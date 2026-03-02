@@ -118,11 +118,11 @@ def lr_only_params() -> Generator[dict[str, Any], None, None]:
 def select_best_val_args() -> str:
     """Get the early stopping arguments.
 
-    This is used to select the final test miou based on the epoch of the max val miou.
+    Selects the best test result based on the epoch with the best primary validation metric.
     """
     return " ".join(
         [
-            f" --trainer.callbacks.downstream_evaluator.tasks.{task_name}.select_final_test_miou_based_on_epoch_of_max_val_miou=True  --trainer.callbacks.downstream_evaluator.tasks.{task_name}.linear_probe_eval_interval=5"
+            f" --trainer.callbacks.downstream_evaluator.tasks.{task_name}.select_best_by_primary_metric=True  --trainer.callbacks.downstream_evaluator.tasks.{task_name}.linear_probe_eval_interval=5"
             for task_name in EVAL_TASKS.keys()
         ]
     )

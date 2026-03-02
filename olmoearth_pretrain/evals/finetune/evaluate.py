@@ -5,11 +5,15 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 from einops import rearrange
-from sklearn.metrics import accuracy_score, f1_score
 from torch.utils.data import DataLoader
 
 from olmoearth_pretrain.evals.finetune.model import BackboneWithHead, to_device
-from olmoearth_pretrain.evals.metrics import EvalResult, segmentation_metrics
+from olmoearth_pretrain.evals.metrics import (
+    EvalMetric,
+    EvalResult,
+    classification_metrics,
+    segmentation_metrics,
+)
 
 
 @torch.no_grad()
@@ -18,12 +22,10 @@ def eval_cls(
     loader: DataLoader,
     device: torch.device,
     is_multilabel: bool,
+    primary_metric: EvalMetric | None = None,
+    primary_metric_class: int | None = None,
 ) -> EvalResult:
-    """Evaluate classification metrics.
-
-    Returns:
-        EvalResult with metrics: micro f1 (if multilabel) or accuracy.
-    """
+    """Evaluate classification metrics."""
     module.eval()
     logits_all, labels_all = [], []
     for masked, label in loader:
@@ -37,29 +39,15 @@ def eval_cls(
     labels = torch.cat(labels_all, 0)
     if is_multilabel:
         preds = torch.sigmoid(logits).gt(0.5).int()
-        labels_np = labels.numpy().astype(int)
-        preds_np = preds.numpy()
-        acc = accuracy_score(labels_np, preds_np)  # subset/exact match accuracy
-        f1 = f1_score(labels_np, preds_np, average="micro", zero_division=0)
-        macro = f1_score(labels_np, preds_np, average="macro", zero_division=0)
-        per_class_f1 = f1_score(
-            labels_np, preds_np, average=None, zero_division=0
-        ).tolist()
-        return EvalResult.from_classification(
-            acc, f1=f1, macro_f1=macro, per_class_f1=per_class_f1
-        )
     else:
         preds = torch.argmax(logits, dim=-1)
-        labels_np = labels.numpy()
-        preds_np = preds.numpy()
-        acc = accuracy_score(labels_np, preds_np)
-        macro = f1_score(labels_np, preds_np, average="macro", zero_division=0)
-        per_class_f1 = f1_score(
-            labels_np, preds_np, average=None, zero_division=0
-        ).tolist()
-        return EvalResult.from_classification(
-            acc, macro_f1=macro, per_class_f1=per_class_f1
-        )
+    return classification_metrics(
+        preds,
+        labels,
+        is_multilabel=is_multilabel,
+        primary_metric=primary_metric,
+        primary_metric_class=primary_metric_class,
+    )
 
 
 @torch.no_grad()
@@ -69,12 +57,10 @@ def eval_seg(
     device: torch.device,
     num_classes: int,
     patch_size: int,
+    primary_metric: EvalMetric | None = None,
+    primary_metric_class: int | None = None,
 ) -> EvalResult:
-    """Evaluate segmentation metrics.
-
-    Returns:
-        EvalResult with metrics: miou, overall_acc, macro_acc, macro_f1
-    """
+    """Evaluate segmentation metrics."""
     module.eval()
     preds_all, labels_all = [], []
     for masked, label in loader:
@@ -103,4 +89,11 @@ def eval_seg(
         labels_all.append(label.cpu())
     preds = torch.cat(preds_all, 0)
     labels = torch.cat(labels_all, 0)
-    return segmentation_metrics(preds, labels, num_classes=num_classes, ignore_label=-1)
+    return segmentation_metrics(
+        preds,
+        labels,
+        num_classes=num_classes,
+        ignore_label=-1,
+        primary_metric=primary_metric,
+        primary_metric_class=primary_metric_class,
+    )

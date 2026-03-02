@@ -98,7 +98,7 @@ class DownstreamTaskConfig:
     norm_method: NormMethod = field(
         default_factory=lambda: NormMethod.NORM_NO_CLIP_2_STD
     )
-    select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
+    select_best_by_primary_metric: bool = False
     # Quantize embeddings to int8 for storage efficiency evaluation
     quantize_embeddings: bool = False
     # Reduce embedding dimensionality via PCA (None = no reduction)
@@ -161,9 +161,7 @@ class DownstreamEvaluator:
         self.partition = task.partition
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
-        self.select_final_test_miou_based_on_epoch_of_max_val_miou = (
-            task.select_final_test_miou_based_on_epoch_of_max_val_miou
-        )
+        self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
         self.embedding_dim = task.embedding_dim
         self.primary_metric = task.primary_metric
@@ -171,10 +169,9 @@ class DownstreamEvaluator:
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
-        if self.select_final_test_miou_based_on_epoch_of_max_val_miou:
+        if self.select_best_by_primary_metric:
             assert self.run_on_test, (
-                "if select_final_test_miou_based_on_epoch_of_max_val_miou is True, "
-                "run_on_test must be True"
+                "if select_best_by_primary_metric is True, run_on_test must be True"
             )
         if self.eval_mode is None:
             self.eval_mode = get_eval_mode(self.config.task_type)  # type: ignore
@@ -209,6 +206,8 @@ class DownstreamEvaluator:
         self.eval_function = (
             partial(
                 run_knn,
+                primary_metric=self.primary_metric,
+                primary_metric_class=self.primary_metric_class,
             )
             if self.eval_mode == EvalMode.KNN
             else (
@@ -219,7 +218,9 @@ class DownstreamEvaluator:
                     eval_interval=self.linear_probe_eval_interval,
                     probe_type=self.probe_type,
                     lr=self.probe_lr,
-                    select_final_test_miou_based_on_epoch_of_max_val_miou=self.select_final_test_miou_based_on_epoch_of_max_val_miou,
+                    select_best_by_primary_metric=self.select_best_by_primary_metric,
+                    primary_metric=self.primary_metric,
+                    primary_metric_class=self.primary_metric_class,
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
                 else None
@@ -474,6 +475,8 @@ class DownstreamEvaluator:
             seed=self.finetune_seed,
             best_checkpoint_path=best_checkpoint_path,
             resume_checkpoint_path=resume_checkpoint_path,
+            primary_metric=self.primary_metric,
+            primary_metric_class=self.primary_metric_class,
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
@@ -727,16 +730,6 @@ class DownstreamEvaluatorCallback(Callback):
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
         start_time = time.monotonic()
         result = evaluator.val()
-
-        if evaluator.primary_metric is not None:
-            if result.val_result is not None:
-                result.val_result = result.val_result.with_primary_metric(
-                    evaluator.primary_metric, class_idx=evaluator.primary_metric_class
-                )
-            if result.test_result is not None:
-                result.test_result = result.test_result.with_primary_metric(
-                    evaluator.primary_metric, class_idx=evaluator.primary_metric_class
-                )
 
         val_result = result.val_result
         test_result = result.test_result

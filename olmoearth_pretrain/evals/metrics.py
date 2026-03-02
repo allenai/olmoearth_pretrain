@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import Any
 
 import torch
+from sklearn.metrics import accuracy_score, f1_score
 
 
 class EvalMetric(StrEnum):
@@ -24,7 +25,7 @@ class EvalMetric(StrEnum):
 
 @dataclass
 class EvalTaskResult:
-    """Result from an evaluation task (knn, linear probe, finetune)."""
+    """Container for one task's outputs: validation/test results, optional bootstrap stats, and eval runtime."""
 
     val_result: EvalResult | None
     test_result: EvalResult | None
@@ -83,14 +84,13 @@ class EvalResult:
         f1: float | None = None,
         macro_f1: float | None = None,
         per_class_f1: list[float] | None = None,
+        is_multilabel: bool = False,
+        primary_metric: EvalMetric | None = None,
+        primary_metric_class: int | None = None,
     ) -> EvalResult:
         """Create EvalResult from classification metrics.
 
-        Args:
-            accuracy: Classification accuracy (exact match for multilabel)
-            f1: Optional F1 score (micro-averaged, typically for multilabel tasks)
-            macro_f1: Optional macro-averaged F1 score
-            per_class_f1: Optional per-class F1 scores (index = class index)
+        Primary metric defaults to F1 for multilabel, ACCURACY for single-label.
         """
         metrics: dict[str, float] = {EvalMetric.ACCURACY.value: accuracy}
         if f1 is not None:
@@ -100,10 +100,19 @@ class EvalResult:
         if per_class_f1 is not None:
             for i, score in enumerate(per_class_f1):
                 metrics[f"f1_class_{i}"] = score
+
+        if primary_metric is None:
+            primary_metric = EvalMetric.F1 if is_multilabel else EvalMetric.ACCURACY
+        resolved_key = cls._resolve_metric_key(primary_metric, primary_metric_class)
+        if resolved_key not in metrics:
+            raise ValueError(
+                f"primary_metric '{resolved_key}' not found in computed metrics: "
+                f"{list(metrics.keys())}"
+            )
         return cls(
-            primary=accuracy,
-            primary_metric=EvalMetric.ACCURACY,
-            primary_metric_key=EvalMetric.ACCURACY.value,
+            primary=metrics[resolved_key],
+            primary_metric=primary_metric,
+            primary_metric_key=resolved_key,
             metrics=metrics,
         )
 
@@ -115,19 +124,30 @@ class EvalResult:
         macro_acc: float,
         macro_f1: float,
         micro_f1: float,
+        primary_metric: EvalMetric | None = None,
+        primary_metric_class: int | None = None,
     ) -> EvalResult:
-        """Create EvalResult from segmentation metrics."""
+        """Create EvalResult from segmentation metrics. Primary defaults to MIOU."""
+        metrics = {
+            EvalMetric.MIOU.value: miou,
+            EvalMetric.OVERALL_ACC.value: overall_acc,
+            EvalMetric.MACRO_ACC.value: macro_acc,
+            EvalMetric.MACRO_F1.value: macro_f1,
+            EvalMetric.MICRO_F1.value: micro_f1,
+        }
+        if primary_metric is None:
+            primary_metric = EvalMetric.MIOU
+        resolved_key = cls._resolve_metric_key(primary_metric, primary_metric_class)
+        if resolved_key not in metrics:
+            raise ValueError(
+                f"primary_metric '{resolved_key}' not found in computed metrics: "
+                f"{list(metrics.keys())}"
+            )
         return cls(
-            primary=miou,
-            primary_metric=EvalMetric.MIOU,
-            primary_metric_key=EvalMetric.MIOU.value,
-            metrics={
-                EvalMetric.MIOU.value: miou,
-                EvalMetric.OVERALL_ACC.value: overall_acc,
-                EvalMetric.MACRO_ACC.value: macro_acc,
-                EvalMetric.MACRO_F1.value: macro_f1,
-                EvalMetric.MICRO_F1.value: micro_f1,
-            },
+            primary=metrics[resolved_key],
+            primary_metric=primary_metric,
+            primary_metric_key=resolved_key,
+            metrics=metrics,
         )
 
 
@@ -179,6 +199,8 @@ def segmentation_metrics(
     labels: torch.Tensor,
     num_classes: int,
     ignore_label: int = -1,
+    primary_metric: EvalMetric | None = None,
+    primary_metric_class: int | None = None,
 ) -> EvalResult:
     """Compute all segmentation metrics from predictions and labels.
 
@@ -187,6 +209,8 @@ def segmentation_metrics(
         labels: Ground truth segmentation masks of shape (N, H, W), integer class indices
         num_classes: Number of classes in the segmentation task
         ignore_label: Label value to ignore (default: -1)
+        primary_metric: Override the default primary metric (None = MIOU)
+        primary_metric_class: Class index for CLASS_F1 primary metric
 
     Returns:
         EvalResult with metrics: miou, overall_acc, macro_acc, macro_f1
@@ -239,4 +263,48 @@ def segmentation_metrics(
         macro_acc=macro_acc,
         macro_f1=macro_f1,
         micro_f1=micro_f1,
+        primary_metric=primary_metric,
+        primary_metric_class=primary_metric_class,
+    )
+
+
+def classification_metrics(
+    predictions: torch.Tensor,
+    labels: torch.Tensor,
+    is_multilabel: bool = False,
+    primary_metric: EvalMetric | None = None,
+    primary_metric_class: int | None = None,
+) -> EvalResult:
+    """Compute classification metrics from predictions and labels."""
+    preds_np = predictions.detach().cpu().numpy()
+    labels_np = labels.detach().cpu().numpy()
+
+    if is_multilabel:
+        preds_np = preds_np.astype(int)
+        labels_np = labels_np.astype(int)
+        accuracy = accuracy_score(labels_np, preds_np)
+        micro_f1 = f1_score(labels_np, preds_np, average="micro", zero_division=0)
+        macro_f1 = f1_score(labels_np, preds_np, average="macro", zero_division=0)
+        per_class_f1 = f1_score(
+            labels_np, preds_np, average=None, zero_division=0
+        ).tolist()
+        return EvalResult.from_classification(
+            accuracy,
+            f1=micro_f1,
+            macro_f1=macro_f1,
+            per_class_f1=per_class_f1,
+            is_multilabel=True,
+            primary_metric=primary_metric,
+            primary_metric_class=primary_metric_class,
+        )
+
+    accuracy = accuracy_score(labels_np, preds_np)
+    macro_f1 = f1_score(labels_np, preds_np, average="macro", zero_division=0)
+    per_class_f1 = f1_score(labels_np, preds_np, average=None, zero_division=0).tolist()
+    return EvalResult.from_classification(
+        accuracy,
+        macro_f1=macro_f1,
+        per_class_f1=per_class_f1,
+        primary_metric=primary_metric,
+        primary_metric_class=primary_metric_class,
     )
