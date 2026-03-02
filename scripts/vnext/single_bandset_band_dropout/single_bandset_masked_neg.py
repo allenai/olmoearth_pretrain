@@ -18,6 +18,9 @@ Experiments:
 22. exp 19 + decoder supervision (same as exp 21 but random_with_decode instead of random_time_with_decode)
 23. exp 21 but with LatentMIM train module (no contrastive loss, single view)
 24. exp 21 but with lower contrastive weight (0.03 instead of 0.1)
+25. single bandset S2 (all 12 bands) / Landsat + SpectralMixer + random band dropout (rate ~ Uniform(0, 0.3)) + modality_cross_random masking + masked neg loss
+26. single bandset S2 (all 12 bands) / Landsat + SpectralMixer + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + masked neg loss
+27. exp 21 + SpectralMixer (decoder supervision + spectral mixer on satellite modalities)
 """
 
 import copy
@@ -521,6 +524,11 @@ build_model_exp8 = _build_model
 
 
 RANDOM_BAND_DROPOUT_MAX_RATE = 0.3
+SATELLITE_MODALITIES = [
+    Modality.SENTINEL2_L2A.name,
+    Modality.SENTINEL1.name,
+    Modality.LANDSAT.name,
+]
 
 # ============================================================
 # Experiment 13: single bandset + random band dropout (rate ~ Uniform(0, 0.3))
@@ -1407,6 +1415,187 @@ def build_dataloader_exp24(common: CommonComponents) -> OlmoEarthDataLoaderConfi
 
 
 # ============================================================
+# Experiment 25: single bandset (all 12 bands) + SpectralMixer + random band dropout
+#                + modality_cross_random masking
+# ============================================================
+
+
+def build_common_exp25(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp25."""
+    return _build_common(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp25(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp25."""
+    return _build_train_module(common, "modality_cross_random")
+
+
+def build_model_exp25(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp25: single bandset + SpectralMixer + random band dropout."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+        use_spectral_mixer=True,
+        spectral_mixer_modalities=SATELLITE_MODALITIES,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+    )
+
+
+def build_dataloader_exp25(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp25."""
+    return _build_dataloader(common, "modality_cross_random")
+
+
+# ============================================================
+# Experiment 26: single bandset (all 12 bands) + SpectralMixer + random band dropout
+#                + random_with_decode masking
+# ============================================================
+
+
+def build_common_exp26(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp26."""
+    return _build_common(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp26(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp26."""
+    return _build_train_module(common, "random_with_decode")
+
+
+def build_model_exp26(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp26: single bandset + SpectralMixer + random band dropout."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+        use_spectral_mixer=True,
+        spectral_mixer_modalities=SATELLITE_MODALITIES,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+    )
+
+
+def build_dataloader_exp26(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp26."""
+    return _build_dataloader(common, "random_with_decode")
+
+
+# ============================================================
+# Experiment 27: exp 21 + SpectralMixer
+# decoder supervision + spectral mixer on satellite modalities
+# ============================================================
+
+
+def build_common_exp27(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp27 (same as exp21)."""
+    return build_common_exp21(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp27(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp27 (same as exp21)."""
+    return build_train_module_exp21(common)
+
+
+def build_model_exp27(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp27: exp21 + SpectralMixer."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+        use_spectral_mixer=True,
+        spectral_mixer_modalities=SATELLITE_MODALITIES,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    supervision_head_config = SupervisionHeadConfig(
+        modality_configs=SUPERVISION_MODALITY_CONFIGS,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        supervision_head_config=supervision_head_config,
+    )
+
+
+def build_dataloader_exp27(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp27 (same as exp21)."""
+    return build_dataloader_exp21(common)
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -1512,6 +1701,24 @@ EXPERIMENTS = {
         build_model_exp24,
         build_train_module_exp24,
         build_dataloader_exp24,
+    ),
+    "single_bandset_all12_spectral_mixer_random_band_dropout_cross_random_masked_neg": (
+        build_common_exp25,
+        build_model_exp25,
+        build_train_module_exp25,
+        build_dataloader_exp25,
+    ),
+    "single_bandset_all12_spectral_mixer_random_band_dropout_random_decode_masked_neg": (
+        build_common_exp26,
+        build_model_exp26,
+        build_train_module_exp26,
+        build_dataloader_exp26,
+    ),
+    "single_bandset_all12_spectral_mixer_random_band_dropout_ndvi_era5_random_time_decode_masked_neg_decoder_supervision": (
+        build_common_exp27,
+        build_model_exp27,
+        build_train_module_exp27,
+        build_dataloader_exp27,
     ),
 }
 
