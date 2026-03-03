@@ -21,6 +21,7 @@ Experiments:
 25. single bandset S2 (all 12 bands) / Landsat + SpectralMixer + random band dropout (rate ~ Uniform(0, 0.3)) + modality_cross_random masking + masked neg loss
 26. single bandset S2 (all 12 bands) / Landsat + SpectralMixer + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + masked neg loss
 27. exp 21 + SpectralMixer (decoder supervision + spectral mixer on satellite modalities)
+28. exp 27 + lower contrastive weight (0.03 instead of 0.1) — combines spectral mixer, decoder supervision, NDVI + ERA5, band dropout, low contrastive
 """
 
 import copy
@@ -1596,6 +1597,36 @@ def build_dataloader_exp27(common: CommonComponents) -> OlmoEarthDataLoaderConfi
 
 
 # ============================================================
+# Experiment 28: exp 27 + lower contrastive weight (0.03)
+# spectral mixer + decoder supervision + NDVI + ERA5 + band dropout + low contrastive
+# ============================================================
+
+
+def build_common_exp28(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp28 (same as exp21/27)."""
+    return build_common_exp21(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp28(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp28 (same as exp24: low contrastive weight)."""
+    return build_train_module_exp24(common)
+
+
+def build_model_exp28(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp28 (same as exp27: spectral mixer + supervision)."""
+    return build_model_exp27(common)
+
+
+def build_dataloader_exp28(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp28 (same as exp21/27)."""
+    return build_dataloader_exp21(common)
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -1719,6 +1750,12 @@ EXPERIMENTS = {
         build_model_exp27,
         build_train_module_exp27,
         build_dataloader_exp27,
+    ),
+    "single_bandset_all12_spectral_mixer_random_band_dropout_ndvi_era5_random_time_decode_masked_neg_decoder_supervision_low_contrastive": (
+        build_common_exp28,
+        build_model_exp28,
+        build_train_module_exp28,
+        build_dataloader_exp28,
     ),
 }
 
