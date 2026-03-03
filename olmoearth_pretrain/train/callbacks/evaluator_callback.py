@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 import torch
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
-from olmo_core.train.common import Duration
+from olmo_core.train.common import Duration, ReduceType
 from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader
 
@@ -104,9 +104,6 @@ class DownstreamTaskConfig:
     quantize_embeddings: bool = False
     # Reduce embedding dimensionality via PCA (None = no reduction)
     embedding_dim: int | None = None
-    # Rank-max LR: each rank uses a different LR and we take max across ranks
-    # This effectively gives a free LR sweep during evaluation
-    rank_max_lr: bool = False
 
 
 class DownstreamEvaluator:
@@ -507,11 +504,20 @@ def _log_eval_result_to_wandb(
 def _record_eval_result(
     trainer: Trainer, prefix: str, name: str, result: EvalResult
 ) -> None:
-    """Record an EvalResult to trainer metrics."""
+    """Record an EvalResult to trainer metrics.
+
+    Uses ReduceType.max so that when ranks run different LRs (rank-max LR),
+    the best result across ranks is reported automatically.
+    """
     for metric_name, metric_value in result.metrics.items():
-        trainer.record_metric(f"{prefix}/{name}/{metric_name}", metric_value)
-    # Also record primary metric for backward compatibility
-    trainer.record_metric(f"{prefix}/{name}", result.primary)
+        trainer.record_metric(
+            f"{prefix}/{name}/{metric_name}",
+            metric_value,
+            reduce_type=ReduceType.max,
+        )
+    trainer.record_metric(
+        f"{prefix}/{name}", result.primary, reduce_type=ReduceType.max
+    )
 
 
 @dataclass

@@ -9,7 +9,6 @@ from logging import getLogger
 
 import numpy as np
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
@@ -42,15 +41,6 @@ def get_rank_lr(rank: int, world_size: int) -> float | None:
     if rank >= len(RANK_MAX_LRS):
         return None
     return RANK_MAX_LRS[rank]
-
-
-def all_reduce_max(value: float, device: torch.device) -> float:
-    """All-reduce a scalar value with MAX operation across ranks."""
-    if not is_distributed():
-        return value
-    tensor = torch.tensor([value], device=device, dtype=torch.float32)
-    dist.all_reduce(tensor, op=dist.ReduceOp.MAX)
-    return tensor.item()
 
 
 class ProbeType(StrEnum):
@@ -187,7 +177,9 @@ def train_and_eval_probe(
             use_rank_max = False
 
     if use_rank_max:
-        effective_lr = get_rank_lr(rank, world_size)
+        rank_lr = get_rank_lr(rank, world_size)
+        assert rank_lr is not None
+        effective_lr = rank_lr
         logger.info(
             f"Rank-max LR enabled: rank {rank}/{world_size} using lr={effective_lr:.6f} "
             f"(sweep LRs: {RANK_MAX_LRS})"
@@ -398,34 +390,6 @@ def train_and_eval_probe(
         )
         if n_bootstrap == 0:
             logger.info(f"Test result: {test_result}")
-
-    # When using rank-max LR, aggregate results via all_reduce MAX
-    if use_rank_max:
-        local_val = final_val_result.primary
-        max_val_primary = all_reduce_max(local_val, device)
-        if max_val_primary > local_val:
-            logger.info(
-                f"Rank {rank}: local val={local_val:.4f}, max across ranks={max_val_primary:.4f}"
-            )
-        else:
-            logger.info(
-                f"Rank {rank}: this rank achieved max val={local_val:.4f} (lr={effective_lr:.6f})"
-            )
-        # Update the primary metric, keep other metrics from this rank
-        updated_metrics = dict(final_val_result.metrics)
-        for k, v in updated_metrics.items():
-            if v == local_val:
-                updated_metrics[k] = max_val_primary
-        final_val_result = EvalResult(primary=max_val_primary, metrics=updated_metrics)
-
-        if test_result is not None:
-            local_test = test_result.primary
-            max_test_primary = all_reduce_max(local_test, device)
-            updated_test_metrics = dict(test_result.metrics)
-            for k, v in updated_test_metrics.items():
-                if v == local_test:
-                    updated_test_metrics[k] = max_test_primary
-            test_result = EvalResult(primary=max_test_primary, metrics=updated_test_metrics)
 
     return EvalTaskResult(
         val_result=final_val_result,
