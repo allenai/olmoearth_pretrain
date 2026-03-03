@@ -39,9 +39,6 @@ from olmoearth_pretrain.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
 
-# Derived modalities that don't need normalization (already bounded)
-_DERIVED_MODALITIES_SKIP_NORMALIZATION: set[str] = {"ndvi"}
-
 
 # =============================================================================
 # Subsetting Functions
@@ -837,9 +834,6 @@ class OlmoEarthDataset(Dataset):
         if self.normalize:
             for modality_name in sample_dict.keys():
                 if modality_name == "timestamps":
-                    continue
-                # Skip derived modalities that are already bounded (e.g. NDVI in [-1, 1])
-                if modality_name in _DERIVED_MODALITIES_SKIP_NORMALIZATION:
                     continue
                 # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
                 if modality_name in missing_modalities:
