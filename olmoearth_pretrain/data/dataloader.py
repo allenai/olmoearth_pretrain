@@ -260,20 +260,22 @@ class OlmoEarthDataLoader(DataLoaderBase):
 
     def _iter_batches(self) -> Iterable[OlmoEarthSample]:
         """Iterate over the dataset in batches."""
-        return torch.utils.data.DataLoader(
-            _IterableDatasetWrapper(self),
-            batch_size=None,
-            num_workers=self.num_workers,
-            pin_memory=self.target_device_type == "cuda" and self.num_workers > 0,
-            prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
-            persistent_workers=(
-                self.persistent_workers if self.num_workers > 0 else False
-            ),
-            multiprocessing_context=(
-                self.multiprocessing_context if self.num_workers > 0 else None
-            ),
-            timeout=0,
-        )
+        if not hasattr(self, "_torch_dataloader"):
+            self._torch_dataloader = torch.utils.data.DataLoader(
+                _IterableDatasetWrapper(self),
+                batch_size=None,
+                num_workers=self.num_workers,
+                pin_memory=self.target_device_type == "cuda" and self.num_workers > 0,
+                prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
+                persistent_workers=(
+                    self.persistent_workers if self.num_workers > 0 else False
+                ),
+                multiprocessing_context=(
+                    self.multiprocessing_context if self.num_workers > 0 else None
+                ),
+                timeout=0,
+            )
+        return self._torch_dataloader
 
     @property
     def worker_info(self):  # type: ignore
