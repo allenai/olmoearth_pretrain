@@ -378,6 +378,8 @@ class MultiModalPatchEmbeddings(nn.Module):
         band_dropout_modalities: list[str] | None = None,
         use_spectral_mixer: bool = False,
         spectral_mixer_modalities: list[str] | None = None,
+        use_spectral_attention: bool = False,
+        spectral_attention_d_model: int = 64,
     ):
         """Initialize the patch embeddings.
 
@@ -401,9 +403,15 @@ class MultiModalPatchEmbeddings(nn.Module):
                 spectral combinations (e.g., NDVI-like ratios) that the linear Conv2d
                 alone cannot express. Applied to spatial bandsets with >1 band.
                 Initialized as identity for stable training. Default: False.
-            spectral_mixer_modalities: If provided, only apply the spectral mixer to
-                these modalities. If None, apply to all eligible spatial multi-band
+            spectral_mixer_modalities: If provided, only apply the spectral mixer/attention
+                to these modalities. If None, apply to all eligible spatial multi-band
                 modalities. Default: None.
+            use_spectral_attention: If True, apply content-dependent cross-band self-attention
+                pixel-wise before the patch embedding Conv2d. Unlike SpectralMixer, the mixing
+                weights depend on actual band values. Mutually exclusive with use_spectral_mixer.
+                Default: False.
+            spectral_attention_d_model: Embedding dimension for band tokens in SpectralAttention.
+                Default: 64.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -433,14 +441,20 @@ class MultiModalPatchEmbeddings(nn.Module):
                     buffer_name, banset_indices_tensor, persistent=False
                 )
 
-        # Spectral mixers: one per (modality, bandset) for spatial multi-band bandsets.
-        self.spectral_mixers: nn.ModuleDict | None = None
-        if use_spectral_mixer:
-            from olmoearth_pretrain.nn.spectral_mixer import SpectralMixer
+        if use_spectral_mixer and use_spectral_attention:
+            raise ValueError(
+                "use_spectral_mixer and use_spectral_attention are mutually exclusive"
+            )
 
+        # Spectral mixers/attention: one per (modality, bandset) for spatial multi-band bandsets.
+        self.spectral_mixers: nn.ModuleDict | None = None
+        if use_spectral_mixer or use_spectral_attention:
             mixers: dict[str, nn.Module] = {}
             for modality in self.supported_modality_names:
-                if spectral_mixer_modalities is not None and modality not in spectral_mixer_modalities:
+                if (
+                    spectral_mixer_modalities is not None
+                    and modality not in spectral_mixer_modalities
+                ):
                     continue
                 modality_spec = Modality.get(modality)
                 if not modality_spec.is_spatial:
@@ -450,7 +464,20 @@ class MultiModalPatchEmbeddings(nn.Module):
                 ):
                     if len(bandset_indices) > 1:
                         key = self._get_embedding_module_name(modality, idx)
-                        mixers[key] = SpectralMixer(len(bandset_indices))
+                        if use_spectral_mixer:
+                            from olmoearth_pretrain.nn.spectral_mixer import (
+                                SpectralMixer,
+                            )
+
+                            mixers[key] = SpectralMixer(len(bandset_indices))
+                        else:
+                            from olmoearth_pretrain.nn.spectral_mixer import (
+                                SpectralAttention,
+                            )
+
+                            mixers[key] = SpectralAttention(
+                                len(bandset_indices), d_model=spectral_attention_d_model
+                            )
             if mixers:
                 self.spectral_mixers = nn.ModuleDict(mixers)
 
@@ -1316,6 +1343,8 @@ class Encoder(FlexiVitBase):
         band_dropout_modalities: list[str] | None = None,
         use_spectral_mixer: bool = False,
         spectral_mixer_modalities: list[str] | None = None,
+        use_spectral_attention: bool = False,
+        spectral_attention_d_model: int = 64,
     ):
         """Initialize the encoder.
 
@@ -1349,8 +1378,11 @@ class Encoder(FlexiVitBase):
             use_spectral_mixer: If True, apply a lightweight cross-band MLP mixer before
                 the patch embedding Conv2d for each spatial multi-band bandset. Learns
                 non-linear spectral combinations pixel-wise. Initialized as identity.
-            spectral_mixer_modalities: If provided, only apply the spectral mixer to these
-                modalities. If None, apply to all eligible spatial multi-band modalities.
+            spectral_mixer_modalities: If provided, only apply the spectral mixer/attention
+                to these modalities. If None, apply to all eligible spatial multi-band modalities.
+            use_spectral_attention: If True, apply content-dependent cross-band self-attention
+                before the Conv2d. Mutually exclusive with use_spectral_mixer.
+            spectral_attention_d_model: Embedding dimension for SpectralAttention band tokens.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1390,6 +1422,8 @@ class Encoder(FlexiVitBase):
             band_dropout_modalities=self.band_dropout_modalities,
             use_spectral_mixer=use_spectral_mixer,
             spectral_mixer_modalities=spectral_mixer_modalities,
+            use_spectral_attention=use_spectral_attention,
+            spectral_attention_d_model=spectral_attention_d_model,
         )
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=self.embedding_size,
@@ -2268,6 +2302,8 @@ class EncoderConfig(Config):
     band_dropout_modalities: list[str] | None = None
     use_spectral_mixer: bool = False
     spectral_mixer_modalities: list[str] | None = None
+    use_spectral_attention: bool = False
+    spectral_attention_d_model: int = 64
 
     def validate(self) -> None:
         """Validate the configuration."""

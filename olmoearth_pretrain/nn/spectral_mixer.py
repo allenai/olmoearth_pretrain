@@ -1,5 +1,7 @@
 """Spectral mixer module for cross-band interaction before patch embedding."""
 
+import math
+
 import torch
 import torch.nn as nn
 
@@ -45,3 +47,74 @@ class SpectralMixer(nn.Module):
             Spectrally mixed tensor of the same shape.
         """
         return x + self.fc2(self.act(self.fc1(self.norm(x))))
+
+
+class SpectralAttention(nn.Module):
+    """Content-dependent cross-band self-attention applied pixel-wise before patch embedding.
+
+    Unlike SpectralMixer (fixed MLP), the mixing weights here depend on the actual
+    band values — a vegetation pixel gets different spectral mixing than a water pixel.
+    Each scalar band value is projected to a d_model-dim embedding, augmented with a
+    learnable band identity embedding, then self-attention across bands produces
+    content-dependent corrections.
+
+    Initialized as identity (zero-init on the output projection) so training
+    starts from the same point as a model without the attention.
+
+    Args:
+        num_bands: Number of spectral bands in this bandset.
+        d_model: Embedding dimension for band tokens. Default: 64.
+        num_heads: Number of attention heads. Default: 2.
+    """
+
+    def __init__(self, num_bands: int, d_model: int = 64, num_heads: int = 2) -> None:
+        """Initialize SpectralAttention."""
+        super().__init__()
+        self.num_bands = num_bands
+        self.d_model = d_model
+        self.num_heads = num_heads
+        assert d_model % num_heads == 0
+
+        self.band_embed = nn.Linear(1, d_model)
+        self.band_pos = nn.Parameter(torch.randn(num_bands, d_model) * 0.02)
+
+        self.W_q = nn.Linear(d_model, d_model)
+        self.W_k = nn.Linear(d_model, d_model)
+        self.W_v = nn.Linear(d_model, d_model)
+        self.out_proj = nn.Linear(d_model, 1)
+
+        # Zero-init so the attention starts as identity.
+        nn.init.zeros_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply content-dependent cross-band mixing.
+
+        Args:
+            x: Any-shape tensor with bands in the last dimension [..., num_bands].
+
+        Returns:
+            Spectrally mixed tensor of the same shape.
+        """
+        shape = x.shape
+        x_flat = x.reshape(-1, self.num_bands)  # [N, B]
+
+        # Each band scalar → d_model embedding + learnable band identity
+        tokens = self.band_embed(x_flat.unsqueeze(-1)) + self.band_pos  # [N, B, d]
+
+        # Multi-head self-attention across bands
+        N, B, d = tokens.shape
+        head_dim = d // self.num_heads
+
+        Q = (
+            self.W_q(tokens).view(N, B, self.num_heads, head_dim).transpose(1, 2)
+        )  # [N, nh, B, hd]
+        K = self.W_k(tokens).view(N, B, self.num_heads, head_dim).transpose(1, 2)
+        V = self.W_v(tokens).view(N, B, self.num_heads, head_dim).transpose(1, 2)
+
+        attn = (Q @ K.transpose(-2, -1)) * (1.0 / math.sqrt(head_dim))  # [N, nh, B, B]
+        attn = torch.softmax(attn, dim=-1)
+        out = (attn @ V).transpose(1, 2).reshape(N, B, d)  # [N, B, d]
+
+        delta = self.out_proj(out).squeeze(-1)  # [N, B]
+        return (x_flat + delta).reshape(shape)
