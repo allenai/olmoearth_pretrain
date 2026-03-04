@@ -13,8 +13,6 @@ from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
     ConfigSaverCallback,
-    GarbageCollectorCallback,
-    GPUMemoryMonitorCallback,
 )
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
@@ -34,7 +32,6 @@ from olmoearth_pretrain.internal.experiment import (
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
-    OlmoEarthSpeedMonitorCallback,
     OlmoEarthWandBCallback,
 )
 from olmoearth_pretrain.train.callbacks.evaluator_callback import DownstreamTaskConfig
@@ -187,7 +184,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         enabled=True,  # set to False to avoid wandb errors
     )
     # Safe to collect everys tep for now
-    garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
+    # garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     EVAL_TASKS = {
         "m-eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
@@ -240,8 +237,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             checkpointer=checkpointer_config,
         )
         .with_callback("wandb", wandb_callback)
-        .with_callback("speed_monitor", OlmoEarthSpeedMonitorCallback())
-        .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
         .with_callback("config_saver", ConfigSaverCallback())
         .with_callback(
             "downstream_evaluator",
@@ -249,7 +244,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                 tasks=EVAL_TASKS,
             ),
         )
-        .with_callback("garbage_collector", garbage_collector_callback)
         .with_callback(
             "beaker", BeakerCallback()
         )  # this shoukd not be here, but for now it is
