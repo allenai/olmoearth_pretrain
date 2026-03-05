@@ -24,11 +24,12 @@ Example:
 
 from dataclasses import dataclass, field
 
+from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 
 
 @dataclass
-class ModalityTokenization:
+class ModalityTokenization(Config):
     """Custom tokenization configuration for a single modality.
 
     Specifies how bands should be grouped into tokens. Each band_group
@@ -95,7 +96,7 @@ class ModalityTokenization:
 
 
 @dataclass
-class TokenizationConfig:
+class TokenizationConfig(Config):
     """Configuration for custom tokenization strategies.
 
     Allows overriding the default bandset groupings for specific modalities.
@@ -104,6 +105,14 @@ class TokenizationConfig:
     """
 
     overrides: dict[str, ModalityTokenization] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Coerce raw dicts in overrides to ModalityTokenization instances."""
+        self.overrides = {
+            name: ModalityTokenization(**cfg) if isinstance(cfg, dict) else cfg
+            for name, cfg in self.overrides.items()
+        }
+
     _bandset_indices_cache: dict[str, list[list[int]]] = field(
         default_factory=dict, init=False, repr=False
     )

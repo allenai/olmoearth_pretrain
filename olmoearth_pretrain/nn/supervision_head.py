@@ -80,6 +80,13 @@ class SupervisionHeadConfig(Config):
 
     modality_configs: dict[str, SupervisionModalityConfig] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        """Coerce raw dicts in modality_configs to SupervisionModalityConfig instances."""
+        self.modality_configs = {
+            name: SupervisionModalityConfig(**cfg) if isinstance(cfg, dict) else cfg
+            for name, cfg in self.modality_configs.items()
+        }
+
     def build(self, embedding_dim: int, max_patch_size: int) -> SupervisionHead:
         """Build the supervision head.
 
