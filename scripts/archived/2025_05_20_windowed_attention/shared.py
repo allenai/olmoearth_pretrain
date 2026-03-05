@@ -1,22 +1,5 @@
 """Trying to prototype fitting everything into olmo core."""
 
-from olmo_core.config import DType
-from olmo_core.distributed.parallel.data_parallel import (
-    DataParallelConfig,
-    DataParallelType,
-)
-from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import CosWithWarmup
-from olmo_core.train.callbacks import (
-    ConfigSaverCallback,
-    GarbageCollectorCallback,
-    GPUMemoryMonitorCallback,
-)
-from olmo_core.train.checkpoint import CheckpointerConfig
-from olmo_core.train.common import Duration, LoadStrategy
-from olmo_core.train.config import TrainerConfig
-from upath import UPath
-
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
@@ -39,6 +22,22 @@ from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+from olmo_core.config import DType
+from olmo_core.distributed.parallel.data_parallel import (
+    DataParallelConfig,
+    DataParallelType,
+)
+from olmo_core.optim import AdamWConfig
+from olmo_core.optim.scheduler import CosWithWarmup
+from olmo_core.train.callbacks import (
+    ConfigSaverCallback,
+    GarbageCollectorCallback,
+    GPUMemoryMonitorCallback,
+)
+from olmo_core.train.checkpoint import CheckpointerConfig
+from olmo_core.train.common import Duration, LoadStrategy
+from olmo_core.train.config import TrainerConfig
+from upath import UPath
 
 MIN_PATCH_SIZE = 4
 MAX_PATCH_SIZE = 4
