@@ -154,8 +154,6 @@ class OlmoEarthDataLoader(DataLoaderBase):
             # Overhead of loading modules on import by preloading them
             mp.set_forkserver_preload(["torch", "rasterio"])
 
-        self._torch_dataloader: torch.utils.data.DataLoader | None = None
-
     @property
     def total_unique_batches(self) -> int:
         """The total number of unique batches in an epoch."""
@@ -285,28 +283,22 @@ class OlmoEarthDataLoader(DataLoaderBase):
             )
         return np.memmap(self._global_indices_file, mode="r", dtype=np.uint32)
 
-    def _get_torch_dataloader(self) -> torch.utils.data.DataLoader:
-        """Get or create the underlying torch DataLoader (created once, reused across epochs)."""
-        if self._torch_dataloader is None:
-            self._torch_dataloader = torch.utils.data.DataLoader(
-                _IterableDatasetWrapper(self),
-                batch_size=None,
-                num_workers=self.num_workers,
-                pin_memory=self.target_device_type == "cuda" and self.num_workers > 0,
-                prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
-                persistent_workers=(
-                    self.persistent_workers if self.num_workers > 0 else False
-                ),
-                multiprocessing_context=(
-                    self.multiprocessing_context if self.num_workers > 0 else None
-                ),
-                timeout=0,
-            )
-        return self._torch_dataloader
-
     def _iter_batches(self) -> Iterable[OlmoEarthSample]:
         """Iterate over the dataset in batches."""
-        return self._get_torch_dataloader()
+        return torch.utils.data.DataLoader(
+            _IterableDatasetWrapper(self),
+            batch_size=None,
+            num_workers=self.num_workers,
+            pin_memory=self.target_device_type == "cuda" and self.num_workers > 0,
+            prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
+            persistent_workers=(
+                self.persistent_workers if self.num_workers > 0 else False
+            ),
+            multiprocessing_context=(
+                self.multiprocessing_context if self.num_workers > 0 else None
+            ),
+            timeout=0,
+        )
 
     @property
     def worker_info(self):  # type: ignore
@@ -561,25 +553,18 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
     def __init__(self, data_loader: OlmoEarthDataLoader):
         """Initialize the IterableDatasetWrapper."""
         self.data_loader = data_loader
-        self._num_workers = data_loader.num_workers or 1
-        self.rngs: list | None = None
+        workers = data_loader.num_workers or 1
+        self.rngs = [
+            get_rng(
+                data_loader.seed + data_loader.epoch + data_loader.dp_rank * workers + i
+            )
+            for i in range(workers)
+        ]
         # Dataloader-side masking configuration
         self.transform = data_loader.transform
         self.masking_strategy = data_loader.masking_strategy
         self.masking_strategy_b = data_loader.masking_strategy_b
         self.num_masked_views = data_loader.num_masked_views
-
-    def _reseed_rngs(self) -> None:
-        """Reseed RNGs based on the current epoch so shuffling varies across epochs."""
-        self.rngs = [
-            get_rng(
-                self.data_loader.seed
-                + self.data_loader.epoch
-                + self.data_loader.dp_rank * self._num_workers
-                + i
-            )
-            for i in range(self._num_workers)
-        ]
 
     def _get_batch_item_params_iterator(
         self,
@@ -633,7 +618,6 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
 
         Transform and masking are applied in the batched collator for better vectorization.
         """
-        self._reseed_rngs()
         global_indices = self.data_loader.get_global_indices()
         indices = self.data_loader._get_local_instance_indices(global_indices)
 
