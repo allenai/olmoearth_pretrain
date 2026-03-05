@@ -54,7 +54,7 @@ class SupervisionModalityConfig(Config):
             to integer class labels.
     """
 
-    task_type: SupervisionTaskType
+    task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
     num_output_channels: int
     weight: float = 1.0
     class_values: list[float] | None = None
