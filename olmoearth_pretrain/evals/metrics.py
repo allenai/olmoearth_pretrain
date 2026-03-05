@@ -7,6 +7,10 @@ from typing import Any
 
 import torch
 
+# Label value used to mark invalid/ignored pixels in segmentation targets.
+# Pixels with this label are excluded from loss and metric calculations.
+SEGMENTATION_IGNORE_LABEL = -1
+
 
 @dataclass
 class EvalTaskResult:
@@ -67,7 +71,7 @@ def _build_confusion_matrix(
     predictions: torch.Tensor,
     labels: torch.Tensor,
     num_classes: int,
-    ignore_label: int = -1,
+    ignore_label: int = SEGMENTATION_IGNORE_LABEL,
 ) -> torch.Tensor:
     """Build confusion matrix from predictions and labels.
 
@@ -75,7 +79,7 @@ def _build_confusion_matrix(
         predictions: Predicted segmentation masks of shape (N, H, W), integer class indices
         labels: Ground truth segmentation masks of shape (N, H, W), integer class indices
         num_classes: Number of classes in the segmentation task
-        ignore_label: Label value to ignore (default: -1)
+        ignore_label: Label value to ignore (default: SEGMENTATION_IGNORE_LABEL)
 
     Returns:
         Confusion matrix of shape (num_classes, num_classes)
@@ -110,7 +114,7 @@ def segmentation_metrics(
     predictions: torch.Tensor,
     labels: torch.Tensor,
     num_classes: int,
-    ignore_label: int = -1,
+    ignore_label: int = SEGMENTATION_IGNORE_LABEL,
 ) -> EvalResult:
     """Compute all segmentation metrics from predictions and labels.
 

@@ -19,6 +19,8 @@ You are a cracked engineer who is practical and efficeint while moving at the hi
 - Prefer `list`, `dict`, `tuple` over `typing.List`, `typing.Dict`, `typing.Tuple`
 - Respect existing formatting and style in the codebase
 - Keep edits brief—show just context lines around changes
+- Do not return None instead of raising an error
+- Write pythonic PEP 8 compliant code
 
 ## Setup
 ```bash

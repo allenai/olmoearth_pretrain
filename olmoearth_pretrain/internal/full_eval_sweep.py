@@ -19,7 +19,11 @@ from olmoearth_pretrain.evals.models import (
     get_launch_script_path,
 )
 from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
-from olmoearth_pretrain.internal.constants import EVAL_LAUNCH_PATH, EVAL_WANDB_PROJECT
+from olmoearth_pretrain.internal.constants import (
+    CHECKPOINT_SWEEP_LAUNCH_PATH,
+    EVAL_LAUNCH_PATH,
+    EVAL_WANDB_PROJECT,
+)
 from olmoearth_pretrain.internal.experiment import SubCmd
 from olmoearth_pretrain.nn.pooling import PoolingType
 
@@ -780,6 +784,44 @@ def _get_module_path(model: BaselineModelName | None) -> str:
     return get_launch_script_path(model)
 
 
+def _build_checkpoint_sweep_command(
+    args: argparse.Namespace,
+    sub_command: str,
+    launch_command: str,
+    project_name: str,
+    extra: str,
+) -> str:
+    """Build a single command that evaluates all checkpoints in a directory."""
+    checkpoint_dir = args.checkpoint_dir.rstrip("/")
+    base_run_name = os.path.basename(checkpoint_dir) + "_sweep"
+    if args.model_name:
+        base_run_name = args.model_name
+
+    module_path = (
+        args.module_path
+        if args.module_path is not None
+        else _get_module_path(args.model)
+    )
+
+    cmd_args = _get_model_specific_args(args.model)
+    cmd_args += _get_normalization_args(args.model, Normalization_MODES[0])
+    cmd_args += _get_load_checkpoints_args(args.model)
+    if args.size:
+        cmd_args += _get_model_size_args(args.model, args.size)
+
+    env_prefix = f"TRAIN_SCRIPT_PATH={module_path} CHECKPOINT_DIR={checkpoint_dir}"
+    if args.steps:
+        env_prefix += f" CHECKPOINT_STEPS={args.steps}"
+
+    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
+    return (
+        f"{env_prefix} "
+        f"{launch_command} {CHECKPOINT_SWEEP_LAUNCH_PATH} "
+        f"{sub_command} {base_run_name} {args.cluster} {launch_overrides} "
+        f"--trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
+    )
+
+
 def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     """Build the commands for the sweep."""
     project_name = args.project_name or EVAL_WANDB_PROJECT
@@ -787,6 +829,14 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
 
     sub_command = _get_sub_command(args)
     launch_command = "python3" if not sub_command == SubCmd.evaluate else "torchrun"
+
+    # Checkpoint sweep mode: evaluate all checkpoints in a directory
+    if args.checkpoint_dir:
+        cmd = _build_checkpoint_sweep_command(
+            args, sub_command, launch_command, project_name, extra
+        )
+        return [cmd]
+
     checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
 
     commands_to_run = []
@@ -1044,6 +1094,20 @@ def main() -> None:
         type=int,
         default=None,
         help="If set, reduce embeddings to this dimensionality via PCA (e.g., 128, 64)",
+    )
+    parser.add_argument(
+        "--checkpoint_dir",
+        type=str,
+        default=None,
+        help="Directory containing step{N}/ checkpoint folders. "
+        "Evaluates all checkpoints and logs to a single wandb run.",
+    )
+    parser.add_argument(
+        "--steps",
+        type=str,
+        default=None,
+        help="Comma-separated list of step numbers to evaluate "
+        "(e.g. '5000,10000,15000'). Only used with --checkpoint_dir.",
     )
 
     args, extra_cli = parser.parse_known_args()
