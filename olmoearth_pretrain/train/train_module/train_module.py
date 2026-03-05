@@ -41,6 +41,40 @@ from olmoearth_pretrain.train.loss import LossConfig
 logger = getLogger(__name__)
 
 
+def _strip_unknown_fields(d: Any) -> Any:
+    """Recursively strip fields from config dicts that don't exist on the target class.
+
+    Old checkpoints may contain fields that have since been removed (e.g.
+    ``merge_bandsets``). OmegaConf's strict merge rejects unknown keys, so we
+    strip them before calling ``Config.from_dict``.
+    """
+    if not isinstance(d, dict):
+        return d
+
+    from dataclasses import fields as dc_fields
+    from importlib import import_module
+
+    # Recurse first
+    cleaned = {k: _strip_unknown_fields(v) for k, v in d.items()}
+
+    cls_name = cleaned.get("_CLASS_")
+    if cls_name is None or "." not in cls_name:
+        return cleaned
+
+    try:
+        *modules, name = cls_name.split(".")
+        cls = getattr(import_module(".".join(modules)), name)
+        valid_keys = {f.name for f in dc_fields(cls)} | {"_CLASS_"}
+        removed = set(cleaned) - valid_keys
+        if removed:
+            logger.info("Stripping unknown fields %s from %s", removed, cls_name)
+            cleaned = {k: v for k, v in cleaned.items() if k in valid_keys}
+    except Exception:
+        logger.debug("Could not resolve class %s for field stripping", cls_name)
+
+    return cleaned
+
+
 @dataclass
 class OlmoEarthTrainModuleConfig(Config):
     """A configuration class for building :class:`OlmoEarthTrainModule` instances.
@@ -442,7 +476,7 @@ class OlmoEarthTrainModule(TrainModule):
         if self.trainer.load_path is not None:
             with open(f"{self.trainer.load_path}/config.json") as f:
                 config_dict = json.load(f)
-                model_config = Config.from_dict(config_dict["model"])
+            model_config = Config.from_dict(_strip_unknown_fields(config_dict["model"]))
             model = model_config.build()
             # Check if any keys are missing
             for key in self.model.state_dict().keys():
