@@ -38,6 +38,7 @@ from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     OlmoEarthSpeedMonitorCallback,
     OlmoEarthWandBCallback,
+    ShmMonitorCallback,
 )
 from olmoearth_pretrain.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from olmoearth_pretrain.train.loss import LossConfig
@@ -251,6 +252,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
+        .with_callback("shm_monitor", ShmMonitorCallback(interval=10))
         .with_callback(
             "beaker", BeakerCallback()
         )  # this shoukd not be here, but for now it is
