@@ -76,7 +76,7 @@ class ModalityTokenization(Config):
         """Get the number of band sets (token groups)."""
         return len(self.band_groups)
 
-    def validate(self, base_modality: ModalitySpec) -> None:
+    def validate_against(self, base_modality: ModalitySpec) -> None:
         """Validate that all band names exist in the modality.
 
         Args:
@@ -200,4 +200,4 @@ class TokenizationConfig(Config):
                     f"Invalid modality name in overrides: '{modality_name}'. "
                     f"Valid modalities: {Modality.names()}"
                 )
-            tokenization.validate(base_spec)
+            tokenization.validate_against(base_spec)
