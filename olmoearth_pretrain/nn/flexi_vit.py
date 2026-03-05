@@ -572,6 +572,11 @@ class ReconstructorConfig(Config):
     max_patch_size: int = 8
     tokenization_config: TokenizationConfig | None = None
 
+    def __post_init__(self) -> None:
+        """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
+        if isinstance(self.tokenization_config, dict):
+            self.tokenization_config = TokenizationConfig(**self.tokenization_config)
+
     def validate(self) -> None:
         """Validate the configuration."""
         if len(self.supported_modalities) == 0:
@@ -2046,6 +2051,11 @@ class EncoderConfig(Config):
     use_spectral_mixer: bool = False
     spectral_mixer_modalities: list[str] | None = None
 
+    def __post_init__(self) -> None:
+        """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
+        if isinstance(self.tokenization_config, dict):
+            self.tokenization_config = TokenizationConfig(**self.tokenization_config)
+
     def validate(self) -> None:
         """Validate the configuration."""
         if len(self.supported_modalities) == 0:
@@ -2109,6 +2119,11 @@ class PredictorConfig(Config):
     use_flash_attn: bool = False
     qk_norm: bool = False
     tokenization_config: TokenizationConfig | None = None
+
+    def __post_init__(self) -> None:
+        """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
+        if isinstance(self.tokenization_config, dict):
+            self.tokenization_config = TokenizationConfig(**self.tokenization_config)
 
     def validate(self) -> None:
         """Validate the configuration."""

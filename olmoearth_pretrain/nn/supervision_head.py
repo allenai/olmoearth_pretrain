@@ -40,7 +40,7 @@ class SupervisionTaskType(StrEnum):
 
 
 @dataclass
-class SupervisionModalityConfig:
+class SupervisionModalityConfig(Config):
     """Configuration for supervising a single modality.
 
     Args:
