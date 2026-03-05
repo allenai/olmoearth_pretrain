@@ -13,14 +13,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from olmo_core.data.utils import get_rng
-from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.metrics import (
+    EvalMetric,
     EvalResult,
     EvalTaskResult,
+    classification_metrics,
     segmentation_metrics,
 )
 from olmoearth_pretrain.evals.utils import adjust_learning_rate
@@ -132,9 +133,11 @@ def train_and_eval_probe(
     epochs: int = 50,
     eval_interval: int = 50,
     probe_type: ProbeType = ProbeType.LINEAR,
-    select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False,
+    select_best_by_primary_metric: bool = False,
     n_bootstrap: int = 0,
     bootstrap_seed: int = 42,
+    primary_metric: EvalMetric | None = None,
+    primary_metric_class: int | None = None,
 ) -> EvalTaskResult:
     """Run a linear probe on the OlmoEarth Pretrain model.
 
@@ -224,6 +227,8 @@ def train_and_eval_probe(
             device=device,
             task_type=config.task_type,
             probe_type=probe_type,
+            primary_metric=primary_metric,
+            primary_metric_class=primary_metric_class,
         )
         logger.info(f"Epoch {end_epoch}, Val Score: {val_result.primary}")
         val_results.append(val_result)
@@ -242,7 +247,7 @@ def train_and_eval_probe(
     logger.debug(f"Best Val Score: {best_val_score} at epoch {best_epoch}")
 
     # Determine final validation result
-    if select_final_test_miou_based_on_epoch_of_max_val_miou:
+    if select_best_by_primary_metric:
         # Find the result corresponding to best epoch
         best_idx = (best_epoch // eval_interval) - 1
         if best_idx < 0:
@@ -313,6 +318,8 @@ def train_and_eval_probe(
                     bootstrap_labels,
                     num_classes=config.num_classes,
                     task_type=config.task_type,
+                    primary_metric=primary_metric,
+                    primary_metric_class=primary_metric_class,
                 )
                 bootstrap_scores.append(result.primary)
 
@@ -344,6 +351,8 @@ def train_and_eval_probe(
             all_labels,
             num_classes=config.num_classes,
             task_type=config.task_type,
+            primary_metric=primary_metric,
+            primary_metric_class=primary_metric_class,
         )
         if n_bootstrap == 0:
             logger.info(f"Test result: {test_result}")
@@ -499,25 +508,26 @@ def compute_metric(
     labels: torch.Tensor,
     num_classes: int,
     task_type: TaskType,
+    primary_metric: EvalMetric | None = None,
+    primary_metric_class: int | None = None,
 ) -> EvalResult:
-    """Compute metric from predictions and labels.
-
-    Args:
-        preds: Predictions tensor
-        labels: Labels tensor
-        num_classes: Number of classes
-        task_type: Type of task (classification or segmentation)
-
-    Returns:
-        EvalResult with computed metrics
-    """
+    """Compute metric from predictions and labels."""
     if task_type == TaskType.SEGMENTATION:
         return segmentation_metrics(
-            preds, labels, num_classes=num_classes, ignore_label=-1
+            preds,
+            labels,
+            num_classes=num_classes,
+            ignore_label=-1,
+            primary_metric=primary_metric,
+            primary_metric_class=primary_metric_class,
         )
     else:
-        acc = accuracy_score(labels.numpy(), preds.numpy())
-        return EvalResult.from_classification(acc)
+        return classification_metrics(
+            predictions=preds,
+            labels=labels,
+            primary_metric=primary_metric,
+            primary_metric_class=primary_metric_class,
+        )
 
 
 def evaluate_probe(
@@ -528,12 +538,10 @@ def evaluate_probe(
     task_type: TaskType,
     probe_type: ProbeType,
     num_output_pixels_per_side_of_patch: int | None = None,
+    primary_metric: EvalMetric | None = None,
+    primary_metric_class: int | None = None,
 ) -> EvalResult:
-    """Evaluate a trained linear probe on a segmentation or classification task.
-
-    Returns:
-        EvalResult with computed metrics
-    """
+    """Evaluate a trained linear probe on a segmentation or classification task."""
     preds, labels = get_probe_predictions(
         data_loader=data_loader,
         probe=probe,
@@ -543,4 +551,11 @@ def evaluate_probe(
         probe_type=probe_type,
         num_output_pixels_per_side_of_patch=num_output_pixels_per_side_of_patch,
     )
-    return compute_metric(preds, labels, num_classes, task_type)
+    return compute_metric(
+        preds,
+        labels,
+        num_classes,
+        task_type,
+        primary_metric=primary_metric,
+        primary_metric_class=primary_metric_class,
+    )
