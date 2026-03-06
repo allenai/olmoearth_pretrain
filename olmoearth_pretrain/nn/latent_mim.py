@@ -8,6 +8,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 from torch.distributed import DeviceMesh
+from torch.distributed._composable.replicate import replicate
 from torch.distributed.fsdp import (
     MixedPrecisionPolicy,
     fully_shard,
@@ -136,10 +137,15 @@ class LatentMIM(nn.Module, DistributedMixins):
             self.reconstructor.apply_fsdp(**fsdp_config)
         if self.supervision_head is not None:
             fully_shard(self.supervision_head, **fsdp_config)
+        # Learnable loss weights have tiny 1-element parameters that cannot be
+        # FSDP-sharded.  Replicate them (DDP-style gradient sync) and exclude
+        # from the parent fully_shard via ignored_params.
+        ignored: set[nn.Parameter] = set()
         if self.learnable_loss_weights is not None:
-            fully_shard(self.learnable_loss_weights, **fsdp_config)
+            replicate(self.learnable_loss_weights)
+            ignored.update(self.learnable_loss_weights.parameters())
         # TODO: More finegrained wrapping of the encoder transformer layers next time
-        fully_shard(self, **fsdp_config)
+        fully_shard(self, **fsdp_config, ignored_params=ignored or None)
         register_fsdp_forward_method(self.target_encoder, "forward")
 
     def apply_compile(self) -> None:
