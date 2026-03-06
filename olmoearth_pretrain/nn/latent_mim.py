@@ -17,6 +17,10 @@ from torch.distributed.fsdp import (
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.nn.learnable_loss_weights import (
+    LearnableLossWeights,
+    LearnableLossWeightsConfig,
+)
 from olmoearth_pretrain.nn.supervision_head import (
     SupervisionHead,
     SupervisionHeadConfig,
@@ -37,6 +41,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         decoder: nn.Module,
         reconstructor: torch.nn.Module | None = None,
         supervision_head: SupervisionHead | None = None,
+        learnable_loss_weights: LearnableLossWeights | None = None,
     ):
         """Initialize the Latent MIM Style.
 
@@ -46,12 +51,15 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructor: Optional reconstructor for auto-encoding.
             supervision_head: Optional supervision head for direct supervision
                 of decode-only modalities from decoder output.
+            learnable_loss_weights: Optional Kendall et al. uncertainty-based
+                learnable weights for per-component loss balancing.
         """
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.reconstructor = reconstructor
         self.supervision_head = supervision_head
+        self.learnable_loss_weights = learnable_loss_weights
         self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
@@ -128,6 +136,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             self.reconstructor.apply_fsdp(**fsdp_config)
         if self.supervision_head is not None:
             fully_shard(self.supervision_head, **fsdp_config)
+        if self.learnable_loss_weights is not None:
+            fully_shard(self.learnable_loss_weights, **fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
@@ -154,6 +164,7 @@ class LatentMIMConfig(Config):
     decoder_config: Config
     reconstructor_config: Config | None = None
     supervision_head_config: SupervisionHeadConfig | None = None
+    learnable_loss_weights_config: LearnableLossWeightsConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -199,9 +210,13 @@ class LatentMIMConfig(Config):
                 embedding_dim=embedding_dim,
                 max_patch_size=self.encoder_config.max_patch_size,
             )
+        learnable_loss_weights = None
+        if self.learnable_loss_weights_config is not None:
+            learnable_loss_weights = self.learnable_loss_weights_config.build()
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
             supervision_head=supervision_head,
+            learnable_loss_weights=learnable_loss_weights,
         )

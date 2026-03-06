@@ -221,6 +221,51 @@ class SupervisionHead(nn.Module):
 # ---------------------------------------------------------------------------
 
 
+def _compute_per_modality_losses(
+    predictions: dict[str, Tensor],
+    batch: MaskedOlmoEarthSample,
+    supervision_head: SupervisionHead,
+) -> dict[str, Tensor]:
+    """Compute per-modality supervision losses (non-detached, unweighted).
+
+    Returns a dict of raw loss values suitable for external weighting.
+    Modalities whose target is absent or entirely missing-valued contribute
+    ``0 * pred.sum()`` so that FSDP still sees gradients for all parameters.
+    """
+    modality_configs = supervision_head.modality_configs
+    first_pred = next(iter(predictions.values()))
+    dtype = first_pred.dtype
+    per_modality_losses: dict[str, Tensor] = {}
+
+    for name, pred in predictions.items():
+        cfg = modality_configs[name]
+        raw_target = getattr(batch, name, None)
+
+        if raw_target is None:
+            per_modality_losses[name] = (0 * pred.sum()).to(dtype)
+            continue
+
+        valid_mask = _build_valid_mask(raw_target)
+
+        if not valid_mask.any():
+            per_modality_losses[name] = (0 * pred.sum()).to(dtype)
+            continue
+
+        if cfg.task_type == SupervisionTaskType.CLASSIFICATION:
+            class_values = supervision_head.get_class_values(name)
+            loss = _classification_loss(pred, raw_target, valid_mask, class_values)
+        elif cfg.task_type == SupervisionTaskType.BINARY_CLASSIFICATION:
+            loss = _binary_classification_loss(pred, raw_target, valid_mask)
+        elif cfg.task_type == SupervisionTaskType.REGRESSION:
+            loss = _regression_loss(pred, raw_target, valid_mask)
+        else:
+            raise ValueError(f"Unknown task type: {cfg.task_type}")
+
+        per_modality_losses[name] = loss
+
+    return per_modality_losses
+
+
 def compute_supervision_loss(
     predictions: dict[str, Tensor],
     batch: MaskedOlmoEarthSample,
@@ -237,6 +282,7 @@ def compute_supervision_loss(
         total_loss: Weighted sum of per-modality losses.
         per_modality_losses: Dict of unweighted per-modality loss values (detached).
     """
+    raw_losses = _compute_per_modality_losses(predictions, batch, supervision_head)
     modality_configs = supervision_head.modality_configs
     first_pred = next(iter(predictions.values()))
     device = first_pred.device
@@ -244,34 +290,9 @@ def compute_supervision_loss(
     total_loss = torch.zeros([], device=device, dtype=dtype)
     per_modality_losses: dict[str, Tensor] = {}
 
-    for name, pred in predictions.items():
-        cfg = modality_configs[name]
-        raw_target = getattr(batch, name, None)
-
-        if raw_target is None:
-            total_loss = total_loss + 0 * pred.sum()
-            continue
-
-        # raw_target: [B, H, W, T, num_bands] -- keep all timesteps
-        valid_mask = _build_valid_mask(raw_target)  # [B, H, W, T]
-
-        if not valid_mask.any():
-            total_loss = total_loss + 0 * pred.sum()
-            per_modality_losses[name] = torch.zeros([], device=device)
-            continue
-
-        if cfg.task_type == SupervisionTaskType.CLASSIFICATION:
-            class_values = supervision_head.get_class_values(name)
-            loss = _classification_loss(pred, raw_target, valid_mask, class_values)
-        elif cfg.task_type == SupervisionTaskType.BINARY_CLASSIFICATION:
-            loss = _binary_classification_loss(pred, raw_target, valid_mask)
-        elif cfg.task_type == SupervisionTaskType.REGRESSION:
-            loss = _regression_loss(pred, raw_target, valid_mask)
-        else:
-            raise ValueError(f"Unknown task type: {cfg.task_type}")
-
+    for name, loss in raw_losses.items():
         per_modality_losses[name] = loss.detach()
-        total_loss = total_loss + cfg.weight * loss
+        total_loss = total_loss + modality_configs[name].weight * loss
 
     return total_loss, per_modality_losses
 
