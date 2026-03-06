@@ -32,7 +32,14 @@ PARTITIONS = [
 def get_run_group_name(run_name: str) -> str:
     """Extracts the group name from a run name, e.g., 'my_experiment_step_100' -> 'my_experiment'."""
     # just split on _step and take the first part
-    return run_name.split("_step")[0]
+    if "_step" in run_name:
+        return run_name.split("_step")[0]
+    elif "_dataset" in run_name:
+        return run_name.split("_dataset")[0]
+    elif "_pre_trained" in run_name:
+        return run_name.split("_pre_trained")[0]
+    else:
+        raise ValueError(f"unexpected run name {run_name}")
 
 
 def get_run_groups(
@@ -82,7 +89,9 @@ def group_runs_by_run_prefix_and_step(
     for run in api.runs(wandb_path, lazy=False):
         if run_prefix and not run.name.startswith(run_prefix):
             continue
-        group_name = get_run_group_name(run.name) if "step" in run.name else run_prefix
+        group_name = get_run_group_name(
+            run.name
+        )  # if "step" in run.name else run_prefix
         grouped_runs[group_name].append(run)
         print(f"Found run {run.name} ({run.id}) -> group: {group_name}")
     return grouped_runs
@@ -151,17 +160,17 @@ def get_max_metrics_grouped(
                 if not key.startswith("eval/"):
                     continue
                 if key.startswith("eval/test/"):
-                    print(
-                        f"Skipping test metric {key} for run {run.name} because it is a test metric"
-                    )
+                    # print(
+                    #     f"Skipping test metric {key} for run {run.name} because it is a test metric"
+                    # )
                     # DO NOT select on test metrics
                     continue
                 # Ensure the run has test metrics
                 if run.summary.get(_get_corresponding_test_key(key), None) is None:
                     # DOn't select top val metrics if there is no corresponding test metric
-                    print(
-                        f"Skipping metric {key} for run {run.name} because it has no corresponding test metric"
-                    )
+                    # print(
+                    #     f"Skipping metric {key} for run {run.name} because it has no corresponding test metric"
+                    # )
                     continue
 
                 # If for the given metric, it is a linear probe task skip if it was not done with early stop linear porbing
@@ -183,15 +192,16 @@ def get_max_metrics_grouped(
                 )
                 if (
                     is_linear_probe_task
+                    and get_test_metrics
                     and not is_select_final_test_miou_based_on_epoch_of_max_val_miou
                 ):
                     print(
                         f"Skipping metric {key} for run {run.name} because it is a linear probe task but not done with early stop linear probing"
                     )
                     continue
-                print(
-                    f"Selecting metric {key} for run {run.name} because it matches criteria"
-                )
+                # print(
+                #     f"Selecting metric {key} for run {run.name} because it matches criteria"
+                # )
 
                 prev_max_val = metrics.get(key, float("-inf"))
                 metrics[key] = max(prev_max_val, value)
@@ -447,14 +457,19 @@ if __name__ == "__main__":
                     # Try original name
                     key = f"eval/{metric}"
                     val = partition_metrics[partition].get(key)
+                    name_for_print = metric
                     # Fallback with underscore variant
                     if val is None:
                         metric_alt = metric.replace("-", "_")
                         key_alt = f"eval/{metric_alt}"
                         val = partition_metrics[partition].get(key_alt)
                         name_for_print = metric_alt if val is not None else metric
-                    else:
-                        name_for_print = metric
+                    # also try the segmentation suffixes
+                    if val is None:
+                        metric_alt = f"{metric}/miou"
+                        key_alt = f"eval/{metric_alt}"
+                        val = partition_metrics[partition].get(key_alt)
+                        name_for_print = metric_alt if val is not None else metric
 
                     if val is None:
                         print(f"  {metric}: not found")
