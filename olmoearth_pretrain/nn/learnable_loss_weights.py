@@ -32,7 +32,7 @@ class LearnableLossWeights(nn.Module):
         super().__init__()
         # s = log(sigma^2), initialised to 0 so initial weight = exp(0) = 1.
         self.log_vars = nn.ParameterDict(
-            {name: nn.Parameter(torch.zeros(1)) for name in loss_names}
+            {name: nn.Parameter(torch.zeros(())) for name in loss_names}
         )
 
     def weight_loss(self, name: str, loss: Tensor) -> Tensor:
