@@ -22,6 +22,9 @@ Experiments:
 26. single bandset S2 (all 12 bands) / Landsat + SpectralMixer + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + masked neg loss
 27. exp 21 + SpectralMixer (decoder supervision + spectral mixer on satellite modalities)
 28. exp 27 + lower contrastive weight (0.03 instead of 0.1) — combines spectral mixer, decoder supervision, NDVI + ERA5, band dropout, low contrastive
+29. exp 17 + learnable loss weights (Kendall et al. uncertainty weighting)
+30. exp 20 + learnable loss weights
+31. exp 21 + learnable loss weights (decoder supervision + learnable loss weights)
 """
 
 import copy
@@ -50,6 +53,7 @@ from olmoearth_pretrain.internal.experiment import CommonComponents, SubCmd, mai
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
 from olmoearth_pretrain.nn.flexihelios import EncoderConfig, PredictorConfig
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
+from olmoearth_pretrain.nn.learnable_loss_weights import LearnableLossWeightsConfig
 from olmoearth_pretrain.nn.supervision_head import (
     SupervisionHeadConfig,
     SupervisionModalityConfig,
@@ -1626,6 +1630,207 @@ def build_dataloader_exp28(common: CommonComponents) -> OlmoEarthDataLoaderConfi
     return build_dataloader_exp21(common)
 
 
+# --- Learnable loss weight helpers ---
+
+
+def _learnable_loss_names(
+    training_modalities: list[str],
+    supervised_modalities: list[str] | None = None,
+    include_instance_contrastive: bool = True,
+) -> list[str]:
+    """Build the flat list of loss-component names for LearnableLossWeightsConfig."""
+    names = [f"contrastive/{mod}" for mod in training_modalities]
+    if supervised_modalities:
+        names += [f"supervision/{mod}" for mod in supervised_modalities]
+    if include_instance_contrastive:
+        names.append("instance_contrastive")
+    return names
+
+
+# ============================================================
+# Experiment 29: exp 17 + learnable loss weights
+# ============================================================
+
+
+def build_common_exp29(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp29 (same as exp17)."""
+    return build_common_exp17(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp29(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp29 (same as exp17)."""
+    return build_train_module_exp17(common)
+
+
+def build_model_exp29(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp29: exp17 + learnable loss weights."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        learnable_loss_weights_config=LearnableLossWeightsConfig(
+            loss_names=_learnable_loss_names(common.training_modalities),
+        ),
+    )
+
+
+def build_dataloader_exp29(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp29 (same as exp17)."""
+    return build_dataloader_exp17(common)
+
+
+# ============================================================
+# Experiment 30: exp 20 + learnable loss weights
+# ============================================================
+
+
+def build_common_exp30(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp30 (same as exp20)."""
+    return build_common_exp20(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp30(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp30 (same as exp20)."""
+    return build_train_module_exp20(common)
+
+
+def build_model_exp30(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp30: exp20 + learnable loss weights."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        learnable_loss_weights_config=LearnableLossWeightsConfig(
+            loss_names=_learnable_loss_names(common.training_modalities),
+        ),
+    )
+
+
+def build_dataloader_exp30(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp30 (same as exp20)."""
+    return build_dataloader_exp20(common)
+
+
+# ============================================================
+# Experiment 31: exp 21 + learnable loss weights
+# ============================================================
+
+
+def build_common_exp31(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp31 (same as exp21)."""
+    return build_common_exp21(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp31(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp31 (same as exp21)."""
+    return build_train_module_exp21(common)
+
+
+def build_model_exp31(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp31: exp21 + learnable loss weights."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    supervision_head_config = SupervisionHeadConfig(
+        modality_configs=SUPERVISION_MODALITY_CONFIGS,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        supervision_head_config=supervision_head_config,
+        learnable_loss_weights_config=LearnableLossWeightsConfig(
+            loss_names=_learnable_loss_names(
+                common.training_modalities,
+                supervised_modalities=list(SUPERVISION_MODALITY_CONFIGS.keys()),
+            ),
+        ),
+    )
+
+
+def build_dataloader_exp31(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp31 (same as exp21)."""
+    return build_dataloader_exp21(common)
+
+
 # ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
@@ -1756,6 +1961,24 @@ EXPERIMENTS = {
         build_model_exp28,
         build_train_module_exp28,
         build_dataloader_exp28,
+    ),
+    "single_bandset_all12_random_band_dropout_random_decode_masked_neg_learnable_loss_weights": (
+        build_common_exp29,
+        build_model_exp29,
+        build_train_module_exp29,
+        build_dataloader_exp29,
+    ),
+    "single_bandset_all12_random_band_dropout_ndvi_era5_random_time_decode_masked_neg_learnable_loss_weights": (
+        build_common_exp30,
+        build_model_exp30,
+        build_train_module_exp30,
+        build_dataloader_exp30,
+    ),
+    "single_bandset_all12_random_band_dropout_ndvi_era5_random_time_decode_masked_neg_decoder_supervision_learnable_loss_weights": (
+        build_common_exp31,
+        build_model_exp31,
+        build_train_module_exp31,
+        build_dataloader_exp31,
     ),
 }
 
