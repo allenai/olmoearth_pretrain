@@ -84,3 +84,19 @@ With `min_encoded_bandsets=2` (default), the strategy randomly encodes **2 or 3*
 Band dropout (zeroing random bands before Conv2d) only applies to the **online encoder**. The target encoder has `band_dropout_rate=0.0` (set in `LatentMIM.__init__`), so it always sees full spectral info. The model learns to match the target's representations despite missing bands. At inference, the online encoder also sees all bands — matching the target encoder's view.
 
 The dropout rate is a per-band drop **probability**, not a fixed proportion — each band is independently dropped with probability `rate`. With `random_band_dropout=True`, `rate ~ Uniform(0, 0.3)` is sampled once per forward call (shared across the batch). This means the model frequently sees near-full bands (when rate≈0) and occasionally heavy dropout (rate≈0.3), covering the inference regime (rate=0) during training. At least 1 band is always kept per sample. Applies to any modality with >1 band (S2, Landsat, S1).
+
+---
+
+## Diagnostic metrics
+
+Logged automatically per step to wandb under `train/`:
+
+| Metric | Per-modality | Description |
+|---|---|---|
+| `patchdisc/loss/{mod}` | Yes | PatchDisc loss for each modality |
+| `patchdisc/accuracy/{mod}` | Yes | Top-1 accuracy: is argmax the correct target token? |
+| `patchdisc/num_decode_tokens/{mod}` | Yes | Number of decode tokens (effective loss weighting) |
+| `patchdisc/target_collapse_ratio/{mod}` | Masked-neg only | Fraction of target pairs above `same_target_threshold` |
+| `patchdisc/avg_valid_negatives/{mod}` | Masked-neg only | Mean valid negatives per token after same-target masking |
+| `contrastive/accuracy` | No | Top-1 InfoNCE accuracy across the batch |
+| `contrastive/mean_positive_similarity` | No | Mean cosine similarity between positive pairs |
