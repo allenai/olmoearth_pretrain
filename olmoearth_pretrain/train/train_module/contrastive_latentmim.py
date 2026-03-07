@@ -181,6 +181,16 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets)
 
+    def _accumulate_metrics(
+        self,
+        accumulated: dict[str, float],
+        new_metrics: dict[str, float],
+        scale: float,
+    ) -> None:
+        """Accumulate metrics with scaling (for averaging across microbatches)."""
+        for key, value in new_metrics.items():
+            accumulated[key] = accumulated.get(key, 0.0) + value * scale
+
     def train_batch(
         self,
         batch: tuple[int, MaskedOlmoEarthSample, MaskedOlmoEarthSample],
@@ -209,6 +219,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_con = torch.tensor(0.0, device=self.device)
+        accumulated_metrics: dict[str, float] = {}
 
         # Unpack batch
         patch_size = batch[0]
@@ -230,13 +241,17 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 masked_batch_b = microbatch_b.to_device(self.device)
 
                 # Run Encoder and decoder on the augmented input
-                loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
+                loss_a, latent_a, decoded_a, target_output_a, pooled_a, metrics_a = (
                     self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
                 )
-                loss_b, latent_b, decoded_b, target_output_b, pooled_b = (
+                loss_b, latent_b, decoded_b, target_output_b, pooled_b, metrics_b = (
                     self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
                 )
                 loss = (loss_a + loss_b) / 2
+
+                mb_scale = 0.5 / num_microbatches
+                self._accumulate_metrics(accumulated_metrics, metrics_a, mb_scale)
+                self._accumulate_metrics(accumulated_metrics, metrics_b, mb_scale)
 
                 # Scale loss by number of microbatches
                 reg_term_a = self.compute_regularization(pooled_a)
@@ -252,10 +267,15 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     )
 
                 if self.contrastive_loss is not None:
-                    contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
-                    loss += contrastive_loss
+                    con_loss, con_metrics = self.contrastive_loss.compute_with_metrics(
+                        pooled_a, pooled_b
+                    )
+                    loss += con_loss
                     total_batch_con += (
-                        get_local_tensor(contrastive_loss.detach()) / num_microbatches
+                        get_local_tensor(con_loss.detach()) / num_microbatches
+                    )
+                    self._accumulate_metrics(
+                        accumulated_metrics, con_metrics, 1.0 / num_microbatches
                     )
 
                 loss = loss / num_microbatches
@@ -289,6 +309,13 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             )
         self.log_regularization(total_batch_reg)
 
+        for key, value in accumulated_metrics.items():
+            self.trainer.record_metric(
+                f"train/{key}",
+                value,
+                ReduceType.mean,
+            )
+
         del batch  # In case this helps with memory utilization.
         del masked_batch_a, masked_batch_b
 
@@ -298,7 +325,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         patch_size: int,
         token_exit_cfg: dict[str, int],
     ) -> tuple[
-        torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
+        torch.Tensor,
+        TokensAndMasks,
+        TokensAndMasks,
+        TokensAndMasks,
+        torch.Tensor,
+        dict[str, float],
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
@@ -319,7 +351,16 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     token_exit_cfg=token_exit_cfg,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
-            loss = self.loss_fn(decoded, target_output)
+            loss, patchdisc_metrics = self.base_loss.compute_with_metrics(
+                decoded, target_output
+            )
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
-            return loss, latent, decoded, target_output, latent_projected_and_pooled
+            return (
+                loss,
+                latent,
+                decoded,
+                target_output,
+                latent_projected_and_pooled,
+                patchdisc_metrics,
+            )

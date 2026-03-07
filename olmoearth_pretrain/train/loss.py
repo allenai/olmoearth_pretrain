@@ -31,6 +31,12 @@ class Loss(ABC):
         """Compute the loss between predictions and targets."""
         pass
 
+    def compute_with_metrics(
+        self, predictions: Any, targets: Any, **kwargs: Any
+    ) -> tuple[Tensor, dict[str, float]]:
+        """Compute loss and diagnostic metrics. Override for per-loss metrics."""
+        return self.compute(predictions, targets, **kwargs), {}
+
     @staticmethod
     def _expand_and_reciprocate(t: Tensor) -> Tensor:
         """As described in the name.
@@ -412,12 +418,21 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
     ) -> Tensor:
         """Compute patch discrimination loss with masked same-target negatives."""
+        loss, _ = self.compute_with_metrics(predictions, targets, **kwargs)
+        return loss
+
+    def compute_with_metrics(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> tuple[Tensor, dict[str, float]]:
+        """Compute loss and per-modality diagnostic metrics."""
         modality_preds, modality_masks = predictions.flatten_tokens_and_masks(
             return_lists=True
         )
         modality_targets = targets.flatten_tokens_and_masks(return_lists=True)[0]
 
         total_loss = 0
+        metrics: dict[str, float] = {}
+
         for all_preds, all_masks, all_targets, modality in zip(
             modality_preds, modality_masks, modality_targets, targets.modalities
         ):
@@ -426,7 +441,12 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
             pred = pred.float()
             target = target.float()
 
-            if pred.shape[1] == 0:
+            num_decode_tokens = pred.shape[1]
+            metrics[f"patchdisc/num_decode_tokens/{modality}"] = float(
+                num_decode_tokens
+            )
+
+            if num_decode_tokens == 0:
                 continue
 
             bs, nt, _ = pred.shape
@@ -439,7 +459,6 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
             pred = F.normalize(pred, p=2, dim=-1)
             target = F.normalize(target, p=2, dim=-1)
 
-            # Check if we should mask negatives for this modality
             should_mask = (
                 self.mask_negatives_for_modalities is None
                 or modality in self.mask_negatives_for_modalities
@@ -447,6 +466,12 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
 
             count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
             losses = []
+            correct_total = 0
+            total_tokens = 0
+            collapse_count = 0
+            collapse_pairs_total = 0
+            valid_neg_sum = 0.0
+            valid_neg_count = 0
             start = 0
 
             for c in count:
@@ -458,37 +483,44 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
                 pred_sample = pred[:, start:end, :]
                 target_sample = target[:, start:end, :]
 
-                # Compute similarity scores
                 score_sample = (
                     torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
                 )
 
-                # Apply same-target masking if enabled for this modality
                 if should_mask and c_val > 1:
                     target_flat = target_sample.squeeze(0)  # [c, dim]
                     target_sim = target_flat @ target_flat.T  # [c, c]
                     same_target = target_sim > self.same_target_threshold
 
-                    # Mask: same target but not self (diagonal)
                     diagonal = torch.eye(
                         c_val, dtype=torch.bool, device=target_flat.device
                     )
                     invalid_negatives = same_target & ~diagonal
 
-                    # Check if any token has valid negatives
-                    valid_neg_count = (~same_target).sum(dim=-1)
-                    if valid_neg_count.min() == 0:
-                        # Some tokens have no valid negatives - skip this sample
+                    num_pairs = c_val * (c_val - 1)
+                    collapse_count += int(invalid_negatives.sum().item())
+                    collapse_pairs_total += num_pairs
+
+                    per_token_valid = (~same_target).sum(dim=-1).float()
+                    valid_neg_sum += per_token_valid.sum().item()
+                    valid_neg_count += c_val
+
+                    if per_token_valid.min() == 0:
                         start = end
                         continue
 
-                    # Apply mask to scores: set invalid negatives to -inf
                     score_sample = score_sample.masked_fill(
                         invalid_negatives[None, :, :], float("-inf")
                     )
 
-                # Standard cross-entropy
                 labels = torch.arange(c_val, dtype=torch.long, device=pred.device)[None]
+
+                # Accuracy: does argmax match the correct target?
+                with torch.no_grad():
+                    preds_idx = score_sample.squeeze(0).argmax(dim=-1)
+                    correct_total += int((preds_idx == labels.squeeze(0)).sum().item())
+                    total_tokens += c_val
+
                 loss = F.cross_entropy(
                     score_sample.flatten(0, 1),
                     labels.flatten(0, 1),
@@ -502,13 +534,25 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
             if len(losses) == 0:
                 continue
 
-            loss = torch.stack(losses).mean()
+            modality_loss = torch.stack(losses).mean()
             if self.modality_weights is not None:
-                loss = loss * self.modality_weights.get(modality, 1.0)
+                modality_loss = modality_loss * self.modality_weights.get(modality, 1.0)
 
-            total_loss += loss
+            total_loss += modality_loss
 
-        return self.weight * total_loss
+            metrics[f"patchdisc/loss/{modality}"] = float(modality_loss.detach())
+            if total_tokens > 0:
+                metrics[f"patchdisc/accuracy/{modality}"] = correct_total / total_tokens
+            if collapse_pairs_total > 0:
+                metrics[f"patchdisc/target_collapse_ratio/{modality}"] = (
+                    collapse_count / collapse_pairs_total
+                )
+            if valid_neg_count > 0:
+                metrics[f"patchdisc/avg_valid_negatives/{modality}"] = (
+                    valid_neg_sum / valid_neg_count
+                )
+
+        return self.weight * total_loss, metrics
 
 
 # --- Deprecated aliases for backward compatibility ---
@@ -854,13 +898,31 @@ class InfoNCELoss(Loss):
         Returns:
             The computed loss value.
         """
+        loss, _ = self.compute_with_metrics(predictions, targets, **kwargs)
+        return loss
+
+    def compute_with_metrics(
+        self, predictions: torch.Tensor, targets: torch.Tensor, **kwargs: Any
+    ) -> tuple[Tensor, dict[str, float]]:
+        """Compute InfoNCE loss and accuracy."""
         predictions = F.normalize(predictions, p=2, dim=-1)
         targets = F.normalize(targets, p=2, dim=-1)
         logits = predictions @ targets.transpose(-2, -1)
 
-        # Positive keys are the entries on the diagonal
         labels = torch.arange(len(predictions), device=predictions.device)
-        return self.weight * F.cross_entropy(logits / self.tau, labels)
+        scaled_logits = logits / self.tau
+        loss = self.weight * F.cross_entropy(scaled_logits, labels)
+
+        with torch.no_grad():
+            preds_idx = scaled_logits.argmax(dim=-1)
+            accuracy = (preds_idx == labels).float().mean().item()
+            mean_pos_sim = logits.diagonal().mean().item()
+
+        metrics = {
+            "contrastive/accuracy": accuracy,
+            "contrastive/mean_positive_similarity": mean_pos_sim,
+        }
+        return loss, metrics
 
 
 @LOSS_REGISTRY.register("KoLeo")
