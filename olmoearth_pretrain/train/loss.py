@@ -551,6 +551,7 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
                 metrics[f"patchdisc/avg_valid_negatives/{modality}"] = (
                     valid_neg_sum / valid_neg_count
                 )
+            # Keys without real values keep the 0.0 defaults set above.
 
         return self.weight * total_loss, metrics
 

@@ -177,6 +177,29 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 )
             self.model.target_encoder.apply(self.model.target_encoder._init_weights)
 
+        # Build fixed set of diagnostic metric keys so every step logs the
+        # same keys (required by olmo-core's batched metric reduction).
+        self._default_metrics = self._build_default_metric_keys()
+
+    def _build_default_metric_keys(self) -> dict[str, float]:
+        """Build default metric keys from the model's supported modalities."""
+        defaults: dict[str, float] = {}
+        modalities = getattr(self.model.encoder, "supported_modality_names", [])
+        masked_neg_modalities = getattr(
+            self.base_loss, "mask_negatives_for_modalities", None
+        )
+        for modality in modalities:
+            defaults[f"patchdisc/num_decode_tokens/{modality}"] = 0.0
+            defaults[f"patchdisc/loss/{modality}"] = 0.0
+            defaults[f"patchdisc/accuracy/{modality}"] = 0.0
+            if masked_neg_modalities is None or modality in masked_neg_modalities:
+                defaults[f"patchdisc/target_collapse_ratio/{modality}"] = 0.0
+                defaults[f"patchdisc/avg_valid_negatives/{modality}"] = 0.0
+        if self.contrastive_loss is not None:
+            defaults["contrastive/accuracy"] = 0.0
+            defaults["contrastive/mean_positive_similarity"] = 0.0
+        return defaults
+
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets)
@@ -219,7 +242,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_con = torch.tensor(0.0, device=self.device)
-        accumulated_metrics: dict[str, float] = {}
+        accumulated_metrics: dict[str, float] = dict(self._default_metrics)
 
         # Unpack batch
         patch_size = batch[0]
