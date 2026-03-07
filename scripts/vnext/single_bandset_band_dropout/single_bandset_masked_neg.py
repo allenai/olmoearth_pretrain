@@ -1696,7 +1696,9 @@ def build_model_exp29(common: CommonComponents) -> LatentMIMConfig:
         encoder_config=encoder_config,
         decoder_config=decoder_config,
         learnable_loss_weights_config=LearnableLossWeightsConfig(
-            loss_names=_learnable_loss_names(common.training_modalities),
+            loss_names=_learnable_loss_names(
+                common.training_modalities, include_instance_contrastive=False
+            ),
         ),
     )
 
@@ -1755,7 +1757,9 @@ def build_model_exp30(common: CommonComponents) -> LatentMIMConfig:
         encoder_config=encoder_config,
         decoder_config=decoder_config,
         learnable_loss_weights_config=LearnableLossWeightsConfig(
-            loss_names=_learnable_loss_names(common.training_modalities),
+            loss_names=_learnable_loss_names(
+                common.training_modalities, include_instance_contrastive=False
+            ),
         ),
     )
 
@@ -1821,6 +1825,7 @@ def build_model_exp31(common: CommonComponents) -> LatentMIMConfig:
             loss_names=_learnable_loss_names(
                 common.training_modalities,
                 supervised_modalities=list(SUPERVISION_MODALITY_CONFIGS.keys()),
+                include_instance_contrastive=False,
             ),
         ),
     )
