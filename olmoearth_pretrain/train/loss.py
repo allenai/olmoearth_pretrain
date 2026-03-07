@@ -409,111 +409,125 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         self.same_target_threshold = same_target_threshold
         self.mask_negatives_for_modalities = mask_negatives_for_modalities
 
+    def _compute_modality_loss(
+        self,
+        mod_preds: Tensor,
+        mod_masks: Tensor,
+        mod_targets: Tensor,
+        modality: str,
+    ) -> Tensor | None:
+        """Compute contrastive loss for a single modality's tokens.
+
+        Returns the scalar loss or ``None`` if no valid decoder tokens exist.
+        """
+        pred = mod_preds[mod_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        target = mod_targets[mod_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        pred = pred.float()
+        target = target.float()
+        _bs, nt, _ = pred.shape
+        if nt == 0:
+            return None
+
+        if self.pred2unit:
+            pred_mu = pred.mean(1, keepdims=True)
+            pred_std = pred.std(1, keepdims=True)
+            pred = (pred - pred_mu) / (pred_std + 1e-4)
+
+        pred = F.normalize(pred, p=2, dim=-1)
+        target = F.normalize(target, p=2, dim=-1)
+
+        should_mask = (
+            self.mask_negatives_for_modalities is None
+            or modality in self.mask_negatives_for_modalities
+        )
+
+        count = (mod_masks == MaskValue.DECODER.value).sum(dim=-1)
+        losses: list[Tensor] = []
+        start = 0
+
+        for c in count:
+            c_val = c.item() if hasattr(c, "item") else int(c)
+            end = start + c_val
+            if c_val == 0:
+                continue
+
+            pred_sample = pred[:, start:end, :]
+            target_sample = target[:, start:end, :]
+
+            score_sample = (
+                torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
+            )
+
+            if should_mask and c_val > 1:
+                target_flat = target_sample.squeeze(0)
+                target_sim = target_flat @ target_flat.T
+                same_target = target_sim > self.same_target_threshold
+
+                diagonal = torch.eye(c_val, dtype=torch.bool, device=target_flat.device)
+                invalid_negatives = same_target & ~diagonal
+
+                valid_neg_count = (~same_target).sum(dim=-1)
+                if valid_neg_count.min() == 0:
+                    start = end
+                    continue
+
+                score_sample = score_sample.masked_fill(
+                    invalid_negatives[None, :, :], float("-inf")
+                )
+
+            labels = torch.arange(c_val, dtype=torch.long, device=pred.device)[None]
+            loss = F.cross_entropy(
+                score_sample.flatten(0, 1),
+                labels.flatten(0, 1),
+                reduction="none",
+            ) * (self.tau * 2)
+
+            loss = loss.mean()
+            losses.append(loss)
+            start = end
+
+        if len(losses) == 0:
+            return None
+
+        return torch.stack(losses).mean()
+
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
     ) -> Tensor:
         """Compute patch discrimination loss with masked same-target negatives."""
+        per_modality = self.compute_per_modality(predictions, targets, **kwargs)
+        total_loss: Tensor | int = 0
+        for modality, loss in per_modality.items():
+            if self.modality_weights is not None:
+                loss = loss * self.modality_weights.get(modality, 1.0)
+            total_loss = total_loss + loss
+        return self.weight * total_loss
+
+    def compute_per_modality(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> dict[str, Tensor]:
+        """Compute per-modality contrastive losses (unweighted).
+
+        Returns a dict mapping modality name to its scalar loss.  Static
+        ``modality_weights`` and the global ``self.weight`` are **not** applied
+        so that external weighting (e.g. learnable loss weights) can be used.
+        """
         modality_preds, modality_masks = (
             predictions.flatten_tokens_and_masks_per_modality()
         )
         modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
 
-        total_loss = 0
-        for all_preds, all_masks, all_targets, modality in zip(
+        per_modality_losses: dict[str, Tensor] = {}
+        for mod_preds, mod_masks, mod_targets, modality in zip(
             modality_preds, modality_masks, modality_targets, targets.modalities
         ):
-            pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-            target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-            pred = pred.float()
-            target = target.float()
-
-            all_preds, all_masks = predictions.flatten_all_tokens_and_masks()
-            all_targets = targets.flatten_all_tokens_and_masks()[0]
-            decoder_mask = all_masks == MaskValue.DECODER.value
-            pred = all_preds[decoder_mask].unsqueeze(dim=0)
-            target = all_targets[decoder_mask].unsqueeze(dim=0)
-            bs, nt, _ = pred.shape
-            if nt == 0:
-                continue
-
-            if self.pred2unit:
-                pred_mu = pred.mean(1, keepdims=True)
-                pred_std = pred.std(1, keepdims=True)
-                pred = (pred - pred_mu) / (pred_std + 1e-4)
-
-            pred = F.normalize(pred, p=2, dim=-1)
-            target = F.normalize(target, p=2, dim=-1)
-
-            # Check if we should mask negatives for this modality
-            should_mask = (
-                self.mask_negatives_for_modalities is None
-                or modality in self.mask_negatives_for_modalities
+            loss = self._compute_modality_loss(
+                mod_preds, mod_masks, mod_targets, modality
             )
+            if loss is not None:
+                per_modality_losses[modality] = loss
 
-            count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
-            losses = []
-            start = 0
-
-            for c in count:
-                c_val = c.item() if hasattr(c, "item") else int(c)
-                end = start + c_val
-                if c_val == 0:
-                    continue
-
-                pred_sample = pred[:, start:end, :]
-                target_sample = target[:, start:end, :]
-
-                # Compute similarity scores
-                score_sample = (
-                    torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
-                )
-
-                # Apply same-target masking if enabled for this modality
-                if should_mask and c_val > 1:
-                    target_flat = target_sample.squeeze(0)  # [c, dim]
-                    target_sim = target_flat @ target_flat.T  # [c, c]
-                    same_target = target_sim > self.same_target_threshold
-
-                    # Mask: same target but not self (diagonal)
-                    diagonal = torch.eye(
-                        c_val, dtype=torch.bool, device=target_flat.device
-                    )
-                    invalid_negatives = same_target & ~diagonal
-
-                    # Check if any token has valid negatives
-                    valid_neg_count = (~same_target).sum(dim=-1)
-                    if valid_neg_count.min() == 0:
-                        # Some tokens have no valid negatives - skip this sample
-                        start = end
-                        continue
-
-                    # Apply mask to scores: set invalid negatives to -inf
-                    score_sample = score_sample.masked_fill(
-                        invalid_negatives[None, :, :], float("-inf")
-                    )
-
-                # Standard cross-entropy
-                labels = torch.arange(c_val, dtype=torch.long, device=pred.device)[None]
-                loss = F.cross_entropy(
-                    score_sample.flatten(0, 1),
-                    labels.flatten(0, 1),
-                    reduction="none",
-                ) * (self.tau * 2)
-
-                loss = loss.mean()
-                losses.append(loss)
-                start = end
-
-            if len(losses) == 0:
-                continue
-
-            loss = torch.stack(losses).mean()
-            if self.modality_weights is not None:
-                loss = loss * self.modality_weights.get(modality, 1.0)
-
-            total_loss += loss
-
-        return self.weight * total_loss
+        return per_modality_losses
 
 
 # --- Deprecated aliases for backward compatibility ---
