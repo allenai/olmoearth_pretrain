@@ -882,3 +882,155 @@ class TestBandDropout:
         )
         encoder.disable_band_dropout()
         assert encoder.patch_embeddings.band_dropout_rate == 0.0
+
+
+class TestPerBandEncodings:
+    """Unit tests for per-band encodings in MultiModalPatchEmbeddings."""
+
+    def test_per_band_encodings_creates_params(self) -> None:
+        """Test that per_band_encodings=True creates learnable parameters."""
+        embed = MultiModalPatchEmbeddings(
+            supported_modality_names=["sentinel2_l2a"],
+            max_patch_size=8,
+            embedding_size=16,
+            per_band_encodings=True,
+        )
+        assert hasattr(embed, "per_band_encoding_params")
+        # S2 default has 4 bandsets (RGB+NIR split), each param should exist
+        assert len(embed.per_band_encoding_params) > 0
+        for key, param in embed.per_band_encoding_params.items():
+            assert param.requires_grad, f"Per-band encoding {key} should be learnable"
+            assert (param == 0).all(), "Should be initialized to zeros"
+
+    def test_per_band_encodings_correct_shape_single_bandset(self) -> None:
+        """Test param shape matches num_bands for single bandset tokenization."""
+        from olmoearth_pretrain.nn.tokenization import (
+            ModalityTokenization,
+            TokenizationConfig,
+        )
+
+        single_bandset = TokenizationConfig(
+            overrides={
+                "sentinel2_l2a": ModalityTokenization(
+                    band_groups=[
+                        [
+                            "B02",
+                            "B03",
+                            "B04",
+                            "B08",
+                            "B05",
+                            "B06",
+                            "B07",
+                            "B8A",
+                            "B11",
+                            "B12",
+                            "B01",
+                            "B09",
+                        ],
+                    ]
+                ),
+            }
+        )
+        embed = MultiModalPatchEmbeddings(
+            supported_modality_names=["sentinel2_l2a"],
+            max_patch_size=8,
+            embedding_size=16,
+            tokenization_config=single_bandset,
+            per_band_encodings=True,
+        )
+        key = "sentinel2_l2a__0"
+        assert key in embed.per_band_encoding_params
+        assert embed.per_band_encoding_params[key].shape == (12,)
+
+    def test_per_band_encodings_disabled_by_default(self) -> None:
+        """Test that per_band_encodings=False (default) doesn't create params."""
+        embed = MultiModalPatchEmbeddings(
+            supported_modality_names=["sentinel2_l2a"],
+            max_patch_size=8,
+            embedding_size=16,
+        )
+        assert not hasattr(embed, "per_band_encoding_params")
+
+    def test_per_band_encodings_changes_output(self) -> None:
+        """Test that non-zero per-band encodings change the patch embedding output."""
+        from olmoearth_pretrain.nn.tokenization import (
+            ModalityTokenization,
+            TokenizationConfig,
+        )
+
+        single_bandset = TokenizationConfig(
+            overrides={
+                "sentinel2_l2a": ModalityTokenization(
+                    band_groups=[
+                        [
+                            "B02",
+                            "B03",
+                            "B04",
+                            "B08",
+                            "B05",
+                            "B06",
+                            "B07",
+                            "B8A",
+                            "B11",
+                            "B12",
+                            "B01",
+                            "B09",
+                        ],
+                    ]
+                ),
+            }
+        )
+        embed_without = MultiModalPatchEmbeddings(
+            supported_modality_names=["sentinel2_l2a"],
+            max_patch_size=8,
+            embedding_size=16,
+            tokenization_config=single_bandset,
+            per_band_encodings=False,
+        )
+        embed_with = MultiModalPatchEmbeddings(
+            supported_modality_names=["sentinel2_l2a"],
+            max_patch_size=8,
+            embedding_size=16,
+            tokenization_config=single_bandset,
+            per_band_encodings=True,
+        )
+        # Copy weights so only the per-band encoding differs
+        embed_with.load_state_dict(embed_without.state_dict(), strict=False)
+        # Set non-zero per-band encoding
+        with torch.no_grad():
+            embed_with.per_band_encoding_params["sentinel2_l2a__0"].fill_(0.5)
+
+        from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+
+        B, H, W, T = 2, 16, 16, 1
+        num_channels = 12
+        data = torch.randn(B, H, W, num_channels)
+        mask = torch.full((B, H, W, 1), MaskValue.ONLINE_ENCODER.value)
+        timestamps = torch.zeros(B, T, 3, dtype=torch.long)
+
+        sample = MaskedOlmoEarthSample(
+            timestamps=timestamps,
+            sentinel2_l2a=data,
+            sentinel2_l2a_mask=mask,
+        )
+
+        embed_without.eval()
+        embed_with.eval()
+        tokens_without, _ = embed_without.apply_embedding_to_modality(
+            "sentinel2_l2a", sample, patch_size=8
+        )
+        tokens_with, _ = embed_with.apply_embedding_to_modality(
+            "sentinel2_l2a", sample, patch_size=8
+        )
+        assert not torch.equal(tokens_without, tokens_with), (
+            "Non-zero per-band encoding should change output"
+        )
+
+    def test_encoder_config_per_band_encodings(self) -> None:
+        """Test EncoderConfig passes per_band_encodings to Encoder."""
+        config = EncoderConfig(
+            supported_modality_names=["sentinel2_l2a", "latlon"],
+            per_band_encodings=True,
+        )
+        encoder = config.build()
+        assert encoder.patch_embeddings._per_band_encodings_enabled

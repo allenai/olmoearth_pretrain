@@ -152,6 +152,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        per_band_encodings: bool = False,
     ):
         """Initialize the patch embeddings.
 
@@ -172,6 +173,10 @@ class MultiModalPatchEmbeddings(nn.Module):
                 and acts as stronger augmentation. Default: False (fixed rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            per_band_encodings: If True, add a learnable scalar per band channel to the
+                raw input before patch projection. Gives the projection band-identity
+                information, especially useful with band dropout so the model can
+                distinguish dropped bands from zero-valued pixels. Default: False.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -202,7 +207,19 @@ class MultiModalPatchEmbeddings(nn.Module):
                     buffer_name, banset_indices_tensor, persistent=False
                 )
 
-        # Create a dictionary of per modality index tensors to do  index select with registered buffer
+        # Per-band learnable encodings: one scalar per band channel, added to raw input
+        # before the patch projection so the model can identify individual bands.
+        self._per_band_encodings_enabled = per_band_encodings
+        if per_band_encodings:
+            self.per_band_encoding_params = nn.ParameterDict()
+            for modality in self.supported_modality_names:
+                for idx, bandset_indices in enumerate(
+                    self.tokenization_config.get_bandset_indices(modality)
+                ):
+                    key = self._get_embedding_module_name(modality, idx)
+                    self.per_band_encoding_params[key] = nn.Parameter(
+                        torch.zeros(len(bandset_indices))
+                    )
 
     @staticmethod
     def _get_buffer_name(modality: str, idx: int) -> str:
@@ -303,6 +320,10 @@ class MultiModalPatchEmbeddings(nn.Module):
                     else:
                         rate = self.band_dropout_rate
                     patchified_data = self._apply_band_dropout(patchified_data, rate)
+
+            if self._per_band_encodings_enabled:
+                key = self._get_embedding_module_name(modality, idx)
+                patchified_data = patchified_data + self.per_band_encoding_params[key]
 
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
@@ -1070,6 +1091,7 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        per_band_encodings: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1102,6 +1124,8 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            per_band_encodings: If True, add learnable per-band encodings before patch
+                projection. Helps the model identify individual bands with band dropout.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1141,6 +1165,7 @@ class Encoder(FlexiVitBase):
             band_dropout_rate=self.band_dropout_rate,
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
+            per_band_encodings=per_band_encodings,
         )
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=self.embedding_size,
@@ -2017,6 +2042,7 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+    per_band_encodings: bool = False
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
