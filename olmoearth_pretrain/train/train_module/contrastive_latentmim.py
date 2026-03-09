@@ -17,6 +17,12 @@ from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
+from olmoearth_pretrain.nn.supervision_head import (
+    _compute_per_modality_losses as compute_supervision_losses_per_modality,
+)
+from olmoearth_pretrain.nn.supervision_head import (
+    compute_supervision_loss,
+)
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import (
@@ -170,6 +176,14 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
+
+        self._supervised_modality_names: list[str] = []
+        if self.model.supervision_head is not None:
+            self._supervised_modality_names = list(
+                self.model.supervision_head.modality_configs.keys()
+            )
+            self.total_loss_name = f"{self.total_loss_name}+supervision"
+
         if reinit_targets:
             if ema_decay != (0.0, 0.0):
                 logger.warning(
@@ -253,6 +267,14 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
 
                 if self.contrastive_loss is not None:
                     contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
+                    weights = self.model.learnable_loss_weights
+                    if (
+                        weights is not None
+                        and "instance_contrastive" in weights.log_vars
+                    ):
+                        contrastive_loss = weights.weight_loss(
+                            "instance_contrastive", contrastive_loss
+                        )
                     loss += contrastive_loss
                     total_batch_con += (
                         get_local_tensor(contrastive_loss.detach()) / num_microbatches
@@ -289,6 +311,21 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             )
         self.log_regularization(total_batch_reg)
 
+        # Log learnable loss weight values
+        if self.model.learnable_loss_weights is not None:
+            for name, param in self.model.learnable_loss_weights.log_vars.items():
+                s = get_local_tensor(param.detach()).item()
+                self.trainer.record_metric(
+                    f"loss_weights/{name}/log_var",
+                    s,
+                    reduce_type=None,
+                )
+                self.trainer.record_metric(
+                    f"loss_weights/{name}/effective_weight",
+                    torch.exp(torch.tensor(-s)).item(),
+                    reduce_type=None,
+                )
+
         del batch  # In case this helps with memory utilization.
         del masked_batch_a, masked_batch_b
 
@@ -308,6 +345,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 latent_projected_and_pooled,
                 reconstructed,
                 extra_metrics,
+                supervision_preds,
             ) = self.model(batch, patch_size)
             if extra_metrics is not None:
                 self.log_extra_metrics(extra_metrics)
@@ -319,7 +357,64 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     token_exit_cfg=token_exit_cfg,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
-            loss = self.loss_fn(decoded, target_output)
+
+            weights = self.model.learnable_loss_weights
+
+            # --- Contrastive (token-level) loss ---
+            if weights is not None and hasattr(self.base_loss, "compute_per_modality"):
+                per_mod = self.base_loss.compute_per_modality(decoded, target_output)
+                loss = torch.zeros([], device=self.device)
+                for mod_name, mod_loss in per_mod.items():
+                    key = f"contrastive/{mod_name}"
+                    if key in weights.log_vars:
+                        loss = loss + weights.weight_loss(key, mod_loss)
+                    else:
+                        loss = loss + mod_loss
+                # Ensure gradient for learnable weight params of missing modalities
+                for key, param in weights.log_vars.items():
+                    if key.startswith("contrastive/") and key not in {
+                        f"contrastive/{m}" for m in per_mod
+                    }:
+                        loss = loss + 0 * param.sum()
+            else:
+                loss = self.loss_fn(decoded, target_output)
+
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
+
+            # --- Supervision loss ---
+            if (
+                supervision_preds is not None
+                and self.model.supervision_head is not None
+            ):
+                if extra_metrics is None:
+                    extra_metrics = {}
+
+                if weights is not None:
+                    per_mod_sup = compute_supervision_losses_per_modality(
+                        supervision_preds, batch, self.model.supervision_head
+                    )
+                    for mod_name, mod_loss in per_mod_sup.items():
+                        extra_metrics[f"supervision/{mod_name}"] = mod_loss.detach()
+                        key = f"supervision/{mod_name}"
+                        if key in weights.log_vars:
+                            loss = loss + weights.weight_loss(key, mod_loss)
+                        else:
+                            loss = loss + mod_loss
+                    # Ensure gradient for learnable weight params of missing modalities
+                    for key, param in weights.log_vars.items():
+                        if key.startswith("supervision/") and key not in {
+                            f"supervision/{m}" for m in per_mod_sup
+                        }:
+                            loss = loss + 0 * param.sum()
+                else:
+                    sup_loss, per_modality_losses = compute_supervision_loss(
+                        supervision_preds,
+                        batch,
+                        self.model.supervision_head,
+                    )
+                    loss = loss + sup_loss
+                    for mod_name, mod_loss in per_modality_losses.items():
+                        extra_metrics[f"supervision/{mod_name}"] = mod_loss
+
             return loss, latent, decoded, target_output, latent_projected_and_pooled
