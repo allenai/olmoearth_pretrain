@@ -142,7 +142,6 @@ class RslearnToOlmoEarthDataset(Dataset):
         self.dataset = model_dataset
         self.norm_stats_from_pretrained = norm_stats_from_pretrained
         self.input_modalities = input_modalities
-        print(f"Input modalities: {self.input_modalities}")
 
         # Store temporal config for per-sample timestamp generation
         self.start_time = start_time
@@ -214,7 +213,6 @@ class RslearnToOlmoEarthDataset(Dataset):
             RslearnToOlmoEarthDataset instance.
         """
         # Build ModelDataset using jsonargparse
-        print(f"Building ModelDataset from RuntimeConfig for {source_path}")
         model_dataset = build_model_dataset_from_config(
             runtime_config=runtime_config,
             source_path=source_path,
@@ -248,7 +246,6 @@ class RslearnToOlmoEarthDataset(Dataset):
 
         # Get task structure info for parsing targets
         task_info = runtime_config.get_task_info()
-        print(f"Task info: {task_info}")
 
         return cls(
             model_dataset=model_dataset,
@@ -376,7 +373,6 @@ class RslearnToOlmoEarthDataset(Dataset):
                     maxs=modality_stats["maxs"],
                     method=self.norm_method,
                 )
-            # print(f"x shape: {x.shape} for modality {modality} after normalization")
             sample_dict[modality] = torch.as_tensor(x, dtype=torch.float32)
 
         # TODO: WE should be reading this from the metadata.json of each window/is there a way to enable in rslearn
