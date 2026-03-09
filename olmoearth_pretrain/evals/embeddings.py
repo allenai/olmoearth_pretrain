@@ -5,7 +5,10 @@ import logging
 import torch
 from torch.utils.data import DataLoader
 
-from olmoearth_pretrain.evals.embedding_transforms import quantize_embeddings
+from olmoearth_pretrain.evals.embedding_transforms import (
+    quantize_embeddings,
+    quantize_embeddings_percentile,
+)
 from olmoearth_pretrain.evals.eval_wrapper import EvalWrapper
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
@@ -17,6 +20,8 @@ def get_embeddings(
     model: EvalWrapper,
     is_train: bool = True,
     quantize: bool = False,
+    quantize_bits: int | None = None,
+    quantile_config: dict | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Get embeddings from model for the data in data_loader.
 
@@ -25,6 +30,11 @@ def get_embeddings(
         model: EvalWrapper-wrapped model to get embeddings from.
         is_train: Whether this is training data (affects some model behaviors).
         quantize: If True, quantize embeddings to int8 for storage efficiency testing.
+            Uses the legacy power-based scheme if quantize_bits is None.
+        quantize_bits: If set (1, 2, 4, or 8), use percentile-based quantization
+            with the specified number of bits. Requires quantile_config.
+        quantile_config: Dictionary containing precomputed quantile boundaries
+            for percentile-based quantization. Required if quantize_bits is set.
 
     Returns:
         Tuple of (embeddings, labels). If quantize=True, embeddings are int8.
@@ -64,7 +74,23 @@ def get_embeddings(
 
     # Apply quantization if requested
     if quantize:
-        logger.info(f"Quantizing embeddings from {embeddings.dtype} to int8")
-        embeddings = quantize_embeddings(embeddings)
+        if quantize_bits is not None and quantile_config is not None:
+            # Percentile-based quantization
+            key = f"{quantize_bits}bit"
+            if key not in quantile_config:
+                raise ValueError(
+                    f"Quantile config missing '{key}' key for {quantize_bits}-bit quantization"
+                )
+            logger.info(
+                f"Quantizing embeddings to {quantize_bits}-bit using percentile boundaries"
+            )
+            quantiles = quantile_config[key]["quantiles"]
+            embeddings = quantize_embeddings_percentile(
+                embeddings, quantiles, quantize_bits
+            )
+        else:
+            # Legacy power-based int8 quantization
+            logger.info(f"Quantizing embeddings from {embeddings.dtype} to int8")
+            embeddings = quantize_embeddings(embeddings)
 
     return embeddings, labels
