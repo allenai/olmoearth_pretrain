@@ -231,41 +231,6 @@ class RuntimeConfig:
             )
         return self._split_configs[split]
 
-    # Convenience accessors that extract from instantiated objects or raw config
-
-    def get_groups(self) -> list[str]:
-        """Get groups from train config."""
-        data_init_args = self.model_config.get("data", {}).get("init_args", {})
-        train_config = data_init_args.get("train_config", {})
-        return train_config.get("groups", [])
-
-    def get_split_tag_key(self) -> str:
-        """Get split tag key from train config."""
-        data_init_args = self.model_config.get("data", {}).get("init_args", {})
-        train_config = data_init_args.get("train_config", {})
-        tags = train_config.get("tags", {})
-        return next(iter(tags.keys()), "split") if tags else "split"
-
-    def get_target_input_config(self) -> dict[str, Any]:
-        """Get the config for the target/label input."""
-        data_init_args = self.model_config.get("data", {}).get("init_args", {})
-        inputs_config = data_init_args.get("inputs", {})
-
-        for name, cfg in inputs_config.items():
-            if cfg.get("is_target"):
-                return {
-                    "name": name,
-                    "layers": cfg.get("layers", []),
-                    "data_type": cfg.get("data_type", "vector"),
-                    "bands": cfg.get("bands"),
-                }
-        return {
-            "name": "label",
-            "layers": ["label"],
-            "data_type": "vector",
-            "bands": None,
-        }
-
     def get_task_info(self) -> dict[str, Any]:
         """Get task structure info for parsing targets.
 
@@ -326,23 +291,6 @@ class RuntimeConfig:
                 if input_layers:
                     layers.append(input_layers[0])
         return layers
-
-    def get_crop_size(self, split: str = "val") -> int | None:
-        """Extract crop size from transforms for a split."""
-        data_init_args = self.model_config.get("data", {}).get("init_args", {})
-        config = data_init_args.get(f"{split}_config", {})
-        if not config:
-            config = data_init_args.get("default_config", {})
-
-        transforms = config.get("transforms", [])
-        for transform in transforms:
-            class_path = transform.get("class_path", "")
-            if "crop.Crop" in class_path:
-                crop_size = transform.get("init_args", {}).get("crop_size")
-                if isinstance(crop_size, list | tuple):
-                    return crop_size[0]
-                return crop_size
-        return None
 
 
 def load_runtime_config(
