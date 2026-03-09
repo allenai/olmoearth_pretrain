@@ -955,10 +955,10 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     model_yaml_path = Path(weka_path) / "model.yaml"
     with open(model_yaml_path) as f:
         model_config = yaml.safe_load(f)
-    # Validate that rslearn can parse the model config (inputs, task, etc.)
-    from olmoearth_pretrain.evals.datasets.rslearn_builder import load_runtime_config
+    # Validate that rslearn can parse the model config
+    from olmoearth_pretrain.evals.datasets.rslearn_builder import parse_model_config
 
-    load_runtime_config(str(model_yaml_path), weka_path)
+    parse_model_config(str(model_yaml_path))
     logger.info("[Step 0b] Model config loaded and validated successfully")
 
     # Step 0c: Extract modalities from dataset config

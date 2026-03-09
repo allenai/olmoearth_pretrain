@@ -1,15 +1,16 @@
-"""Runtime configuration loading from rslearn model.yaml using jsonargparse.
+"""Build rslearn datasets for eval using RslearnDataModule via jsonargparse.
 
-This module uses rslearn's native jsonargparse infrastructure to parse and
-instantiate objects directly from model.yaml, rather than manually extracting
-fields. This ensures we stay in sync with rslearn's actual parsing logic.
+Instead of manually instantiating DataInput, Task, SplitConfig, and ModelDataset
+individually, we parse the `data` section of model.yaml into a full
+RslearnDataModule. This keeps us in sync with rslearn's construction logic
+(config merging, dataset setup, etc.) while allowing eval-specific overrides.
 """
 
 from __future__ import annotations
 
+import copy
 import logging
 import re
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -17,29 +18,30 @@ if TYPE_CHECKING:
 
 import jsonargparse
 import yaml
-from rslearn.dataset.dataset import Dataset as RslearnDataset
 from rslearn.template_params import substitute_env_vars_in_string
-from rslearn.train.dataset import DataInput, IndexMode, ModelDataset, SplitConfig
-from rslearn.train.tasks import Task
+from rslearn.train.data_module import RslearnDataModule
+from rslearn.train.dataset import ModelDataset
 from rslearn.utils.jsonargparse import init_jsonargparse
 from upath import UPath
 
 logger = logging.getLogger(__name__)
 
+_JSONARGPARSE_INITIALIZED = False
 
-def _init_rslearn_jsonargparse() -> None:
-    """Initialize rslearn's custom jsonargparse serializers."""
-    init_jsonargparse()
+
+def _ensure_jsonargparse() -> None:
+    global _JSONARGPARSE_INITIALIZED
+    if not _JSONARGPARSE_INITIALIZED:
+        init_jsonargparse()
+        _JSONARGPARSE_INITIALIZED = True
 
 
 def parse_model_config(model_config_path: str) -> dict[str, Any]:
     """Load and parse model.yaml, substituting environment variables.
 
-    Args:
-        model_config_path: Path to model.yaml file.
-
-    Returns:
-        Parsed config dict with env vars substituted.
+    In this eval builder path, dataset location is passed separately via
+    source_path / registry weka_path, so ${DATASET_PATH} in model.yaml
+    does not control where the dataset is loaded from.
     """
     model_config_upath = UPath(model_config_path)
     if not model_config_upath.exists():
@@ -48,10 +50,6 @@ def parse_model_config(model_config_path: str) -> dict[str, Any]:
     with model_config_upath.open() as f:
         raw_content = f.read()
 
-    # Keep rslearn env-substitution semantics for model.yaml compatibility.
-    # In this builder path, dataset location is passed separately
-    # via source_path/registry weka_path, so ${DATASET_PATH} in model.yaml
-    # does not control where the dataset is loaded from.
     if "${DATASET_PATH}" in raw_content:
         logger.warning(
             "model.yaml contains ${DATASET_PATH}, but dataset loading here uses "
@@ -60,7 +58,6 @@ def parse_model_config(model_config_path: str) -> dict[str, Any]:
 
     substituted_content = substitute_env_vars_in_string(raw_content)
 
-    # Surface unresolved placeholders rather than failing silently.
     unresolved_vars = sorted(
         set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", substituted_content))
     )
@@ -73,348 +70,242 @@ def parse_model_config(model_config_path: str) -> dict[str, Any]:
     return yaml.safe_load(substituted_content)
 
 
-def instantiate_data_inputs(model_config: dict[str, Any]) -> dict[str, Any]:
-    """Instantiate DataInput objects from model config using jsonargparse.
+def _strip_normalize_transforms(data_config: dict[str, Any]) -> None:
+    """Remove Normalize transforms from all split configs in-place.
 
-    This uses rslearn's native parsing to build DataInput objects,
-    ensuring we match their exact behavior.
-
-    Args:
-        model_config: Parsed model.yaml dict.
-
-    Returns:
-        Dict mapping input name -> instantiated DataInput object.
+    Normalization is handled by OlmoEarth's eval pipeline (either pretrained
+    stats or per-dataset stats), not by rslearn's transforms. If we left
+    rslearn's Normalize in, the data would be double-normalized.
     """
-    _init_rslearn_jsonargparse()
+    init_args = data_config.get("init_args", {})
+    for config_key in ["default_config", "train_config", "val_config", "test_config"]:
+        cfg = init_args.get(config_key, {})
+        if "transforms" not in cfg:
+            continue
+        original_count = len(cfg["transforms"])
+        cfg["transforms"] = [
+            t for t in cfg["transforms"] if "Normalize" not in t.get("class_path", "")
+        ]
+        removed = original_count - len(cfg["transforms"])
+        if removed:
+            logger.info(
+                "Stripped %d Normalize transform(s) from %s", removed, config_key
+            )
 
-    data_init_args = model_config.get("data", {}).get("init_args", {})
-    inputs_config = data_init_args.get("inputs", {})
 
-    if not inputs_config:
-        return {}
+def _apply_split_overrides(
+    data_config: dict[str, Any],
+    split: str,
+    groups_override: list[str] | None,
+    tags_override: dict[str, str] | None,
+    max_samples: int | None,
+) -> None:
+    """Apply eval-time split overrides to the data config dict in-place."""
+    init_args = data_config.get("init_args", {})
+    split_key = f"{split}_config"
+    split_cfg = init_args.setdefault(split_key, {})
 
-    # Use jsonargparse to instantiate each DataInput
+    if tags_override:
+        split_cfg["tags"] = tags_override
+        # When filtering by tags, clear groups so rslearn scans all directories
+        # first, then filters by tag. Otherwise rslearn only scans the group
+        # directories (e.g. windows/train/) which may not exist when all windows
+        # live under a single group with tag-based splits.
+        if not groups_override:
+            split_cfg["groups"] = None
+        logger.info(
+            "Split override: tags=%s, groups=%s", tags_override, groups_override
+        )
+
+    if groups_override:
+        split_cfg["groups"] = groups_override
+        logger.info("Split override: groups=%s", groups_override)
+
+    if max_samples is not None:
+        split_cfg["num_samples"] = max_samples
+
+
+def _instantiate_data_module(
+    model_config: dict[str, Any],
+    source_path: str,
+    split: str = "val",
+    init_workers: int = 32,
+    groups_override: list[str] | None = None,
+    tags_override: dict[str, str] | None = None,
+    max_samples: int | None = None,
+) -> RslearnDataModule:
+    """Instantiate RslearnDataModule from model.yaml's data section.
+
+    Parses only the ``data`` block via jsonargparse — no model or trainer
+    instantiation needed.
+    """
+    _ensure_jsonargparse()
+
+    data_config = copy.deepcopy(model_config["data"])
+    init_args = data_config.setdefault("init_args", {})
+
+    init_args["path"] = source_path
+    init_args["index_mode"] = "use"
+    init_args["init_workers"] = init_workers
+
+    _strip_normalize_transforms(data_config)
+    _apply_split_overrides(
+        data_config, split, groups_override, tags_override, max_samples
+    )
+
     parser = jsonargparse.ArgumentParser()
-    parser.add_argument("--data_input", type=DataInput)
-
-    instantiated_inputs = {}
-    for name, input_config in inputs_config.items():
-        cfg = parser.parse_object({"data_input": input_config})
-        instantiated_inputs[name] = parser.instantiate_classes(cfg).data_input
-        logger.debug(f"Instantiated DataInput '{name}' via jsonargparse")
-
-    return instantiated_inputs
+    parser.add_argument("--data", type=RslearnDataModule)
+    parsed = parser.parse_object({"data": data_config})
+    return parser.instantiate_classes(parsed).data
 
 
-def instantiate_task(model_config: dict[str, Any]) -> Any:
-    """Instantiate Task object from model config using jsonargparse.
+def build_model_dataset(
+    model_config: dict[str, Any],
+    source_path: str,
+    split: str = "val",
+    init_workers: int = 32,
+    max_samples: int | None = None,
+    groups_override: list[str] | None = None,
+    tags_override: dict[str, str] | None = None,
+) -> ModelDataset:
+    """Build an rslearn ModelDataset for eval.
 
-    Args:
-        model_config: Parsed model.yaml dict.
-
-    Returns:
-        Instantiated Task object.
+    Uses RslearnDataModule's setup() to construct the dataset, which keeps
+    us in sync with rslearn's config merging and ModelDataset construction.
     """
-    _init_rslearn_jsonargparse()
+    stage_map = {"train": "fit", "val": "validate", "test": "test"}
+    stage = stage_map.get(split, "validate")
+
+    data_module = _instantiate_data_module(
+        model_config=model_config,
+        source_path=source_path,
+        split=split,
+        init_workers=init_workers,
+        groups_override=groups_override,
+        tags_override=tags_override,
+        max_samples=max_samples,
+    )
+    data_module.setup(stage)
+
+    dataset = data_module.datasets.get(split)
+    if dataset is None:
+        available = list(data_module.datasets.keys())
+        raise ValueError(
+            f"Split '{split}' not found after setup('{stage}'). Available: {available}"
+        )
+
+    logger.info("Built ModelDataset for split '%s': %d samples", split, len(dataset))
+    return dataset
+
+
+# ---------------------------------------------------------------------------
+# Helpers that read from raw model_config (no instantiation needed)
+# ---------------------------------------------------------------------------
+
+
+def get_task_info(model_config: dict[str, Any]) -> dict[str, Any]:
+    """Get task type from model config.
+
+    Returns dict with:
+        task_name: For MultiTask, the first sub-task name. None for single tasks.
+        task_type: "segmentation", "classification", etc.
+    """
+    _ensure_jsonargparse()
 
     data_init_args = model_config.get("data", {}).get("init_args", {})
     task_config = data_init_args.get("task", {})
-
     if not task_config:
-        return None
+        raise ValueError("No task config found in model.yaml data.init_args.task")
+
+    from rslearn.train.tasks import Task
 
     parser = jsonargparse.ArgumentParser()
     parser.add_argument("--task", type=Task)
 
-    try:
-        cfg = parser.parse_object({"task": task_config})
-        return parser.instantiate_classes(cfg).task
-    except Exception as e:
-        logger.warning(f"Failed to instantiate Task: {e}")
-        return None
+    cfg = parser.parse_object({"task": task_config})
+    task = parser.instantiate_classes(cfg).task
+
+    return _classify_task(task)
 
 
-def instantiate_split_config(
-    model_config: dict[str, Any],
-    split: str = "val",
-) -> Any:
-    """Instantiate SplitConfig for a given split.
+def _classify_task(task: Any) -> dict[str, Any]:
+    """Map a Task instance to task_name and task_type."""
+    task_class = type(task).__name__
 
-    Due to transform instantiation issues (some transforms reference packages
-    that may not be fully loadable), we instantiate SplitConfig directly
-    without transforms, then add transforms separately if needed.
+    if task_class == "MultiTask" and hasattr(task, "tasks") and task.tasks:
+        first_name = next(iter(task.tasks.keys()))
+        first_task = task.tasks[first_name]
+        return {
+            "task_name": first_name,
+            "task_type": _task_type_from_class(type(first_task).__name__),
+        }
 
-    Args:
-        model_config: Parsed model.yaml dict.
-        split: Split name ("train", "val", "test", "predict").
+    return {"task_name": None, "task_type": _task_type_from_class(task_class)}
 
-    Returns:
-        Instantiated SplitConfig object.
-    """
+
+def _task_type_from_class(class_name: str) -> str:
+    name = class_name.lower()
+    for kind in ("segmentation", "classification", "regression"):
+        if kind in name:
+            return kind
+    return "segmentation"
+
+
+def get_modality_layers(model_config: dict[str, Any]) -> list[str]:
+    """Get list of modality layer names (non-target inputs) from raw config."""
     data_init_args = model_config.get("data", {}).get("init_args", {})
-    default_config = data_init_args.get("default_config", {})
-    split_specific = data_init_args.get(f"{split}_config", {})
+    inputs_config = data_init_args.get("inputs", {})
 
-    # Merge configs manually (split-specific overrides default)
-    merged = {**default_config, **split_specific}
-
-    # Extract fields that SplitConfig accepts (without transforms for now)
-    # Transforms are complex and may reference packages that aren't loadable
-    valid_fields = {
-        "groups",
-        "names",
-        "tags",
-        "num_samples",
-        "patch_size",
-        "overlap_ratio",
-        "load_all_patches",
-        "skip_targets",
-        "output_layer_name_skip_inference_if_exists",
-        "sampler",
-    }
-
-    filtered = {k: v for k, v in merged.items() if k in valid_fields}
-
-    try:
-        split_config = SplitConfig(**filtered)
-        logger.debug(
-            f"Instantiated SplitConfig for '{split}' with {list(filtered.keys())}"
-        )
-        return split_config
-    except Exception as e:
-        logger.warning(f"Failed to instantiate SplitConfig for '{split}': {e}")
-        # Return a minimal SplitConfig
-        return SplitConfig(
-            groups=merged.get("groups"),
-            tags=merged.get("tags"),
-            num_samples=merged.get("num_samples"),
-        )
+    layers = []
+    for _name, cfg in inputs_config.items():
+        if not cfg.get("is_target"):
+            input_layers = cfg.get("layers", [])
+            if input_layers:
+                layers.append(input_layers[0])
+    return layers
 
 
-@dataclass
-class RuntimeConfig:
-    """Configuration loaded from model.yaml at runtime.
-
-    Contains both raw config values and optionally instantiated objects.
-    """
-
-    # Raw model config dict
-    model_config: dict[str, Any] = field(default_factory=dict)
-
-    # Instantiated objects (lazily populated)
-    _inputs: dict[str, Any] | None = None
-    _task: Any | None = None
-    _split_configs: dict[str, Any] = field(default_factory=dict)
-
-    # Extracted values for convenience
-    source_path: str = ""
-
-    @property
-    def inputs(self) -> dict[str, Any]:
-        """Get instantiated DataInput objects."""
-        if self._inputs is None:
-            self._inputs = instantiate_data_inputs(self.model_config)
-        return self._inputs
-
-    @property
-    def task(self) -> Any:
-        """Get instantiated Task object."""
-        if self._task is None:
-            self._task = instantiate_task(self.model_config)
-        return self._task
-
-    def get_split_config(self, split: str) -> Any:
-        """Get instantiated SplitConfig for a split."""
-        if split not in self._split_configs:
-            self._split_configs[split] = instantiate_split_config(
-                self.model_config, split
-            )
-        return self._split_configs[split]
-
-    def get_task_info(self) -> dict[str, Any]:
-        """Get task structure info for parsing targets.
-
-        Returns:
-            Dict with:
-            - task_name: For MultiTask, the first sub-task name (e.g., "segment").
-                         None for single tasks.
-            - task_type: The task type ("segmentation", "classification", etc.)
-        """
-        task = self.task
-        if task is None:
-            return {"task_name": None, "task_type": "segmentation"}
-
-        task_class = type(task).__name__
-
-        # Check if it's a MultiTask
-        if task_class == "MultiTask":
-            # Get the first sub-task name and type
-            if hasattr(task, "tasks") and task.tasks:
-                first_name = next(iter(task.tasks.keys()))
-                first_task = task.tasks[first_name]
-                first_task_class = type(first_task).__name__.lower()
-
-                # Map class name to task type
-                if "segmentation" in first_task_class:
-                    task_type = "segmentation"
-                elif "classification" in first_task_class:
-                    task_type = "classification"
-                elif "regression" in first_task_class:
-                    task_type = "regression"
-                else:
-                    task_type = "segmentation"  # default
-
-                return {"task_name": first_name, "task_type": task_type}
-
-        # Single task - no task_name needed
-        task_class_lower = task_class.lower()
-        if "segmentation" in task_class_lower:
-            task_type = "segmentation"
-        elif "classification" in task_class_lower:
-            task_type = "classification"
-        elif "regression" in task_class_lower:
-            task_type = "regression"
-        else:
-            task_type = "segmentation"  # default
-
-        return {"task_name": None, "task_type": task_type}
-
-    def get_modality_layers(self) -> list[str]:
-        """Get list of modality layer names (non-target inputs)."""
-        data_init_args = self.model_config.get("data", {}).get("init_args", {})
-        inputs_config = data_init_args.get("inputs", {})
-
-        layers = []
-        for name, cfg in inputs_config.items():
-            if not cfg.get("is_target"):
-                input_layers = cfg.get("layers", [])
-                if input_layers:
-                    layers.append(input_layers[0])
-        return layers
+# ---------------------------------------------------------------------------
+# High-level entry points
+# ---------------------------------------------------------------------------
 
 
-def load_runtime_config(
+def load_and_build_dataset(
     model_config_path: str,
-    source_path: str = "",
-) -> RuntimeConfig:
-    """Load RuntimeConfig from model.yaml using rslearn's jsonargparse.
-
-    Args:
-        model_config_path: Path to model.yaml file.
-        source_path: Path to rslearn dataset (stored for reference).
-
-    Returns:
-        RuntimeConfig with parsed model config.
-
-    Raises:
-        FileNotFoundError: If model.yaml does not exist.
-        Exception: If model.yaml cannot be parsed.
-    """
-    model_config = parse_model_config(model_config_path)
-
-    return RuntimeConfig(
-        model_config=model_config,
-        source_path=source_path,
-    )
-
-
-def build_model_dataset_from_config(
-    runtime_config: RuntimeConfig,
     source_path: str,
     split: str = "val",
+    init_workers: int = 32,
     max_samples: int | None = None,
     groups_override: list[str] | None = None,
     tags_override: dict[str, str] | None = None,
-) -> Any:
-    """Build rslearn ModelDataset directly from RuntimeConfig.
-
-    This uses the jsonargparse-instantiated objects (inputs, task, split_config)
-    to build the ModelDataset, avoiding manual construction.
-    We intentionally do not construct this via LightningCLI(run=False), because
-    this path needs explicit eval-time groups/tags overrides and transparent
-    control over split filtering behavior.
-
-    Args:
-        runtime_config: RuntimeConfig with parsed model.yaml.
-        source_path: Path to rslearn dataset.
-        split: Dataset split ("train", "val", "test").
-        max_samples: Optional limit on number of samples.
-        groups_override: Optional list of groups to use instead of model.yaml groups.
-        tags_override: Optional dict of tags to filter windows (e.g., {"eval_split": "val"}).
+) -> tuple[ModelDataset, dict[str, Any]]:
+    """Parse model.yaml and build a ModelDataset for eval.
 
     Returns:
-        Instantiated ModelDataset.
+        Tuple of (ModelDataset, parsed model_config dict).
     """
-    # Get instantiated objects from RuntimeConfig
-    inputs = runtime_config.inputs
-    task = runtime_config.task
-    split_config = runtime_config.get_split_config(split)
-
-    if not inputs:
-        raise ValueError("No inputs found in runtime config")
-    if task is None:
-        raise ValueError("No task found in runtime config")
-    if split_config is None:
-        raise ValueError(f"No split config found for split '{split}'")
-
-    # Apply groups override if provided
-    if groups_override:
-        split_config.groups = groups_override
-        logger.info(f"Using custom groups override: {groups_override}")
-
-    # Apply tags override if provided
-    # When filtering by tags, clear groups so rslearn scans all directories
-    # first, then filters by tag. Otherwise rslearn only scans the group
-    # directories (e.g. windows/train/) which may not exist when all windows
-    # live under a single group (e.g. windows/val/) with tag-based splits.
-    if tags_override:
-        split_config.tags = tags_override
-        if not groups_override:
-            split_config.groups = None
-        logger.info(
-            f"Using custom tags override: {tags_override} (groups={split_config.groups})"
-        )
-
-    # Apply max_samples override if provided
-    if max_samples is not None and hasattr(split_config, "num_samples"):
-        split_config.num_samples = max_samples
-
-    # Build the rslearn dataset
-    rslearn_dataset = RslearnDataset(UPath(source_path))
-
-    # Build ModelDataset with instantiated objects
-    return ModelDataset(
-        dataset=rslearn_dataset,
-        split_config=split_config,
-        inputs=inputs,
-        task=task,
-        index_mode=IndexMode.USE,
-        workers=32,  # TODO: this should be configurable somewhere
+    model_config = parse_model_config(model_config_path)
+    dataset = build_model_dataset(
+        model_config=model_config,
+        source_path=source_path,
+        split=split,
+        init_workers=init_workers,
+        max_samples=max_samples,
+        groups_override=groups_override,
+        tags_override=tags_override,
     )
+    return dataset, model_config
 
 
 def build_dataset_from_registry_entry(
     entry: EvalDatasetEntry,
     split: str = "val",
     max_samples: int | None = None,
-) -> Any:
-    """Build rslearn ModelDataset from registry entry using jsonargparse.
+) -> ModelDataset:
+    """Build rslearn ModelDataset from a registry entry.
 
-    This is the main entry point for building datasets from registry entries
-    using the hybrid approach. Uses the split tags written during ingestion
-    to filter windows.
-
-    Args:
-        entry: EvalDatasetEntry from registry.
-        split: Dataset split ("train", "val", "test").
-        max_samples: Optional sample limit.
-
-    Returns:
-        ModelDataset instance.
+    Uses the split tags written during ingestion to filter windows.
     """
-    runtime_config = load_runtime_config(entry.model_yaml_path, entry.weka_path)
-
-    # Resolve splits based on split_type from ingestion.
     split_value_map = {
         "train": entry.train_split,
         "val": entry.val_split,
@@ -426,16 +317,15 @@ def build_dataset_from_registry_entry(
     groups_override = None
 
     if entry.split_type == "tags" and entry.split_tag_key:
-        # Tag-based: scan all group dirs, filter by tag
         tags_override = {entry.split_tag_key: split_value}
-        logger.info(f"Using tag-based splits: {entry.split_tag_key}={split_value}")
+        logger.info("Using tag-based splits: %s=%s", entry.split_tag_key, split_value)
     elif entry.split_type == "groups":
-        # Group-based: use split name as the group directory
         groups_override = [split_value]
-        logger.info(f"Using group-based splits: groups={groups_override}")
+        logger.info("Using group-based splits: groups=%s", groups_override)
 
-    return build_model_dataset_from_config(
-        runtime_config=runtime_config,
+    model_config = parse_model_config(entry.model_yaml_path)
+    return build_model_dataset(
+        model_config=model_config,
         source_path=entry.weka_path,
         split=split,
         max_samples=max_samples,

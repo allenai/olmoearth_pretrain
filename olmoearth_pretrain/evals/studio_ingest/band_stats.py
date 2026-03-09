@@ -35,8 +35,9 @@ from olmoearth_pretrain.data.constants import Modality as DataModality
 from olmoearth_pretrain.data.utils import convert_to_db
 from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
 from olmoearth_pretrain.evals.datasets.rslearn_builder import (
-    build_model_dataset_from_config,
-    load_runtime_config,
+    build_model_dataset,
+    get_modality_layers,
+    parse_model_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,19 +70,19 @@ def _resolve_layer_name(layer: str) -> str | None:
     return None
 
 
-def _get_bands_by_modality_from_runtime_config(
-    runtime_config: Any,
+def _get_bands_by_modality(
+    model_config: dict[str, Any],
 ) -> dict[str, list[str]]:
-    """Extract bands by modality from runtime config.
+    """Extract bands by modality from parsed model config.
 
     Args:
-        runtime_config: RuntimeConfig with parsed model.yaml.
+        model_config: Parsed model.yaml dict.
 
     Returns:
         Dict mapping OlmoEarth modality name -> list of band names
     """
     bands_by_modality = {}
-    modality_layers = runtime_config.get_modality_layers()
+    modality_layers = get_modality_layers(model_config)
 
     for layer in modality_layers:
         resolved = _resolve_layer_name(layer)
@@ -280,9 +281,6 @@ def compute_band_stats_from_model_config(
 ) -> dict:
     """Compute band statistics using the same dataset builder as eval.
 
-    This uses build_model_dataset_from_config from rslearn_builder.py,
-    ensuring the dataset is built with the correct configuration from model.yaml.
-
     Args:
         model_config_path: Path to model.yaml file.
         source_path: Path to the rslearn dataset.
@@ -296,18 +294,15 @@ def compute_band_stats_from_model_config(
     """
     random.seed(seed)
 
-    # Load runtime config from model.yaml
-    runtime_config = load_runtime_config(model_config_path, source_path)
-
-    if not runtime_config.model_config:
+    model_config = parse_model_config(model_config_path)
+    if not model_config:
         raise ValueError(
             f"Failed to load model.yaml from {model_config_path}. "
             "Check that the file exists and is valid YAML."
         )
 
-    # Build dataset using the same builder as eval
-    model_ds = build_model_dataset_from_config(
-        runtime_config=runtime_config,
+    model_ds = build_model_dataset(
+        model_config=model_config,
         source_path=source_path,
         split="train",
         groups_override=groups,
@@ -316,7 +311,6 @@ def compute_band_stats_from_model_config(
 
     total_samples = len(model_ds)
 
-    # Apply sampling if requested
     if num_samples is not None and num_samples < total_samples:
         print(
             f"Sampling {num_samples} of {total_samples} samples for stats computation"
@@ -326,19 +320,14 @@ def compute_band_stats_from_model_config(
     else:
         print(f"Processing all {total_samples} samples")
 
-    # Get bands by modality from runtime config
-    bands_by_modality = _get_bands_by_modality_from_runtime_config(runtime_config)
-
+    bands_by_modality = _get_bands_by_modality(model_config)
     if not bands_by_modality:
         raise ValueError("No modalities found in model config")
 
     band_stats = compute_band_stats(model_ds, bands_by_modality)
-    # make sure none of the stats are None
     for modality, bands in band_stats.items():
         for band, stats in bands.items():
             if any(value is None for value in stats.values()):
                 raise ValueError(f"Stats for {modality} {band} are None {stats}")
-
-    # print the keys of the stats
 
     return band_stats

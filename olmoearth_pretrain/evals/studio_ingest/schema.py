@@ -155,7 +155,7 @@ class EvalDatasetEntry(BaseModel):
     -------------
     - Fields that can be loaded from model.yaml at runtime are NOT stored here
       (e.g., groups, split_tag_key, crop_size, target_layer_name)
-    - Use load_runtime_config() from rslearn_builder to get those values
+    - Use parse_model_config() from rslearn_builder to get those values
     - This reduces registry bloat and keeps model.yaml as source of truth
     """
 

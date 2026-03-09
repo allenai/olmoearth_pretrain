@@ -8,7 +8,6 @@ from importlib.resources import files
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from olmoearth_pretrain.evals.datasets.rslearn_builder import RuntimeConfig
     from olmoearth_pretrain.evals.studio_ingest.schema import EvalDatasetEntry
 
 import numpy as np
@@ -25,7 +24,9 @@ from olmoearth_pretrain.data.utils import convert_to_db
 from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.datasets.rslearn_builder import (
-    build_model_dataset_from_config,
+    build_model_dataset,
+    get_modality_layers,
+    get_task_info,
 )
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 from olmoearth_pretrain.evals.task_types import TaskType
@@ -81,8 +82,8 @@ class RslearnToOlmoEarthDataset(Dataset):
     inputs_dict[<modality>] shape: (T*C, H, W) after rslearn transforms.
     We reshape to (H, W, T, C), normalize, attach timestamps, and wrap as OlmoEarthSample.
 
-    Requires a pre-built ModelDataset from RuntimeConfig (via jsonargparse).
-    Use from_runtime_config() or from_registry_entry() to construct.
+    Requires a pre-built ModelDataset (via RslearnDataModule + jsonargparse).
+    Use from_model_config() or build_rslearn_eval_dataset() to construct.
     """
 
     allowed_modalities = {
@@ -108,7 +109,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         """Initialize RslearnToOlmoEarthDataset.
 
         Args:
-            model_dataset: Pre-built rslearn ModelDataset (from RuntimeConfig).
+            model_dataset: Pre-built rslearn ModelDataset.
             input_modalities: OlmoEarth modality names (e.g., ["sentinel2_l2a"]).
             target_task_name: For MultiTask, the sub-task name (e.g., "segment").
                 If None, assumes single task and accesses target dict directly.
@@ -171,9 +172,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             self.norm_method = norm_method
 
     @classmethod
-    def from_runtime_config(
+    def from_model_config(
         cls,
-        runtime_config: RuntimeConfig,
+        model_config: dict[str, Any],
         source_path: str,
         split: str = "val",
         input_modalities: list[str] | None = None,
@@ -188,12 +189,13 @@ class RslearnToOlmoEarthDataset(Dataset):
         groups_override: list[str] | None = None,
         tags_override: dict[str, str] | None = None,
     ) -> RslearnToOlmoEarthDataset:
-        """Build from RuntimeConfig using jsonargparse-instantiated objects.
+        """Build from a parsed model.yaml config dict.
 
-        This is the main way to build datasets from model.yaml.
+        Uses RslearnDataModule (via jsonargparse) to construct the underlying
+        ModelDataset, keeping us in sync with rslearn's config merging logic.
 
         Args:
-            runtime_config: RuntimeConfig with parsed model.yaml.
+            model_config: Parsed model.yaml dict.
             source_path: Path to rslearn dataset.
             split: Dataset split ("train", "val", "test").
             input_modalities: OlmoEarth modality names. If None, derived from config.
@@ -207,14 +209,10 @@ class RslearnToOlmoEarthDataset(Dataset):
             num_timesteps: Max expected timesteps from config (actual per-sample
                 timesteps are derived from data).
             groups_override: Optional list of groups to use instead of model.yaml groups.
-            tags_override: Optional dict of tags to filter windows (e.g., {"eval_split": "val"}).
-
-        Returns:
-            RslearnToOlmoEarthDataset instance.
+            tags_override: Optional dict of tags to filter windows.
         """
-        # Build ModelDataset using jsonargparse
-        model_dataset = build_model_dataset_from_config(
-            runtime_config=runtime_config,
+        model_dataset = build_model_dataset(
+            model_config=model_config,
             source_path=source_path,
             split=split,
             max_samples=max_samples,
@@ -222,14 +220,10 @@ class RslearnToOlmoEarthDataset(Dataset):
             tags_override=tags_override,
         )
 
-        # Derive input modalities from runtime config if not provided
         if input_modalities is None:
-            modality_layers = runtime_config.get_modality_layers()
-            # Map rslearn layer names to OlmoEarth modality names.
-            # Also handles "pre_"/"post_" prefixed names for compatibility
-            # with older datasets.
+            layers = get_modality_layers(model_config)
             input_modalities = []
-            for layer in modality_layers:
+            for layer in layers:
                 resolved = layer
                 if layer not in RSLEARN_TO_OLMOEARTH:
                     for prefix in ("pre_", "post_"):
@@ -244,8 +238,7 @@ class RslearnToOlmoEarthDataset(Dataset):
                 else:
                     input_modalities.append(layer)
 
-        # Get task structure info for parsing targets
-        task_info = runtime_config.get_task_info()
+        task_info = get_task_info(model_config)
 
         return cls(
             model_dataset=model_dataset,
@@ -534,33 +527,30 @@ def from_registry_entry(
                 groups_override = [split_value]
             log.info(f"Using group-based splits: groups={groups_override}")
 
-    # Load runtime config and build dataset
-    from olmoearth_pretrain.evals.datasets.rslearn_builder import load_runtime_config
+    from olmoearth_pretrain.evals.datasets.rslearn_builder import parse_model_config
 
-    log.info(f"Loading RuntimeConfig from {model_yaml_path}")
-    runtime_config = load_runtime_config(model_yaml_path, dataset_path)
+    log.info(f"Loading model config from {model_yaml_path}")
+    model_config = parse_model_config(model_yaml_path)
 
-    if not runtime_config.model_config:
+    if not model_config:
         raise ValueError(
             f"Failed to load model.yaml from {model_yaml_path}. "
             "Check that the file exists and is valid YAML."
         )
 
-    log.info(
-        f"Building dataset from RuntimeConfig for {entry.name} (path: {dataset_path})"
-    )
+    log.info(f"Building dataset for {entry.name} (path: {dataset_path})")
     if not use_pretrain_norm and not entry.norm_stats:
         raise ValueError(
             f"Dataset '{entry.name}' has use_pretrain_norm=False but no norm_stats in registry."
         )
-    return RslearnToOlmoEarthDataset.from_runtime_config(
-        runtime_config=runtime_config,
+    return RslearnToOlmoEarthDataset.from_model_config(
+        model_config=model_config,
         source_path=dataset_path,
         split=normalized_split,
         input_modalities=input_modalities,
         norm_stats_from_pretrained=use_pretrain_norm,
         norm_method=norm_method,
-        ds_norm_stats_json=None,  # Not currently used
+        ds_norm_stats_json=None,
         ds_norm_stats=entry.norm_stats if not use_pretrain_norm else None,
         max_samples=max_samples,
         groups_override=groups_override,
