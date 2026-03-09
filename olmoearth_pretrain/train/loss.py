@@ -422,12 +422,15 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         for all_preds, all_masks, all_targets, modality in zip(
             modality_preds, modality_masks, modality_targets, targets.modalities
         ):
-            decoder_mask = all_masks == MaskValue.DECODER.value
-            pred = all_preds[decoder_mask].unsqueeze(dim=0).float()
-            target = all_targets[decoder_mask].unsqueeze(dim=0).float()
-            bs, nt, _ = pred.shape
-            if nt == 0:
+            pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            pred = pred.float()
+            target = target.float()
+
+            if pred.shape[1] == 0:
                 continue
+
+            bs, nt, _ = pred.shape
 
             if self.pred2unit:
                 pred_mu = pred.mean(1, keepdims=True)
