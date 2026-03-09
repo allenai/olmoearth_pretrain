@@ -87,11 +87,17 @@ class SpectralAttention(nn.Module):
         nn.init.zeros_(self.out_proj.weight)
         nn.init.zeros_(self.out_proj.bias)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, band_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """Apply content-dependent cross-band mixing.
 
         Args:
             x: Any-shape tensor with bands in the last dimension [..., num_bands].
+            band_mask: Optional boolean mask [..., num_bands] where True = band is
+                present. When provided, dropped bands are excluded from attention
+                keys so present bands only attend to other present bands. The delta
+                for dropped bands is zeroed so the residual preserves the dropout.
 
         Returns:
             Spectrally mixed tensor of the same shape.
@@ -113,8 +119,23 @@ class SpectralAttention(nn.Module):
         V = self.W_v(tokens).view(N, B, self.num_heads, head_dim).transpose(1, 2)
 
         attn = (Q @ K.transpose(-2, -1)) * (1.0 / math.sqrt(head_dim))  # [N, nh, B, B]
+
+        if band_mask is not None:
+            # Mask attention keys: present bands cannot attend TO dropped bands.
+            key_mask = band_mask.reshape(N, B)  # [N, B] True = present
+            # Expand to [N, 1, 1, B] for broadcasting over (heads, query_bands)
+            attn = attn.masked_fill(~key_mask[:, None, None, :], float("-inf"))
+
         attn = torch.softmax(attn, dim=-1)
+        # NaN guard: if a query band has all -inf keys (dropped band querying
+        # when all others are also dropped), softmax produces NaN. Replace with 0.
+        attn = attn.nan_to_num(0.0)
         out = (attn @ V).transpose(1, 2).reshape(N, B, d)  # [N, B, d]
 
         delta = self.out_proj(out).squeeze(-1)  # [N, B]
+
+        if band_mask is not None:
+            # Zero delta for dropped bands so residual preserves the dropout zeros.
+            delta = delta * band_mask.reshape(N, B).to(delta.dtype)
+
         return (x_flat + delta).reshape(shape)

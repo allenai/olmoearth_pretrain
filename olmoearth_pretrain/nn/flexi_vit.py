@@ -156,6 +156,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         spectral_mixer_modalities: list[str] | None = None,
         use_spectral_attention: bool = False,
         spectral_attention_d_model: int = 64,
+        spectral_attention_num_heads: int = 2,
     ):
         """Initialize the patch embeddings.
 
@@ -190,6 +191,8 @@ class MultiModalPatchEmbeddings(nn.Module):
                 Default: False.
             spectral_attention_d_model: Embedding dimension for band tokens in SpectralAttention.
                 Default: 64.
+            spectral_attention_num_heads: Number of attention heads in SpectralAttention.
+                More heads = more diverse spectral correlation patterns. Default: 2.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -255,7 +258,9 @@ class MultiModalPatchEmbeddings(nn.Module):
                             )
 
                             mixers[key] = SpectralAttention(
-                                len(bandset_indices), d_model=spectral_attention_d_model
+                                len(bandset_indices),
+                                d_model=spectral_attention_d_model,
+                                num_heads=spectral_attention_num_heads,
                             )
             if mixers:
                 self.spectral_mixers = nn.ModuleDict(mixers)
@@ -347,6 +352,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                 self.band_dropout_modalities is None
                 or modality in self.band_dropout_modalities
             )
+            band_keep_mask = None
             if self.training and apply_dropout and self.band_dropout_rate > 0.0:
                 num_bands = patchified_data.shape[-1]
                 # Only apply band dropout if there are more than 1 band
@@ -358,13 +364,21 @@ class MultiModalPatchEmbeddings(nn.Module):
                         )
                     else:
                         rate = self.band_dropout_rate
-                    patchified_data = self._apply_band_dropout(patchified_data, rate)
+                    patchified_data, band_keep_mask = self._apply_band_dropout(
+                        patchified_data, rate
+                    )
 
-            # Spectral mixer: cross-band MLP applied pixel-wise before Conv2d.
+            # Spectral mixer/attention: cross-band mixing applied pixel-wise.
             if self.spectral_mixers is not None:
                 mixer_key = self._get_embedding_module_name(modality, idx)
                 if mixer_key in self.spectral_mixers:
-                    patchified_data = self.spectral_mixers[mixer_key](patchified_data)
+                    mixer = self.spectral_mixers[mixer_key]
+                    if band_keep_mask is not None and hasattr(mixer, "band_embed"):
+                        patchified_data = mixer(
+                            patchified_data, band_mask=band_keep_mask
+                        )
+                    else:
+                        patchified_data = mixer(patchified_data)
 
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
@@ -378,7 +392,9 @@ class MultiModalPatchEmbeddings(nn.Module):
         return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
 
     @staticmethod
-    def _apply_band_dropout(patchified_data: Tensor, rate: float) -> Tensor:
+    def _apply_band_dropout(
+        patchified_data: Tensor, rate: float
+    ) -> tuple[Tensor, Tensor]:
         """Randomly zero out band channels to force cross-spectral learning.
 
         Args:
@@ -386,7 +402,8 @@ class MultiModalPatchEmbeddings(nn.Module):
             rate: Probability of dropping each band (per sample).
 
         Returns:
-            Tensor with randomly zeroed bands, at least 1 band kept per sample.
+            Tuple of (data with randomly zeroed bands, keep_mask broadcast to data shape).
+            At least 1 band is kept per sample. keep_mask is True for kept bands.
         """
         num_bands = patchified_data.shape[-1]
         batch_size = patchified_data.shape[0]
@@ -402,7 +419,11 @@ class MultiModalPatchEmbeddings(nn.Module):
             keep_mask[no_bands_kept, rand_idx] = True
         # Broadcast: [B, 1, 1, ..., num_bands]
         view_shape = [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
-        return patchified_data * keep_mask.view(*view_shape).to(patchified_data.dtype)
+        broadcast_mask = keep_mask.view(*view_shape)
+        return (
+            patchified_data * broadcast_mask.to(patchified_data.dtype),
+            broadcast_mask,
+        )
 
     @staticmethod
     def is_any_data_seen_by_encoder(modality_mask: Tensor) -> bool:
@@ -1136,6 +1157,7 @@ class Encoder(FlexiVitBase):
         spectral_mixer_modalities: list[str] | None = None,
         use_spectral_attention: bool = False,
         spectral_attention_d_model: int = 64,
+        spectral_attention_num_heads: int = 2,
     ):
         """Initialize the encoder.
 
@@ -1176,6 +1198,7 @@ class Encoder(FlexiVitBase):
             use_spectral_attention: If True, apply content-dependent cross-band self-attention
                 before the Conv2d. Mutually exclusive with use_spectral_mixer.
             spectral_attention_d_model: Embedding dimension for SpectralAttention band tokens.
+            spectral_attention_num_heads: Number of heads in SpectralAttention.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1219,6 +1242,7 @@ class Encoder(FlexiVitBase):
             spectral_mixer_modalities=spectral_mixer_modalities,
             use_spectral_attention=use_spectral_attention,
             spectral_attention_d_model=spectral_attention_d_model,
+            spectral_attention_num_heads=spectral_attention_num_heads,
         )
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=self.embedding_size,
@@ -2099,6 +2123,7 @@ class EncoderConfig(Config):
     spectral_mixer_modalities: list[str] | None = None
     use_spectral_attention: bool = False
     spectral_attention_d_model: int = 64
+    spectral_attention_num_heads: int = 2
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""

@@ -811,7 +811,7 @@ class TestBandDropout:
         torch.manual_seed(42)
         B, H, W, num_bands = 4, 2, 2, 12
         data = torch.ones(B, H, W, num_bands)
-        result = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.5)
+        result, mask = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.5)
         # Some bands should be zeroed
         assert (result == 0).any(), "Expected some bands to be dropped"
         # Some bands should be kept
@@ -822,7 +822,7 @@ class TestBandDropout:
         torch.manual_seed(0)
         B, num_bands = 8, 6
         data = torch.ones(B, num_bands)
-        result = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=1.0)
+        result, mask = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=1.0)
         # Every sample must have at least one non-zero band
         per_sample_sum = result.sum(dim=-1)
         assert (per_sample_sum > 0).all(), "Each sample must keep at least 1 band"
@@ -831,14 +831,14 @@ class TestBandDropout:
         """Test that rate=0.0 keeps all bands."""
         B, num_bands = 4, 10
         data = torch.randn(B, num_bands)
-        result = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.0)
+        result, mask = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.0)
         assert torch.equal(result, data), "rate=0.0 should not modify data"
 
     def test_band_dropout_not_applied_when_rate_zero(self) -> None:
         """Test that when dropout rate is 0.0, no values are zeroed."""
         B, num_bands = 4, 12
         data = torch.ones(B, num_bands)
-        result = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.0)
+        result, mask = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.0)
         assert (result != 0).all(), "No values should be zero when dropout rate is 0.0"
 
     def test_band_dropout_not_applied_in_eval(self) -> None:
@@ -855,7 +855,7 @@ class TestBandDropout:
         )
         # In train mode, dropout should zero some bands
         embed.train()
-        result_train = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.5)
+        result_train, _ = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.5)
         assert (result_train == 0).any(), "Dropout should zero some bands in train mode"
         # In eval mode, the caller gates dropout with self.training
         embed.eval()
