@@ -248,7 +248,7 @@ def _task_type_from_class(class_name: str) -> str:
     for kind in ("segmentation", "classification", "regression"):
         if kind in name:
             return kind
-    return "segmentation"
+    raise ValueError(f"Cannot determine task type from class name: {class_name}")
 
 
 def get_modality_layers(model_config: dict[str, Any]) -> list[str]:

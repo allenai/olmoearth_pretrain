@@ -189,7 +189,7 @@ class EvalDatasetEntry(BaseModel):
     imputes: list[tuple[str, str]] = Field(default_factory=list)
 
     # Sizing
-    window_size: int = 64  # TOD: we should be reading this in
+    window_size: int | None = None
     timeseries: bool = False
 
     # Normalization

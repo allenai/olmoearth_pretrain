@@ -71,6 +71,30 @@ from olmoearth_pretrain.evals.task_types import SplitName, SplitType
 logger = logging.getLogger(__name__)
 
 
+def _infer_window_size(dataset_path: str) -> int | None:
+    """Read a single window's metadata.json to get its spatial size.
+
+    Walks the windows/ directory and reads the first metadata.json found,
+    avoiding loading the full dataset or all windows.
+    """
+    windows_dir = UPath(dataset_path) / "windows"
+    if not windows_dir.exists():
+        return None
+    for group_dir in windows_dir.iterdir():
+        if not group_dir.is_dir():
+            continue
+        for window_dir in group_dir.iterdir():
+            metadata_path = window_dir / "metadata.json"
+            if not metadata_path.exists():
+                continue
+            with metadata_path.open() as f:
+                metadata = json.load(f)
+            bounds = metadata.get("bounds")
+            if bounds and len(bounds) >= 4:
+                return bounds[3] - bounds[1]
+    return None
+
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -822,57 +846,6 @@ def count_split_stats(
 
 
 # =============================================================================
-# Transform Extraction Utilities
-# =============================================================================
-
-
-def _extract_sizing(
-    transforms: list[dict],
-    default_config: dict | None = None,
-) -> tuple[int | None, int | None]:
-    """Extract crop and pad sizes from transforms or default_config.
-
-    Scans the transforms for Crop and Pad transforms and extracts
-    their sizing parameters. Falls back to default_config.patch_size
-    if no Crop transform is found.
-
-    NOTE: The rslearn API for patch_size in default_config is expected to change.
-    This extraction logic may need updates when rslearn updates their config schema.
-
-    Args:
-        transforms: List of transform config dicts with class_path and init_args.
-        default_config: Optional default_config dict from model.yaml data.init_args.
-
-    Returns:
-        Tuple of (crop_size, pad_size), each None if not found.
-    """
-    crop_size: int | None = None
-    pad_size: int | None = None
-
-    for transform in transforms:
-        class_path = transform.get("class_path", "")
-        init_args = transform.get("init_args", {})
-
-        if "crop.Crop" in class_path:
-            crop_size = init_args.get("crop_size")
-            # Handle tuple case (min, max) - take the min for deterministic eval
-            if isinstance(crop_size, list | tuple):
-                crop_size = crop_size[0]
-        elif "pad.Pad" in class_path:
-            pad_size = init_args.get("size")
-            # Handle tuple case (min, max) - take the min for deterministic eval
-            if isinstance(pad_size, list | tuple):
-                pad_size = pad_size[0]
-
-    # Fallback: use default_config.patch_size if no Crop transform found
-    # NOTE: This is rslearn's window/tile size for sampling data
-    if crop_size is None and default_config is not None:
-        crop_size = default_config.get("patch_size")
-
-    return crop_size, pad_size
-
-
-# =============================================================================
 # Main Ingestion Function
 # =============================================================================
 
@@ -1084,10 +1057,21 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
 
     task_type = rslearn_task_type_to_olmoearth_task_type(rslearn_task)
 
-    # Extract window_size from default_config
+    # Extract window_size: prefer crop_size from config, fall back to actual
+    # window dimensions from the dataset.
     data_init_args = model_config["data"]["init_args"]
     default_config = data_init_args.get("default_config", {})
-    window_size = default_config.get("patch_size", 64)
+    window_size = default_config.get("crop_size")
+
+    if window_size is None:
+        window_size = _infer_window_size(weka_path)
+        if window_size is not None:
+            logger.info(
+                "No crop_size in config, inferred window_size=%d from data",
+                window_size,
+            )
+        else:
+            logger.warning("No windows found to infer window_size, leaving as None")
 
     logger.info("Creating EvalDatasetEntry...")
     entry = EvalDatasetEntry(
