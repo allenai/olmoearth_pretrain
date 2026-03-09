@@ -256,7 +256,7 @@ class GalileoTrainModule(OlmoEarthTrainModule):
                 microbatch_b = microbatches_b[microbatch_idx]
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} "
-                    f"with batch size {microbatch_a.timestamps.shape[0]}"
+                    f"with batch size {microbatch_a.batch_size}"
                 )
                 masked_batch_a = microbatch_a.to_device(self.device)
                 masked_batch_b = microbatch_b.to_device(self.device)
@@ -292,7 +292,7 @@ class GalileoTrainModule(OlmoEarthTrainModule):
                     )
                 if self.contrastive_loss is not None:
                     contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
-                    logger.info(f"contrastive loss: {contrastive_loss}")
+                    logger.debug("contrastive loss: %s", contrastive_loss)
                     loss += contrastive_loss
                     total_batch_con += (
                         get_local_tensor(contrastive_loss.detach()) / num_microbatches

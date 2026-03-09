@@ -596,7 +596,8 @@ class EncodeEarlyAttnPool(Encoder):
         token_norm_stats = None
         if self.has_register_tokens and register_tokens is not None:
             tokens, register_tokens = self.pop_register_tokens(tokens)
-            token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
+            if self.log_token_norm_stats:
+                token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
 
         if exit_ids_seq is not None:
             # this should only ever be called by the target encoder,
@@ -856,7 +857,7 @@ class PooledModalityPredictor(PredictorBase):
         pooled_tokens_and_masks["modality_pooled_tokens"] = pooled_tokens
 
         # Prepare the Learnable Masked Outputs on the original Unpooled Tokens
-        decoder_emedded_dict = x.as_dict(return_none=False)
+        decoder_emedded_dict = x.as_dict()
         tokens_only_dict = self.add_masks(decoder_emedded_dict)
         decoder_emedded_dict.update(tokens_only_dict)
         tokens_and_masks = self.apply_attn(

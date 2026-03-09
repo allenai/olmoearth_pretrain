@@ -31,7 +31,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --only-group dev
+          uv sync --extra dev --no-install-project
           uv tool install pre-commit --with pre-commit-uv --force-reinstall
 
       - name: Linting

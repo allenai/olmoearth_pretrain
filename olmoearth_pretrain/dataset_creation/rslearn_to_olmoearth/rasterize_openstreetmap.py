@@ -187,6 +187,12 @@ def rasterize_openstreetmap(olmoearth_path: UPath, in_fname: UPath) -> None:
             if coords[1] < 0 or coords[1] >= OUTPUT_SIZE:
                 continue
             array[category_id, coords[1], coords[0]] = 1
+        elif geometry["type"] == "MultiLineString":
+            for line_string_coords in geometry["coordinates"]:
+                draw_line_string(array, line_string_coords, category_id, transform)
+        elif geometry["type"] == "MultiPolygon":
+            for polygon_coords in geometry["coordinates"]:
+                draw_polygon(array, polygon_coords, category_id, transform)
         else:
             raise ValueError(f"cannot handle geometry type {geometry['type']}")
 

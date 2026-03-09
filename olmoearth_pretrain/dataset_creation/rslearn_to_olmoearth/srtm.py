@@ -6,7 +6,7 @@ import multiprocessing
 from datetime import UTC, datetime
 
 import tqdm
-from rslearn.dataset import Window
+from rslearn.dataset import Dataset, Window
 from rslearn.utils.mp import star_imap_unordered
 from upath import UPath
 
@@ -23,14 +23,13 @@ END_TIME = datetime(2001, 1, 1, tzinfo=UTC)
 LAYER_NAME = "srtm"
 
 
-def convert_srtm(window_path: UPath, olmoearth_path: UPath) -> None:
+def convert_srtm(window: Window, olmoearth_path: UPath) -> None:
     """Add SRTM elevation data for this window to the OlmoEarth Pretrain dataset.
 
     Args:
-        window_path: the rslearn window directory to read data from.
+        window: the rslearn window to read data from.
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
     """
-    window = Window.load(window_path)
     window_metadata = get_window_metadata(window)
 
     if not window.is_layer_completed(LAYER_NAME):
@@ -103,14 +102,16 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    ds_path = UPath(args.ds_path)
+    dataset = Dataset(UPath(args.ds_path))
     olmoearth_path = UPath(args.olmoearth_path)
 
     jobs = []
-    for window_dir in (ds_path / "windows" / "res_10").iterdir():
+    for window in dataset.load_windows(
+        workers=args.workers, show_progress=True, groups=["res_10"]
+    ):
         jobs.append(
             dict(
-                window_path=window_dir,
+                window=window,
                 olmoearth_path=olmoearth_path,
             )
         )

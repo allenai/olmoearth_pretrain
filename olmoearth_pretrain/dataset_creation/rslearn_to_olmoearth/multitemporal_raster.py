@@ -77,7 +77,7 @@ def get_adjusted_projection_and_bounds(
 
 
 def convert_freq(
-    window_path: UPath,
+    window: Window,
     olmoearth_path: UPath,
     layer_name: str,
     modality: ModalitySpec,
@@ -87,7 +87,7 @@ def convert_freq(
     """Add frequent (two-week) data from this window to the OlmoEarth Pretrain dataset.
 
     Args:
-        window_path: the rslearn window directory to read data from.
+        window: the rslearn window to read data from.
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
         layer_name: the name of the layer containing frequent data in the rslearn
             dataset. It should be configured to individually store each item from the
@@ -100,7 +100,6 @@ def convert_freq(
         unprepared_okay: whether we should ignore the case where the window hasn't been
             prepared.
     """
-    window = Window.load(window_path)
     window_metadata = get_window_metadata(window)
     layer_datas = window.load_layer_datas()
 
@@ -233,7 +232,7 @@ def convert_freq(
 
 
 def convert_monthly(
-    window_path: UPath,
+    window: Window,
     olmoearth_path: UPath,
     layer_prefix: str,
     modality: ModalitySpec,
@@ -241,7 +240,7 @@ def convert_monthly(
     """Add monthly (one-year) data from this window to the OlmoEarth Pretrain dataset.
 
     Args:
-        window_path: the rslearn window directory to read data from.
+        window: the rslearn window to read data from.
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
         layer_prefix: the prefix for the layer names containing monthly data in the
             rslearn dataset. The layers should be named with suffixes "_mo01", "_mo02",
@@ -250,7 +249,6 @@ def convert_monthly(
         modality: the modality.
         band_sets: the band sets.
     """
-    window = Window.load(window_path)
     window_metadata = get_window_metadata(window)
 
     if abs(window_metadata.resolution - modality.get_tile_resolution()) > EPSILON:

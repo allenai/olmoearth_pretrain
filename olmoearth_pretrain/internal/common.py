@@ -200,7 +200,7 @@ def build_launch_config(
             "pip install uv",
             # so that we can use uv tools
             'export PATH="/root/.local/bin:$PATH" ',
-            "uv sync --locked --all-groups",
+            "uv sync --locked --all-extras",
             # activate the uv venv
             "venv_path=$(uv run python -c 'import sys; print(sys.executable)')",
             'source "$(dirname "$venv_path")/activate"',
@@ -257,6 +257,9 @@ def build_common_components(
             clusters=cluster,
             nccl_debug=nccl_debug,
         )
+        # Set retries=2 for launch command
+        if cmd == SubCmd.launch:
+            launch_config.retries = 2
     root_dir = get_root_dir(cluster)
 
     beaker_user = get_beaker_username() or ANONYMOUS_USER

@@ -31,9 +31,7 @@ from olmoearth_pretrain.internal.experiment import (
     OlmoEarthVisualizeConfig,
     SubCmd,
 )
-from olmoearth_pretrain.nn.flexi_vit import (
-    PoolingType,
-)
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     OlmoEarthSpeedMonitorCallback,
@@ -159,6 +157,7 @@ def build_dataloader_config(
         num_masked_views=2,  # ContrastiveLatentMIM needs 2 views
         masking_config=get_masking_config(common),
         # masking_config_b is not set, so both views use the same strategy
+        tokenization_config=common.tokenization_config,
     )
 
 
@@ -185,9 +184,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         name=common.run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
-        enabled=True,  # set to False to avoid wandb errors
+        enabled=True,
     )
-    # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     EVAL_TASKS = {
         "m-eurosat": DownstreamTaskConfig(
@@ -251,9 +249,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
-        .with_callback(
-            "beaker", BeakerCallback()
-        )  # this shoukd not be here, but for now it is
+        .with_callback("beaker", BeakerCallback())
         .with_callback(
             "checkpointer",
             CheckpointerCallback(

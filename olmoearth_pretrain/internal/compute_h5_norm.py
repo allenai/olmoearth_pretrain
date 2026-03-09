@@ -52,9 +52,9 @@ def compute_normalization_values(
         _, sample = dataset[get_item_args]
         for modality in sample.modalities:
             # Shall we compute the norm stats for worldcover?
-            if modality == "timestamps" or modality == "latlon":
+            if modality == "latlon":
                 continue
-            modality_data = sample.as_dict(ignore_nones=True)[modality]
+            modality_data = sample.as_dict()[modality]
             modality_spec = Modality.get(modality)
             modality_bands = modality_spec.band_order
             if modality_data is None:

@@ -1,7 +1,7 @@
 {
   "setup-worktree": [
     "pip install uv",
-    "uv sync --locked --all-groups --no-group flash-attn",
+    "uv sync --locked --extra all-no-flash",
     "source .venv/bin/activate"
   ]
 }

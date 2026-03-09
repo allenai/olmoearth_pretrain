@@ -11,10 +11,9 @@ Experiments:
 15. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + ERA5 decode-only + masked neg loss
 16. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + modality_cross_random masking + ERA5 decode-only + masked neg loss
 17. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + masked neg loss
-18. single bandset S2 (all 12 bands) / Landsat + SpectralMixer + random band dropout (rate ~ Uniform(0, 0.3)) + modality_cross_random masking + masked neg loss
-19. single bandset S2 (all 12 bands) / Landsat + SpectralMixer + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + masked neg loss
-20. single bandset S2 (all 12 bands) / Landsat + SpectralAttention (d=64) + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + masked neg loss
-21. single bandset S2 (all 12 bands) / Landsat + SpectralAttention (d=128) + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + masked neg loss
+18. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + NDVI decode-only + masked neg loss
+19. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + NDVI + ERA5 decode-only + masked neg loss
+20. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_time_with_decode masking + NDVI + ERA5 decode-only + masked neg loss
 """
 
 import copy
@@ -68,6 +67,11 @@ ONLY_DECODE_MODALITIES = [
 ]
 
 ONLY_DECODE_MODALITIES_WITH_ERA5 = ONLY_DECODE_MODALITIES + [Modality.ERA5_10.name]
+ONLY_DECODE_MODALITIES_WITH_NDVI = ONLY_DECODE_MODALITIES + [Modality.NDVI.name]
+ONLY_DECODE_MODALITIES_WITH_NDVI_AND_ERA5 = ONLY_DECODE_MODALITIES + [
+    Modality.NDVI.name,
+    Modality.ERA5_10.name,
+]
 
 _LOSS_CONFIG_DICT = {
     "type": "modality_patch_discrimination_masked_negatives",
@@ -131,15 +135,20 @@ LANDSAT_SINGLE_BANDSET = ModalityTokenization(
 )
 
 
+NDVI_SINGLE_BANDSET = ModalityTokenization(band_groups=[["ndvi"]])
+
+
 def _tokenization_config(
     s2_config: ModalityTokenization = S2_SINGLE_BANDSET,
+    include_ndvi: bool = False,
 ) -> TokenizationConfig:
-    return TokenizationConfig(
-        overrides={
-            "sentinel2_l2a": s2_config,
-            "landsat": LANDSAT_SINGLE_BANDSET,
-        }
-    )
+    overrides: dict[str, ModalityTokenization] = {
+        "sentinel2_l2a": s2_config,
+        "landsat": LANDSAT_SINGLE_BANDSET,
+    }
+    if include_ndvi:
+        overrides["ndvi"] = NDVI_SINGLE_BANDSET
+    return TokenizationConfig(overrides=overrides)
 
 
 def _masking_config(
@@ -402,6 +411,71 @@ def _loss_config_era5() -> LossConfig:
             "same_target_threshold": 0.999,
             "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES_WITH_ERA5,
         }
+    )
+
+
+def _masking_config_ndvi(
+    tokenization_config: TokenizationConfig | None = None,
+) -> MaskingConfig:
+    return MaskingConfig(
+        strategy_config={
+            "type": "random_with_decode",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "only_decode_modalities": ONLY_DECODE_MODALITIES_WITH_NDVI,
+        },
+        tokenization_config=tokenization_config,
+    )
+
+
+def _loss_config_ndvi() -> LossConfig:
+    return LossConfig(
+        loss_config={
+            "type": "modality_patch_discrimination_masked_negatives",
+            "tau": 0.1,
+            "same_target_threshold": 0.999,
+            "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES_WITH_NDVI,
+        }
+    )
+
+
+def _masking_config_ndvi_era5(
+    tokenization_config: TokenizationConfig | None = None,
+) -> MaskingConfig:
+    return MaskingConfig(
+        strategy_config={
+            "type": "random_with_decode",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "only_decode_modalities": ONLY_DECODE_MODALITIES_WITH_NDVI_AND_ERA5,
+        },
+        tokenization_config=tokenization_config,
+    )
+
+
+def _loss_config_ndvi_era5() -> LossConfig:
+    return LossConfig(
+        loss_config={
+            "type": "modality_patch_discrimination_masked_negatives",
+            "tau": 0.1,
+            "same_target_threshold": 0.999,
+            "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES_WITH_NDVI_AND_ERA5,
+        }
+    )
+
+
+def _masking_config_random_time_ndvi_era5(
+    tokenization_config: TokenizationConfig | None = None,
+) -> MaskingConfig:
+    return MaskingConfig(
+        strategy_config={
+            "type": "random_time_with_decode",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "random_ratio": 0.5,
+            "only_decode_modalities": ONLY_DECODE_MODALITIES_WITH_NDVI_AND_ERA5,
+        },
+        tokenization_config=tokenization_config,
     )
 
 

@@ -21,7 +21,7 @@ from olmoearth_pretrain.evals.models import (
 from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
 from olmoearth_pretrain.internal.constants import EVAL_LAUNCH_PATH, EVAL_WANDB_PROJECT
 from olmoearth_pretrain.internal.experiment import SubCmd
-from olmoearth_pretrain.nn.flexi_vit import PoolingType
+from olmoearth_pretrain.nn.pooling import PoolingType
 
 LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 Normalization_MODES = ["pre_trained", "dataset"]
@@ -118,11 +118,11 @@ def lr_only_params() -> Generator[dict[str, Any], None, None]:
 def select_best_val_args() -> str:
     """Get the early stopping arguments.
 
-    This is used to select the final test miou based on the epoch of the max val miou.
+    Selects the best test result based on the epoch with the best primary validation metric.
     """
     return " ".join(
         [
-            f" --trainer.callbacks.downstream_evaluator.tasks.{task_name}.select_final_test_miou_based_on_epoch_of_max_val_miou=True  --trainer.callbacks.downstream_evaluator.tasks.{task_name}.linear_probe_eval_interval=5"
+            f" --trainer.callbacks.downstream_evaluator.tasks.{task_name}.select_best_by_primary_metric=True  --trainer.callbacks.downstream_evaluator.tasks.{task_name}.linear_probe_eval_interval=5"
             for task_name in EVAL_TASKS.keys()
         ]
     )

@@ -18,14 +18,13 @@ from olmo_core.train.config import TrainerConfig
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
 from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
     main,
 )
-from olmoearth_pretrain.nn.flexi_vit import (
-    PoolingType,
-)
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     OlmoEarthWandBCallback,
@@ -73,6 +72,7 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
         eval_mode=EvalMode.KNN,
+        primary_metric=EvalMetric.ACCURACY,
     ),
     "m_forestnet": DownstreamTaskConfig(
         dataset="m-forestnet",
@@ -83,6 +83,7 @@ EVAL_TASKS = {
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         eval_interval=Duration.epochs(5),
         eval_mode=EvalMode.KNN,
+        primary_metric=EvalMetric.ACCURACY,
     ),
     "m_bigearthnet": DownstreamTaskConfig(
         dataset="m-bigearthnet",
@@ -92,6 +93,7 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
         eval_mode=EvalMode.KNN,
+        primary_metric=EvalMetric.MACRO_F1,
     ),
     "m_so2sat": DownstreamTaskConfig(
         dataset="m-so2sat",
@@ -101,6 +103,7 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
         eval_mode=EvalMode.KNN,
+        primary_metric=EvalMetric.ACCURACY,
     ),
     "m_brick_kiln": DownstreamTaskConfig(
         dataset="m-brick-kiln",
@@ -110,6 +113,7 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
         eval_mode=EvalMode.KNN,
+        primary_metric=EvalMetric.ACCURACY,
     ),
     "m_sa_crop_type": DownstreamTaskConfig(
         dataset="m-sa-crop-type",
@@ -122,6 +126,7 @@ EVAL_TASKS = {
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
         eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
     ),
     "m_cashew_plant": DownstreamTaskConfig(
         dataset="m-cashew-plant",
@@ -134,6 +139,7 @@ EVAL_TASKS = {
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
         eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
     ),
     "mados": DownstreamTaskConfig(
         dataset="mados",
@@ -146,6 +152,7 @@ EVAL_TASKS = {
         probe_lr=0.01,
         eval_interval=Duration.epochs(10),
         eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MICRO_F1,
     ),
     "sen1floods11": DownstreamTaskConfig(
         dataset="sen1floods11",
@@ -157,6 +164,7 @@ EVAL_TASKS = {
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
         eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
     ),
     "pastis_sentinel2": DownstreamTaskConfig(
         dataset="pastis",
@@ -170,6 +178,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
     ),
     "pastis_sentinel1": DownstreamTaskConfig(
         dataset="pastis",
@@ -183,6 +192,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL1.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
     ),
     "pastis_sentinel1_sentinel2": DownstreamTaskConfig(
         dataset="pastis",
@@ -196,6 +206,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
     ),
     "nandi_sentinel2": DownstreamTaskConfig(
         dataset="nandi",
@@ -206,6 +217,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         input_layers=["sentinel2"],
         eval_interval=Duration.epochs(20),
+        primary_metric=EvalMetric.ACCURACY,
     ),
     "nandi_sentinel1": DownstreamTaskConfig(
         dataset="nandi",
@@ -217,6 +229,7 @@ EVAL_TASKS = {
         input_layers=["sentinel1_ascending"],
         eval_interval=Duration.epochs(20),
         eval_mode=EvalMode.KNN,
+        primary_metric=EvalMetric.ACCURACY,
     ),
     "nandi_landsat": DownstreamTaskConfig(
         dataset="nandi",
@@ -228,6 +241,7 @@ EVAL_TASKS = {
         input_layers=["landsat"],
         eval_interval=Duration.epochs(20),
         eval_mode=EvalMode.KNN,
+        primary_metric=EvalMetric.ACCURACY,
     ),
     "awf_sentinel2": DownstreamTaskConfig(
         dataset="awf",
@@ -239,6 +253,7 @@ EVAL_TASKS = {
         input_layers=["sentinel2"],
         eval_interval=Duration.epochs(20),
         eval_mode=EvalMode.KNN,
+        primary_metric=EvalMetric.ACCURACY,
     ),
     "awf_sentinel1": DownstreamTaskConfig(
         dataset="awf",
@@ -250,6 +265,7 @@ EVAL_TASKS = {
         input_layers=["sentinel1_ascending"],
         eval_interval=Duration.epochs(20),
         eval_mode=EvalMode.KNN,
+        primary_metric=EvalMetric.ACCURACY,
     ),
     "awf_landsat": DownstreamTaskConfig(
         dataset="awf",
@@ -261,6 +277,7 @@ EVAL_TASKS = {
         input_layers=["landsat"],
         eval_interval=Duration.epochs(20),
         eval_mode=EvalMode.KNN,
+        primary_metric=EvalMetric.ACCURACY,
     ),
     "pastis128_sentinel2": DownstreamTaskConfig(
         dataset="pastis128",
@@ -274,6 +291,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
     ),
     "pastis128_sentinel1": DownstreamTaskConfig(
         dataset="pastis128",
@@ -287,6 +305,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL1.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
     ),
     "pastis128_sentinel1_sentinel2": DownstreamTaskConfig(
         dataset="pastis128",
@@ -300,6 +319,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
     ),
 }
 
@@ -311,6 +331,7 @@ FT_EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         epochs=50,
+        primary_metric=EvalMetric.ACCURACY,
     ),
     "m_bigearthnet": DownstreamTaskConfig(
         dataset="m-bigearthnet",
@@ -319,6 +340,7 @@ FT_EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         epochs=50,
+        primary_metric=EvalMetric.MACRO_F1,
     ),
     "m_so2sat": DownstreamTaskConfig(
         dataset="m-so2sat",
@@ -327,6 +349,7 @@ FT_EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         epochs=50,
+        primary_metric=EvalMetric.ACCURACY,
     ),
     "m_sa_crop_type": DownstreamTaskConfig(
         dataset="m-sa-crop-type",
@@ -336,6 +359,7 @@ FT_EVAL_TASKS = {
         norm_stats_from_pretrained=False,
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         epochs=50,
+        primary_metric=EvalMetric.MIOU,
     ),
     "mados": DownstreamTaskConfig(
         dataset="mados",
@@ -345,6 +369,7 @@ FT_EVAL_TASKS = {
         norm_stats_from_pretrained=False,
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         epochs=50,
+        primary_metric=EvalMetric.MICRO_F1,
     ),
     "pastis_sentinel2": DownstreamTaskConfig(
         dataset="pastis",
@@ -354,6 +379,7 @@ FT_EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
+        primary_metric=EvalMetric.MIOU,
     ),
     "m_brick_kiln": DownstreamTaskConfig(
         dataset="m-brick-kiln",
@@ -362,6 +388,7 @@ FT_EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         epochs=50,
+        primary_metric=EvalMetric.ACCURACY,
     ),
     "sen1floods11": DownstreamTaskConfig(
         dataset="sen1floods11",
@@ -370,6 +397,7 @@ FT_EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         epochs=50,
+        primary_metric=EvalMetric.MIOU,
     ),
     "m_cashew_plant": DownstreamTaskConfig(
         dataset="m-cashew-plant",
@@ -379,6 +407,7 @@ FT_EVAL_TASKS = {
         norm_stats_from_pretrained=False,
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         epochs=50,
+        primary_metric=EvalMetric.MIOU,
     ),
     "m_forestnet": DownstreamTaskConfig(
         dataset="m-forestnet",
@@ -388,6 +417,7 @@ FT_EVAL_TASKS = {
         norm_stats_from_pretrained=False,
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         epochs=50,
+        primary_metric=EvalMetric.ACCURACY,
     ),
 }
 

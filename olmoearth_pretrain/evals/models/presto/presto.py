@@ -11,7 +11,7 @@ from upath import UPath
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.nn.flexi_vit import PoolingType
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 from .single_file_presto import (
@@ -174,6 +174,7 @@ class PrestoWrapper(nn.Module):
         """Forward pass through presto model."""
         s2 = getattr(masked_olmoearth_sample, Modality.SENTINEL2_L2A.name)
         s1 = getattr(masked_olmoearth_sample, Modality.SENTINEL1.name)
+        assert masked_olmoearth_sample.timestamps is not None
         months = masked_olmoearth_sample.timestamps[:, :, 1]
 
         x, mask, dynamic_world, months = self._preproccess(s2=s2, s1=s1, months=months)

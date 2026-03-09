@@ -10,7 +10,7 @@ import numpy as np
 import numpy.typing as npt
 import tqdm
 from rslearn.data_sources import Item
-from rslearn.dataset import Window
+from rslearn.dataset import Dataset, Window
 from rslearn.utils.mp import star_imap_unordered
 from rslearn.utils.raster_format import GeotiffRasterFormat
 from upath import UPath
@@ -28,18 +28,17 @@ LAYER_NAME = "era5_10"
 logger = logging.getLogger(__name__)
 
 
-def convert_era5(window_path: UPath, olmoearth_path: UPath) -> None:
+def convert_era5(window: Window, olmoearth_path: UPath) -> None:
     """Add ERA5 data for this window to the OlmoEarth Pretrain dataset.
 
     Args:
-        window_path: the rslearn window directory to read data from.
+        window: the rslearn window to read data from.
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
     """
     modality = Modality.ERA5_10
     assert len(modality.band_sets) == 1
     band_set = modality.band_sets[0]
 
-    window = Window.load(window_path)
     window_metadata = get_window_metadata(window)
     layer_datas = window.load_layer_datas()
     raster_format = GeotiffRasterFormat()
@@ -61,6 +60,8 @@ def convert_era5(window_path: UPath, olmoearth_path: UPath) -> None:
     year_time_ranges = []
     two_week_image: npt.NDArray | None = None
     two_week_time_range: tuple[datetime, datetime] | None = None
+    adjusted_projection = None
+    adjusted_bounds = None
     for group_idx, group in enumerate(layer_datas[LAYER_NAME].serialized_item_groups):
         # Can be uncompleted due to errors since for some reason the API occasionally
         # just returns two bands instead of all the requested variables.
@@ -107,6 +108,12 @@ def convert_era5(window_path: UPath, olmoearth_path: UPath) -> None:
     if two_week_image is None or two_week_time_range is None:
         logger.warning(
             f"skipping window {window.name} because it did not have an image intersecting the window time range"
+        )
+        return
+
+    if adjusted_projection is None or adjusted_bounds is None:
+        logger.warning(
+            f"skipping window {window.name} because adjusted_projection or adjusted_bounds is None"
         )
         return
 
@@ -211,15 +218,16 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    ds_path = UPath(args.ds_path)
+    dataset = Dataset(UPath(args.ds_path))
     olmoearth_path = UPath(args.olmoearth_path)
 
-    metadata_fnames = ds_path.glob("windows/res_10/*/metadata.json")
     jobs = []
-    for metadata_fname in metadata_fnames:
+    for window in dataset.load_windows(
+        workers=args.workers, show_progress=True, groups=["res_10"]
+    ):
         jobs.append(
             dict(
-                window_path=metadata_fname.parent,
+                window=window,
                 olmoearth_path=olmoearth_path,
             )
         )

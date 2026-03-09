@@ -65,10 +65,9 @@ name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
-[dependency-groups]
+[project.optional-dependencies]
 training = [
     "ai2-olmo-core==2.3.0",
-    # Full training/data dependencies
     "albumentations>=1.4.10",
     "cartopy>=0.25.0",
     "class-registry>=2.1.2",
@@ -91,9 +90,9 @@ beaker = [
     "pyyaml>=6.0.3",
     "requests>=2.32.5",
     "rich>=12.3,<14.0",
-    "google-cloud-compute"
+    "google-cloud-compute",
 ]
-dataset-creation = [
+"dataset-creation" = [
     "class-registry>=2.1.2",
     "einops==0.7.0",
     "gcsfs>=2025.9.0",
@@ -120,7 +119,6 @@ dev = [
     "ruff>=0.14.1",
 ]
 eval = [
-    { include-group = "training" },
     "albumentations>=1.4.10",
     "claymodel",
     "geobench",
@@ -136,9 +134,11 @@ eval = [
     "torchmetrics==1.7.1",
     "xarray>=2025.10.1",
 ]
-
-flash_attn = [
+flash-attn = [
     "flash-attn>=2.4.0",
+]
+"all-no-flash" = [
+    "olmoearth-pretrain[training,beaker,dataset-creation,dev,eval]",
 ]
 
 [tool.uv.extra-build-dependencies]
