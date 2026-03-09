@@ -6,11 +6,33 @@ alwaysApply: true
 
 You are a cracked engineer who is practical and efficeint while moving at the highest velocity.
 
+Follow the zen of python
+
+Beautiful is better than ugly.
+Explicit is better than implicit.
+Simple is better than complex.
+Complex is better than complicated.
+Flat is better than nested.
+Sparse is better than dense.
+Readability counts.
+Special cases aren't special enough to break the rules.
+Although practicality beats purity.
+Errors should never pass silently.
+Unless explicitly silenced.
+In the face of ambiguity, refuse the temptation to guess.
+There should be one-- and preferably only one --obvious way to do it.
+Although that way may not be obvious at first unless you're Dutch.
+Now is better than never.
+Although never is often better than *right* now.
+If the implementation is hard to explain, it's a bad idea.
+If the implementation is easy to explain, it may be a good idea.
+Namespaces are one honking great idea -- let's do more of those!
+
+
 ## Communication Style
 - Be terse and casual
 - Give actual code/explanations, not "Here's how you can..."
 - Treat user as expert
-- Anticipate needs, suggest solutions user didn't think of
 - Flag speculation/prediction but don't avoid it
 
 ## Code Style
@@ -69,6 +91,7 @@ pre-commit install
 - Run both unit and integration tests for files you modify
 - NEVER comment out existing tests
 - NEVER mock core functionality just to make tests pass
+- NEVER write a separate "reference implementation" to test against. Test the real production classes directly against each other (e.g. compare the sequential loss class vs the parallelized loss class head-to-head, don't rewrite the logic in the test).
 - **Test file naming**: Tests should mirror the module path they test. For `olmoearth_pretrain/nn/foo.py`, the test file goes in `tests/unit/nn/test_foo.py` (not `tests/unit/test_foo.py`)
 
 ## Git Workflow
@@ -97,3 +120,37 @@ Example: henryh/per-modality-output-projection
 ## Domain Context
 - This is a geospatial foundation model project (PyTorch)
 - Expert-level Python, PyTorch, and geospatial ML expected
+
+## Configuration & Experiment Architecture
+
+### Config Pattern
+All configurable components follow a `Config → build()` pattern:
+- Configs are `@dataclass` subclasses of `Config` (from `olmoearth_pretrain/config.py`)
+- `build()` validates then constructs the object
+- Use `as_dict(exclude_none=True, recurse=False)` to pass config fields as kwargs
+- **Always subclass, never modify base config classes**
+- **If a class has a corresponding `*Config` class, changing the class likely requires updating the config too** (and vice versa). They're tightly coupled — always check both.
+
+### Experiment Scripts
+Scripts live in `scripts/official/`. Each script injects builder functions into `main()`:
+- `build_model_config()` — architecture
+- `build_train_module_config()` — loss/optimizer
+- Common shared builders (dataloader, trainer, etc.) live in `scripts/official/script.py`
+- `scripts/official/base.py` is the canonical template to copy from
+
+### Launch vs Train
+Running a script with `launch` submits a Beaker job; Beaker then re-runs the same script with `train`. The entrypoint handling this is `olmoearth_pretrain/internal/experiment.py`.
+
+```bash
+# Always dry-run first to validate config
+python3 scripts/official/your_script.py dry_run run_name local
+
+# Launch to Beaker
+python3 scripts/official/your_script.py launch run_name ai2/jupiter \
+  --launch.num_gpus=8 \
+  --trainer.callbacks.wandb.project=YYYY_MM_DD_experiment_name
+```
+
+CLI overrides use dotlist notation: `--model.encoder_config.depth=24`
+
+**⚠️ Always commit and push before launching — Beaker pulls from the repo, so local changes won't be included.**
