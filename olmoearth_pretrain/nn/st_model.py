@@ -1520,6 +1520,11 @@ class STEncoderConfig(Config):
     tokenization_config: TokenizationConfig | None = None
     use_linear_patch_embed: bool = True
 
+    def __post_init__(self) -> None:
+        """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
+        if isinstance(self.tokenization_config, dict):
+            self.tokenization_config = TokenizationConfig(**self.tokenization_config)
+
     def validate(self) -> None:
         """Validate the configuration."""
         if len(self.supported_modalities) == 0:
@@ -1579,6 +1584,11 @@ class STPredictorConfig(Config):
     windowed_attention_size: int | None = None
     layer_attention_modes: list[str] | None = None
     tokenization_config: TokenizationConfig | None = None
+
+    def __post_init__(self) -> None:
+        """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
+        if isinstance(self.tokenization_config, dict):
+            self.tokenization_config = TokenizationConfig(**self.tokenization_config)
 
     def validate(self) -> None:
         """Validate the configuration."""
