@@ -1,4 +1,4 @@
-"""Callback that monitors /dev/shm and process memory usage."""
+"""Callback that monitors /dev/shm, process memory, and CUDA host memory."""
 
 import logging
 import os
@@ -6,6 +6,7 @@ import shutil
 from dataclasses import dataclass
 
 import psutil
+import torch
 
 from olmo_core.train.callbacks.callback import Callback
 
@@ -14,7 +15,7 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class ShmMonitorCallback(Callback):
-    """Logs /dev/shm and per-process memory stats every ``interval`` steps."""
+    """Logs /dev/shm, per-process memory, and CUDA host memory stats every ``interval`` steps."""
 
     interval: int = 10
     enabled: bool = True
@@ -37,24 +38,59 @@ class ShmMonitorCallback(Callback):
             self.trainer.record_metric("shm/total_gb", total_gb)
             self.trainer.record_metric("shm/used_pct", pct)
         except OSError:
-            pass
+            used_gb = 0
+            total_gb = 0
 
         try:
             proc = psutil.Process(os.getpid())
             mem = proc.memory_info()
-            self.trainer.record_metric("mem/main_rss_gb", mem.rss / (1024**3))
+            main_rss = mem.rss / (1024**3)
+            self.trainer.record_metric("mem/main_rss_gb", main_rss)
             self.trainer.record_metric("mem/main_vms_gb", mem.vms / (1024**3))
 
             children = proc.children(recursive=True)
             child_rss = sum(c.memory_info().rss for c in children) / (1024**3)
             self.trainer.record_metric("mem/children_rss_gb", child_rss)
-            self.trainer.record_metric("mem/total_rss_gb", mem.rss / (1024**3) + child_rss)
+            self.trainer.record_metric("mem/total_rss_gb", main_rss + child_rss)
             self.trainer.record_metric("mem/num_children", len(children))
-
-            log.info(
-                f"mem: main_rss={mem.rss / (1024**3):.2f}GB, "
-                f"children_rss={child_rss:.2f}GB ({len(children)} procs), "
-                f"shm={used_gb:.2f}/{total_gb:.2f}GB"
-            )
         except (psutil.NoSuchProcess, OSError):
-            pass
+            main_rss = 0
+            child_rss = 0
+
+        if torch.cuda.is_available():
+            try:
+                stats = torch.cuda.memory_stats()
+                to_gb = 1 / (1024**3)
+
+                # GPU device memory
+                self.trainer.record_metric(
+                    "cuda/allocated_gb", stats.get("allocated_bytes.all.current", 0) * to_gb
+                )
+                self.trainer.record_metric(
+                    "cuda/reserved_gb", stats.get("reserved_bytes.all.current", 0) * to_gb
+                )
+                self.trainer.record_metric(
+                    "cuda/active_gb", stats.get("active_bytes.all.current", 0) * to_gb
+                )
+
+                # Pinned (host) memory managed by PyTorch's caching allocator
+                pinned_current = stats.get("pinned_bytes.all.current", 0) * to_gb
+                pinned_peak = stats.get("pinned_bytes.all.peak", 0) * to_gb
+                self.trainer.record_metric("cuda/pinned_current_gb", pinned_current)
+                self.trainer.record_metric("cuda/pinned_peak_gb", pinned_peak)
+
+                # Number of pinned memory allocations
+                pinned_allocs = stats.get("pinned_bytes.all.allocated", 0)
+                pinned_frees = stats.get("pinned_bytes.all.freed", 0)
+                self.trainer.record_metric("cuda/pinned_alloc_count", pinned_allocs)
+                self.trainer.record_metric("cuda/pinned_free_count", pinned_frees)
+                self.trainer.record_metric("cuda/pinned_live_count", pinned_allocs - pinned_frees)
+
+                log.info(
+                    f"mem: rss={main_rss:.2f}GB, children={child_rss:.2f}GB, "
+                    f"cuda_alloc={stats.get('allocated_bytes.all.current', 0) * to_gb:.2f}GB, "
+                    f"pinned={pinned_current:.4f}GB (peak={pinned_peak:.4f}GB, "
+                    f"live_allocs={pinned_allocs - pinned_frees})"
+                )
+            except Exception:
+                pass
