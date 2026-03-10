@@ -129,9 +129,7 @@ class SpectralAttention(nn.Module):
             else:
                 bm = band_mask.reshape(band_mask.shape[0], band_mask.shape[-1])
                 spatial = N // bm.shape[0]
-                flat_mask = (
-                    bm.unsqueeze(1).expand(-1, spatial, -1).reshape(N, B)
-                )
+                flat_mask = bm.unsqueeze(1).expand(-1, spatial, -1).reshape(N, B)
             attn = attn.masked_fill(~flat_mask[:, None, None, :], float("-inf"))
 
         attn = torch.softmax(attn, dim=-1)
