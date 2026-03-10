@@ -120,11 +120,16 @@ class SpectralAttention(nn.Module):
 
         attn = (Q @ K.transpose(-2, -1)) * (1.0 / math.sqrt(head_dim))  # [N, nh, B, B]
 
+        # band_mask may be full-shape [..., B] or per-sample [batch, B].
+        # Flatten to [N, B] to match x_flat, expanding per-sample masks as needed.
+        flat_mask = None
         if band_mask is not None:
-            # Mask attention keys: present bands cannot attend TO dropped bands.
-            key_mask = band_mask.reshape(N, B)  # [N, B] True = present
-            # Expand to [N, 1, 1, B] for broadcasting over (heads, query_bands)
-            attn = attn.masked_fill(~key_mask[:, None, None, :], float("-inf"))
+            if band_mask.numel() == N * B:
+                flat_mask = band_mask.reshape(N, B)
+            else:
+                spatial = N // band_mask.shape[0]
+                flat_mask = band_mask.unsqueeze(1).expand(-1, spatial, -1).reshape(N, B)
+            attn = attn.masked_fill(~flat_mask[:, None, None, :], float("-inf"))
 
         attn = torch.softmax(attn, dim=-1)
         # NaN guard: if a query band has all -inf keys (dropped band querying
@@ -134,8 +139,7 @@ class SpectralAttention(nn.Module):
 
         delta = self.out_proj(out).squeeze(-1)  # [N, B]
 
-        if band_mask is not None:
-            # Zero delta for dropped bands so residual preserves the dropout zeros.
-            delta = delta * band_mask.reshape(N, B).to(delta.dtype)
+        if flat_mask is not None:
+            delta = delta * flat_mask.to(delta.dtype)
 
         return (x_flat + delta).reshape(shape)
