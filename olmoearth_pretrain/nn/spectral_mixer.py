@@ -120,15 +120,18 @@ class SpectralAttention(nn.Module):
 
         attn = (Q @ K.transpose(-2, -1)) * (1.0 / math.sqrt(head_dim))  # [N, nh, B, B]
 
-        # band_mask may be full-shape [..., B] or per-sample [batch, B].
-        # Flatten to [N, B] to match x_flat, expanding per-sample masks as needed.
+        # band_mask may be full-shape [..., B], per-sample [batch, B], or
+        # broadcast [batch, 1, ..., 1, B]. Flatten to [N, B] to match x_flat.
         flat_mask = None
         if band_mask is not None:
             if band_mask.numel() == N * B:
                 flat_mask = band_mask.reshape(N, B)
             else:
-                spatial = N // band_mask.shape[0]
-                flat_mask = band_mask.unsqueeze(1).expand(-1, spatial, -1).reshape(N, B)
+                bm = band_mask.reshape(band_mask.shape[0], band_mask.shape[-1])
+                spatial = N // bm.shape[0]
+                flat_mask = (
+                    bm.unsqueeze(1).expand(-1, spatial, -1).reshape(N, B)
+                )
             attn = attn.masked_fill(~flat_mask[:, None, None, :], float("-inf"))
 
         attn = torch.softmax(attn, dim=-1)

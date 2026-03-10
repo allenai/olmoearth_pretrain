@@ -372,13 +372,7 @@ class MultiModalPatchEmbeddings(nn.Module):
             if self.spectral_mixers is not None:
                 mixer_key = self._get_embedding_module_name(modality, idx)
                 if mixer_key in self.spectral_mixers:
-                    mixer = self.spectral_mixers[mixer_key]
-                    if band_keep_mask is not None and hasattr(mixer, "band_embed"):
-                        patchified_data = mixer(
-                            patchified_data, band_mask=band_keep_mask
-                        )
-                    else:
-                        patchified_data = mixer(patchified_data)
+                    patchified_data = self.spectral_mixers[mixer_key](patchified_data)
 
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
