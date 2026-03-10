@@ -1,5 +1,9 @@
 """Launch script."""
 
+from helios.internal.common import build_common_components
+from helios.internal.experiment import CommonComponents, main
+from helios.train.masking import MaskingConfig
+from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 from shared import (
     build_dataloader_config,
     build_dataset_config,
@@ -8,11 +12,6 @@ from shared import (
     build_trainer_config,
     build_visualize_config,
 )
-
-from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, main
-from helios.train.masking import MaskingConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 
 def my_build_train_module_config(
