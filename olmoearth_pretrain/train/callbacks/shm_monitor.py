@@ -57,40 +57,24 @@ class ShmMonitorCallback(Callback):
             main_rss = 0
             child_rss = 0
 
-        if torch.cuda.is_available():
-            try:
-                stats = torch.cuda.memory_stats()
-                to_gb = 1 / (1024**3)
+        # /proc/self/status breaks RSS into anonymous, file-backed, and shared
+        try:
+            to_gb = 1 / (1024 * 1024)  # /proc/self/status reports in kB
+            with open("/proc/self/status") as f:
+                for line in f:
+                    if line.startswith("RssAnon:"):
+                        val = int(line.split()[1]) * to_gb
+                        self.trainer.record_metric("proc/rss_anon_gb", val)
+                    elif line.startswith("RssFile:"):
+                        val = int(line.split()[1]) * to_gb
+                        self.trainer.record_metric("proc/rss_file_gb", val)
+                    elif line.startswith("RssShmem:"):
+                        val = int(line.split()[1]) * to_gb
+                        self.trainer.record_metric("proc/rss_shmem_gb", val)
+                    elif line.startswith("VmSwap:"):
+                        val = int(line.split()[1]) * to_gb
+                        self.trainer.record_metric("proc/vm_swap_gb", val)
 
-                # GPU device memory
-                self.trainer.record_metric(
-                    "cuda/allocated_gb", stats.get("allocated_bytes.all.current", 0) * to_gb
-                )
-                self.trainer.record_metric(
-                    "cuda/reserved_gb", stats.get("reserved_bytes.all.current", 0) * to_gb
-                )
-                self.trainer.record_metric(
-                    "cuda/active_gb", stats.get("active_bytes.all.current", 0) * to_gb
-                )
-
-                # Pinned (host) memory managed by PyTorch's caching allocator
-                pinned_current = stats.get("pinned_bytes.all.current", 0) * to_gb
-                pinned_peak = stats.get("pinned_bytes.all.peak", 0) * to_gb
-                self.trainer.record_metric("cuda/pinned_current_gb", pinned_current)
-                self.trainer.record_metric("cuda/pinned_peak_gb", pinned_peak)
-
-                # Number of pinned memory allocations
-                pinned_allocs = stats.get("pinned_bytes.all.allocated", 0)
-                pinned_frees = stats.get("pinned_bytes.all.freed", 0)
-                self.trainer.record_metric("cuda/pinned_alloc_count", pinned_allocs)
-                self.trainer.record_metric("cuda/pinned_free_count", pinned_frees)
-                self.trainer.record_metric("cuda/pinned_live_count", pinned_allocs - pinned_frees)
-
-                log.info(
-                    f"mem: rss={main_rss:.2f}GB, children={child_rss:.2f}GB, "
-                    f"cuda_alloc={stats.get('allocated_bytes.all.current', 0) * to_gb:.2f}GB, "
-                    f"pinned={pinned_current:.4f}GB (peak={pinned_peak:.4f}GB, "
-                    f"live_allocs={pinned_allocs - pinned_frees})"
-                )
-            except Exception:
-                pass
+            log.info(f"mem: rss={main_rss:.2f}GB, children={child_rss:.2f}GB")
+        except OSError:
+            pass
