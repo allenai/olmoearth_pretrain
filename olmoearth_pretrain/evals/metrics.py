@@ -22,6 +22,7 @@ class EvalMetric(StrEnum):
     MACRO_ACC = "macro_acc"
     MACRO_F1 = "macro_f1"
 
+
 # Label value used to mark invalid/ignored pixels in segmentation targets.
 # Pixels with this label are excluded from loss and metric calculations.
 SEGMENTATION_IGNORE_LABEL = -1

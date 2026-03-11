@@ -413,8 +413,12 @@ class RslearnToOlmoEarthDataset(Dataset):
         # - ClassificationTask: {"class": tensor, "valid": tensor}
         # - RegressionTask: {"value": tensor, "valid": tensor}
         if self.target_task_type == TaskType.SEGMENTATION:
-            classes = torch.as_tensor(data_dict["classes"].image, dtype=torch.long).squeeze()
-            valid = torch.as_tensor(data_dict["valid"].image, dtype=torch.long).squeeze()
+            classes = torch.as_tensor(
+                data_dict["classes"].image, dtype=torch.long
+            ).squeeze()
+            valid = torch.as_tensor(
+                data_dict["valid"].image, dtype=torch.long
+            ).squeeze()
         elif self.target_task_type == TaskType.CLASSIFICATION:
             # already a tensor
             classes = data_dict["class"]

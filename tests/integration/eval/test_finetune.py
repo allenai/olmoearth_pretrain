@@ -37,7 +37,7 @@ def test_segmentation_eval_pipeline() -> None:
 
     # Verify return type is EvalResult
     assert isinstance(result, EvalResult)
-    expected_keys = {"miou", "overall_acc", "macro_acc", "macro_f1"}
+    expected_keys = {"miou", "overall_acc", "macro_acc", "macro_f1", "micro_f1"}
     assert set(result.metrics.keys()) == expected_keys
 
     # Primary metric should be miou
@@ -98,6 +98,7 @@ def test_segmentation_eval_with_interpolation() -> None:
     assert "overall_acc" in result.metrics
     assert "macro_acc" in result.metrics
     assert "macro_f1" in result.metrics
+    assert "micro_f1" in result.metrics
 
 
 def test_segmentation_eval_with_ignore_labels() -> None:
@@ -119,5 +120,5 @@ def test_segmentation_eval_with_ignore_labels() -> None:
 
     assert isinstance(result, EvalResult)
     # Metrics should still be valid
-    for key in ["miou", "overall_acc", "macro_acc", "macro_f1"]:
+    for key in ["miou", "overall_acc", "macro_acc", "macro_f1", "micro_f1"]:
         assert 0.0 <= result.metrics[key] <= 1.0
