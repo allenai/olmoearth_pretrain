@@ -359,8 +359,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                 if num_bands > 1:
                     if self.random_band_dropout:
                         rate = (
-                            torch.rand(1, device=patchified_data.device).item()
-                            * self.band_dropout_rate
+                            torch.rand(1).item() * self.band_dropout_rate
                         )
                     else:
                         rate = self.band_dropout_rate
@@ -410,13 +409,10 @@ class MultiModalPatchEmbeddings(nn.Module):
         keep_mask = (
             torch.rand(batch_size, num_bands, device=patchified_data.device) >= rate
         )
-        # If no bands are kept, randomly select one band to keep
-        no_bands_kept = ~keep_mask.any(dim=1)
-        if no_bands_kept.any():
-            rand_idx = torch.randint(
-                num_bands, (no_bands_kept.sum(),), device=keep_mask.device
-            )
-            keep_mask[no_bands_kept, rand_idx] = True
+        # Guarantee at least 1 band per sample without GPU->CPU sync.
+        # Pick a random fallback band per sample; force it on unconditionally.
+        fallback_idx = torch.randint(num_bands, (batch_size,), device=keep_mask.device)
+        keep_mask.scatter_(1, fallback_idx.unsqueeze(1), True)
         # Broadcast: [B, 1, 1, ..., num_bands]
         view_shape = [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
         broadcast_mask = keep_mask.view(*view_shape)

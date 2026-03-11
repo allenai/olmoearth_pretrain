@@ -39,7 +39,7 @@ class FlexiPatchEmbed(nn.Module):
         embedding_size: int = 128,
         norm_layer: nn.Module | None = None,
         bias: bool = True,
-        interpolation: str = "bicubic",
+        interpolation: str = "bilinear",
         antialias: bool = True,
         use_linear_patch_embed: bool = True,
     ) -> None:
