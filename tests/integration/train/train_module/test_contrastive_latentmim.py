@@ -14,7 +14,11 @@ from olmoearth_pretrain.data.collate import collate_double_masked_batched
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.data.transform import TransformConfig
-from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig
+from olmoearth_pretrain.nn.flexi_vit import (
+    EncoderConfig,
+    FineGrainedPredictorConfig,
+    PredictorConfig,
+)
 from olmoearth_pretrain.nn.latent_mim import LatentMIM, LatentMIMConfig
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
@@ -76,6 +80,47 @@ def latent_mim_model(
     )
 
     # Build the model
+    model = latent_mim_config.build()
+    model.to(device="cpu")
+    return model
+
+
+@pytest.fixture
+def fine_grained_latent_mim_model(
+    supported_modality_names: list[str], set_random_seeds: None
+) -> LatentMIM:
+    """Create a LatentMIM model using the fine-grained predictor scaffold."""
+    encoder_config = EncoderConfig(
+        supported_modality_names=supported_modality_names,
+        embedding_size=16,
+        max_patch_size=8,
+        num_heads=2,
+        mlp_ratio=1.0,
+        depth=2,
+        drop_path=0.1,
+        max_sequence_length=12,
+    )
+    predictor_config = FineGrainedPredictorConfig(
+        supported_modality_names=supported_modality_names,
+        encoder_embedding_size=16,
+        decoder_embedding_size=16,
+        depth=2,
+        mlp_ratio=1.0,
+        num_heads=2,
+        max_sequence_length=12,
+        drop_path=0.0,
+        output_embedding_size=None,
+        max_fine_patch_size=8,
+        target_patch_size_by_modality={
+            Modality.SENTINEL2_L2A.name: 1,
+            Modality.SENTINEL1.name: 1,
+            Modality.WORLDCOVER.name: 4,
+        },
+    )
+    latent_mim_config = LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=predictor_config,
+    )
     model = latent_mim_config.build()
     model.to(device="cpu")
     return model
@@ -217,6 +262,64 @@ def test_train_batch_with_missing_modalities(
         logger.info(mock_trainer._metrics)
         check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc"])
         check_loss_is_a_reasonable_value(mock_trainer._metrics["train/InfoNCE"])
+
+
+def test_fine_grained_predictor_model_forward_with_mixed_target_patch_sizes(
+    samples_without_missing_modalities: list[tuple[int, OlmoEarthSample]],
+    fine_grained_latent_mim_model: LatentMIM,
+    train_module_config: ContrastiveLatentMIMTrainModuleConfig,
+    set_random_seeds: None,
+) -> None:
+    """Mixed target patch sizes should align decoded and target shapes."""
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    batch = collate_double_masked_batched(
+        samples_without_missing_modalities,
+        transform=None,
+        masking_strategy=masking_strategy,
+        masking_strategy_b=None,
+    )
+    patch_size = 4
+    train_module_config.target_patch_size_by_modality = {
+        Modality.SENTINEL2_L2A.name: 1,
+        Modality.SENTINEL1.name: 1,
+        Modality.WORLDCOVER.name: 4,
+    }
+    train_module = train_module_config.build(
+        fine_grained_latent_mim_model, device="cpu"
+    )
+    masked_batch = batch[1].to_device(torch.device("cpu"))
+    with (
+        patch.object(
+            fine_grained_latent_mim_model.encoder,
+            "forward",
+            wraps=fine_grained_latent_mim_model.encoder.forward,
+        ) as encoder_forward,
+        patch.object(
+            fine_grained_latent_mim_model.target_encoder,
+            "forward",
+            wraps=fine_grained_latent_mim_model.target_encoder.forward,
+        ) as target_forward,
+    ):
+        loss, _, decoded, target_output, _ = train_module.model_forward(
+            masked_batch,
+            patch_size,
+            train_module.token_exit_cfg,
+        )
+    assert encoder_forward.call_args is not None
+    assert encoder_forward.call_args.kwargs["patch_size"] == patch_size
+    assert {call.kwargs["patch_size"] for call in target_forward.call_args_list} == {
+        1,
+        4,
+    }
+    assert torch.isfinite(loss)
+    assert decoded.sentinel2_l2a is not None and target_output.sentinel2_l2a is not None
+    assert decoded.sentinel1 is not None and target_output.sentinel1 is not None
+    assert decoded.worldcover is not None and target_output.worldcover is not None
+    assert decoded.sentinel2_l2a.shape == target_output.sentinel2_l2a.shape
+    assert decoded.sentinel1.shape == target_output.sentinel1.shape
+    assert decoded.worldcover.shape == target_output.worldcover.shape
+    assert decoded.sentinel2_l2a.shape[1] == decoded.worldcover.shape[1] * 4
+    assert decoded.sentinel2_l2a.shape[2] == decoded.worldcover.shape[2] * 4
 
 
 def _run_train_batch_and_get_loss(

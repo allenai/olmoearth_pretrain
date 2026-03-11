@@ -11,6 +11,8 @@ from olmoearth_pretrain.nn.flexi_vit import (
     CompositeEncodings,
     Encoder,
     EncoderConfig,
+    FineGrainedPredictor,
+    FineGrainedPredictorConfig,
     FlexiVitBase,
     MultiModalPatchEmbeddings,
     PoolingType,
@@ -659,6 +661,97 @@ class TestPredictor:
         supported_modality_names = [m.name for m in supported_modalities]
         config = PredictorConfig(supported_modality_names)
         _ = config.build()
+
+
+class TestFineGrainedPredictor:
+    """Unit tests for the fine-grained predictor scaffold."""
+
+    def test_fine_grained_predictor_config(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Tests we can build the fine-grained predictor config."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = FineGrainedPredictorConfig(
+            supported_modality_names=supported_modality_names,
+            target_patch_size_by_modality={Modality.SENTINEL2_L2A.name: 1},
+            max_fine_patch_size=8,
+        )
+        predictor = config.build()
+        assert isinstance(predictor, FineGrainedPredictor)
+
+    def test_get_subpatch_pos_uses_target_stride(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Subpatch positions should stride by the target patch size."""
+        predictor = FineGrainedPredictor(
+            supported_modalities=supported_modalities,
+            encoder_embedding_size=8,
+            decoder_embedding_size=8,
+            depth=1,
+            mlp_ratio=1.0,
+            num_heads=2,
+            max_sequence_length=12,
+            max_fine_patch_size=8,
+        )
+        with torch.no_grad():
+            predictor.subpatch_pos.zero_()
+            predictor.subpatch_pos[:, :, 0] = torch.arange(64).reshape(8, 8)
+
+        subpatch_pos = predictor.get_subpatch_pos(
+            parent_patch_size=4, target_patch_size=2
+        )
+
+        assert subpatch_pos.shape == (4, 8)
+        assert torch.equal(
+            subpatch_pos[:, 0],
+            torch.tensor([0.0, 2.0, 16.0, 18.0]),
+        )
+
+    def test_build_and_restore_fine_query_stream(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Fine query helpers should expand and restore per-modality tensors."""
+        predictor = FineGrainedPredictor(
+            supported_modalities=supported_modalities,
+            encoder_embedding_size=8,
+            decoder_embedding_size=8,
+            depth=1,
+            mlp_ratio=1.0,
+            num_heads=2,
+            max_sequence_length=12,
+            max_fine_patch_size=8,
+            target_patch_size_by_modality={Modality.SENTINEL2_L2A.name: 1},
+        )
+        with torch.no_grad():
+            predictor.subpatch_pos.zero_()
+            predictor.subpatch_pos[0, 1, 0] = 1.0
+            predictor.subpatch_pos[1, 0, 0] = 2.0
+            predictor.subpatch_pos[1, 1, 0] = 3.0
+
+        tokens_only_dict = {
+            Modality.SENTINEL2_L2A.name: torch.tensor(
+                [[[[[[1.0, 10.0, 100.0, 1000.0, 0.0, 0.0, 0.0, 0.0]]]]]]
+            )
+        }
+
+        fine_queries, query_specs = predictor.build_fine_query_stream(
+            tokens_only_dict,
+            patch_size=2,
+        )
+        restored = predictor.restore_fine_predictions_per_modality(
+            fine_queries,
+            query_specs,
+        )
+
+        assert fine_queries.shape == (1, 4, 8)
+        assert len(query_specs) == 1
+        assert query_specs[0].fine_token_shape == (2, 2, 1, 1)
+        restored_tokens = restored[Modality.SENTINEL2_L2A.name]
+        assert restored_tokens.shape == (1, 2, 2, 1, 1, 8)
+        assert torch.equal(
+            restored_tokens[0, :, :, 0, 0, 0],
+            torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+        )
 
 
 class TestTokensAndMasks:

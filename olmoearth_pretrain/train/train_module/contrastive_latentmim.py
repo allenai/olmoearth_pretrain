@@ -1,5 +1,6 @@
 """Training and optimizer abstraction for OlmoEarth Pretrain."""
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any
@@ -56,6 +57,8 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
     reinit_targets: bool = False
+    target_patch_size: int | None = None
+    target_patch_size_by_modality: dict[str, int] | None = None
 
     def build(
         self,
@@ -106,6 +109,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         contrastive_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         reinit_targets: bool = False,
+        target_patch_size: int | None = None,
+        target_patch_size_by_modality: dict[str, int] | None = None,
     ):
         """Initialize the training module.
 
@@ -133,6 +138,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             contrastive_config: An optional contrastive configration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
             reinit_targets: Whether or not to reinitialize the target encoder.
+            target_patch_size: Optional fallback target patch size for all modalities.
+            target_patch_size_by_modality: Optional per-modality target patch sizes.
         """
         super().__init__(
             model=model,
@@ -163,6 +170,26 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.contrastive_loss = (
             contrastive_config.build() if contrastive_config is not None else None
         )
+        self.target_patch_size = target_patch_size
+        self.target_patch_size_by_modality = target_patch_size_by_modality or {}
+        unknown_target_modalities = set(self.target_patch_size_by_modality) - set(
+            Modality.names()
+        )
+        if unknown_target_modalities:
+            raise ValueError(
+                "target_patch_size_by_modality contains unknown modalities: "
+                f"{unknown_target_modalities}"
+            )
+        invalid_target_patch_sizes = {
+            modality: target_patch_size
+            for modality, target_patch_size in self.target_patch_size_by_modality.items()
+            if target_patch_size < 1
+        }
+        if invalid_target_patch_sizes:
+            raise ValueError(
+                "target_patch_size_by_modality must only contain positive patch "
+                f"sizes, got: {invalid_target_patch_sizes}"
+            )
         self.total_loss_name = self.base_loss.name
         if self.regularizer is not None:
             self.total_loss_name = f"{self.base_loss.name}+{self.regularizer.name}"
@@ -180,6 +207,111 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets)
+
+    def _get_target_patch_size_for_modality(
+        self, modality: str, patch_size: int
+    ) -> int:
+        """Get the target patch size for a modality."""
+        default_target_patch_size = self.target_patch_size or patch_size
+        return self.target_patch_size_by_modality.get(
+            modality, default_target_patch_size
+        )
+
+    @staticmethod
+    def _subset_batch_to_modalities(
+        batch: MaskedOlmoEarthSample, modalities: list[str]
+    ) -> MaskedOlmoEarthSample:
+        """Keep only the requested modalities in a masked batch."""
+        batch_dict = batch.as_dict(include_nones=True)
+        modalities_to_keep = set(modalities)
+        for modality in batch.modalities:
+            if modality in modalities_to_keep:
+                continue
+            batch_dict[modality] = None
+            batch_dict[batch.get_masked_modality_name(modality)] = None
+        return MaskedOlmoEarthSample.from_dict(batch_dict)
+
+    @staticmethod
+    def _merge_target_outputs(target_outputs: list[TokensAndMasks]) -> TokensAndMasks:
+        """Merge target outputs from multiple target-encoder forwards."""
+        merged_dict: dict[str, Any] = {}
+        for target_output in target_outputs:
+            target_output_dict = target_output.as_dict(include_nones=False)
+            overlapping_keys = set(merged_dict).intersection(target_output_dict)
+            if overlapping_keys:
+                raise ValueError(
+                    "Attempted to merge duplicate target outputs for keys: "
+                    f"{overlapping_keys}"
+                )
+            merged_dict.update(target_output_dict)
+        return TokensAndMasks(**merged_dict)
+
+    def _build_target_output(
+        self,
+        batch: MaskedOlmoEarthSample,
+        patch_size: int,
+        token_exit_cfg: dict[str, int],
+    ) -> TokensAndMasks:
+        """Build target outputs, grouping modalities by target patch size."""
+        unmasked_batch = batch.unmask()
+        target_modalities_by_patch_size: dict[int, list[str]] = defaultdict(list)
+        for modality in unmasked_batch.modalities:
+            target_patch_size = self._get_target_patch_size_for_modality(
+                modality, patch_size
+            )
+            target_modalities_by_patch_size[target_patch_size].append(modality)
+
+        target_outputs = []
+        for target_patch_size, grouped_modalities in sorted(
+            target_modalities_by_patch_size.items()
+        ):
+            target_batch = self._subset_batch_to_modalities(
+                unmasked_batch, grouped_modalities
+            )
+            output_dict = self.model.target_encoder.forward(
+                target_batch,
+                patch_size=target_patch_size,
+                token_exit_cfg=token_exit_cfg,
+            )
+            target_output, _, _ = unpack_encoder_output(output_dict)
+            target_outputs.append(target_output)
+        return self._merge_target_outputs(target_outputs)
+
+    @staticmethod
+    def _validate_decoded_target_shapes(
+        decoded: TokensAndMasks, target_output: TokensAndMasks
+    ) -> None:
+        """Fail fast when decoded and target outputs do not align."""
+        decoded_modalities = set(decoded.modalities)
+        target_modalities = set(target_output.modalities)
+        if decoded_modalities != target_modalities:
+            raise ValueError(
+                "Decoded and target modalities do not match: "
+                f"decoded={sorted(decoded_modalities)}, "
+                f"target={sorted(target_modalities)}"
+            )
+
+        for modality in decoded.modalities:
+            decoded_tokens = getattr(decoded, modality)
+            target_tokens = getattr(target_output, modality)
+            decoded_mask = getattr(decoded, decoded.get_masked_modality_name(modality))
+            target_mask = getattr(
+                target_output, target_output.get_masked_modality_name(modality)
+            )
+            if decoded_tokens is None or target_tokens is None:
+                raise ValueError(f"Missing token tensor for modality {modality}")
+            if decoded_mask is None or target_mask is None:
+                raise ValueError(f"Missing mask tensor for modality {modality}")
+            if decoded_tokens.shape != target_tokens.shape:
+                raise ValueError(
+                    f"Decoded and target token shapes differ for modality {modality}: "
+                    f"{decoded_tokens.shape} != {target_tokens.shape}"
+                )
+            if decoded_mask.shape != target_mask.shape:
+                raise ValueError(
+                    f"Decoded and target mask shapes differ for modality {modality}: "
+                    f"{decoded_mask.shape} != {target_mask.shape}"
+                )
 
     def train_batch(
         self,
@@ -313,12 +445,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
-                output_dict = self.model.target_encoder.forward(
-                    batch.unmask(),
+                target_output = self._build_target_output(
+                    batch,
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
-                target_output, _, _ = unpack_encoder_output(output_dict)
+            self._validate_decoded_target_shapes(decoded, target_output)
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)

@@ -358,9 +358,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                 # Only apply band dropout if there are more than 1 band
                 if num_bands > 1:
                     if self.random_band_dropout:
-                        rate = (
-                            torch.rand(1).item() * self.band_dropout_rate
-                        )
+                        rate = torch.rand(1).item() * self.band_dropout_rate
                     else:
                         rate = self.band_dropout_rate
                     patchified_data, band_keep_mask = self._apply_band_dropout(
@@ -2099,6 +2097,348 @@ class Predictor(PredictorBase):
 
 
 @dataclass
+class FineGrainedQuerySpec:
+    """Describes how a modality maps into the flat fine-query stream."""
+
+    modality: str
+    fine_token_shape: tuple[int, ...]
+    flat_start: int
+
+
+class FineGrainedPredictor(Predictor):
+    """Predictor scaffold for mixed-resolution decoder queries."""
+
+    def __init__(
+        self,
+        *args: Any,
+        max_fine_patch_size: int = 8,
+        target_patch_size_by_modality: dict[str, int] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize the fine-grained predictor scaffold."""
+        super().__init__(*args, **kwargs)
+        if max_fine_patch_size < 1:
+            raise ValueError("max_fine_patch_size must be >= 1")
+        self.max_fine_patch_size = max_fine_patch_size
+        self.target_patch_size_by_modality = target_patch_size_by_modality or {}
+        self.subpatch_pos = nn.Parameter(
+            torch.zeros(
+                max_fine_patch_size,
+                max_fine_patch_size,
+                self.embedding_size,
+            )
+        )
+
+    def get_target_patch_size(self, modality: str, patch_size: int) -> int:
+        """Return the target patch size for a modality."""
+        return self.target_patch_size_by_modality.get(modality, patch_size)
+
+    def get_subpatch_pos(
+        self, parent_patch_size: int, target_patch_size: int
+    ) -> Tensor:
+        """Return flattened subpatch positions for one parent patch."""
+        if target_patch_size < 1:
+            raise ValueError("target_patch_size must be >= 1")
+        if parent_patch_size < target_patch_size:
+            raise ValueError(
+                "parent_patch_size must be >= target_patch_size for fine queries"
+            )
+        if parent_patch_size % target_patch_size != 0:
+            raise ValueError("parent_patch_size must be divisible by target_patch_size")
+        if parent_patch_size > self.max_fine_patch_size:
+            raise ValueError("parent_patch_size exceeds configured max_fine_patch_size")
+        offsets = torch.arange(
+            0,
+            parent_patch_size,
+            target_patch_size,
+            device=self.subpatch_pos.device,
+        )
+        pos = self.subpatch_pos.index_select(0, offsets).index_select(1, offsets)
+        return rearrange(pos, "h w d -> (h w) d")
+
+    def build_coarse_context_stream(
+        self, x: dict[str, Tensor]
+    ) -> tuple[Tensor, Tensor]:
+        """Flatten the existing coarse context stream."""
+        return self.collapse_and_combine_hwtc(x)
+
+    def build_fine_query_stream(
+        self,
+        tokens_only_dict: dict[str, Tensor],
+        patch_size: int,
+    ) -> tuple[Tensor, list[FineGrainedQuerySpec]]:
+        """Expand selected spatial modalities into fine decoder queries."""
+        query_tokens = []
+        query_specs = []
+        flat_offset = 0
+        available_modalities = return_modalities_from_dict(tokens_only_dict)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+
+        for modality in modalities_to_process:
+            modality_tokens = tokens_only_dict[modality]
+            target_patch_size = self.get_target_patch_size(modality, patch_size)
+            fine_tokens = self._build_fine_query_tokens_for_modality(
+                modality_tokens,
+                modality=modality,
+                patch_size=patch_size,
+                target_patch_size=target_patch_size,
+            )
+            flat_tokens = rearrange(fine_tokens, "b ... d -> b (...) d")
+            flat_start = flat_offset
+            flat_offset += flat_tokens.shape[1]
+            query_tokens.append(flat_tokens)
+            query_specs.append(
+                FineGrainedQuerySpec(
+                    modality=modality,
+                    fine_token_shape=tuple(fine_tokens.shape[1:-1]),
+                    flat_start=flat_start,
+                )
+            )
+
+        if not query_tokens:
+            raise ValueError("No modalities available to build fine query stream")
+
+        return torch.cat(query_tokens, dim=1), query_specs
+
+    def build_fine_query_mask_stream(
+        self,
+        original_masks_dict: dict[str, Tensor],
+        query_specs: list[FineGrainedQuerySpec],
+        patch_size: int,
+    ) -> tuple[Tensor, dict[str, Tensor]]:
+        """Expand modality masks to match the fine query stream."""
+        fine_masks = []
+        fine_masks_dict = {}
+        for spec in query_specs:
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                spec.modality
+            )
+            target_patch_size = self.get_target_patch_size(spec.modality, patch_size)
+            fine_mask = self._build_fine_query_mask_for_modality(
+                original_masks_dict[masked_modality_name],
+                modality=spec.modality,
+                patch_size=patch_size,
+                target_patch_size=target_patch_size,
+            )
+            fine_masks_dict[masked_modality_name] = fine_mask
+            fine_masks.append(rearrange(fine_mask, "b ... -> b (...)"))
+        return torch.cat(fine_masks, dim=1), fine_masks_dict
+
+    def restore_fine_predictions_per_modality(
+        self,
+        flat_predictions: Tensor,
+        query_specs: list[FineGrainedQuerySpec],
+    ) -> dict[str, Tensor]:
+        """Restore flat fine-query predictions back to per-modality tensors."""
+        restored = {}
+        for spec in query_specs:
+            flat_length = math.prod(spec.fine_token_shape)
+            modality_predictions = flat_predictions[
+                :, spec.flat_start : spec.flat_start + flat_length
+            ]
+            restored[spec.modality] = modality_predictions.reshape(
+                flat_predictions.shape[0],
+                *spec.fine_token_shape,
+                flat_predictions.shape[-1],
+            )
+        return restored
+
+    def _build_fine_query_tokens_for_modality(
+        self,
+        modality_tokens: Tensor,
+        modality: str,
+        patch_size: int,
+        target_patch_size: int,
+    ) -> Tensor:
+        """Expand one modality from coarse parent tokens to fine query tokens."""
+        modality_spec = Modality.get(modality)
+        if not modality_spec.is_spatial:
+            if target_patch_size != patch_size:
+                raise ValueError(
+                    f"Non-spatial modality {modality} must keep patch size {patch_size}"
+                )
+            return modality_tokens
+
+        if target_patch_size == patch_size:
+            return modality_tokens
+
+        scale = patch_size // target_patch_size
+        fine_pos = self.get_subpatch_pos(patch_size, target_patch_size).reshape(
+            scale, scale, self.embedding_size
+        )
+        batch_size, height, width = modality_tokens.shape[:3]
+        tail_dims = modality_tokens.shape[3:-1]
+        modality_tokens = modality_tokens.reshape(
+            batch_size, height, width, -1, self.embedding_size
+        )
+        fine_tokens = (
+            modality_tokens[:, :, :, None, None, :, :]
+            + fine_pos[None, None, None, :, :, None, :]
+        )
+        fine_tokens = rearrange(
+            fine_tokens,
+            "b h w sh sw tail d -> b (h sh) (w sw) tail d",
+        )
+        return fine_tokens.reshape(
+            batch_size,
+            height * scale,
+            width * scale,
+            *tail_dims,
+            self.embedding_size,
+        )
+
+    def _build_fine_query_mask_for_modality(
+        self,
+        modality_mask: Tensor,
+        modality: str,
+        patch_size: int,
+        target_patch_size: int,
+    ) -> Tensor:
+        """Expand one modality mask from coarse to fine resolution."""
+        modality_spec = Modality.get(modality)
+        if not modality_spec.is_spatial:
+            if target_patch_size != patch_size:
+                raise ValueError(
+                    f"Non-spatial modality {modality} must keep patch size {patch_size}"
+                )
+            return modality_mask
+
+        if target_patch_size == patch_size:
+            return modality_mask
+
+        scale = patch_size // target_patch_size
+        batch_size, height, width = modality_mask.shape[:3]
+        tail_dims = modality_mask.shape[3:]
+        modality_mask = modality_mask.reshape(batch_size, height, width, -1)
+        fine_mask = modality_mask[:, :, :, None, None, :].expand(
+            -1, -1, -1, scale, scale, -1
+        )
+        fine_mask = rearrange(
+            fine_mask,
+            "b h w sh sw tail -> b (h sh) (w sw) tail",
+        )
+        return fine_mask.reshape(
+            batch_size,
+            height * scale,
+            width * scale,
+            *tail_dims,
+        )
+
+    def apply_attn(
+        self,
+        x: dict[str, Tensor],
+        timestamps: Tensor,
+        patch_size: int,
+        input_res: int,
+    ) -> dict[str, Tensor]:
+        """Apply mixed-resolution attention with fine decoder queries."""
+        tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
+            self.split_tokens_masks_and_dims(x)
+        )
+        coarse_tokens_dict = self.composite_encodings(
+            tokens_only_dict, timestamps, patch_size, input_res
+        )
+        coarse_tokens_dict.update(original_masks_dict)
+
+        coarse_all_tokens, coarse_mask = self.build_coarse_context_stream(
+            coarse_tokens_dict
+        )
+        (
+            _coarse_tokens_to_decode,
+            unmasked_tokens,
+            _coarse_tokens_to_decode_mask,
+            unmasked_tokens_mask,
+            _coarse_indices,
+            _coarse_seqlens_tokens_to_decode,
+            seqlens_unmasked_tokens,
+            _coarse_max_length_of_tokens_to_decode,
+            max_length_of_unmasked_tokens,
+        ) = self.split_x_y(coarse_all_tokens, coarse_mask.clone())
+
+        fine_query_tokens, query_specs = self.build_fine_query_stream(
+            {
+                modality: coarse_tokens_dict[modality]
+                for modality in return_modalities_from_dict(coarse_tokens_dict)
+            },
+            patch_size,
+        )
+        fine_query_mask, fine_masks_dict = self.build_fine_query_mask_stream(
+            original_masks_dict,
+            query_specs,
+            patch_size,
+        )
+        (
+            tokens_to_decode,
+            fine_unmasked_tokens,
+            tokens_to_decode_mask,
+            fine_unmasked_tokens_mask,
+            fine_indices,
+            seqlens_tokens_to_decode,
+            _fine_seqlens_unmasked_tokens,
+            max_length_of_tokens_to_decode,
+            _fine_max_length_of_unmasked_tokens,
+        ) = self.split_x_y(fine_query_tokens, fine_query_mask.clone())
+
+        if self.use_flash_attn:
+            og_shape_tokens_to_decode = tokens_to_decode.shape
+            tokens_to_decode = self.pack_tokens(
+                tokens_to_decode, tokens_to_decode_mask.bool()
+            )
+            og_shape_unmasked_tokens = unmasked_tokens.shape
+            unmasked_tokens = self.pack_tokens(
+                unmasked_tokens, unmasked_tokens_mask.bool()
+            )
+            cu_seqlens_tokens_to_decode = get_cumulative_sequence_lengths(
+                seqlens_tokens_to_decode
+            )
+            cu_seqlens_unmasked_tokens = get_cumulative_sequence_lengths(
+                seqlens_unmasked_tokens
+            )
+        else:
+            cu_seqlens_tokens_to_decode = None
+            cu_seqlens_unmasked_tokens = None
+
+        for blk in self.blocks:
+            tokens_to_decode = blk(
+                x=tokens_to_decode,
+                y=unmasked_tokens,
+                attn_mask=(
+                    unmasked_tokens_mask.bool() if not self.use_flash_attn else None
+                ),
+                cu_seqlens_q=cu_seqlens_tokens_to_decode,
+                cu_seqlens_k=cu_seqlens_unmasked_tokens,
+                max_seqlen_q=max_length_of_tokens_to_decode,
+                max_seqlen_k=max_length_of_unmasked_tokens,
+            )
+
+        if self.use_flash_attn:
+            tokens_to_decode = self.unpack_tokens(
+                tokens_to_decode,
+                tokens_to_decode_mask.bool(),
+                og_shape_tokens_to_decode,
+            )
+            unmasked_tokens = self.unpack_tokens(
+                unmasked_tokens, unmasked_tokens_mask.bool(), og_shape_unmasked_tokens
+            )
+
+        flat_predictions = self.combine_x_y(
+            tokens_to_decode=tokens_to_decode,
+            unmasked_tokens=fine_unmasked_tokens,
+            tokens_to_decode_mask=tokens_to_decode_mask,
+            unmasked_tokens_mask=fine_unmasked_tokens_mask,
+            indices=fine_indices,
+        )
+        fine_predictions = self.restore_fine_predictions_per_modality(
+            flat_predictions,
+            query_specs,
+        )
+        fine_predictions.update(fine_masks_dict)
+        return fine_predictions
+
+
+@dataclass
 class EncoderConfig(Config):
     """Configuration for the Encoder."""
 
@@ -2233,3 +2573,45 @@ class PredictorConfig(Config):
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"Predictor kwargs: {kwargs}")
         return Predictor(**kwargs)
+
+
+@dataclass
+class FineGrainedPredictorConfig(PredictorConfig):
+    """Configuration for the fine-grained predictor scaffold."""
+
+    max_fine_patch_size: int = 8
+    target_patch_size_by_modality: dict[str, int] | None = None
+
+    def validate(self) -> None:
+        """Validate the configuration."""
+        super().validate()
+        if self.max_fine_patch_size < 1:
+            raise ValueError("max_fine_patch_size must be >= 1")
+        if self.target_patch_size_by_modality is not None:
+            unknown = set(self.target_patch_size_by_modality) - set(
+                self.supported_modality_names
+            )
+            if unknown:
+                raise ValueError(
+                    "target_patch_size_by_modality contains modalities not in "
+                    f"supported_modality_names: {unknown}"
+                )
+            invalid = {
+                modality: patch_size
+                for modality, patch_size in self.target_patch_size_by_modality.items()
+                if patch_size < 1
+            }
+            if invalid:
+                raise ValueError(
+                    "target_patch_size_by_modality must only contain positive patch "
+                    f"sizes, got: {invalid}"
+                )
+
+    def build(self) -> "PredictorBase":
+        """Build the fine-grained predictor."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"FineGrainedPredictor kwargs: {kwargs}")
+        return FineGrainedPredictor(**kwargs)
