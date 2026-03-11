@@ -14,6 +14,8 @@ Experiments:
 18. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + NDVI decode-only + masked neg loss
 19. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + NDVI + ERA5 decode-only + masked neg loss
 20. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_time_with_decode masking + NDVI + ERA5 decode-only + masked neg loss
+21. exp20 with contrastive weight 0.03
+22. exp20 with contrastive weight 0.05
 """
 
 import copy
@@ -90,8 +92,10 @@ def _loss_config() -> LossConfig:
     return LossConfig(loss_config=copy.deepcopy(_LOSS_CONFIG_DICT))
 
 
-def _contrastive_config() -> LossConfig:
-    return LossConfig(loss_config=copy.deepcopy(_CONTRASTIVE_CONFIG_DICT))
+def _contrastive_config(weight: float = 0.1) -> LossConfig:
+    config = copy.deepcopy(_CONTRASTIVE_CONFIG_DICT)
+    config["weight"] = weight
+    return LossConfig(loss_config=config)
 
 
 # --- Tokenization configs ---
@@ -1121,6 +1125,94 @@ def build_dataloader_exp20(common: CommonComponents) -> OlmoEarthDataLoaderConfi
     )
 
 
+# --- Experiment 21: exp20 with contrastive weight 0.03 ---
+
+
+def build_common_exp21(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp21 (exp20 with contrastive weight 0.03)."""
+    return build_common_exp20(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp21(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp21 (exp20 with contrastive weight 0.03)."""
+    return ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
+        rank_microbatch_size=32,
+        masking_config=_masking_config_random_time_ndvi_era5(
+            common.tokenization_config
+        ),
+        loss_config=_loss_config_ndvi_era5(),
+        contrastive_config=_contrastive_config(weight=0.03),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        max_grad_norm=1.0,
+        scheduler=CosWithWarmup(warmup_steps=8000),
+        ema_decay=(1.0, 1.0),
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+    )
+
+
+def build_model_exp21(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp21 (exp20 with contrastive weight 0.03)."""
+    return build_model_exp20(common)
+
+
+def build_dataloader_exp21(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp21 (exp20 with contrastive weight 0.03)."""
+    return build_dataloader_exp20(common)
+
+
+# --- Experiment 22: exp20 with contrastive weight 0.05 ---
+
+
+def build_common_exp22(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp22 (exp20 with contrastive weight 0.05)."""
+    return build_common_exp20(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp22(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp22 (exp20 with contrastive weight 0.05)."""
+    return ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
+        rank_microbatch_size=32,
+        masking_config=_masking_config_random_time_ndvi_era5(
+            common.tokenization_config
+        ),
+        loss_config=_loss_config_ndvi_era5(),
+        contrastive_config=_contrastive_config(weight=0.05),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        max_grad_norm=1.0,
+        scheduler=CosWithWarmup(warmup_steps=8000),
+        ema_decay=(1.0, 1.0),
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+    )
+
+
+def build_model_exp22(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp22 (exp20 with contrastive weight 0.05)."""
+    return build_model_exp20(common)
+
+
+def build_dataloader_exp22(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp22 (exp20 with contrastive weight 0.05)."""
+    return build_dataloader_exp20(common)
+
+
 # ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
@@ -1203,6 +1295,18 @@ EXPERIMENTS = {
         build_model_exp20,
         build_train_module_exp20,
         build_dataloader_exp20,
+    ),
+    "single_bandset_all12_random_band_dropout_ndvi_era5_random_time_decode_masked_neg_ic_weight_0.03": (
+        build_common_exp21,
+        build_model_exp21,
+        build_train_module_exp21,
+        build_dataloader_exp21,
+    ),
+    "single_bandset_all12_random_band_dropout_ndvi_era5_random_time_decode_masked_neg_ic_weight_0.05": (
+        build_common_exp22,
+        build_model_exp22,
+        build_train_module_exp22,
+        build_dataloader_exp22,
     ),
 }
 
