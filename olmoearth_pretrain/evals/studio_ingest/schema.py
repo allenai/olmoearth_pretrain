@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 from olmoearth_pretrain.data.constants import ModalitySpec
 from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
-from olmoearth_pretrain.evals.task_types import SplitName, SplitType, TaskType
+from olmoearth_pretrain.evals.task_types import TaskType
 
 # =============================================================================
 # Config Instantiation
@@ -154,7 +154,7 @@ class EvalDatasetEntry(BaseModel):
     Design Notes:
     -------------
     - Fields that can be loaded from model.yaml at runtime are NOT stored here
-      (e.g., groups, split_tag_key, crop_size, target_layer_name)
+      (e.g., groups, crop_size, target_layer_name)
     - Use parse_model_config() from rslearn_builder to get those values
     - This reduces registry bloat and keeps model.yaml as source of truth
     """
@@ -176,12 +176,8 @@ class EvalDatasetEntry(BaseModel):
         validation_alias=AliasChoices("is_multilabel", "multilabel"),
     )
     classes: list[str] | None = None  # Optional class names
-    # Split configuration
-    train_split: str = "train"
-    val_split: str = "val"
-    test_split: str = "test"
-    split_type: str = "tags"  # "groups" or "tags"
-    split_tag_key: str = "eval_split"  # Tag key used for split filtering
+    # Split configuration — splits are always tag-based with train/val/test values.
+    split_tag_key: str = "eval_split"
     split_stats: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     # Modality configuration
@@ -213,20 +209,6 @@ class EvalDatasetEntry(BaseModel):
             raise ValueError(
                 f"Invalid task_type '{value}'. Must be one of: {valid_task_types}"
             )
-        return value
-
-    @field_validator("split_type", mode="before")
-    @classmethod
-    def _normalize_split_type(cls, value: str | SplitType) -> str:
-        if isinstance(value, SplitType):
-            return value.value
-        return value
-
-    @field_validator("train_split", "val_split", "test_split", mode="before")
-    @classmethod
-    def _normalize_split_name(cls, value: str | SplitName) -> str:
-        if isinstance(value, SplitName):
-            return value.value
         return value
 
     @field_validator("modalities", mode="before")

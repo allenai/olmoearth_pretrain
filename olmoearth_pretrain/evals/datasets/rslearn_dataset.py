@@ -18,8 +18,8 @@ from rslearn.train.dataset import ModelDataset as RsModelDataset
 from rslearn.train.model_context import RasterImage
 from torch.utils.data import Dataset
 
-from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS
-from olmoearth_pretrain.data.constants import Modality as DataModality
+from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS, Modality
+from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 from olmoearth_pretrain.data.utils import convert_to_db
 from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
@@ -27,6 +27,7 @@ from olmoearth_pretrain.evals.datasets.rslearn_builder import (
     build_model_dataset,
     get_modality_layers,
     get_task_info,
+    parse_model_config,
 )
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 from olmoearth_pretrain.evals.task_types import TaskType
@@ -87,9 +88,9 @@ class RslearnToOlmoEarthDataset(Dataset):
     """
 
     allowed_modalities = {
-        DataModality.SENTINEL2_L2A.name,
-        DataModality.SENTINEL1.name,
-        DataModality.LANDSAT.name,
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+        Modality.LANDSAT.name,
     }
 
     def __init__(
@@ -161,8 +162,6 @@ class RslearnToOlmoEarthDataset(Dataset):
             )
 
         if self.norm_stats_from_pretrained:
-            from olmoearth_pretrain.data.normalize import Normalizer, Strategy
-
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
         else:
             if ds_norm_stats is not None:
@@ -262,7 +261,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         out: dict[str, dict[str, np.ndarray]] = {}
         for modality, per_band in raw_stats.items():
             modality_name = modality.lower()
-            band_order = DataModality.get(modality_name).band_order
+            band_order = Modality.get(modality_name).band_order
 
             # Also support pre-aggregated format: {"means": [...], "stds": [...], ...}
             if all(
@@ -351,11 +350,11 @@ class RslearnToOlmoEarthDataset(Dataset):
                 sample_timesteps = x.shape[2]
 
             # Convert to dB for Sentinel-1
-            if modality == DataModality.SENTINEL1.name:
+            if modality == Modality.SENTINEL1.name:
                 x = convert_to_db(x)
 
             if self.norm_stats_from_pretrained:
-                x = self.normalizer_computed.normalize(DataModality.get(modality), x)
+                x = self.normalizer_computed.normalize(Modality.get(modality), x)
             else:
                 modality_stats = self.dataset_norm_stats[modality]
                 x = normalize_bands(
@@ -378,9 +377,6 @@ class RslearnToOlmoEarthDataset(Dataset):
 
         olmoearth_sample = OlmoEarthSample(**sample_dict)
         masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(olmoearth_sample)
-        # ensure modality and modality mask have same hw raise error if not
-        # Error is likely padding the mask wrong maybe or something?
-        from olmoearth_pretrain.data.constants import Modality
 
         for modality in self.input_modalities:
             modality_spec = Modality.get(modality)
@@ -507,31 +503,13 @@ def from_registry_entry(
     # Normalize split name: "valid" -> "val"
     normalized_split = "val" if split == "valid" else split
 
-    # Resolve splits based on split_type from ingestion.
-    # "tags": all windows may live under one group dir, split by metadata tag
-    # "groups": windows are in separate group dirs (windows/train/, windows/val/, etc.)
-    split_value_map = {
-        "train": entry.train_split,
-        "val": entry.val_split,
-        "test": entry.test_split,
-    }
-    split_value = split_value_map.get(normalized_split, normalized_split)
-
+    # Splits are always tag-based: ingest writes split_tag_key with train/val/test values
     effective_tags = tags_override
-    if effective_tags is None:
-        if entry.split_type == "tags" and entry.split_tag_key:
-            effective_tags = {entry.split_tag_key: split_value}
-            # Clear groups so rslearn scans all dirs, then filters by tag
-            if groups_override is None:
-                groups_override = []
-            log.info(f"Using tag-based splits: {entry.split_tag_key}={split_value}")
-        elif entry.split_type == "groups":
-            # Use split name as the group directory
-            if groups_override is None:
-                groups_override = [split_value]
-            log.info(f"Using group-based splits: groups={groups_override}")
-
-    from olmoearth_pretrain.evals.datasets.rslearn_builder import parse_model_config
+    if effective_tags is None and entry.split_tag_key:
+        effective_tags = {entry.split_tag_key: normalized_split}
+        if groups_override is None:
+            groups_override = []
+        log.info(f"Using tag-based splits: {entry.split_tag_key}={normalized_split}")
 
     log.info(f"Loading model config from {model_yaml_path}")
     model_config = parse_model_config(model_yaml_path)

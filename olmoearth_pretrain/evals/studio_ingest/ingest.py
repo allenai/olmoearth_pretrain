@@ -57,6 +57,7 @@ from rslearn.config import DatasetConfig
 from rslearn.dataset.dataset import Dataset as RslearnDataset
 from upath import UPath
 
+from olmoearth_pretrain.evals.datasets.rslearn_builder import parse_model_config
 from olmoearth_pretrain.evals.studio_ingest.band_stats import (
     compute_band_stats_from_model_config,
 )
@@ -66,7 +67,7 @@ from olmoearth_pretrain.evals.studio_ingest.schema import (
     rslearn_task_type_to_olmoearth_task_type,
     rslearn_to_olmoearth,
 )
-from olmoearth_pretrain.evals.task_types import SplitName, SplitType
+from olmoearth_pretrain.evals.task_types import SplitName
 
 logger = logging.getLogger(__name__)
 
@@ -628,9 +629,9 @@ def scan_windows_and_splits(
 
     # Use string keys for consistency
     splits: dict[str, list[tuple[str, str]]] = {
-        str(SplitName.TRAIN): [],
-        str(SplitName.VAL): [],
-        str(SplitName.TEST): [],
+        SplitName.TRAIN: [],
+        SplitName.VAL: [],
+        SplitName.TEST: [],
     }
 
     for window in windows:
@@ -640,14 +641,13 @@ def scan_windows_and_splits(
         if split_val in splits:
             splits[split_val].append((window.group, window.name))
         elif window.group in ("train",):
-            splits[str(SplitName.TRAIN)].append((window.group, window.name))
+            splits[SplitName.TRAIN].append((window.group, window.name))
         elif window.group in ("val", "valid", "validation"):
-            splits[str(SplitName.VAL)].append((window.group, window.name))
+            splits[SplitName.VAL].append((window.group, window.name))
         elif window.group in ("test", "test_hard"):
-            splits[str(SplitName.TEST)].append((window.group, window.name))
+            splits[SplitName.TEST].append((window.group, window.name))
         else:
-            # Unknown group, add to train by default
-            splits[str(SplitName.TRAIN)].append((window.group, window.name))
+            splits[SplitName.TRAIN].append((window.group, window.name))
 
     return splits
 
@@ -929,8 +929,6 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     with open(model_yaml_path) as f:
         model_config = yaml.safe_load(f)
     # Validate that rslearn can parse the model config
-    from olmoearth_pretrain.evals.datasets.rslearn_builder import parse_model_config
-
     parse_model_config(str(model_yaml_path))
     logger.info("[Step 0b] Model config loaded and validated successfully")
 
@@ -1048,7 +1046,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         model_config_path=str(model_yaml_path),
         source_path=weka_path,
         groups=config.source_groups,
-        tags={EVAL_SPLIT_TAG_KEY: str(SplitName.TRAIN)},
+        tags={EVAL_SPLIT_TAG_KEY: SplitName.TRAIN},
         num_samples=config.num_samples,
     )
     logger.info(
@@ -1085,10 +1083,6 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         window_size=window_size,
         timeseries=timeseries,
         num_timesteps=num_timesteps,
-        train_split=SplitName.TRAIN,
-        val_split=SplitName.VAL,
-        test_split=SplitName.TEST,
-        split_type=SplitType.TAGS,
         split_tag_key=EVAL_SPLIT_TAG_KEY,
         split_stats=split_stats,
         norm_stats=norm_stats,

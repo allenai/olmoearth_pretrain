@@ -109,13 +109,9 @@
         }
       },
       "split_tag_key": "eval_split",
-      "split_type": "tags",
       "task_type": "segmentation",
-      "test_split": "test",
       "timeseries": true,
-      "train_split": "train",
       "use_pretrain_norm": true,
-      "val_split": "val",
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/awf_lulc_map",
       "window_size": 64
     },
@@ -224,13 +220,9 @@
         }
       },
       "split_tag_key": "eval_split",
-      "split_type": "tags",
       "task_type": "segmentation",
-      "test_split": "test",
       "timeseries": true,
-      "train_split": "train",
       "use_pretrain_norm": true,
-      "val_split": "val",
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/canada_wildfire_sat_eval_split",
       "window_size": 50
     },
@@ -345,13 +337,9 @@
         }
       },
       "split_tag_key": "eval_split",
-      "split_type": "tags",
       "task_type": "classification",
-      "test_split": "test",
       "timeseries": true,
-      "train_split": "train",
       "use_pretrain_norm": true,
-      "val_split": "val",
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/forest_loss_driver",
       "window_size": 64
     },
@@ -567,13 +555,9 @@
         }
       },
       "split_tag_key": "eval_split",
-      "split_type": "tags",
       "task_type": "segmentation",
-      "test_split": "test",
       "timeseries": true,
-      "train_split": "train",
       "use_pretrain_norm": true,
-      "val_split": "val",
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/geo_ecosystem_annual_test",
       "window_size": 64
     },
@@ -767,13 +751,9 @@
         }
       },
       "split_tag_key": "eval_split",
-      "split_type": "tags",
       "task_type": "segmentation",
-      "test_split": "test",
       "timeseries": true,
-      "train_split": "train",
       "use_pretrain_norm": true,
-      "val_split": "val",
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/nandi_crop_map",
       "window_size": 64
     },
@@ -879,13 +859,9 @@
         }
       },
       "split_tag_key": "eval_split",
-      "split_type": "tags",
       "task_type": "segmentation",
-      "test_split": "test",
       "timeseries": true,
-      "train_split": "train",
       "use_pretrain_norm": true,
-      "val_split": "val",
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/nigeria_settlement",
       "window_size": 64
     },
@@ -931,13 +907,9 @@
         }
       },
       "split_tag_key": "eval_split",
-      "split_type": "tags",
       "task_type": "segmentation",
-      "test_split": "test",
       "timeseries": false,
-      "train_split": "train",
       "use_pretrain_norm": true,
-      "val_split": "val",
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/oil_spill_detection/dataset",
       "window_size": 128
     },
@@ -1048,13 +1020,9 @@
         }
       },
       "split_tag_key": "eval_split",
-      "split_type": "tags",
       "task_type": "segmentation",
-      "test_split": "test",
       "timeseries": true,
-      "train_split": "train",
       "use_pretrain_norm": true,
-      "val_split": "val",
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/tolbi_crop",
       "window_size": 64
     },
@@ -1167,13 +1135,9 @@
         }
       },
       "split_tag_key": "eval_split",
-      "split_type": "tags",
       "task_type": "segmentation",
-      "test_split": "test",
       "timeseries": true,
-      "train_split": "train",
       "use_pretrain_norm": true,
-      "val_split": "val",
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/yemen_crop",
       "window_size": 16
     }

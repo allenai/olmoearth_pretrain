@@ -304,24 +304,11 @@ def build_dataset_from_registry_entry(
 ) -> ModelDataset:
     """Build rslearn ModelDataset from a registry entry.
 
-    Uses the split tags written during ingestion to filter windows.
+    Splits are always tag-based: the ingest CLI writes an ``eval_split`` tag
+    (or whatever ``entry.split_tag_key`` is) with values ``train``/``val``/``test``.
     """
-    split_value_map = {
-        "train": entry.train_split,
-        "val": entry.val_split,
-        "test": entry.test_split,
-    }
-    split_value = split_value_map.get(split, split)
-
-    tags_override = None
-    groups_override = None
-
-    if entry.split_type == "tags" and entry.split_tag_key:
-        tags_override = {entry.split_tag_key: split_value}
-        logger.info("Using tag-based splits: %s=%s", entry.split_tag_key, split_value)
-    elif entry.split_type == "groups":
-        groups_override = [split_value]
-        logger.info("Using group-based splits: groups=%s", groups_override)
+    tags_override = {entry.split_tag_key: split}
+    logger.info("Using tag-based splits: %s=%s", entry.split_tag_key, split)
 
     model_config = parse_model_config(entry.model_yaml_path)
     return build_model_dataset(
@@ -329,6 +316,5 @@ def build_dataset_from_registry_entry(
         source_path=entry.weka_path,
         split=split,
         max_samples=max_samples,
-        groups_override=groups_override,
         tags_override=tags_override,
     )
