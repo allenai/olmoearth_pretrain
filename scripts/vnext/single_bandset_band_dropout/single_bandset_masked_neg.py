@@ -88,6 +88,7 @@ _LOSS_CONFIG_DICT = {
     "same_target_threshold": 0.999,
     "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
 }
+MASKED_NEG_ROW_CHUNK_SIZE = 64
 
 _CONTRASTIVE_CONFIG_DICT = {
     "type": "InfoNCE",
@@ -1137,6 +1138,7 @@ def build_train_module_exp22(
                 "tau": 0.1,
                 "same_target_threshold": 0.999,
                 "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
+                "row_chunk_size": MASKED_NEG_ROW_CHUNK_SIZE,
             }
         ),
         contrastive_config=_contrastive_config(),
@@ -1223,6 +1225,7 @@ def build_train_module_exp23(
                 "tau": 0.1,
                 "same_target_threshold": 0.999,
                 "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
+                "row_chunk_size": MASKED_NEG_ROW_CHUNK_SIZE,
             }
         ),
         contrastive_config=_contrastive_config(),
@@ -1309,6 +1312,7 @@ def build_train_module_exp24(
                 "tau": 0.1,
                 "same_target_threshold": 0.999,
                 "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
+                "row_chunk_size": MASKED_NEG_ROW_CHUNK_SIZE,
             }
         ),
         contrastive_config=_contrastive_config(),
@@ -1396,6 +1400,7 @@ def build_train_module_exp25(
                 "tau": 0.1,
                 "same_target_threshold": 0.999,
                 "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
+                "row_chunk_size": MASKED_NEG_ROW_CHUNK_SIZE,
             }
         ),
         contrastive_config=_contrastive_config(),

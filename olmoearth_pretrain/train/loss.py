@@ -538,6 +538,7 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         modality_weights: dict[str, float] | None = None,
         same_target_threshold: float = 0.999,
         mask_negatives_for_modalities: list[str] | None = None,
+        row_chunk_size: int | None = None,
     ):
         """Initialize vectorized masked negatives patch discrimination loss.
 
@@ -549,6 +550,8 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
             same_target_threshold: cosine similarity threshold to consider targets as same
             mask_negatives_for_modalities: list of modality names to apply masking for.
                 If None, applies to all modalities.
+            row_chunk_size: optional number of decoder-token rows to process at a
+                time. Use this to trade compute for lower peak memory.
         """
         self.tau = tau
         self.pred2unit = pred2unit
@@ -556,6 +559,7 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         self.modality_weights = modality_weights
         self.same_target_threshold = same_target_threshold
         self.mask_negatives_for_modalities = mask_negatives_for_modalities
+        self.row_chunk_size = row_chunk_size
 
     def _compute_modality_loss_parallel(
         self,
@@ -604,59 +608,64 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
 
         sorted_preds = F.normalize(sorted_preds, p=2, dim=-1)
         sorted_targets = F.normalize(sorted_targets, p=2, dim=-1)
+        labels = range_tensor.unsqueeze(0).expand(batch_size, -1)
+        col_mask = valid_mask.unsqueeze(1)
+        chunk_size = self.row_chunk_size or num_tokens
+        if chunk_size <= 0:
+            raise ValueError("row_chunk_size must be positive when provided")
 
-        # Similarity scores: (batch, tokens, tokens)
-        scores = torch.bmm(sorted_preds, sorted_targets.transpose(1, 2)) / self.tau
+        loss_sum_per_sample = torch.zeros(
+            batch_size, device=sorted_preds.device, dtype=sorted_preds.dtype
+        )
+        sample_should_skip = torch.zeros(
+            batch_size, device=sorted_preds.device, dtype=torch.bool
+        )
+        neg_inf = -torch.finfo(sorted_preds.dtype).max
+        target_t = sorted_targets.transpose(1, 2)
 
-        # Mask non-decoder columns
-        col_mask = valid_mask.unsqueeze(1).expand_as(scores)
-        scores = scores.masked_fill(~col_mask, -torch.finfo(scores.dtype).max)
+        for row_start in range(0, num_tokens, chunk_size):
+            row_end = min(row_start + chunk_size, num_tokens)
+            row_preds = sorted_preds[:, row_start:row_end, :]
+            row_valid = valid_mask[:, row_start:row_end]
 
-        # Track which samples contribute to the loss
-        sample_valid = count > 0  # (batch,)
+            # Similarity scores for the current block of query rows.
+            scores = torch.bmm(row_preds, target_t) / self.tau
+            scores = scores.masked_fill(~col_mask, neg_inf)
 
-        if should_mask:
-            # Target-target cosine similarity
-            target_sim = torch.bmm(sorted_targets, sorted_targets.transpose(1, 2))
-            same_target = target_sim > self.same_target_threshold
+            if should_mask:
+                row_targets = sorted_targets[:, row_start:row_end, :]
+                target_sim = torch.bmm(row_targets, target_t)
+                same_target = target_sim > self.same_target_threshold
 
-            # Diagonal = positive pair, not an invalid negative
-            diag = torch.eye(num_tokens, dtype=torch.bool, device=scores.device)
-            diag = diag.unsqueeze(0).expand(batch_size, -1, -1)
-            invalid_negatives = same_target & ~diag
+                row_indices = range_tensor[row_start:row_end]
+                diagonal = row_indices.view(1, -1, 1) == range_tensor.view(1, 1, -1)
+                invalid_negatives = same_target & ~diagonal
 
-            # Restrict to valid decoder region
-            valid_region = valid_mask.unsqueeze(2) & valid_mask.unsqueeze(1)
-            invalid_negatives = invalid_negatives & valid_region
+                valid_region = row_valid.unsqueeze(2) & valid_mask.unsqueeze(1)
+                invalid_negatives = invalid_negatives & valid_region
 
-            # Skip samples where any decoder token has zero valid negatives
-            valid_neg_per_token = (~same_target & valid_region).sum(dim=-1)
-            has_no_valid_neg = (valid_neg_per_token == 0) & valid_mask
-            sample_should_skip = has_no_valid_neg.any(dim=1)
-            sample_valid = sample_valid & ~sample_should_skip
+                valid_neg_per_token = (~same_target & valid_region).sum(dim=-1)
+                has_no_valid_neg = (valid_neg_per_token == 0) & row_valid
+                sample_should_skip |= has_no_valid_neg.any(dim=1)
 
-            scores = scores.masked_fill(invalid_negatives, float("-inf"))
+                scores = scores.masked_fill(invalid_negatives, float("-inf"))
 
-        # Zero out rows for non-valid positions and skipped samples
-        row_valid = valid_mask & sample_valid.unsqueeze(1)
-        row_mask_3d = row_valid.unsqueeze(2).expand_as(scores)
-        scores = scores.masked_fill(~row_mask_3d, 0.0)
+            # Zero out padded rows before CE so ignored rows stay finite.
+            scores = scores.masked_fill(~row_valid.unsqueeze(2), 0.0)
 
+            loss_per_pos = F.cross_entropy(
+                scores.reshape(-1, num_tokens),
+                labels[:, row_start:row_end].reshape(-1),
+                reduction="none",
+            ) * (self.tau * 2)
+            loss_per_pos = loss_per_pos.reshape(batch_size, row_end - row_start)
+            loss_sum_per_sample += (loss_per_pos * row_valid.float()).sum(dim=1)
+
+        sample_valid = (count > 0) & ~sample_should_skip
         num_valid = sample_valid.sum()
 
-        # Labels: diagonal
-        labels = range_tensor.unsqueeze(0).expand(batch_size, -1)
-
-        loss_per_pos = F.cross_entropy(
-            scores.reshape(-1, num_tokens),
-            labels.reshape(-1),
-            reduction="none",
-        ) * (self.tau * 2)
-        loss_per_pos = loss_per_pos.reshape(batch_size, num_tokens)
-
-        # Average per sample (only valid positions in valid samples)
-        loss_per_sample = (loss_per_pos * row_valid.float()).sum(
-            dim=1
+        loss_per_sample = (
+            loss_sum_per_sample * sample_valid.float()
         ) / count.float().clamp(min=1)
         loss = loss_per_sample.sum() / num_valid.float().clamp(min=1)
 
