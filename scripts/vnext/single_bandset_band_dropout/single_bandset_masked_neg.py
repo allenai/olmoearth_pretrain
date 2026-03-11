@@ -1296,13 +1296,13 @@ EXPERIMENTS = {
         build_train_module_exp20,
         build_dataloader_exp20,
     ),
-    "single_bandset_all12_random_band_dropout_ndvi_era5_random_time_decode_masked_neg_ic_weight_0.03": (
+    "single_bandset_all12_random_band_dropout_ndvi_era5_random_time_decode_masked_neg_ic_weight_003": (
         build_common_exp21,
         build_model_exp21,
         build_train_module_exp21,
         build_dataloader_exp21,
     ),
-    "single_bandset_all12_random_band_dropout_ndvi_era5_random_time_decode_masked_neg_ic_weight_0.05": (
+    "single_bandset_all12_random_band_dropout_ndvi_era5_random_time_decode_masked_neg_ic_weight_005": (
         build_common_exp22,
         build_model_exp22,
         build_train_module_exp22,
