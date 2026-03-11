@@ -145,7 +145,7 @@ def _instantiate_data_module(
     init_args = data_config.setdefault("init_args", {})
 
     init_args["path"] = source_path
-    init_args["index_mode"] = "use"
+    init_args["index_mode"] = "USE"
     init_args["init_workers"] = init_workers
 
     _strip_normalize_transforms(data_config)
