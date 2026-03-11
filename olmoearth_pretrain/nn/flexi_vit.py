@@ -1717,6 +1717,7 @@ class PredictorBase(FlexiVitBase):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        output_mlp_ratio: float | None = None,
     ):
         """Initialize the predictor.
 
@@ -1735,6 +1736,9 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn: Whether to use flash attention
             qk_norm: Whether to apply normalization to Q and K in attention
             tokenization_config: Optional config for custom band groupings
+            output_mlp_ratio: When set, replaces the linear output projection with
+                an MLP: Linear(d, ratio*d) -> GELU -> Linear(ratio*d, out_dim).
+                The existing LayerNorm before to_output_embed is preserved.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1760,9 +1764,17 @@ class PredictorBase(FlexiVitBase):
         if output_embedding_size is None:
             output_embedding_size = encoder_embedding_size
         self.output_embedding_size = output_embedding_size
-        self.to_output_embed = nn.Linear(
-            decoder_embedding_size, output_embedding_size, bias=True
-        )
+        if output_mlp_ratio is not None:
+            hidden = int(decoder_embedding_size * output_mlp_ratio)
+            self.to_output_embed = nn.Sequential(
+                nn.Linear(decoder_embedding_size, hidden, bias=True),
+                nn.GELU(),
+                nn.Linear(hidden, output_embedding_size, bias=True),
+            )
+        else:
+            self.to_output_embed = nn.Linear(
+                decoder_embedding_size, output_embedding_size, bias=True
+            )
         # THIS is the learnable mask token
         self.mask_token = nn.Parameter(torch.zeros(decoder_embedding_size))
 
@@ -2189,6 +2201,7 @@ class PredictorConfig(Config):
     use_flash_attn: bool = False
     qk_norm: bool = False
     tokenization_config: TokenizationConfig | None = None
+    output_mlp_ratio: float | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""

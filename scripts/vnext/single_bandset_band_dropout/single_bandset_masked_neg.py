@@ -17,6 +17,7 @@ Experiments:
 21. single bandset S2 (all 12 bands) / Landsat + SpectralAttention d=128 + random band dropout + random_with_decode masking + masked neg loss
 22. SpectralAttention d=128, 8 heads + dropout masking + fused AdamW + compile + vec masked neg loss
 23. Exp21 model + Exp22 speedups + orthogonal target projection init
+24. Exp23 + larger MLP output head (output_mlp_ratio=4) in predictor for more capacity
 """
 
 import copy
@@ -1269,6 +1270,93 @@ def build_dataloader_exp23(common: CommonComponents) -> OlmoEarthDataLoaderConfi
 
 
 # ============================================================
+# Experiment 24: Exp23 + larger MLP output head (output_mlp_ratio=4)
+#                in predictor for more capacity to predict varied projections
+# ============================================================
+
+
+def build_common_exp24(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp24."""
+    return _build_common(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp24(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp24: same as exp23."""
+    return ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
+        rank_microbatch_size=32,
+        masking_config=_masking_config(
+            "random_with_decode", common.tokenization_config
+        ),
+        loss_config=LossConfig(
+            loss_config={
+                "type": "modality_patch_discrimination_masked_negatives_vec",
+                "tau": 0.1,
+                "same_target_threshold": 0.999,
+                "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
+            }
+        ),
+        contrastive_config=_contrastive_config(),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        max_grad_norm=1.0,
+        scheduler=CosWithWarmup(warmup_steps=8000),
+        ema_decay=(1.0, 1.0),
+        compile_model=True,
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+    )
+
+
+def build_model_exp24(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp24: exp23 + MLP output head (ratio=4) in predictor."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+        use_spectral_attention=True,
+        spectral_attention_d_model=128,
+        spectral_mixer_modalities=SATELLITE_MODALITIES,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        output_mlp_ratio=4.0,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        target_projection_init="orthogonal",
+    )
+
+
+def build_dataloader_exp24(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp24."""
+    return _build_dataloader(common, "random_with_decode")
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -1368,6 +1456,12 @@ EXPERIMENTS = {
         build_model_exp23,
         build_train_module_exp23,
         build_dataloader_exp23,
+    ),
+    "single_bandset_all12_spectral_attn_d128_orthogonal_target_mlp_output_random_decode_masked_neg": (
+        build_common_exp24,
+        build_model_exp24,
+        build_train_module_exp24,
+        build_dataloader_exp24,
     ),
 }
 
