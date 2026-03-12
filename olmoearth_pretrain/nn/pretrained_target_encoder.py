@@ -178,12 +178,18 @@ class PretrainedTargetEncoder(nn.Module):
     ) -> dict[str, Any]:
         """Run separate forward pass per encodable modality, then merge results."""
         x = self._expand_masks_for_pretrained_encoder(x)
+        # Use fast_pass=True to skip project_and_aggregate, which fails on
+        # per-modality sub-samples when some batch elements lack data for a
+        # modality (causing 0 encoded tokens in pool_instance_wise).
+        # fast_pass is safe here: unmasked data means all tokens attend to all
+        # others, so passing mask=None is equivalent.
+        kwargs.pop("token_exit_cfg", None)
         merged_output: dict[str, Any] = {}
         for modality in encodable_modalities:
             sub_sample = self._make_sub_sample(x, [modality])
             # Use __call__ (not .forward()) to trigger FSDP hooks.
             output_dict = self.pretrained_encoder(
-                sub_sample, patch_size=patch_size, **kwargs
+                sub_sample, patch_size=patch_size, fast_pass=True, **kwargs
             )
             tokens_and_masks = output_dict.get("tokens_and_masks")
             if tokens_and_masks is not None:
