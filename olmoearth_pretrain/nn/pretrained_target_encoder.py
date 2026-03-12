@@ -1,7 +1,7 @@
 """Pretrained target encoder wrapper for LatentMIM with a frozen teacher model."""
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 import torch
 import torch.nn as nn
@@ -91,6 +91,43 @@ class PretrainedTargetEncoder(nn.Module):
             for p in self.random_projections.parameters():
                 p.requires_grad = False
 
+    def _expand_masks_for_pretrained_encoder(
+        self, x: MaskedOlmoEarthSample
+    ) -> MaskedOlmoEarthSample:
+        """Expand mask bandset dimensions to match the pretrained encoder's tokenization.
+
+        The masks in the input sample have a bandset dimension based on the online
+        encoder's tokenization (e.g., 1 for single-bandset S2). The pretrained encoder
+        may use a different tokenization (e.g., 3 bandsets for S2). This method expands
+        the mask's last dimension via repeat to match when the current count is smaller
+        than the target and evenly divides it.
+        """
+        pretrained_tok = cast(
+            TokenizationConfig,
+            getattr(
+                self.pretrained_encoder, "tokenization_config", TokenizationConfig()
+            ),
+        )
+        updates: dict[str, Any] = {}
+        for modality in x.modalities:
+            mask_name = x.get_masked_modality_name(modality)
+            mask = getattr(x, mask_name)
+            if mask is None:
+                continue
+            target_bandsets = pretrained_tok.get_num_bandsets(modality)
+            current_bandsets = mask.shape[-1]
+            # Only expand when the mask has fewer bandsets than the target expects
+            # and the expansion factor is an integer.
+            if (
+                current_bandsets < target_bandsets
+                and target_bandsets % current_bandsets == 0
+            ):
+                factor = target_bandsets // current_bandsets
+                updates[mask_name] = mask.repeat_interleave(factor, dim=-1)
+        if updates:
+            return x._replace(**updates)
+        return x
+
     def _split_sample(self, x: MaskedOlmoEarthSample) -> tuple[list[str], list[str]]:
         """Split available modalities into encodable and decode-only."""
         available = x.modalities
@@ -118,9 +155,7 @@ class PretrainedTargetEncoder(nn.Module):
         self, x: MaskedOlmoEarthSample, patch_size: int
     ) -> dict[str, torch.Tensor]:
         """Run only patch embeddings (no transformer, no encodings, no norm)."""
-        # Use __call__ to trigger FSDP hooks for mixed precision casting.
-        # patch_embeddings is not individually FSDP-sharded, but the pretrained
-        # encoder is, so we go through the encoder with projection_only logic.
+        x = self._expand_masks_for_pretrained_encoder(x)
         return self.pretrained_encoder.patch_embeddings(x, patch_size)
 
     def _forward_encodable_full(
@@ -130,6 +165,7 @@ class PretrainedTargetEncoder(nn.Module):
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Run full pretrained encoder forward."""
+        x = self._expand_masks_for_pretrained_encoder(x)
         # Use __call__ (not .forward()) to trigger FSDP hooks.
         return self.pretrained_encoder(x, patch_size=patch_size, **kwargs)
 
@@ -141,6 +177,7 @@ class PretrainedTargetEncoder(nn.Module):
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Run separate forward pass per encodable modality, then merge results."""
+        x = self._expand_masks_for_pretrained_encoder(x)
         merged_output: dict[str, Any] = {}
         for modality in encodable_modalities:
             sub_sample = self._make_sub_sample(x, [modality])
