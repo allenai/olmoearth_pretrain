@@ -191,9 +191,18 @@ class PretrainedTargetLatentMIM(nn.Module, DistributedMixins):
         # don't propagate mixed-precision casting to child modules.
         if param_dtype is not None:
             self.target_encoder.to(dtype=param_dtype)
-        # Shard the pretrained encoder (its own apply_fsdp calls fully_shard on itself),
-        # then shard the wrapper so register_fsdp_forward_method works correctly.
-        self.target_encoder.pretrained_encoder.apply_fsdp(**fsdp_config)
+        # Shard the pretrained encoder's submodules individually, but do NOT
+        # call pretrained_encoder.apply_fsdp() (which would also fully_shard the
+        # encoder itself and create nested FSDP boundaries).
+        for block in self.target_encoder.pretrained_encoder.blocks:
+            block.apply_fsdp(**fsdp_config)
+        # Shard patch_embeddings as its own FSDP unit so that when it's called
+        # directly (e.g. in projection_only mode), its __call__ triggers proper
+        # parameter unsharding.  Without this, the conv weights remain as
+        # DTensors and cause mixed Tensor/DTensor errors.
+        fully_shard(
+            self.target_encoder.pretrained_encoder.patch_embeddings, **fsdp_config
+        )
         if self.target_encoder.random_projections is not None:
             fully_shard(self.target_encoder.random_projections, **fsdp_config)
         fully_shard(self.target_encoder, **fsdp_config)
