@@ -185,7 +185,12 @@ class PretrainedTargetLatentMIM(nn.Module, DistributedMixins):
 
         self.encoder.apply_fsdp(**fsdp_config)
         self.decoder.apply_fsdp(**fsdp_config)
-        # Target encoder is frozen but still needs sharding for memory efficiency.
+        # Target encoder is frozen — cast to param_dtype upfront so its parameters
+        # match the mixed-precision compute dtype.  This avoids dtype mismatches
+        # (e.g. bf16 input vs fp32 conv bias) that arise when nested FSDP units
+        # don't propagate mixed-precision casting to child modules.
+        if param_dtype is not None:
+            self.target_encoder.to(dtype=param_dtype)
         # Shard the pretrained encoder (its own apply_fsdp calls fully_shard on itself),
         # then shard the wrapper so register_fsdp_forward_method works correctly.
         self.target_encoder.pretrained_encoder.apply_fsdp(**fsdp_config)
