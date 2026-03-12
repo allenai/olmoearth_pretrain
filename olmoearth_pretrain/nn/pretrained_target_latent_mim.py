@@ -185,8 +185,13 @@ class PretrainedTargetLatentMIM(nn.Module, DistributedMixins):
 
         self.encoder.apply_fsdp(**fsdp_config)
         self.decoder.apply_fsdp(**fsdp_config)
-        # Target encoder is frozen but still needs sharding for memory efficiency
+        # Target encoder is frozen but still needs sharding for memory efficiency.
+        # Shard the pretrained encoder (its own apply_fsdp calls fully_shard on itself),
+        # then shard the wrapper so register_fsdp_forward_method works correctly.
         self.target_encoder.pretrained_encoder.apply_fsdp(**fsdp_config)
+        if self.target_encoder.random_projections is not None:
+            fully_shard(self.target_encoder.random_projections, **fsdp_config)
+        fully_shard(self.target_encoder, **fsdp_config)
         if self.reconstructor:
             self.reconstructor.apply_fsdp(**fsdp_config)
         fully_shard(self, **fsdp_config)
