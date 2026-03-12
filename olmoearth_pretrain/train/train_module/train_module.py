@@ -537,6 +537,17 @@ class OlmoEarthTrainModule(TrainModule):
         if self.start_ema == 1.0 and self.end_ema == 1.0:
             return
 
+        # Guard: EMA requires matching encoder/target_encoder architectures
+        from olmoearth_pretrain.nn.pretrained_target_latent_mim import (
+            PretrainedTargetLatentMIM,
+        )
+
+        if isinstance(self.model, PretrainedTargetLatentMIM):
+            raise ValueError(
+                "EMA updates are not supported with a pretrained target encoder. "
+                "Set ema_decay=(1.0, 1.0) to disable EMA."
+            )
+
         cur_ema_value = (
             self.start_ema
             + self.trainer.global_step
