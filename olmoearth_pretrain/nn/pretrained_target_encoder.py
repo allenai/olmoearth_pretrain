@@ -118,7 +118,10 @@ class PretrainedTargetEncoder(nn.Module):
         self, x: MaskedOlmoEarthSample, patch_size: int
     ) -> dict[str, torch.Tensor]:
         """Run only patch embeddings (no transformer, no encodings, no norm)."""
-        return self.pretrained_encoder.patch_embeddings.forward(x, patch_size)
+        # Use __call__ to trigger FSDP hooks for mixed precision casting.
+        # patch_embeddings is not individually FSDP-sharded, but the pretrained
+        # encoder is, so we go through the encoder with projection_only logic.
+        return self.pretrained_encoder.patch_embeddings(x, patch_size)
 
     def _forward_encodable_full(
         self,
@@ -127,7 +130,8 @@ class PretrainedTargetEncoder(nn.Module):
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Run full pretrained encoder forward."""
-        return self.pretrained_encoder.forward(x, patch_size=patch_size, **kwargs)
+        # Use __call__ (not .forward()) to trigger FSDP hooks.
+        return self.pretrained_encoder(x, patch_size=patch_size, **kwargs)
 
     def _forward_encodable_per_modality(
         self,
@@ -140,7 +144,8 @@ class PretrainedTargetEncoder(nn.Module):
         merged_output: dict[str, Any] = {}
         for modality in encodable_modalities:
             sub_sample = self._make_sub_sample(x, [modality])
-            output_dict = self.pretrained_encoder.forward(
+            # Use __call__ (not .forward()) to trigger FSDP hooks.
+            output_dict = self.pretrained_encoder(
                 sub_sample, patch_size=patch_size, **kwargs
             )
             tokens_and_masks = output_dict.get("tokens_and_masks")
@@ -155,7 +160,8 @@ class PretrainedTargetEncoder(nn.Module):
         """Apply random projections to decode-only modalities."""
         if self.random_projections is None:
             return {}
-        return self.random_projections.forward(x, patch_size)
+        # Use __call__ (not .forward()) to trigger FSDP hooks.
+        return self.random_projections(x, patch_size)
 
     def forward(
         self,
