@@ -13,6 +13,10 @@ Experiments:
 import copy
 import logging
 import sys
+from pathlib import Path
+
+# Add single_bandset_band_dropout directory to path for base_token_masked imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "single_bandset_band_dropout"))
 
 from base_token_masked import (
     build_common_components as build_common_components_base,
