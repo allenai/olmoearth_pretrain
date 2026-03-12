@@ -8,6 +8,7 @@ Experiments:
 2. pretrained_target_random_band_dropout: Uniform(0, 0.3) band dropout, full depth single pass
 3. pretrained_target_projection_only: Uniform(0, 0.3) band dropout, projection only (no transformer)
 4. pretrained_target_per_modality: Uniform(0, 0.3) band dropout, full depth per-modality forward
+5. pretrained_target_no_dropout_projection_only: No band dropout, projection only (no transformer)
 """
 
 import copy
@@ -393,6 +394,40 @@ def build_dataloader_exp4(common: CommonComponents) -> OlmoEarthDataLoaderConfig
 
 
 # ============================================================
+# Experiment 5: No band dropout + projection only
+# ============================================================
+
+
+def build_common_exp5(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp5."""
+    return _build_common(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp5(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp5."""
+    return _build_train_module(common)
+
+
+def build_model_exp5(common: CommonComponents) -> PretrainedTargetLatentMIMConfig:
+    """Build model for exp5."""
+    return _build_model(
+        common,
+        band_dropout_rate=0.0,
+        random_band_dropout=False,
+        projection_only=True,
+    )
+
+
+def build_dataloader_exp5(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp5."""
+    return _build_dataloader(common)
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -420,6 +455,12 @@ EXPERIMENTS = {
         build_model_exp4,
         build_train_module_exp4,
         build_dataloader_exp4,
+    ),
+    "pretrained_target_no_dropout_projection_only": (
+        build_common_exp5,
+        build_model_exp5,
+        build_train_module_exp5,
+        build_dataloader_exp5,
     ),
 }
 
