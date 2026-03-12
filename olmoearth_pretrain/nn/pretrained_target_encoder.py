@@ -152,11 +152,27 @@ class PretrainedTargetEncoder(nn.Module):
         return x._replace(**updates)
 
     def _forward_encodable_projection_only(
-        self, x: MaskedOlmoEarthSample, patch_size: int
-    ) -> dict[str, torch.Tensor]:
-        """Run only patch embeddings (no transformer, no encodings, no norm)."""
+        self, x: MaskedOlmoEarthSample, patch_size: int, **kwargs: Any
+    ) -> dict[str, Any]:
+        """Run only patch embeddings (no transformer, no encodings, no norm).
+
+        Uses the full Encoder.__call__() with token_exit_cfg set to 0 for all
+        modalities, which skips the transformer blocks.  Going through __call__
+        (rather than calling patch_embeddings directly) ensures FSDP parameter
+        unsharding works correctly — Encoder.forward() calls
+        patch_embeddings.forward() (bypassing __call__), so the params must
+        already be unsharded by the parent FSDP unit.
+        """
         x = self._expand_masks_for_pretrained_encoder(x)
-        return self.pretrained_encoder.patch_embeddings(x, patch_size)
+        # Build token_exit_cfg that exits all modalities at depth 0 to skip
+        # the transformer blocks while still going through Encoder.__call__().
+        kwargs.pop("token_exit_cfg", None)
+        token_exit_cfg = {
+            mod: 0 for mod in self.pretrained_encoder.supported_modality_names
+        }
+        return self.pretrained_encoder(
+            x, patch_size=patch_size, token_exit_cfg=token_exit_cfg, **kwargs
+        )
 
     def _forward_encodable_full(
         self,
@@ -228,9 +244,14 @@ class PretrainedTargetEncoder(nn.Module):
         encodable_output: dict[str, Any] = {}
         if encodable_modalities:
             if self.projection_only:
-                encodable_output = self._forward_encodable_projection_only(
-                    x, patch_size
+                result = self._forward_encodable_projection_only(
+                    x, patch_size, **kwargs
                 )
+                if not decode_only_modalities:
+                    return result
+                tam = result.get("tokens_and_masks")
+                if tam is not None:
+                    encodable_output = tam.as_dict(include_nones=False)
             elif self.per_modality_forward:
                 result = self._forward_encodable_per_modality(
                     x, encodable_modalities, patch_size, **kwargs
