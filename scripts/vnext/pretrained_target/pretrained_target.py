@@ -9,6 +9,9 @@ Experiments:
 3. pretrained_target_projection_only: Uniform(0, 0.3) band dropout, projection only (no transformer)
 4. pretrained_target_per_modality: Uniform(0, 0.3) band dropout, full depth per-modality forward
 5. pretrained_target_no_dropout_projection_only: No band dropout, projection only (no transformer)
+6. pretrained_target_random_band_dropout_cw005: Same as exp2 but contrastive weight 0.05
+7. pretrained_target_projection_only_cw005: Same as exp3 but contrastive weight 0.05
+8. pretrained_target_per_modality_cw005: Same as exp4 but contrastive weight 0.05
 """
 
 import copy
@@ -137,8 +140,10 @@ def _loss_config() -> LossConfig:
     return LossConfig(loss_config=copy.deepcopy(_LOSS_CONFIG_DICT))
 
 
-def _contrastive_config() -> LossConfig:
-    return LossConfig(loss_config=copy.deepcopy(_CONTRASTIVE_CONFIG_DICT))
+def _contrastive_config(weight: float = 0.1) -> LossConfig:
+    cfg = copy.deepcopy(_CONTRASTIVE_CONFIG_DICT)
+    cfg["weight"] = weight
+    return LossConfig(loss_config=cfg)
 
 
 # --- Masking config ---
@@ -179,13 +184,14 @@ def _build_common(
 
 def _build_train_module(
     common: CommonComponents,
+    contrastive_weight: float = 0.1,
 ) -> ContrastiveLatentMIMTrainModuleConfig:
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
         rank_microbatch_size=32,
         masking_config=_masking_config(common.tokenization_config),
         loss_config=_loss_config(),
-        contrastive_config=_contrastive_config(),
+        contrastive_config=_contrastive_config(weight=contrastive_weight),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(warmup_steps=8000),
@@ -428,6 +434,107 @@ def build_dataloader_exp5(common: CommonComponents) -> OlmoEarthDataLoaderConfig
 
 
 # ============================================================
+# Experiment 6: Random band dropout, full depth, contrastive weight 0.05
+# ============================================================
+
+
+def build_common_exp6(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp6."""
+    return _build_common(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp6(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp6."""
+    return _build_train_module(common, contrastive_weight=0.05)
+
+
+def build_model_exp6(common: CommonComponents) -> PretrainedTargetLatentMIMConfig:
+    """Build model for exp6."""
+    return _build_model(
+        common,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+    )
+
+
+def build_dataloader_exp6(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp6."""
+    return _build_dataloader(common)
+
+
+# ============================================================
+# Experiment 7: Random band dropout + projection only, contrastive weight 0.05
+# ============================================================
+
+
+def build_common_exp7(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp7."""
+    return _build_common(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp7(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp7."""
+    return _build_train_module(common, contrastive_weight=0.05)
+
+
+def build_model_exp7(common: CommonComponents) -> PretrainedTargetLatentMIMConfig:
+    """Build model for exp7."""
+    return _build_model(
+        common,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+        projection_only=True,
+    )
+
+
+def build_dataloader_exp7(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp7."""
+    return _build_dataloader(common)
+
+
+# ============================================================
+# Experiment 8: Random band dropout + per-modality forward, contrastive weight 0.05
+# ============================================================
+
+
+def build_common_exp8(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp8."""
+    return _build_common(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp8(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp8."""
+    return _build_train_module(common, contrastive_weight=0.05)
+
+
+def build_model_exp8(common: CommonComponents) -> PretrainedTargetLatentMIMConfig:
+    """Build model for exp8."""
+    return _build_model(
+        common,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+        per_modality_forward=True,
+    )
+
+
+def build_dataloader_exp8(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp8."""
+    return _build_dataloader(common)
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -461,6 +568,24 @@ EXPERIMENTS = {
         build_model_exp5,
         build_train_module_exp5,
         build_dataloader_exp5,
+    ),
+    "pretrained_target_random_band_dropout_cw005": (
+        build_common_exp6,
+        build_model_exp6,
+        build_train_module_exp6,
+        build_dataloader_exp6,
+    ),
+    "pretrained_target_projection_only_cw005": (
+        build_common_exp7,
+        build_model_exp7,
+        build_train_module_exp7,
+        build_dataloader_exp7,
+    ),
+    "pretrained_target_per_modality_cw005": (
+        build_common_exp8,
+        build_model_exp8,
+        build_train_module_exp8,
+        build_dataloader_exp8,
     ),
 }
 
