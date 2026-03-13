@@ -141,10 +141,11 @@ class Attention(nn.Module):
         self.cross_attn = cross_attn
         self.use_flash_attn = use_flash_attn
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
-        
+
         from olmoearth_pretrain.nn.noble import get_noble_config
+
         noble_config = get_noble_config(noble_config)
-        
+
         self.q = noble_config.make_linear(dim, dim, bias=qkv_bias, layer_type="qkv")
         self.k = noble_config.make_linear(dim, dim, bias=qkv_bias, layer_type="qkv")
         self.v = noble_config.make_linear(dim, dim, bias=qkv_bias, layer_type="qkv")
@@ -340,12 +341,17 @@ class Mlp(nn.Module):
         hidden_features = hidden_features or in_features
 
         from olmoearth_pretrain.nn.noble import get_noble_config
+
         noble_config = get_noble_config(noble_config)
 
-        self.fc1 = noble_config.make_linear(in_features, hidden_features, bias=bias, layer_type="mlp")
+        self.fc1 = noble_config.make_linear(
+            in_features, hidden_features, bias=bias, layer_type="mlp"
+        )
         self.act = act_layer()
         self.drop1 = nn.Dropout(drop)
-        self.fc2 = noble_config.make_linear(hidden_features, out_features, bias=bias, layer_type="mlp")
+        self.fc2 = noble_config.make_linear(
+            hidden_features, out_features, bias=bias, layer_type="mlp"
+        )
         self.drop2 = nn.Dropout(drop)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

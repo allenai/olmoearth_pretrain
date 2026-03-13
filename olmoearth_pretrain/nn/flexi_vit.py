@@ -539,7 +539,7 @@ class Reconstructor(nn.Module):
 class ReconstructorConfig(Config):
     """Configuration for the Reconstructor."""
 
-    decoder_config: "Config"
+    decoder_config: Config
     supported_modality_names: list[str]
     max_patch_size: int = 8
     tokenization_config: TokenizationConfig | None = None
@@ -565,7 +565,7 @@ class ReconstructorConfig(Config):
         """Get the supported modalities."""
         return get_modality_specs_from_names(self.supported_modality_names)
 
-    def build(self) -> "Reconstructor":
+    def build(self) -> Reconstructor:
         """Build the reconstructor."""
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
@@ -2038,6 +2038,7 @@ class EncoderConfig(Config):
             self.tokenization_config = TokenizationConfig(**self.tokenization_config)
         if isinstance(self.noble_config, dict):
             from olmoearth_pretrain.nn.noble import NobleConfig
+
             self.noble_config = NobleConfig(**self.noble_config)
 
     def validate(self) -> None:
@@ -2067,7 +2068,7 @@ class EncoderConfig(Config):
         """Get the supported modalities."""
         return get_modality_specs_from_names(self.supported_modality_names)
 
-    def build(self) -> "Encoder":
+    def build(self) -> Encoder:
         """Build the encoder."""
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
@@ -2104,6 +2105,7 @@ class PredictorConfig(Config):
             self.tokenization_config = TokenizationConfig(**self.tokenization_config)
         if isinstance(self.noble_config, dict):
             from olmoearth_pretrain.nn.noble import NobleConfig
+
             self.noble_config = NobleConfig(**self.noble_config)
 
     def validate(self) -> None:
@@ -2124,7 +2126,7 @@ class PredictorConfig(Config):
         """Get the supported modalities."""
         return get_modality_specs_from_names(self.supported_modality_names)
 
-    def build(self) -> "PredictorBase":
+    def build(self) -> PredictorBase:
         """Build the predictor."""
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)

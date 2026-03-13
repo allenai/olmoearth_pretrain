@@ -79,7 +79,7 @@ class TestNobleBranch:
     def test_invalid_activation(self) -> None:
         """Test that invalid activation raises error."""
         with pytest.raises(ValueError, match="Unknown activation"):
-            NobleBranch(64, 128, 16, activation="invalid")
+            NobleBranch(64, 128, 16, activation="invalid")  # type: ignore[arg-type]
 
     def test_init_scale(self) -> None:
         """Test that W_up is initialized with small values."""
@@ -117,12 +117,12 @@ class TestNobleLinear:
         in_features, out_features = 64, 64
         noble_linear = NobleLinear(in_features, out_features, bias=False)
         x = torch.randn(4, 16, in_features)
-        
+
         # Get individual outputs
         linear_out = noble_linear.linear(x)
         branch_out = noble_linear.branch(x)
         combined_out = noble_linear(x)
-        
+
         # Combined should be sum of linear and branch
         assert torch.allclose(combined_out, linear_out + branch_out, atol=1e-6)
 
@@ -130,9 +130,7 @@ class TestNobleLinear:
         """Test rank is computed from rank_ratio."""
         in_features, out_features = 64, 128
         rank_ratio = 0.25
-        noble_linear = NobleLinear(
-            in_features, out_features, rank_ratio=rank_ratio
-        )
+        noble_linear = NobleLinear(in_features, out_features, rank_ratio=rank_ratio)
         expected_rank = int(min(in_features, out_features) * rank_ratio)
         assert noble_linear.branch.w_down.out_features == expected_rank
 
@@ -140,9 +138,7 @@ class TestNobleLinear:
         """Test explicit rank overrides rank_ratio."""
         in_features, out_features = 64, 128
         rank = 8
-        noble_linear = NobleLinear(
-            in_features, out_features, rank=rank
-        )
+        noble_linear = NobleLinear(in_features, out_features, rank=rank)
         assert noble_linear.branch.w_down.out_features == rank
 
     def test_with_bias(self) -> None:
@@ -180,7 +176,7 @@ class TestNobleConfig:
     def test_validate_activation(self) -> None:
         """Test validation of activation."""
         with pytest.raises(ValueError, match="activation"):
-            NobleConfig(activation="invalid").validate()
+            NobleConfig(activation="invalid").validate()  # type: ignore[arg-type]
 
     def test_validate_init_scale(self) -> None:
         """Test validation of init_scale."""
@@ -249,7 +245,7 @@ class TestNobleIntegration:
             num_heads=4,
             noble_config=noble_config,
         )
-        
+
         x = torch.randn(2, 16, 64)
         y = attn(x)
         assert y.shape == x.shape
@@ -264,7 +260,7 @@ class TestNobleIntegration:
             hidden_features=256,
             noble_config=noble_config,
         )
-        
+
         x = torch.randn(2, 16, 64)
         y = mlp(x)
         assert y.shape == x.shape
@@ -279,7 +275,7 @@ class TestNobleIntegration:
             num_heads=4,
             noble_config=noble_config,
         )
-        
+
         x = torch.randn(2, 16, 64)
         y = block(x)
         assert y.shape == x.shape
@@ -292,9 +288,9 @@ class TestNobleIntegration:
         attn_noble = Attention(
             dim=64, num_heads=4, noble_config=NobleConfig(enabled=True)
         )
-        
+
         base_params = sum(p.numel() for p in attn_base.parameters())
         noble_params = sum(p.numel() for p in attn_noble.parameters())
-        
+
         # NOBLE should add parameters
         assert noble_params > base_params
