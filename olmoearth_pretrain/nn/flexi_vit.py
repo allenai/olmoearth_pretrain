@@ -380,6 +380,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         spectral_mixer_modalities: list[str] | None = None,
         use_spectral_attention: bool = False,
         spectral_attention_d_model: int = 64,
+        spectral_attention_num_heads: int = 2,
     ):
         """Initialize the patch embeddings.
 
@@ -412,6 +413,8 @@ class MultiModalPatchEmbeddings(nn.Module):
                 Default: False.
             spectral_attention_d_model: Embedding dimension for band tokens in SpectralAttention.
                 Default: 64.
+            spectral_attention_num_heads: Number of attention heads in SpectralAttention.
+                Default: 2.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -476,7 +479,9 @@ class MultiModalPatchEmbeddings(nn.Module):
                             )
 
                             mixers[key] = SpectralAttention(
-                                len(bandset_indices), d_model=spectral_attention_d_model
+                                len(bandset_indices),
+                                d_model=spectral_attention_d_model,
+                                num_heads=spectral_attention_num_heads,
                             )
             if mixers:
                 self.spectral_mixers = nn.ModuleDict(mixers)
@@ -1345,6 +1350,7 @@ class Encoder(FlexiVitBase):
         spectral_mixer_modalities: list[str] | None = None,
         use_spectral_attention: bool = False,
         spectral_attention_d_model: int = 64,
+        spectral_attention_num_heads: int = 2,
     ):
         """Initialize the encoder.
 
@@ -1383,6 +1389,7 @@ class Encoder(FlexiVitBase):
             use_spectral_attention: If True, apply content-dependent cross-band self-attention
                 before the Conv2d. Mutually exclusive with use_spectral_mixer.
             spectral_attention_d_model: Embedding dimension for SpectralAttention band tokens.
+            spectral_attention_num_heads: Number of attention heads in SpectralAttention.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1424,6 +1431,7 @@ class Encoder(FlexiVitBase):
             spectral_mixer_modalities=spectral_mixer_modalities,
             use_spectral_attention=use_spectral_attention,
             spectral_attention_d_model=spectral_attention_d_model,
+            spectral_attention_num_heads=spectral_attention_num_heads,
         )
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=self.embedding_size,
@@ -2304,6 +2312,7 @@ class EncoderConfig(Config):
     spectral_mixer_modalities: list[str] | None = None
     use_spectral_attention: bool = False
     spectral_attention_d_model: int = 64
+    spectral_attention_num_heads: int = 2
 
     def validate(self) -> None:
         """Validate the configuration."""

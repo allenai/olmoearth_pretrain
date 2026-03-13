@@ -178,7 +178,7 @@ def _build_train_module(
 ) -> ContrastiveLatentMIMTrainModuleConfig:
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
-        rank_microbatch_size=64,
+        rank_microbatch_size=32,
         masking_config=_masking_config(masking_type, common.tokenization_config),
         loss_config=_loss_config(),
         contrastive_config=_contrastive_config(),
@@ -575,7 +575,7 @@ def build_train_module_exp15(
     """Build train module for exp15 (random_with_decode + ERA5 decode-only)."""
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
-        rank_microbatch_size=64,
+        rank_microbatch_size=32,
         masking_config=_masking_config_era5(common.tokenization_config),
         loss_config=_loss_config_era5(),
         contrastive_config=_contrastive_config(),
@@ -660,7 +660,7 @@ def build_train_module_exp16(
     """Build train module for exp16 (modality_cross_random + ERA5 decode-only)."""
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
-        rank_microbatch_size=64,
+        rank_microbatch_size=32,
         masking_config=_masking_config_era5_cross_random(common.tokenization_config),
         loss_config=_loss_config_era5(),
         contrastive_config=_contrastive_config(),
