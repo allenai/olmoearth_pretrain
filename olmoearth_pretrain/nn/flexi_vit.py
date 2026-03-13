@@ -46,7 +46,7 @@ def get_modalities_to_process(
     modalities_to_process = set(supported_modality_names).intersection(
         set(available_modalities)
     )
-    return list(modalities_to_process)
+    return sorted(modalities_to_process)
 
 
 def return_modalities_from_dict(
