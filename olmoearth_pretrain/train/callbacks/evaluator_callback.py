@@ -92,6 +92,9 @@ class DownstreamTaskConfig:
     eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
+    # If set, extract features from this encoder exit depth instead of the final layer.
+    # 0 corresponds to patch embeddings before attention; N corresponds to after block N.
+    feature_exit_depth: int | None = None
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
@@ -161,6 +164,7 @@ class DownstreamEvaluator:
         self.partition = task.partition
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
+        self.feature_exit_depth = task.feature_exit_depth
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
         self.embedding_dim = task.embedding_dim
@@ -292,6 +296,7 @@ class DownstreamEvaluator:
             "pooling_type": self.pooling_type,
             "concat_features": (self.probe_type == "attn_pool"),
             "use_pooled_tokens": self.use_pooled_tokens,
+            "feature_exit_depth": self.feature_exit_depth,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(
