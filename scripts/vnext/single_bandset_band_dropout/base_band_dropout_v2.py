@@ -1,7 +1,7 @@
 """Base script for single bandset + random band dropout (optical only) + masked-negatives loss.
 
 Changes from base_band_dropout.py:
-- rank_microbatch_size: 32 -> 64
+- rank_microbatch_size: 32 (reverted from 64)
 - InfoNCE weight: 0.1 -> 0.05
 - Band dropout only for S2 and Landsat (not S1)
 - SpectralAttention (d_model=128, num_heads=2) on satellite modalities
@@ -162,7 +162,7 @@ def build_train_module_config(
     """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
-        rank_microbatch_size=64,
+        rank_microbatch_size=32,
         masking_config=_masking_config(common.tokenization_config),
         loss_config=LossConfig(
             loss_config={
