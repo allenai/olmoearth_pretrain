@@ -18,6 +18,7 @@ Experiments:
 22. SpectralAttention d=128, 8 heads + dropout masking + fused AdamW + compile + vec masked neg loss
 23. Exp21 model + Exp22 speedups + orthogonal target projection init
 24. Exp23 + larger MLP output head (output_mlp_ratio=4) in predictor for more capacity
+25. Exp23 with random Fourier target projection init
 """
 
 import copy
@@ -1357,6 +1358,66 @@ def build_dataloader_exp24(common: CommonComponents) -> OlmoEarthDataLoaderConfi
 
 
 # ============================================================
+# Experiment 25: Exp23 with random Fourier target projection init
+# ============================================================
+
+
+def build_common_exp25(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp25."""
+    return _build_common(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp25(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp25: same as exp23."""
+    return build_train_module_exp23(common)
+
+
+def build_model_exp25(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp25: exp23 with random Fourier target projection init."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+        use_spectral_attention=True,
+        spectral_attention_d_model=128,
+        spectral_mixer_modalities=SATELLITE_MODALITIES,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        target_projection_init="random_fourier",
+    )
+
+
+def build_dataloader_exp25(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp25."""
+    return _build_dataloader(common, "random_with_decode")
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -1462,6 +1523,12 @@ EXPERIMENTS = {
         build_model_exp24,
         build_train_module_exp24,
         build_dataloader_exp24,
+    ),
+    "single_bandset_all12_spectral_attn_d128_random_fourier_target_random_decode_masked_neg": (
+        build_common_exp25,
+        build_model_exp25,
+        build_train_module_exp25,
+        build_dataloader_exp25,
     ),
 }
 
