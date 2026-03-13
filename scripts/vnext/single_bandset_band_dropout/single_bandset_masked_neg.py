@@ -1132,15 +1132,7 @@ def build_train_module_exp22(
         masking_config=_masking_config(
             "random_with_decode", common.tokenization_config
         ),
-        loss_config=LossConfig(
-            loss_config={
-                "type": "modality_patch_discrimination_masked_negatives_vec",
-                "tau": 0.1,
-                "same_target_threshold": 0.999,
-                "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
-                "row_chunk_size": MASKED_NEG_ROW_CHUNK_SIZE,
-            }
-        ),
+        loss_config=_loss_config(),
         contrastive_config=_contrastive_config(),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
@@ -1170,9 +1162,7 @@ def build_model_exp22(common: CommonComponents) -> LatentMIMConfig:
         tokenization_config=common.tokenization_config,
         band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
         random_band_dropout=True,
-        use_spectral_attention=True,
-        spectral_attention_d_model=128,
-        spectral_attention_num_heads=8,
+        use_spectral_mixer=True,
         spectral_mixer_modalities=SATELLITE_MODALITIES,
     )
     decoder_config = PredictorConfig(
@@ -1394,15 +1384,7 @@ def build_train_module_exp25(
         masking_config=_masking_config(
             "random_with_decode", common.tokenization_config
         ),
-        loss_config=LossConfig(
-            loss_config={
-                "type": "modality_patch_discrimination_masked_negatives_vec",
-                "tau": 0.1,
-                "same_target_threshold": 0.999,
-                "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
-                "row_chunk_size": MASKED_NEG_ROW_CHUNK_SIZE,
-            }
-        ),
+        loss_config=_loss_config(),
         contrastive_config=_contrastive_config(),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
@@ -1433,9 +1415,7 @@ def build_model_exp25(common: CommonComponents) -> LatentMIMConfig:
         tokenization_config=common.tokenization_config,
         band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
         random_band_dropout=True,
-        use_spectral_attention=True,
-        spectral_attention_d_model=128,
-        spectral_attention_num_heads=8,
+        use_spectral_mixer=True,
         spectral_mixer_modalities=SATELLITE_MODALITIES,
     )
     decoder_config = FineGrainedPredictorConfig(
