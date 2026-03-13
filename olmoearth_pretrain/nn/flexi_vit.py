@@ -1,9 +1,11 @@
 """Model code for the OlmoEarth Pretrain model."""
 
+from __future__ import annotations
+
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from einops import rearrange, reduce, repeat
@@ -11,6 +13,9 @@ from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
 
 from olmoearth_pretrain.config import Config
+
+if TYPE_CHECKING:
+    from olmoearth_pretrain.nn.noble import NobleConfig
 from olmoearth_pretrain.data.constants import (
     BASE_GSD,
     Modality,
@@ -835,6 +840,7 @@ class FlexiVitBase(nn.Module):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        noble_config: NobleConfig | None = None,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -862,6 +868,7 @@ class FlexiVitBase(nn.Module):
                     cross_attn=self.cross_attn,
                     drop_path=drop_path,
                     use_flash_attn=self.use_flash_attn,
+                    noble_config=noble_config,
                 )
                 for _ in range(depth)
             ]
@@ -1070,6 +1077,7 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        noble_config: NobleConfig | None = None,
     ):
         """Initialize the encoder.
 
@@ -1102,6 +1110,7 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            noble_config: Optional NOBLE config for nonlinear low-rank branches.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1117,6 +1126,7 @@ class Encoder(FlexiVitBase):
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
+            noble_config=noble_config,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1619,6 +1629,7 @@ class PredictorBase(FlexiVitBase):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        noble_config: NobleConfig | None = None,
     ):
         """Initialize the predictor.
 
@@ -1637,6 +1648,7 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn: Whether to use flash attention
             qk_norm: Whether to apply normalization to Q and K in attention
             tokenization_config: Optional config for custom band groupings
+            noble_config: Optional NOBLE config for nonlinear low-rank branches.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1652,6 +1664,7 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn=use_flash_attn,
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
+            noble_config=noble_config,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -2017,11 +2030,15 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+    noble_config: NobleConfig | None = None
 
     def __post_init__(self) -> None:
-        """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
+        """Coerce raw dicts to TokenizationConfig/NobleConfig for old checkpoint compatibility."""
         if isinstance(self.tokenization_config, dict):
             self.tokenization_config = TokenizationConfig(**self.tokenization_config)
+        if isinstance(self.noble_config, dict):
+            from olmoearth_pretrain.nn.noble import NobleConfig
+            self.noble_config = NobleConfig(**self.noble_config)
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -2042,6 +2059,8 @@ class EncoderConfig(Config):
                 )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
+        if self.noble_config is not None:
+            self.noble_config.validate()
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -2077,11 +2096,15 @@ class PredictorConfig(Config):
     use_flash_attn: bool = False
     qk_norm: bool = False
     tokenization_config: TokenizationConfig | None = None
+    noble_config: NobleConfig | None = None
 
     def __post_init__(self) -> None:
-        """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
+        """Coerce raw dicts to TokenizationConfig/NobleConfig for old checkpoint compatibility."""
         if isinstance(self.tokenization_config, dict):
             self.tokenization_config = TokenizationConfig(**self.tokenization_config)
+        if isinstance(self.noble_config, dict):
+            from olmoearth_pretrain.nn.noble import NobleConfig
+            self.noble_config = NobleConfig(**self.noble_config)
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -2093,6 +2116,8 @@ class PredictorConfig(Config):
                     raise ValueError(f"Modality {modality} is not supported")
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
+        if self.noble_config is not None:
+            self.noble_config.validate()
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
