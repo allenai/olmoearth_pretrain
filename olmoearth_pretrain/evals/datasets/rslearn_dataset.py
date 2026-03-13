@@ -1,169 +1,71 @@
 """Convert rslearn dataset to OlmoEarth Pretrain evaluation dataset format."""
 
+from __future__ import annotations
+
 import json
-from collections import defaultdict
 from datetime import datetime
 from importlib.resources import files
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from olmoearth_pretrain.evals.studio_ingest.schema import EvalDatasetEntry
 
 import numpy as np
 import torch
 from dateutil.relativedelta import relativedelta
 from einops import rearrange
-from rslearn.dataset.dataset import Dataset as RslearnDataset
-from rslearn.train.dataset import DataInput as RsDataInput
 from rslearn.train.dataset import ModelDataset as RsModelDataset
-from rslearn.train.dataset import SplitConfig as RsSplitConfig
-from rslearn.train.tasks.classification import (
-    ClassificationTask as RsClassificationTask,
-)
-from rslearn.train.transforms.pad import Pad as RsPad
-from torch.utils.data import Dataset
-from upath import UPath
+from rslearn.train.model_context import RasterImage
+from torch.utils.data import Dataset, IterableDataset
 
-from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS
-from olmoearth_pretrain.data.constants import Modality as DataModality
+from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS, Modality
+from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 from olmoearth_pretrain.data.utils import convert_to_db
+from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
+from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.datasets.rslearn_builder import (
+    build_model_dataset,
+    get_modality_layers,
+    get_task_info,
+    parse_model_config,
+)
+from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
+from olmoearth_pretrain.evals.task_types import TaskType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, OlmoEarthSample
 
 from .normalize import normalize_bands
-
-# rslearn layer name -> (olmoearth modality name, all bands)
-RSLEARN_TO_OLMOEARTH: dict[str, tuple[str, list[str]]] = {
-    "sentinel2": ("sentinel2_l2a", DataModality.SENTINEL2_L2A.band_order),
-    "sentinel1": ("sentinel1", DataModality.SENTINEL1.band_order),
-    "sentinel1_ascending": ("sentinel1", DataModality.SENTINEL1.band_order),
-    "sentinel1_descending": ("sentinel1", DataModality.SENTINEL1.band_order),
-    "landsat": ("landsat", DataModality.LANDSAT.band_order),
-}
-
-
-def build_rslearn_model_dataset(
-    rslearn_dataset: RslearnDataset,
-    layers: list[str],
-    classes: list[str],
-    rslearn_dataset_groups: list[str] | None = None,
-    input_size: int | None = None,
-    split: str = "train",
-    property_name: str = "category",
-    skip_targets: bool = False,
-) -> RsModelDataset:
-    """Build an rslearn ModelDataset.
-
-    Args:
-        rslearn_dataset: The source RslearnDataset.
-        rslearn_dataset_groups: Optional list of dataset group names to include.
-        layers: List of rslearn layer names to use as model inputs.
-            Example: "sentinel2". Only provide the base name, do not include
-            layer names such as "sentinel2.1" or "sentinel2.n".
-        input_size: Optional input patch size (pixels) to crop/resize samples to.
-        split: Dataset split to use (e.g., "train", "val", "test").
-        property_name: The property in the dataset to use as the target label.
-        classes: List of class names. If None, inferred from dataset.
-        skip_targets: Whether or not to skip the target, if True, property_name and classes can be placeholder.
-
-    Returns:
-        RsModelDataset: A dataset object ready for training or evaluation.
-    """
-    if not layers:
-        raise ValueError(
-            "`layers` must be a non-empty list of rslearn layer names, "
-            f"allowed: {list(RSLEARN_TO_OLMOEARTH.keys())}"
-        )
-    if split not in ("train", "val", "test"):
-        raise ValueError(f"Invalid split {split}, must be one of train/val/test")
-
-    # Validate input layers
-    unknown = [m for m in layers if m not in RSLEARN_TO_OLMOEARTH]
-    if unknown:
-        raise ValueError(
-            f"Unknown rslearn layer(s): {unknown}. "
-            f"Allowed: {list(RSLEARN_TO_OLMOEARTH.keys())}"
-        )
-
-    if classes is None:
-        raise ValueError("`classes` must be provided and cannot be None.")
-
-    # Group rslearn layers by their OlmoEarth Pretrain modality key
-    layers_by_olmoearth: dict[str, list[str]] = defaultdict(list)
-    bands_by_olmoearth: dict[str, list[str]] = {}
-
-    for rslearn_layer in layers:
-        olmoearth_key, band_order = RSLEARN_TO_OLMOEARTH[rslearn_layer]
-        layers_by_olmoearth[olmoearth_key].append(rslearn_layer)
-        bands_by_olmoearth[olmoearth_key] = band_order
-
-    transforms = []
-    if input_size is not None:
-        transforms.append(
-            RsPad(
-                size=input_size,
-                mode="center",
-                image_selectors=list(layers_by_olmoearth.keys()),
-            )
-        )
-
-    inputs: dict[str, RsDataInput] = {}
-    # Expand each rslearn layer name to time-indexed variants, keep the first *per base layer*
-    for olmoearth_key, per_key_layers in layers_by_olmoearth.items():
-        expanded: list[str] = []
-        for base in per_key_layers:
-            # convention: base, then base.1 ... base.(YEAR_NUM_TIMESTEPS-1)
-            expanded.append(base)
-            expanded.extend(f"{base}.{i}" for i in range(1, YEAR_NUM_TIMESTEPS))
-        inputs[olmoearth_key] = RsDataInput(
-            data_type="raster",
-            layers=expanded,
-            bands=bands_by_olmoearth[olmoearth_key],
-            passthrough=True,
-            load_all_layers=True,
-        )
-
-    inputs["targets"] = RsDataInput(
-        data_type="vector",
-        layers=["label"],
-        is_target=True,
-    )
-
-    split_config = RsSplitConfig(
-        transforms=transforms,
-        groups=rslearn_dataset_groups,
-        skip_targets=skip_targets,
-        tags={"helios_split": split}
-        if split
-        else {},  # must stay as helios because it is tagged that way in the dataset
-    )
-
-    return RsModelDataset(
-        dataset=rslearn_dataset,
-        split_config=split_config,
-        inputs=inputs,
-        # TODO: add task type later if we also want to support segmentation task
-        task=RsClassificationTask(
-            property_name=property_name,
-            classes=classes,
-        ),
-        workers=32,
-    )
 
 
 def get_timestamps(
     start_time: str,
     end_time: str,
+    num_timesteps: int | None = None,
 ) -> list[torch.Tensor]:
-    """Return first YEAR_NUM_TIMESTEPS monthly (day, month0, year) long tensors."""
+    """Return monthly (day, month0, year) long tensors for the specified range.
+
+    Args:
+        start_time: Start date in YYYY-MM-DD format.
+        end_time: End date in YYYY-MM-DD format.
+        num_timesteps: Number of timesteps to generate. If None, uses YEAR_NUM_TIMESTEPS.
+
+    Returns:
+        List of tensors, each containing [day, month (0-indexed), year].
+    """
+    if num_timesteps is None:
+        num_timesteps = YEAR_NUM_TIMESTEPS
+
     start = datetime.strptime(start_time, "%Y-%m-%d").replace(day=1)
     end = datetime.strptime(end_time, "%Y-%m-%d")
 
     months_diff = (end.year - start.year) * 12 + (end.month - start.month) + 1
-    if months_diff < YEAR_NUM_TIMESTEPS:
+    if months_diff < num_timesteps:
         raise ValueError(
-            f"Not enough months in range ({months_diff}) to cover {YEAR_NUM_TIMESTEPS}"
+            f"Not enough months in range ({months_diff}) to cover {num_timesteps}"
         )
 
     dates: list[torch.Tensor] = []
     cur = start
-    while cur <= end and len(dates) < YEAR_NUM_TIMESTEPS:
+    while cur <= end and len(dates) < num_timesteps:
         # month stored 0-indexed
         dates.append(
             torch.tensor(
@@ -180,84 +82,212 @@ class RslearnToOlmoEarthDataset(Dataset):
     Expects rslearn ModelDataset to yield: (inputs_dict, target, metadata).
     inputs_dict[<modality>] shape: (T*C, H, W) after rslearn transforms.
     We reshape to (H, W, T, C), normalize, attach timestamps, and wrap as OlmoEarthSample.
+
+    Requires a pre-built ModelDataset (via RslearnDataModule + jsonargparse).
+    Use from_model_config() or build_rslearn_eval_dataset() to construct.
     """
 
     allowed_modalities = {
-        DataModality.SENTINEL2_L2A.name,
-        DataModality.SENTINEL1.name,
-        DataModality.LANDSAT.name,
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+        Modality.LANDSAT.name,
     }
 
     def __init__(
         self,
-        ds_path: str,
-        layers: list[str],
-        classes: list[str],
+        model_dataset: RsModelDataset,
         input_modalities: list[str],
-        ds_groups: list[str] | None = None,
-        input_size: int | None = None,
-        split: str = "train",
-        property_name: str = "category",
-        partition: str = "default",
+        target_task_name: str | None = None,
+        target_task_type: TaskType | str = TaskType.SEGMENTATION,
         norm_stats_from_pretrained: bool = True,
-        # Default to 2std no clip - this matches what our model sees in pretraining,
-        # so when using dataset stats (e.g. for MADOS) consistency is important.
-        norm_method: str = "norm_no_clip_2_std",
+        norm_method: str = NormMethod.NORM_NO_CLIP_2_STD,
         ds_norm_stats_json: str | None = None,
+        ds_norm_stats: dict[str, Any] | None = None,
         start_time: str = "2022-09-01",
         end_time: str = "2023-09-01",
+        num_timesteps: int = 12,
     ):
-        """Initialize RslearnToOlmoEarthDataset."""
-        if split not in ("train", "val", "valid", "test"):
-            raise ValueError(f"Invalid split {split}")
+        """Initialize RslearnToOlmoEarthDataset.
 
-        if not norm_stats_from_pretrained and ds_norm_stats_json is None:
+        Args:
+            model_dataset: Pre-built rslearn ModelDataset.
+            input_modalities: OlmoEarth modality names (e.g., ["sentinel2_l2a"]).
+            target_task_name: For MultiTask, the sub-task name (e.g., "segment").
+                If None, assumes single task and accesses target dict directly.
+            target_task_type: Type of task ("segmentation" or "classification").
+                Determines how to parse the target dict.
+            norm_stats_from_pretrained: Use pretrain normalization stats.
+            norm_method: Normalization method when not using pretrain stats.
+            ds_norm_stats_json: Path to dataset norm stats JSON.
+            ds_norm_stats: Dataset norm stats blob (e.g. from registry entry).
+            start_time: Start time for timestamp generation.
+            end_time: End time for timestamp generation.
+            num_timesteps: Number of timesteps per sample.
+        """
+        if (
+            not norm_stats_from_pretrained
+            and ds_norm_stats_json is None
+            and ds_norm_stats is None
+        ):
             raise ValueError(
                 "norm_stats_from_pretrained=False requires a JSON file with dataset stats "
-                "(set ds_norm_stats_json)."
+                "or registry stats (set ds_norm_stats_json or ds_norm_stats)."
             )
 
         if not input_modalities:
             raise ValueError("Must specify at least one input modality")
         if not all(m in self.allowed_modalities for m in input_modalities):
-            raise ValueError(f"Input modalities must be in {self.allowed_modalities}")
+            raise ValueError(
+                f"Input modalities must be in {self.allowed_modalities} but got {input_modalities}"
+            )
 
-        # Build rslearn ModelDataset for the split
-        dataset = RslearnDataset(UPath(ds_path))
-        self.dataset = build_rslearn_model_dataset(
-            rslearn_dataset=dataset,
-            rslearn_dataset_groups=ds_groups,
-            layers=layers,
-            input_size=input_size,
-            split="val" if split == "valid" else split,  # rslearn uses 'val'
-            property_name=property_name,
-            classes=classes,
-        )
-
+        self.dataset = model_dataset
         self.norm_stats_from_pretrained = norm_stats_from_pretrained
         self.input_modalities = input_modalities
-        self.timestamps = torch.stack(get_timestamps(start_time, end_time))  # (T, 3)
+
+        # Store temporal config for per-sample timestamp generation
+        self.start_time = start_time
+        self.end_time = end_time
+        self.max_timesteps = num_timesteps  # Max expected timesteps (for validation)
+
+        # Target parsing config - derived from Task structure
+        self.target_task_name = target_task_name  # For MultiTask, e.g., "segment"
+        self.target_task_type = TaskType(target_task_type)
+        if self.target_task_type not in {
+            TaskType.SEGMENTATION,
+            TaskType.CLASSIFICATION,
+        }:
+            raise ValueError(
+                f"Unsupported target task type: {self.target_task_type.value}"
+            )
 
         if self.norm_stats_from_pretrained:
-            from olmoearth_pretrain.data.normalize import Normalizer, Strategy
-
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
         else:
-            self.dataset_norm_stats = self._get_norm_stats(ds_norm_stats_json)  # type: ignore
+            if ds_norm_stats is not None:
+                self.dataset_norm_stats = self._parse_norm_stats(ds_norm_stats)
+            else:
+                self.dataset_norm_stats = self._get_norm_stats(ds_norm_stats_json)  # type: ignore[arg-type]
             self.norm_method = norm_method
 
-    @staticmethod
-    def _get_norm_stats(ds_norm_stats_json: str) -> dict:
-        """Load dataset norm stats."""
-        with (
-            files("olmoearth_pretrain.evals.datasets.config") / ds_norm_stats_json
-        ).open() as f:
-            blob = json.load(f)
-        out = {}
-        for modality, per_band in blob.items():
-            band_order = DataModality.get(modality).band_order
-            means, stds, mins, maxs = [], [], [], []
+    @classmethod
+    def from_model_config(
+        cls,
+        model_config: dict[str, Any],
+        source_path: str,
+        split: str = "val",
+        input_modalities: list[str] | None = None,
+        norm_stats_from_pretrained: bool = True,
+        norm_method: str = "norm_no_clip",
+        ds_norm_stats_json: str | None = None,
+        ds_norm_stats: dict[str, Any] | None = None,
+        start_time: str = "2022-09-01",
+        end_time: str = "2023-09-01",
+        max_samples: int | None = None,
+        num_timesteps: int = 12,
+        groups_override: list[str] | None = None,
+        tags_override: dict[str, str] | None = None,
+    ) -> RslearnToOlmoEarthDataset:
+        """Build from a parsed model.yaml config dict.
 
+        Uses RslearnDataModule (via jsonargparse) to construct the underlying
+        ModelDataset, keeping us in sync with rslearn's config merging logic.
+
+        Args:
+            model_config: Parsed model.yaml dict.
+            source_path: Path to rslearn dataset.
+            split: Dataset split ("train", "val", "test").
+            input_modalities: OlmoEarth modality names. If None, derived from config.
+            norm_stats_from_pretrained: Use pretrain norm stats.
+            norm_method: Normalization method.
+            ds_norm_stats_json: Path to dataset norm stats.
+            ds_norm_stats: Dataset norm stats blob (e.g. from registry entry).
+            start_time: Start time for timestamps (used for timestamp generation).
+            end_time: End time for timestamps (used for timestamp generation).
+            max_samples: Optional sample limit.
+            num_timesteps: Max expected timesteps from config (actual per-sample
+                timesteps are derived from data).
+            groups_override: Optional list of groups to use instead of model.yaml groups.
+            tags_override: Optional dict of tags to filter windows.
+        """
+        model_dataset = build_model_dataset(
+            model_config=model_config,
+            source_path=source_path,
+            split=split,
+            max_samples=max_samples,
+            groups_override=groups_override,
+            tags_override=tags_override,
+        )
+
+        if input_modalities is None:
+            layers = get_modality_layers(model_config)
+            input_modalities = []
+            for layer in layers:
+                resolved = layer
+                if layer not in RSLEARN_TO_OLMOEARTH:
+                    for prefix in ("pre_", "post_"):
+                        if (
+                            layer.startswith(prefix)
+                            and layer[len(prefix) :] in RSLEARN_TO_OLMOEARTH
+                        ):
+                            resolved = layer[len(prefix) :]
+                            break
+                if resolved in RSLEARN_TO_OLMOEARTH:
+                    input_modalities.append(RSLEARN_TO_OLMOEARTH[resolved].name)
+                else:
+                    input_modalities.append(layer)
+
+        task_info = get_task_info(model_config)
+
+        return wrap_rslearn_dataset(
+            model_dataset=model_dataset,
+            input_modalities=input_modalities,
+            target_task_name=task_info["task_name"],
+            target_task_type=task_info["task_type"],
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
+            ds_norm_stats_json=ds_norm_stats_json,
+            ds_norm_stats=ds_norm_stats,
+            start_time=start_time,
+            end_time=end_time,
+            num_timesteps=num_timesteps,
+        )
+
+    @staticmethod
+    def _parse_norm_stats(
+        raw_stats: dict[str, Any],
+    ) -> dict[str, dict[str, np.ndarray]]:
+        """Convert raw stats into modality arrays keyed by band order."""
+        out: dict[str, dict[str, np.ndarray]] = {}
+        for modality, per_band in raw_stats.items():
+            modality_name = modality.lower()
+            band_order = Modality.get(modality_name).band_order
+
+            # Also support pre-aggregated format: {"means": [...], "stds": [...], ...}
+            if all(
+                key in per_band for key in ("means", "stds", "mins", "maxs")
+            ) and isinstance(per_band.get("means"), list | tuple):
+                means = np.array(per_band["means"], dtype=np.float32)
+                stds = np.array(per_band["stds"], dtype=np.float32)
+                mins = np.array(per_band["mins"], dtype=np.float32)
+                maxs = np.array(per_band["maxs"], dtype=np.float32)
+                if not (
+                    len(means) == len(stds) == len(mins) == len(maxs) == len(band_order)
+                ):
+                    raise ValueError(
+                        f"Invalid aggregated norm stats for modality {modality_name}: "
+                        f"expected {len(band_order)} bands, got "
+                        f"{len(means)}, {len(stds)}, {len(mins)}, {len(maxs)}"
+                    )
+                out[modality_name] = {
+                    "means": means,
+                    "stds": stds,
+                    "mins": mins,
+                    "maxs": maxs,
+                }
+                continue
+
+            means, stds, mins, maxs = [], [], [], []
             for band in band_order:
                 band_stats = (
                     per_band.get(band)
@@ -265,51 +295,60 @@ class RslearnToOlmoEarthDataset(Dataset):
                     or per_band.get(band.lower())
                 )
                 if band_stats is None:
-                    raise ValueError(f"Missing stats for {band} in modality {modality}")
+                    raise ValueError(
+                        f"Missing stats for {band} in modality {modality_name}"
+                    )
                 means.append(band_stats["mean"])
                 stds.append(band_stats["std"])
                 mins.append(band_stats["min"])
                 maxs.append(band_stats["max"])
 
-            out[modality] = {
+            out[modality_name] = {
                 "means": np.array(means, dtype=np.float32),
                 "stds": np.array(stds, dtype=np.float32),
                 "mins": np.array(mins, dtype=np.float32),
                 "maxs": np.array(maxs, dtype=np.float32),
             }
-
         return out
 
-    def __len__(self) -> int:
-        """Length of the dataset."""
-        return len(self.dataset)
+    @staticmethod
+    def _get_norm_stats(ds_norm_stats_json: str) -> dict:
+        """Load dataset norm stats from a JSON file."""
+        with (
+            files("olmoearth_pretrain.evals.datasets.config") / ds_norm_stats_json
+        ).open() as f:
+            blob = json.load(f)
+        return RslearnToOlmoEarthDataset._parse_norm_stats(blob)
 
-    def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
-        """Return a MaskedOlmoEarthSample and target tensor."""
-        input_dict, target, _ = self.dataset[idx]
-
+    def _transform_sample(
+        self, input_dict: dict, target: dict
+    ) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
+        """Transform a raw rslearn sample into (MaskedOlmoEarthSample, label)."""
         sample_dict: dict[str, Any] = {}
-        T = YEAR_NUM_TIMESTEPS
+        sample_timesteps: int | None = None
 
         for modality in self.input_modalities:
             if modality not in input_dict:
                 raise ValueError(f"Modality {modality} not found in dataset inputs")
-            num_bands = DataModality.get(modality).num_bands
             x = input_dict[modality]
-            # Turn into numpy array for compatibility with normalizer
-            if not isinstance(x, np.ndarray):
-                x = x.numpy()
-            if x.ndim != 3:
-                raise ValueError(
-                    f"Expected (T*C, H, W) for {modality}, got {tuple(x.shape)}"
+            if not isinstance(x, RasterImage):
+                raise TypeError(
+                    f"Input modality '{modality}' must be RasterImage, got {type(x).__name__}"
                 )
-            # Convert to dB for Sentinel-1
-            if modality == DataModality.SENTINEL1.name:
+
+            img = x.image
+            if isinstance(img, torch.Tensor):
+                img = img.numpy()
+            x = rearrange(img, "c t h w -> h w t c")
+
+            if sample_timesteps is None:
+                sample_timesteps = x.shape[2]
+
+            if modality == Modality.SENTINEL1.name:
                 x = convert_to_db(x)
-            x = rearrange(x, "(t c) h w -> h w t c", t=T, c=num_bands)
 
             if self.norm_stats_from_pretrained:
-                x = self.normalizer_computed.normalize(DataModality.get(modality), x)
+                x = self.normalizer_computed.normalize(Modality.get(modality), x)
             else:
                 modality_stats = self.dataset_norm_stats[modality]
                 x = normalize_bands(
@@ -320,11 +359,192 @@ class RslearnToOlmoEarthDataset(Dataset):
                     maxs=modality_stats["maxs"],
                     method=self.norm_method,
                 )
-
             sample_dict[modality] = torch.as_tensor(x, dtype=torch.float32)
 
-        sample_dict["timestamps"] = self.timestamps
+        sample_timesteps = sample_timesteps or self.max_timesteps
+        timestamps = get_timestamps(
+            self.start_time, self.end_time, num_timesteps=sample_timesteps
+        )
+        sample_dict["timestamps"] = torch.stack(timestamps)
 
         olmoearth_sample = OlmoEarthSample(**sample_dict)
         masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(olmoearth_sample)
-        return masked_sample, target["class"].long()
+
+        for modality in self.input_modalities:
+            modality_spec = Modality.get(modality)
+            if modality_spec.is_spatial:
+                mask_attr_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                    modality
+                )
+                masked_attr = getattr(masked_sample, mask_attr_name)
+                if masked_attr is None:
+                    raise ValueError(
+                        f"Modality mask {mask_attr_name} not found for modality {modality}"
+                    )
+                if masked_attr.shape[1:3] != sample_dict[modality].shape[1:3]:
+                    raise ValueError(
+                        f"Modality mask {mask_attr_name} and modality {modality} have different hw shapes: "
+                        f"{masked_attr.shape[1:3]} != {sample_dict[modality].shape[1:3]}"
+                    )
+
+        if self.target_task_name:
+            data_dict = target.get(self.target_task_name, {})
+        else:
+            data_dict = target
+
+        if self.target_task_type == TaskType.SEGMENTATION:
+            classes = torch.as_tensor(
+                data_dict["classes"].image, dtype=torch.long
+            ).squeeze()
+            valid = torch.as_tensor(
+                data_dict["valid"].image, dtype=torch.long
+            ).squeeze()
+        elif self.target_task_type == TaskType.CLASSIFICATION:
+            classes = data_dict["class"]
+            valid = data_dict["valid"]
+        else:
+            raise ValueError(
+                f"Unsupported target task type: {self.target_task_type.value}"
+            )
+
+        if valid is not None:
+            assert classes is not None, "valid mask present but no classes tensor"
+            classes = classes.masked_fill(valid == 0, SEGMENTATION_IGNORE_LABEL)
+        return masked_sample, classes
+
+    def __len__(self) -> int:
+        """Length of the dataset."""
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
+        """Return a MaskedOlmoEarthSample and target tensor."""
+        input_dict, target, _ = self.dataset[idx]
+        return self._transform_sample(input_dict, target)
+
+
+class IterableRslearnToOlmoEarthDataset(IterableDataset, RslearnToOlmoEarthDataset):
+    """Iterable variant so PyTorch DataLoader uses __iter__ instead of __getitem__."""
+
+    def __iter__(self):
+        for input_dict, target, _ in self.dataset:
+            yield self._transform_sample(input_dict, target)
+
+    def __len__(self):
+        raise TypeError(f"{type(self).__name__} has no len()")
+
+
+def wrap_rslearn_dataset(**kwargs) -> RslearnToOlmoEarthDataset:
+    """Wrap an rslearn dataset, picking map-style or iterable based on what rslearn returns."""
+    if isinstance(kwargs.get("model_dataset"), IterableDataset):
+        return IterableRslearnToOlmoEarthDataset(**kwargs)
+    return RslearnToOlmoEarthDataset(**kwargs)
+
+
+def from_registry_entry(
+    entry: EvalDatasetEntry,
+    split: str = "train",
+    norm_method: str = "norm_no_clip",
+    norm_stats_from_pretrained: bool | None = None,
+    max_samples: int | None = None,
+    input_modalities_override: list[str] | None = None,
+    groups_override: list[str] | None = None,
+    tags_override: dict[str, str] | None = None,
+) -> RslearnToOlmoEarthDataset:
+    """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
+
+    Uses jsonargparse to build ModelDataset directly from model.yaml.
+    Requires model.yaml at entry.weka_path/model.yaml (set during ingestion).
+
+    Uses the split tags written during ingestion to filter windows by default.
+
+    Args:
+        entry: Registry entry containing dataset metadata.
+        split: Dataset split to load ("train", "val", "valid", "test").
+        norm_method: Normalization method when not using pretrain stats.
+        norm_stats_from_pretrained: Override for entry.use_pretrain_norm.
+        max_samples: Optional limit on number of samples.
+        input_modalities_override: Override modalities from entry. For multi-modal datasets,
+            allows using only a subset (e.g., just S1 or just S2).
+        groups_override: Override groups. If None, no group filtering is applied.
+        tags_override: Override tags. If None, uses entry.split_tag_key with the
+            appropriate split value (e.g., {"eval_split": "val"}).
+
+    Returns:
+        Configured RslearnToOlmoEarthDataset instance.
+
+    Raises:
+        ValueError: If entry has no weka_path.
+
+    Example:
+        from olmoearth_pretrain.evals.studio_ingest import get_dataset_entry
+
+        entry = get_dataset_entry("tolbi_crops")
+        dataset = from_registry_entry(entry, split="val")
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+
+    dataset_path = entry.weka_path if entry.weka_path else entry.source_path
+    if not dataset_path:
+        raise ValueError(f"Entry '{entry.name}' has no weka_path or source_path.")
+
+    if not entry.weka_path:
+        raise ValueError(
+            f"Registry entry '{entry.name}' has no weka_path. "
+            "model.yaml must be at weka_path/model.yaml. Run migrate_model_yaml or re-ingest."
+        )
+
+    model_yaml_path = f"{entry.weka_path}/model.yaml"
+
+    # Use override if provided, otherwise use modalities from entry
+    if input_modalities_override:
+        input_modalities = [m.lower() for m in input_modalities_override]
+    else:
+        input_modalities = [m.lower() for m in entry.modalities]
+
+    # Use override if provided, otherwise use entry's setting
+    use_pretrain_norm = (
+        norm_stats_from_pretrained
+        if norm_stats_from_pretrained is not None
+        else entry.use_pretrain_norm
+    )
+
+    # Normalize split name: "valid" -> "val"
+    normalized_split = "val" if split == "valid" else split
+
+    # Splits are always tag-based: ingest writes split_tag_key with train/val/test values
+    effective_tags = tags_override
+    if effective_tags is None and entry.split_tag_key:
+        effective_tags = {entry.split_tag_key: normalized_split}
+        if groups_override is None:
+            groups_override = []
+        log.info(f"Using tag-based splits: {entry.split_tag_key}={normalized_split}")
+
+    log.info(f"Loading model config from {model_yaml_path}")
+    model_config = parse_model_config(model_yaml_path)
+
+    if not model_config:
+        raise ValueError(
+            f"Failed to load model.yaml from {model_yaml_path}. "
+            "Check that the file exists and is valid YAML."
+        )
+
+    log.info(f"Building dataset for {entry.name} (path: {dataset_path})")
+    if not use_pretrain_norm and not entry.norm_stats:
+        raise ValueError(
+            f"Dataset '{entry.name}' has use_pretrain_norm=False but no norm_stats in registry."
+        )
+    return RslearnToOlmoEarthDataset.from_model_config(
+        model_config=model_config,
+        source_path=dataset_path,
+        split=normalized_split,
+        input_modalities=input_modalities,
+        norm_stats_from_pretrained=use_pretrain_norm,
+        norm_method=norm_method,
+        ds_norm_stats_json=None,
+        ds_norm_stats=entry.norm_stats if not use_pretrain_norm else None,
+        max_samples=max_samples,
+        groups_override=groups_override,
+        tags_override=effective_tags,
+    )
