@@ -66,16 +66,38 @@ def pool_spatially(
             masked_attr = getattr(tokens_and_masks, mask_attr_name)
             if masked_attr is None:
                 continue
-            if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
-                attr = getattr(tokens_and_masks, attr_name)
-                if pooling_type == PoolingType.MEAN:
-                    spatial_average.append(torch.mean(attr, dim=(-2, -3)))
-                else:
-                    spatial_average.append(
-                        torch.max(torch.max(attr, dim=-2).values, dim=-2).values
-                    )
+            online_mask = masked_attr == MaskValue.ONLINE_ENCODER.value
+            has_any_online = online_mask.any()
+            if not has_any_online:
+                continue
+            attr = getattr(tokens_and_masks, attr_name)
+            # Collapse mask trailing dims to a single bool per position,
+            # then pad with size-1 dims to broadcast against token tensor.
+            while online_mask.ndim > attr.ndim:
+                online_mask = online_mask.any(dim=-1)
+            token_mask = online_mask
+            while token_mask.ndim < attr.ndim:
+                token_mask = token_mask.unsqueeze(-1)
+            masked_tokens = attr * token_mask.float()
+            if pooling_type == PoolingType.MEAN:
+                count = token_mask.float().sum(dim=(-2, -3)).clamp(min=1)
+                spatial_average.append(
+                    masked_tokens.sum(dim=(-2, -3)) / count
+                )
+            else:
+                masked_tokens = masked_tokens.masked_fill(
+                    ~token_mask, float("-inf")
+                )
+                spatial_average.append(
+                    torch.max(
+                        torch.max(masked_tokens, dim=-2).values, dim=-2
+                    ).values
+                )
     if len(spatial_average) == 0:
-        raise ValueError("Missing unmasked spatial modalities for spatial pooling.")
+        raise ValueError(
+            "Missing unmasked spatial modalities for spatial pooling. "
+            f"Available modalities: {tokens_and_masks.modalities}."
+        )
     spatial_average_t = torch.stack(spatial_average, dim=-1)
     if pooling_type == PoolingType.MEAN:
         return spatial_average_t.mean(dim=-1)

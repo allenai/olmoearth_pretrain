@@ -15,7 +15,7 @@ import torch
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
 from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets import (
@@ -253,22 +253,24 @@ class DownstreamEvaluator:
             generator.manual_seed(split_seed)
             worker_init_fn = partial(_seed_worker, base_seed=split_seed)
 
+        eval_ds = get_eval_dataset(
+            eval_dataset=self.dataset,
+            split=split,
+            partition=self.partition,
+            norm_stats_from_pretrained=self.norm_stats_from_pretrained,
+            input_modalities=self.input_modalities,
+            input_layers=self.input_layers,
+            norm_method=self.norm_method,
+        )
+        is_iterable = isinstance(eval_ds, IterableDataset)
         return DataLoader(
-            get_eval_dataset(
-                eval_dataset=self.dataset,
-                split=split,
-                partition=self.partition,
-                norm_stats_from_pretrained=self.norm_stats_from_pretrained,
-                input_modalities=self.input_modalities,
-                input_layers=self.input_layers,
-                norm_method=self.norm_method,
-            ),
+            eval_ds,
             collate_fn=eval_collate_fn_variable_time,
             batch_size=batch_size,
             num_workers=self.num_workers,
-            generator=generator,
+            generator=None if is_iterable else generator,
             worker_init_fn=worker_init_fn,
-            shuffle=(split == "train"),  # Only shuffle train data
+            shuffle=False if is_iterable else (split == "train"),
         )
 
     def _get_embeddings(

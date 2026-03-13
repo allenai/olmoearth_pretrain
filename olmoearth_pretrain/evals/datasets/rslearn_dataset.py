@@ -16,7 +16,7 @@ from dateutil.relativedelta import relativedelta
 from einops import rearrange
 from rslearn.train.dataset import ModelDataset as RsModelDataset
 from rslearn.train.model_context import RasterImage
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, IterableDataset
 
 from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS, Modality
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
@@ -239,7 +239,7 @@ class RslearnToOlmoEarthDataset(Dataset):
 
         task_info = get_task_info(model_config)
 
-        return cls(
+        return wrap_rslearn_dataset(
             model_dataset=model_dataset,
             input_modalities=input_modalities,
             target_task_name=task_info["task_name"],
@@ -320,16 +320,12 @@ class RslearnToOlmoEarthDataset(Dataset):
             blob = json.load(f)
         return RslearnToOlmoEarthDataset._parse_norm_stats(blob)
 
-    def __len__(self) -> int:
-        """Length of the dataset."""
-        return len(self.dataset)
-
-    def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
-        """Return a MaskedOlmoEarthSample and target tensor."""
-        input_dict, target, _ = self.dataset[idx]
-
+    def _transform_sample(
+        self, input_dict: dict, target: dict
+    ) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
+        """Transform a raw rslearn sample into (MaskedOlmoEarthSample, label)."""
         sample_dict: dict[str, Any] = {}
-        sample_timesteps: int | None = None  # Will be set from actual data
+        sample_timesteps: int | None = None
 
         for modality in self.input_modalities:
             if modality not in input_dict:
@@ -345,11 +341,9 @@ class RslearnToOlmoEarthDataset(Dataset):
                 img = img.numpy()
             x = rearrange(img, "c t h w -> h w t c")
 
-            # Track actual timesteps from data (should be consistent across modalities)
             if sample_timesteps is None:
                 sample_timesteps = x.shape[2]
 
-            # Convert to dB for Sentinel-1
             if modality == Modality.SENTINEL1.name:
                 x = convert_to_db(x)
 
@@ -367,8 +361,6 @@ class RslearnToOlmoEarthDataset(Dataset):
                 )
             sample_dict[modality] = torch.as_tensor(x, dtype=torch.float32)
 
-        # TODO: WE should be reading this from the metadata.json of each window/is there a way to enable in rslearn
-        # Generate timestamps for this sample's actual number of timesteps
         sample_timesteps = sample_timesteps or self.max_timesteps
         timestamps = get_timestamps(
             self.start_time, self.end_time, num_timesteps=sample_timesteps
@@ -389,25 +381,17 @@ class RslearnToOlmoEarthDataset(Dataset):
                     raise ValueError(
                         f"Modality mask {mask_attr_name} not found for modality {modality}"
                     )
-                # hw is only dims 1 and 2
                 if masked_attr.shape[1:3] != sample_dict[modality].shape[1:3]:
                     raise ValueError(
                         f"Modality mask {mask_attr_name} and modality {modality} have different hw shapes: "
                         f"{masked_attr.shape[1:3]} != {sample_dict[modality].shape[1:3]}"
                     )
-        # For MultiTask: target[task_name] contains the sub-task's output
-        # For single Task: target contains the output directly
+
         if self.target_task_name:
-            # MultiTask - access sub-task by name
             data_dict = target.get(self.target_task_name, {})
         else:
-            # Single task - target dict is the data directly
             data_dict = target
 
-        # Parse target based on task type
-        # - SegmentationTask: {"classes": RasterImage, "valid": RasterImage}
-        # - ClassificationTask: {"class": tensor, "valid": tensor}
-        # - RegressionTask: {"value": tensor, "valid": tensor}
         if self.target_task_type == TaskType.SEGMENTATION:
             classes = torch.as_tensor(
                 data_dict["classes"].image, dtype=torch.long
@@ -416,7 +400,6 @@ class RslearnToOlmoEarthDataset(Dataset):
                 data_dict["valid"].image, dtype=torch.long
             ).squeeze()
         elif self.target_task_type == TaskType.CLASSIFICATION:
-            # already a tensor
             classes = data_dict["class"]
             valid = data_dict["valid"]
         else:
@@ -428,6 +411,33 @@ class RslearnToOlmoEarthDataset(Dataset):
             assert classes is not None, "valid mask present but no classes tensor"
             classes = classes.masked_fill(valid == 0, SEGMENTATION_IGNORE_LABEL)
         return masked_sample, classes
+
+    def __len__(self) -> int:
+        """Length of the dataset."""
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
+        """Return a MaskedOlmoEarthSample and target tensor."""
+        input_dict, target, _ = self.dataset[idx]
+        return self._transform_sample(input_dict, target)
+
+
+class IterableRslearnToOlmoEarthDataset(IterableDataset, RslearnToOlmoEarthDataset):
+    """Iterable variant so PyTorch DataLoader uses __iter__ instead of __getitem__."""
+
+    def __iter__(self):
+        for input_dict, target, _ in self.dataset:
+            yield self._transform_sample(input_dict, target)
+
+    def __len__(self):
+        raise TypeError(f"{type(self).__name__} has no len()")
+
+
+def wrap_rslearn_dataset(**kwargs) -> RslearnToOlmoEarthDataset:
+    """Wrap an rslearn dataset, picking map-style or iterable based on what rslearn returns."""
+    if isinstance(kwargs.get("model_dataset"), IterableDataset):
+        return IterableRslearnToOlmoEarthDataset(**kwargs)
+    return RslearnToOlmoEarthDataset(**kwargs)
 
 
 def from_registry_entry(

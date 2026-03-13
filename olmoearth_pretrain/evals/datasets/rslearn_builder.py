@@ -167,11 +167,13 @@ def build_model_dataset(
     max_samples: int | None = None,
     groups_override: list[str] | None = None,
     tags_override: dict[str, str] | None = None,
-) -> ModelDataset:
-    """Build an rslearn ModelDataset for eval.
+):
+    """Build an rslearn dataset for eval.
 
     Uses RslearnDataModule's setup() to construct the dataset, which keeps
     us in sync with rslearn's config merging and ModelDataset construction.
+
+    Returns whatever dataset type rslearn produces (map-style or iterable).
     """
     stage_map = {"train": "fit", "val": "validate", "test": "test"}
     stage = stage_map.get(split, "validate")
@@ -194,7 +196,13 @@ def build_model_dataset(
             f"Split '{split}' not found after setup('{stage}'). Available: {available}"
         )
 
-    logger.info("Built ModelDataset for split '%s': %d samples", split, len(dataset))
+    if hasattr(dataset, "__len__"):
+        logger.info("Built dataset for split '%s': %d samples", split, len(dataset))
+    else:
+        logger.info(
+            "Built dataset for split '%s' (iterable: %s)",
+            split, type(dataset).__name__,
+        )
     return dataset
 
 

@@ -33,7 +33,6 @@ def get_embeddings(
     labels_list: list[torch.Tensor] = []
     model.eval()
     device = model.device
-    total_samples = len(data_loader)
     with torch.no_grad():
         for i, (masked_olmoearth_sample, label) in enumerate(data_loader):
             masked_olmoearth_sample_dict = masked_olmoearth_sample.as_dict()
@@ -57,7 +56,7 @@ def get_embeddings(
 
             embeddings_list.append(batch_embeddings.cpu())
             labels_list.append(label)
-            logger.info(f"Processed {i} / {total_samples}")
+            logger.info("Processed batch %d", i)
 
     embeddings = torch.cat(embeddings_list, dim=0)  # (N, dim)
     labels = torch.cat(labels_list, dim=0)  # (N)
