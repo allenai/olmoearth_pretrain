@@ -76,7 +76,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         drop_path=0.1,
         max_sequence_length=12,
         use_flash_attn=True,
-        use_linear_patch_embed=True,
+        use_linear_patch_embed=False,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
