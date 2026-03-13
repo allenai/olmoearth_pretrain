@@ -67,12 +67,19 @@ class SpectralAttention(nn.Module):
         num_heads: Number of attention heads. Default: 2.
     """
 
-    def __init__(self, num_bands: int, d_model: int = 64, num_heads: int = 2) -> None:
+    def __init__(
+        self,
+        num_bands: int,
+        d_model: int = 64,
+        num_heads: int = 2,
+        chunk_size: int = 65536,
+    ) -> None:
         """Initialize SpectralAttention."""
         super().__init__()
         self.num_bands = num_bands
         self.d_model = d_model
         self.num_heads = num_heads
+        self.chunk_size = chunk_size
         assert d_model % num_heads == 0
 
         self.band_embed = nn.Linear(1, d_model)
@@ -87,6 +94,22 @@ class SpectralAttention(nn.Module):
         nn.init.zeros_(self.out_proj.weight)
         nn.init.zeros_(self.out_proj.bias)
 
+    def _attend_chunk(self, x_chunk: torch.Tensor) -> torch.Tensor:
+        """Run attention on a chunk of pixels. x_chunk: [M, num_bands]."""
+        tokens = self.band_embed(x_chunk.unsqueeze(-1)) + self.band_pos  # [M, B, d]
+        M, B, d = tokens.shape
+        head_dim = d // self.num_heads
+
+        Q = self.W_q(tokens).view(M, B, self.num_heads, head_dim).transpose(1, 2)
+        K = self.W_k(tokens).view(M, B, self.num_heads, head_dim).transpose(1, 2)
+        V = self.W_v(tokens).view(M, B, self.num_heads, head_dim).transpose(1, 2)
+
+        attn = (Q @ K.transpose(-2, -1)) * (1.0 / math.sqrt(head_dim))
+        attn = torch.softmax(attn, dim=-1)
+        out = (attn @ V).transpose(1, 2).reshape(M, B, d)
+
+        return self.out_proj(out).squeeze(-1)  # [M, B]
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply content-dependent cross-band mixing.
 
@@ -98,23 +121,17 @@ class SpectralAttention(nn.Module):
         """
         shape = x.shape
         x_flat = x.reshape(-1, self.num_bands)  # [N, B]
+        N = x_flat.shape[0]
 
-        # Each band scalar → d_model embedding + learnable band identity
-        tokens = self.band_embed(x_flat.unsqueeze(-1)) + self.band_pos  # [N, B, d]
+        if N <= self.chunk_size:
+            delta = self._attend_chunk(x_flat)
+        else:
+            delta = torch.cat(
+                [
+                    self._attend_chunk(x_flat[i : i + self.chunk_size])
+                    for i in range(0, N, self.chunk_size)
+                ],
+                dim=0,
+            )
 
-        # Multi-head self-attention across bands
-        N, B, d = tokens.shape
-        head_dim = d // self.num_heads
-
-        Q = (
-            self.W_q(tokens).view(N, B, self.num_heads, head_dim).transpose(1, 2)
-        )  # [N, nh, B, hd]
-        K = self.W_k(tokens).view(N, B, self.num_heads, head_dim).transpose(1, 2)
-        V = self.W_v(tokens).view(N, B, self.num_heads, head_dim).transpose(1, 2)
-
-        attn = (Q @ K.transpose(-2, -1)) * (1.0 / math.sqrt(head_dim))  # [N, nh, B, B]
-        attn = torch.softmax(attn, dim=-1)
-        out = (attn @ V).transpose(1, 2).reshape(N, B, d)  # [N, B, d]
-
-        delta = self.out_proj(out).squeeze(-1)  # [N, B]
         return (x_flat + delta).reshape(shape)
