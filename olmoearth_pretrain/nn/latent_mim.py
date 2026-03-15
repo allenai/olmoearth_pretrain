@@ -32,6 +32,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         encoder: nn.Module,
         decoder: nn.Module,
         reconstructor: torch.nn.Module | None = None,
+        target_projection_init: str = "default",
     ):
         """Initialize the Latent MIM Style.
 
@@ -39,17 +40,46 @@ class LatentMIM(nn.Module, DistributedMixins):
             encoder: The encoder to use.
             decoder: The decoder to use.
             reconstructor: Optional reconstructor for auto-encoding.
+            target_projection_init: How to initialize the target encoder's patch
+                embeddings. "default" keeps encoder init; "orthogonal" uses
+                orthogonal matrices for better conditioning under band dropout.
         """
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.reconstructor = reconstructor
         self.target_encoder = deepcopy(self.encoder)
-        for p in self.target_encoder.parameters():
-            p.requires_grad = False
-        # Disable band dropout on target encoder so it always sees full spectral info.
         if hasattr(self.target_encoder, "disable_band_dropout"):
             self.target_encoder.disable_band_dropout()
+        if target_projection_init != "default":
+            self._reinit_target_projections(target_projection_init)
+        for p in self.target_encoder.parameters():
+            p.requires_grad = False
+
+    def _reinit_target_projections(self, init_type: str) -> None:
+        """Reinitialize target encoder patch embeddings for better-conditioned projections."""
+        from olmoearth_pretrain.nn.flexi_patch_embed import FlexiPatchEmbed
+
+        count = 0
+        for module in self.target_encoder.modules():
+            if not isinstance(module, FlexiPatchEmbed):
+                continue
+            proj = module.proj
+            if not isinstance(proj, nn.Linear):
+                logger.warning(
+                    f"Skipping non-Linear patch embed proj ({type(proj).__name__})"
+                )
+                continue
+            if init_type == "orthogonal":
+                nn.init.orthogonal_(proj.weight)
+                if proj.bias is not None:
+                    nn.init.zeros_(proj.bias)
+            else:
+                raise ValueError(f"Unknown target_projection_init: {init_type!r}")
+            count += 1
+        logger.info(
+            f"Reinitialized {count} target encoder patch embeddings with {init_type!r}"
+        )
 
     def forward(
         self, x: MaskedOlmoEarthSample, patch_size: int
@@ -131,6 +161,7 @@ class LatentMIMConfig(Config):
     encoder_config: Config
     decoder_config: Config
     reconstructor_config: Config | None = None
+    target_projection_init: str = "default"
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -166,4 +197,5 @@ class LatentMIMConfig(Config):
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
+            target_projection_init=self.target_projection_init,
         )

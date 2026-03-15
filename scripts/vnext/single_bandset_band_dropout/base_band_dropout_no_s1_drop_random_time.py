@@ -343,6 +343,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
+        target_projection_init="orthogonal",
     )
     return model_config
 
