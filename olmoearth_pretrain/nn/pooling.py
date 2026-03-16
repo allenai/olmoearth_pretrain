@@ -81,17 +81,11 @@ def pool_spatially(
             masked_tokens = attr * token_mask.float()
             if pooling_type == PoolingType.MEAN:
                 count = token_mask.float().sum(dim=(-2, -3)).clamp(min=1)
-                spatial_average.append(
-                    masked_tokens.sum(dim=(-2, -3)) / count
-                )
+                spatial_average.append(masked_tokens.sum(dim=(-2, -3)) / count)
             else:
-                masked_tokens = masked_tokens.masked_fill(
-                    ~token_mask, float("-inf")
-                )
+                masked_tokens = masked_tokens.masked_fill(~token_mask, float("-inf"))
                 spatial_average.append(
-                    torch.max(
-                        torch.max(masked_tokens, dim=-2).values, dim=-2
-                    ).values
+                    torch.max(torch.max(masked_tokens, dim=-2).values, dim=-2).values
                 )
     if len(spatial_average) == 0:
         raise ValueError(
