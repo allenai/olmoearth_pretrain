@@ -167,7 +167,7 @@ def build_model_dataset(
     max_samples: int | None = None,
     groups_override: list[str] | None = None,
     tags_override: dict[str, str] | None = None,
-):
+) -> Any:
     """Build an rslearn dataset for eval.
 
     Uses RslearnDataModule's setup() to construct the dataset, which keeps
@@ -201,7 +201,8 @@ def build_model_dataset(
     else:
         logger.info(
             "Built dataset for split '%s' (iterable: %s)",
-            split, type(dataset).__name__,
+            split,
+            type(dataset).__name__,
         )
     return dataset
 

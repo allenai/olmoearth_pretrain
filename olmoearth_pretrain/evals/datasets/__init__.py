@@ -36,7 +36,6 @@ def get_eval_dataset(
     split: str,
     norm_stats_from_pretrained: bool = False,
     input_modalities: list[str] = [],
-    input_layers: list[str] = [],
     partition: str = EvalDatasetPartition.TRAIN1X,
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.

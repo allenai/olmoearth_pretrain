@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from datetime import datetime
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
@@ -178,7 +179,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         split: str = "val",
         input_modalities: list[str] | None = None,
         norm_stats_from_pretrained: bool = True,
-        norm_method: str = "norm_no_clip",
+        norm_method: str = NormMethod.NORM_NO_CLIP_2_STD,
         ds_norm_stats_json: str | None = None,
         ds_norm_stats: dict[str, Any] | None = None,
         start_time: str = "2022-09-01",
@@ -425,15 +426,13 @@ class RslearnToOlmoEarthDataset(Dataset):
 class IterableRslearnToOlmoEarthDataset(IterableDataset, RslearnToOlmoEarthDataset):
     """Iterable variant so PyTorch DataLoader uses __iter__ instead of __getitem__."""
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[tuple[MaskedOlmoEarthSample, torch.Tensor]]:
+        """Iterate over the dataset."""
         for input_dict, target, _ in self.dataset:
             yield self._transform_sample(input_dict, target)
 
-    def __len__(self):
-        raise TypeError(f"{type(self).__name__} has no len()")
 
-
-def wrap_rslearn_dataset(**kwargs) -> RslearnToOlmoEarthDataset:
+def wrap_rslearn_dataset(**kwargs: Any) -> RslearnToOlmoEarthDataset:
     """Wrap an rslearn dataset, picking map-style or iterable based on what rslearn returns."""
     if isinstance(kwargs.get("model_dataset"), IterableDataset):
         return IterableRslearnToOlmoEarthDataset(**kwargs)
@@ -443,7 +442,7 @@ def wrap_rslearn_dataset(**kwargs) -> RslearnToOlmoEarthDataset:
 def from_registry_entry(
     entry: EvalDatasetEntry,
     split: str = "train",
-    norm_method: str = "norm_no_clip",
+    norm_method: str = NormMethod.NORM_NO_CLIP_2_STD,
     norm_stats_from_pretrained: bool | None = None,
     max_samples: int | None = None,
     input_modalities_override: list[str] | None = None,
