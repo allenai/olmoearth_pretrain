@@ -32,6 +32,11 @@ class Loss(ABC):
         """Compute the loss between predictions and targets."""
         pass
 
+    @property
+    def per_modality_losses(self) -> dict[str, float]:
+        """Per-modality loss breakdown from the last compute() call. Empty by default."""
+        return getattr(self, "_per_modality_losses", {})
+
     @staticmethod
     def _expand_and_reciprocate(t: Tensor) -> Tensor:
         """As described in the name.
@@ -419,6 +424,7 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
 
         total_loss = 0
+        self._per_modality_losses = {}
         for all_preds, all_masks, all_targets, modality in zip(
             modality_preds, modality_masks, modality_targets, targets.modalities
         ):
@@ -502,6 +508,7 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
                 continue
 
             loss = torch.stack(losses).mean()
+            self._per_modality_losses[modality] = loss.detach().item()
             if self.modality_weights is not None:
                 loss = loss * self.modality_weights.get(modality, 1.0)
 

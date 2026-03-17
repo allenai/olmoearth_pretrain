@@ -209,6 +209,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_con = torch.zeros([], device=self.device)
+        per_modality_loss_accum: dict[str, float] = {}
 
         # Unpack batch
         patch_size = batch[0]
@@ -233,9 +234,20 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
                     self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
                 )
+                per_mod_a = self.base_loss.per_modality_losses
                 loss_b, latent_b, decoded_b, target_output_b, pooled_b = (
                     self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
                 )
+                per_mod_b = self.base_loss.per_modality_losses
+                for modality in set(per_mod_a) | set(per_mod_b):
+                    val = (
+                        per_mod_a.get(modality, 0.0) + per_mod_b.get(modality, 0.0)
+                    ) / 2
+                    per_modality_loss_accum[modality] = (
+                        per_modality_loss_accum.get(modality, 0.0)
+                        + val / num_microbatches
+                    )
+
                 loss = (loss_a + loss_b) / 2
 
                 # Scale loss by number of microbatches
@@ -281,6 +293,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             total_batch_loss,
             ReduceType.mean,
         )
+        for modality, mod_loss in per_modality_loss_accum.items():
+            self.trainer.record_metric(
+                f"train/loss_per_modality/{modality}",
+                mod_loss,
+                ReduceType.mean,
+            )
         if self.contrastive_loss is not None:
             self.trainer.record_metric(
                 f"train/{self.contrastive_loss.name}",
