@@ -1,24 +1,34 @@
-"""Garbage collector callback with full gen2 collection support."""
+"""Garbage collector callback with malloc_trim support."""
 
+import ctypes
 import gc
 import logging
+import platform
 from dataclasses import dataclass
-from typing import Optional
 
 from olmo_core.train.callbacks.garbage_collector import GarbageCollectorCallback
 
 log = logging.getLogger(__name__)
 
+_libc = None
+if platform.system() == "Linux":
+    try:
+        _libc = ctypes.CDLL("libc.so.6")
+    except OSError:
+        pass
+
 
 @dataclass
 class FullGCCallback(GarbageCollectorCallback):
-    """Extends GarbageCollectorCallback to periodically run full gen2 collections.
+    """Extends GarbageCollectorCallback with full gen2 collection and malloc_trim.
 
-    The upstream callback only runs gc.collect(1), which never frees gen2 objects.
-    This subclass adds a full gc.collect() every ``full_gc_interval`` steps.
+    glibc's malloc keeps freed memory in internal free lists instead of returning
+    it to the OS, causing RSS to grow over time. Calling malloc_trim(0) forces
+    glibc to release freed pages back to the OS.
     """
 
     full_gc_interval: int = 50
+    malloc_trim_interval: int = 50
 
     def post_step(self):
         if not self.enabled:
@@ -27,3 +37,5 @@ class FullGCCallback(GarbageCollectorCallback):
             gc.collect(1)
         if self.step % self.full_gc_interval == 0:
             gc.collect()
+        if self.step % self.malloc_trim_interval == 0 and _libc is not None:
+            _libc.malloc_trim(0)
