@@ -1,7 +1,9 @@
 """Attention Components for OlmoEarth Pretrain."""
 
+from __future__ import annotations
+
 from logging import getLogger
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
@@ -9,6 +11,9 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
+
+if TYPE_CHECKING:
+    from olmoearth_pretrain.nn.noble import NobleConfig
 
 try:
     import flash_attn
@@ -95,6 +100,7 @@ class Attention(nn.Module):
         proj_drop: Output projection dropout rate. Defaults to 0.0.
         norm_layer: Normalization layer. Defaults to nn.LayerNorm.
         cross_attn: Enable cross-attention. Defaults to False.
+        noble_config: Optional NOBLE config for nonlinear low-rank branches.
     """
 
     fast_attn: Final[bool]
@@ -110,6 +116,7 @@ class Attention(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
+        noble_config: NobleConfig | None = None,
     ) -> None:
         """Initialize the attention module.
 
@@ -123,6 +130,7 @@ class Attention(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Enable cross-attention
             use_flash_attn: Use flash attention
+            noble_config: Optional NOBLE config for nonlinear low-rank branches
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -133,14 +141,19 @@ class Attention(nn.Module):
         self.cross_attn = cross_attn
         self.use_flash_attn = use_flash_attn
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
-        self.q = nn.Linear(dim, dim, bias=qkv_bias)
-        self.k = nn.Linear(dim, dim, bias=qkv_bias)
-        self.v = nn.Linear(dim, dim, bias=qkv_bias)
+
+        from olmoearth_pretrain.nn.noble import get_noble_config
+
+        noble_config = get_noble_config(noble_config)
+
+        self.q = noble_config.make_linear(dim, dim, bias=qkv_bias, layer_type="qkv")
+        self.k = noble_config.make_linear(dim, dim, bias=qkv_bias, layer_type="qkv")
+        self.v = noble_config.make_linear(dim, dim, bias=qkv_bias, layer_type="qkv")
 
         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
+        self.proj = noble_config.make_linear(dim, dim, bias=True, layer_type="proj")
         self.proj_drop = nn.Dropout(proj_drop)
 
     def sdpa(
@@ -299,6 +312,7 @@ class Mlp(nn.Module):
         act_layer: Activation layer. Defaults to nn.GELU.
         bias: Enable bias in linear layers. Defaults to True.
         drop: Dropout rate. Defaults to 0.0.
+        noble_config: Optional NOBLE config for nonlinear low-rank branches.
     """
 
     def __init__(
@@ -309,6 +323,7 @@ class Mlp(nn.Module):
         act_layer: nn.Module = nn.GELU,
         bias: bool = True,
         drop: float = 0.0,
+        noble_config: NobleConfig | None = None,
     ) -> None:
         """Initialize the MLP module.
 
@@ -319,15 +334,24 @@ class Mlp(nn.Module):
             act_layer: Activation layer. Defaults to nn.GELU.
             bias: Enable bias in linear layers. Defaults to True.
             drop: Dropout rate. Defaults to 0.0.
+            noble_config: Optional NOBLE config for nonlinear low-rank branches
         """
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
 
-        self.fc1 = nn.Linear(in_features, hidden_features, bias=bias)
+        from olmoearth_pretrain.nn.noble import get_noble_config
+
+        noble_config = get_noble_config(noble_config)
+
+        self.fc1 = noble_config.make_linear(
+            in_features, hidden_features, bias=bias, layer_type="mlp"
+        )
         self.act = act_layer()
         self.drop1 = nn.Dropout(drop)
-        self.fc2 = nn.Linear(hidden_features, out_features, bias=bias)
+        self.fc2 = noble_config.make_linear(
+            hidden_features, out_features, bias=bias, layer_type="mlp"
+        )
         self.drop2 = nn.Dropout(drop)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -439,6 +463,7 @@ class Block(nn.Module):
         act_layer: Activation layer. Default: nn.GELU
         norm_layer: Normalization layer. Default: nn.LayerNorm
         cross_attn: Whether to use cross attention. Default: False
+        noble_config: Optional NOBLE config for nonlinear low-rank branches.
     """
 
     def __init__(
@@ -456,6 +481,7 @@ class Block(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
+        noble_config: NobleConfig | None = None,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -473,6 +499,7 @@ class Block(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Whether to use cross attention
             use_flash_attn: Whether to use flash attention
+            noble_config: Optional NOBLE config for nonlinear low-rank branches
         """
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -486,6 +513,7 @@ class Block(nn.Module):
             norm_layer=norm_layer,
             cross_attn=cross_attn,
             use_flash_attn=use_flash_attn,
+            noble_config=noble_config,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -498,6 +526,7 @@ class Block(nn.Module):
             hidden_features=int(dim * mlp_ratio),
             act_layer=act_layer,
             drop=drop,
+            noble_config=noble_config,
         )
         self.ls2 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
