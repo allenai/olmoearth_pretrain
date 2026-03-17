@@ -177,6 +177,17 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 )
             self.model.target_encoder.apply(self.model.target_encoder._init_weights)
 
+        self._per_modality_metric_keys = self._build_per_modality_metric_keys()
+
+    def _build_per_modality_metric_keys(self) -> dict[str, float]:
+        """Build fixed set of per-modality loss metric keys.
+
+        olmo-core's batched metric reduction requires the same keys every step,
+        so we pre-register all supported modalities with 0.0 defaults.
+        """
+        modalities = getattr(self.model.encoder, "supported_modality_names", [])
+        return {f"loss_per_modality/{m}": 0.0 for m in modalities}
+
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets)
@@ -209,7 +220,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_con = torch.zeros([], device=self.device)
-        per_modality_loss_accum: dict[str, float] = {}
+        per_modality_loss_accum: dict[str, float] = dict(self._per_modality_metric_keys)
 
         # Unpack batch
         patch_size = batch[0]
@@ -239,14 +250,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
                 )
                 per_mod_b = self.base_loss.per_modality_losses
-                for modality in set(per_mod_a) | set(per_mod_b):
-                    val = (
+                mb_scale = 0.5 / num_microbatches
+                for key in per_modality_loss_accum:
+                    modality = key.split("/")[-1]
+                    per_modality_loss_accum[key] += (
                         per_mod_a.get(modality, 0.0) + per_mod_b.get(modality, 0.0)
-                    ) / 2
-                    per_modality_loss_accum[modality] = (
-                        per_modality_loss_accum.get(modality, 0.0)
-                        + val / num_microbatches
-                    )
+                    ) * mb_scale
 
                 loss = (loss_a + loss_b) / 2
 
@@ -293,10 +302,10 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             total_batch_loss,
             ReduceType.mean,
         )
-        for modality, mod_loss in per_modality_loss_accum.items():
+        for key, value in per_modality_loss_accum.items():
             self.trainer.record_metric(
-                f"train/loss_per_modality/{modality}",
-                mod_loss,
+                f"train/{key}",
+                value,
                 ReduceType.mean,
             )
         if self.contrastive_loss is not None:
