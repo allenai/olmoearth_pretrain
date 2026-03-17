@@ -293,6 +293,8 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         use_dice_loss=True,
+        primary_metric=EvalMetric.CLASS_F1,
+        primary_metric_class=1,
     ),
     "yemen_crop": DownstreamTaskConfig(
         dataset="yemen_crop",
