@@ -582,6 +582,73 @@ def _get_env_prefix(args: argparse.Namespace, module_path: str) -> str:
     return prefix
 
 
+def _parse_csv_str(value: str) -> list[str]:
+    """Parse a comma-separated string into a non-empty list of strings."""
+    parsed = [item.strip() for item in value.split(",") if item.strip()]
+    if not parsed:
+        raise argparse.ArgumentTypeError("Expected at least one comma-separated value")
+    return parsed
+
+
+def _parse_csv_int(value: str) -> list[int]:
+    """Parse a comma-separated string into a non-empty list of integers."""
+    try:
+        parsed = [int(item.strip()) for item in value.split(",") if item.strip()]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "Expected a comma-separated list of integers"
+        ) from exc
+    if not parsed:
+        raise argparse.ArgumentTypeError("Expected at least one layer depth")
+    if any(depth < 0 for depth in parsed):
+        raise argparse.ArgumentTypeError("Layer depths must be non-negative")
+    return parsed
+
+
+def _append_layer_suffix(run_name: str, layer_depth: int | None) -> str:
+    """Append the layer suffix when doing a layer sweep."""
+    if layer_depth is None:
+        return run_name
+    return f"{run_name}_layer{layer_depth}"
+
+
+def _resolve_tasks_to_run(args: argparse.Namespace) -> list[str] | None:
+    """Resolve the downstream task filter from explicit names and skip names."""
+    tasks_to_run = list(args.task_names) if getattr(args, "task_names", None) else None
+
+    if tasks_to_run is None and args.task_skip_names:
+        skip_names = [name.strip() for name in args.task_skip_names.split(",")]
+        tasks_to_run = [task for task in EVAL_TASKS.keys() if task not in skip_names]
+    elif tasks_to_run is not None and args.task_skip_names:
+        skip_names = [name.strip() for name in args.task_skip_names.split(",")]
+        tasks_to_run = [task for task in tasks_to_run if task not in skip_names]
+
+    return tasks_to_run
+
+
+def _get_task_filter_args(args: argparse.Namespace) -> list[str]:
+    """Build a tasks_to_run override when a task filter is provided."""
+    tasks_to_run = _resolve_tasks_to_run(args)
+    if tasks_to_run is None:
+        return []
+    return [
+        f"--trainer.callbacks.downstream_evaluator.tasks_to_run='{json.dumps(tasks_to_run)}'"
+    ]
+
+
+def _get_feature_exit_depth_args(args: argparse.Namespace) -> list[str]:
+    """Build per-task feature exit depth overrides for layer sweeps."""
+    layer_depth = getattr(args, "layer_depth", None)
+    if layer_depth is None:
+        return []
+
+    tasks_to_override = _resolve_tasks_to_run(args) or list(EVAL_TASKS.keys())
+    return [
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.feature_exit_depth={layer_depth}"
+        for task_name in tasks_to_override
+    ]
+
+
 def _build_default_command(
     args: argparse.Namespace,
     base_run_name: str,
@@ -598,6 +665,9 @@ def _build_default_command(
     pooling_type = pooling_types[0]
     logger.info(
         f"Running defaults: {norm_mode} normalization, lr={lr}, pooling={pooling_type}"
+    )
+    base_run_name = _append_layer_suffix(
+        base_run_name, getattr(args, "layer_depth", None)
     )
     run_name = f"{base_run_name}_df{_get_label_percentage_run_suffix(args)}"
     cmd_args = ""
@@ -660,6 +730,9 @@ def _build_hyperparameter_command(
     # map default to df
     norm_mode_str = _get_norm_mode_str(norm_mode)
     pooling_type_str = _get_pooling_type_str(pooling_type)
+    base_run_name = _append_layer_suffix(
+        base_run_name, getattr(args, "layer_depth", None)
+    )
     run_name = (
         f"{base_run_name}_{norm_mode_str}_lr{lr}_pt{pooling_type_str}"
         f"{_get_label_percentage_run_suffix(args)}"
@@ -791,6 +864,9 @@ def _build_command_from_eval_settings(
         else _get_norm_mode_str(list(norm_modes_used)[0])
     )
 
+    base_run_name = _append_layer_suffix(
+        base_run_name, getattr(args, "layer_depth", None)
+    )
     run_name = (
         f"{base_run_name}_{norm_str}_{lr_str}_pt{pooling_str}"
         f"{_get_label_percentage_run_suffix(args)}"
@@ -873,6 +949,9 @@ def _build_checkpoint_sweep_command(
     base_run_name = os.path.basename(checkpoint_dir) + "_sweep"
     if args.model_name:
         base_run_name = args.model_name
+    base_run_name = _append_layer_suffix(
+        base_run_name, getattr(args, "layer_depth", None)
+    )
     base_run_name += _get_label_percentage_run_suffix(args)
 
     module_path = (
@@ -905,8 +984,10 @@ def _build_checkpoint_sweep_command(
     )
 
 
-def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
-    """Build the commands for the sweep."""
+def _build_commands_for_args(
+    args: argparse.Namespace, extra_cli: list[str]
+) -> list[str]:
+    """Build commands for one model / size / optional layer / label-percentage configuration."""
     label_percentages = parse_label_percentages(
         getattr(args, "label_percentages", None)
     )
@@ -916,7 +997,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             label_args = copy.copy(args)
             label_args.label_percentages = None
             label_args.label_percentage = label_percentage
-            commands.extend(build_commands(label_args, extra_cli))
+            commands.extend(_build_commands_for_args(label_args, extra_cli))
         return commands
 
     project_name = args.project_name or EVAL_WANDB_PROJECT
@@ -1071,17 +1152,30 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
 
     commands_to_run = [f"{cmd} {MAX_DURATION_OVERRIDE}" for cmd in commands_to_run]
 
-    # Filter out skipped tasks if task-skip-names is provided
-    if args.task_skip_names:
-        skip_names = [name.strip() for name in args.task_skip_names.split(",")]
-        tasks_to_run = [task for task in EVAL_TASKS.keys() if task not in skip_names]
-        tasks_to_run_arg = f" --trainer.callbacks.downstream_evaluator.tasks_to_run='{json.dumps(tasks_to_run)}'"
+    task_filter_args = _get_task_filter_args(args)
+    if task_filter_args:
+        tasks_to_run_arg = " " + " ".join(task_filter_args)
         commands_to_run_new = []
         for cmd in commands_to_run:
             logger.info(f"Adding tasks_to_run filter to {cmd}")
             cmd += tasks_to_run_arg
             commands_to_run_new.append(cmd)
         commands_to_run = commands_to_run_new
+
+    return commands_to_run
+
+
+def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
+    """Build the commands for the sweep."""
+    layer_depths = getattr(args, "layer_depths", None) or [None]
+    commands_to_run: list[str] = []
+
+    for layer_depth in layer_depths:
+        layer_args = copy.deepcopy(args)
+        layer_args.layer_depth = layer_depth
+        layer_extra_cli = list(extra_cli)
+        layer_extra_cli.extend(_get_feature_exit_depth_args(layer_args))
+        commands_to_run.extend(_build_commands_for_args(layer_args, layer_extra_cli))
 
     return commands_to_run
 
@@ -1217,6 +1311,18 @@ def main() -> None:
         default=None,
         help="Comma-separated train-label fractions to evaluate "
         "(supported: 0.01,0.02,0.05,0.10,0.20,0.50,1.0).",
+    )
+    parser.add_argument(
+        "--task_names",
+        type=_parse_csv_str,
+        default=None,
+        help="Comma-separated downstream task names to run",
+    )
+    parser.add_argument(
+        "--layer_depths",
+        type=_parse_csv_int,
+        default=None,
+        help="Comma-separated encoder exit depths to evaluate",
     )
 
     args, extra_cli = parser.parse_known_args()
