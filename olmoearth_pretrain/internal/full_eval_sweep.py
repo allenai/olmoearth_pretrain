@@ -20,7 +20,11 @@ from olmoearth_pretrain.evals.models import (
     get_launch_script_path,
 )
 from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
-from olmoearth_pretrain.internal.constants import EVAL_LAUNCH_PATH, EVAL_WANDB_PROJECT
+from olmoearth_pretrain.internal.constants import (
+    CHECKPOINT_SWEEP_LAUNCH_PATH,
+    EVAL_LAUNCH_PATH,
+    EVAL_WANDB_PROJECT,
+)
 from olmoearth_pretrain.internal.experiment import SubCmd
 from olmoearth_pretrain.nn.pooling import PoolingType
 
@@ -546,7 +550,9 @@ def _append_layer_suffix(run_name: str, layer_depth: int | None) -> str:
 
 def _resolve_tasks_to_run(args: argparse.Namespace) -> list[str] | None:
     """Resolve the downstream task filter from explicit names and skip names."""
-    tasks_to_run = list(args.task_names) if getattr(args, "task_names", None) else None
+    tasks_to_run = (
+        list(args.task_names) if getattr(args, "task_names", None) is not None else None
+    )
 
     if tasks_to_run is None and args.task_skip_names:
         skip_names = [name.strip() for name in args.task_skip_names.split(",")]
@@ -554,6 +560,16 @@ def _resolve_tasks_to_run(args: argparse.Namespace) -> list[str] | None:
     elif tasks_to_run is not None and args.task_skip_names:
         skip_names = [name.strip() for name in args.task_skip_names.split(",")]
         tasks_to_run = [task for task in tasks_to_run if task not in skip_names]
+
+    if tasks_to_run is None:
+        return None
+
+    unknown_tasks = sorted(set(tasks_to_run) - set(EVAL_TASKS.keys()))
+    if unknown_tasks:
+        raise ValueError(f"Unknown task_names: {unknown_tasks}")
+
+    if not tasks_to_run:
+        raise ValueError("No tasks selected after applying task filters.")
 
     return tasks_to_run
 
@@ -857,6 +873,59 @@ def _get_module_path(model: BaselineModelName | None) -> str:
     return get_launch_script_path(model)
 
 
+def _build_checkpoint_sweep_command(
+    args: argparse.Namespace,
+    sub_command: str,
+    launch_command: str,
+    project_name: str,
+    extra: str,
+) -> str:
+    """Build a single command that evaluates all checkpoints in a directory."""
+    checkpoint_dir = args.checkpoint_dir.rstrip("/")
+    base_run_name = os.path.basename(checkpoint_dir) + "_sweep"
+    if args.model_name:
+        base_run_name = args.model_name
+    base_run_name = _append_layer_suffix(
+        base_run_name, getattr(args, "layer_depth", None)
+    )
+
+    module_path = (
+        args.module_path
+        if args.module_path is not None
+        else _get_module_path(args.model)
+    )
+
+    cmd_args = _get_model_specific_args(args.model)
+    cmd_args += _get_normalization_args(args.model, Normalization_MODES[0])
+    cmd_args += _get_load_checkpoints_args(args.model)
+    if args.size:
+        cmd_args += _get_model_size_args(args.model, args.size)
+
+    if getattr(args, "quantize_embeddings", False):
+        cmd_args += quantize_args
+        base_run_name += "_qt"
+
+    embedding_dim = getattr(args, "embedding_dim", None)
+    if embedding_dim is not None:
+        cmd_args += get_embedding_dim_args(embedding_dim)
+        base_run_name += f"_dim{embedding_dim}"
+
+    if "init_seed" in extra:
+        base_run_name += f"_seed{extra.split('init_seed=')[1].split(' ')[0]}"
+
+    env_prefix = f"TRAIN_SCRIPT_PATH={module_path} CHECKPOINT_DIR={checkpoint_dir}"
+    if args.steps:
+        env_prefix += f" CHECKPOINT_STEPS={args.steps}"
+
+    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
+    return (
+        f"{env_prefix} "
+        f"{launch_command} {CHECKPOINT_SWEEP_LAUNCH_PATH} "
+        f"{sub_command} {base_run_name} {args.cluster} {launch_overrides} "
+        f"--trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
+    )
+
+
 def _build_commands_for_args(
     args: argparse.Namespace, extra_cli: list[str]
 ) -> list[str]:
@@ -866,35 +935,24 @@ def _build_commands_for_args(
 
     sub_command = _get_sub_command(args)
     launch_command = "python3" if not sub_command == SubCmd.evaluate else "torchrun"
-    checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
-
     commands_to_run = []
 
-    if args.defaults_only:
-        if args.model == "all":
-            raise ValueError("Cannot run defaults with all models")
-        # Just run with the first/default values
-        base_run_name = _get_base_run_name(args, args.size)
-        cmd = _build_default_command(
-            args,
-            base_run_name,
-            sub_command,
-            launch_command,
-            checkpoint_args,
-            project_name,
-            extra,
-            args.size,
+    # Checkpoint sweep mode: evaluate all checkpoints in a directory
+    if args.checkpoint_dir:
+        cmd = _build_checkpoint_sweep_command(
+            args, sub_command, launch_command, project_name, extra
         )
         commands_to_run.append(cmd)
-    elif args.lr_only:
-        # only sweep the learning rates use mean pooling  and whatever normalization works best
-        base_run_name = _get_base_run_name(args, args.size)
-        lr_params = lr_only_params()
+    else:
+        checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
 
-        for params in lr_params:
-            cmd = _build_hyperparameter_command(
+        if args.defaults_only:
+            if args.model == "all":
+                raise ValueError("Cannot run defaults with all models")
+            # Just run with the first/default values
+            base_run_name = _get_base_run_name(args, args.size)
+            cmd = _build_default_command(
                 args,
-                params,
                 base_run_name,
                 sub_command,
                 launch_command,
@@ -904,96 +962,118 @@ def _build_commands_for_args(
                 args.size,
             )
             commands_to_run.append(cmd)
-    else:
-        if args.model == "all":
-            models = list(BaselineModelName)
-            # Filter out skipped models if model-skip-names is provided
-            if args.model_skip_names:
-                skip_names = [name.strip() for name in args.model_skip_names.split(",")]
-                models = [model for model in models if model not in skip_names]
+        elif args.lr_only:
+            # only sweep the learning rates use mean pooling  and whatever normalization works best
+            base_run_name = _get_base_run_name(args, args.size)
+            lr_params = lr_only_params()
+
+            for params in lr_params:
+                cmd = _build_hyperparameter_command(
+                    args,
+                    params,
+                    base_run_name,
+                    sub_command,
+                    launch_command,
+                    checkpoint_args,
+                    project_name,
+                    extra,
+                    args.size,
+                )
+                commands_to_run.append(cmd)
         else:
-            models = [args.model]
-        for model in models:
-            args.model = model
-            # Models that only use dataset normalization or need dataset normalization to scale to 0 - 1 then always use pretrained
-            dataset_norm_only_models = {
-                BaselineModelName.DINO_V3,
-                BaselineModelName.PANOPTICON,
-                BaselineModelName.TESSERA,
-            }
-            if args.size is not None:
-                model_sizes = [args.size]
+            if args.model == "all":
+                models = list(BaselineModelName)
+                # Filter out skipped models if model-skip-names is provided
+                if args.model_skip_names:
+                    skip_names = [
+                        name.strip() for name in args.model_skip_names.split(",")
+                    ]
+                    models = [model for model in models if model not in skip_names]
             else:
-                model_sizes = (
-                    MODELS_WITH_MULTIPLE_SIZES.get(
-                        args.model,
-                        [None],  # type: ignore # TODO: Fix this
-                    )
-                    if args.all_sizes
-                    else [None]
-                )
-
-            for size in model_sizes:
-                base_run_name = _get_base_run_name(args, size)
-
-                # Optionally load imported settings from json file
-                if args.load_eval_settings_from_json:
-                    with open(args.load_eval_settings_from_json) as f:
-                        eval_settings = json.load(f)
-                    # Get all tasks for this group/run
-                    base_run_name_og = _get_base_run_name(args, size, use_uuid=False)
-                    if "step" in base_run_name_og:
-                        base_run_name_og = base_run_name_og.split("_step")[0]
-                    suffixes_to_try = ["", "_base", "_large"]
-                    eval_settings_dict = None
-
-                    for suffix in suffixes_to_try:
-                        try:
-                            lookup_name = base_run_name_og + suffix
-                            eval_settings_dict = eval_settings[lookup_name]
-                            base_run_name = lookup_name  # Update base_run_name to the successful lookup
-                            break
-                        except KeyError:
-                            continue
-
-                    if eval_settings_dict is None:
-                        raise KeyError(
-                            f"Could not find eval settings for {base_run_name} with any of the suffixes: {suffixes_to_try}"
+                models = [args.model]
+            for model in models:
+                args.model = model
+                # Models that only use dataset normalization or need dataset normalization to scale to 0 - 1 then always use pretrained
+                dataset_norm_only_models = {
+                    BaselineModelName.DINO_V3,
+                    BaselineModelName.PANOPTICON,
+                    BaselineModelName.TESSERA,
+                }
+                if args.size is not None:
+                    model_sizes = [args.size]
+                else:
+                    model_sizes = (
+                        MODELS_WITH_MULTIPLE_SIZES.get(
+                            args.model,
+                            [None],  # type: ignore # TODO: Fix this
                         )
-
-                    base_run_name += "_from_json_settings"
-
-                    cmd = _build_command_from_eval_settings(
-                        args,
-                        eval_settings_dict,  # This now contains all tasks with their settings
-                        base_run_name,
-                        sub_command,
-                        launch_command,
-                        checkpoint_args,
-                        project_name,
-                        extra,
-                        size,
+                        if args.all_sizes
+                        else [None]
                     )
-                    commands_to_run.append(cmd)
-                    continue
 
-                hp_params = loop_through_params(
-                    no_norm=(args.model in dataset_norm_only_models)
-                )
+                for size in model_sizes:
+                    base_run_name = _get_base_run_name(args, size)
 
-                for params in hp_params:
-                    cmd = _build_hyperparameter_command(
-                        args,
-                        params,
-                        base_run_name,
-                        sub_command,
-                        launch_command,
-                        checkpoint_args,
-                        project_name,
-                        extra,
-                        size,
+                    # Optionally load imported settings from json file
+                    if args.load_eval_settings_from_json:
+                        with open(args.load_eval_settings_from_json) as f:
+                            eval_settings = json.load(f)
+                        # Get all tasks for this group/run
+                        base_run_name_og = _get_base_run_name(
+                            args, size, use_uuid=False
+                        )
+                        if "step" in base_run_name_og:
+                            base_run_name_og = base_run_name_og.split("_step")[0]
+                        suffixes_to_try = ["", "_base", "_large"]
+                        eval_settings_dict = None
+
+                        for suffix in suffixes_to_try:
+                            try:
+                                lookup_name = base_run_name_og + suffix
+                                eval_settings_dict = eval_settings[lookup_name]
+                                base_run_name = lookup_name  # Update base_run_name to the successful lookup
+                                break
+                            except KeyError:
+                                continue
+
+                        if eval_settings_dict is None:
+                            raise KeyError(
+                                f"Could not find eval settings for {base_run_name} with any of the suffixes: {suffixes_to_try}"
+                            )
+
+                        base_run_name += "_from_json_settings"
+
+                        cmd = _build_command_from_eval_settings(
+                            args,
+                            eval_settings_dict,  # This now contains all tasks with their settings
+                            base_run_name,
+                            sub_command,
+                            launch_command,
+                            checkpoint_args,
+                            project_name,
+                            extra,
+                            size,
+                        )
+                        commands_to_run.append(cmd)
+                        continue
+
+                    hp_params = loop_through_params(
+                        no_norm=(args.model in dataset_norm_only_models)
                     )
-                    commands_to_run.append(cmd)
+
+                    for params in hp_params:
+                        cmd = _build_hyperparameter_command(
+                            args,
+                            params,
+                            base_run_name,
+                            sub_command,
+                            launch_command,
+                            checkpoint_args,
+                            project_name,
+                            extra,
+                            size,
+                        )
+                        commands_to_run.append(cmd)
 
     if args.select_best_val:
         commands_to_run_new = []
@@ -1148,6 +1228,20 @@ def main() -> None:
         type=_parse_csv_int,
         default=None,
         help="Comma-separated encoder exit depths to evaluate",
+    )
+    parser.add_argument(
+        "--checkpoint_dir",
+        type=str,
+        default=None,
+        help="Directory containing step{N}/ checkpoint folders. "
+        "Evaluates all checkpoints and logs to a single wandb run.",
+    )
+    parser.add_argument(
+        "--steps",
+        type=str,
+        default=None,
+        help="Comma-separated list of step numbers to evaluate "
+        "(e.g. '5000,10000,15000'). Only used with --checkpoint_dir.",
     )
 
     args, extra_cli = parser.parse_known_args()

@@ -45,6 +45,8 @@ def base_args() -> argparse.Namespace:
         load_eval_settings_from_json=False,
         quantize_embeddings=False,
         embedding_dim=None,
+        checkpoint_dir=None,
+        steps=None,
     )
 
 
@@ -71,6 +73,8 @@ def minimal_args() -> argparse.Namespace:
         load_eval_settings_from_json=False,
         quantize_embeddings=False,
         embedding_dim=None,
+        checkpoint_dir=None,
+        steps=None,
     )
 
 
@@ -467,6 +471,61 @@ class TestBuildCommandsExecution:
             in command
             for command in commands
         )
+
+    def test_build_commands_checkpoint_dir(self, base_args: argparse.Namespace) -> None:
+        """Test build_commands uses checkpoint sweep mode."""
+        base_args.checkpoint_dir = "/checkpoints/run_a"
+        base_args.checkpoint_path = None
+        base_args.steps = "5000,10000"
+        base_args.defaults_only = True
+
+        commands: list[str] = build_commands(base_args, [])
+
+        assert len(commands) == 1
+        command = commands[0]
+        assert "CHECKPOINT_DIR=/checkpoints/run_a" in command
+        assert "CHECKPOINT_STEPS=5000,10000" in command
+        assert "checkpoint_sweep_evals.py" in command
+        assert "run_a_sweep" in command
+
+    def test_build_commands_checkpoint_dir_with_layer_depths(
+        self, base_args: argparse.Namespace
+    ) -> None:
+        """Test checkpoint sweep mode expands once per requested layer."""
+        base_args.checkpoint_dir = "/checkpoints/run_a"
+        base_args.checkpoint_path = None
+        base_args.task_names = ["m_eurosat"]
+        base_args.layer_depths = [12, 16]
+        base_args.defaults_only = True
+
+        commands: list[str] = build_commands(base_args, [])
+
+        assert len(commands) == 2
+        assert "CHECKPOINT_DIR=/checkpoints/run_a" in commands[0]
+        assert "run_a_sweep_layer12" in commands[0]
+        assert "run_a_sweep_layer16" in commands[1]
+        assert (
+            "--trainer.callbacks.downstream_evaluator.tasks.m_eurosat.feature_exit_depth=12"
+            in commands[0]
+        )
+        assert (
+            "--trainer.callbacks.downstream_evaluator.tasks.m_eurosat.feature_exit_depth=16"
+            in commands[1]
+        )
+        assert (
+            "--trainer.callbacks.downstream_evaluator.tasks_to_run='[\"m_eurosat\"]'"
+            in commands[0]
+        )
+
+    def test_build_commands_rejects_unknown_task_names(
+        self, base_args: argparse.Namespace
+    ) -> None:
+        """Unknown task names should fail fast."""
+        base_args.defaults_only = True
+        base_args.task_names = ["does_not_exist"]
+
+        with pytest.raises(ValueError, match="Unknown task_names"):
+            build_commands(base_args, [])
 
 
 class TestParametrizedTests:
