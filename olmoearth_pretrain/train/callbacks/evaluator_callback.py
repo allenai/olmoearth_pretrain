@@ -185,6 +185,9 @@ class DownstreamEvaluator:
 
         assert self.eval_mode in EvalMode, f"Unexpected eval mode {self.eval_mode}"
 
+        if self.eval_mode == EvalMode.FINETUNE and self.feature_exit_depth is not None:
+            raise ValueError("feature_exit_depth is not supported for finetune evals.")
+
         if self.eval_mode == EvalMode.LINEAR_PROBE:
             if self.probe_lr is None:
                 raise ValueError("probe_lr cannot be none for segmentation tasks.")
