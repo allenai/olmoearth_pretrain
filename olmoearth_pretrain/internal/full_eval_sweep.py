@@ -4,6 +4,7 @@ e.g. python -m olmoearth_pretrain.internal.full_eval_sweep --cluster=ai2/saturn-
 """
 
 import argparse
+import copy
 import json
 import os
 import subprocess  # nosec
@@ -517,6 +518,85 @@ def _get_pooling_type_str(pooling_type: str) -> str:
 LAUNCH_OVERRIDES = "--launch.priority=high --launch.num_gpus=1 --launch.task_name=eval"
 
 
+def _parse_csv_str(value: str) -> list[str]:
+    """Parse a comma-separated string into a non-empty list of strings."""
+    parsed = [item.strip() for item in value.split(",") if item.strip()]
+    if not parsed:
+        raise argparse.ArgumentTypeError("Expected at least one comma-separated value")
+    return parsed
+
+
+def _parse_csv_int(value: str) -> list[int]:
+    """Parse a comma-separated string into a non-empty list of integers."""
+    try:
+        parsed = [int(item.strip()) for item in value.split(",") if item.strip()]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "Expected a comma-separated list of integers"
+        ) from exc
+    if not parsed:
+        raise argparse.ArgumentTypeError("Expected at least one layer depth")
+    if any(depth < 0 for depth in parsed):
+        raise argparse.ArgumentTypeError("Layer depths must be non-negative")
+    return parsed
+
+
+def _append_layer_suffix(run_name: str, layer_depth: int | None) -> str:
+    """Append the layer suffix when doing a layer sweep."""
+    if layer_depth is None:
+        return run_name
+    return f"{run_name}_layer{layer_depth}"
+
+
+def _resolve_tasks_to_run(args: argparse.Namespace) -> list[str] | None:
+    """Resolve the downstream task filter from explicit names and skip names."""
+    tasks_to_run = (
+        list(args.task_names) if getattr(args, "task_names", None) is not None else None
+    )
+
+    if tasks_to_run is None and args.task_skip_names:
+        skip_names = [name.strip() for name in args.task_skip_names.split(",")]
+        tasks_to_run = [task for task in EVAL_TASKS.keys() if task not in skip_names]
+    elif tasks_to_run is not None and args.task_skip_names:
+        skip_names = [name.strip() for name in args.task_skip_names.split(",")]
+        tasks_to_run = [task for task in tasks_to_run if task not in skip_names]
+
+    if tasks_to_run is None:
+        return None
+
+    unknown_tasks = sorted(set(tasks_to_run) - set(EVAL_TASKS.keys()))
+    if unknown_tasks:
+        raise ValueError(f"Unknown task_names: {unknown_tasks}")
+
+    if not tasks_to_run:
+        raise ValueError("No tasks selected after applying task filters.")
+
+    return tasks_to_run
+
+
+def _get_task_filter_args(args: argparse.Namespace) -> list[str]:
+    """Build a tasks_to_run override when a task filter is provided."""
+    tasks_to_run = _resolve_tasks_to_run(args)
+    if tasks_to_run is None:
+        return []
+    return [
+        f"--trainer.callbacks.downstream_evaluator.tasks_to_run='{json.dumps(tasks_to_run)}'"
+    ]
+
+
+def _get_feature_exit_depth_args(args: argparse.Namespace) -> list[str]:
+    """Build per-task feature exit depth overrides for layer sweeps."""
+    layer_depth = getattr(args, "layer_depth", None)
+    if layer_depth is None:
+        return []
+
+    tasks_to_override = _resolve_tasks_to_run(args) or list(EVAL_TASKS.keys())
+    return [
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.feature_exit_depth={layer_depth}"
+        for task_name in tasks_to_override
+    ]
+
+
 def _build_default_command(
     args: argparse.Namespace,
     base_run_name: str,
@@ -533,6 +613,9 @@ def _build_default_command(
     pooling_type = pooling_types[0]
     logger.info(
         f"Running defaults: {norm_mode} normalization, lr={lr}, pooling={pooling_type}"
+    )
+    base_run_name = _append_layer_suffix(
+        base_run_name, getattr(args, "layer_depth", None)
     )
     run_name = f"{base_run_name}_df"
     cmd_args = _get_model_specific_args(args.model)
@@ -591,6 +674,9 @@ def _build_hyperparameter_command(
     # map default to df
     norm_mode_str = _get_norm_mode_str(norm_mode)
     pooling_type_str = _get_pooling_type_str(pooling_type)
+    base_run_name = _append_layer_suffix(
+        base_run_name, getattr(args, "layer_depth", None)
+    )
     run_name = f"{base_run_name}_{norm_mode_str}_lr{lr}_pt{pooling_type_str}"
     cmd_args = lr_args.format(arg=lr)
 
@@ -718,6 +804,9 @@ def _build_command_from_eval_settings(
         else _get_norm_mode_str(list(norm_modes_used)[0])
     )
 
+    base_run_name = _append_layer_suffix(
+        base_run_name, getattr(args, "layer_depth", None)
+    )
     run_name = f"{base_run_name}_{norm_str}_{lr_str}_pt{pooling_str}"
 
     # Check if quantization is enabled (either from args or from JSON settings)
@@ -796,6 +885,9 @@ def _build_checkpoint_sweep_command(
     base_run_name = os.path.basename(checkpoint_dir) + "_sweep"
     if args.model_name:
         base_run_name = args.model_name
+    base_run_name = _append_layer_suffix(
+        base_run_name, getattr(args, "layer_depth", None)
+    )
 
     module_path = (
         args.module_path
@@ -808,6 +900,18 @@ def _build_checkpoint_sweep_command(
     cmd_args += _get_load_checkpoints_args(args.model)
     if args.size:
         cmd_args += _get_model_size_args(args.model, args.size)
+
+    if getattr(args, "quantize_embeddings", False):
+        cmd_args += quantize_args
+        base_run_name += "_qt"
+
+    embedding_dim = getattr(args, "embedding_dim", None)
+    if embedding_dim is not None:
+        cmd_args += get_embedding_dim_args(embedding_dim)
+        base_run_name += f"_dim{embedding_dim}"
+
+    if "init_seed" in extra:
+        base_run_name += f"_seed{extra.split('init_seed=')[1].split(' ')[0]}"
 
     env_prefix = f"TRAIN_SCRIPT_PATH={module_path} CHECKPOINT_DIR={checkpoint_dir}"
     if args.steps:
@@ -822,50 +926,33 @@ def _build_checkpoint_sweep_command(
     )
 
 
-def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
-    """Build the commands for the sweep."""
+def _build_commands_for_args(
+    args: argparse.Namespace, extra_cli: list[str]
+) -> list[str]:
+    """Build commands for one model / size / optional layer configuration."""
     project_name = args.project_name or EVAL_WANDB_PROJECT
     extra = " " + " ".join(extra_cli) if extra_cli else ""
 
     sub_command = _get_sub_command(args)
     launch_command = "python3" if not sub_command == SubCmd.evaluate else "torchrun"
+    commands_to_run = []
 
     # Checkpoint sweep mode: evaluate all checkpoints in a directory
     if args.checkpoint_dir:
         cmd = _build_checkpoint_sweep_command(
             args, sub_command, launch_command, project_name, extra
         )
-        return [cmd]
-
-    checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
-
-    commands_to_run = []
-
-    if args.defaults_only:
-        if args.model == "all":
-            raise ValueError("Cannot run defaults with all models")
-        # Just run with the first/default values
-        base_run_name = _get_base_run_name(args, args.size)
-        cmd = _build_default_command(
-            args,
-            base_run_name,
-            sub_command,
-            launch_command,
-            checkpoint_args,
-            project_name,
-            extra,
-            args.size,
-        )
         commands_to_run.append(cmd)
-    elif args.lr_only:
-        # only sweep the learning rates use mean pooling  and whatever normalization works best
-        base_run_name = _get_base_run_name(args, args.size)
-        lr_params = lr_only_params()
+    else:
+        checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
 
-        for params in lr_params:
-            cmd = _build_hyperparameter_command(
+        if args.defaults_only:
+            if args.model == "all":
+                raise ValueError("Cannot run defaults with all models")
+            # Just run with the first/default values
+            base_run_name = _get_base_run_name(args, args.size)
+            cmd = _build_default_command(
                 args,
-                params,
                 base_run_name,
                 sub_command,
                 launch_command,
@@ -875,96 +962,118 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                 args.size,
             )
             commands_to_run.append(cmd)
-    else:
-        if args.model == "all":
-            models = list(BaselineModelName)
-            # Filter out skipped models if model-skip-names is provided
-            if args.model_skip_names:
-                skip_names = [name.strip() for name in args.model_skip_names.split(",")]
-                models = [model for model in models if model not in skip_names]
+        elif args.lr_only:
+            # only sweep the learning rates use mean pooling  and whatever normalization works best
+            base_run_name = _get_base_run_name(args, args.size)
+            lr_params = lr_only_params()
+
+            for params in lr_params:
+                cmd = _build_hyperparameter_command(
+                    args,
+                    params,
+                    base_run_name,
+                    sub_command,
+                    launch_command,
+                    checkpoint_args,
+                    project_name,
+                    extra,
+                    args.size,
+                )
+                commands_to_run.append(cmd)
         else:
-            models = [args.model]
-        for model in models:
-            args.model = model
-            # Models that only use dataset normalization or need dataset normalization to scale to 0 - 1 then always use pretrained
-            dataset_norm_only_models = {
-                BaselineModelName.DINO_V3,
-                BaselineModelName.PANOPTICON,
-                BaselineModelName.TESSERA,
-            }
-            if args.size is not None:
-                model_sizes = [args.size]
+            if args.model == "all":
+                models = list(BaselineModelName)
+                # Filter out skipped models if model-skip-names is provided
+                if args.model_skip_names:
+                    skip_names = [
+                        name.strip() for name in args.model_skip_names.split(",")
+                    ]
+                    models = [model for model in models if model not in skip_names]
             else:
-                model_sizes = (
-                    MODELS_WITH_MULTIPLE_SIZES.get(
-                        args.model,
-                        [None],  # type: ignore # TODO: Fix this
-                    )
-                    if args.all_sizes
-                    else [None]
-                )
-
-            for size in model_sizes:
-                base_run_name = _get_base_run_name(args, size)
-
-                # Optionally load imported settings from json file
-                if args.load_eval_settings_from_json:
-                    with open(args.load_eval_settings_from_json) as f:
-                        eval_settings = json.load(f)
-                    # Get all tasks for this group/run
-                    base_run_name_og = _get_base_run_name(args, size, use_uuid=False)
-                    if "step" in base_run_name_og:
-                        base_run_name_og = base_run_name_og.split("_step")[0]
-                    suffixes_to_try = ["", "_base", "_large"]
-                    eval_settings_dict = None
-
-                    for suffix in suffixes_to_try:
-                        try:
-                            lookup_name = base_run_name_og + suffix
-                            eval_settings_dict = eval_settings[lookup_name]
-                            base_run_name = lookup_name  # Update base_run_name to the successful lookup
-                            break
-                        except KeyError:
-                            continue
-
-                    if eval_settings_dict is None:
-                        raise KeyError(
-                            f"Could not find eval settings for {base_run_name} with any of the suffixes: {suffixes_to_try}"
+                models = [args.model]
+            for model in models:
+                args.model = model
+                # Models that only use dataset normalization or need dataset normalization to scale to 0 - 1 then always use pretrained
+                dataset_norm_only_models = {
+                    BaselineModelName.DINO_V3,
+                    BaselineModelName.PANOPTICON,
+                    BaselineModelName.TESSERA,
+                }
+                if args.size is not None:
+                    model_sizes = [args.size]
+                else:
+                    model_sizes = (
+                        MODELS_WITH_MULTIPLE_SIZES.get(
+                            args.model,
+                            [None],  # type: ignore # TODO: Fix this
                         )
-
-                    base_run_name += "_from_json_settings"
-
-                    cmd = _build_command_from_eval_settings(
-                        args,
-                        eval_settings_dict,  # This now contains all tasks with their settings
-                        base_run_name,
-                        sub_command,
-                        launch_command,
-                        checkpoint_args,
-                        project_name,
-                        extra,
-                        size,
+                        if args.all_sizes
+                        else [None]
                     )
-                    commands_to_run.append(cmd)
-                    continue
 
-                hp_params = loop_through_params(
-                    no_norm=(args.model in dataset_norm_only_models)
-                )
+                for size in model_sizes:
+                    base_run_name = _get_base_run_name(args, size)
 
-                for params in hp_params:
-                    cmd = _build_hyperparameter_command(
-                        args,
-                        params,
-                        base_run_name,
-                        sub_command,
-                        launch_command,
-                        checkpoint_args,
-                        project_name,
-                        extra,
-                        size,
+                    # Optionally load imported settings from json file
+                    if args.load_eval_settings_from_json:
+                        with open(args.load_eval_settings_from_json) as f:
+                            eval_settings = json.load(f)
+                        # Get all tasks for this group/run
+                        base_run_name_og = _get_base_run_name(
+                            args, size, use_uuid=False
+                        )
+                        if "step" in base_run_name_og:
+                            base_run_name_og = base_run_name_og.split("_step")[0]
+                        suffixes_to_try = ["", "_base", "_large"]
+                        eval_settings_dict = None
+
+                        for suffix in suffixes_to_try:
+                            try:
+                                lookup_name = base_run_name_og + suffix
+                                eval_settings_dict = eval_settings[lookup_name]
+                                base_run_name = lookup_name  # Update base_run_name to the successful lookup
+                                break
+                            except KeyError:
+                                continue
+
+                        if eval_settings_dict is None:
+                            raise KeyError(
+                                f"Could not find eval settings for {base_run_name} with any of the suffixes: {suffixes_to_try}"
+                            )
+
+                        base_run_name += "_from_json_settings"
+
+                        cmd = _build_command_from_eval_settings(
+                            args,
+                            eval_settings_dict,  # This now contains all tasks with their settings
+                            base_run_name,
+                            sub_command,
+                            launch_command,
+                            checkpoint_args,
+                            project_name,
+                            extra,
+                            size,
+                        )
+                        commands_to_run.append(cmd)
+                        continue
+
+                    hp_params = loop_through_params(
+                        no_norm=(args.model in dataset_norm_only_models)
                     )
-                    commands_to_run.append(cmd)
+
+                    for params in hp_params:
+                        cmd = _build_hyperparameter_command(
+                            args,
+                            params,
+                            base_run_name,
+                            sub_command,
+                            launch_command,
+                            checkpoint_args,
+                            project_name,
+                            extra,
+                            size,
+                        )
+                        commands_to_run.append(cmd)
 
     if args.select_best_val:
         commands_to_run_new = []
@@ -974,17 +1083,30 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             commands_to_run_new.append(cmd)
         commands_to_run = commands_to_run_new
 
-    # Filter out skipped tasks if task-skip-names is provided
-    if args.task_skip_names:
-        skip_names = [name.strip() for name in args.task_skip_names.split(",")]
-        tasks_to_run = [task for task in EVAL_TASKS.keys() if task not in skip_names]
-        tasks_to_run_arg = f" --trainer.callbacks.downstream_evaluator.tasks_to_run='{json.dumps(tasks_to_run)}'"
+    task_filter_args = _get_task_filter_args(args)
+    if task_filter_args:
+        tasks_to_run_arg = " " + " ".join(task_filter_args)
         commands_to_run_new = []
         for cmd in commands_to_run:
             logger.info(f"Adding tasks_to_run filter to {cmd}")
             cmd += tasks_to_run_arg
             commands_to_run_new.append(cmd)
         commands_to_run = commands_to_run_new
+
+    return commands_to_run
+
+
+def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
+    """Build the commands for the sweep."""
+    layer_depths = getattr(args, "layer_depths", None) or [None]
+    commands_to_run: list[str] = []
+
+    for layer_depth in layer_depths:
+        layer_args = copy.deepcopy(args)
+        layer_args.layer_depth = layer_depth
+        layer_extra_cli = list(extra_cli)
+        layer_extra_cli.extend(_get_feature_exit_depth_args(layer_args))
+        commands_to_run.extend(_build_commands_for_args(layer_args, layer_extra_cli))
 
     return commands_to_run
 
@@ -1094,6 +1216,18 @@ def main() -> None:
         type=int,
         default=None,
         help="If set, reduce embeddings to this dimensionality via PCA (e.g., 128, 64)",
+    )
+    parser.add_argument(
+        "--task_names",
+        type=_parse_csv_str,
+        default=None,
+        help="Comma-separated downstream task names to run",
+    )
+    parser.add_argument(
+        "--layer_depths",
+        type=_parse_csv_int,
+        default=None,
+        help="Comma-separated encoder exit depths to evaluate",
     )
     parser.add_argument(
         "--checkpoint_dir",
