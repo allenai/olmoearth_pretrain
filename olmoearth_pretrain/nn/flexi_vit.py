@@ -152,6 +152,11 @@ class MultiModalPatchEmbeddings(nn.Module):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        use_spectral_attention: bool = False,
+        spectral_attention_d_model: int = 128,
+        spectral_attention_num_heads: int = 2,
+        spectral_attention_chunk_size: int = 8192,
+        spectral_attention_modalities: list[str] | None = None,
     ):
         """Initialize the patch embeddings.
 
@@ -172,6 +177,17 @@ class MultiModalPatchEmbeddings(nn.Module):
                 and acts as stronger augmentation. Default: False (fixed rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            use_spectral_attention: If True, apply content-dependent cross-band
+                self-attention pixel-wise before patch embedding. Default: False.
+            spectral_attention_d_model: Embedding dimension for SpectralAttention
+                band tokens. Default: 128.
+            spectral_attention_num_heads: Number of attention heads in
+                SpectralAttention. Default: 2.
+            spectral_attention_chunk_size: Max pixels per chunk for memory-bounded
+                processing. 0 disables chunking. Default: 8192.
+            spectral_attention_modalities: If provided, only apply spectral attention
+                to these modalities. If None, apply to all eligible spatial multi-band
+                modalities. Default: None.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -201,6 +217,35 @@ class MultiModalPatchEmbeddings(nn.Module):
                 self.register_buffer(
                     buffer_name, banset_indices_tensor, persistent=False
                 )
+
+        # Spectral attention: one module per (modality, bandset) for eligible bandsets.
+        self.spectral_attention_modules: nn.ModuleDict | None = None
+        if use_spectral_attention:
+            from olmoearth_pretrain.nn.spectral_attention import SpectralAttention
+
+            modules: dict[str, nn.Module] = {}
+            for modality in self.supported_modality_names:
+                if (
+                    spectral_attention_modalities is not None
+                    and modality not in spectral_attention_modalities
+                ):
+                    continue
+                modality_spec = Modality.get(modality)
+                if not modality_spec.is_spatial:
+                    continue
+                for idx, bandset_indices in enumerate(
+                    self.tokenization_config.get_bandset_indices(modality)
+                ):
+                    if len(bandset_indices) > 1:
+                        key = self._get_embedding_module_name(modality, idx)
+                        modules[key] = SpectralAttention(
+                            len(bandset_indices),
+                            d_model=spectral_attention_d_model,
+                            num_heads=spectral_attention_num_heads,
+                            chunk_size=spectral_attention_chunk_size,
+                        )
+            if modules:
+                self.spectral_attention_modules = nn.ModuleDict(modules)
 
         # Create a dictionary of per modality index tensors to do  index select with registered buffer
 
@@ -303,6 +348,13 @@ class MultiModalPatchEmbeddings(nn.Module):
                     else:
                         rate = self.band_dropout_rate
                     patchified_data = self._apply_band_dropout(patchified_data, rate)
+
+            if self.spectral_attention_modules is not None:
+                sa_key = self._get_embedding_module_name(modality, idx)
+                if sa_key in self.spectral_attention_modules:
+                    patchified_data = self.spectral_attention_modules[sa_key](
+                        patchified_data
+                    )
 
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
@@ -1070,6 +1122,11 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        use_spectral_attention: bool = False,
+        spectral_attention_d_model: int = 128,
+        spectral_attention_num_heads: int = 2,
+        spectral_attention_chunk_size: int = 8192,
+        spectral_attention_modalities: list[str] | None = None,
     ):
         """Initialize the encoder.
 
@@ -1102,6 +1159,12 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            use_spectral_attention: If True, apply content-dependent cross-band
+                self-attention before patch embedding.
+            spectral_attention_d_model: Embedding dim for SpectralAttention.
+            spectral_attention_num_heads: Number of attention heads.
+            spectral_attention_chunk_size: Max pixels per chunk (0 disables chunking).
+            spectral_attention_modalities: Modalities to apply spectral attention to.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1141,6 +1204,11 @@ class Encoder(FlexiVitBase):
             band_dropout_rate=self.band_dropout_rate,
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
+            use_spectral_attention=use_spectral_attention,
+            spectral_attention_d_model=spectral_attention_d_model,
+            spectral_attention_num_heads=spectral_attention_num_heads,
+            spectral_attention_chunk_size=spectral_attention_chunk_size,
+            spectral_attention_modalities=spectral_attention_modalities,
         )
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=self.embedding_size,
@@ -2017,6 +2085,11 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+    use_spectral_attention: bool = False
+    spectral_attention_d_model: int = 128
+    spectral_attention_num_heads: int = 2
+    spectral_attention_chunk_size: int = 8192
+    spectral_attention_modalities: list[str] | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2038,6 +2111,15 @@ class EncoderConfig(Config):
             if unknown:
                 raise ValueError(
                     f"band_dropout_modalities contains modalities not in "
+                    f"supported_modality_names: {unknown}"
+                )
+        if self.spectral_attention_modalities is not None:
+            unknown = set(self.spectral_attention_modalities) - set(
+                self.supported_modality_names
+            )
+            if unknown:
+                raise ValueError(
+                    f"spectral_attention_modalities contains modalities not in "
                     f"supported_modality_names: {unknown}"
                 )
         if self.tokenization_config is not None:
