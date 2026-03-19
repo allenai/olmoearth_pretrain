@@ -18,10 +18,13 @@ For training code, add a guard at module level:
 
 from __future__ import annotations
 
+import logging
 import warnings
 from dataclasses import dataclass, fields, is_dataclass
 from importlib import import_module
 from typing import Any, TypeVar
+
+logger = logging.getLogger(__name__)
 
 # === Single source of truth for olmo-core availability ===
 try:
@@ -241,8 +244,10 @@ class _StandaloneConfig:
 # === The unified export ===
 # Use olmo-core Config if available, otherwise use standalone
 if OLMO_CORE_AVAILABLE:
+    logger.debug("olmo-core is available")
     Config = _OlmoCoreConfig  # type: ignore[assignment,misc]
 else:
+    logger.debug("olmo-core is not available")
     Config = _StandaloneConfig
     # Emit warning once when module is first imported
     warnings.warn(
