@@ -25,6 +25,7 @@ Experiments:
 29. exp 17 + learnable loss weights (Kendall et al. uncertainty weighting)
 30. exp 20 + learnable loss weights
 31. exp 21 + learnable loss weights (decoder supervision + learnable loss weights)
+36. exp 32 (IC=0.05, supervision=0.3x) but no band dropout on S1
 """
 
 import copy
@@ -532,6 +533,12 @@ RANDOM_BAND_DROPOUT_MAX_RATE = 0.3
 SATELLITE_MODALITIES = [
     Modality.SENTINEL2_L2A.name,
     Modality.SENTINEL1.name,
+    Modality.LANDSAT.name,
+]
+
+# No S1 dropout — only apply band dropout to S2 and Landsat.
+BAND_DROPOUT_MODALITIES_NO_S1 = [
+    Modality.SENTINEL2_L2A.name,
     Modality.LANDSAT.name,
 ]
 
@@ -2164,6 +2171,82 @@ def build_dataloader_exp35(common: CommonComponents) -> OlmoEarthDataLoaderConfi
     return build_dataloader_exp21(common)
 
 
+# --- Exp 36: IC=0.05, supervision=0.3x, no S1 band dropout ---
+
+
+def build_common_exp36(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp36 (same as exp21)."""
+    return build_common_exp21(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp36(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp36 (IC=0.05, supervision=0.3x, no S1 band dropout)."""
+    return ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
+        rank_microbatch_size=32,
+        masking_config=_masking_config_random_time_ndvi_era5(
+            common.tokenization_config
+        ),
+        loss_config=_loss_config_ndvi_era5(),
+        contrastive_config=_contrastive_config_005(),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        max_grad_norm=1.0,
+        scheduler=CosWithWarmup(warmup_steps=8000),
+        ema_decay=(1.0, 1.0),
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+    )
+
+
+def build_model_exp36(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp36 (IC=0.05, supervision=0.3x, no S1 band dropout)."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+        band_dropout_modalities=BAND_DROPOUT_MODALITIES_NO_S1,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    supervision_head_config = SupervisionHeadConfig(
+        modality_configs=SUPERVISION_MODALITY_CONFIGS_03X,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        supervision_head_config=supervision_head_config,
+    )
+
+
+def build_dataloader_exp36(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp36 (same as exp21)."""
+    return build_dataloader_exp21(common)
+
+
 # ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
@@ -2336,6 +2419,12 @@ EXPERIMENTS = {
         build_model_exp35,
         build_train_module_exp35,
         build_dataloader_exp35,
+    ),
+    "masked_neg_decoder_supervision_ic005_sup03x_no_s1_band_dropout": (
+        build_common_exp36,
+        build_model_exp36,
+        build_train_module_exp36,
+        build_dataloader_exp36,
     ),
 }
 
