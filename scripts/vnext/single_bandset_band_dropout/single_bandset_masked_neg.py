@@ -2439,6 +2439,69 @@ def build_dataloader_exp37(common: CommonComponents) -> OlmoEarthDataLoaderConfi
 
 
 # ============================================================
+# Experiment 39: exp36 + band dropout decay (linearly decay to 0 from step 150k to 200k)
+# ============================================================
+
+
+def build_common_exp39(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp39 (same as exp36)."""
+    return build_common_exp36(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp39(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp39 (same as exp36)."""
+    return build_train_module_exp36(common)
+
+
+def build_model_exp39(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp39 (exp36 + band dropout decay 150k-200k)."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+        band_dropout_modalities=BAND_DROPOUT_MODALITIES_NO_S1,
+        band_dropout_decay_start_step=200_000,
+        band_dropout_decay_end_step=250_000,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    supervision_head_config = SupervisionHeadConfig(
+        modality_configs=SUPERVISION_MODALITY_CONFIGS_03X,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        supervision_head_config=supervision_head_config,
+    )
+
+
+def build_dataloader_exp39(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp39 (same as exp36)."""
+    return build_dataloader_exp36(common)
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -2628,6 +2691,12 @@ EXPERIMENTS = {
         build_model_exp38,
         build_train_module_exp38,
         build_dataloader_exp38,
+    ),
+    "masked_neg_decoder_supervision_ic005_sup03x_no_s1_band_dropout_decay": (
+        build_common_exp39,
+        build_model_exp39,
+        build_train_module_exp39,
+        build_dataloader_exp39,
     ),
 }
 

@@ -882,3 +882,44 @@ class TestBandDropout:
         )
         encoder.disable_band_dropout()
         assert encoder.patch_embeddings.band_dropout_rate == 0.0
+
+    def test_band_dropout_decay_schedule(self) -> None:
+        """Test that band dropout rate decays linearly between start and end steps."""
+        embed = MultiModalPatchEmbeddings(
+            supported_modality_names=["sentinel2_l2a"],
+            max_patch_size=8,
+            embedding_size=16,
+            band_dropout_rate=0.3,
+            band_dropout_decay_start_step=100,
+            band_dropout_decay_end_step=200,
+        )
+        # Before start: full rate
+        embed.update_band_dropout_for_step(50)
+        assert embed.band_dropout_rate == 0.3
+
+        # At start: still full rate
+        embed.update_band_dropout_for_step(100)
+        assert embed.band_dropout_rate == 0.3
+
+        # Midpoint: half rate
+        embed.update_band_dropout_for_step(150)
+        assert abs(embed.band_dropout_rate - 0.15) < 1e-9
+
+        # At end: zero
+        embed.update_band_dropout_for_step(200)
+        assert embed.band_dropout_rate == 0.0
+
+        # After end: zero
+        embed.update_band_dropout_for_step(300)
+        assert embed.band_dropout_rate == 0.0
+
+    def test_band_dropout_no_decay_without_schedule(self) -> None:
+        """Test that band dropout rate stays constant without decay config."""
+        embed = MultiModalPatchEmbeddings(
+            supported_modality_names=["sentinel2_l2a"],
+            max_patch_size=8,
+            embedding_size=16,
+            band_dropout_rate=0.3,
+        )
+        embed.update_band_dropout_for_step(150_000)
+        assert embed.band_dropout_rate == 0.3

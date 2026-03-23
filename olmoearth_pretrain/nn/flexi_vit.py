@@ -152,6 +152,8 @@ class MultiModalPatchEmbeddings(nn.Module):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        band_dropout_decay_start_step: int | None = None,
+        band_dropout_decay_end_step: int | None = None,
         use_spectral_mixer: bool = False,
         spectral_mixer_modalities: list[str] | None = None,
     ):
@@ -174,6 +176,12 @@ class MultiModalPatchEmbeddings(nn.Module):
                 and acts as stronger augmentation. Default: False (fixed rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            band_dropout_decay_start_step: If set, band dropout rate begins linearly
+                decaying at this step. Before this step, the full band_dropout_rate
+                is used. Default: None (no decay).
+            band_dropout_decay_end_step: If set, band dropout rate reaches 0 at this
+                step. After this step, no band dropout is applied.
+                Default: None (no decay).
             use_spectral_mixer: If True, apply a lightweight cross-band MLP mixer
                 pixel-wise before the patch embedding Conv2d. Learns non-linear
                 spectral combinations (e.g., NDVI-like ratios) that the linear Conv2d
@@ -189,9 +197,12 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.supported_modality_names = supported_modality_names
         self.tokenization_config = tokenization_config or TokenizationConfig()
         self.use_linear_patch_embed = use_linear_patch_embed
+        self._base_band_dropout_rate = band_dropout_rate
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
+        self.band_dropout_decay_start_step = band_dropout_decay_start_step
+        self.band_dropout_decay_end_step = band_dropout_decay_end_step
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -379,6 +390,27 @@ class MultiModalPatchEmbeddings(nn.Module):
         # Broadcast: [B, 1, 1, ..., num_bands]
         view_shape = [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
         return patchified_data * keep_mask.view(*view_shape).to(patchified_data.dtype)
+
+    def update_band_dropout_for_step(self, step: int) -> None:
+        """Update band dropout rate based on a linear decay schedule.
+
+        If decay is configured, linearly interpolates from _base_band_dropout_rate
+        to 0 between band_dropout_decay_start_step and band_dropout_decay_end_step.
+        """
+        if (
+            self.band_dropout_decay_start_step is None
+            or self.band_dropout_decay_end_step is None
+        ):
+            return
+        if step < self.band_dropout_decay_start_step:
+            self.band_dropout_rate = self._base_band_dropout_rate
+        elif step >= self.band_dropout_decay_end_step:
+            self.band_dropout_rate = 0.0
+        else:
+            progress = (step - self.band_dropout_decay_start_step) / (
+                self.band_dropout_decay_end_step - self.band_dropout_decay_start_step
+            )
+            self.band_dropout_rate = self._base_band_dropout_rate * (1.0 - progress)
 
     @staticmethod
     def is_any_data_seen_by_encoder(modality_mask: Tensor) -> bool:
@@ -1108,6 +1140,8 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        band_dropout_decay_start_step: int | None = None,
+        band_dropout_decay_end_step: int | None = None,
         use_spectral_mixer: bool = False,
         spectral_mixer_modalities: list[str] | None = None,
     ):
@@ -1142,6 +1176,10 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            band_dropout_decay_start_step: If set, band dropout rate begins linearly
+                decaying at this step. Default: None (no decay).
+            band_dropout_decay_end_step: If set, band dropout rate reaches 0 at this
+                step. Default: None (no decay).
             use_spectral_mixer: If True, apply a lightweight cross-band MLP mixer before
                 the patch embedding Conv2d for each spatial multi-band bandset. Learns
                 non-linear spectral combinations pixel-wise. Initialized as identity.
@@ -1186,6 +1224,8 @@ class Encoder(FlexiVitBase):
             band_dropout_rate=self.band_dropout_rate,
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
+            band_dropout_decay_start_step=band_dropout_decay_start_step,
+            band_dropout_decay_end_step=band_dropout_decay_end_step,
             use_spectral_mixer=use_spectral_mixer,
             spectral_mixer_modalities=spectral_mixer_modalities,
         )
@@ -1207,6 +1247,10 @@ class Encoder(FlexiVitBase):
     def disable_band_dropout(self) -> None:
         """Disable band dropout (e.g. for target/EMA encoder)."""
         self.patch_embeddings.band_dropout_rate = 0.0
+
+    def update_band_dropout_for_step(self, step: int) -> None:
+        """Update band dropout rate based on the current training step."""
+        self.patch_embeddings.update_band_dropout_for_step(step)
 
     def _init_register_tokens(self) -> None:
         """Initialize the register tokens."""
@@ -2064,6 +2108,8 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+    band_dropout_decay_start_step: int | None = None
+    band_dropout_decay_end_step: int | None = None
     use_spectral_mixer: bool = False
     spectral_mixer_modalities: list[str] | None = None
 

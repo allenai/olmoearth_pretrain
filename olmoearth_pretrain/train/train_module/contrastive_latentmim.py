@@ -218,6 +218,18 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         """
         if not dry_run:
             self.update_target_encoder()
+        # Update band dropout rate based on schedule (if configured)
+        self.model.encoder.update_band_dropout_for_step(self.trainer.global_step)
+        if (
+            not dry_run
+            and self.model.encoder.patch_embeddings.band_dropout_decay_start_step
+            is not None
+        ):
+            self.trainer.record_metric(
+                "train/band_dropout_rate",
+                self.model.encoder.patch_embeddings.band_dropout_rate,
+                reduce_type=None,
+            )
         # Set the model to train mode
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
