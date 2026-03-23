@@ -197,6 +197,44 @@ class TestSupervisionHead:
         assert "srtm" in preds
         assert preds["srtm"].shape == (B, H_PIX, W_PIX, 1, 1)
 
+    def test_non_spatial_forward(self) -> None:
+        """Non-spatial modality (latlon) produces [B, C] output."""
+        cfg = {
+            "latlon": SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION,
+                num_output_channels=2,
+            ),
+        }
+        head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
+        decoded = TokensAndMasks(
+            latlon=torch.randn(B, 1, D),
+            latlon_mask=torch.full((B, 1), MaskValue.DECODER.value),
+        )
+        timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
+        batch = MaskedOlmoEarthSample(timestamps=timestamps, latlon=torch.rand(B, 2))
+        preds = head(decoded, batch)
+        assert "latlon" in preds
+        assert preds["latlon"].shape == (B, 2)
+
+    def test_non_spatial_missing_tokens(self) -> None:
+        """Non-spatial head runs with dummy zeros when tokens are absent (FSDP)."""
+        cfg = {
+            "latlon": SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION,
+                num_output_channels=2,
+            ),
+        }
+        head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
+        decoded = TokensAndMasks(
+            sentinel2_l2a=torch.randn(B, P_H, P_W, 3, 2, D),
+            sentinel2_l2a_mask=torch.full((B, P_H, P_W, 3, 2), MaskValue.DECODER.value),
+        )
+        timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
+        batch = MaskedOlmoEarthSample(timestamps=timestamps)
+        preds = head(decoded, batch)
+        assert "latlon" in preds
+        assert preds["latlon"].requires_grad
+
 
 class TestBuildValidMask:
     """Test _build_valid_mask helper."""
@@ -287,6 +325,24 @@ class TestComputeSupervisionLoss:
         assert total_loss > 0
         assert "ndvi" in per_mod
 
+    def test_non_spatial_regression_loss(self) -> None:
+        """Non-spatial regression loss (latlon) is positive and finite."""
+        cfg = {
+            "latlon": SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION,
+                num_output_channels=2,
+                weight=0.3,
+            ),
+        }
+        head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
+        pred = torch.randn(B, 2)
+        timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
+        batch = MaskedOlmoEarthSample(timestamps=timestamps, latlon=torch.rand(B, 2))
+        total_loss, per_mod = compute_supervision_loss({"latlon": pred}, batch, head)
+        assert total_loss.ndim == 0
+        assert total_loss > 0
+        assert "latlon" in per_mod
+
     def test_all_missing_returns_zero(self) -> None:
         """Entirely missing target yields zero loss."""
         cfg = {
@@ -363,6 +419,20 @@ class TestSupervisionHeadConfig:
         assert head.max_patch_size == MAX_PATCH_SIZE
         assert head.heads["worldcover"].out_features == MAX_PATCH_SIZE**2 * 11
         assert head.heads["srtm"].out_features == MAX_PATCH_SIZE**2 * 1
+
+    def test_non_spatial_modality_head_size(self) -> None:
+        """Non-spatial modality (latlon) head output is num_channels, not mps^2 * num_channels."""
+        config = SupervisionHeadConfig(
+            modality_configs={
+                "latlon": SupervisionModalityConfig(
+                    task_type=SupervisionTaskType.REGRESSION,
+                    num_output_channels=2,
+                ),
+            }
+        )
+        head = config.build(embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
+        assert head.heads["latlon"].out_features == 2
+        assert "latlon" in head._non_spatial_modalities
 
     def test_classification_requires_class_values(self) -> None:
         """Classification without class_values raises ValueError."""

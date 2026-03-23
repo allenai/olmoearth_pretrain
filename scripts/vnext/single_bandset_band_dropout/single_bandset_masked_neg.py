@@ -26,6 +26,8 @@ Experiments:
 30. exp 20 + learnable loss weights
 31. exp 21 + learnable loss weights (decoder supervision + learnable loss weights)
 36. exp 32 (IC=0.05, supervision=0.3x) but no band dropout on S1
+37. exp 36 + latlon as encode-decode modality with supervision (excluded from token contrastive loss)
+38. exp 36 but full bandset (default multi-bandset tokenization) + no band dropout
 """
 
 import copy
@@ -2248,6 +2250,195 @@ def build_dataloader_exp36(common: CommonComponents) -> OlmoEarthDataLoaderConfi
 
 
 # ============================================================
+# Experiment 38: exp36 but full bandset (default tokenization) + no band dropout
+# ============================================================
+
+
+def _tokenization_config_full_bandset() -> TokenizationConfig:
+    """Default multi-bandset tokenization with only NDVI override."""
+    return TokenizationConfig(overrides={"ndvi": NDVI_SINGLE_BANDSET})
+
+
+def build_common_exp38(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp38 (full bandset, no band dropout)."""
+    common = build_common_components_base(script, cmd, run_name, cluster, overrides)
+    common.training_modalities = common.training_modalities + [
+        Modality.NDVI.name,
+        Modality.ERA5_10.name,
+    ]
+    common.tokenization_config = _tokenization_config_full_bandset()
+    return common
+
+
+def build_train_module_exp38(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp38 (same losses as exp36, full bandset)."""
+    return ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
+        rank_microbatch_size=32,
+        masking_config=_masking_config_random_time_ndvi_era5(
+            common.tokenization_config
+        ),
+        loss_config=_loss_config_ndvi_era5(),
+        contrastive_config=_contrastive_config_005(),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        max_grad_norm=1.0,
+        scheduler=CosWithWarmup(warmup_steps=8000),
+        ema_decay=(1.0, 1.0),
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+    )
+
+
+def build_model_exp38(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp38 (full bandset, no band dropout, supervision=0.3x)."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    supervision_head_config = SupervisionHeadConfig(
+        modality_configs=SUPERVISION_MODALITY_CONFIGS_03X,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        supervision_head_config=supervision_head_config,
+    )
+
+
+def build_dataloader_exp38(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp38 (same as exp21)."""
+    return build_dataloader_exp21(common)
+
+
+# ============================================================
+# Experiment 37: exp36 + latlon as encode-decode with supervision
+# ============================================================
+
+SUPERVISION_MODALITY_CONFIGS_03X_WITH_LATLON = {
+    **SUPERVISION_MODALITY_CONFIGS_03X,
+    "latlon": SupervisionModalityConfig(
+        task_type=SupervisionTaskType.REGRESSION,
+        num_output_channels=2,
+        # 1.0 for regression, 0.3 for the supervisory weight
+        weight=1.0 * 0.3,
+    ),
+}
+
+
+def build_common_exp37(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp37 (exp36 + latlon)."""
+    common = build_common_exp36(script, cmd, run_name, cluster, overrides)
+    common.training_modalities = common.training_modalities + [Modality.LATLON.name]
+    return common
+
+
+def _loss_config_ndvi_era5_latlon() -> LossConfig:
+    """Loss config that excludes latlon from the token contrastive loss."""
+    return LossConfig(
+        loss_config={
+            "type": "modality_patch_discrimination_masked_negatives",
+            "tau": 0.1,
+            "same_target_threshold": 0.999,
+            "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES_WITH_NDVI_AND_ERA5,
+            "modality_weights": {"latlon": 0.0},
+        }
+    )
+
+
+def build_train_module_exp37(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp37 (exp36 + latlon, excluded from token contrastive)."""
+    return ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
+        rank_microbatch_size=32,
+        masking_config=_masking_config_random_time_ndvi_era5(
+            common.tokenization_config
+        ),
+        loss_config=_loss_config_ndvi_era5_latlon(),
+        contrastive_config=_contrastive_config_005(),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        max_grad_norm=1.0,
+        scheduler=CosWithWarmup(warmup_steps=8000),
+        ema_decay=(1.0, 1.0),
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+    )
+
+
+def build_model_exp37(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp37 (exp36 + latlon supervision)."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+        band_dropout_modalities=BAND_DROPOUT_MODALITIES_NO_S1,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    supervision_head_config = SupervisionHeadConfig(
+        modality_configs=SUPERVISION_MODALITY_CONFIGS_03X_WITH_LATLON,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        supervision_head_config=supervision_head_config,
+    )
+
+
+def build_dataloader_exp37(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp37 (same as exp21)."""
+    return build_dataloader_exp21(common)
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -2425,6 +2616,18 @@ EXPERIMENTS = {
         build_model_exp36,
         build_train_module_exp36,
         build_dataloader_exp36,
+    ),
+    "masked_neg_decoder_supervision_ic005_sup03x_no_s1_band_dropout_latlon": (
+        build_common_exp37,
+        build_model_exp37,
+        build_train_module_exp37,
+        build_dataloader_exp37,
+    ),
+    "masked_neg_decoder_supervision_ic005_sup03x_full_bandset": (
+        build_common_exp38,
+        build_model_exp38,
+        build_train_module_exp38,
+        build_dataloader_exp38,
     ),
 }
 

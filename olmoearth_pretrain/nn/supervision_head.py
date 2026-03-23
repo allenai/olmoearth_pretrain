@@ -24,7 +24,7 @@ from einops import rearrange
 from torch import Tensor
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.constants import MISSING_VALUE
+from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 
@@ -127,9 +127,15 @@ class SupervisionHead(nn.Module):
         super().__init__()
         self.modality_configs = modality_configs
         self.max_patch_size = max_patch_size
+        self._non_spatial_modalities: set[str] = set()
         self.heads = nn.ModuleDict()
         for name, cfg in modality_configs.items():
-            out_dim = cfg.num_output_channels * max_patch_size * max_patch_size
+            modality_spec = Modality.get(name)
+            if modality_spec.is_spatial:
+                out_dim = cfg.num_output_channels * max_patch_size * max_patch_size
+            else:
+                out_dim = cfg.num_output_channels
+                self._non_spatial_modalities.add(name)
             self.heads[name] = nn.Linear(embedding_dim, out_dim)
 
         for name, cfg in modality_configs.items():
@@ -175,41 +181,59 @@ class SupervisionHead(nn.Module):
 
         predictions: dict[str, Tensor] = {}
         for sup_name, head in self.heads.items():
-            tokens = getattr(decoded, sup_name, None)  # [B, P_H, P_W, T, BS, D] | None
+            tokens = getattr(decoded, sup_name, None)
 
-            if tokens is not None:
-                features = tokens.mean(dim=-2)  # [B, P_H, P_W, T, D]
+            if sup_name in self._non_spatial_modalities:
+                # Non-spatial modality: tokens are [B, BS, D] or None
+                if tokens is not None:
+                    features = tokens.mean(dim=-2)  # [B, D]
+                else:
+                    batch_size = self._get_batch_size(decoded)
+                    features = torch.zeros(
+                        batch_size, head.in_features, device=device, dtype=dtype
+                    )
+                output = head(features)  # [B, C]
             else:
-                batch_size = self._get_batch_size(decoded)
-                features = torch.zeros(
-                    batch_size, 1, 1, 1, head.in_features, device=device, dtype=dtype
-                )
+                # Spatial modality: tokens are [B, P_H, P_W, T, BS, D] or None
+                if tokens is not None:
+                    features = tokens.mean(dim=-2)  # [B, P_H, P_W, T, D]
+                else:
+                    batch_size = self._get_batch_size(decoded)
+                    features = torch.zeros(
+                        batch_size,
+                        1,
+                        1,
+                        1,
+                        head.in_features,
+                        device=device,
+                        dtype=dtype,
+                    )
 
-            num_channels = self.modality_configs[sup_name].num_output_channels
-            raw = head(features)  # [B, P_H, P_W, T, mps^2 * C]
+                num_channels = self.modality_configs[sup_name].num_output_channels
+                raw = head(features)  # [B, P_H, P_W, T, mps^2 * C]
 
-            output = rearrange(
-                raw,
-                "b ph pw t (c i j) -> b (ph i) (pw j) t c",
-                c=num_channels,
-                i=mps,
-                j=mps,
-            )  # [B, P_H*mps, P_W*mps, T, C]
+                output = rearrange(
+                    raw,
+                    "b ph pw t (c i j) -> b (ph i) (pw j) t c",
+                    c=num_channels,
+                    i=mps,
+                    j=mps,
+                )  # [B, P_H*mps, P_W*mps, T, C]
 
-            raw_target = getattr(batch, sup_name, None)
-            if raw_target is not None:
-                target_h, target_w = raw_target.shape[1], raw_target.shape[2]
-                if output.shape[1] != target_h or output.shape[2] != target_w:
-                    orig_dtype = output.dtype
-                    b, h, w, t, c = output.shape
-                    output = rearrange(output, "b h w t c -> (b t) c h w")
-                    output = F.interpolate(
-                        output.float(),
-                        size=(target_h, target_w),
-                        mode="bilinear",
-                        align_corners=False,
-                    ).to(orig_dtype)
-                    output = rearrange(output, "(b t) c h w -> b h w t c", b=b, t=t)
+                raw_target = getattr(batch, sup_name, None)
+                if raw_target is not None:
+                    target_h, target_w = raw_target.shape[1], raw_target.shape[2]
+                    if output.shape[1] != target_h or output.shape[2] != target_w:
+                        orig_dtype = output.dtype
+                        b, h, w, t, c = output.shape
+                        output = rearrange(output, "b h w t c -> (b t) c h w")
+                        output = F.interpolate(
+                            output.float(),
+                            size=(target_h, target_w),
+                            mode="bilinear",
+                            align_corners=False,
+                        ).to(orig_dtype)
+                        output = rearrange(output, "(b t) c h w -> b h w t c", b=b, t=t)
 
             predictions[sup_name] = output
 
