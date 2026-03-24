@@ -271,7 +271,7 @@ def launch_beaker(
         task_name="pca-analysis",
     )
     launch_config.priority = BeakerPriority(priority)
-    launch_config.launch(follow=True, torchrun=False)
+    launch_config.launch(follow=False, torchrun=False)
 
 
 def main() -> None:
