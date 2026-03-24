@@ -417,29 +417,39 @@ class MultiModalPatchEmbeddings(nn.Module):
 
     @staticmethod
     def _apply_structured_band_dropout(patchified_data: Tensor, rate: float) -> Tensor:
-        """Drop a deterministic number of bands, shared across all samples.
+        """Drop a deterministic number of bands with per-sample random selection.
 
         Computes num_drop = round(num_bands * rate), then randomly selects that many
-        bands to zero out. The same bands are dropped for every sample in the batch,
-        reducing gradient variance compared to per-sample Bernoulli dropout.
+        bands to zero out independently per sample. The count is deterministic (no
+        extreme tail events) but each sample drops different bands for augmentation
+        diversity.
 
         Args:
             patchified_data: Input tensor with bands in the last dimension.
             rate: Fraction of bands to drop (from Uniform(0, max_rate)).
 
         Returns:
-            Tensor with exactly num_drop bands zeroed, at least 1 band kept.
+            Tensor with exactly num_drop bands zeroed per sample, at least 1 kept.
         """
         num_bands = patchified_data.shape[-1]
+        batch_size = patchified_data.shape[0]
         num_drop = min(round(num_bands * rate), num_bands - 1)
         if num_drop == 0:
             return patchified_data
-        perm = torch.randperm(num_bands, device=patchified_data.device)
-        keep_mask = torch.ones(
-            num_bands, device=patchified_data.device, dtype=patchified_data.dtype
+        perm = torch.stack(
+            [
+                torch.randperm(num_bands, device=patchified_data.device)
+                for _ in range(batch_size)
+            ]
         )
-        keep_mask[perm[:num_drop]] = 0.0
-        view_shape = [1] * (patchified_data.dim() - 1) + [num_bands]
+        keep_mask = torch.ones(
+            batch_size,
+            num_bands,
+            device=patchified_data.device,
+            dtype=patchified_data.dtype,
+        )
+        keep_mask.scatter_(1, perm[:, :num_drop], 0.0)
+        view_shape = [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
         return patchified_data * keep_mask.view(*view_shape)
 
     @staticmethod
