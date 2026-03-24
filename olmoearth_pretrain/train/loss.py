@@ -390,6 +390,7 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         modality_weights: dict[str, float] | None = None,
         same_target_threshold: float = 0.999,
         mask_negatives_for_modalities: list[str] | None = None,
+        covariance_weight: float = 0.0,
     ):
         """Initialize masked negatives patch discrimination loss.
 
@@ -401,6 +402,9 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
             same_target_threshold: cosine similarity threshold to consider targets as same
             mask_negatives_for_modalities: list of modality names to apply masking for.
                 If None, applies to all modalities.
+            covariance_weight: weight for covariance regularization on encoder embeddings.
+                When > 0, penalizes off-diagonal elements of the embedding covariance matrix
+                to prevent dimensional collapse (VICReg-style). Requires encoder_latent kwarg.
         """
         self.tau = tau
         self.pred2unit = pred2unit
@@ -408,6 +412,26 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         self.modality_weights = modality_weights
         self.same_target_threshold = same_target_threshold
         self.mask_negatives_for_modalities = mask_negatives_for_modalities
+        self.covariance_weight = covariance_weight
+
+    @staticmethod
+    def _compute_covariance_loss(z: Tensor) -> Tensor:
+        """Compute off-diagonal covariance penalty (VICReg-style).
+
+        Args:
+            z: embeddings of shape (N, d).
+
+        Returns:
+            Scalar loss: mean squared off-diagonal covariance.
+        """
+        z = z.float()
+        z = z - z.mean(dim=0)
+        n = z.shape[0]
+        d = z.shape[1]
+        cov = (z.T @ z) / (n - 1)  # (d, d)
+        # Zero the diagonal, penalize off-diagonal
+        cov.fill_diagonal_(0)
+        return cov.pow(2).sum() / d
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
@@ -506,6 +530,19 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
                 loss = loss * self.modality_weights.get(modality, 1.0)
 
             total_loss += loss
+
+        # Covariance regularization on encoder embeddings
+        if self.covariance_weight > 0:
+            encoder_latent: TokensAndMasks | None = kwargs.get("encoder_latent")
+            if encoder_latent is not None:
+                all_tokens, all_masks = encoder_latent.flatten_all_tokens_and_masks()
+                encoder_tokens = all_tokens[all_masks == MaskValue.ONLINE_ENCODER.value]
+                if encoder_tokens.shape[0] > 1:
+                    total_loss = (
+                        total_loss
+                        + self.covariance_weight
+                        * self._compute_covariance_loss(encoder_tokens)
+                    )
 
         return self.weight * total_loss
 

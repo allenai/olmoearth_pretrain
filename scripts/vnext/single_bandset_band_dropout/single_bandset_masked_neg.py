@@ -2502,6 +2502,64 @@ def build_dataloader_exp39(common: CommonComponents) -> OlmoEarthDataLoaderConfi
 
 
 # ============================================================
+# Experiment 40: exp36 + covariance regularization on encoder embeddings
+# ============================================================
+
+
+def build_common_exp40(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp40 (same as exp36)."""
+    return build_common_exp36(script, cmd, run_name, cluster, overrides)
+
+
+def _loss_config_ndvi_era5_covariance(covariance_weight: float = 1.0) -> LossConfig:
+    return LossConfig(
+        loss_config={
+            "type": "modality_patch_discrimination_masked_negatives",
+            "tau": 0.1,
+            "same_target_threshold": 0.999,
+            "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES_WITH_NDVI_AND_ERA5,
+            "covariance_weight": covariance_weight,
+        }
+    )
+
+
+def build_train_module_exp40(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp40 (exp36 + covariance reg weight=1.0)."""
+    return ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
+        rank_microbatch_size=32,
+        masking_config=_masking_config_random_time_ndvi_era5(
+            common.tokenization_config
+        ),
+        loss_config=_loss_config_ndvi_era5_covariance(covariance_weight=1.0),
+        contrastive_config=_contrastive_config_005(),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        max_grad_norm=1.0,
+        scheduler=CosWithWarmup(warmup_steps=8000),
+        ema_decay=(1.0, 1.0),
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+    )
+
+
+def build_model_exp40(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp40 (same as exp36)."""
+    return build_model_exp36(common)
+
+
+def build_dataloader_exp40(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp40 (same as exp36)."""
+    return build_dataloader_exp36(common)
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -2697,6 +2755,12 @@ EXPERIMENTS = {
         build_model_exp39,
         build_train_module_exp39,
         build_dataloader_exp39,
+    ),
+    "masked_neg_decoder_supervision_ic005_sup03x_no_s1_band_dropout_covariance_reg": (
+        build_common_exp40,
+        build_model_exp40,
+        build_train_module_exp40,
+        build_dataloader_exp40,
     ),
 }
 

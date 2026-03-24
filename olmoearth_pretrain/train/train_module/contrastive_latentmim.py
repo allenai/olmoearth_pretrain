@@ -191,9 +191,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 )
             self.model.target_encoder.apply(self.model.target_encoder._init_weights)
 
-    def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
+    def loss_fn(self, pred: Any, targets: Any, **kwargs: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
-        return self.base_loss.compute(pred, targets)
+        return self.base_loss.compute(pred, targets, **kwargs)
 
     def train_batch(
         self,
@@ -389,7 +389,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     }:
                         loss = loss + 0 * param.sum()
             else:
-                loss = self.loss_fn(decoded, target_output)
+                loss = self.loss_fn(decoded, target_output, encoder_latent=latent)
 
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
