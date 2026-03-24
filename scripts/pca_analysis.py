@@ -262,7 +262,7 @@ def launch_beaker(
         "--experiment",
         experiment,
         "--output",
-        output,
+        f"/output/{output}",
     ]
     launch_config = build_launch_config(
         name="pca-analysis",
