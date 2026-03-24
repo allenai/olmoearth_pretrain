@@ -4,17 +4,21 @@ Reproduces the analysis from https://geospatialml.com/posts/compressing-earth-em
 to measure dimensional redundancy in encoder embeddings.
 
 Usage:
-    # From a distributed checkpoint — requires the training script to build model config:
-    torchrun --nproc_per_node=1 scripts/pca_analysis.py \
+    # Run locally from a distributed checkpoint (requires torchrun):
+    torchrun --nproc_per_node=1 scripts/pca_analysis.py run \
         --checkpoint_dir /path/to/checkpoints/step300000 \
         --train_script scripts/vnext/single_bandset_band_dropout/single_bandset_masked_neg.py \
-        --experiment masked_neg_decoder_supervision_ic005_sup03x_no_s1_band_dropout \
-        --output pca_analysis.png
+        --experiment masked_neg_decoder_supervision_ic005_sup03x_no_s1_band_dropout
 
-    # From a converted weights.pth checkpoint (e.g. HuggingFace models):
-    python scripts/pca_analysis.py \
-        --model_path /path/to/model_dir \
-        --output pca_analysis.png
+    # Run locally from a converted weights.pth checkpoint (e.g. HuggingFace models):
+    python scripts/pca_analysis.py run --model_path /path/to/model_dir
+
+    # Launch on Beaker:
+    python scripts/pca_analysis.py launch \
+        --checkpoint_dir /weka/dfive-default/.../step300000 \
+        --train_script scripts/vnext/single_bandset_band_dropout/single_bandset_masked_neg.py \
+        --experiment masked_neg_decoder_supervision_ic005_sup03x_no_s1_band_dropout \
+        --cluster ai2/saturn-cirrascale
 """
 
 import argparse
@@ -233,37 +237,105 @@ def plot_results(results: dict, output_path: str) -> None:
     plt.close()
 
 
+def launch_beaker(
+    checkpoint_dir: str,
+    train_script: str,
+    experiment: str,
+    cluster: str,
+    priority: str = "high",
+    output: str = "pca_analysis.png",
+) -> None:
+    """Launch PCA analysis as a beaker job."""
+    from olmo_core.launch.beaker import BeakerPriority
+
+    from olmoearth_pretrain.internal.common import build_launch_config
+
+    cmd = [
+        "torchrun",
+        "--nproc_per_node=1",
+        "scripts/pca_analysis.py",
+        "run",
+        "--checkpoint_dir",
+        checkpoint_dir,
+        "--train_script",
+        train_script,
+        "--experiment",
+        experiment,
+        "--output",
+        output,
+    ]
+    launch_config = build_launch_config(
+        name="pca-analysis",
+        cmd=cmd,
+        clusters=cluster,
+        task_name="pca-analysis",
+    )
+    launch_config.priority = BeakerPriority(priority)
+    launch_config.launch(follow=True, torchrun=False)
+
+
 def main() -> None:
     """Run pca analysis."""
     parser = argparse.ArgumentParser(description="PCA analysis of encoder embeddings")
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # --- run: local or torchrun execution ---
+    run_parser = subparsers.add_parser("run", help="Run PCA analysis locally")
+    source_group = run_parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument(
         "--checkpoint_dir",
         type=str,
         help="Path to distributed checkpoint step directory (e.g. .../step300000/)",
     )
-    group.add_argument(
+    source_group.add_argument(
         "--model_path",
         type=str,
         help="Path to converted model directory (config.json + weights.pth)",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--train_script",
         type=str,
         default=None,
         help="Path to training script (required for --checkpoint_dir)",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--experiment",
         type=str,
         default=None,
-        help="Experiment key in the training script's EXPERIMENTS dict (required for --checkpoint_dir)",
+        help="Experiment key in the script's EXPERIMENTS dict (required for --checkpoint_dir)",
     )
-    parser.add_argument("--output", type=str, default="pca_analysis.png")
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--patch_size", type=int, default=8)
+    run_parser.add_argument("--output", type=str, default="pca_analysis.png")
+    run_parser.add_argument("--batch_size", type=int, default=32)
+    run_parser.add_argument("--patch_size", type=int, default=8)
+
+    # --- launch: submit to beaker ---
+    launch_parser = subparsers.add_parser("launch", help="Launch on Beaker")
+    launch_parser.add_argument("--checkpoint_dir", type=str, required=True)
+    launch_parser.add_argument("--train_script", type=str, required=True)
+    launch_parser.add_argument("--experiment", type=str, required=True)
+    launch_parser.add_argument("--cluster", type=str, default="ai2/saturn-cirrascale")
+    launch_parser.add_argument(
+        "--priority",
+        type=str,
+        default="high",
+        choices=["preemptible", "normal", "high", "urgent"],
+    )
+    launch_parser.add_argument("--output", type=str, default="pca_analysis.png")
+
     args = parser.parse_args()
 
+    if args.command == "launch":
+        launch_beaker(
+            checkpoint_dir=args.checkpoint_dir,
+            train_script=args.train_script,
+            experiment=args.experiment,
+            cluster=args.cluster,
+            priority=args.priority,
+            output=args.output,
+        )
+        return
+
+    # --- run ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if args.checkpoint_dir:
