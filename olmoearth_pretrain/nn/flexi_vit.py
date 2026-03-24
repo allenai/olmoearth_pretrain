@@ -151,6 +151,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         use_linear_patch_embed: bool = True,
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
+        structured_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
         use_spectral_attention: bool = False,
         spectral_attention_d_model: int = 128,
@@ -175,6 +176,10 @@ class MultiModalPatchEmbeddings(nn.Module):
             random_band_dropout: If True, sample the dropout rate per forward call from
                 Uniform(0, band_dropout_rate). This reduces train-inference mismatch
                 and acts as stronger augmentation. Default: False (fixed rate).
+            structured_band_dropout: If True, use count-based dropout: sample a rate from
+                Uniform(0, band_dropout_rate), compute num_drop = round(num_bands * rate),
+                then drop exactly that many bands, shared across all samples in the batch.
+                Mutually exclusive with random_band_dropout. Default: False.
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
             use_spectral_attention: If True, apply content-dependent cross-band
@@ -197,7 +202,12 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.use_linear_patch_embed = use_linear_patch_embed
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
+        self.structured_band_dropout = structured_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
+        if random_band_dropout and structured_band_dropout:
+            raise ValueError(
+                "random_band_dropout and structured_band_dropout are mutually exclusive"
+            )
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -338,16 +348,27 @@ class MultiModalPatchEmbeddings(nn.Module):
             )
             if self.training and apply_dropout and self.band_dropout_rate > 0.0:
                 num_bands = patchified_data.shape[-1]
-                # Only apply band dropout if there are more than 1 band
                 if num_bands > 1:
-                    if self.random_band_dropout:
+                    if self.structured_band_dropout:
                         rate = (
                             torch.rand(1, device=patchified_data.device).item()
                             * self.band_dropout_rate
                         )
+                        patchified_data = self._apply_structured_band_dropout(
+                            patchified_data, rate
+                        )
+                    elif self.random_band_dropout:
+                        rate = (
+                            torch.rand(1, device=patchified_data.device).item()
+                            * self.band_dropout_rate
+                        )
+                        patchified_data = self._apply_band_dropout(
+                            patchified_data, rate
+                        )
                     else:
-                        rate = self.band_dropout_rate
-                    patchified_data = self._apply_band_dropout(patchified_data, rate)
+                        patchified_data = self._apply_band_dropout(
+                            patchified_data, self.band_dropout_rate
+                        )
 
             if self.spectral_attention_modules is not None:
                 sa_key = self._get_embedding_module_name(modality, idx)
@@ -393,6 +414,33 @@ class MultiModalPatchEmbeddings(nn.Module):
         # Broadcast: [B, 1, 1, ..., num_bands]
         view_shape = [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
         return patchified_data * keep_mask.view(*view_shape).to(patchified_data.dtype)
+
+    @staticmethod
+    def _apply_structured_band_dropout(patchified_data: Tensor, rate: float) -> Tensor:
+        """Drop a deterministic number of bands, shared across all samples.
+
+        Computes num_drop = round(num_bands * rate), then randomly selects that many
+        bands to zero out. The same bands are dropped for every sample in the batch,
+        reducing gradient variance compared to per-sample Bernoulli dropout.
+
+        Args:
+            patchified_data: Input tensor with bands in the last dimension.
+            rate: Fraction of bands to drop (from Uniform(0, max_rate)).
+
+        Returns:
+            Tensor with exactly num_drop bands zeroed, at least 1 band kept.
+        """
+        num_bands = patchified_data.shape[-1]
+        num_drop = min(round(num_bands * rate), num_bands - 1)
+        if num_drop == 0:
+            return patchified_data
+        perm = torch.randperm(num_bands, device=patchified_data.device)
+        keep_mask = torch.ones(
+            num_bands, device=patchified_data.device, dtype=patchified_data.dtype
+        )
+        keep_mask[perm[:num_drop]] = 0.0
+        view_shape = [1] * (patchified_data.dim() - 1) + [num_bands]
+        return patchified_data * keep_mask.view(*view_shape)
 
     @staticmethod
     def is_any_data_seen_by_encoder(modality_mask: Tensor) -> bool:
@@ -1121,6 +1169,7 @@ class Encoder(FlexiVitBase):
         use_linear_patch_embed: bool = True,
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
+        structured_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
         use_spectral_attention: bool = False,
         spectral_attention_d_model: int = 128,
@@ -1157,6 +1206,7 @@ class Encoder(FlexiVitBase):
                 Set False to load checkpoints trained before this flag existed (Conv2d weights).
             band_dropout_rate: Probability of dropping each band channel during training.
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
+            structured_band_dropout: If True, use count-based dropout shared across batch.
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
             use_spectral_attention: If True, apply content-dependent cross-band
@@ -1194,6 +1244,7 @@ class Encoder(FlexiVitBase):
         self.use_linear_patch_embed = use_linear_patch_embed
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
+        self.structured_band_dropout = structured_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
@@ -1203,6 +1254,7 @@ class Encoder(FlexiVitBase):
             use_linear_patch_embed=self.use_linear_patch_embed,
             band_dropout_rate=self.band_dropout_rate,
             random_band_dropout=self.random_band_dropout,
+            structured_band_dropout=self.structured_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
             use_spectral_attention=use_spectral_attention,
             spectral_attention_d_model=spectral_attention_d_model,
@@ -2084,6 +2136,7 @@ class EncoderConfig(Config):
     use_linear_patch_embed: bool = True
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
+    structured_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
     use_spectral_attention: bool = False
     spectral_attention_d_model: int = 128
