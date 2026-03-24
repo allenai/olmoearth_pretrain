@@ -6,9 +6,7 @@ to measure dimensional redundancy in encoder embeddings.
 Usage:
     # Run locally from a distributed checkpoint (requires torchrun):
     torchrun --nproc_per_node=1 scripts/pca_analysis.py run \
-        --checkpoint_dir /path/to/checkpoints/step300000 \
-        --train_script scripts/vnext/single_bandset_band_dropout/single_bandset_masked_neg.py \
-        --experiment masked_neg_decoder_supervision_ic005_sup03x_no_s1_band_dropout
+        --checkpoint_dir /path/to/checkpoints/step300000
 
     # Run locally from a converted weights.pth checkpoint (e.g. HuggingFace models):
     python scripts/pca_analysis.py run --model_path /path/to/model_dir
@@ -16,12 +14,12 @@ Usage:
     # Launch on Beaker:
     python scripts/pca_analysis.py launch \
         --checkpoint_dir /weka/dfive-default/.../step300000 \
-        --train_script scripts/vnext/single_bandset_band_dropout/single_bandset_masked_neg.py \
-        --experiment masked_neg_decoder_supervision_ic005_sup03x_no_s1_band_dropout \
-        --cluster ai2/saturn-cirrascale
+        --cluster ai2/saturn-cirrascale \
+        --priority preemptible
 """
 
 import argparse
+import json
 import logging
 from pathlib import Path
 
@@ -35,36 +33,27 @@ logger = logging.getLogger(__name__)
 
 
 def load_model_from_distributed_checkpoint(
-    checkpoint_dir: str, train_script: str, experiment: str
+    checkpoint_dir: str,
 ) -> torch.nn.Module:
     """Load model from a distributed training checkpoint.
 
-    Uses the training script to build the model config (same pattern as
-    checkpoint_sweep_evals.py), then loads weights from the checkpoint.
+    Builds the model from the checkpoint's own config.json (which is guaranteed
+    to match the saved weights), then loads the distributed checkpoint weights.
 
     Args:
         checkpoint_dir: Path to a step directory (e.g. .../step300000/).
-        train_script: Path to the training script (e.g. scripts/vnext/.../single_bandset_masked_neg.py).
-        experiment: Experiment key in the script's EXPERIMENTS dict.
     """
+    from olmo_core.config import Config
     from olmo_core.distributed.checkpoint import load_model_and_optim_state
 
-    from olmoearth_pretrain.internal.all_evals import load_user_module
-    from olmoearth_pretrain.internal.experiment import SubCmd
+    from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
 
-    user_mod = load_user_module(train_script)
+    config_path = Path(checkpoint_dir) / "config.json"
+    with open(config_path) as f:
+        config_dict = json.load(f)
 
-    # Look up experiment builders
-    experiments = user_mod.EXPERIMENTS
-    if experiment not in experiments:
-        raise ValueError(
-            f"Unknown experiment: {experiment}. Available: {list(experiments.keys())}"
-        )
-    common_builder, model_builder, _, _ = experiments[experiment]
-
-    # Build common components (use dummy values for script/cmd/run_name/cluster)
-    common = common_builder(train_script, SubCmd.evaluate, "pca_analysis", "local", [])
-    model_config = model_builder(common)
+    config_dict = patch_legacy_encoder_config(config_dict)
+    model_config = Config.from_dict(config_dict["model"])
     model = model_config.build()
 
     train_module_dir = str(Path(checkpoint_dir) / "model_and_optim")
@@ -239,8 +228,6 @@ def plot_results(results: dict, output_path: str) -> None:
 
 def launch_beaker(
     checkpoint_dir: str,
-    train_script: str,
-    experiment: str,
     cluster: str,
     priority: str = "high",
     output: str = "pca_analysis.png",
@@ -257,10 +244,6 @@ def launch_beaker(
         "run",
         "--checkpoint_dir",
         checkpoint_dir,
-        "--train_script",
-        train_script,
-        "--experiment",
-        experiment,
         "--output",
         f"/output/{output}",
     ]
@@ -292,18 +275,6 @@ def main() -> None:
         type=str,
         help="Path to converted model directory (config.json + weights.pth)",
     )
-    run_parser.add_argument(
-        "--train_script",
-        type=str,
-        default=None,
-        help="Path to training script (required for --checkpoint_dir)",
-    )
-    run_parser.add_argument(
-        "--experiment",
-        type=str,
-        default=None,
-        help="Experiment key in the script's EXPERIMENTS dict (required for --checkpoint_dir)",
-    )
     run_parser.add_argument("--output", type=str, default="pca_analysis.png")
     run_parser.add_argument("--batch_size", type=int, default=32)
     run_parser.add_argument("--patch_size", type=int, default=8)
@@ -311,8 +282,6 @@ def main() -> None:
     # --- launch: submit to beaker ---
     launch_parser = subparsers.add_parser("launch", help="Launch on Beaker")
     launch_parser.add_argument("--checkpoint_dir", type=str, required=True)
-    launch_parser.add_argument("--train_script", type=str, required=True)
-    launch_parser.add_argument("--experiment", type=str, required=True)
     launch_parser.add_argument("--cluster", type=str, default="ai2/saturn-cirrascale")
     launch_parser.add_argument(
         "--priority",
@@ -327,8 +296,6 @@ def main() -> None:
     if args.command == "launch":
         launch_beaker(
             checkpoint_dir=args.checkpoint_dir,
-            train_script=args.train_script,
-            experiment=args.experiment,
             cluster=args.cluster,
             priority=args.priority,
             output=args.output,
@@ -339,13 +306,7 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if args.checkpoint_dir:
-        if not args.train_script or not args.experiment:
-            parser.error(
-                "--train_script and --experiment are required with --checkpoint_dir"
-            )
-        model = load_model_from_distributed_checkpoint(
-            args.checkpoint_dir, args.train_script, args.experiment
-        )
+        model = load_model_from_distributed_checkpoint(args.checkpoint_dir)
     else:
         model = load_model_from_path(args.model_path)
 
