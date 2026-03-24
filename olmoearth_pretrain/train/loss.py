@@ -413,6 +413,7 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         self.same_target_threshold = same_target_threshold
         self.mask_negatives_for_modalities = mask_negatives_for_modalities
         self.covariance_weight = covariance_weight
+        self._last_covariance_loss: Tensor | None = None
 
     @staticmethod
     def _compute_covariance_loss(z: Tensor) -> Tensor:
@@ -532,17 +533,16 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
             total_loss += loss
 
         # Covariance regularization on encoder embeddings
+        self._last_covariance_loss = None
         if self.covariance_weight > 0:
             encoder_latent: TokensAndMasks | None = kwargs.get("encoder_latent")
             if encoder_latent is not None:
                 all_tokens, all_masks = encoder_latent.flatten_all_tokens_and_masks()
                 encoder_tokens = all_tokens[all_masks == MaskValue.ONLINE_ENCODER.value]
                 if encoder_tokens.shape[0] > 1:
-                    total_loss = (
-                        total_loss
-                        + self.covariance_weight
-                        * self._compute_covariance_loss(encoder_tokens)
-                    )
+                    cov_loss = self._compute_covariance_loss(encoder_tokens)
+                    self._last_covariance_loss = cov_loss.detach()
+                    total_loss = total_loss + self.covariance_weight * cov_loss
 
         return self.weight * total_loss
 

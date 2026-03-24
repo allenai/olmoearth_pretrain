@@ -391,6 +391,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             else:
                 loss = self.loss_fn(decoded, target_output, encoder_latent=latent)
 
+            # Log covariance loss if computed
+            if hasattr(self.base_loss, "_last_covariance_loss"):
+                cov_loss = self.base_loss._last_covariance_loss
+                if cov_loss is not None:
+                    self.log_extra_metrics({"train/covariance_loss": cov_loss})
+
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
 

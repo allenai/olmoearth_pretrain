@@ -4,20 +4,20 @@ Reproduces the analysis from https://geospatialml.com/posts/compressing-earth-em
 to measure dimensional redundancy in encoder embeddings.
 
 Usage:
-    # From a distributed checkpoint (e.g. step300000/):
+    # From a distributed checkpoint — requires the training script to build model config:
     torchrun --nproc_per_node=1 scripts/pca_analysis.py \
         --checkpoint_dir /path/to/checkpoints/step300000 \
         --train_script scripts/vnext/single_bandset_band_dropout/single_bandset_masked_neg.py \
+        --experiment masked_neg_decoder_supervision_ic005_sup03x_no_s1_band_dropout \
         --output pca_analysis.png
 
-    # From a converted weights.pth checkpoint:
+    # From a converted weights.pth checkpoint (e.g. HuggingFace models):
     python scripts/pca_analysis.py \
         --model_path /path/to/model_dir \
         --output pca_analysis.png
 """
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
@@ -31,25 +31,36 @@ logger = logging.getLogger(__name__)
 
 
 def load_model_from_distributed_checkpoint(
-    checkpoint_dir: str, train_script: str
+    checkpoint_dir: str, train_script: str, experiment: str
 ) -> torch.nn.Module:
     """Load model from a distributed training checkpoint.
 
+    Uses the training script to build the model config (same pattern as
+    checkpoint_sweep_evals.py), then loads weights from the checkpoint.
+
     Args:
         checkpoint_dir: Path to a step directory (e.g. .../step300000/).
-        train_script: Path to the training script that defines the model config.
+        train_script: Path to the training script (e.g. scripts/vnext/.../single_bandset_masked_neg.py).
+        experiment: Experiment key in the script's EXPERIMENTS dict.
     """
-    from olmo_core.config import Config
     from olmo_core.distributed.checkpoint import load_model_and_optim_state
 
-    config_path = Path(checkpoint_dir) / "config.json"
-    with open(config_path) as f:
-        config_dict = json.load(f)
+    from olmoearth_pretrain.internal.all_evals import load_user_module
+    from olmoearth_pretrain.internal.experiment import SubCmd
 
-    from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
+    user_mod = load_user_module(train_script)
 
-    config_dict = patch_legacy_encoder_config(config_dict)
-    model_config = Config.from_dict(config_dict["model"])
+    # Look up experiment builders
+    experiments = user_mod.EXPERIMENTS
+    if experiment not in experiments:
+        raise ValueError(
+            f"Unknown experiment: {experiment}. Available: {list(experiments.keys())}"
+        )
+    common_builder, model_builder, _, _ = experiments[experiment]
+
+    # Build common components (use dummy values for script/cmd/run_name/cluster)
+    common = common_builder(train_script, SubCmd.evaluate, "pca_analysis", "local", [])
+    model_config = model_builder(common)
     model = model_config.build()
 
     train_module_dir = str(Path(checkpoint_dir) / "model_and_optim")
@@ -67,34 +78,38 @@ def load_model_from_path(model_path: str) -> torch.nn.Module:
     return model
 
 
+def _encoder_forward(
+    encoder: torch.nn.Module, sample: torch.nn.Module, patch_size: int
+) -> torch.nn.Module:
+    """Call encoder forward, handling both FlexiVitBase (returns dict) and STBase (returns tuple)."""
+    from olmoearth_pretrain.nn.flexi_vit import FlexiVitBase
+
+    if isinstance(encoder, FlexiVitBase):
+        output_dict = encoder(sample, patch_size=patch_size, fast_pass=True)
+        return output_dict["tokens_and_masks"]
+    else:
+        # STEncoder returns (TokensAndMasks, projected_pooled)
+        tokens_and_masks, _ = encoder(sample, patch_size=patch_size)
+        return tokens_and_masks
+
+
 def get_embeddings(
     model: torch.nn.Module,
     device: torch.device,
     batch_size: int = 32,
     patch_size: int = 8,
 ) -> np.ndarray:
-    """Get encoder embeddings on the EuroSAT eval dataset."""
+    """Get mean-pooled encoder embeddings on the EuroSAT eval dataset."""
     from olmoearth_pretrain.evals.datasets import get_eval_dataset
-    from olmoearth_pretrain.evals.datasets.configs import dataset_to_config
-    from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
-    from olmoearth_pretrain.nn.pooling import PoolingType
+    from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
     from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
-
-    config = dataset_to_config("m-eurosat")
 
     dataset = get_eval_dataset("m-eurosat", split="test")
     data_loader = DataLoader(
         dataset, batch_size=batch_size, shuffle=False, num_workers=4
     )
 
-    eval_wrapper = get_eval_wrapper(
-        model,
-        task_type=config.task_type,
-        patch_size=patch_size,
-        pooling_type=PoolingType.MEAN,
-    )
-    eval_wrapper.eval()
-
+    model.eval()
     embeddings_list: list[torch.Tensor] = []
     with torch.no_grad():
         for i, (masked_sample, label) in enumerate(data_loader):
@@ -104,11 +119,12 @@ def get_embeddings(
             masked_sample = MaskedOlmoEarthSample.from_dict(sample_dict)
 
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-                batch_embeddings, _ = eval_wrapper(
-                    masked_olmoearth_sample=masked_sample,
-                    labels=label,
-                    is_train=False,
-                )
+                tokens_and_masks = _encoder_forward(model, masked_sample, patch_size)
+
+            # Mean-pool unmasked encoder tokens -> (batch, dim)
+            batch_embeddings = pool_unmasked_tokens(
+                tokens_and_masks, PoolingType.MEAN, spatial_pooling=False
+            )
             embeddings_list.append(batch_embeddings.float().cpu())
 
             if (i + 1) % 10 == 0:
@@ -235,7 +251,13 @@ def main() -> None:
         "--train_script",
         type=str,
         default=None,
-        help="Path to training script (only needed for --checkpoint_dir)",
+        help="Path to training script (required for --checkpoint_dir)",
+    )
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        default=None,
+        help="Experiment key in the training script's EXPERIMENTS dict (required for --checkpoint_dir)",
     )
     parser.add_argument("--output", type=str, default="pca_analysis.png")
     parser.add_argument("--batch_size", type=int, default=32)
@@ -245,8 +267,12 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if args.checkpoint_dir:
+        if not args.train_script or not args.experiment:
+            parser.error(
+                "--train_script and --experiment are required with --checkpoint_dir"
+            )
         model = load_model_from_distributed_checkpoint(
-            args.checkpoint_dir, args.train_script
+            args.checkpoint_dir, args.train_script, args.experiment
         )
     else:
         model = load_model_from_path(args.model_path)
