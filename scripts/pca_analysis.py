@@ -141,11 +141,13 @@ def pca_analysis(embeddings: np.ndarray) -> dict:
     variance_ratio = pca.explained_variance_ratio_
     cumulative_variance = np.cumsum(variance_ratio)
 
-    # Key metrics
-    dims_for_90 = int(np.searchsorted(cumulative_variance, 0.90) + 1)
-    dims_for_95 = int(np.searchsorted(cumulative_variance, 0.95) + 1)
-    dims_for_98 = int(np.searchsorted(cumulative_variance, 0.98) + 1)
-    dims_for_99 = int(np.searchsorted(cumulative_variance, 0.99) + 1)
+    # Variance explained by top-k components
+    top_k_dims = [4, 8, 16, 32, 64]
+    variance_at_k = {
+        k: float(cumulative_variance[k - 1])
+        for k in top_k_dims
+        if k <= len(cumulative_variance)
+    }
 
     results = {
         "singular_values": pca.singular_values_,
@@ -153,10 +155,7 @@ def pca_analysis(embeddings: np.ndarray) -> dict:
         "cumulative_variance": cumulative_variance,
         "embedding_dim": embeddings.shape[1],
         "num_samples": embeddings.shape[0],
-        "dims_for_90": dims_for_90,
-        "dims_for_95": dims_for_95,
-        "dims_for_98": dims_for_98,
-        "dims_for_99": dims_for_99,
+        "variance_at_k": variance_at_k,
     }
     return results
 
@@ -191,19 +190,17 @@ def plot_results(results: dict, output_path: str) -> None:
     ax.axhline(y=0.98, color="gray", linestyle=":", alpha=0.5, label="98%")
 
     # Mark key thresholds
-    for pct, dims, color in [
-        (0.90, results["dims_for_90"], "green"),
-        (0.95, results["dims_for_95"], "orange"),
-        (0.98, results["dims_for_98"], "red"),
-    ]:
-        ax.axvline(x=dims, color=color, linestyle="--", alpha=0.5)
-        ax.annotate(
-            f"{int(pct * 100)}%: {dims}d",
-            xy=(dims, pct),
-            xytext=(dims + d * 0.05, pct - 0.03),
-            fontsize=9,
-            color=color,
-        )
+    colors = ["green", "orange", "red", "purple", "brown"]
+    for (k, var), color in zip(results["variance_at_k"].items(), colors):
+        if k <= d:
+            ax.axvline(x=k, color=color, linestyle="--", alpha=0.5)
+            ax.annotate(
+                f"{k}d: {var:.0%}",
+                xy=(k, var),
+                xytext=(k + d * 0.05, var - 0.03),
+                fontsize=9,
+                color=color,
+            )
 
     ax.set_xlabel("Number of Components")
     ax.set_ylabel("Cumulative Variance Explained")
@@ -211,12 +208,12 @@ def plot_results(results: dict, output_path: str) -> None:
     ax.legend()
     ax.grid(True, alpha=0.3)
 
+    variance_summary = " | ".join(
+        f"{k}d: {var:.0%}" for k, var in results["variance_at_k"].items()
+    )
     fig.suptitle(
         f"PCA Analysis of Encoder Embeddings ({results['num_samples']} samples, {d}d)\n"
-        f"90%: {results['dims_for_90']}d | "
-        f"95%: {results['dims_for_95']}d | "
-        f"98%: {results['dims_for_98']}d | "
-        f"99%: {results['dims_for_99']}d",
+        f"{variance_summary}",
         fontsize=12,
     )
     plt.tight_layout()
@@ -334,12 +331,9 @@ def main() -> None:
     print(f"Embedding dimension: {results['embedding_dim']}")
     print(f"Number of samples:   {results['num_samples']}")
     print("")
-    print(f"Dimensions for 90% variance: {results['dims_for_90']}")
-    print(f"Dimensions for 95% variance: {results['dims_for_95']}")
-    print(f"Dimensions for 98% variance: {results['dims_for_98']}")
-    print(f"Dimensions for 99% variance: {results['dims_for_99']}")
-    print("")
-    print(f"Top-5 component variance:    {results['variance_ratio'][:5]}")
+    print("Cumulative variance explained by top-k components:")
+    for k, var in results["variance_at_k"].items():
+        print(f"  {k:>3d}d: {var:.0%}")
     print(f"{'=' * 60}")
 
     output_path = Path(args.output)
