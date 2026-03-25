@@ -547,6 +547,139 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         return self.weight * total_loss
 
 
+@LOSS_REGISTRY.register("modality_all_discrimination_masked_negatives")
+class ModalityAllDiscriminationMaskedNegatives(Loss):
+    """Patch discrimination across all batch instances, with same-target negative masking.
+
+    Like ModalityPatchDiscriminationMaskedNegatives, but negatives are drawn from
+    every instance in the batch (not just within the same instance). This encourages
+    the model to produce embeddings that are discriminable across the full batch,
+    reducing position-dependent artifacts that arise when negatives are only
+    drawn from within a single image.
+    """
+
+    name = "ModalityAllDiscMasked"
+
+    def __init__(
+        self,
+        tau: float = 0.1,
+        pred2unit: bool = False,
+        weight: float = 1.0,
+        modality_weights: dict[str, float] | None = None,
+        same_target_threshold: float = 0.999,
+        mask_negatives_for_modalities: list[str] | None = None,
+        covariance_weight: float = 0.0,
+    ):
+        """Initialize cross-instance masked negatives patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            pred2unit: whether to standardize the predictions using batch statistics
+            weight: the weight to apply to this loss
+            modality_weights: the weights to apply to each modality
+            same_target_threshold: cosine similarity threshold to consider targets as same
+            mask_negatives_for_modalities: list of modality names to apply masking for.
+                If None, applies to all modalities.
+            covariance_weight: weight for covariance regularization on encoder embeddings.
+                When > 0, penalizes off-diagonal elements of the embedding covariance matrix
+                to prevent dimensional collapse (VICReg-style). Requires encoder_latent kwarg.
+        """
+        self.tau = tau
+        self.pred2unit = pred2unit
+        self.weight = weight
+        self.modality_weights = modality_weights
+        self.same_target_threshold = same_target_threshold
+        self.mask_negatives_for_modalities = mask_negatives_for_modalities
+        self.covariance_weight = covariance_weight
+        self._last_covariance_loss: Tensor | None = None
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute cross-instance patch discrimination loss with masked same-target negatives."""
+        modality_preds, modality_masks = (
+            predictions.flatten_tokens_and_masks_per_modality()
+        )
+        modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
+
+        total_loss = 0
+        for all_preds, all_masks, all_targets, modality in zip(
+            modality_preds, modality_masks, modality_targets, targets.modalities
+        ):
+            # Gather all decoder tokens across the batch into a single set
+            pred = all_preds[all_masks == MaskValue.DECODER.value]  # [N_total, D]
+            target = all_targets[all_masks == MaskValue.DECODER.value]  # [N_total, D]
+            pred = pred.float()
+            target = target.float()
+            nt = pred.shape[0]
+            if nt == 0:
+                continue
+
+            if self.pred2unit:
+                pred_mu = pred.mean(0, keepdim=True)
+                pred_std = pred.std(0, keepdim=True)
+                pred = (pred - pred_mu) / (pred_std + 1e-4)
+
+            pred = F.normalize(pred, p=2, dim=-1)
+            target = F.normalize(target, p=2, dim=-1)
+
+            # Similarity: each predicted token against all target tokens
+            scores = (pred @ target.T) / self.tau  # [N_total, N_total]
+
+            # Check if we should mask negatives for this modality
+            should_mask = (
+                self.mask_negatives_for_modalities is None
+                or modality in self.mask_negatives_for_modalities
+            )
+
+            if should_mask and nt > 1:
+                target_sim = target @ target.T  # [N_total, N_total]
+                same_target = target_sim > self.same_target_threshold
+
+                diagonal = torch.eye(nt, dtype=torch.bool, device=target.device)
+                invalid_negatives = same_target & ~diagonal
+
+                # Check if any token has no valid negatives
+                valid_neg_count = (~same_target).sum(dim=-1)
+                if valid_neg_count.min() > 0:
+                    scores = scores.masked_fill(invalid_negatives, float("-inf"))
+
+            labels = torch.arange(nt, dtype=torch.long, device=pred.device)
+            loss = F.cross_entropy(scores, labels, reduction="none") * (self.tau * 2)
+
+            # Average: mean over tokens, weighted by per-sample contribution
+            # to match the per-sample averaging of the original loss
+            count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)  # [B]
+            num_valid_samples = (count > 0).sum().float().clamp(min=1)
+            loss_multiplier = self._expand_and_reciprocate(count[count > 0])
+            loss = (loss * loss_multiplier).sum() / num_valid_samples
+
+            if self.modality_weights is not None:
+                loss = loss * self.modality_weights.get(modality, 1.0)
+
+            total_loss += loss
+
+        # Covariance regularization on encoder embeddings
+        self._last_covariance_loss = None
+        if self.covariance_weight > 0:
+            encoder_latent: TokensAndMasks | None = kwargs.get("encoder_latent")
+            if encoder_latent is not None:
+                all_tokens, all_enc_masks = (
+                    encoder_latent.flatten_all_tokens_and_masks()
+                )
+                encoder_tokens = all_tokens[
+                    all_enc_masks == MaskValue.ONLINE_ENCODER.value
+                ]
+                if encoder_tokens.shape[0] > 1:
+                    cov_loss = ModalityPatchDiscriminationMaskedNegatives._compute_covariance_loss(
+                        encoder_tokens
+                    )
+                    self._last_covariance_loss = cov_loss.detach()
+                    total_loss = total_loss + self.covariance_weight * cov_loss
+
+        return self.weight * total_loss
+
+
 @LOSS_REGISTRY.register("modality_patch_discrimination_vec")
 class ModalityPatchDiscriminationLossVec(Loss):
     """Loss function for per-modality patch discrimination task.

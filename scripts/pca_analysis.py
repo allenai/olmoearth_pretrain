@@ -94,12 +94,17 @@ def get_embeddings(
 ) -> np.ndarray:
     """Get mean-pooled encoder embeddings on the EuroSAT eval dataset."""
     from olmoearth_pretrain.evals.datasets import get_eval_dataset
+    from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn_variable_time
     from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
     from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
     dataset = get_eval_dataset("m-eurosat", split="test")
     data_loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=False, num_workers=4
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=4,
+        collate_fn=eval_collate_fn_variable_time,
     )
 
     model.eval()

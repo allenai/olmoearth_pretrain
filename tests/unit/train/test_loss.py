@@ -12,6 +12,7 @@ from olmoearth_pretrain.train.loss import (
     KoLeoLoss,
     L1Loss,
     L2Loss,
+    ModalityAllDiscriminationMaskedNegatives,
     ModalityPatchDiscriminationLossNew,
     ModalityPatchDiscriminationLossVec,
     ModalityPatchDiscriminationMaskedNegatives,
@@ -1142,3 +1143,97 @@ def test_modality_patch_discrimination_masked_negatives() -> None:
 
     # Masking removes false negatives from denominator, so loss should be lower
     assert loss_value < loss_no_mask_value
+
+
+def test_modality_all_discrimination_masked_negatives() -> None:
+    """Test cross-instance masked negatives loss runs and masks identical-target negatives."""
+    b, t_h, t_w, t, d = 4, 2, 2, 2, 8
+
+    # Create targets where some tokens share the same embedding (e.g. same class)
+    target_s2 = torch.randn((b, t_h, t_w, t, d))
+    # Make first two spatial tokens identical per sample to trigger masking
+    target_s2[:, 0, 0, :, :] = target_s2[:, 0, 1, :, :]
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=target_s2,
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+
+    loss = ModalityAllDiscriminationMaskedNegatives(tau=0.1)
+    loss_value = loss.compute(preds, targets)
+    assert loss_value > 0
+
+    # Without masking (set threshold impossibly high so nothing is masked)
+    loss_no_mask = ModalityAllDiscriminationMaskedNegatives(
+        tau=0.1, same_target_threshold=2.0
+    )
+    loss_no_mask_value = loss_no_mask.compute(preds, targets)
+    assert loss_no_mask_value > 0
+
+    # Masking removes false negatives from denominator, so loss should be lower
+    assert loss_value < loss_no_mask_value
+
+
+def test_modality_all_discrimination_masked_negatives_uses_cross_instance_negatives() -> (
+    None
+):
+    """Test that cross-instance loss draws negatives from other instances.
+
+    With 2 samples each having 1 decoder token, the within-instance loss
+    (ModalityPatchDiscriminationMaskedNegatives) has no negatives per sample
+    and would skip those samples. The cross-instance loss should still compute
+    a meaningful loss since it sees tokens from both instances.
+    """
+    b, t_h, t_w, t, d = 2, 1, 1, 1, 8
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+
+    # Cross-instance loss should work: 2 tokens total, each is a negative for the other
+    cross_loss = ModalityAllDiscriminationMaskedNegatives(tau=0.1)
+    cross_loss_value = cross_loss.compute(preds, targets)
+    assert cross_loss_value > 0
+
+
+def test_modality_all_discrimination_masked_negatives_covariance() -> None:
+    """Test that covariance regularization works with the cross-instance loss."""
+    b, t_h, t_w, t, d = 4, 2, 2, 2, 8
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+
+    encoder_latent = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t))
+        * MaskValue.ONLINE_ENCODER.value,
+    )
+
+    loss_no_cov = ModalityAllDiscriminationMaskedNegatives(tau=0.1, covariance_weight=0)
+    loss_with_cov = ModalityAllDiscriminationMaskedNegatives(
+        tau=0.1, covariance_weight=1.0
+    )
+
+    val_no_cov = loss_no_cov.compute(preds, targets, encoder_latent=encoder_latent)
+    val_with_cov = loss_with_cov.compute(preds, targets, encoder_latent=encoder_latent)
+
+    assert val_no_cov > 0
+    assert val_with_cov > 0
+    assert loss_with_cov._last_covariance_loss is not None
+    # Covariance reg should make the loss larger
+    assert val_with_cov > val_no_cov
