@@ -159,6 +159,9 @@ def knn_classify(train_emb, train_labels, test_emb, test_labels, k=20):
     train_emb = F.normalize(train_emb.float(), dim=1)
     test_emb = F.normalize(test_emb.float(), dim=1)
 
+    # Bound k by training set size
+    k = min(k, len(train_emb))
+
     # Cosine similarity: [n_test, n_train]
     sim = test_emb @ train_emb.t()
 

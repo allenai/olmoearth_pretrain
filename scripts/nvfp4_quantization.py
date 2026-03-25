@@ -632,9 +632,13 @@ def main() -> None:
             full_model = load_model_from_id(mid, load_weights=True).to(DEVICE)
             fp32_model = get_encoder(full_model)
             fp32_model.eval()
-        # Deep copy for FP4 so we keep the original FP32 model
+        # Deep copy for quantization so we keep the original FP32 model
         fp4_model = copy.deepcopy(fp32_model)
         fp4_model = step2_quantize(fp4_model, args.quant_config, precision=args.precision)
+        # Check if quantization actually inserted quantizer nodes
+        if count_quantizer_nodes(fp4_model) == 0:
+            print("  Quantization did not insert any nodes. Using FP32 for remaining steps.")
+            fp4_model = fp32_model
 
     if 3 in run_steps:
         if fp32_model is None:
