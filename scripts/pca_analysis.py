@@ -26,6 +26,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from sklearn.decomposition import PCA
 from torch.utils.data import DataLoader
 
 logging.basicConfig(level=logging.INFO)
@@ -92,13 +93,13 @@ def get_embeddings(
     batch_size: int = 32,
     patch_size: int = 8,
 ) -> np.ndarray:
-    """Get mean-pooled encoder embeddings on the EuroSAT eval dataset."""
+    """Get mean-pooled encoder embeddings on the EuroSAT training dataset."""
     from olmoearth_pretrain.evals.datasets import get_eval_dataset
     from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn_variable_time
     from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
     from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
-    dataset = get_eval_dataset("m-eurosat", split="test")
+    dataset = get_eval_dataset("m-eurosat", split="train")
     data_loader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -135,16 +136,9 @@ def get_embeddings(
 
 def pca_analysis(embeddings: np.ndarray) -> dict:
     """Run PCA analysis and return results."""
-    # Center the embeddings
-    centered = embeddings - embeddings.mean(axis=0)
+    pca = PCA().fit(embeddings)
 
-    # SVD of centered embeddings
-    _, singular_values, Vt = np.linalg.svd(centered, full_matrices=False)
-
-    # Variance explained by each component
-    variance = singular_values**2 / (len(embeddings) - 1)
-    total_variance = variance.sum()
-    variance_ratio = variance / total_variance
+    variance_ratio = pca.explained_variance_ratio_
     cumulative_variance = np.cumsum(variance_ratio)
 
     # Key metrics
@@ -154,7 +148,7 @@ def pca_analysis(embeddings: np.ndarray) -> dict:
     dims_for_99 = int(np.searchsorted(cumulative_variance, 0.99) + 1)
 
     results = {
-        "singular_values": singular_values,
+        "singular_values": pca.singular_values_,
         "variance_ratio": variance_ratio,
         "cumulative_variance": cumulative_variance,
         "embedding_dim": embeddings.shape[1],
