@@ -236,6 +236,12 @@ def launch_beaker(
 
     from olmoearth_pretrain.internal.common import build_launch_config
 
+    # Derive a job name from the checkpoint path for easy identification
+    # e.g. "/weka/.../exp17/step300000" -> "pca-exp17-step300000"
+    checkpoint_path = Path(checkpoint_dir).resolve()
+    name_parts = [checkpoint_path.parent.name, checkpoint_path.name]
+    job_name = "pca-" + "-".join(p for p in name_parts if p)
+
     cmd = [
         "torchrun",
         "--nproc_per_node=1",
@@ -244,10 +250,10 @@ def launch_beaker(
         "--checkpoint_dir",
         checkpoint_dir,
         "--output",
-        f"/output/{output}",
+        f"/results/{output}",
     ]
     launch_config = build_launch_config(
-        name="pca-analysis",
+        name=job_name,
         cmd=cmd,
         clusters=cluster,
         task_name="pca-analysis",
@@ -336,7 +342,9 @@ def main() -> None:
     print(f"Top-5 component variance:    {results['variance_ratio'][:5]}")
     print(f"{'=' * 60}")
 
-    plot_results(results, args.output)
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plot_results(results, str(output_path))
 
 
 if __name__ == "__main__":
