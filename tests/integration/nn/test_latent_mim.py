@@ -176,3 +176,83 @@ def test_latentmim_with_loss(
             assert param.grad is not None, name
     for name, param in latentmim.target_encoder.named_parameters():
         assert param.grad is None, name
+
+
+def test_latentmim_with_latlon_encoding(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    masked_sample_dict: dict[str, torch.Tensor],
+) -> None:
+    """Test end-to-end forward pass with use_latlon_encoding enabled."""
+    supported_modalities = [
+        Modality.SENTINEL2_L2A,
+        Modality.LATLON,
+        Modality.WORLDCOVER,
+    ]
+    B, H, W, T, C = masked_sample_dict["sentinel2_l2a"].shape
+    x = MaskedOlmoEarthSample(**masked_sample_dict)
+
+    patch_size = 4
+    ENCODER_EMBEDDING_SIZE = 16
+    DECODER_EMBEDDING_SIZE = 16
+
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=ENCODER_EMBEDDING_SIZE,
+        max_patch_size=8,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=4.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.1,
+        use_latlon_encoding=True,
+        latlon_dropout_rate=0.2,
+    )
+    predictor = Predictor(
+        supported_modalities=supported_modalities,
+        encoder_embedding_size=ENCODER_EMBEDDING_SIZE,
+        decoder_embedding_size=DECODER_EMBEDDING_SIZE,
+        depth=2,
+        mlp_ratio=4.0,
+        num_heads=2,
+        max_sequence_length=12,
+        drop_path=0.1,
+        use_latlon_encoding=True,
+        latlon_dropout_rate=0.0,
+    )
+    latentmim = LatentMIM(encoder, predictor)
+
+    # Forward pass should complete without error
+    latent, decoded, latent_proj, reconstructed, extra = latentmim.forward(
+        x, patch_size
+    )
+
+    # Verify output shapes are correct (same as without latlon encoding)
+    patched_H = H // patch_size
+    patched_W = W // patch_size
+    sentinel2_l2a_num_band_sets = modality_band_set_len_and_total_bands[
+        "sentinel2_l2a"
+    ][0]
+
+    assert decoded.sentinel2_l2a is not None
+    assert decoded.sentinel2_l2a.shape == (
+        B,
+        patched_H,
+        patched_W,
+        T,
+        sentinel2_l2a_num_band_sets,
+        predictor.output_embedding_size,
+    )
+
+    # Verify loss backward works (gradients flow)
+    loss_fn = PatchDiscriminationLoss()
+    with torch.no_grad():
+        output_dict = latentmim.target_encoder.forward(
+            x.unmask(),
+            patch_size=patch_size,
+            token_exit_cfg={
+                modality: 0 for modality in latentmim.encoder.supported_modality_names
+            },
+        )
+        target_output, _, _ = unpack_encoder_output(output_dict)
+    loss_fn.compute(decoded, target_output).backward()

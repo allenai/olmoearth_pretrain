@@ -1,11 +1,13 @@
 """Unit tests for different encodings of data."""
 
+import pytest
 import torch
 
 from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
+    get_latlon_encoding,
     get_month_encoding_table,
 )
 
@@ -128,3 +130,56 @@ def test_get_month_encoding_table() -> None:
     encoding = get_month_encoding_table(encoding_dim)
     assert encoding.shape == (12, encoding_dim)
     assert torch.allclose(encoding, expected_output, atol=atol, rtol=rtol)
+
+
+class TestGetLatlonEncoding:
+    """Tests for get_latlon_encoding."""
+
+    def test_output_shape(self) -> None:
+        """Test that output shape is (B, encoding_dim)."""
+        latlon = torch.tensor([[45.0, 90.0], [-30.0, -60.0], [0.0, 0.0]])
+        encoding = get_latlon_encoding(latlon, 16)
+        assert encoding.shape == (3, 16)
+
+    def test_encoding_dim_must_be_even(self) -> None:
+        """Test that odd encoding_dim raises an assertion error."""
+        latlon = torch.tensor([[45.0, 90.0]])
+        with pytest.raises(AssertionError):
+            get_latlon_encoding(latlon, 7)
+
+    def test_deterministic(self) -> None:
+        """Test that same input produces same output."""
+        latlon = torch.tensor([[45.0, 90.0], [-30.0, 120.0]])
+        enc1 = get_latlon_encoding(latlon, 8)
+        enc2 = get_latlon_encoding(latlon, 8)
+        assert torch.equal(enc1, enc2)
+
+    def test_different_coords_produce_different_encodings(self) -> None:
+        """Test that different lat/lon values produce different encodings."""
+        latlon = torch.tensor([[0.0, 0.0], [45.0, 90.0]])
+        encoding = get_latlon_encoding(latlon, 8)
+        assert not torch.allclose(encoding[0], encoding[1])
+
+    def test_equator_prime_meridian(self) -> None:
+        """Test encoding at origin (0, 0) — normalized to 0, gives known sin/cos."""
+        latlon = torch.tensor([[0.0, 0.0]])
+        encoding = get_latlon_encoding(latlon, 4)
+        # Normalized coords are both 0 → sin(0)=0, cos(0)=1 for all freqs
+        expected = torch.tensor([[0.0, 1.0, 0.0, 1.0]])
+        assert torch.allclose(encoding, expected, atol=1e-6)
+
+    def test_batch_size_one(self) -> None:
+        """Test with batch size 1."""
+        latlon = torch.tensor([[90.0, 180.0]])
+        encoding = get_latlon_encoding(latlon, 8)
+        assert encoding.shape == (1, 8)
+
+    def test_uses_normalized_coordinates(self) -> None:
+        """Test that encoding uses lat/90 and lon/180 normalization."""
+        latlon = torch.tensor([[90.0, 180.0]])
+        encoding = get_latlon_encoding(latlon, 4)
+        # lat=90 → normalized=1.0, lon=180 → normalized=1.0
+        # Both produce get_1d_sincos_pos_encoding(tensor([1.0]), 2)
+        ref = get_1d_sincos_pos_encoding(torch.tensor([1.0]), 2)
+        expected = torch.cat([ref, ref], dim=1)
+        assert torch.allclose(encoding, expected, atol=1e-6)

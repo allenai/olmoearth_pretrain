@@ -26,6 +26,7 @@ from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
+    get_latlon_encoding,
     get_month_encoding_table,
 )
 from olmoearth_pretrain.nn.flexi_patch_embed import (
@@ -551,12 +552,13 @@ class Reconstructor(nn.Module):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        latlon: Tensor | None = None,
     ) -> TokensAndMasks:
         """Return flexibly patchified reconstruction for each modality of the input data.
 
         Given a [B, H, W, (T), b_s, D] inputs, returns a [B, H, W, (T), C] output.
         """
-        input_data = self.decoder(x, timestamps, patch_size, input_res)
+        input_data = self.decoder(x, timestamps, patch_size, input_res, latlon=latlon)
         output_dict = {}
         modalities_to_process = get_modalities_to_process(
             input_data.modalities, [m.name for m in self.supported_modalities]
@@ -624,6 +626,8 @@ class CompositeEncodings(nn.Module):
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        use_latlon_encoding: bool = False,
+        latlon_dropout_rate: float = 0.0,
     ):
         """Initialize the composite encodings.
 
@@ -635,9 +639,13 @@ class CompositeEncodings(nn.Module):
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             tokenization_config: Optional config for custom band groupings
+            use_latlon_encoding: Whether to add sinusoidal lat/lon encoding to all tokens
+            latlon_dropout_rate: Probability of dropping lat/lon encoding per sample during training
         """
         super().__init__()
         self.embedding_size = embedding_size
+        self.use_latlon_encoding = use_latlon_encoding
+        self.latlon_dropout_rate = latlon_dropout_rate
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [
             modality.name for modality in supported_modalities
@@ -715,6 +723,7 @@ class CompositeEncodings(nn.Module):
         input_res: int | None = None,
         use_modality_encodings: bool = True,
         use_temporal_encodings: bool = True,
+        latlon: Tensor | None = None,
     ) -> Tensor:
         """Apply the encodings to the patchified data based on modality type.
 
@@ -726,6 +735,7 @@ class CompositeEncodings(nn.Module):
             input_res: Optional input resolution for spatial encodings
             use_modality_encodings: Whether to use modality encodings
             use_temporal_encodings: Whether to use temporal encodings
+            latlon: Optional lat/lon coordinates [B, 2] for geographic encoding
 
         Returns:
             Tensor with encodings applied based on modality type
@@ -821,6 +831,17 @@ class CompositeEncodings(nn.Module):
                 spatial_embed, f"b h w d -> {ein_string}", **ein_dict
             )
             modality_embed[..., n * 3 : n * 4] += spatial_embed
+        if self.use_latlon_encoding and latlon is not None:
+            latlon_embed = get_latlon_encoding(latlon, self.embedding_size)  # (B, D)
+            if self.training and self.latlon_dropout_rate > 0.0:
+                drop_mask = torch.bernoulli(
+                    torch.full((b, 1), 1.0 - self.latlon_dropout_rate, device=device)
+                )
+                latlon_embed = latlon_embed * drop_mask
+            # Broadcast (B, D) to match modality_embed shape (B, ..., D)
+            num_middle_dims = modality_embed.ndim - 2
+            view_shape = (b, *([1] * num_middle_dims), self.embedding_size)
+            modality_embed = modality_embed + latlon_embed.view(*view_shape)
         return modality_tokens + modality_embed
 
     def forward(
@@ -829,6 +850,7 @@ class CompositeEncodings(nn.Module):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        latlon: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply the encodings to the patchified data.
 
@@ -837,6 +859,7 @@ class CompositeEncodings(nn.Module):
             timestamps: Timestamps of the data
             patch_size: Size of patches
             input_res: Resolution of the input data
+            latlon: Optional lat/lon coordinates [B, 2] for geographic encoding
 
         Returns:
             Tokens only for each modality
@@ -853,6 +876,7 @@ class CompositeEncodings(nn.Module):
                 timestamps=timestamps,
                 patch_size=patch_size,
                 input_res=input_res,
+                latlon=latlon,
             )
         return output_dict
 
@@ -876,6 +900,8 @@ class FlexiVitBase(nn.Module):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        use_latlon_encoding: bool = False,
+        latlon_dropout_rate: float = 0.0,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -915,6 +941,8 @@ class FlexiVitBase(nn.Module):
             learnable_channel_embeddings,
             random_channel_embeddings,
             tokenization_config=self._base_tokenization_config,
+            use_latlon_encoding=use_latlon_encoding,
+            latlon_dropout_rate=latlon_dropout_rate,
         )
         self.apply(self._init_weights)
 
@@ -1112,6 +1140,8 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        use_latlon_encoding: bool = False,
+        latlon_dropout_rate: float = 0.0,
     ):
         """Initialize the encoder.
 
@@ -1145,6 +1175,8 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            use_latlon_encoding: Whether to add sinusoidal lat/lon encoding to all tokens.
+            latlon_dropout_rate: Probability of dropping lat/lon encoding per sample during training.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1160,6 +1192,8 @@ class Encoder(FlexiVitBase):
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
+            use_latlon_encoding=use_latlon_encoding,
+            latlon_dropout_rate=latlon_dropout_rate,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1468,6 +1502,7 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        latlon: Tensor | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1485,6 +1520,7 @@ class Encoder(FlexiVitBase):
             timestamps,
             patch_size,
             input_res,
+            latlon=latlon,
         )
         tokens_dict.update(original_masks_dict)
 
@@ -1618,6 +1654,7 @@ class Encoder(FlexiVitBase):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 fast_pass=fast_pass,
+                latlon=x.latlon,
             )
         else:
             token_norm_stats = {}
@@ -1680,6 +1717,8 @@ class PredictorBase(FlexiVitBase):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        use_latlon_encoding: bool = False,
+        latlon_dropout_rate: float = 0.0,
     ):
         """Initialize the predictor.
 
@@ -1698,6 +1737,8 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn: Whether to use flash attention
             qk_norm: Whether to apply normalization to Q and K in attention
             tokenization_config: Optional config for custom band groupings
+            use_latlon_encoding: Whether to add sinusoidal lat/lon encoding to all tokens.
+            latlon_dropout_rate: Probability of dropping lat/lon encoding per sample during training.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1713,6 +1754,8 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn=use_flash_attn,
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
+            use_latlon_encoding=use_latlon_encoding,
+            latlon_dropout_rate=latlon_dropout_rate,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -1904,13 +1947,14 @@ class Predictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int,
+        latlon: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply attention to the tokens."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
         tokens_dict = self.composite_encodings(
-            tokens_only_dict, timestamps, patch_size, input_res
+            tokens_only_dict, timestamps, patch_size, input_res, latlon=latlon
         )
         tokens_dict.update(original_masks_dict)
         all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -1990,6 +2034,7 @@ class Predictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        latlon: Tensor | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -1998,6 +2043,7 @@ class Predictor(PredictorBase):
             timestamps: Timestamps of the tokens
             patch_size: Patch size of the tokens
             input_res: Input resolution of the tokens
+            latlon: Optional lat/lon coordinates [B, 2] for geographic encoding
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
@@ -2022,7 +2068,7 @@ class Predictor(PredictorBase):
         tokens_only_dict = self.add_masks(decoder_emedded_dict)
         decoder_emedded_dict.update(tokens_only_dict)
         tokens_and_masks = self.apply_attn(
-            decoder_emedded_dict, timestamps, patch_size, input_res
+            decoder_emedded_dict, timestamps, patch_size, input_res, latlon=latlon
         )
         # TODO: Factor this out into a more readable function
         output_dict = {}
@@ -2079,6 +2125,8 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+    use_latlon_encoding: bool = False
+    latlon_dropout_rate: float = 0.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2104,6 +2152,12 @@ class EncoderConfig(Config):
                 )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
+        if not 0.0 <= self.latlon_dropout_rate <= 1.0:
+            raise ValueError("latlon_dropout_rate must be between 0 and 1")
+        if self.latlon_dropout_rate > 0.0 and not self.use_latlon_encoding:
+            raise ValueError(
+                "latlon_dropout_rate > 0 requires use_latlon_encoding=True"
+            )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -2139,6 +2193,8 @@ class PredictorConfig(Config):
     use_flash_attn: bool = False
     qk_norm: bool = False
     tokenization_config: TokenizationConfig | None = None
+    use_latlon_encoding: bool = False
+    latlon_dropout_rate: float = 0.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2155,6 +2211,12 @@ class PredictorConfig(Config):
                     raise ValueError(f"Modality {modality} is not supported")
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
+        if not 0.0 <= self.latlon_dropout_rate <= 1.0:
+            raise ValueError("latlon_dropout_rate must be between 0 and 1")
+        if self.latlon_dropout_rate > 0.0 and not self.use_latlon_encoding:
+            raise ValueError(
+                "latlon_dropout_rate > 0 requires use_latlon_encoding=True"
+            )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:

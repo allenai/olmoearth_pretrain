@@ -7,6 +7,7 @@ They cover the following:
 - 2D sinusoidal position encoding (for spatial data)
 - 1D sinusoidal position encoding (for temporal data)
 - Month encoding (for temporal data)
+- Lat/lon encoding (for geographic location)
 """
 
 import numpy as np
@@ -119,3 +120,27 @@ def get_month_encoding_table(encoding_dim: int) -> torch.Tensor:
     month_table = torch.concatenate([sin_table[:-1], cos_table[:-1]], axis=-1)
 
     return month_table  # (M, D)
+
+
+def get_latlon_encoding(latlon: torch.Tensor, encoding_dim: int) -> torch.Tensor:
+    """Sinusoidal encoding for geographic lat/lon coordinates.
+
+    Normalizes latitude to [-1, 1] (from [-90, 90]) and longitude to [-1, 1]
+    (from [-180, 180]), then applies 1D sinusoidal encoding to each coordinate
+    and concatenates the results.
+
+    Args:
+        latlon: Tensor of shape (B, 2) where [:, 0] is latitude and [:, 1] is longitude,
+            both in degrees.
+        encoding_dim: Output encoding dimension (must be divisible by 2).
+
+    Returns:
+        encoding: Tensor of shape (B, encoding_dim).
+    """
+    assert encoding_dim % 2 == 0, f"encoding_dim must be even, got {encoding_dim}"
+    dim_per_coord = encoding_dim // 2
+    lat = latlon[:, 0] / 90.0  # normalize to [-1, 1]
+    lon = latlon[:, 1] / 180.0  # normalize to [-1, 1]
+    lat_enc = get_1d_sincos_pos_encoding(lat, dim_per_coord)  # (B, D/2)
+    lon_enc = get_1d_sincos_pos_encoding(lon, dim_per_coord)  # (B, D/2)
+    return torch.cat([lat_enc, lon_enc], dim=1)  # (B, D)
