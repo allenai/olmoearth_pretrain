@@ -58,6 +58,32 @@ def return_modalities_from_dict(
     ]
 
 
+def get_never_encoded_bandsets(
+    input_data: MaskedOlmoEarthSample,
+    supported_modality_names: list[str],
+    tokenization_config: "TokenizationConfig",
+) -> set[tuple[str, int]]:
+    """Return modality bandsets that never hit the online encoder in this batch."""
+    never_encoded: set[tuple[str, int]] = set()
+
+    for modality in supported_modality_names:
+        mask_name = input_data.get_masked_modality_name(modality)
+        modality_mask = getattr(input_data, mask_name, None)
+        num_bandsets = tokenization_config.get_num_bandsets(modality)
+
+        if modality_mask is None:
+            for bandset_idx in range(num_bandsets):
+                never_encoded.add((modality, bandset_idx))
+            continue
+
+        for bandset_idx in range(num_bandsets):
+            bandset_mask = modality_mask[..., bandset_idx]
+            if not (bandset_mask == MaskValue.ONLINE_ENCODER.value).any():
+                never_encoded.add((modality, bandset_idx))
+
+    return never_encoded
+
+
 # TokensAndMasks is imported from datatypes and re-exported here for backwards compatibility
 # See olmoearth_pretrain.datatypes.TokensAndMasks for the implementation
 
@@ -311,6 +337,69 @@ class MultiModalPatchEmbeddings(nn.Module):
                 }
             )
 
+    def patchify_modality_bandset(
+        self,
+        modality_data: Tensor,
+        modality_mask: Tensor,
+        modality_name: str,
+        patch_size: int,
+        bandset_idx: int,
+    ) -> tuple[Tensor, Tensor]:
+        """Apply embedding to a single modality bandset."""
+        modality_spec = Modality.get(modality_name)
+
+        modality_specific_kwargs = {}
+        if not modality_spec.is_spatial:
+            token_mask = modality_mask[..., bandset_idx]
+        else:
+            token_mask = modality_mask[
+                :,
+                0 :: patch_size * modality_spec.image_tile_size_factor,
+                0 :: patch_size * modality_spec.image_tile_size_factor,
+                ...,
+                bandset_idx,
+            ]
+            modality_specific_kwargs = {"patch_size": patch_size}
+
+        buffer_name = self._get_buffer_name(modality_name, bandset_idx)
+        patchified_data = torch.index_select(
+            modality_data, -1, getattr(self, buffer_name)
+        )
+
+        apply_dropout = (
+            self.band_dropout_modalities is None
+            or modality_name in self.band_dropout_modalities
+        )
+        band_keep_mask = None
+        if self.training and apply_dropout and self.band_dropout_rate > 0.0:
+            num_bands = patchified_data.shape[-1]
+            if num_bands > 1:
+                if self.random_band_dropout:
+                    rate = torch.rand(1).item() * self.band_dropout_rate
+                else:
+                    rate = self.band_dropout_rate
+                patchified_data, band_keep_mask = self._apply_band_dropout(
+                    patchified_data, rate
+                )
+
+        if self.spectral_mixers is not None:
+            mixer_key = self._get_embedding_module_name(modality_name, bandset_idx)
+            if mixer_key in self.spectral_mixers:
+                mixer = self.spectral_mixers[mixer_key]
+                if band_keep_mask is not None and hasattr(mixer, "band_embed"):
+                    patchified_data = mixer(patchified_data, band_mask=band_keep_mask)
+                else:
+                    patchified_data = mixer(patchified_data)
+
+        embedding_module = self.per_modality_embeddings[modality_name][
+            self._get_embedding_module_name(modality_name, bandset_idx)
+        ]
+        patchified_data = embedding_module(
+            patchified_data, **modality_specific_kwargs
+        )
+
+        return patchified_data, token_mask
+
     def apply_embedding_to_modality(
         self,
         modality: str,
@@ -323,67 +412,16 @@ class MultiModalPatchEmbeddings(nn.Module):
         modality_mask = getattr(input_data, masked_modality_name)
         modality_data = getattr(input_data, modality)
 
-        modality_spec = Modality.get(modality)
         num_band_sets = self.tokenization_config.get_num_bandsets(modality)
-
         modality_tokens, modality_masks = [], []
         for idx in range(num_band_sets):
-            modality_specific_kwargs = {}
-            if not modality_spec.is_spatial:
-                # static in time
-                token_mask = modality_mask[..., idx]
-            else:
-                token_mask = modality_mask[
-                    :,
-                    0 :: patch_size * modality_spec.image_tile_size_factor,
-                    0 :: patch_size * modality_spec.image_tile_size_factor,
-                    ...,
-                    idx,
-                ]
-                modality_specific_kwargs = {"patch_size": patch_size}
-
-            buffer_name = self._get_buffer_name(modality, idx)
-            patchified_data = torch.index_select(
-                modality_data, -1, getattr(self, buffer_name)
+            patchified_data, token_mask = self.patchify_modality_bandset(
+                modality_data=modality_data,
+                modality_mask=modality_mask,
+                modality_name=modality,
+                patch_size=patch_size,
+                bandset_idx=idx,
             )
-
-            # Check if we should apply band dropout for this bandset
-            apply_dropout = (
-                self.band_dropout_modalities is None
-                or modality in self.band_dropout_modalities
-            )
-            band_keep_mask = None
-            if self.training and apply_dropout and self.band_dropout_rate > 0.0:
-                num_bands = patchified_data.shape[-1]
-                # Only apply band dropout if there are more than 1 band
-                if num_bands > 1:
-                    if self.random_band_dropout:
-                        rate = torch.rand(1).item() * self.band_dropout_rate
-                    else:
-                        rate = self.band_dropout_rate
-                    patchified_data, band_keep_mask = self._apply_band_dropout(
-                        patchified_data, rate
-                    )
-
-            # Spectral mixer/attention: cross-band mixing applied pixel-wise.
-            if self.spectral_mixers is not None:
-                mixer_key = self._get_embedding_module_name(modality, idx)
-                if mixer_key in self.spectral_mixers:
-                    mixer = self.spectral_mixers[mixer_key]
-                    if band_keep_mask is not None and hasattr(mixer, "band_embed"):
-                        patchified_data = mixer(
-                            patchified_data, band_mask=band_keep_mask
-                        )
-                    else:
-                        patchified_data = mixer(patchified_data)
-
-            embedding_module = self.per_modality_embeddings[modality][
-                self._get_embedding_module_name(modality, idx)
-            ]
-            patchified_data = embedding_module(
-                patchified_data, **modality_specific_kwargs
-            )
-
             modality_tokens.append(patchified_data)
             modality_masks.append(token_mask)
         return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
@@ -428,6 +466,49 @@ class MultiModalPatchEmbeddings(nn.Module):
         """Apply torch.compile to the model."""
         self.compile(dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)
 
+    def _create_fake_modality_input(
+        self,
+        modality: str,
+        batch_size: int,
+        height: int,
+        width: int,
+        time: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        mask_dtype: torch.dtype,
+    ) -> tuple[Tensor, Tensor]:
+        """Create fake all-missing inputs so every modality path is exercised."""
+        modality_spec = Modality.get(modality)
+        num_bandsets = self.tokenization_config.get_num_bandsets(modality)
+
+        data_shape: tuple[int, ...]
+        mask_shape: tuple[int, ...]
+        if modality_spec.is_spacetime_varying:
+            h = height * modality_spec.image_tile_size_factor
+            w = width * modality_spec.image_tile_size_factor
+            data_shape = (batch_size, h, w, time, modality_spec.num_bands)
+            mask_shape = (batch_size, h, w, time, num_bandsets)
+        elif modality_spec.is_space_only_varying:
+            h = height * modality_spec.image_tile_size_factor
+            w = width * modality_spec.image_tile_size_factor
+            data_shape = (batch_size, h, w, 1, modality_spec.num_bands)
+            mask_shape = (batch_size, h, w, 1, num_bandsets)
+        elif modality_spec.is_time_only_varying:
+            data_shape = (batch_size, time, modality_spec.num_bands)
+            mask_shape = (batch_size, time, num_bandsets)
+        else:
+            data_shape = (batch_size, modality_spec.num_bands)
+            mask_shape = (batch_size, num_bandsets)
+
+        fake_data = torch.zeros(data_shape, device=device, dtype=dtype)
+        fake_mask = torch.full(
+            mask_shape,
+            fill_value=MaskValue.MISSING.value,
+            device=device,
+            dtype=mask_dtype,
+        )
+        return fake_data, fake_mask
+
     def forward(
         self,
         input_data: MaskedOlmoEarthSample,
@@ -444,18 +525,98 @@ class MultiModalPatchEmbeddings(nn.Module):
         [1, 1, 0, 0]
         [1, 1, 0, 0]
         for the H, W dimensions
+
+        Missing modalities, or bandsets that are never seen by the online encoder,
+        still get fake all-missing inputs passed through their embedding path so
+        FSDP touches the same per-modality parameters on every rank.
         """
-        output_dict = {}
-        modalities_to_process = get_modalities_to_process(
-            input_data.modalities, self.supported_modality_names
+        never_encoded = get_never_encoded_bandsets(
+            input_data, self.supported_modality_names, self.tokenization_config
         )
-        for modality in modalities_to_process:
-            modality_tokens, modality_masks = self.apply_embedding_to_modality(
-                modality, input_data, patch_size
+
+        output_dict = {}
+        batch_size = input_data.timestamps.shape[0]
+        time = input_data.timestamps.shape[1]
+        device = input_data.timestamps.device
+        dtype = torch.float32
+        mask_dtype = torch.float32
+        height, width = None, None
+
+        for modality in input_data.modalities:
+            modality_data = getattr(input_data, modality)
+            modality_mask = getattr(
+                input_data, input_data.get_masked_modality_name(modality)
             )
-            output_dict[modality] = modality_tokens
+            if modality_data is not None:
+                dtype = modality_data.dtype
+                device = modality_data.device
+            if modality_mask is not None:
+                mask_dtype = modality_mask.dtype
+            modality_spec = Modality.get(modality)
+            if modality_data is not None and modality_spec.is_spatial:
+                height = modality_data.shape[1] // modality_spec.image_tile_size_factor
+                width = modality_data.shape[2] // modality_spec.image_tile_size_factor
+                break
+
+        if height is None or width is None:
+            height, width = 16, 16
+
+        for modality in self.supported_modality_names:
+            real_modality_data = getattr(input_data, modality)
+            real_modality_mask = getattr(
+                input_data, input_data.get_masked_modality_name(modality)
+            )
+            fake_modality_data = None
+            fake_modality_mask = None
+            modality_tokens = []
+            modality_masks = []
+
+            for bandset_idx in range(self.tokenization_config.get_num_bandsets(modality)):
+                if (modality, bandset_idx) in never_encoded:
+                    if fake_modality_data is None or fake_modality_mask is None:
+                        fake_modality_data, fake_modality_mask = (
+                            self._create_fake_modality_input(
+                                modality=modality,
+                                batch_size=batch_size,
+                                height=height,
+                                width=width,
+                                time=time,
+                                device=device,
+                                dtype=dtype,
+                                mask_dtype=mask_dtype,
+                            )
+                        )
+                    modality_data = fake_modality_data
+                    # Keep the real mask for present decode-only/target-only modalities
+                    # so downstream decoder logic still sees them. Only truly absent
+                    # modalities should look fully missing.
+                    modality_mask = (
+                        real_modality_mask
+                        if real_modality_data is not None and real_modality_mask is not None
+                        else fake_modality_mask
+                    )
+                else:
+                    modality_data = real_modality_data
+                    modality_mask = real_modality_mask
+
+                if modality_data is None or modality_mask is None:
+                    raise ValueError(
+                        f"Missing data or mask for modality {modality} bandset {bandset_idx}"
+                    )
+
+                tokens, masks = self.patchify_modality_bandset(
+                    modality_data=modality_data,
+                    modality_mask=modality_mask,
+                    modality_name=modality,
+                    patch_size=patch_size,
+                    bandset_idx=bandset_idx,
+                )
+                modality_tokens.append(tokens)
+                modality_masks.append(masks)
+
+            output_dict[modality] = torch.stack(modality_tokens, dim=-2)
             modality_mask_name = input_data.get_masked_modality_name(modality)
-            output_dict[modality_mask_name] = modality_masks
+            output_dict[modality_mask_name] = torch.stack(modality_masks, dim=-1)
         return output_dict
 
 
@@ -2112,6 +2273,9 @@ class FineGrainedPredictor(Predictor):
         self,
         *args: Any,
         max_fine_patch_size: int = 8,
+        pixel_target_modalities: list[str] | None = None,
+        max_expansion_factor: int = 4,
+        max_decode_tokens: int | None = None,
         target_patch_size_by_modality: dict[str, int] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -2120,7 +2284,9 @@ class FineGrainedPredictor(Predictor):
         if max_fine_patch_size < 1:
             raise ValueError("max_fine_patch_size must be >= 1")
         self.max_fine_patch_size = max_fine_patch_size
-        self.target_patch_size_by_modality = target_patch_size_by_modality or {}
+        self.pixel_target_modalities: set[str] = set(pixel_target_modalities or [])
+        self.max_expansion_factor = max_expansion_factor
+        self.max_decode_tokens = max_decode_tokens
         self.subpatch_pos = nn.Parameter(
             torch.zeros(
                 max_fine_patch_size,
@@ -2129,9 +2295,31 @@ class FineGrainedPredictor(Predictor):
             )
         )
 
+    @staticmethod
+    def _largest_divisor_with_max_expansion(
+        patch_size: int, max_expansion: int
+    ) -> int:
+        """Return the largest divisor of patch_size that gives at most max_expansion."""
+        min_target = max(1, (patch_size + max_expansion - 1) // max_expansion)
+        for candidate in range(min_target, patch_size + 1):
+            if patch_size % candidate == 0:
+                return candidate
+        return patch_size
+
     def get_target_patch_size(self, modality: str, patch_size: int) -> int:
         """Return the target patch size for a modality."""
-        return self.target_patch_size_by_modality.get(modality, patch_size)
+        modality_spec = Modality.get(modality)
+        if not modality_spec.is_spatial:
+            return patch_size
+        if modality in self.pixel_target_modalities:
+            return 1
+        if patch_size < 4:
+            return 1
+        if patch_size == 4:
+            return 2
+        return self._largest_divisor_with_max_expansion(
+            patch_size, self.max_expansion_factor
+        )
 
     def get_subpatch_pos(
         self, parent_patch_size: int, target_patch_size: int
@@ -2156,11 +2344,17 @@ class FineGrainedPredictor(Predictor):
         pos = self.subpatch_pos.index_select(0, offsets).index_select(1, offsets)
         return rearrange(pos, "h w d -> (h w) d")
 
-    def build_coarse_context_stream(
-        self, x: dict[str, Tensor]
-    ) -> tuple[Tensor, Tensor]:
-        """Flatten the existing coarse context stream."""
-        return self.collapse_and_combine_hwtc(x)
+    def _touch_subpatch_pos(self, tokens: Tensor) -> Tensor:
+        """Keep `subpatch_pos` in the autograd graph on every rank.
+
+        Fine-grained expansion only reads `subpatch_pos` when `target_patch_size` is
+        smaller than the sampled `patch_size`. Rank-local patch sizes can therefore make
+        FSDP see different parameter-usage paths unless we add this no-op dependency.
+        """
+        zero = self.subpatch_pos.sum().to(dtype=tokens.dtype, device=tokens.device) * 0.0
+        return tokens + zero
+
+
 
     def build_fine_query_stream(
         self,
@@ -2342,9 +2536,10 @@ class FineGrainedPredictor(Predictor):
         )
         coarse_tokens_dict.update(original_masks_dict)
 
-        coarse_all_tokens, coarse_mask = self.build_coarse_context_stream(
+        coarse_all_tokens, coarse_mask = self.collapse_and_combine_hwtc(
             coarse_tokens_dict
         )
+        # THis is just normal split x,y
         (
             _coarse_tokens_to_decode,
             unmasked_tokens,
@@ -2364,11 +2559,26 @@ class FineGrainedPredictor(Predictor):
             },
             patch_size,
         )
+        fine_query_tokens = self._touch_subpatch_pos(fine_query_tokens)
         fine_query_mask, fine_masks_dict = self.build_fine_query_mask_stream(
             original_masks_dict,
             query_specs,
             patch_size,
         )
+        if self.max_decode_tokens is not None and self.training:
+            decode_positions = (fine_query_mask == MaskValue.DECODER.value)
+            num_decode = decode_positions.sum(dim=1)
+            for i in range(fine_query_mask.shape[0]):
+                n = int(num_decode[i])
+                if n <= self.max_decode_tokens:
+                    continue
+                indices_i = decode_positions[i].nonzero(as_tuple=False).squeeze(-1)
+                drop = indices_i[
+                    torch.randperm(n, device=fine_query_mask.device)[
+                        self.max_decode_tokens :
+                    ]
+                ]
+                fine_query_mask[i, drop] = MaskValue.TARGET_ENCODER_ONLY.value
         (
             tokens_to_decode,
             fine_unmasked_tokens,
@@ -2380,6 +2590,13 @@ class FineGrainedPredictor(Predictor):
             max_length_of_tokens_to_decode,
             _fine_max_length_of_unmasked_tokens,
         ) = self.split_x_y(fine_query_tokens, fine_query_mask.clone())
+
+        logger.warning(
+            "FineGrainedPredictor ps=%s decode=%s context=%s",
+            patch_size,
+            int(max_length_of_tokens_to_decode),
+            int(max_length_of_unmasked_tokens),
+        )
 
         if self.use_flash_attn:
             og_shape_tokens_to_decode = tokens_to_decode.shape
@@ -2400,7 +2617,7 @@ class FineGrainedPredictor(Predictor):
             cu_seqlens_tokens_to_decode = None
             cu_seqlens_unmasked_tokens = None
 
-        for blk in self.blocks:
+        for i_blk, blk in enumerate(self.blocks):
             tokens_to_decode = blk(
                 x=tokens_to_decode,
                 y=unmasked_tokens,
@@ -2580,31 +2797,25 @@ class FineGrainedPredictorConfig(PredictorConfig):
     """Configuration for the fine-grained predictor scaffold."""
 
     max_fine_patch_size: int = 8
-    target_patch_size_by_modality: dict[str, int] | None = None
+    pixel_target_modalities: list[str] | None = None
+    max_expansion_factor: int = 4
+    max_decode_tokens: int | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
         super().validate()
         if self.max_fine_patch_size < 1:
             raise ValueError("max_fine_patch_size must be >= 1")
-        if self.target_patch_size_by_modality is not None:
-            unknown = set(self.target_patch_size_by_modality) - set(
+        if self.max_expansion_factor < 1:
+            raise ValueError("max_expansion_factor must be >= 1")
+        if self.pixel_target_modalities is not None:
+            unknown = set(self.pixel_target_modalities) - set(
                 self.supported_modality_names
             )
             if unknown:
                 raise ValueError(
-                    "target_patch_size_by_modality contains modalities not in "
+                    "pixel_target_modalities contains modalities not in "
                     f"supported_modality_names: {unknown}"
-                )
-            invalid = {
-                modality: patch_size
-                for modality, patch_size in self.target_patch_size_by_modality.items()
-                if patch_size < 1
-            }
-            if invalid:
-                raise ValueError(
-                    "target_patch_size_by_modality must only contain positive patch "
-                    f"sizes, got: {invalid}"
                 )
 
     def build(self) -> "PredictorBase":

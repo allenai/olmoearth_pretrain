@@ -7,6 +7,7 @@ import torch
 from einops import repeat
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import (
     CompositeEncodings,
     Encoder,
@@ -334,6 +335,50 @@ class TestEncoder:
         supported_modality_names = [m.name for m in supported_modalities]
         config = EncoderConfig(supported_modality_names)
         _ = config.build()
+
+    def test_forward_drops_all_missing_supported_modalities(self) -> None:
+        """Fake all-missing modalities should not propagate past the encoder."""
+        encoder = Encoder(
+            embedding_size=16,
+            max_patch_size=8,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=4.0,
+            depth=2,
+            drop_path=0.1,
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.WORLDCEREAL],
+            max_sequence_length=12,
+        )
+
+        batch_size, height, width, time = 2, 16, 16, 3
+        s2_bands = Modality.SENTINEL2_L2A.num_bands
+        s2_band_sets = Modality.SENTINEL2_L2A.num_band_sets
+        sentinel2_l2a = torch.randn(batch_size, height, width, time, s2_bands)
+        sentinel2_l2a_mask = torch.full(
+            (batch_size, height, width, time, s2_band_sets),
+            fill_value=MaskValue.ONLINE_ENCODER.value,
+            dtype=torch.float32,
+        )
+        timestamps = repeat(
+            torch.tensor(
+                [[15, 7, 2023], [15, 8, 2023], [15, 9, 2023]], dtype=torch.long
+            ),
+            "t d -> b t d",
+            b=batch_size,
+        )
+        masked_sample = MaskedOlmoEarthSample(
+            timestamps=timestamps,
+            sentinel2_l2a=sentinel2_l2a,
+            sentinel2_l2a_mask=sentinel2_l2a_mask,
+        )
+
+        output_dict = encoder.forward(masked_sample, patch_size=2)
+        output = output_dict["tokens_and_masks"]
+
+        assert "sentinel2_l2a" in output.modalities
+        assert "worldcereal" not in output.modalities
+        assert output.worldcereal is None
+        assert output.worldcereal_mask is None
 
 
 class TestPredictor:
@@ -894,6 +939,156 @@ class TestProjectionAndAggregation:
                 )
                 # for now, lets just check it all runs properly
                 _ = layer(t_and_m)
+
+
+class TestMultiModalPatchEmbeddings:
+    """Unit tests for the multimodal patch embedding path."""
+
+    def test_missing_modality_gets_fake_inputs(self) -> None:
+        """Missing supported modalities should still be routed through embeddings."""
+        supported_modality_names = ["sentinel2_l2a", "sentinel1"]
+        patch_embeddings = MultiModalPatchEmbeddings(
+            supported_modality_names=supported_modality_names,
+            max_patch_size=8,
+            embedding_size=16,
+        )
+
+        batch_size, height, width, time = 2, 16, 16, 3
+        s2_bands = Modality.SENTINEL2_L2A.num_bands
+        s2_band_sets = Modality.SENTINEL2_L2A.num_band_sets
+        sentinel2_l2a = torch.randn(batch_size, height, width, time, s2_bands)
+        sentinel2_l2a_mask = torch.full(
+            (batch_size, height, width, time, s2_band_sets),
+            fill_value=MaskValue.ONLINE_ENCODER.value,
+            dtype=torch.float32,
+        )
+        timestamps = repeat(
+            torch.tensor(
+                [[15, 7, 2023], [15, 8, 2023], [15, 9, 2023]], dtype=torch.long
+            ),
+            "t d -> b t d",
+            b=batch_size,
+        )
+        masked_sample = MaskedOlmoEarthSample(
+            timestamps=timestamps,
+            sentinel2_l2a=sentinel2_l2a,
+            sentinel2_l2a_mask=sentinel2_l2a_mask,
+        )
+
+        output = patch_embeddings.forward(masked_sample, patch_size=2)
+
+        assert "sentinel2_l2a" in output
+        assert "sentinel2_l2a_mask" in output
+        assert "sentinel1" in output
+        assert "sentinel1_mask" in output
+        assert (output["sentinel1_mask"] == MaskValue.MISSING.value).all()
+
+        expected_h = height // 2
+        expected_w = width // 2
+        assert output["sentinel2_l2a"].shape == (
+            batch_size,
+            expected_h,
+            expected_w,
+            time,
+            s2_band_sets,
+            16,
+        )
+        assert output["sentinel1"].shape == (
+            batch_size,
+            expected_h,
+            expected_w,
+            time,
+            Modality.SENTINEL1.num_band_sets,
+            16,
+        )
+
+    def test_never_encoded_bandset_preserves_present_mask(self) -> None:
+        """Present decode-only bandsets should keep their original mask values."""
+        patch_embeddings = MultiModalPatchEmbeddings(
+            supported_modality_names=["sentinel2_l2a"],
+            max_patch_size=8,
+            embedding_size=16,
+        )
+
+        batch_size, height, width, time = 2, 16, 16, 3
+        s2_bands = Modality.SENTINEL2_L2A.num_bands
+        s2_band_sets = Modality.SENTINEL2_L2A.num_band_sets
+        assert s2_band_sets > 1
+
+        sentinel2_l2a = torch.randn(batch_size, height, width, time, s2_bands)
+        sentinel2_l2a_mask = torch.full(
+            (batch_size, height, width, time, s2_band_sets),
+            fill_value=MaskValue.ONLINE_ENCODER.value,
+            dtype=torch.float32,
+        )
+        sentinel2_l2a_mask[..., 0] = MaskValue.DECODER.value
+        timestamps = repeat(
+            torch.tensor(
+                [[15, 7, 2023], [15, 8, 2023], [15, 9, 2023]], dtype=torch.long
+            ),
+            "t d -> b t d",
+            b=batch_size,
+        )
+        masked_sample = MaskedOlmoEarthSample(
+            timestamps=timestamps,
+            sentinel2_l2a=sentinel2_l2a,
+            sentinel2_l2a_mask=sentinel2_l2a_mask,
+        )
+
+        output = patch_embeddings.forward(masked_sample, patch_size=2)
+
+        assert (output["sentinel2_l2a_mask"][..., 0] == MaskValue.DECODER.value).all()
+        assert (
+            output["sentinel2_l2a_mask"][..., 1:] == MaskValue.ONLINE_ENCODER.value
+        ).all()
+
+    def test_all_modalities_present(self) -> None:
+        """Present modalities should keep their real masks."""
+        supported_modality_names = ["sentinel2_l2a", "latlon"]
+        patch_embeddings = MultiModalPatchEmbeddings(
+            supported_modality_names=supported_modality_names,
+            max_patch_size=8,
+            embedding_size=16,
+        )
+
+        batch_size, height, width, time = 2, 16, 16, 3
+        s2_bands = Modality.SENTINEL2_L2A.num_bands
+        s2_band_sets = Modality.SENTINEL2_L2A.num_band_sets
+        latlon_bands = Modality.LATLON.num_bands
+        latlon_band_sets = Modality.LATLON.num_band_sets
+        sentinel2_l2a = torch.randn(batch_size, height, width, time, s2_bands)
+        sentinel2_l2a_mask = torch.full(
+            (batch_size, height, width, time, s2_band_sets),
+            fill_value=MaskValue.ONLINE_ENCODER.value,
+            dtype=torch.float32,
+        )
+        latlon = torch.randn(batch_size, latlon_bands)
+        latlon_mask = torch.full(
+            (batch_size, latlon_band_sets),
+            fill_value=MaskValue.ONLINE_ENCODER.value,
+            dtype=torch.float32,
+        )
+        timestamps = repeat(
+            torch.tensor(
+                [[15, 7, 2023], [15, 8, 2023], [15, 9, 2023]], dtype=torch.long
+            ),
+            "t d -> b t d",
+            b=batch_size,
+        )
+        masked_sample = MaskedOlmoEarthSample(
+            timestamps=timestamps,
+            sentinel2_l2a=sentinel2_l2a,
+            sentinel2_l2a_mask=sentinel2_l2a_mask,
+            latlon=latlon,
+            latlon_mask=latlon_mask,
+        )
+
+        output = patch_embeddings.forward(masked_sample, patch_size=2)
+
+        assert "sentinel2_l2a" in output
+        assert "latlon" in output
+        assert (output["sentinel2_l2a_mask"] == MaskValue.ONLINE_ENCODER.value).all()
+        assert (output["latlon_mask"] == MaskValue.ONLINE_ENCODER.value).all()
 
 
 class TestBandDropout:

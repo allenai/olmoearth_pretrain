@@ -4,6 +4,7 @@ import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import cast
 
 import numpy as np
@@ -39,6 +40,7 @@ from olmoearth_pretrain.train.train_module.train_module import (
 )
 
 logger = logging.getLogger(__name__)
+DIST_TIMEOUT = timedelta(minutes=1)
 
 
 @dataclass
@@ -432,7 +434,7 @@ class SubCmd(StrEnum):
         ):
             prepare_cli_environment()
         elif self == SubCmd.train or self == SubCmd.evaluate:
-            prepare_training_environment()
+            prepare_training_environment(timeout=DIST_TIMEOUT)
         elif self == SubCmd.train_single:
             prepare_training_environment(backend=None)
         else:

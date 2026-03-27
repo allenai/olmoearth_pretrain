@@ -1,6 +1,5 @@
 """Training and optimizer abstraction for OlmoEarth Pretrain."""
 
-from collections import defaultdict
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any
@@ -31,7 +30,6 @@ from olmoearth_pretrain.train.train_module.train_module import (
 from olmoearth_pretrain.train.utils import split_masked_batch
 
 logger = getLogger(__name__)
-
 
 @dataclass
 class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
@@ -138,8 +136,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             contrastive_config: An optional contrastive configration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
             reinit_targets: Whether or not to reinitialize the target encoder.
-            target_patch_size: Optional fallback target patch size for all modalities.
-            target_patch_size_by_modality: Optional per-modality target patch sizes.
+            target_patch_size: Target patch size for the target encoder (default: 1).
+            target_patch_size_by_modality: Deprecated, ignored. Kept for checkpoint compat.
         """
         super().__init__(
             model=model,
@@ -171,25 +169,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             contrastive_config.build() if contrastive_config is not None else None
         )
         self.target_patch_size = target_patch_size
-        self.target_patch_size_by_modality = target_patch_size_by_modality or {}
-        unknown_target_modalities = set(self.target_patch_size_by_modality) - set(
-            Modality.names()
-        )
-        if unknown_target_modalities:
-            raise ValueError(
-                "target_patch_size_by_modality contains unknown modalities: "
-                f"{unknown_target_modalities}"
-            )
-        invalid_target_patch_sizes = {
-            modality: target_patch_size
-            for modality, target_patch_size in self.target_patch_size_by_modality.items()
-            if target_patch_size < 1
-        }
-        if invalid_target_patch_sizes:
-            raise ValueError(
-                "target_patch_size_by_modality must only contain positive patch "
-                f"sizes, got: {invalid_target_patch_sizes}"
-            )
         self.total_loss_name = self.base_loss.name
         if self.regularizer is not None:
             self.total_loss_name = f"{self.base_loss.name}+{self.regularizer.name}"
@@ -208,74 +187,40 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets)
 
-    def _get_target_patch_size_for_modality(
-        self, modality: str, patch_size: int
-    ) -> int:
-        """Get the target patch size for a modality."""
-        default_target_patch_size = self.target_patch_size or patch_size
-        return self.target_patch_size_by_modality.get(
-            modality, default_target_patch_size
-        )
-
-    @staticmethod
-    def _subset_batch_to_modalities(
-        batch: MaskedOlmoEarthSample, modalities: list[str]
-    ) -> MaskedOlmoEarthSample:
-        """Keep only the requested modalities in a masked batch."""
-        batch_dict = batch.as_dict(include_nones=True)
-        modalities_to_keep = set(modalities)
-        for modality in batch.modalities:
-            if modality in modalities_to_keep:
-                continue
-            batch_dict[modality] = None
-            batch_dict[batch.get_masked_modality_name(modality)] = None
-        return MaskedOlmoEarthSample.from_dict(batch_dict)
-
-    @staticmethod
-    def _merge_target_outputs(target_outputs: list[TokensAndMasks]) -> TokensAndMasks:
-        """Merge target outputs from multiple target-encoder forwards."""
-        merged_dict: dict[str, Any] = {}
-        for target_output in target_outputs:
-            target_output_dict = target_output.as_dict(include_nones=False)
-            overlapping_keys = set(merged_dict).intersection(target_output_dict)
-            if overlapping_keys:
-                raise ValueError(
-                    "Attempted to merge duplicate target outputs for keys: "
-                    f"{overlapping_keys}"
-                )
-            merged_dict.update(target_output_dict)
-        return TokensAndMasks(**merged_dict)
-
     def _build_target_output(
         self,
         batch: MaskedOlmoEarthSample,
         patch_size: int,
         token_exit_cfg: dict[str, int],
     ) -> TokensAndMasks:
-        """Build target outputs, grouping modalities by target patch size."""
-        unmasked_batch = batch.unmask()
-        target_modalities_by_patch_size: dict[int, list[str]] = defaultdict(list)
-        for modality in unmasked_batch.modalities:
-            target_patch_size = self._get_target_patch_size_for_modality(
-                modality, patch_size
-            )
-            target_modalities_by_patch_size[target_patch_size].append(modality)
+        """Build target outputs at the decoder's capped target resolution.
 
-        target_outputs = []
-        for target_patch_size, grouped_modalities in sorted(
-            target_modalities_by_patch_size.items()
-        ):
-            target_batch = self._subset_batch_to_modalities(
-                unmasked_batch, grouped_modalities
-            )
-            output_dict = self.model.target_encoder.forward(
-                target_batch,
-                patch_size=target_patch_size,
-                token_exit_cfg=token_exit_cfg,
-            )
-            target_output, _, _ = unpack_encoder_output(output_dict)
-            target_outputs.append(target_output)
-        return self._merge_target_outputs(target_outputs)
+        Single target_encoder.forward() call -- FSDP-safe because every rank
+        always makes exactly one call regardless of the sampled patch_size.
+        """
+        from olmoearth_pretrain.nn.flexi_vit import FineGrainedPredictor
+
+        decoder = self.model.decoder
+        if isinstance(decoder, FineGrainedPredictor):
+            if patch_size < 4:
+                target_ps = 1
+            elif patch_size == 4:
+                target_ps = 2
+            else:
+                target_ps = decoder._largest_divisor_with_max_expansion(
+                    patch_size, decoder.max_expansion_factor
+                )
+        else:
+            target_ps = self.target_patch_size or patch_size
+
+        unmasked_batch = batch.unmask()
+        output_dict = self.model.target_encoder.forward(
+            unmasked_batch,
+            patch_size=target_ps,
+            token_exit_cfg=token_exit_cfg,
+        )
+        target_output, _, _ = unpack_encoder_output(output_dict)
+        return target_output
 
     @staticmethod
     def _validate_decoded_target_shapes(
@@ -354,6 +299,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
                 microbatch_a = microbatches_a[microbatch_idx]
                 microbatch_b = microbatches_b[microbatch_idx]
+                step = getattr(self.trainer, "global_step", None)
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} "
                     f"with batch size {microbatch_a.batch_size}"
@@ -444,7 +390,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             if extra_metrics is not None:
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
-                logger.debug("Target Encoder forward pass...")
                 target_output = self._build_target_output(
                     batch,
                     patch_size=patch_size,

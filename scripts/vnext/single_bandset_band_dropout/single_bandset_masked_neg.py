@@ -147,11 +147,7 @@ LANDSAT_SINGLE_BANDSET = ModalityTokenization(
 
 NDVI_SINGLE_BANDSET = ModalityTokenization(band_groups=[["ndvi"]])
 
-FINE_GRAINED_TARGET_PATCH_SIZE_BY_MODALITY = {
-    Modality.SENTINEL2_L2A.name: 1,
-    Modality.SENTINEL1.name: 1,
-    Modality.LANDSAT.name: 1,
-}
+PIXEL_TARGET_MODALITIES: list[str] = []
 
 
 def _tokenization_config(
@@ -1391,7 +1387,6 @@ def build_train_module_exp25(
         scheduler=CosWithWarmup(warmup_steps=8000),
         ema_decay=(1.0, 1.0),
         compile_model=True,
-        target_patch_size_by_modality=FINE_GRAINED_TARGET_PATCH_SIZE_BY_MODALITY,
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
             param_dtype=DType.bfloat16,
@@ -1428,7 +1423,8 @@ def build_model_exp25(common: CommonComponents) -> LatentMIMConfig:
         max_sequence_length=12,
         tokenization_config=common.tokenization_config,
         max_fine_patch_size=MAX_PATCH_SIZE,
-        target_patch_size_by_modality=FINE_GRAINED_TARGET_PATCH_SIZE_BY_MODALITY,
+        pixel_target_modalities=PIXEL_TARGET_MODALITIES,
+        max_expansion_factor=3,
     )
     return LatentMIMConfig(
         encoder_config=encoder_config,
