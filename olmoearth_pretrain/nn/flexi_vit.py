@@ -2275,7 +2275,6 @@ class FineGrainedPredictor(Predictor):
         max_fine_patch_size: int = 8,
         pixel_target_modalities: list[str] | None = None,
         max_expansion_factor: int = 4,
-        max_decode_tokens: int | None = None,
         target_patch_size_by_modality: dict[str, int] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -2286,7 +2285,6 @@ class FineGrainedPredictor(Predictor):
         self.max_fine_patch_size = max_fine_patch_size
         self.pixel_target_modalities: set[str] = set(pixel_target_modalities or [])
         self.max_expansion_factor = max_expansion_factor
-        self.max_decode_tokens = max_decode_tokens
         self.subpatch_pos = nn.Parameter(
             torch.zeros(
                 max_fine_patch_size,
@@ -2565,20 +2563,6 @@ class FineGrainedPredictor(Predictor):
             query_specs,
             patch_size,
         )
-        if self.max_decode_tokens is not None and self.training:
-            decode_positions = (fine_query_mask == MaskValue.DECODER.value)
-            num_decode = decode_positions.sum(dim=1)
-            for i in range(fine_query_mask.shape[0]):
-                n = int(num_decode[i])
-                if n <= self.max_decode_tokens:
-                    continue
-                indices_i = decode_positions[i].nonzero(as_tuple=False).squeeze(-1)
-                drop = indices_i[
-                    torch.randperm(n, device=fine_query_mask.device)[
-                        self.max_decode_tokens :
-                    ]
-                ]
-                fine_query_mask[i, drop] = MaskValue.TARGET_ENCODER_ONLY.value
         (
             tokens_to_decode,
             fine_unmasked_tokens,
@@ -2591,7 +2575,7 @@ class FineGrainedPredictor(Predictor):
             _fine_max_length_of_unmasked_tokens,
         ) = self.split_x_y(fine_query_tokens, fine_query_mask.clone())
 
-        logger.warning(
+        logger.debug(
             "FineGrainedPredictor ps=%s decode=%s context=%s",
             patch_size,
             int(max_length_of_tokens_to_decode),
@@ -2799,8 +2783,6 @@ class FineGrainedPredictorConfig(PredictorConfig):
     max_fine_patch_size: int = 8
     pixel_target_modalities: list[str] | None = None
     max_expansion_factor: int = 4
-    max_decode_tokens: int | None = None
-
     def validate(self) -> None:
         """Validate the configuration."""
         super().validate()
