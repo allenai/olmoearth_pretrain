@@ -34,7 +34,7 @@ EXPERIMENTS=(
 )
 
 for exp in "${EXPERIMENTS[@]}"; do
-    run_name="data_ablation_${exp}"
+    run_name="data_ablation_${exp}_1"
     filter_path="${FILTER_DIR}/${exp}.npy"
 
     echo "=== Launching ${run_name} ==="
@@ -42,6 +42,7 @@ for exp in "${EXPERIMENTS[@]}"; do
         --launch.num_gpus="${NUM_GPUS}" \
         --launch.clusters="${CLUSTERS}" \
         --dataset.filter_idx_file="${filter_path}" \
+        --data_loader.num_dataset_repeats_per_epoch=10 \
         --trainer.callbacks.wandb.project="${WANDB_PROJECT}"
 
     echo ""
