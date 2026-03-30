@@ -172,7 +172,7 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
+        input_modalities=[Modality.SENTINEL1.name],
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
