@@ -23,6 +23,11 @@ class EvalMetric(StrEnum):
     MACRO_F1 = "macro_f1"
 
 
+# Label value used to mark invalid/ignored pixels in segmentation targets.
+# Pixels with this label are excluded from loss and metric calculations.
+SEGMENTATION_IGNORE_LABEL = -1
+
+
 @dataclass
 class EvalTaskResult:
     """Container for one task's outputs: validation/test results, optional bootstrap stats, and eval runtime."""
@@ -124,6 +129,7 @@ class EvalResult:
         macro_acc: float,
         macro_f1: float,
         micro_f1: float,
+        per_class_f1: list[float] | None = None,
         primary_metric: EvalMetric | None = None,
         primary_metric_class: int | None = None,
     ) -> EvalResult:
@@ -135,6 +141,9 @@ class EvalResult:
             EvalMetric.MACRO_F1.value: macro_f1,
             EvalMetric.MICRO_F1.value: micro_f1,
         }
+        if per_class_f1 is not None:
+            for i, score in enumerate(per_class_f1):
+                metrics[f"f1_class_{i}"] = score
         if primary_metric is None:
             primary_metric = EvalMetric.MIOU
         resolved_key = cls._resolve_metric_key(primary_metric, primary_metric_class)
@@ -155,7 +164,7 @@ def _build_confusion_matrix(
     predictions: torch.Tensor,
     labels: torch.Tensor,
     num_classes: int,
-    ignore_label: int = -1,
+    ignore_label: int = SEGMENTATION_IGNORE_LABEL,
 ) -> torch.Tensor:
     """Build confusion matrix from predictions and labels.
 
@@ -163,7 +172,7 @@ def _build_confusion_matrix(
         predictions: Predicted segmentation masks of shape (N, H, W), integer class indices
         labels: Ground truth segmentation masks of shape (N, H, W), integer class indices
         num_classes: Number of classes in the segmentation task
-        ignore_label: Label value to ignore (default: -1)
+        ignore_label: Label value to ignore (default: SEGMENTATION_IGNORE_LABEL)
 
     Returns:
         Confusion matrix of shape (num_classes, num_classes)
@@ -198,7 +207,7 @@ def segmentation_metrics(
     predictions: torch.Tensor,
     labels: torch.Tensor,
     num_classes: int,
-    ignore_label: int = -1,
+    ignore_label: int = SEGMENTATION_IGNORE_LABEL,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
 ) -> EvalResult:
@@ -263,6 +272,7 @@ def segmentation_metrics(
         macro_acc=macro_acc,
         macro_f1=macro_f1,
         micro_f1=micro_f1,
+        per_class_f1=per_class_f1.tolist(),
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
     )

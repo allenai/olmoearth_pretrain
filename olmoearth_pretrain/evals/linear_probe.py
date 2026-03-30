@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 import math
 from enum import StrEnum
 from logging import getLogger
@@ -18,6 +19,7 @@ from tqdm import tqdm
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.metrics import (
+    SEGMENTATION_IGNORE_LABEL,
     EvalMetric,
     EvalResult,
     EvalTaskResult,
@@ -136,6 +138,7 @@ def train_and_eval_probe(
     select_best_by_primary_metric: bool = False,
     n_bootstrap: int = 0,
     bootstrap_seed: int = 42,
+    use_dice_loss: bool = False,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
 ) -> EvalTaskResult:
@@ -214,6 +217,7 @@ def train_and_eval_probe(
             num_classes=config.num_classes,
             num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
             device=device,
+            use_dice_loss=use_dice_loss,
         )
         val_result = evaluate_probe(
             data_loader=DataLoader(
@@ -344,7 +348,6 @@ def train_and_eval_probe(
                 f"Bootstrap test score: {bootstrap_mean:.4f} ± {std_metric:.4f} "
                 f"[{ci_lower:.4f}, {ci_upper:.4f}]"
             )
-
         # Compute full metrics for the actual test result
         test_result = compute_metric(
             all_preds,
@@ -364,6 +367,62 @@ def train_and_eval_probe(
     )
 
 
+def weighted_dice_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    num_classes: int,
+    ignore_index: int = SEGMENTATION_IGNORE_LABEL,
+    smooth: float = 1.0,
+) -> torch.Tensor:
+    """Compute class-weighted dice loss for segmentation.
+
+    Args:
+        logits: Model predictions of shape (N, C, ...) where C is num_classes.
+        targets: Ground truth labels of shape (N, ...) with integer class indices.
+        num_classes: Number of classes.
+        ignore_index: Label value to ignore when computing loss.
+        smooth: Smoothing term to avoid division by zero.
+
+    Returns:
+        Scalar weighted dice loss.
+    """
+    valid_mask = targets != ignore_index
+    targets_masked = targets.clone()
+    targets_masked[~valid_mask] = 0
+
+    probs = F.softmax(logits, dim=1)
+    one_hot = (
+        F.one_hot(targets_masked, num_classes)
+        .permute(0, -1, *range(1, targets.ndim))
+        .float()
+    )
+
+    # Zero out ignored pixels in both probs and one_hot
+    valid_mask_expanded = valid_mask.unsqueeze(1).expand_as(one_hot)
+    probs = probs * valid_mask_expanded
+    one_hot = one_hot * valid_mask_expanded
+
+    # Per-class dice: sum over batch and spatial dims
+    dims = (0,) + tuple(range(2, probs.ndim))
+    intersection = (probs * one_hot).sum(dim=dims)
+    cardinality = probs.sum(dim=dims) + one_hot.sum(dim=dims)
+
+    dice_per_class = (2.0 * intersection + smooth) / (cardinality + smooth)
+
+    # Class weights: inverse frequency of valid pixels per class
+    class_counts = one_hot.sum(dim=dims)
+    total = class_counts.sum()
+    weights = torch.where(
+        class_counts > 0,
+        total / (num_classes * class_counts),
+        torch.zeros_like(class_counts),
+    )
+    weights = weights / (weights.sum() + 1e-8)
+
+    loss = 1.0 - (weights * dice_per_class).sum()
+    return loss
+
+
 def train_probe(
     data_loader: DataLoader,
     probe: nn.Module,
@@ -375,12 +434,16 @@ def train_probe(
     device: torch.device,
     task_type: TaskType,
     num_output_pixels_per_side_of_patch: int | None = None,
+    use_dice_loss: bool = False,
 ) -> nn.Module:
-    """Train a linear probe on a segmentation task."""
+    """Train a linear probe on a classification or segmentation task."""
     opt = torch.optim.AdamW(probe.parameters(), lr=lr)
 
     probe = probe.train()
-    loss_function = nn.CrossEntropyLoss(ignore_index=-1)  # for MADOS, but ok for others
+    if use_dice_loss:
+        loss_function = functools.partial(weighted_dice_loss, num_classes=num_classes)
+    else:
+        loss_function = nn.CrossEntropyLoss(ignore_index=SEGMENTATION_IGNORE_LABEL)
     start_epoch = current_epoch
     for epoch in range(start_epoch, epochs):
         for i, batch in enumerate(data_loader):
@@ -517,7 +580,7 @@ def compute_metric(
             preds,
             labels,
             num_classes=num_classes,
-            ignore_label=-1,
+            ignore_label=SEGMENTATION_IGNORE_LABEL,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
         )
