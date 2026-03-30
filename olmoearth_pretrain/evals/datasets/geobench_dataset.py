@@ -297,8 +297,26 @@ class GeobenchDataset(Dataset):
             sample_dict["sentinel2_l2a"] = torch.tensor(s2).float()
 
         timestamp = repeat(torch.tensor(self.default_day_month_year), "d -> t d", t=1)
+
+        # Extract lat/lon from geobench band metadata if available
+        latlon = None
+        ref_band = sample.bands[self.band_indices[0]]
+        if (
+            hasattr(ref_band, "transform")
+            and ref_band.transform is not None
+            and hasattr(ref_band, "crs")
+            and ref_band.crs is not None
+        ):
+            from rasterio.crs import CRS
+            from rasterio.warp import transform
+
+            h, w = ref_band.data.shape[-2:]
+            cx, cy = ref_band.transform * (w / 2, h / 2)
+            xs, ys = transform(ref_band.crs, CRS.from_epsg(4326), [cx], [cy])
+            latlon = torch.tensor([ys[0], xs[0]], dtype=torch.float32)
+
         masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(
-            OlmoEarthSample(**sample_dict, timestamps=timestamp.long())
+            OlmoEarthSample(**sample_dict, timestamps=timestamp.long(), latlon=latlon)
         )
         return masked_sample, target
 
