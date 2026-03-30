@@ -23,6 +23,8 @@ from olmo_core.train.config import TrainerConfig
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
 from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig
+from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.common import (
     build_common_components as build_common_components_default,
 )
@@ -37,7 +39,10 @@ from olmoearth_pretrain.train.callbacks import (
     OlmoEarthSpeedMonitorCallback,
     OlmoEarthWandBCallback,
 )
-from olmoearth_pretrain.train.callbacks.evaluator_callback import DownstreamTaskConfig
+from olmoearth_pretrain.train.callbacks.evaluator_callback import (
+    DownstreamTaskConfig,
+    EvalMode,
+)
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
 from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
@@ -226,6 +231,66 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.steps(20000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
             epochs=50,
+        ),
+        "yemen_crop": DownstreamTaskConfig(
+            dataset="yemen_crop",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+            eval_interval=Duration.steps(10000),
+            probe_lr=0.001,
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+        ),
+        "tolbi_crop": DownstreamTaskConfig(
+            dataset="tolbi_crop",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=16,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+            probe_lr=0.1,
+            eval_interval=Duration.steps(10000),
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+        ),
+        "geo_ecosystem_annual_test": DownstreamTaskConfig(
+            dataset="geo_ecosystem_annual_test",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+            probe_lr=0.01,
+            eval_interval=Duration.steps(10000),
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+        ),
+        "canada_wildfire_sat_eval_split": DownstreamTaskConfig(
+            dataset="canada_wildfire_sat_eval_split",
+            embedding_batch_size=32,
+            probe_batch_size=16,
+            patch_size=5,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+            probe_lr=0.1,
+            eval_interval=Duration.steps(10000),
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            use_dice_loss=True,
+            primary_metric=EvalMetric.CLASS_F1,
+            primary_metric_class=1,
         ),
     }
     trainer_config = (
