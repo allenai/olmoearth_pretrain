@@ -29,6 +29,7 @@ Experiments:
 37. exp 36 + latlon as encode-decode modality with supervision (excluded from token contrastive loss)
 38. exp 36 but full bandset (default multi-bandset tokenization) + no band dropout
 41. exp 36 but with cross-instance masked negatives (negatives drawn from all batch instances)
+42. base_band_dropout_no_s1_drop_random_time (no NDVI/ERA5, no supervision, rank_microbatch=64) + band dropout decay (200k-250k)
 """
 
 import copy
@@ -2618,6 +2619,82 @@ def build_dataloader_exp41(common: CommonComponents) -> OlmoEarthDataLoaderConfi
 
 
 # ============================================================
+# Experiment 42: base_band_dropout_no_s1_drop_random_time + band dropout decay
+# ============================================================
+
+
+def build_common_exp42(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp42 (base config, no NDVI/ERA5)."""
+    return _build_common(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp42(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp42 (IC=0.05, rank_microbatch=64, no NDVI/ERA5)."""
+    return ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
+        rank_microbatch_size=64,
+        masking_config=_masking_config(
+            "random_time_with_decode", common.tokenization_config
+        ),
+        loss_config=_loss_config(),
+        contrastive_config=_contrastive_config_005(),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        max_grad_norm=1.0,
+        scheduler=CosWithWarmup(warmup_steps=8000),
+        ema_decay=(1.0, 1.0),
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+    )
+
+
+def build_model_exp42(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp42 (base + band dropout decay 200k-250k, no supervision)."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+        band_dropout_modalities=BAND_DROPOUT_MODALITIES_NO_S1,
+        band_dropout_decay_start_step=200_000,
+        band_dropout_decay_end_step=250_000,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+    )
+
+
+def build_dataloader_exp42(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp42."""
+    return _build_dataloader(common, "random_time_with_decode")
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -2825,6 +2902,12 @@ EXPERIMENTS = {
         build_model_exp41,
         build_train_module_exp41,
         build_dataloader_exp41,
+    ),
+    "base_band_dropout_no_s1_random_time_band_dropout_decay": (
+        build_common_exp42,
+        build_model_exp42,
+        build_train_module_exp42,
+        build_dataloader_exp42,
     ),
 }
 
