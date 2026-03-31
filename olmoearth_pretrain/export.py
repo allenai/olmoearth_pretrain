@@ -344,7 +344,7 @@ def verify_export(
         torch.manual_seed(i + 42)
         # Create input tensor
         x = torch.randn(1, spatial, spatial, T, S2_MODALITY.num_bands, device=device)
-        ts = torch.tensor([[[1, 6, 2020]]], dtype=torch.long, device=device)
+        ts = torch.tensor([[1, 6, 2020]], dtype=torch.long, device=device).unsqueeze(0).expand(1, T, 3)
 
         # Static encoder forward
         with torch.no_grad():

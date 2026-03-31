@@ -41,7 +41,15 @@ from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.export import StaticOlmoEarthEncoder, verify_export
 from olmoearth_pretrain.model_loader import ModelID, load_model_from_id
-from olmoearth_pretrain.quantization import check_modelopt_available, quantize_model
+
+# quantization module is optional (available via PR #516)
+try:
+    from olmoearth_pretrain.quantization import check_modelopt_available, quantize_model
+except ImportError:
+    def check_modelopt_available():
+        return False
+    def quantize_model(*args, **kwargs):
+        raise ImportError("olmoearth_pretrain.quantization not available. See PR #516.")
 
 
 def make_calib_fn(patch_size=2, spatial_size=64, device="cuda"):
