@@ -79,9 +79,15 @@ class LatentMIM(nn.Module, DistributedMixins):
             extra_metrics["token_norm_stats"] = token_norm_stats
         reconstructed = None
         if self.reconstructor:
-            reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
+            reconstructed = self.reconstructor(
+                latent, x.timestamps, patch_size, latlon=x.latlon
+            )
         decoded = self.decoder(
-            latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
+            latent,
+            timestamps=x.timestamps,
+            patch_size=patch_size,
+            latlon=x.latlon,
+            **decoder_kwargs,
         )
         return (
             latent,
