@@ -71,8 +71,6 @@ def visualize_sample(
     # At least 1 column, but also handle the largest band_order among the modalities
     max_bands = 1
     for modality_name in modalities:
-        if modality_name == "timestamps":
-            continue
         modality_spec = Modality.get(modality_name)
         if modality_spec != Modality.LATLON:
             max_bands = max(max_bands, len(modality_spec.band_order))

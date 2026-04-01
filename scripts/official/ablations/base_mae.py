@@ -35,11 +35,11 @@ from olmoearth_pretrain.internal.experiment import (
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
 from olmoearth_pretrain.nn.flexi_vit import (
     EncoderConfig,
-    PoolingType,
     PredictorConfig,
     ReconstructorConfig,
 )
 from olmoearth_pretrain.nn.mae import MAEConfig
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     OlmoEarthSpeedMonitorCallback,
@@ -115,6 +115,7 @@ def build_model_config(common: CommonComponents) -> MAEConfig:
         max_patch_size=MAX_PATCH_SIZE,
         drop_path=0.1,
         max_sequence_length=12,
+        use_linear_patch_embed=False,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],

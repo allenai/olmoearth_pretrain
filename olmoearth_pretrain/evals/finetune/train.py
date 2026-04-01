@@ -37,7 +37,7 @@ from olmoearth_pretrain.evals.finetune.model import (
     snapshot_state_dict,
     to_device,
 )
-from olmoearth_pretrain.evals.metrics import EvalResult, EvalTaskResult
+from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
 
 logger = getLogger(__name__)
 
@@ -59,24 +59,52 @@ def compute_eval_metrics(
     test_loader: DataLoader | None,
     device: torch.device,
     patch_size: int,
+    primary_metric: EvalMetric | None = None,
+    primary_metric_class: int | None = None,
 ) -> EvalTaskResult:
     """Evaluate a finetuned model on val and test sets."""
     ft.eval()
 
     if task_config.task_type == TaskType.CLASSIFICATION:
-        val_result = eval_cls(ft, val_loader, device, task_config.is_multilabel)
+        val_result = eval_cls(
+            ft,
+            val_loader,
+            device,
+            task_config.is_multilabel,
+            primary_metric=primary_metric,
+            primary_metric_class=primary_metric_class,
+        )
     else:
         val_result = eval_seg(
-            ft, val_loader, device, task_config.num_classes, patch_size
+            ft,
+            val_loader,
+            device,
+            task_config.num_classes,
+            patch_size,
+            primary_metric=primary_metric,
+            primary_metric_class=primary_metric_class,
         )
 
     test_result: EvalResult | None = None
     if test_loader is not None:
         if task_config.task_type == TaskType.CLASSIFICATION:
-            test_result = eval_cls(ft, test_loader, device, task_config.is_multilabel)
+            test_result = eval_cls(
+                ft,
+                test_loader,
+                device,
+                task_config.is_multilabel,
+                primary_metric=primary_metric,
+                primary_metric_class=primary_metric_class,
+            )
         else:
             test_result = eval_seg(
-                ft, test_loader, device, task_config.num_classes, patch_size
+                ft,
+                test_loader,
+                device,
+                task_config.num_classes,
+                patch_size,
+                primary_metric=primary_metric,
+                primary_metric_class=primary_metric_class,
             )
 
     return EvalTaskResult(val_result=val_result, test_result=test_result)
@@ -99,6 +127,8 @@ def run_finetune_eval(
     seed: int | None = None,
     best_checkpoint_path: str | None = None,
     resume_checkpoint_path: str | None = None,
+    primary_metric: EvalMetric | None = None,
+    primary_metric_class: int | None = None,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
     if seed is not None:
@@ -129,7 +159,14 @@ def run_finetune_eval(
         state = torch.load(best_checkpoint_path, map_location=device)
         ft.load_state_dict(state)
         return compute_eval_metrics(
-            ft, task_config, val_loader, test_loader, device, patch_size
+            ft,
+            task_config,
+            val_loader,
+            test_loader,
+            device,
+            patch_size,
+            primary_metric=primary_metric,
+            primary_metric_class=primary_metric_class,
         )
 
     # Freeze the backbone for the first portion of epochs
@@ -241,7 +278,14 @@ def run_finetune_eval(
             opt.zero_grad()
 
         if task_config.task_type == TaskType.CLASSIFICATION:
-            val_result = eval_cls(ft, val_loader, device, task_config.is_multilabel)
+            val_result = eval_cls(
+                ft,
+                val_loader,
+                device,
+                task_config.is_multilabel,
+                primary_metric=primary_metric,
+                primary_metric_class=primary_metric_class,
+            )
         else:
             val_result = eval_seg(
                 ft,
@@ -249,6 +293,8 @@ def run_finetune_eval(
                 device,
                 task_config.num_classes,
                 patch_size,
+                primary_metric=primary_metric,
+                primary_metric_class=primary_metric_class,
             )
 
         if wandb_logger is not None:
@@ -306,10 +352,23 @@ def run_finetune_eval(
     test_result: EvalResult | None = None
     if test_loader is not None:
         if task_config.task_type == TaskType.CLASSIFICATION:
-            test_result = eval_cls(ft, test_loader, device, task_config.is_multilabel)
+            test_result = eval_cls(
+                ft,
+                test_loader,
+                device,
+                task_config.is_multilabel,
+                primary_metric=primary_metric,
+                primary_metric_class=primary_metric_class,
+            )
         else:
             test_result = eval_seg(
-                ft, test_loader, device, task_config.num_classes, patch_size
+                ft,
+                test_loader,
+                device,
+                task_config.num_classes,
+                patch_size,
+                primary_metric=primary_metric,
+                primary_metric_class=primary_metric_class,
             )
 
     return EvalTaskResult(

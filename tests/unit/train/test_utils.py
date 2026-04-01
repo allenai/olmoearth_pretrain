@@ -39,6 +39,7 @@ def test_split_masked_batch(microbatch_size: int) -> None:
         if i == len(micro_batches) - 1:
             expected_mb_size = B - i * microbatch_size
 
+        assert micro_batch.timestamps is not None
         mb_size = micro_batch.timestamps.shape[0]
         assert mb_size == expected_mb_size
         total_samples += mb_size

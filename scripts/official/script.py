@@ -30,9 +30,7 @@ from olmoearth_pretrain.internal.experiment import (
     OlmoEarthVisualizeConfig,
     SubCmd,
 )
-from olmoearth_pretrain.nn.flexi_vit import (
-    PoolingType,
-)
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     FullGCCallback,
@@ -187,9 +185,13 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         name=common.run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
-        enabled=True,  # set to False to avoid wandb errors
+        enabled=True,
     )
+<<<<<<< HEAD
     garbage_collector_callback = FullGCCallback(gc_interval=1, full_gc_interval=50, malloc_trim_interval=50)
+=======
+    garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
+>>>>>>> 0b9625ec6ffce3388d887d8eafcfcf7572be7e77
     EVAL_TASKS = {
         "m-eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
@@ -252,10 +254,14 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
+<<<<<<< HEAD
         .with_callback("shm_monitor", ShmMonitorCallback(interval=10))
         .with_callback(
             "beaker", BeakerCallback()
         )  # this shoukd not be here, but for now it is
+=======
+        .with_callback("beaker", BeakerCallback())
+>>>>>>> 0b9625ec6ffce3388d887d8eafcfcf7572be7e77
         .with_callback(
             "checkpointer",
             CheckpointerCallback(

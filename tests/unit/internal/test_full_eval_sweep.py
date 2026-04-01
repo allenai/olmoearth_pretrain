@@ -41,6 +41,8 @@ def base_args() -> argparse.Namespace:
         task_skip_names=None,
         size=None,
         load_eval_settings_from_json=False,
+        checkpoint_dir=None,
+        steps=None,
     )
 
 
@@ -63,6 +65,8 @@ def minimal_args() -> argparse.Namespace:
         task_skip_names=None,
         size=None,
         load_eval_settings_from_json=False,
+        checkpoint_dir=None,
+        steps=None,
     )
 
 

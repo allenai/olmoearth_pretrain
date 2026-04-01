@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 import math
 from enum import StrEnum
 from logging import getLogger
@@ -13,14 +14,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from olmo_core.data.utils import get_rng
-from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.metrics import (
+    SEGMENTATION_IGNORE_LABEL,
+    EvalMetric,
     EvalResult,
     EvalTaskResult,
+    classification_metrics,
     segmentation_metrics,
 )
 from olmoearth_pretrain.evals.utils import adjust_learning_rate
@@ -132,9 +135,12 @@ def train_and_eval_probe(
     epochs: int = 50,
     eval_interval: int = 50,
     probe_type: ProbeType = ProbeType.LINEAR,
-    select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False,
+    select_best_by_primary_metric: bool = False,
     n_bootstrap: int = 0,
     bootstrap_seed: int = 42,
+    use_dice_loss: bool = False,
+    primary_metric: EvalMetric | None = None,
+    primary_metric_class: int | None = None,
 ) -> EvalTaskResult:
     """Run a linear probe on the OlmoEarth Pretrain model.
 
@@ -211,6 +217,7 @@ def train_and_eval_probe(
             num_classes=config.num_classes,
             num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
             device=device,
+            use_dice_loss=use_dice_loss,
         )
         val_result = evaluate_probe(
             data_loader=DataLoader(
@@ -224,6 +231,8 @@ def train_and_eval_probe(
             device=device,
             task_type=config.task_type,
             probe_type=probe_type,
+            primary_metric=primary_metric,
+            primary_metric_class=primary_metric_class,
         )
         logger.info(f"Epoch {end_epoch}, Val Score: {val_result.primary}")
         val_results.append(val_result)
@@ -242,7 +251,7 @@ def train_and_eval_probe(
     logger.debug(f"Best Val Score: {best_val_score} at epoch {best_epoch}")
 
     # Determine final validation result
-    if select_final_test_miou_based_on_epoch_of_max_val_miou:
+    if select_best_by_primary_metric:
         # Find the result corresponding to best epoch
         best_idx = (best_epoch // eval_interval) - 1
         if best_idx < 0:
@@ -313,6 +322,8 @@ def train_and_eval_probe(
                     bootstrap_labels,
                     num_classes=config.num_classes,
                     task_type=config.task_type,
+                    primary_metric=primary_metric,
+                    primary_metric_class=primary_metric_class,
                 )
                 bootstrap_scores.append(result.primary)
 
@@ -337,13 +348,14 @@ def train_and_eval_probe(
                 f"Bootstrap test score: {bootstrap_mean:.4f} ± {std_metric:.4f} "
                 f"[{ci_lower:.4f}, {ci_upper:.4f}]"
             )
-
         # Compute full metrics for the actual test result
         test_result = compute_metric(
             all_preds,
             all_labels,
             num_classes=config.num_classes,
             task_type=config.task_type,
+            primary_metric=primary_metric,
+            primary_metric_class=primary_metric_class,
         )
         if n_bootstrap == 0:
             logger.info(f"Test result: {test_result}")
@@ -353,6 +365,62 @@ def train_and_eval_probe(
         test_result=test_result,
         bootstrap_stats=bootstrap_stats,
     )
+
+
+def weighted_dice_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    num_classes: int,
+    ignore_index: int = SEGMENTATION_IGNORE_LABEL,
+    smooth: float = 1.0,
+) -> torch.Tensor:
+    """Compute class-weighted dice loss for segmentation.
+
+    Args:
+        logits: Model predictions of shape (N, C, ...) where C is num_classes.
+        targets: Ground truth labels of shape (N, ...) with integer class indices.
+        num_classes: Number of classes.
+        ignore_index: Label value to ignore when computing loss.
+        smooth: Smoothing term to avoid division by zero.
+
+    Returns:
+        Scalar weighted dice loss.
+    """
+    valid_mask = targets != ignore_index
+    targets_masked = targets.clone()
+    targets_masked[~valid_mask] = 0
+
+    probs = F.softmax(logits, dim=1)
+    one_hot = (
+        F.one_hot(targets_masked, num_classes)
+        .permute(0, -1, *range(1, targets.ndim))
+        .float()
+    )
+
+    # Zero out ignored pixels in both probs and one_hot
+    valid_mask_expanded = valid_mask.unsqueeze(1).expand_as(one_hot)
+    probs = probs * valid_mask_expanded
+    one_hot = one_hot * valid_mask_expanded
+
+    # Per-class dice: sum over batch and spatial dims
+    dims = (0,) + tuple(range(2, probs.ndim))
+    intersection = (probs * one_hot).sum(dim=dims)
+    cardinality = probs.sum(dim=dims) + one_hot.sum(dim=dims)
+
+    dice_per_class = (2.0 * intersection + smooth) / (cardinality + smooth)
+
+    # Class weights: inverse frequency of valid pixels per class
+    class_counts = one_hot.sum(dim=dims)
+    total = class_counts.sum()
+    weights = torch.where(
+        class_counts > 0,
+        total / (num_classes * class_counts),
+        torch.zeros_like(class_counts),
+    )
+    weights = weights / (weights.sum() + 1e-8)
+
+    loss = 1.0 - (weights * dice_per_class).sum()
+    return loss
 
 
 def train_probe(
@@ -366,12 +434,16 @@ def train_probe(
     device: torch.device,
     task_type: TaskType,
     num_output_pixels_per_side_of_patch: int | None = None,
+    use_dice_loss: bool = False,
 ) -> nn.Module:
-    """Train a linear probe on a segmentation task."""
+    """Train a linear probe on a classification or segmentation task."""
     opt = torch.optim.AdamW(probe.parameters(), lr=lr)
 
     probe = probe.train()
-    loss_function = nn.CrossEntropyLoss(ignore_index=-1)  # for MADOS, but ok for others
+    if use_dice_loss:
+        loss_function = functools.partial(weighted_dice_loss, num_classes=num_classes)
+    else:
+        loss_function = nn.CrossEntropyLoss(ignore_index=SEGMENTATION_IGNORE_LABEL)
     start_epoch = current_epoch
     for epoch in range(start_epoch, epochs):
         for i, batch in enumerate(data_loader):
@@ -499,25 +571,26 @@ def compute_metric(
     labels: torch.Tensor,
     num_classes: int,
     task_type: TaskType,
+    primary_metric: EvalMetric | None = None,
+    primary_metric_class: int | None = None,
 ) -> EvalResult:
-    """Compute metric from predictions and labels.
-
-    Args:
-        preds: Predictions tensor
-        labels: Labels tensor
-        num_classes: Number of classes
-        task_type: Type of task (classification or segmentation)
-
-    Returns:
-        EvalResult with computed metrics
-    """
+    """Compute metric from predictions and labels."""
     if task_type == TaskType.SEGMENTATION:
         return segmentation_metrics(
-            preds, labels, num_classes=num_classes, ignore_label=-1
+            preds,
+            labels,
+            num_classes=num_classes,
+            ignore_label=SEGMENTATION_IGNORE_LABEL,
+            primary_metric=primary_metric,
+            primary_metric_class=primary_metric_class,
         )
     else:
-        acc = accuracy_score(labels.numpy(), preds.numpy())
-        return EvalResult.from_classification(acc)
+        return classification_metrics(
+            predictions=preds,
+            labels=labels,
+            primary_metric=primary_metric,
+            primary_metric_class=primary_metric_class,
+        )
 
 
 def evaluate_probe(
@@ -528,12 +601,10 @@ def evaluate_probe(
     task_type: TaskType,
     probe_type: ProbeType,
     num_output_pixels_per_side_of_patch: int | None = None,
+    primary_metric: EvalMetric | None = None,
+    primary_metric_class: int | None = None,
 ) -> EvalResult:
-    """Evaluate a trained linear probe on a segmentation or classification task.
-
-    Returns:
-        EvalResult with computed metrics
-    """
+    """Evaluate a trained linear probe on a segmentation or classification task."""
     preds, labels = get_probe_predictions(
         data_loader=data_loader,
         probe=probe,
@@ -543,4 +614,11 @@ def evaluate_probe(
         probe_type=probe_type,
         num_output_pixels_per_side_of_patch=num_output_pixels_per_side_of_patch,
     )
-    return compute_metric(preds, labels, num_classes, task_type)
+    return compute_metric(
+        preds,
+        labels,
+        num_classes,
+        task_type,
+        primary_metric=primary_metric,
+        primary_metric_class=primary_metric_class,
+    )

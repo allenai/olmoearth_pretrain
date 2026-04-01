@@ -152,6 +152,15 @@ def build_launch_config(
     if train_script_path is not None:
         logger.info(f"Propagating train script path to experiment: {train_script_path}")
         env_vars.append(BeakerEnvVar(name="TRAIN_SCRIPT_PATH", value=train_script_path))
+    # Propagate checkpoint sweep env vars to the experiment if set
+    checkpoint_dir = os.environ.get("CHECKPOINT_DIR")
+    if checkpoint_dir is not None:
+        logger.info(f"Propagating checkpoint dir to experiment: {checkpoint_dir}")
+        env_vars.append(BeakerEnvVar(name="CHECKPOINT_DIR", value=checkpoint_dir))
+    checkpoint_steps = os.environ.get("CHECKPOINT_STEPS")
+    if checkpoint_steps is not None:
+        logger.info(f"Propagating checkpoint steps to experiment: {checkpoint_steps}")
+        env_vars.append(BeakerEnvVar(name="CHECKPOINT_STEPS", value=checkpoint_steps))
     # Propagate the finetune tag to the experiment if set
     finetune = os.environ.get("FINETUNE")
     if finetune is not None:
@@ -257,6 +266,9 @@ def build_common_components(
             clusters=cluster,
             nccl_debug=nccl_debug,
         )
+        # Set retries=2 for launch command
+        if cmd == SubCmd.launch:
+            launch_config.retries = 2
     root_dir = get_root_dir(cluster)
 
     beaker_user = get_beaker_username() or ANONYMOUS_USER

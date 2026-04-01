@@ -3,8 +3,7 @@
 import logging
 import math
 from dataclasses import dataclass
-from enum import StrEnum
-from typing import Any, NamedTuple
+from typing import Any
 
 import torch
 from einops import rearrange, reduce, repeat
@@ -18,7 +17,11 @@ from olmoearth_pretrain.data.constants import (
     ModalitySpec,
     get_modality_specs_from_names,
 )
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+from olmoearth_pretrain.datatypes import (
+    MaskedOlmoEarthSample,
+    MaskValue,
+    TokensAndMasks,
+)
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
@@ -29,6 +32,7 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
+from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
@@ -54,239 +58,8 @@ def return_modalities_from_dict(
     ]
 
 
-class PoolingType(StrEnum):
-    """Strategy for pooling the tokens."""
-
-    MAX = "max"
-    MEAN = "mean"
-
-
-class TokensAndMasks(NamedTuple):
-    """Output to compute the loss on.
-
-    Args:
-        sentinel2: sentinel 2 data of shape (B, P_H, P_W, T, Band_Sets, D)
-        sentinel2_mask: sentinel 2 mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
-        sentinel1: sentinel 1 data of shape (B, P_H, P_W, T, Band_Sets, D)
-        sentinel1_mask: sentinel 1 mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
-        worldcover: worldcover data of shape (B, P_H, P_W, T, Band_Sets, D)
-        worldcover_mask: worldcover mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
-        latlon: lat lon data containing geographical coordinates
-        latlon_mask: lat lon mask indicating which coordinates are masked/unmasked
-        openstreetmap_raster: openstreetmap raster data of shape (B, P_H, P_W, T, Band_Sets, D)
-        openstreetmap_raster_mask: openstreetmap raster mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
-    """
-
-    sentinel2_l2a: Tensor | None = None
-    sentinel2_l2a_mask: Tensor | None = None
-    sentinel1: Tensor | None = None
-    sentinel1_mask: Tensor | None = None
-    worldcover: Tensor | None = None
-    worldcover_mask: Tensor | None = None
-    latlon: Tensor | None = None
-    latlon_mask: Tensor | None = None
-    openstreetmap_raster: Tensor | None = None
-    openstreetmap_raster_mask: Tensor | None = None
-    srtm: Tensor | None = None
-    srtm_mask: Tensor | None = None
-    landsat: Tensor | None = None
-    landsat_mask: Tensor | None = None
-    naip: Tensor | None = None
-    naip_mask: Tensor | None = None
-    naip_10: Tensor | None = None
-    naip_10_mask: Tensor | None = None
-    gse: Tensor | None = None
-    gse_mask: Tensor | None = None
-    cdl: Tensor | None = None
-    cdl_mask: Tensor | None = None
-    worldpop: Tensor | None = None
-    worldpop_mask: Tensor | None = None
-    worldcereal: Tensor | None = None
-    worldcereal_mask: Tensor | None = None
-    wri_canopy_height_map: Tensor | None = None
-    wri_canopy_height_map_mask: Tensor | None = None
-    era5_10: Tensor | None = None
-    era5_10_mask: Tensor | None = None
-    eurocrops: Tensor | None = None
-    eurocrops_mask: Tensor | None = None
-
-    @property
-    def device(self) -> torch.device:
-        """Get the device of the tokens and masks."""
-        if self.sentinel2_l2a is not None:
-            return self.sentinel2_l2a.device
-        else:
-            # look for any other modality that is not None
-            for modality in self._fields:
-                if getattr(self, modality) is not None:
-                    return getattr(self, modality).device
-            raise ValueError("No data to get device from")
-
-    # TODO: It seems like we want a lot of our named tuples to have this functionality so we should probably create a utility base class for the named tuples and double subclass
-    @classmethod
-    def get_masked_modality_name(cls, modality: str) -> str:
-        """Get the masked modality name."""
-        return f"{modality}_mask"
-
-    def as_dict(self, return_none: bool = True) -> dict[str, Any]:
-        """Convert the namedtuple to a dictionary.
-
-        Returns:
-            Dictionary representation of the namedtuple.
-        """
-        return_dict = {}
-        for field in self._fields:
-            val = getattr(self, field)
-            if return_none:
-                return_dict[field] = val
-            else:
-                if val is not None:
-                    return_dict[field] = val
-        return return_dict
-
-    @property
-    def modalities(self) -> list[str]:
-        """Return all data fields."""
-        return [
-            x
-            for x in self._fields
-            if not x.endswith("mask") and getattr(self, x) is not None
-        ]
-
-    def get_shape_dict(self) -> dict[str, tuple]:
-        """Return a dictionary of the shapes of the fields."""
-        return {x: getattr(self, x).shape for x in self._fields}
-
-    @staticmethod
-    def _flatten(x: Tensor) -> Tensor:
-        return rearrange(x, "b ... d -> b (...) d")
-
-    def flatten_tokens_and_masks(
-        self, return_lists: bool = False
-    ) -> tuple[Tensor, Tensor]:
-        """Return the flattened tokens and masks.
-
-        Args:
-            return_lists: If True, return the original lists before concatenation.
-                          If False, return concatenated tensors.
-
-        Tokens will have shape [B, T, D] and masks will have shape [B, T]
-        """
-        flattened_x, flattened_masks = [], []
-        for attr_name in self.modalities:
-            mask_attr_name = self.get_masked_modality_name(attr_name)
-            attr = getattr(self, attr_name)
-            masked_attr = getattr(self, mask_attr_name)
-            if attr is not None:
-                if masked_attr is None:
-                    raise ValueError(
-                        f"Can't have present {attr_name} but None {mask_attr_name}"
-                    )
-                masked_attr = masked_attr.unsqueeze(dim=-1)
-                flattened_x.append(self._flatten(attr))
-                flattened_masks.append(self._flatten(masked_attr))
-
-        if return_lists:
-            # Remove the extra dimension from the masks
-            flattened_masks = [mask[:, :, 0] for mask in flattened_masks]
-            return flattened_x, flattened_masks
-
-        x = torch.cat(flattened_x, dim=1)
-        masks = torch.cat(flattened_masks, dim=1)[:, :, 0]
-        return x, masks
-
-    def pool_spatially_and_concat_modalities(self) -> Tensor:
-        """Pool the modalities  across time to get spatial features and concatenate the features."""
-        spatial_stacked_features = []
-        for attr_name in self.modalities:
-            if Modality.get(attr_name).is_spatial:
-                mask_attr_name = self.get_masked_modality_name(attr_name)
-                masked_attr = getattr(self, mask_attr_name)
-                if masked_attr is None:
-                    continue
-                if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
-                    attr = getattr(self, attr_name)
-                    # only mean in temporal dimension
-                    pooled_attr = torch.mean(attr, dim=(-3))
-                    spatial_stacked_features.append(pooled_attr)
-        if len(spatial_stacked_features) == 0:
-            raise ValueError("Missing unmasked spatial modalities for spatial pooling.")
-        # Concatenate along the band sets dimension instead of stacking
-        spatial_stacked_features = torch.cat(spatial_stacked_features, dim=-2)
-        return spatial_stacked_features
-
-    def pool_spatially(self, pooling_type: PoolingType) -> Tensor:
-        """Pool the modalities across time to get spatial features."""
-        spatial_average = []
-        for attr_name in self.modalities:
-            if Modality.get(attr_name).is_spatial:
-                mask_attr_name = self.get_masked_modality_name(attr_name)
-                masked_attr = getattr(self, mask_attr_name)
-                if masked_attr is None:
-                    continue
-                if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
-                    attr = getattr(self, attr_name)
-                    # pool across time and bandset dimensions
-                    if pooling_type == PoolingType.MEAN:
-                        spatial_average.append(torch.mean(attr, dim=(-2, -3)))
-                    else:
-                        spatial_average.append(
-                            torch.max(torch.max(attr, dim=-2).values, dim=-2).values
-                        )
-        if len(spatial_average) == 0:
-            raise ValueError("Missing unmasked spatial modalities for spatial pooling.")
-        spatial_average_t = torch.stack(spatial_average, dim=-1)
-        if pooling_type == PoolingType.MEAN:
-            return spatial_average_t.mean(dim=-1)
-        else:
-            return spatial_average_t.max(dim=-1).values
-
-    def pool_instance_wise(self, pooling_type: PoolingType) -> Tensor:
-        """Pool all the tokens in the instance."""
-        x, mask = self.flatten_tokens_and_masks()
-        # 1s for online encoder, 0s elsewhere
-        mask = (mask == MaskValue.ONLINE_ENCODER.value).long()
-        x_for_pooling = x * mask.unsqueeze(-1)
-        if pooling_type == PoolingType.MAX:
-            x_for_pooling = x_for_pooling.masked_fill(
-                ~mask.bool().unsqueeze(-1), -float("inf")
-            )
-            return x_for_pooling.max(dim=1).values
-        elif pooling_type == PoolingType.MEAN:
-            num_encoded_tokens = torch.sum(mask, -1, keepdim=True)
-            logger.debug(f"num_encoded_tokens: {num_encoded_tokens}")
-            if (num_encoded_tokens == 0).any():
-                raise ValueError(
-                    f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
-                )
-            return x_for_pooling.sum(dim=1) / num_encoded_tokens
-        else:
-            raise ValueError(f"Invalid pooling type: {pooling_type}")
-
-    def pool_unmasked_tokens(
-        self,
-        pooling_type: PoolingType = PoolingType.MAX,
-        spatial_pooling: bool = False,
-        concat_features: bool = False,
-    ) -> Tensor:
-        """Pool the unmasked tokens.
-
-        Args:
-            pooling_type: Pooling type for the tokens
-            spatial_pooling: Whether to keep the spatial dimensions when pooling. If true,
-                this expects the masks within a spatial modality to be consistent (e.g. all
-                s2 tokens would have the same mask.)
-            concat_features: Whether to concatenate the features instead of averaging them, only enabled for spatial pooling as of now,
-            requires no masked out tokens
-        """
-        if concat_features and spatial_pooling:
-            return self.pool_spatially_and_concat_modalities()
-        if concat_features:
-            raise ValueError("concat_features is not supported for non-spatial pooling")
-        if not spatial_pooling:
-            return self.pool_instance_wise(pooling_type)
-        else:
-            return self.pool_spatially(pooling_type)
+# TokensAndMasks is imported from datatypes and re-exported here for backwards compatibility
+# See olmoearth_pretrain.datatypes.TokensAndMasks for the implementation
 
 
 class ProjectAndAggregate(nn.Module):
@@ -297,6 +70,8 @@ class ProjectAndAggregate(nn.Module):
         embedding_size: int,
         num_layers: int,
         aggregate_then_project: bool = True,
+        output_embedding_size: int | None = None,
+        only_project: bool = False,
     ):
         """Initialize the linear module.
 
@@ -305,12 +80,27 @@ class ProjectAndAggregate(nn.Module):
             a ReLU activation will be applied between layers
         aggregate_then_project: If True, then we will average the tokens before applying
             the projection. If False, we will apply the projection first.
+        output_embedding_size: If provided, the final layer will output this size instead
+            of embedding_size.
+        only_project: If True, only project the tokens without aggregation.
         """
         super().__init__()
-        projections = [nn.Linear(embedding_size, embedding_size)]
-        for _ in range(1, num_layers):
+        self.only_project = only_project
+        out_size = (
+            output_embedding_size
+            if output_embedding_size is not None
+            else embedding_size
+        )
+        # Build projection layers: all intermediate layers use embedding_size, final uses out_size
+        if num_layers == 1:
+            projections = [nn.Linear(embedding_size, out_size)]
+        else:
+            projections = [nn.Linear(embedding_size, embedding_size)]
+            for _ in range(1, num_layers - 1):
+                projections.append(nn.ReLU())
+                projections.append(nn.Linear(embedding_size, embedding_size))
             projections.append(nn.ReLU())
-            projections.append(nn.Linear(embedding_size, embedding_size))
+            projections.append(nn.Linear(embedding_size, out_size))
         self.projection = nn.Sequential(*projections)
         self.aggregate_then_project = aggregate_then_project
 
@@ -319,8 +109,8 @@ class ProjectAndAggregate(nn.Module):
     ) -> torch.Tensor:
         """Apply the aggregate operation to the input."""
         if isinstance(x, TokensAndMasks):
-            pooled_for_contrastive = x.pool_unmasked_tokens(
-                PoolingType.MEAN, spatial_pooling=False
+            pooled_for_contrastive = pool_unmasked_tokens(
+                x, PoolingType.MEAN, spatial_pooling=False
             )
         elif isinstance(x, torch.Tensor):
             pooled_for_contrastive = reduce(x, "b ... d -> b  d", "mean")
@@ -333,7 +123,7 @@ class ProjectAndAggregate(nn.Module):
     ) -> torch.Tensor:
         """Apply the project operation to the input then aggregate."""
         if isinstance(x, TokensAndMasks):
-            decoder_emedded_dict = x._asdict()
+            decoder_emedded_dict = x.as_dict(include_nones=True)
             for modality in x.modalities:
                 x_modality = getattr(x, modality)
                 # Are these normalizations masked correctly?
@@ -344,8 +134,8 @@ class ProjectAndAggregate(nn.Module):
                     x, masked_modality_name
                 )
             x_projected = TokensAndMasks(**decoder_emedded_dict)
-            projected_pooled = x_projected.pool_unmasked_tokens(
-                PoolingType.MEAN, spatial_pooling=False
+            projected_pooled = pool_unmasked_tokens(
+                x_projected, PoolingType.MEAN, spatial_pooling=False
             )
         elif isinstance(x, torch.Tensor):
             x_projected = self.projection(x)
@@ -354,16 +144,40 @@ class ProjectAndAggregate(nn.Module):
             raise ValueError(f"Invalid input type: {type(x)}")
         return projected_pooled
 
-    def forward(self, x: TokensAndMasks | torch.Tensor) -> torch.Tensor:
+    def apply_project_only(
+        self, x: TokensAndMasks | torch.Tensor
+    ) -> TokensAndMasks | torch.Tensor:
+        """Apply projection without aggregation, preserving token structure."""
+        if isinstance(x, TokensAndMasks):
+            decoder_emedded_dict = x._asdict()
+            for modality in x.modalities:
+                x_modality = getattr(x, modality)
+                x_modality = self.projection(x_modality)
+                masked_modality_name = x.get_masked_modality_name(modality)
+                decoder_emedded_dict[modality] = x_modality
+                decoder_emedded_dict[masked_modality_name] = getattr(
+                    x, masked_modality_name
+                )
+            return TokensAndMasks(**decoder_emedded_dict)
+        elif isinstance(x, torch.Tensor):
+            return self.projection(x)
+        else:
+            raise ValueError(f"Invalid input type: {type(x)}")
+
+    def forward(
+        self, x: TokensAndMasks | torch.Tensor
+    ) -> torch.Tensor | TokensAndMasks:
         """Apply a (non)linear projection to an input TokensAndMasks.
 
         This can be applied either before or after pooling the tokens.
+        If only_project is True, returns projected tokens without aggregation.
         """
-        return (
-            self.apply_aggregate_then_project(x)
-            if self.aggregate_then_project
-            else self.apply_project_then_aggregate(x)
-        )
+        if self.only_project:
+            return self.apply_project_only(x)
+        elif self.aggregate_then_project:
+            return self.apply_aggregate_then_project(x)
+        else:
+            return self.apply_project_then_aggregate(x)
 
 
 class MultiModalPatchEmbeddings(nn.Module):
@@ -375,6 +189,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         max_patch_size: int,
         embedding_size: int,
         tokenization_config: TokenizationConfig | None = None,
+        use_linear_patch_embed: bool = True,
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
@@ -387,6 +202,8 @@ class MultiModalPatchEmbeddings(nn.Module):
             max_patch_size: Maximum size of patches
             embedding_size: Size of embeddings
             tokenization_config: Optional config for custom band groupings
+            use_linear_patch_embed: Passed through to FlexiPatchEmbed. Set False to load
+                checkpoints trained before this flag existed (which used Conv2d).
             band_dropout_rate: Probability of dropping each band channel during training.
                 When > 0, randomly zeroes out bands before the patch embedding Conv2d,
                 forcing the model to learn cross-spectral representations. Only active
@@ -402,6 +219,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.embedding_size = embedding_size
         self.supported_modality_names = supported_modality_names
         self.tokenization_config = tokenization_config or TokenizationConfig()
+        self.use_linear_patch_embed = use_linear_patch_embed
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
@@ -467,6 +285,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                         embedding_size=self.embedding_size,
                         patch_size_at_16=self.max_patch_size,
                         modality_spec=modality_spec,
+                        use_linear_patch_embed=self.use_linear_patch_embed,
                     )
                     for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
@@ -761,6 +580,11 @@ class ReconstructorConfig(Config):
     max_patch_size: int = 8
     tokenization_config: TokenizationConfig | None = None
 
+    def __post_init__(self) -> None:
+        """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
+        if isinstance(self.tokenization_config, dict):
+            self.tokenization_config = TokenizationConfig(**self.tokenization_config)
+
     def validate(self) -> None:
         """Validate the configuration."""
         if len(self.supported_modalities) == 0:
@@ -868,6 +692,8 @@ class CompositeEncodings(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module) -> None:
+        if getattr(m, "_skip_custom_init", False):
+            return
         if isinstance(m, nn.Linear):
             # we use xavier_uniform following official JAX ViT:
             torch.nn.init.xavier_uniform_(m.weight)
@@ -1093,6 +919,9 @@ class FlexiVitBase(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module) -> None:
+        if getattr(m, "_skip_custom_init", False):
+            logger.debug(f"Skipping custom init for {m}")
+            return
         if isinstance(m, nn.Linear):
             # we use xavier_uniform following official JAX ViT:
             torch.nn.init.xavier_uniform_(m.weight)
@@ -1277,7 +1106,9 @@ class Encoder(FlexiVitBase):
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
         log_token_norm_stats: bool = False,
+        output_embedding_size: int | None = None,
         tokenization_config: TokenizationConfig | None = None,
+        use_linear_patch_embed: bool = True,
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
@@ -1306,7 +1137,10 @@ class Encoder(FlexiVitBase):
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
             log_token_norm_stats: Whether to log the token norm stats
+            output_embedding_size: If set, project tokens to this size after attention
             tokenization_config: Optional config for custom band groupings
+            use_linear_patch_embed: If True, use nn.Linear for patch projection (faster).
+                Set False to load checkpoints trained before this flag existed (Conv2d weights).
             band_dropout_rate: Probability of dropping each band channel during training.
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
@@ -1337,6 +1171,7 @@ class Encoder(FlexiVitBase):
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
+        self.use_linear_patch_embed = use_linear_patch_embed
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
@@ -1345,12 +1180,26 @@ class Encoder(FlexiVitBase):
             self.max_patch_size,
             self.embedding_size,
             tokenization_config=self.tokenization_config,
+            use_linear_patch_embed=self.use_linear_patch_embed,
             band_dropout_rate=self.band_dropout_rate,
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
         )
+        self.output_embedding_size = output_embedding_size
+        # If output_embedding_size is set, project tokens to that size after attention
+        self.embedding_projector: ProjectAndAggregate | None = None
+        if output_embedding_size is not None:
+            self.embedding_projector = ProjectAndAggregate(
+                embedding_size=self.embedding_size,
+                num_layers=1,
+                output_embedding_size=output_embedding_size,
+                only_project=True,
+            )
+            final_embedding_size = output_embedding_size
+        else:
+            final_embedding_size = self.embedding_size
         self.project_and_aggregate = ProjectAndAggregate(
-            embedding_size=self.embedding_size,
+            embedding_size=final_embedding_size,
             num_layers=num_projection_layers,
             aggregate_then_project=aggregate_then_project,
         )
@@ -1773,6 +1622,11 @@ class Encoder(FlexiVitBase):
         else:
             token_norm_stats = {}
         output = TokensAndMasks(**patchified_tokens_and_masks)
+
+        # Project to output_embedding_size if configured
+        if self.embedding_projector is not None:
+            output = self.embedding_projector(output)
+
         output_dict: dict[str, Any] = {
             "tokens_and_masks": output,
         }
@@ -2148,8 +2002,7 @@ class Predictor(PredictorBase):
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
         """
-        decoder_emedded_dict = x.as_dict(return_none=False)
-
+        decoder_emedded_dict = x.as_dict()
         # Apply Input Norms and encoder to decoder embeds to each modality
         available_modalities = x.modalities
         modalities_to_process = get_modalities_to_process(
@@ -2220,10 +2073,17 @@ class EncoderConfig(Config):
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
     log_token_norm_stats: bool = False
+    output_embedding_size: int | None = None
     tokenization_config: TokenizationConfig | None = None
+    use_linear_patch_embed: bool = True
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+
+    def __post_init__(self) -> None:
+        """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
+        if isinstance(self.tokenization_config, dict):
+            self.tokenization_config = TokenizationConfig(**self.tokenization_config)
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -2279,6 +2139,11 @@ class PredictorConfig(Config):
     use_flash_attn: bool = False
     qk_norm: bool = False
     tokenization_config: TokenizationConfig | None = None
+
+    def __post_init__(self) -> None:
+        """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
+        if isinstance(self.tokenization_config, dict):
+            self.tokenization_config = TokenizationConfig(**self.tokenization_config)
 
     def validate(self) -> None:
         """Validate the configuration."""

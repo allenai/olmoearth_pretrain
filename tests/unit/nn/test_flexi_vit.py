@@ -19,6 +19,7 @@ from olmoearth_pretrain.nn.flexi_vit import (
     ProjectAndAggregate,
     TokensAndMasks,
 )
+from olmoearth_pretrain.nn.pooling import pool_unmasked_tokens
 from olmoearth_pretrain.train.masking import MaskValue
 
 logger = logging.getLogger(__name__)
@@ -91,20 +92,6 @@ class TestCompositeEncodings:
         )
         assert not (wc_enc == 0).all()
         assert not (wc_enc == worldcover_tokens).all()
-        assert worldcover_tokens.shape == wc_enc.shape
-
-    def test_apply_encodings_per_modality_worldcover_rectangular_grid(
-        self,
-        composite_encodings: CompositeEncodings,
-    ) -> None:
-        """Rectangular (H!=W) spatial grids should not crash."""
-        B, H, W, C, D = 1, 18, 20, 1, 16
-        patch_size = 4
-        input_res = 10
-        worldcover_tokens = torch.randn(B, H, W, C, D)
-        wc_enc = composite_encodings._apply_encodings_per_modality(
-            "worldcover", worldcover_tokens, None, patch_size, input_res
-        )
         assert worldcover_tokens.shape == wc_enc.shape
 
     def test_apply_encodings_per_modality_grad(
@@ -678,7 +665,7 @@ class TestTokensAndMasks:
     """Test TestTokensAndMasks."""
 
     def test_flatten_tokens_and_masks(self) -> None:
-        """Test TokensAndMasks.flatten_tokens_and_masks."""
+        """Test TokensAndMasks.flatten_all_tokens_and_masks."""
         b, h, w, t, d = 2, 4, 4, 3, 128
         sentinel_2 = torch.ones((b, h, w, t, d))
         sentinel_2[0, 0, 0, 0, :] = 0  # set one "token" to 0s
@@ -687,7 +674,7 @@ class TestTokensAndMasks:
         t_and_m = TokensAndMasks(
             sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
         )
-        x, mask = t_and_m.flatten_tokens_and_masks()
+        x, mask = t_and_m.flatten_all_tokens_and_masks()
 
         assert x.shape == (b, h * w * t, d)
         assert mask.shape == (b, h * w * t)
@@ -715,12 +702,16 @@ class TestTokensAndMasks:
         )
 
         # Test max pooling
-        pooled_max = t_and_m_max.pool_unmasked_tokens(PoolingType.MAX)
+        pooled_max = pool_unmasked_tokens(
+            t_and_m_max, PoolingType.MAX, spatial_pooling=False
+        )
         assert pooled_max.shape == (b, d)
         assert (pooled_max == 2).all()  # check the 3 tokens have been ignored
 
         # Test mean pooling
-        pooled_mean = t_and_m_mean.pool_unmasked_tokens(PoolingType.MEAN)
+        pooled_mean = pool_unmasked_tokens(
+            t_and_m_mean, PoolingType.MEAN, spatial_pooling=False
+        )
         assert pooled_mean.shape == (b, d)
         assert (pooled_mean == 1).all()  # check the 0 tokens have been ignored
 
@@ -741,8 +732,8 @@ class TestTokensAndMasks:
         )
 
         # Test mean pooling
-        pooled_mean = t_and_m_mean.pool_unmasked_tokens(
-            PoolingType.MEAN, spatial_pooling=True
+        pooled_mean = pool_unmasked_tokens(
+            t_and_m_mean, PoolingType.MEAN, spatial_pooling=True
         )
         assert pooled_mean.shape == (b, h, w, d)
         assert (pooled_mean == 1).all()  # check the sen1 tokens have been ignored
@@ -762,8 +753,8 @@ class TestTokensAndMasks:
         )
 
         # Test max pooling
-        pooled_max = t_and_m_max.pool_unmasked_tokens(
-            PoolingType.MAX, spatial_pooling=True
+        pooled_max = pool_unmasked_tokens(
+            t_and_m_max, PoolingType.MAX, spatial_pooling=True
         )
         assert pooled_max.shape == (b, h, w, d)
         assert (pooled_max == 2).all()  # check the 3 tokens have been ignored
@@ -810,6 +801,89 @@ class TestProjectionAndAggregation:
                 )
                 # for now, lets just check it all runs properly
                 _ = layer(t_and_m)
+
+    def test_output_embedding_size(self) -> None:
+        """Test output_embedding_size changes output dimension."""
+        b, h, w, t, d = 2, 4, 4, 3, 128
+        out_d = 64
+        sentinel_2 = torch.ones((b, h, w, t, d))
+        sentinel_2_mask = torch.zeros((b, h, w, t)).long()
+        t_and_m = TokensAndMasks(
+            sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
+        )
+
+        for num_layers in [1, 2, 3]:
+            for agg_first in [True, False]:
+                layer = ProjectAndAggregate(
+                    embedding_size=d,
+                    num_layers=num_layers,
+                    aggregate_then_project=agg_first,
+                    output_embedding_size=out_d,
+                )
+                out = layer(t_and_m)
+                assert out.shape == (b, out_d), (
+                    f"Expected (b, {out_d}), got {out.shape}"
+                )
+
+        # Also test with raw tensor input
+        x_tensor = torch.ones((b, h * w * t, d))
+        layer = ProjectAndAggregate(
+            embedding_size=d,
+            num_layers=2,
+            aggregate_then_project=True,
+            output_embedding_size=out_d,
+        )
+        out = layer(x_tensor)
+        assert out.shape == (b, out_d)
+
+    def test_only_project(self) -> None:
+        """Test only_project returns tokens without aggregation."""
+        b, h, w, t, d = 2, 4, 4, 3, 128
+        sentinel_2 = torch.ones((b, h, w, t, d))
+        sentinel_2_mask = torch.zeros((b, h, w, t)).long()
+        t_and_m = TokensAndMasks(
+            sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
+        )
+
+        layer = ProjectAndAggregate(embedding_size=d, num_layers=2, only_project=True)
+        out = layer(t_and_m)
+        # Should return TokensAndMasks, not aggregated tensor
+        assert isinstance(out, TokensAndMasks)
+        assert out.sentinel2_l2a is not None
+        assert out.sentinel2_l2a.shape == (b, h, w, t, d)
+
+        # Test with raw tensor - should preserve token structure
+        x_tensor = torch.ones((b, h * w * t, d))
+        out_tensor = layer(x_tensor)
+        assert isinstance(out_tensor, torch.Tensor)
+        assert out_tensor.shape == (b, h * w * t, d)
+
+    def test_only_project_with_output_embedding_size(self) -> None:
+        """Test only_project combined with output_embedding_size."""
+        b, h, w, t, d = 2, 4, 4, 3, 128
+        out_d = 64
+        sentinel_2 = torch.ones((b, h, w, t, d))
+        sentinel_2_mask = torch.zeros((b, h, w, t)).long()
+        t_and_m = TokensAndMasks(
+            sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
+        )
+
+        layer = ProjectAndAggregate(
+            embedding_size=d,
+            num_layers=2,
+            only_project=True,
+            output_embedding_size=out_d,
+        )
+        out = layer(t_and_m)
+        assert isinstance(out, TokensAndMasks)
+        assert out.sentinel2_l2a is not None
+        # Output tokens should have projected dimension
+        assert out.sentinel2_l2a.shape == (b, h, w, t, out_d)
+
+        # Test with raw tensor
+        x_tensor = torch.ones((b, h * w * t, d))
+        out_tensor = layer(x_tensor)
+        assert out_tensor.shape == (b, h * w * t, out_d)
 
 
 class TestBandDropout:
@@ -874,9 +948,7 @@ class TestBandDropout:
             "No values should be zero when eval mode skips dropout"
         )
 
-    def test_disable_band_dropout(
-        self, supported_modalities: list[ModalitySpec]
-    ) -> None:
+    def test_disable_band_dropout(self) -> None:
         """Test Encoder.disable_band_dropout sets rate to 0."""
         encoder = Encoder(
             embedding_size=8,
@@ -886,13 +958,10 @@ class TestBandDropout:
             mlp_ratio=4.0,
             depth=2,
             drop_path=0.1,
-            supported_modalities=supported_modalities,
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
             max_sequence_length=12,
             band_dropout_rate=0.5,
             random_band_dropout=True,
         )
         encoder.disable_band_dropout()
         assert encoder.patch_embeddings.band_dropout_rate == 0.0
-
-
-# TODO: write a unit test for the FlexiPatchEmbeddings

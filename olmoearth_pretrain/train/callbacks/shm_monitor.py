@@ -1,8 +1,10 @@
 """Callback that monitors /dev/shm, process memory, and CUDA host memory."""
 
+import gc
 import logging
 import os
 import shutil
+import tracemalloc
 from dataclasses import dataclass
 
 import psutil
@@ -19,6 +21,22 @@ class ShmMonitorCallback(Callback):
 
     interval: int = 10
     enabled: bool = True
+    # Set to True to enable tracemalloc-based Python heap profiling (has overhead)
+    tracemalloc_enabled: bool = False
+    tracemalloc_interval: int = 50
+    tracemalloc_top_n: int = 20
+    # Set to True to log counts of Python objects by type
+    objcount_enabled: bool = False
+    objcount_interval: int = 50
+    objcount_top_n: int = 20
+
+    def pre_train(self):
+        # Internal profiling state (not part of config, set lazily)
+        self._tracemalloc_snapshot = None
+        self._objcounts_prev: dict = {}
+        if self.tracemalloc_enabled and int(os.environ.get("RANK", "0")) == 0:
+            tracemalloc.start(25)
+            log.info("tracemalloc started")
 
     def post_step(self):
         if not self.enabled:
@@ -83,3 +101,76 @@ class ShmMonitorCallback(Callback):
             )
         except Exception as e:
             log.warning(f"Failed to read /proc/self/status: {e}")
+
+        # tracemalloc: log top Python allocation sites and deltas
+        if not hasattr(self, "_tracemalloc_snapshot"):
+            self._tracemalloc_snapshot = None
+            self._objcounts_prev = {}
+        if self.tracemalloc_enabled and tracemalloc.is_tracing():
+            if self.step % self.tracemalloc_interval == 0:
+                try:
+                    snapshot = tracemalloc.take_snapshot()
+                    if self._tracemalloc_snapshot is not None:
+                        stats = snapshot.compare_to(
+                            self._tracemalloc_snapshot, "lineno"
+                        )
+                        top = sorted(stats, key=lambda s: s.size_diff, reverse=True)[
+                            : self.tracemalloc_top_n
+                        ]
+                        lines = [
+                            f"  +{s.size_diff/1024:.1f}KB ({s.count_diff:+d} objs) {s.traceback}"
+                            for s in top
+                            if s.size_diff > 0
+                        ]
+                        if lines:
+                            log.info(
+                                f"[tracemalloc step={self.step}] top growing allocations:\n"
+                                + "\n".join(lines)
+                            )
+                    else:
+                        top = snapshot.statistics("lineno")[: self.tracemalloc_top_n]
+                        lines = [
+                            f"  {s.size/1024:.1f}KB ({s.count} objs) {s.traceback}"
+                            for s in top
+                        ]
+                        log.info(
+                            f"[tracemalloc step={self.step}] top allocations (baseline):\n"
+                            + "\n".join(lines)
+                        )
+                    self._tracemalloc_snapshot = snapshot
+                except Exception as e:
+                    log.warning(f"tracemalloc failed: {e}")
+
+        # objcount: log counts of Python objects by type and detect growing types
+        if self.objcount_enabled and self.step % self.objcount_interval == 0:
+            try:
+                counts: dict[str, int] = {}
+                for obj in gc.get_objects():
+                    t = type(obj).__name__
+                    counts[t] = counts.get(t, 0) + 1
+                # Find types whose count grew since last check
+                if self._objcounts_prev:
+                    deltas = {
+                        t: counts.get(t, 0) - self._objcounts_prev.get(t, 0)
+                        for t in set(counts) | set(self._objcounts_prev)
+                    }
+                    growing = sorted(
+                        ((t, d) for t, d in deltas.items() if d > 0),
+                        key=lambda x: -x[1],
+                    )[: self.objcount_top_n]
+                    if growing:
+                        log.info(
+                            f"[objcount step={self.step}] growing object types:\n"
+                            + "\n".join(f"  {t}: +{d}" for t, d in growing)
+                        )
+                else:
+                    top = sorted(counts.items(), key=lambda x: -x[1])[
+                        : self.objcount_top_n
+                    ]
+                    log.info(
+                        f"[objcount step={self.step}] baseline object counts:\n"
+                        + "\n".join(f"  {t}: {n}" for t, n in top)
+                    )
+                self._objcounts_prev = counts
+            except Exception as e:
+                log.warning(f"objcount failed: {e}")
