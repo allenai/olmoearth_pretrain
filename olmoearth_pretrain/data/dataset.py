@@ -732,7 +732,7 @@ class OlmoEarthDataset(Dataset):
                     for k, v in h5file.items()
                     if k in self.training_modalities
                     # TODO: Fix the floating string issue
-                    or k in ["timestamps"]
+                    or k in ["timestamps", "latlon"]
                 }
 
                 if (
