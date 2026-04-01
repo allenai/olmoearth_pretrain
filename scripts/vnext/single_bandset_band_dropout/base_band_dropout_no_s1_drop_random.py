@@ -277,7 +277,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             embedding_batch_size=32,
             probe_batch_size=8,
             num_workers=2,
-            pooling_type=PoolingType.MAX,
+            pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
             eval_interval=Duration.steps(20000),
