@@ -1,5 +1,6 @@
 """Unit tests for different encodings of data."""
 
+import pytest
 import torch
 
 from olmoearth_pretrain.nn.encodings import (
@@ -7,6 +8,7 @@ from olmoearth_pretrain.nn.encodings import (
     get_2d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
+    get_timestamp_encoding,
 )
 
 
@@ -128,3 +130,44 @@ def test_get_month_encoding_table() -> None:
     encoding = get_month_encoding_table(encoding_dim)
     assert encoding.shape == (12, encoding_dim)
     assert torch.allclose(encoding, expected_output, atol=atol, rtol=rtol)
+
+
+def test_get_timestamp_encoding_output_shape() -> None:
+    """Test that the timestamp encoding has the correct output shape."""
+    B, T, D = 2, 6, 8
+    # day=15, month=5 (0-indexed), year=2021
+    timestamps = torch.tensor([[[15, 5, 2021]] * T] * B)
+    encoding = get_timestamp_encoding(timestamps, D)
+    assert encoding.shape == (B, T, D)
+
+
+def test_get_timestamp_encoding_deterministic() -> None:
+    """Test that the same input always produces the same output."""
+    timestamps = torch.tensor([[[1, 0, 2020], [15, 6, 2021]]])
+    enc1 = get_timestamp_encoding(timestamps, 8)
+    enc2 = get_timestamp_encoding(timestamps, 8)
+    assert torch.equal(enc1, enc2)
+
+
+def test_get_timestamp_encoding_different_dates_differ() -> None:
+    """Test that different timestamps produce different encodings."""
+    ts1 = torch.tensor([[[1, 0, 2020], [1, 0, 2020]]])  # Jan 2020
+    ts2 = torch.tensor([[[1, 6, 2021], [1, 6, 2021]]])  # Jul 2021
+    enc1 = get_timestamp_encoding(ts1, 8)
+    enc2 = get_timestamp_encoding(ts2, 8)
+    assert not torch.allclose(enc1, enc2)
+
+
+def test_get_timestamp_encoding_dim_must_be_even() -> None:
+    """Test that odd encoding_dim raises an assertion."""
+    timestamps = torch.tensor([[[1, 0, 2020]]])
+    with pytest.raises(AssertionError):
+        get_timestamp_encoding(timestamps, 7)
+
+
+def test_get_timestamp_encoding_values_bounded() -> None:
+    """Test that encoding values are in [-1, 1] (sin/cos range)."""
+    timestamps = torch.tensor([[[1, 0, 2015], [28, 11, 2025]]])
+    encoding = get_timestamp_encoding(timestamps, 16)
+    assert encoding.min() >= -1.0
+    assert encoding.max() <= 1.0

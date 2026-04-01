@@ -7,10 +7,20 @@ They cover the following:
 - 2D sinusoidal position encoding (for spatial data)
 - 1D sinusoidal position encoding (for temporal data)
 - Month encoding (for temporal data)
+- Timestamp encoding (for full datetime information)
 """
+
+from enum import StrEnum
 
 import numpy as np
 import torch
+
+
+class TimestampEncodingMode(StrEnum):
+    """Mode for encoding temporal information."""
+
+    LEGACY = "legacy"
+    UNIFIED = "unified"
 
 
 def get_1d_sincos_pos_encoding(pos: torch.Tensor, encoding_dim: int) -> torch.Tensor:
@@ -119,3 +129,32 @@ def get_month_encoding_table(encoding_dim: int) -> torch.Tensor:
     month_table = torch.concatenate([sin_table[:-1], cos_table[:-1]], axis=-1)
 
     return month_table  # (M, D)
+
+
+def get_timestamp_encoding(timestamps: torch.Tensor, encoding_dim: int) -> torch.Tensor:
+    """Sinusoidal encoding for full timestamps.
+
+    Converts [day, month (0-indexed), year] to a continuous fractional year
+    and applies 1D sinusoidal encoding.
+
+    Args:
+        timestamps: Tensor of shape (B, T, 3) where [..., 0] is day (1-31),
+            [..., 1] is month (0-indexed, 0-11), [..., 2] is year.
+        encoding_dim: Output encoding dimension (must be even).
+
+    Returns:
+        encoding: Tensor of shape (B, T, encoding_dim).
+    """
+    assert encoding_dim % 2 == 0, f"encoding_dim must be even, got {encoding_dim}"
+    day = timestamps[..., 0].float()
+    month = timestamps[..., 1].float()
+    year = timestamps[..., 2].float()
+
+    # Convert to fractional year (e.g., 2021.5 for ~July 2021)
+    day_of_year = month * 30.4375 + day
+    fractional_year = year + day_of_year / 365.25
+
+    b, t = fractional_year.shape
+    flat = fractional_year.reshape(-1)  # (B*T,)
+    enc = get_1d_sincos_pos_encoding(flat, encoding_dim)  # (B*T, D)
+    return enc.reshape(b, t, encoding_dim)

@@ -24,9 +24,11 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
+    TimestampEncodingMode,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
+    get_timestamp_encoding,
 )
 from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
@@ -624,6 +626,8 @@ class CompositeEncodings(nn.Module):
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        timestamp_encoding_mode: str = "legacy",
+        timestamp_dropout_rate: float = 0.0,
     ):
         """Initialize the composite encodings.
 
@@ -635,9 +639,15 @@ class CompositeEncodings(nn.Module):
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             tokenization_config: Optional config for custom band groupings
+            timestamp_encoding_mode: "legacy" for old multi-part encoding,
+                "unified" for single sinusoidal encoding of the full timestamp
+            timestamp_dropout_rate: Probability of dropping timestamp encoding per sample
+                during training (only used when timestamp_encoding_mode="unified")
         """
         super().__init__()
         self.embedding_size = embedding_size
+        self.timestamp_encoding_mode = TimestampEncodingMode(timestamp_encoding_mode)
+        self.timestamp_dropout_rate = timestamp_dropout_rate
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [
             modality.name for modality in supported_modalities
@@ -795,16 +805,63 @@ class CompositeEncodings(nn.Module):
             modality_embed[..., :n] += channel_embed
 
         if modality.is_multitemporal and use_temporal_encodings:
-            # Time position encodings
-            time_embed = repeat(self.pos_embed[:t], f"t d -> {ein_string}", **ein_dict)
-            modality_embed[..., n : n * 2] += time_embed.to(device)
+            if self.timestamp_encoding_mode == TimestampEncodingMode.LEGACY:
+                # Time position encodings
+                time_embed = repeat(
+                    self.pos_embed[:t], f"t d -> {ein_string}", **ein_dict
+                )
+                modality_embed[..., n : n * 2] += time_embed.to(device)
 
-            # Month encodings
-            assert timestamps is not None
-            months = timestamps[:, :, 1]
-            month_embed = self.month_embed(months)
-            month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
-            modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
+                # Month encodings
+                assert timestamps is not None
+                months = timestamps[:, :, 1]
+                month_embed = self.month_embed(months)
+                month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
+                modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
+            else:
+                # Unified timestamp encoding: full sinusoidal encoding of the timestamp
+                assert timestamps is not None
+                ts_embed = get_timestamp_encoding(
+                    timestamps, self.embedding_size
+                )  # (B, T, D)
+                if self.training and self.timestamp_dropout_rate > 0.0:
+                    drop_mask = torch.bernoulli(
+                        torch.full(
+                            (b, 1, 1),
+                            1.0 - self.timestamp_dropout_rate,
+                            device=device,
+                        )
+                    )
+                    ts_embed = ts_embed * drop_mask
+                # Broadcast (B, T, D) to match modality_embed shape
+                num_middle_dims = modality_embed.ndim - 2  # exclude B and D
+                # Insert 1s for spatial (h, w) and bandset dims, keep T
+                if "t" in ein_dict:
+                    # Shape has an explicit T dim — figure out where it is
+                    # Possible shapes: (B,H,W,T,B_S,D), (B,T,B_S,D), (B,H,W,T,D)
+                    view_dims = []
+                    for dim_name in ein_string.split():
+                        if dim_name == "b":
+                            view_dims.append(b)
+                        elif dim_name == "t":
+                            view_dims.append(t)
+                        elif dim_name == "d":
+                            view_dims.append(self.embedding_size)
+                        else:
+                            view_dims.append(1)
+                    modality_embed = modality_embed + ts_embed.to(device).view(
+                        *view_dims
+                    )
+                else:
+                    # No T dimension — broadcast as (B, 1..., D)
+                    view_shape = (
+                        b,
+                        *([1] * num_middle_dims),
+                        self.embedding_size,
+                    )
+                    modality_embed = modality_embed + ts_embed[:, 0].to(device).view(
+                        *view_shape
+                    )
         if modality.is_spatial:
             # Spatial encodings
             assert input_res is not None
@@ -876,6 +933,8 @@ class FlexiVitBase(nn.Module):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        timestamp_encoding_mode: str = "legacy",
+        timestamp_dropout_rate: float = 0.0,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -915,6 +974,8 @@ class FlexiVitBase(nn.Module):
             learnable_channel_embeddings,
             random_channel_embeddings,
             tokenization_config=self._base_tokenization_config,
+            timestamp_encoding_mode=timestamp_encoding_mode,
+            timestamp_dropout_rate=timestamp_dropout_rate,
         )
         self.apply(self._init_weights)
 
@@ -1112,6 +1173,8 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        timestamp_encoding_mode: str = "legacy",
+        timestamp_dropout_rate: float = 0.0,
     ):
         """Initialize the encoder.
 
@@ -1145,6 +1208,10 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            timestamp_encoding_mode: "legacy" for old multi-part encoding,
+                "unified" for single sinusoidal encoding of the full timestamp.
+            timestamp_dropout_rate: Probability of dropping timestamp encoding per sample
+                during training (only used when timestamp_encoding_mode="unified").
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1160,6 +1227,8 @@ class Encoder(FlexiVitBase):
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
+            timestamp_encoding_mode=timestamp_encoding_mode,
+            timestamp_dropout_rate=timestamp_dropout_rate,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1680,6 +1749,8 @@ class PredictorBase(FlexiVitBase):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        timestamp_encoding_mode: str = "legacy",
+        timestamp_dropout_rate: float = 0.0,
     ):
         """Initialize the predictor.
 
@@ -1698,6 +1769,10 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn: Whether to use flash attention
             qk_norm: Whether to apply normalization to Q and K in attention
             tokenization_config: Optional config for custom band groupings
+            timestamp_encoding_mode: "legacy" for old multi-part encoding,
+                "unified" for single sinusoidal encoding of the full timestamp.
+            timestamp_dropout_rate: Probability of dropping timestamp encoding per sample
+                during training (only used when timestamp_encoding_mode="unified").
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1713,6 +1788,8 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn=use_flash_attn,
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
+            timestamp_encoding_mode=timestamp_encoding_mode,
+            timestamp_dropout_rate=timestamp_dropout_rate,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -2079,6 +2156,8 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+    timestamp_encoding_mode: str = "legacy"
+    timestamp_dropout_rate: float = 0.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2104,6 +2183,20 @@ class EncoderConfig(Config):
                 )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
+        if self.timestamp_encoding_mode not in ("legacy", "unified"):
+            raise ValueError(
+                f"timestamp_encoding_mode must be 'legacy' or 'unified', "
+                f"got '{self.timestamp_encoding_mode}'"
+            )
+        if not 0.0 <= self.timestamp_dropout_rate <= 1.0:
+            raise ValueError("timestamp_dropout_rate must be between 0 and 1")
+        if (
+            self.timestamp_dropout_rate > 0.0
+            and self.timestamp_encoding_mode != "unified"
+        ):
+            raise ValueError(
+                "timestamp_dropout_rate > 0 requires timestamp_encoding_mode='unified'"
+            )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -2139,6 +2232,8 @@ class PredictorConfig(Config):
     use_flash_attn: bool = False
     qk_norm: bool = False
     tokenization_config: TokenizationConfig | None = None
+    timestamp_encoding_mode: str = "legacy"
+    timestamp_dropout_rate: float = 0.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2155,6 +2250,20 @@ class PredictorConfig(Config):
                     raise ValueError(f"Modality {modality} is not supported")
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
+        if self.timestamp_encoding_mode not in ("legacy", "unified"):
+            raise ValueError(
+                f"timestamp_encoding_mode must be 'legacy' or 'unified', "
+                f"got '{self.timestamp_encoding_mode}'"
+            )
+        if not 0.0 <= self.timestamp_dropout_rate <= 1.0:
+            raise ValueError("timestamp_dropout_rate must be between 0 and 1")
+        if (
+            self.timestamp_dropout_rate > 0.0
+            and self.timestamp_encoding_mode != "unified"
+        ):
+            raise ValueError(
+                "timestamp_dropout_rate > 0 requires timestamp_encoding_mode='unified'"
+            )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
