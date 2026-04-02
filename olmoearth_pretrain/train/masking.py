@@ -1687,10 +1687,13 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
                 # TODO - should we apply a random mask with the decode only ratio?
 
         # now for the trickier encode-decode modalities
+        # Skip modalities marked ignore_when_parsing (e.g. latlon) — they are metadata,
+        # not spatial/temporal data that should be masked.
         encode_decode_modalities = [
             m
             for m in batch.modalities
             if m not in self.only_decode_modalities + none_modalites
+            and not Modality.get(m).ignore_when_parsing
         ]
         for i in range(batch.batch_size):
             encode_decode_bandsets: list[tuple[str, int]] = []
@@ -1876,10 +1879,13 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                 ] = mask
 
+        # Skip modalities marked ignore_when_parsing (e.g. latlon) — they are metadata,
+        # not spatial/temporal data that should be masked.
         encode_decode_modalities = [
             m
             for m in batch.modalities
             if m not in self.only_decode_modalities + ["timestamps"] + none_modalites
+            and not Modality.get(m).ignore_when_parsing
         ]
         for i in range(batch.batch_size):
             encode_decode_bandsets: list[tuple[str, int]] = []
