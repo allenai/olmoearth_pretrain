@@ -1948,24 +1948,20 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     masked_modality_name = (
                         MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                     )
+                    mask = output_dict[masked_modality_name][
+                        i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                    ]
+                    # TODO what if there is no time dimension for this modality?
+                    assert len(mask.shape) == 5
+
+                    missing_mask = mask == MaskValue.MISSING.value
+                    mask[:] = MaskValue.TARGET_ENCODER_ONLY.value
+                    mask[:, :, :, encode_timestamps] = MaskValue.ONLINE_ENCODER.value
+                    mask[:, :, :, decode_timestamps] = MaskValue.DECODER.value
+                    mask[missing_mask] = MaskValue.MISSING.value
                     output_dict[masked_modality_name][
                         i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
-                    ] = self.time_masking_with_missing(
-                        output_dict[masked_modality_name][
-                            i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
-                        ],
-                        encode_timestamps,
-                        MaskValue.ONLINE_ENCODER.value,
-                    )
-                    output_dict[masked_modality_name][
-                        i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
-                    ] = self.time_masking_with_missing(
-                        output_dict[masked_modality_name][
-                            i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
-                        ],
-                        decode_timestamps,
-                        MaskValue.DECODER.value,
-                    )
+                    ] = mask
             else:
                 np.random.shuffle(encode_decode_bandsets)
                 num_encode = math.ceil(len(encode_decode_bandsets) * self.encode_ratio)
@@ -2004,21 +2000,6 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     )
 
         return MaskedOlmoEarthSample(**output_dict)
-
-    @staticmethod
-    def time_masking_with_missing(
-        mask: torch.Tensor, timestamps: torch.Tensor, mask_value: int
-    ) -> torch.Tensor:
-        """Time masking with missing values."""
-        assert len(mask.shape) == 5, (
-            "Expected modality to have a time dimension"
-        )  # BHWTC
-        # TODO: What do we do when this condition isn't met?
-        missing_mask = mask == MaskValue.MISSING.value
-        mask[:] = MaskValue.TARGET_ENCODER_ONLY.value
-        mask[:, :, :, timestamps] = mask_value
-        mask[missing_mask] = MaskValue.MISSING.value
-        return mask
 
 
 def propagate_tokenization_config(
