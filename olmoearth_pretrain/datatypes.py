@@ -37,6 +37,7 @@ class MaskValue(Enum):
 
 # timestamps is never considered a "modality" - it's metadata about when samples were captured
 TIMESTAMPS_FIELD = "timestamps"
+LATLON_FIELD = "latlon"
 
 
 # =============================================================================
