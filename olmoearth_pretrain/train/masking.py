@@ -1919,6 +1919,9 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     not_missing_t = torch.argwhere(missing_per_time)[:, 0]
                     not_missing_t = not_missing_t[torch.randperm(len(not_missing_t))]
                     num_encode = math.ceil(len(not_missing_t) * self.encode_ratio)
+                    if num_encode == len(not_missing_t):
+                        # make sure at least one timestep is decode
+                        num_encode -= 1
                     encode_timestamps = not_missing_t[:num_encode]
                     decode_timestamps = not_missing_t[num_encode:]
 
@@ -1938,6 +1941,31 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     self.encode_ratio,
                     self.decode_ratio,
                 )
+            elif not use_random_masking:
+                assert encode_timestamps is not None
+                assert decode_timestamps is not None
+                for modality_name, bandset_idx in encode_decode_bandsets:
+                    masked_modality_name = (
+                        MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+                    )
+                    output_dict[masked_modality_name][
+                        i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                    ] = self.time_masking_with_missing(
+                        output_dict[masked_modality_name][
+                            i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                        ],
+                        encode_timestamps,
+                        MaskValue.ONLINE_ENCODER.value,
+                    )
+                    output_dict[masked_modality_name][
+                        i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                    ] = self.time_masking_with_missing(
+                        output_dict[masked_modality_name][
+                            i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                        ],
+                        decode_timestamps,
+                        MaskValue.DECODER.value,
+                    )
             else:
                 np.random.shuffle(encode_decode_bandsets)
                 num_encode = math.ceil(len(encode_decode_bandsets) * self.encode_ratio)
@@ -1945,85 +1973,35 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                 decode_bandsets = encode_decode_bandsets[num_encode:]
 
                 for modality_name, bandset_idx in encode_bandsets:
-                    randomly_mask_bandset = (
-                        use_random_masking
-                        or not Modality.get(modality_name).is_spacetime_varying
-                    )
-                    if not randomly_mask_bandset:
-                        assert encode_timestamps is not None
-                        if not self._bandset_has_data_at_timestamps(
-                            output_dict,
-                            modality_name,
-                            bandset_idx,
-                            i,
-                            encode_timestamps,
-                        ):
-                            randomly_mask_bandset = True
                     masked_modality_name = (
                         MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                     )
-                    if randomly_mask_bandset:
+                    output_dict[masked_modality_name][
+                        i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                    ] = self._random_fill_unmasked(
                         output_dict[masked_modality_name][
                             i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
-                        ] = self._random_fill_unmasked(
-                            output_dict[masked_modality_name][
-                                i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
-                            ],
-                            Modality.get(modality_name),
-                            patch_size,
-                            self.encode_ratio,
-                            0,
-                        )
-                    else:
-                        output_dict[masked_modality_name][
-                            i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
-                        ] = self.time_masking_with_missing(
-                            output_dict[masked_modality_name][
-                                i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
-                            ],
-                            encode_timestamps,
-                            MaskValue.ONLINE_ENCODER.value,
-                        )
+                        ],
+                        Modality.get(modality_name),
+                        patch_size,
+                        self.encode_ratio,
+                        0,
+                    )
                 for modality_name, bandset_idx in decode_bandsets:
-                    randomly_mask_bandset = (
-                        use_random_masking
-                        or not Modality.get(modality_name).is_spacetime_varying
-                    )
-                    if not randomly_mask_bandset:
-                        assert decode_timestamps is not None
-                        if not self._bandset_has_data_at_timestamps(
-                            output_dict,
-                            modality_name,
-                            bandset_idx,
-                            i,
-                            decode_timestamps,
-                        ):
-                            randomly_mask_bandset = True
                     masked_modality_name = (
                         MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                     )
-                    if randomly_mask_bandset:
+                    output_dict[masked_modality_name][
+                        i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                    ] = self._random_fill_unmasked(
                         output_dict[masked_modality_name][
                             i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
-                        ] = self._random_fill_unmasked(
-                            output_dict[masked_modality_name][
-                                i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
-                            ],
-                            Modality.get(modality_name),
-                            patch_size,
-                            0,
-                            self.decode_ratio,
-                        )
-                    else:
-                        output_dict[masked_modality_name][
-                            i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
-                        ] = self.time_masking_with_missing(
-                            output_dict[masked_modality_name][
-                                i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
-                            ],
-                            decode_timestamps,
-                            MaskValue.DECODER.value,
-                        )
+                        ],
+                        Modality.get(modality_name),
+                        patch_size,
+                        0,
+                        self.decode_ratio,
+                    )
 
         return MaskedOlmoEarthSample(**output_dict)
 
@@ -2032,7 +2010,10 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         mask: torch.Tensor, timestamps: torch.Tensor, mask_value: int
     ) -> torch.Tensor:
         """Time masking with missing values."""
-        assert len(mask.shape) == 5  # BHWTC
+        assert len(mask.shape) == 5, (
+            "Expected modality to have a time dimension"
+        )  # BHWTC
+        # TODO: What do we do when this condition isn't met?
         missing_mask = mask == MaskValue.MISSING.value
         mask[:] = MaskValue.TARGET_ENCODER_ONLY.value
         mask[:, :, :, timestamps] = mask_value
