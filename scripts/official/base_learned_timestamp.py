@@ -39,8 +39,8 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         drop_path=0.1,
         max_sequence_length=12,
         use_linear_patch_embed=False,
-        use_latlon_encoding=True,
-        latlon_dropout_rate=0.5,
+        use_learned_latlon_encoding=True,
+        latlon_hidden_dim=64,
         timestamp_encoding_mode="learned",
         timestamp_hidden_dim=64,
     )
@@ -52,8 +52,8 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         num_heads=model_size["decoder_num_heads"],
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
-        use_latlon_encoding=True,
-        latlon_dropout_rate=0.0,
+        use_learned_latlon_encoding=True,
+        latlon_hidden_dim=64,
         timestamp_encoding_mode="learned",
         timestamp_hidden_dim=64,
     )

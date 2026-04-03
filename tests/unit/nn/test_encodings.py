@@ -4,12 +4,15 @@ import pytest
 import torch
 
 from olmoearth_pretrain.nn.encodings import (
+    LatLonMLP,
     TimestampMLP,
+    compute_per_token_latlon,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
     get_timestamp_encoding,
+    latlon_to_learned_input,
     timestamps_to_learned_input,
 )
 
@@ -252,3 +255,91 @@ def test_timestamp_mlp_custom_hidden_dim() -> None:
     params_small = sum(p.numel() for p in mlp_small.parameters())
     params_large = sum(p.numel() for p in mlp_large.parameters())
     assert params_large > params_small
+
+
+# --- latlon_to_learned_input tests ---
+
+
+def test_latlon_to_learned_input_shape() -> None:
+    """Output should have 5 features for any leading dimensions."""
+    latlon_2d = torch.tensor([[45.0, 90.0], [0.0, -180.0]])
+    assert latlon_to_learned_input(latlon_2d).shape == (2, 5)
+
+    latlon_4d = torch.randn(2, 4, 4, 2)
+    assert latlon_to_learned_input(latlon_4d).shape == (2, 4, 4, 5)
+
+
+def test_latlon_to_learned_input_known_values() -> None:
+    """Verify known values for lat=45, lon=90."""
+    import math
+
+    latlon = torch.tensor([[45.0, 90.0]])
+    out = latlon_to_learned_input(latlon)
+    assert abs(out[0, 0].item() - 0.5) < 1e-5  # 45/90
+    assert abs(out[0, 1].item() - math.sin(math.radians(45))) < 1e-5
+    assert abs(out[0, 2].item() - math.cos(math.radians(45))) < 1e-5
+    assert abs(out[0, 3].item() - math.sin(math.radians(90))) < 1e-5  # 1.0
+    assert abs(out[0, 4].item() - math.cos(math.radians(90))) < 1e-5  # 0.0
+
+
+def test_latlon_to_learned_input_lon_wraparound() -> None:
+    """lon=-180 and lon=180 should produce identical sin/cos."""
+    ll1 = torch.tensor([[0.0, -180.0]])
+    ll2 = torch.tensor([[0.0, 180.0]])
+    out1 = latlon_to_learned_input(ll1)
+    out2 = latlon_to_learned_input(ll2)
+    assert torch.allclose(out1[0, 3:5], out2[0, 3:5], atol=1e-5)
+
+
+# --- compute_per_token_latlon tests ---
+
+
+def test_compute_per_token_latlon_shape() -> None:
+    """Output shape should be (B, H, W, 2)."""
+    latlon = torch.tensor([[45.0, 10.0], [-30.0, 120.0]])
+    out = compute_per_token_latlon(latlon, grid_h=4, grid_w=4, meters_per_token=160.0)
+    assert out.shape == (2, 4, 4, 2)
+
+
+def test_compute_per_token_latlon_center_matches_tile() -> None:
+    """For an odd grid, the center token should equal the tile center."""
+    latlon = torch.tensor([[45.0, 10.0]])
+    out = compute_per_token_latlon(latlon, grid_h=3, grid_w=3, meters_per_token=160.0)
+    # Center is at (1, 1) for a 3x3 grid
+    assert abs(out[0, 1, 1, 0].item() - 45.0) < 1e-4
+    assert abs(out[0, 1, 1, 1].item() - 10.0) < 1e-4
+
+
+def test_compute_per_token_latlon_direction() -> None:
+    """Increasing h should decrease lat (south), increasing w should increase lon (east)."""
+    latlon = torch.tensor([[0.0, 0.0]])  # equator, prime meridian
+    out = compute_per_token_latlon(
+        latlon, grid_h=3, grid_w=3, meters_per_token=111320.0
+    )
+    # h=0 is north of h=2
+    assert out[0, 0, 1, 0].item() > out[0, 2, 1, 0].item()
+    # w=2 is east of w=0
+    assert out[0, 1, 2, 1].item() > out[0, 1, 0, 1].item()
+
+
+# --- LatLonMLP tests ---
+
+
+def test_latlon_mlp_output_shape() -> None:
+    """MLP should work with both (B, 2) and (B, H, W, 2) inputs."""
+    mlp = LatLonMLP(output_dim=48, hidden_dim=32)
+    out_2d = mlp(torch.tensor([[45.0, 10.0], [0.0, 0.0]]))
+    assert out_2d.shape == (2, 48)
+
+    out_4d = mlp(torch.randn(2, 4, 4, 2))
+    assert out_4d.shape == (2, 4, 4, 48)
+
+
+def test_latlon_mlp_is_differentiable() -> None:
+    """Gradients should flow through the MLP."""
+    mlp = LatLonMLP(output_dim=32, hidden_dim=16)
+    latlon = torch.tensor([[45.0, 10.0]], requires_grad=False)
+    out = mlp(latlon)
+    out.sum().backward()
+    for p in mlp.parameters():
+        assert p.grad is not None

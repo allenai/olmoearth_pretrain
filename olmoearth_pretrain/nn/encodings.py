@@ -11,6 +11,7 @@ They cover the following:
 - Timestamp encoding (for full datetime information)
 """
 
+import math
 from enum import StrEnum
 
 import numpy as np
@@ -258,6 +259,132 @@ class TimestampMLP(nn.Module):
             (B, T, output_dim) learned timestamp embedding.
         """
         x = timestamps_to_learned_input(timestamps)
+        # Match the dtype of the MLP weights (e.g. bfloat16 under FSDP)
+        x = x.to(dtype=next(self.mlp.parameters()).dtype)
+        return self.mlp(x)
+
+
+def latlon_to_learned_input(latlon: torch.Tensor) -> torch.Tensor:
+    """Convert lat/lon in degrees to a 5-float learned-encoding input.
+
+    Produces [lat/90, sin(lat_rad), cos(lat_rad), sin(lon_rad), cos(lon_rad)]
+    where the sin/cos pairs handle cyclical properties and longitude wrap-around.
+
+    Args:
+        latlon: Tensor of shape (..., 2) where [..., 0] is latitude in degrees
+            [-90, 90] and [..., 1] is longitude in degrees [-180, 180].
+
+    Returns:
+        Tensor of shape (..., 5).
+    """
+    lat = latlon[..., 0]
+    lon = latlon[..., 1]
+
+    lat_rad = lat * (math.pi / 180.0)
+    lon_rad = lon * (math.pi / 180.0)
+
+    return torch.stack(
+        [
+            lat / 90.0,
+            torch.sin(lat_rad),
+            torch.cos(lat_rad),
+            torch.sin(lon_rad),
+            torch.cos(lon_rad),
+        ],
+        dim=-1,
+    )
+
+
+def compute_per_token_latlon(
+    latlon: torch.Tensor,
+    grid_h: int,
+    grid_w: int,
+    meters_per_token: float,
+) -> torch.Tensor:
+    """Compute per-token lat/lon from tile center and grid geometry.
+
+    Args:
+        latlon: Tile center coordinates (B, 2) in degrees [lat, lon].
+        grid_h: Number of tokens in height dimension.
+        grid_w: Number of tokens in width dimension.
+        meters_per_token: Spatial extent of each token in meters
+            (input_res * patch_size).
+
+    Returns:
+        Per-token lat/lon tensor of shape (B, H, W, 2) in degrees.
+    """
+    METERS_PER_DEG = 111320.0
+
+    lat_center = latlon[:, 0]  # (B,)
+    lon_center = latlon[:, 1]  # (B,)
+
+    device = latlon.device
+    h_offsets = torch.arange(grid_h, device=device) - (grid_h - 1) / 2.0  # (H,)
+    w_offsets = torch.arange(grid_w, device=device) - (grid_w - 1) / 2.0  # (W,)
+
+    # Latitude offsets (increasing h = south = decreasing lat)
+    lat_offset_deg = -h_offsets * meters_per_token / METERS_PER_DEG  # (H,)
+
+    # Longitude offsets (vary per batch element due to cos(lat) correction)
+    cos_lat = torch.cos(lat_center * (math.pi / 180.0)).clamp(min=1e-6)  # (B,)
+    lon_offset_deg = (
+        w_offsets[None, :] * meters_per_token / (METERS_PER_DEG * cos_lat[:, None])
+    )  # (B, W)
+
+    # Broadcast to (B, H, W)
+    token_lat = lat_center[:, None, None] + lat_offset_deg[None, :, None]  # (B, H, 1)
+    token_lon = lon_center[:, None, None] + lon_offset_deg[:, None, :]  # (B, 1, W)
+
+    return torch.stack(
+        [token_lat.expand(-1, grid_h, grid_w), token_lon.expand(-1, grid_h, grid_w)],
+        dim=-1,
+    )  # (B, H, W, 2)
+
+
+class LatLonMLP(nn.Module):
+    """Learned geographic encoding via a small MLP.
+
+    Takes lat/lon coordinates in degrees, converts them to a 5-float
+    representation (normalized lat + sin/cos for lat and lon), and maps
+    through a 2-layer MLP to produce geographic embeddings.
+
+    Args:
+        output_dim: Output embedding dimension (should be embedding_dim_per_embedding_type).
+        hidden_dim: Hidden layer dimension. Default: 64.
+        activation: Activation module between the two linear layers.
+            Default: nn.GELU().
+    """
+
+    def __init__(
+        self,
+        output_dim: int,
+        hidden_dim: int = 64,
+        activation: nn.Module | None = None,
+    ):
+        """Initialize the LatLonMLP."""
+        super().__init__()
+        if activation is None:
+            activation = nn.GELU()
+        self.mlp = nn.Sequential(
+            nn.Linear(5, hidden_dim),
+            activation,
+            nn.Linear(hidden_dim, output_dim),
+        )
+        # Preserve default PyTorch init — skip the parent model's xavier_uniform_ init
+        for m in self.mlp.modules():
+            if isinstance(m, nn.Linear):
+                m._skip_custom_init = True  # type: ignore[attr-defined]
+
+    def forward(self, latlon: torch.Tensor) -> torch.Tensor:
+        """Produce learned geographic embeddings.
+
+        Args:
+            latlon: (..., 2) lat/lon in degrees.
+
+        Returns:
+            (..., output_dim) learned geographic embedding.
+        """
+        x = latlon_to_learned_input(latlon)
         # Match the dtype of the MLP weights (e.g. bfloat16 under FSDP)
         x = x.to(dtype=next(self.mlp.parameters()).dtype)
         return self.mlp(x)

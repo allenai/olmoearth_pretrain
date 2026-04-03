@@ -24,8 +24,10 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
+    LatLonMLP,
     TimestampEncodingMode,
     TimestampMLP,
+    compute_per_token_latlon,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_latlon_encoding,
@@ -634,6 +636,8 @@ class CompositeEncodings(nn.Module):
         timestamp_hidden_dim: int = 64,
         use_latlon_encoding: bool = False,
         latlon_dropout_rate: float = 0.0,
+        use_learned_latlon_encoding: bool = False,
+        latlon_hidden_dim: int = 64,
     ):
         """Initialize the composite encodings.
 
@@ -654,6 +658,11 @@ class CompositeEncodings(nn.Module):
                 (only used when timestamp_encoding_mode="learned")
             use_latlon_encoding: Whether to add sinusoidal lat/lon encoding to all tokens
             latlon_dropout_rate: Probability of dropping lat/lon encoding per sample during training
+            use_learned_latlon_encoding: Whether to use a learned per-token geographic
+                encoding that replaces both the spatial sinusoidal encoding and the
+                broadcast latlon encoding
+            latlon_hidden_dim: Hidden layer dimension for the learned latlon MLP
+                (only used when use_learned_latlon_encoding=True)
         """
         super().__init__()
         self.embedding_size = embedding_size
@@ -661,6 +670,7 @@ class CompositeEncodings(nn.Module):
         self.timestamp_dropout_rate = timestamp_dropout_rate
         self.use_latlon_encoding = use_latlon_encoding
         self.latlon_dropout_rate = latlon_dropout_rate
+        self.use_learned_latlon_encoding = use_learned_latlon_encoding
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [
             modality.name for modality in supported_modalities
@@ -720,6 +730,15 @@ class CompositeEncodings(nn.Module):
             )
         else:
             self.timestamp_mlp = None
+
+        # Learned latlon MLP
+        if self.use_learned_latlon_encoding:
+            self.latlon_mlp: LatLonMLP | None = LatLonMLP(
+                output_dim=self.embedding_dim_per_embedding_type,
+                hidden_dim=latlon_hidden_dim,
+            )
+        else:
+            self.latlon_mlp = None
 
         self.apply(self._init_weights)
 
@@ -912,8 +931,31 @@ class CompositeEncodings(nn.Module):
                     modality_embed[..., n : n * 3] += (
                         ts_embed[:, 0].to(device).view(*view_shape)
                     )
-        if modality.is_spatial:
-            # Spatial encodings
+        if self.use_learned_latlon_encoding:
+            # Learned per-token geographic encoding replaces both
+            # spatial sinusoidal encoding and broadcast latlon encoding
+            assert latlon is not None, (
+                "latlon must be provided when use_learned_latlon_encoding=True"
+            )
+            assert self.latlon_mlp is not None
+            if modality.is_spatial:
+                assert input_res is not None
+                assert patch_size is not None
+                meters_per_token = input_res * patch_size
+                per_token_ll = compute_per_token_latlon(
+                    latlon, h, w, meters_per_token
+                )  # (B, H, W, 2)
+                geo_embed = self.latlon_mlp(per_token_ll.to(device))  # (B, H, W, n)
+                geo_embed = repeat(geo_embed, f"b h w d -> {ein_string}", **ein_dict)
+            else:
+                # Non-spatial modalities: use tile center directly
+                geo_embed_flat = self.latlon_mlp(latlon)  # (B, n)
+                num_middle_dims = modality_embed.ndim - 2
+                view_shape = (b, *([1] * num_middle_dims), n)
+                geo_embed = geo_embed_flat.view(*view_shape)
+            modality_embed[..., n * 3 : n * 4] += geo_embed
+        elif modality.is_spatial:
+            # Original spatial sinusoidal encoding
             assert input_res is not None
             assert patch_size is not None
             gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
@@ -928,7 +970,11 @@ class CompositeEncodings(nn.Module):
                 spatial_embed, f"b h w d -> {ein_string}", **ein_dict
             )
             modality_embed[..., n * 3 : n * 4] += spatial_embed
-        if self.use_latlon_encoding and latlon is not None:
+        if (
+            self.use_latlon_encoding
+            and latlon is not None
+            and not self.use_learned_latlon_encoding
+        ):
             latlon_embed = get_latlon_encoding(latlon, self.embedding_size)  # (B, D)
             if self.training and self.latlon_dropout_rate > 0.0:
                 drop_mask = torch.bernoulli(
@@ -1002,6 +1048,8 @@ class FlexiVitBase(nn.Module):
         timestamp_hidden_dim: int = 64,
         use_latlon_encoding: bool = False,
         latlon_dropout_rate: float = 0.0,
+        use_learned_latlon_encoding: bool = False,
+        latlon_hidden_dim: int = 64,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -1046,6 +1094,8 @@ class FlexiVitBase(nn.Module):
             timestamp_hidden_dim=timestamp_hidden_dim,
             use_latlon_encoding=use_latlon_encoding,
             latlon_dropout_rate=latlon_dropout_rate,
+            use_learned_latlon_encoding=use_learned_latlon_encoding,
+            latlon_hidden_dim=latlon_hidden_dim,
         )
         self.apply(self._init_weights)
 
@@ -1248,12 +1298,15 @@ class Encoder(FlexiVitBase):
         timestamp_hidden_dim: int = 64,
         use_latlon_encoding: bool = False,
         latlon_dropout_rate: float = 0.0,
+        use_learned_latlon_encoding: bool = False,
+        latlon_hidden_dim: int = 64,
     ):
         """Initialize the encoder.
 
         Args:
             embedding_size: Size of token embeddings
             max_patch_size: Maximum patch size for patchification
+
             min_patch_size: Minimum patch size for patchification
             num_heads: Number of attention heads
             mlp_ratio: Ratio for MLP hidden dimension
@@ -1290,6 +1343,8 @@ class Encoder(FlexiVitBase):
                 (only used when timestamp_encoding_mode="learned").
             use_latlon_encoding: Whether to add sinusoidal lat/lon encoding to all tokens.
             latlon_dropout_rate: Probability of dropping lat/lon encoding per sample during training.
+            use_learned_latlon_encoding: Whether to use learned per-token geographic encoding.
+            latlon_hidden_dim: Hidden layer dimension for the learned latlon MLP.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1310,6 +1365,8 @@ class Encoder(FlexiVitBase):
             timestamp_hidden_dim=timestamp_hidden_dim,
             use_latlon_encoding=use_latlon_encoding,
             latlon_dropout_rate=latlon_dropout_rate,
+            use_learned_latlon_encoding=use_learned_latlon_encoding,
+            latlon_hidden_dim=latlon_hidden_dim,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1838,6 +1895,8 @@ class PredictorBase(FlexiVitBase):
         timestamp_hidden_dim: int = 64,
         use_latlon_encoding: bool = False,
         latlon_dropout_rate: float = 0.0,
+        use_learned_latlon_encoding: bool = False,
+        latlon_hidden_dim: int = 64,
     ):
         """Initialize the predictor.
 
@@ -1865,6 +1924,8 @@ class PredictorBase(FlexiVitBase):
                 (only used when timestamp_encoding_mode="learned").
             use_latlon_encoding: Whether to add sinusoidal lat/lon encoding to all tokens.
             latlon_dropout_rate: Probability of dropping lat/lon encoding per sample during training.
+            use_learned_latlon_encoding: Whether to use learned per-token geographic encoding.
+            latlon_hidden_dim: Hidden layer dimension for the learned latlon MLP.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1885,6 +1946,8 @@ class PredictorBase(FlexiVitBase):
             timestamp_hidden_dim=timestamp_hidden_dim,
             use_latlon_encoding=use_latlon_encoding,
             latlon_dropout_rate=latlon_dropout_rate,
+            use_learned_latlon_encoding=use_learned_latlon_encoding,
+            latlon_hidden_dim=latlon_hidden_dim,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -2259,6 +2322,8 @@ class EncoderConfig(Config):
     timestamp_hidden_dim: int = 64
     use_latlon_encoding: bool = False
     latlon_dropout_rate: float = 0.0
+    use_learned_latlon_encoding: bool = False
+    latlon_hidden_dim: int = 64
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2344,6 +2409,8 @@ class PredictorConfig(Config):
     timestamp_hidden_dim: int = 64
     use_latlon_encoding: bool = False
     latlon_dropout_rate: float = 0.0
+    use_learned_latlon_encoding: bool = False
+    latlon_hidden_dim: int = 64
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
