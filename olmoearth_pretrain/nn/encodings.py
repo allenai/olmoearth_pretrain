@@ -15,6 +15,7 @@ from enum import StrEnum
 
 import numpy as np
 import torch
+from torch import nn
 
 
 class TimestampEncodingMode(StrEnum):
@@ -22,6 +23,7 @@ class TimestampEncodingMode(StrEnum):
 
     LEGACY = "legacy"
     UNIFIED = "unified"
+    LEARNED = "learned"
 
 
 def get_1d_sincos_pos_encoding(pos: torch.Tensor, encoding_dim: int) -> torch.Tensor:
@@ -183,3 +185,79 @@ def get_timestamp_encoding(timestamps: torch.Tensor, encoding_dim: int) -> torch
     flat = fractional_year.reshape(-1)  # (B*T,)
     enc = get_1d_sincos_pos_encoding(flat, encoding_dim)  # (B*T, D)
     return enc.reshape(b, t, encoding_dim)
+
+
+def timestamps_to_learned_input(timestamps: torch.Tensor) -> torch.Tensor:
+    """Convert [day, month, year] timestamps to a 3-float learned-encoding input.
+
+    Produces [fractional_year_since_2020, sin(2*pi*frac), cos(2*pi*frac)]
+    where fractional_year_since_2020 is a continuous real number (Jan 1 2020 = 0,
+    Jan 1 2021 = 1, etc.) and the sin/cos pair captures yearly cyclical seasonality.
+
+    Args:
+        timestamps: Tensor of shape (B, T, 3) where [..., 0] is day (1-31),
+            [..., 1] is month (0-indexed, 0-11), [..., 2] is year.
+
+    Returns:
+        Tensor of shape (B, T, 3).
+    """
+    day = timestamps[..., 0].float()
+    month = timestamps[..., 1].float()
+    year = timestamps[..., 2].float()
+
+    day_of_year = month * 30.4375 + day
+    fractional_year = year + day_of_year / 365.25 - 2020.0
+
+    sin_val = torch.sin(2 * np.pi * fractional_year)
+    cos_val = torch.cos(2 * np.pi * fractional_year)
+
+    return torch.stack([fractional_year, sin_val, cos_val], dim=-1)
+
+
+class TimestampMLP(nn.Module):
+    """Learned timestamp encoding via a small MLP.
+
+    Takes raw [day, month, year] timestamps, converts them to a 3-float
+    representation (fractional year + sin/cos yearly cycle), and maps them
+    through a 2-layer MLP to produce timestamp embeddings.
+
+    Args:
+        output_dim: Output embedding dimension (should be 2 * embedding_dim_per_embedding_type).
+        hidden_dim: Hidden layer dimension. Default: 64.
+        activation: Activation module between the two linear layers.
+            Default: nn.GELU().
+    """
+
+    def __init__(
+        self,
+        output_dim: int,
+        hidden_dim: int = 64,
+        activation: nn.Module | None = None,
+    ):
+        """Initialize the TimestampMLP."""
+        super().__init__()
+        if activation is None:
+            activation = nn.GELU()
+        self.mlp = nn.Sequential(
+            nn.Linear(3, hidden_dim),
+            activation,
+            nn.Linear(hidden_dim, output_dim),
+        )
+        # Preserve default PyTorch init — skip the parent model's xavier_uniform_ init
+        for m in self.mlp.modules():
+            if isinstance(m, nn.Linear):
+                m._skip_custom_init = True  # type: ignore[attr-defined]
+
+    def forward(self, timestamps: torch.Tensor) -> torch.Tensor:
+        """Produce learned timestamp embeddings.
+
+        Args:
+            timestamps: (B, T, 3) raw [day, month, year] tensor.
+
+        Returns:
+            (B, T, output_dim) learned timestamp embedding.
+        """
+        x = timestamps_to_learned_input(timestamps)
+        # Match the dtype of the MLP weights (e.g. bfloat16 under FSDP)
+        x = x.to(dtype=next(self.mlp.parameters()).dtype)
+        return self.mlp(x)

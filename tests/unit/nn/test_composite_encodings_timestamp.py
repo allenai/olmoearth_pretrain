@@ -211,3 +211,128 @@ def test_unified_skips_old_temporal_slices(
 
     # The unified output should differ from legacy in these slices
     assert not torch.allclose(result[..., n : n * 2], legacy_result[..., n : n * 2])
+
+
+# --- Learned mode tests ---
+
+
+def test_learned_mode_creates_successfully(
+    embedding_size: int,
+    supported_modalities: list[ModalitySpec],
+    max_sequence_length: int,
+) -> None:
+    """Learned mode should create without error and have an MLP."""
+    ce = _make_composite_encodings(
+        embedding_size, supported_modalities, max_sequence_length, "learned"
+    )
+    assert ce.timestamp_encoding_mode == "learned"
+    assert ce.timestamp_mlp is not None
+
+
+def test_learned_mode_has_learnable_params(
+    embedding_size: int,
+    supported_modalities: list[ModalitySpec],
+    max_sequence_length: int,
+) -> None:
+    """The learned timestamp MLP should have trainable parameters."""
+    ce = _make_composite_encodings(
+        embedding_size, supported_modalities, max_sequence_length, "learned"
+    )
+    assert ce.timestamp_mlp is not None
+    mlp_params = list(ce.timestamp_mlp.parameters())
+    assert len(mlp_params) > 0
+    assert all(p.requires_grad for p in mlp_params)
+
+
+def test_learned_mode_output_shape_matches_legacy(
+    embedding_size: int,
+    supported_modalities: list[ModalitySpec],
+    max_sequence_length: int,
+    timestamps: torch.Tensor,
+) -> None:
+    """Learned and legacy modes should produce same-shaped output."""
+    B, T = timestamps.shape[:2]
+    H, W = 2, 2
+    num_bandsets = 3
+    tokens = torch.randn(B, H, W, T, num_bandsets, embedding_size)
+    patch_size = 4
+
+    legacy_ce = _make_composite_encodings(
+        embedding_size, supported_modalities, max_sequence_length, "legacy"
+    )
+    learned_ce = _make_composite_encodings(
+        embedding_size, supported_modalities, max_sequence_length, "learned"
+    )
+
+    per_modality_tokens = {"sentinel2_l2a": tokens.clone()}
+    legacy_out = legacy_ce.forward(per_modality_tokens, timestamps, patch_size)
+
+    per_modality_tokens = {"sentinel2_l2a": tokens.clone()}
+    learned_out = learned_ce.forward(per_modality_tokens, timestamps, patch_size)
+
+    assert legacy_out["sentinel2_l2a"].shape == learned_out["sentinel2_l2a"].shape
+
+
+def test_learned_mode_only_writes_temporal_slices(
+    embedding_size: int,
+    supported_modalities: list[ModalitySpec],
+    max_sequence_length: int,
+    timestamps: torch.Tensor,
+) -> None:
+    """Learned mode should only modify the temporal slices [n:3n], not channel or spatial."""
+    B, T = timestamps.shape[:2]
+    H, W = 2, 2
+    num_bandsets = 3
+    tokens = torch.zeros(B, H, W, T, num_bandsets, embedding_size)
+    patch_size = 4
+
+    legacy_ce = _make_composite_encodings(
+        embedding_size, supported_modalities, max_sequence_length, "legacy"
+    )
+    learned_ce = _make_composite_encodings(
+        embedding_size, supported_modalities, max_sequence_length, "learned"
+    )
+
+    per_modality_tokens = {"sentinel2_l2a": tokens.clone()}
+    legacy_out = legacy_ce.forward(per_modality_tokens, timestamps, patch_size)
+
+    per_modality_tokens = {"sentinel2_l2a": tokens.clone()}
+    learned_out = learned_ce.forward(per_modality_tokens, timestamps, patch_size)
+
+    n = embedding_size // 4
+
+    # Channel slice [0:n] and spatial slice [3n:4n] should be identical
+    # between legacy and learned (both use the same channel + spatial encodings)
+    assert torch.allclose(
+        legacy_out["sentinel2_l2a"][..., :n],
+        learned_out["sentinel2_l2a"][..., :n],
+    )
+    assert torch.allclose(
+        legacy_out["sentinel2_l2a"][..., n * 3 :],
+        learned_out["sentinel2_l2a"][..., n * 3 :],
+    )
+
+
+def test_learned_mode_temporal_slices_nonzero(
+    embedding_size: int,
+    supported_modalities: list[ModalitySpec],
+    max_sequence_length: int,
+    timestamps: torch.Tensor,
+) -> None:
+    """Learned mode should produce non-zero temporal slices."""
+    B, T = timestamps.shape[:2]
+    H, W = 2, 2
+    num_bandsets = 3
+    tokens = torch.zeros(B, H, W, T, num_bandsets, embedding_size)
+    patch_size = 4
+
+    ce = _make_composite_encodings(
+        embedding_size, supported_modalities, max_sequence_length, "learned"
+    )
+
+    per_modality_tokens = {"sentinel2_l2a": tokens.clone()}
+    out = ce.forward(per_modality_tokens, timestamps, patch_size)
+    result = out["sentinel2_l2a"]
+
+    n = embedding_size // 4
+    assert result[..., n : n * 3].abs().sum() > 0

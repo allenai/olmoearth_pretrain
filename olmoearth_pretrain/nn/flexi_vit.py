@@ -25,6 +25,7 @@ from olmoearth_pretrain.datatypes import (
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
     TimestampEncodingMode,
+    TimestampMLP,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_latlon_encoding,
@@ -630,6 +631,7 @@ class CompositeEncodings(nn.Module):
         tokenization_config: TokenizationConfig | None = None,
         timestamp_encoding_mode: str = "legacy",
         timestamp_dropout_rate: float = 0.0,
+        timestamp_hidden_dim: int = 64,
         use_latlon_encoding: bool = False,
         latlon_dropout_rate: float = 0.0,
     ):
@@ -644,9 +646,12 @@ class CompositeEncodings(nn.Module):
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             tokenization_config: Optional config for custom band groupings
             timestamp_encoding_mode: "legacy" for old multi-part encoding,
-                "unified" for single sinusoidal encoding of the full timestamp
+                "unified" for single sinusoidal encoding of the full timestamp,
+                "learned" for MLP-based encoding of fractional year + sin/cos cycle
             timestamp_dropout_rate: Probability of dropping timestamp encoding per sample
                 during training (only used when timestamp_encoding_mode="unified")
+            timestamp_hidden_dim: Hidden layer dimension for the learned timestamp MLP
+                (only used when timestamp_encoding_mode="learned")
             use_latlon_encoding: Whether to add sinusoidal lat/lon encoding to all tokens
             latlon_dropout_rate: Probability of dropping lat/lon encoding per sample during training
         """
@@ -706,6 +711,15 @@ class CompositeEncodings(nn.Module):
                 else:
                     channel_embeddings = nn.Parameter(torch.zeros(shape), **args)
                 self.per_modality_channel_embeddings[modality.name] = channel_embeddings
+
+        # Learned timestamp MLP
+        if self.timestamp_encoding_mode == TimestampEncodingMode.LEARNED:
+            self.timestamp_mlp: TimestampMLP | None = TimestampMLP(
+                output_dim=2 * self.embedding_dim_per_embedding_type,
+                hidden_dim=timestamp_hidden_dim,
+            )
+        else:
+            self.timestamp_mlp = None
 
         self.apply(self._init_weights)
 
@@ -828,7 +842,7 @@ class CompositeEncodings(nn.Module):
                 month_embed = self.month_embed(months)
                 month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
                 modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
-            else:
+            elif self.timestamp_encoding_mode == TimestampEncodingMode.UNIFIED:
                 # Unified timestamp encoding: full sinusoidal encoding of the timestamp
                 assert timestamps is not None
                 ts_embed = get_timestamp_encoding(
@@ -871,6 +885,32 @@ class CompositeEncodings(nn.Module):
                     )
                     modality_embed = modality_embed + ts_embed[:, 0].to(device).view(
                         *view_shape
+                    )
+            elif self.timestamp_encoding_mode == TimestampEncodingMode.LEARNED:
+                # Learned timestamp encoding via MLP
+                assert timestamps is not None
+                assert self.timestamp_mlp is not None
+                ts_embed = self.timestamp_mlp(timestamps)  # (B, T, 2*n)
+                two_n = 2 * n
+                if "t" in ein_dict:
+                    view_dims = []
+                    for dim_name in ein_string.split():
+                        if dim_name == "b":
+                            view_dims.append(b)
+                        elif dim_name == "t":
+                            view_dims.append(t)
+                        elif dim_name == "d":
+                            view_dims.append(two_n)
+                        else:
+                            view_dims.append(1)
+                    modality_embed[..., n : n * 3] += ts_embed.to(device).view(
+                        *view_dims
+                    )
+                else:
+                    num_middle_dims = modality_embed.ndim - 2
+                    view_shape = (b, *([1] * num_middle_dims), two_n)
+                    modality_embed[..., n : n * 3] += (
+                        ts_embed[:, 0].to(device).view(*view_shape)
                     )
         if modality.is_spatial:
             # Spatial encodings
@@ -959,6 +999,7 @@ class FlexiVitBase(nn.Module):
         tokenization_config: TokenizationConfig | None = None,
         timestamp_encoding_mode: str = "legacy",
         timestamp_dropout_rate: float = 0.0,
+        timestamp_hidden_dim: int = 64,
         use_latlon_encoding: bool = False,
         latlon_dropout_rate: float = 0.0,
     ) -> None:
@@ -1002,6 +1043,7 @@ class FlexiVitBase(nn.Module):
             tokenization_config=self._base_tokenization_config,
             timestamp_encoding_mode=timestamp_encoding_mode,
             timestamp_dropout_rate=timestamp_dropout_rate,
+            timestamp_hidden_dim=timestamp_hidden_dim,
             use_latlon_encoding=use_latlon_encoding,
             latlon_dropout_rate=latlon_dropout_rate,
         )
@@ -1203,6 +1245,7 @@ class Encoder(FlexiVitBase):
         band_dropout_modalities: list[str] | None = None,
         timestamp_encoding_mode: str = "legacy",
         timestamp_dropout_rate: float = 0.0,
+        timestamp_hidden_dim: int = 64,
         use_latlon_encoding: bool = False,
         latlon_dropout_rate: float = 0.0,
     ):
@@ -1239,9 +1282,12 @@ class Encoder(FlexiVitBase):
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
             timestamp_encoding_mode: "legacy" for old multi-part encoding,
-                "unified" for single sinusoidal encoding of the full timestamp.
+                "unified" for single sinusoidal encoding of the full timestamp,
+                "learned" for MLP-based encoding of fractional year + sin/cos cycle.
             timestamp_dropout_rate: Probability of dropping timestamp encoding per sample
                 during training (only used when timestamp_encoding_mode="unified").
+            timestamp_hidden_dim: Hidden layer dimension for the learned timestamp MLP
+                (only used when timestamp_encoding_mode="learned").
             use_latlon_encoding: Whether to add sinusoidal lat/lon encoding to all tokens.
             latlon_dropout_rate: Probability of dropping lat/lon encoding per sample during training.
         """
@@ -1261,6 +1307,7 @@ class Encoder(FlexiVitBase):
             tokenization_config=self.tokenization_config,
             timestamp_encoding_mode=timestamp_encoding_mode,
             timestamp_dropout_rate=timestamp_dropout_rate,
+            timestamp_hidden_dim=timestamp_hidden_dim,
             use_latlon_encoding=use_latlon_encoding,
             latlon_dropout_rate=latlon_dropout_rate,
         )
@@ -1788,6 +1835,7 @@ class PredictorBase(FlexiVitBase):
         tokenization_config: TokenizationConfig | None = None,
         timestamp_encoding_mode: str = "legacy",
         timestamp_dropout_rate: float = 0.0,
+        timestamp_hidden_dim: int = 64,
         use_latlon_encoding: bool = False,
         latlon_dropout_rate: float = 0.0,
     ):
@@ -1809,9 +1857,12 @@ class PredictorBase(FlexiVitBase):
             qk_norm: Whether to apply normalization to Q and K in attention
             tokenization_config: Optional config for custom band groupings
             timestamp_encoding_mode: "legacy" for old multi-part encoding,
-                "unified" for single sinusoidal encoding of the full timestamp.
+                "unified" for single sinusoidal encoding of the full timestamp,
+                "learned" for MLP-based encoding of fractional year + sin/cos cycle.
             timestamp_dropout_rate: Probability of dropping timestamp encoding per sample
                 during training (only used when timestamp_encoding_mode="unified").
+            timestamp_hidden_dim: Hidden layer dimension for the learned timestamp MLP
+                (only used when timestamp_encoding_mode="learned").
             use_latlon_encoding: Whether to add sinusoidal lat/lon encoding to all tokens.
             latlon_dropout_rate: Probability of dropping lat/lon encoding per sample during training.
         """
@@ -1831,6 +1882,7 @@ class PredictorBase(FlexiVitBase):
             tokenization_config=self.tokenization_config,
             timestamp_encoding_mode=timestamp_encoding_mode,
             timestamp_dropout_rate=timestamp_dropout_rate,
+            timestamp_hidden_dim=timestamp_hidden_dim,
             use_latlon_encoding=use_latlon_encoding,
             latlon_dropout_rate=latlon_dropout_rate,
         )
@@ -2204,6 +2256,7 @@ class EncoderConfig(Config):
     band_dropout_modalities: list[str] | None = None
     timestamp_encoding_mode: str = "legacy"
     timestamp_dropout_rate: float = 0.0
+    timestamp_hidden_dim: int = 64
     use_latlon_encoding: bool = False
     latlon_dropout_rate: float = 0.0
 
@@ -2231,9 +2284,9 @@ class EncoderConfig(Config):
                 )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
-        if self.timestamp_encoding_mode not in ("legacy", "unified"):
+        if self.timestamp_encoding_mode not in ("legacy", "unified", "learned"):
             raise ValueError(
-                f"timestamp_encoding_mode must be 'legacy' or 'unified', "
+                f"timestamp_encoding_mode must be 'legacy', 'unified', or 'learned', "
                 f"got '{self.timestamp_encoding_mode}'"
             )
         if not 0.0 <= self.timestamp_dropout_rate <= 1.0:
@@ -2288,6 +2341,7 @@ class PredictorConfig(Config):
     tokenization_config: TokenizationConfig | None = None
     timestamp_encoding_mode: str = "legacy"
     timestamp_dropout_rate: float = 0.0
+    timestamp_hidden_dim: int = 64
     use_latlon_encoding: bool = False
     latlon_dropout_rate: float = 0.0
 
@@ -2306,9 +2360,9 @@ class PredictorConfig(Config):
                     raise ValueError(f"Modality {modality} is not supported")
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
-        if self.timestamp_encoding_mode not in ("legacy", "unified"):
+        if self.timestamp_encoding_mode not in ("legacy", "unified", "learned"):
             raise ValueError(
-                f"timestamp_encoding_mode must be 'legacy' or 'unified', "
+                f"timestamp_encoding_mode must be 'legacy', 'unified', or 'learned', "
                 f"got '{self.timestamp_encoding_mode}'"
             )
         if not 0.0 <= self.timestamp_dropout_rate <= 1.0:

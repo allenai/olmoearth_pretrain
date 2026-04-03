@@ -4,11 +4,13 @@ import pytest
 import torch
 
 from olmoearth_pretrain.nn.encodings import (
+    TimestampMLP,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
     get_timestamp_encoding,
+    timestamps_to_learned_input,
 )
 
 
@@ -171,3 +173,82 @@ def test_get_timestamp_encoding_values_bounded() -> None:
     encoding = get_timestamp_encoding(timestamps, 16)
     assert encoding.min() >= -1.0
     assert encoding.max() <= 1.0
+
+
+# --- timestamps_to_learned_input tests ---
+
+
+def test_timestamps_to_learned_input_shape() -> None:
+    """Output shape should match input batch and time dims with 3 features."""
+    timestamps = torch.tensor([[[1, 0, 2020], [15, 6, 2021]]])
+    out = timestamps_to_learned_input(timestamps)
+    assert out.shape == (1, 2, 3)
+
+
+def test_timestamps_to_learned_input_jan_2021() -> None:
+    """Jan 1 2021 should have fractional year ~1.0 and sin/cos near the cycle start."""
+    timestamps = torch.tensor([[[1, 0, 2021]]])
+    out = timestamps_to_learned_input(timestamps)
+    frac = out[0, 0, 0].item()
+    # year=2021 + (0*30.4375 + 1)/365.25 - 2020 = ~1.00274
+    assert abs(frac - 1.00274) < 0.01
+
+
+def test_timestamps_to_learned_input_july_2020() -> None:
+    """July 2020 should have fractional year ~0.5."""
+    # month=6 (0-indexed July), day=1
+    timestamps = torch.tensor([[[1, 6, 2020]]])
+    out = timestamps_to_learned_input(timestamps)
+    frac = out[0, 0, 0].item()
+    # (6*30.4375 + 1)/365.25 = ~0.502
+    assert abs(frac - 0.5) < 0.05
+
+
+def test_timestamps_to_learned_input_sin_cos_consistency() -> None:
+    """Sin and cos outputs should match torch.sin/cos of 2*pi*frac."""
+    import numpy as np
+
+    timestamps = torch.tensor([[[15, 3, 2022]]])
+    out = timestamps_to_learned_input(timestamps)
+    frac = out[0, 0, 0].item()
+    assert abs(out[0, 0, 1].item() - np.sin(2 * np.pi * frac)) < 1e-5
+    assert abs(out[0, 0, 2].item() - np.cos(2 * np.pi * frac)) < 1e-5
+
+
+def test_timestamps_to_learned_input_different_dates_differ() -> None:
+    """Different dates should produce different representations."""
+    ts1 = torch.tensor([[[1, 0, 2020]]])
+    ts2 = torch.tensor([[[1, 6, 2022]]])
+    out1 = timestamps_to_learned_input(ts1)
+    out2 = timestamps_to_learned_input(ts2)
+    assert not torch.allclose(out1, out2)
+
+
+# --- TimestampMLP tests ---
+
+
+def test_timestamp_mlp_output_shape() -> None:
+    """MLP output should have the correct shape."""
+    mlp = TimestampMLP(output_dim=96, hidden_dim=64)
+    timestamps = torch.tensor([[[1, 0, 2020], [15, 6, 2021]]] * 2)  # (2, 2, 3)
+    out = mlp(timestamps)
+    assert out.shape == (2, 2, 96)
+
+
+def test_timestamp_mlp_is_differentiable() -> None:
+    """Gradients should flow through the MLP."""
+    mlp = TimestampMLP(output_dim=32, hidden_dim=16)
+    timestamps = torch.tensor([[[1, 0, 2020], [15, 6, 2021]]], dtype=torch.float32)
+    out = mlp(timestamps)
+    out.sum().backward()
+    for p in mlp.parameters():
+        assert p.grad is not None
+
+
+def test_timestamp_mlp_custom_hidden_dim() -> None:
+    """Different hidden dims should produce different parameter counts."""
+    mlp_small = TimestampMLP(output_dim=32, hidden_dim=16)
+    mlp_large = TimestampMLP(output_dim=32, hidden_dim=64)
+    params_small = sum(p.numel() for p in mlp_small.parameters())
+    params_large = sum(p.numel() for p in mlp_large.parameters())
+    assert params_large > params_small
