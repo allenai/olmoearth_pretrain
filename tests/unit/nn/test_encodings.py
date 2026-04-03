@@ -261,34 +261,56 @@ def test_timestamp_mlp_custom_hidden_dim() -> None:
 
 
 def test_latlon_to_learned_input_shape() -> None:
-    """Output should have 5 features for any leading dimensions."""
+    """Output should have 3 + 6*num_freqs features."""
     latlon_2d = torch.tensor([[45.0, 90.0], [0.0, -180.0]])
-    assert latlon_to_learned_input(latlon_2d).shape == (2, 5)
+    # Default num_freqs=20 -> 3 + 120 = 123
+    assert latlon_to_learned_input(latlon_2d).shape == (2, 123)
 
     latlon_4d = torch.randn(2, 4, 4, 2)
-    assert latlon_to_learned_input(latlon_4d).shape == (2, 4, 4, 5)
+    assert latlon_to_learned_input(latlon_4d).shape == (2, 4, 4, 123)
+
+    # Custom num_freqs
+    assert latlon_to_learned_input(latlon_2d, num_freqs=4).shape == (2, 27)
 
 
-def test_latlon_to_learned_input_known_values() -> None:
-    """Verify known values for lat=45, lon=90."""
-    import math
-
-    latlon = torch.tensor([[45.0, 90.0]])
+def test_latlon_to_learned_input_unit_sphere() -> None:
+    """First 3 features should be unit sphere coordinates (x, y, z)."""
+    latlon = torch.tensor([[0.0, 0.0]])  # equator, prime meridian
     out = latlon_to_learned_input(latlon)
-    assert abs(out[0, 0].item() - 0.5) < 1e-5  # 45/90
-    assert abs(out[0, 1].item() - math.sin(math.radians(45))) < 1e-5
-    assert abs(out[0, 2].item() - math.cos(math.radians(45))) < 1e-5
-    assert abs(out[0, 3].item() - math.sin(math.radians(90))) < 1e-5  # 1.0
-    assert abs(out[0, 4].item() - math.cos(math.radians(90))) < 1e-5  # 0.0
+    # (cos(0)*cos(0), cos(0)*sin(0), sin(0)) = (1, 0, 0)
+    assert abs(out[0, 0].item() - 1.0) < 1e-5
+    assert abs(out[0, 1].item() - 0.0) < 1e-5
+    assert abs(out[0, 2].item() - 0.0) < 1e-5
+
+    latlon_pole = torch.tensor([[90.0, 0.0]])  # north pole
+    out_pole = latlon_to_learned_input(latlon_pole)
+    # (cos(90)*cos(0), cos(90)*sin(0), sin(90)) = (0, 0, 1)
+    assert abs(out_pole[0, 0].item()) < 1e-5
+    assert abs(out_pole[0, 1].item()) < 1e-5
+    assert abs(out_pole[0, 2].item() - 1.0) < 1e-5
 
 
 def test_latlon_to_learned_input_lon_wraparound() -> None:
-    """lon=-180 and lon=180 should produce identical sin/cos."""
+    """lon=-180 and lon=180 should map to the same point on the unit sphere."""
     ll1 = torch.tensor([[0.0, -180.0]])
     ll2 = torch.tensor([[0.0, 180.0]])
     out1 = latlon_to_learned_input(ll1)
     out2 = latlon_to_learned_input(ll2)
-    assert torch.allclose(out1[0, 3:5], out2[0, 3:5], atol=1e-5)
+    # Raw sphere coordinates (first 3) should be identical
+    assert torch.allclose(out1[0, :3], out2[0, :3], atol=1e-5)
+    # Full encoding close within float precision amplified by high freqs
+    assert torch.allclose(out1, out2, atol=0.5)
+
+
+def test_latlon_to_learned_input_nearby_points_differ() -> None:
+    """Points 10m apart should produce different high-frequency encodings."""
+    # ~10m offset in latitude ≈ 0.00009 degrees
+    ll1 = torch.tensor([[45.0, 10.0]])
+    ll2 = torch.tensor([[45.00009, 10.0]])
+    out1 = latlon_to_learned_input(ll1, num_freqs=20)
+    out2 = latlon_to_learned_input(ll2, num_freqs=20)
+    # Should NOT be close — high frequencies resolve this
+    assert not torch.allclose(out1, out2, atol=0.01)
 
 
 # --- compute_per_token_latlon tests ---

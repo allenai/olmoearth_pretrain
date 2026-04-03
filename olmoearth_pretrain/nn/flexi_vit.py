@@ -638,6 +638,7 @@ class CompositeEncodings(nn.Module):
         latlon_dropout_rate: float = 0.0,
         use_learned_latlon_encoding: bool = False,
         latlon_hidden_dim: int = 64,
+        latlon_num_freqs: int = 20,
     ):
         """Initialize the composite encodings.
 
@@ -663,6 +664,8 @@ class CompositeEncodings(nn.Module):
                 broadcast latlon encoding
             latlon_hidden_dim: Hidden layer dimension for the learned latlon MLP
                 (only used when use_learned_latlon_encoding=True)
+            latlon_num_freqs: Number of frequency bands for the spherical positional
+                encoding (only used when use_learned_latlon_encoding=True)
         """
         super().__init__()
         self.embedding_size = embedding_size
@@ -736,6 +739,7 @@ class CompositeEncodings(nn.Module):
             self.latlon_mlp: LatLonMLP | None = LatLonMLP(
                 output_dim=self.embedding_dim_per_embedding_type,
                 hidden_dim=latlon_hidden_dim,
+                num_freqs=latlon_num_freqs,
             )
         else:
             self.latlon_mlp = None
@@ -1050,6 +1054,7 @@ class FlexiVitBase(nn.Module):
         latlon_dropout_rate: float = 0.0,
         use_learned_latlon_encoding: bool = False,
         latlon_hidden_dim: int = 64,
+        latlon_num_freqs: int = 20,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -1096,6 +1101,7 @@ class FlexiVitBase(nn.Module):
             latlon_dropout_rate=latlon_dropout_rate,
             use_learned_latlon_encoding=use_learned_latlon_encoding,
             latlon_hidden_dim=latlon_hidden_dim,
+            latlon_num_freqs=latlon_num_freqs,
         )
         self.apply(self._init_weights)
 
@@ -1300,6 +1306,7 @@ class Encoder(FlexiVitBase):
         latlon_dropout_rate: float = 0.0,
         use_learned_latlon_encoding: bool = False,
         latlon_hidden_dim: int = 64,
+        latlon_num_freqs: int = 20,
     ):
         """Initialize the encoder.
 
@@ -1345,6 +1352,7 @@ class Encoder(FlexiVitBase):
             latlon_dropout_rate: Probability of dropping lat/lon encoding per sample during training.
             use_learned_latlon_encoding: Whether to use learned per-token geographic encoding.
             latlon_hidden_dim: Hidden layer dimension for the learned latlon MLP.
+            latlon_num_freqs: Number of frequency bands for spherical positional encoding.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1367,6 +1375,7 @@ class Encoder(FlexiVitBase):
             latlon_dropout_rate=latlon_dropout_rate,
             use_learned_latlon_encoding=use_learned_latlon_encoding,
             latlon_hidden_dim=latlon_hidden_dim,
+            latlon_num_freqs=latlon_num_freqs,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1897,6 +1906,7 @@ class PredictorBase(FlexiVitBase):
         latlon_dropout_rate: float = 0.0,
         use_learned_latlon_encoding: bool = False,
         latlon_hidden_dim: int = 64,
+        latlon_num_freqs: int = 20,
     ):
         """Initialize the predictor.
 
@@ -1926,6 +1936,7 @@ class PredictorBase(FlexiVitBase):
             latlon_dropout_rate: Probability of dropping lat/lon encoding per sample during training.
             use_learned_latlon_encoding: Whether to use learned per-token geographic encoding.
             latlon_hidden_dim: Hidden layer dimension for the learned latlon MLP.
+            latlon_num_freqs: Number of frequency bands for spherical positional encoding.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1948,6 +1959,7 @@ class PredictorBase(FlexiVitBase):
             latlon_dropout_rate=latlon_dropout_rate,
             use_learned_latlon_encoding=use_learned_latlon_encoding,
             latlon_hidden_dim=latlon_hidden_dim,
+            latlon_num_freqs=latlon_num_freqs,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -2324,6 +2336,7 @@ class EncoderConfig(Config):
     latlon_dropout_rate: float = 0.0
     use_learned_latlon_encoding: bool = False
     latlon_hidden_dim: int = 64
+    latlon_num_freqs: int = 20
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2411,6 +2424,7 @@ class PredictorConfig(Config):
     latlon_dropout_rate: float = 0.0
     use_learned_latlon_encoding: bool = False
     latlon_hidden_dim: int = 64
+    latlon_num_freqs: int = 20
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""

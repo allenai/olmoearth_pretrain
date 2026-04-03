@@ -264,35 +264,47 @@ class TimestampMLP(nn.Module):
         return self.mlp(x)
 
 
-def latlon_to_learned_input(latlon: torch.Tensor) -> torch.Tensor:
-    """Convert lat/lon in degrees to a 5-float learned-encoding input.
+def latlon_to_learned_input(latlon: torch.Tensor, num_freqs: int = 20) -> torch.Tensor:
+    """Convert lat/lon in degrees to a multi-frequency spherical encoding.
 
-    Produces [lat/90, sin(lat_rad), cos(lat_rad), sin(lon_rad), cos(lon_rad)]
-    where the sin/cos pairs handle cyclical properties and longitude wrap-around.
+    Maps lat/lon to a point on the unit sphere (x, y, z), then applies
+    multi-frequency sinusoidal encoding to each coordinate. This provides
+    a discontinuity-free representation at multiple spatial scales.
+
+    Output features: [x, y, z, sin(2^0·π·x), cos(2^0·π·x), ...,
+    sin(2^(L-1)·π·z), cos(2^(L-1)·π·z)] for a total of 3 + 6*num_freqs.
 
     Args:
         latlon: Tensor of shape (..., 2) where [..., 0] is latitude in degrees
             [-90, 90] and [..., 1] is longitude in degrees [-180, 180].
+        num_freqs: Number of frequency bands (L). Default: 20.
 
     Returns:
-        Tensor of shape (..., 5).
+        Tensor of shape (..., 3 + 6 * num_freqs).
     """
-    lat = latlon[..., 0]
-    lon = latlon[..., 1]
+    lat_rad = latlon[..., 0] * (math.pi / 180.0)
+    lon_rad = latlon[..., 1] * (math.pi / 180.0)
 
-    lat_rad = lat * (math.pi / 180.0)
-    lon_rad = lon * (math.pi / 180.0)
+    # Unit sphere coordinates
+    cos_lat = torch.cos(lat_rad)
+    x = cos_lat * torch.cos(lon_rad)
+    y = cos_lat * torch.sin(lon_rad)
+    z = torch.sin(lat_rad)
 
-    return torch.stack(
-        [
-            lat / 90.0,
-            torch.sin(lat_rad),
-            torch.cos(lat_rad),
-            torch.sin(lon_rad),
-            torch.cos(lon_rad),
-        ],
-        dim=-1,
-    )
+    xyz = torch.stack([x, y, z], dim=-1)  # (..., 3)
+
+    # Multi-frequency encoding
+    # freqs: [2^0, 2^1, ..., 2^(L-1)] * pi
+    freqs = (
+        2.0 ** torch.arange(num_freqs, device=latlon.device, dtype=latlon.dtype)
+    ) * math.pi
+    # (..., 3, 1) * (L,) -> (..., 3, L)
+    angles = xyz.unsqueeze(-1) * freqs
+    # (..., 3, L) -> (..., 6L) interleaved sin/cos
+    encoded = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)  # (..., 3, 2L)
+    encoded = encoded.flatten(-2)  # (..., 6L)
+
+    return torch.cat([xyz, encoded], dim=-1)  # (..., 3 + 6L)
 
 
 def compute_per_token_latlon(
@@ -344,13 +356,14 @@ def compute_per_token_latlon(
 class LatLonMLP(nn.Module):
     """Learned geographic encoding via a small MLP.
 
-    Takes lat/lon coordinates in degrees, converts them to a 5-float
-    representation (normalized lat + sin/cos for lat and lon), and maps
-    through a 2-layer MLP to produce geographic embeddings.
+    Takes lat/lon coordinates in degrees, maps them to the unit sphere,
+    applies multi-frequency sinusoidal encoding for multi-scale resolution,
+    and maps through a 2-layer MLP to produce geographic embeddings.
 
     Args:
         output_dim: Output embedding dimension (should be embedding_dim_per_embedding_type).
         hidden_dim: Hidden layer dimension. Default: 64.
+        num_freqs: Number of frequency bands for the positional encoding. Default: 20.
         activation: Activation module between the two linear layers.
             Default: nn.GELU().
     """
@@ -359,14 +372,17 @@ class LatLonMLP(nn.Module):
         self,
         output_dim: int,
         hidden_dim: int = 64,
+        num_freqs: int = 20,
         activation: nn.Module | None = None,
     ):
         """Initialize the LatLonMLP."""
         super().__init__()
+        self.num_freqs = num_freqs
         if activation is None:
             activation = nn.GELU()
+        input_dim = 3 + 6 * num_freqs
         self.mlp = nn.Sequential(
-            nn.Linear(5, hidden_dim),
+            nn.Linear(input_dim, hidden_dim),
             activation,
             nn.Linear(hidden_dim, output_dim),
         )
@@ -384,7 +400,7 @@ class LatLonMLP(nn.Module):
         Returns:
             (..., output_dim) learned geographic embedding.
         """
-        x = latlon_to_learned_input(latlon)
+        x = latlon_to_learned_input(latlon, self.num_freqs)
         # Match the dtype of the MLP weights (e.g. bfloat16 under FSDP)
         x = x.to(dtype=next(self.mlp.parameters()).dtype)
         return self.mlp(x)
