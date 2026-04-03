@@ -4,7 +4,7 @@ import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 from olmo_core.config import StrEnum
@@ -165,6 +165,23 @@ class BenchmarkExperimentConfig(Config):
     launch: OlmoEarthBeakerLaunchConfig | None = None
 
 
+@dataclass
+class OlmoEarthExtractConfig(Config):
+    """Configuration for extracting encoder embeddings to disk."""
+
+    run_name: str
+    model: Config
+    dataset: OlmoEarthDatasetConfig
+    checkpoint_path: str
+    output_dir: str
+    patch_size: int = 8
+    batch_size: int = 64
+    num_workers: int = 8
+    sampled_hw_p: int = 4
+    launch: OlmoEarthBeakerLaunchConfig | None = None
+    init_seed: int = 12536
+
+
 def split_common_overrides(overrides: list[str]) -> tuple[list[str], list[str]]:
     """Split the common overrides from the command line."""
     common_overrides = [
@@ -278,6 +295,33 @@ def build_benchmark_config(
     return config
 
 
+def build_extract_config(
+    common: CommonComponents,
+    model_config_builder: Callable[[CommonComponents], Config],
+    dataset_config_builder: Callable[[CommonComponents], OlmoEarthDatasetConfig],
+    extract_config_builder: Callable[[CommonComponents], dict],
+    overrides: list[str],
+) -> OlmoEarthExtractConfig:
+    """Build an embedding extraction configuration."""
+    common_overrides, overrides = split_common_overrides(overrides)
+    logger.info("Common overrides: %s", common_overrides)
+    common = common.merge(common_overrides)
+    logger.info("Common: %s", common)
+    model_config = model_config_builder(common)
+    dataset_config = dataset_config_builder(common)
+    extract_kwargs = extract_config_builder(common)
+    config = OlmoEarthExtractConfig(
+        run_name=common.run_name,
+        model=model_config,
+        dataset=dataset_config,
+        launch=common.launch,
+        **extract_kwargs,
+    )
+    logger.info("Overrides: %s", overrides)
+    config = config.merge(overrides)
+    return config
+
+
 def benchmark(config: BenchmarkExperimentConfig) -> None:
     """Benchmark an experiment."""
     runner = config.benchmark.build(model_config=config.model)
@@ -288,6 +332,168 @@ def launch_benchmark(config: BenchmarkExperimentConfig) -> None:
     """Launch a throughput benchmarking run."""
     assert config.launch is not None
     config.launch.launch(follow=False, torchrun=False)
+
+
+def extract(config: OlmoEarthExtractConfig) -> None:
+    """Extract encoder embeddings from a checkpoint and save to disk."""
+    import pandas as pd
+    import torch
+    from torch.utils.data import DataLoader, Dataset
+
+    from olmoearth_pretrain.data.collate import collate_olmoearth_pretrain
+    from olmoearth_pretrain.data.dataset import GetItemArgs
+    from olmoearth_pretrain.datatypes import (
+        MaskedOlmoEarthSample,
+        MaskValue,
+        OlmoEarthSample,
+    )
+    from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
+
+    seed_all(config.init_seed)
+
+    # 1. Build model and load checkpoint
+    model = config.model.build()
+    device = get_default_device()
+    model = model.to(device)
+
+    from olmo_core.distributed.checkpoint import load_model_and_optim_state
+    from upath import UPath
+
+    ckpt_dir = str(UPath(config.checkpoint_path) / "model_and_optim")
+    logger.info("Loading checkpoint from %s", ckpt_dir)
+    load_model_and_optim_state(ckpt_dir, model)
+
+    encoder = model.encoder
+    encoder.eval()
+    del model.decoder, model.target_encoder
+    if model.reconstructor is not None:
+        del model.reconstructor
+
+    # 2. Build dataset
+    dataset = config.dataset.build()
+
+    class _IndexedDataset(Dataset):
+        """Wraps OlmoEarthDataset to yield (idx, patch_size, sample)."""
+
+        def __init__(self, inner: Dataset, patch_size: int, sampled_hw_p: int):
+            self.inner = inner
+            self.patch_size = patch_size
+            self.sampled_hw_p = sampled_hw_p
+
+        def __len__(self) -> int:
+            return len(self.inner)
+
+        def __getitem__(self, idx: int) -> tuple[int, int, OlmoEarthSample]:
+            args = GetItemArgs(
+                idx=idx,
+                patch_size=self.patch_size,
+                sampled_hw_p=self.sampled_hw_p,
+            )
+            patch_size, sample = self.inner[args]
+            return idx, patch_size, sample
+
+    def _extract_collate(
+        batch: list[tuple[int, int, OlmoEarthSample]],
+    ) -> tuple[int, MaskedOlmoEarthSample, torch.Tensor, torch.Tensor]:
+        indices = [item[0] for item in batch]
+        raw_samples = [(item[1], item[2]) for item in batch]
+        patch_size, batched_sample = collate_olmoearth_pretrain(raw_samples)
+        latlons = batched_sample.latlon
+        # Build MaskedOlmoEarthSample with all tokens as ONLINE_ENCODER.
+        # We cannot use from_olmoearthsample on a batched sample because
+        # it uses unbatched shape() for mask construction.
+        masked_dict: dict[str, Any] = {}
+        for key, val in batched_sample.as_dict().items():
+            if key == "timestamps":
+                masked_dict[key] = val
+            elif val is None:
+                masked_dict[key] = None
+                masked_dict[MaskedOlmoEarthSample.get_masked_modality_name(key)] = None
+            else:
+                masked_dict[key] = val
+                masked_dict[MaskedOlmoEarthSample.get_masked_modality_name(key)] = (
+                    torch.full(val.shape, MaskValue.ONLINE_ENCODER.value)
+                )
+        masked_sample = MaskedOlmoEarthSample(**masked_dict)
+        return (
+            patch_size,
+            masked_sample,
+            latlons,
+            torch.tensor(indices, dtype=torch.long),
+        )
+
+    indexed_dataset = _IndexedDataset(dataset, config.patch_size, config.sampled_hw_p)
+    dataloader = DataLoader(
+        indexed_dataset,
+        batch_size=config.batch_size,
+        num_workers=config.num_workers,
+        shuffle=False,
+        collate_fn=_extract_collate,
+        pin_memory=True,
+    )
+
+    # 3. Inference loop -- sharded output
+    output_dir = UPath(config.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    index_rows: list[dict] = []
+    shard_embeddings: list[np.ndarray] = []
+    shard_idx = 0
+    shard_size = config.batch_size * 16
+
+    logger.info("Starting embedding extraction to %s", output_dir)
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(dataloader):
+            patch_size, masked_sample, latlons, sample_indices = batch
+            masked_sample = masked_sample.to_device(device)
+            with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
+                output = encoder(masked_sample, patch_size=patch_size, fast_pass=True)
+                tokens = output["tokens_and_masks"]
+                embeddings = pool_unmasked_tokens(
+                    tokens, PoolingType.MEAN, spatial_pooling=False
+                )
+            embeddings_np = embeddings.to(torch.float16).cpu().numpy()
+
+            for i in range(embeddings_np.shape[0]):
+                shard_embeddings.append(embeddings_np[i])
+                index_rows.append(
+                    {
+                        "sample_idx": int(sample_indices[i]),
+                        "shard": f"shard_{shard_idx:04d}.npz",
+                        "row": len(shard_embeddings) - 1,
+                        "lat": float(latlons[i, 0]),
+                        "lon": float(latlons[i, 1]),
+                    }
+                )
+                if len(shard_embeddings) >= shard_size:
+                    np.savez(
+                        output_dir / f"shard_{shard_idx:04d}.npz",
+                        embeddings=np.stack(shard_embeddings),
+                    )
+                    logger.info(
+                        "Wrote shard %d (%d samples)", shard_idx, len(shard_embeddings)
+                    )
+                    shard_embeddings = []
+                    shard_idx += 1
+
+            if batch_idx % 50 == 0:
+                logger.info("Processed batch %d", batch_idx)
+
+    if shard_embeddings:
+        np.savez(
+            output_dir / f"shard_{shard_idx:04d}.npz",
+            embeddings=np.stack(shard_embeddings),
+        )
+        logger.info(
+            "Wrote final shard %d (%d samples)", shard_idx, len(shard_embeddings)
+        )
+
+    pd.DataFrame(index_rows).to_csv(output_dir / "index.csv", index=False)
+    logger.info(
+        "Extraction complete: %d samples, %d shards, index at %s/index.csv",
+        len(index_rows),
+        shard_idx + 1,
+        output_dir,
+    )
 
 
 def train(config: OlmoEarthExperimentConfig) -> None:
@@ -409,6 +615,8 @@ class SubCmd(StrEnum):
     train_single = "train_single"
     evaluate = "evaluate"
     launch_evaluate = "launch_evaluate"
+    extract = "extract"
+    launch_extract = "launch_extract"
     prep = "prep"
     launch_prep = "launch_prep"
     dry_run = "dry_run"
@@ -429,9 +637,10 @@ class SubCmd(StrEnum):
             SubCmd.benchmark,
             SubCmd.launch_benchmark,
             SubCmd.launch_evaluate,
+            SubCmd.launch_extract,
         ):
             prepare_cli_environment()
-        elif self == SubCmd.train or self == SubCmd.evaluate:
+        elif self in (SubCmd.train, SubCmd.evaluate, SubCmd.extract):
             prepare_training_environment()
         elif self == SubCmd.train_single:
             prepare_training_environment(backend=None)
@@ -440,7 +649,9 @@ class SubCmd(StrEnum):
 
     def run(
         self,
-        config: OlmoEarthExperimentConfig | BenchmarkExperimentConfig,
+        config: OlmoEarthExperimentConfig
+        | BenchmarkExperimentConfig
+        | OlmoEarthExtractConfig,
     ) -> None:
         """Run the given subcommand."""
         if get_local_rank() == 0:
@@ -452,7 +663,15 @@ class SubCmd(StrEnum):
             #     f"[b blue]Non-embedding parameters:[/]        {config.model.num_non_embedding_params:,d}"
             # )
 
-        if self == SubCmd.launch or self == SubCmd.launch_evaluate:
+        if self == SubCmd.launch_extract:
+            assert config.launch is not None
+            config.launch.launch(follow=False, torchrun=True)
+        elif self == SubCmd.extract:
+            try:
+                extract(config)
+            finally:
+                teardown_training_environment()
+        elif self == SubCmd.launch or self == SubCmd.launch_evaluate:
             launch(config)
         elif self == SubCmd.dry_run or self == SubCmd.dry_run_evaluate:
             logger.info(config)
@@ -511,6 +730,7 @@ def main(
         Callable[[CommonComponents], ThroughputBenchmarkRunnerConfig] | None
     ) = None,
     benchmark_model_config_builder: Callable[[CommonComponents], Config] | None = None,
+    extract_config_builder: Callable[[CommonComponents], dict] | None = None,
 ) -> None:
     """Main entry point for OlmoEarth Pretrain experiments.
 
@@ -549,7 +769,19 @@ If running command on a local machine ie from a session, you can use the [b]loca
     cmd = SubCmd(cmd)
     cmd.prepare_environment()
 
-    if cmd == SubCmd.benchmark or cmd == SubCmd.launch_benchmark:
+    if cmd in (SubCmd.extract, SubCmd.launch_extract):
+        assert model_config_builder is not None
+        assert dataset_config_builder is not None
+        if extract_config_builder is None:
+            raise ValueError("extract_config_builder is not set")
+        config = build_extract_config(
+            common=common,
+            model_config_builder=model_config_builder,
+            dataset_config_builder=dataset_config_builder,
+            extract_config_builder=extract_config_builder,
+            overrides=overrides,
+        )
+    elif cmd == SubCmd.benchmark or cmd == SubCmd.launch_benchmark:
         if inference_benchmarking_config_builder is None:
             raise ValueError("inference_benchmarking_config_builder is not set")
         config = build_benchmark_config(

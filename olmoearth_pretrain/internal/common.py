@@ -250,6 +250,8 @@ def build_common_components(
         cmd_to_launch = SubCmd.prep
     elif cmd == SubCmd.launch_benchmark:
         cmd_to_launch = SubCmd.benchmark
+    elif cmd == SubCmd.launch_extract:
+        cmd_to_launch = SubCmd.extract
     else:
         cmd_to_launch = cmd
 
