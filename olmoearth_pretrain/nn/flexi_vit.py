@@ -637,7 +637,7 @@ class CompositeEncodings(nn.Module):
         use_latlon_encoding: bool = False,
         latlon_dropout_rate: float = 0.0,
         use_learned_latlon_encoding: bool = False,
-        latlon_hidden_dim: int = 64,
+        latlon_hidden_dim: int = 128,
         latlon_num_freqs: int = 20,
     ):
         """Initialize the composite encodings.
@@ -1053,7 +1053,7 @@ class FlexiVitBase(nn.Module):
         use_latlon_encoding: bool = False,
         latlon_dropout_rate: float = 0.0,
         use_learned_latlon_encoding: bool = False,
-        latlon_hidden_dim: int = 64,
+        latlon_hidden_dim: int = 128,
         latlon_num_freqs: int = 20,
     ) -> None:
         """Initialize the FlexiVitBase class."""
@@ -1305,7 +1305,7 @@ class Encoder(FlexiVitBase):
         use_latlon_encoding: bool = False,
         latlon_dropout_rate: float = 0.0,
         use_learned_latlon_encoding: bool = False,
-        latlon_hidden_dim: int = 64,
+        latlon_hidden_dim: int = 128,
         latlon_num_freqs: int = 20,
     ):
         """Initialize the encoder.
@@ -1905,7 +1905,7 @@ class PredictorBase(FlexiVitBase):
         use_latlon_encoding: bool = False,
         latlon_dropout_rate: float = 0.0,
         use_learned_latlon_encoding: bool = False,
-        latlon_hidden_dim: int = 64,
+        latlon_hidden_dim: int = 128,
         latlon_num_freqs: int = 20,
     ):
         """Initialize the predictor.
@@ -2335,7 +2335,7 @@ class EncoderConfig(Config):
     use_latlon_encoding: bool = False
     latlon_dropout_rate: float = 0.0
     use_learned_latlon_encoding: bool = False
-    latlon_hidden_dim: int = 64
+    latlon_hidden_dim: int = 128
     latlon_num_freqs: int = 20
 
     def __post_init__(self) -> None:
@@ -2423,7 +2423,7 @@ class PredictorConfig(Config):
     use_latlon_encoding: bool = False
     latlon_dropout_rate: float = 0.0
     use_learned_latlon_encoding: bool = False
-    latlon_hidden_dim: int = 64
+    latlon_hidden_dim: int = 128
     latlon_num_freqs: int = 20
 
     def __post_init__(self) -> None:

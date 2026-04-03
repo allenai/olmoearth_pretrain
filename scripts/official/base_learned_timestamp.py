@@ -40,7 +40,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_sequence_length=12,
         use_linear_patch_embed=False,
         use_learned_latlon_encoding=True,
-        latlon_hidden_dim=64,
+        latlon_hidden_dim=128,
         timestamp_encoding_mode="learned",
         timestamp_hidden_dim=64,
     )
@@ -53,7 +53,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
         use_learned_latlon_encoding=True,
-        latlon_hidden_dim=64,
+        latlon_hidden_dim=128,
         timestamp_encoding_mode="learned",
         timestamp_hidden_dim=64,
     )

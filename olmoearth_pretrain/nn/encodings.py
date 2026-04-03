@@ -371,7 +371,7 @@ class LatLonMLP(nn.Module):
     def __init__(
         self,
         output_dim: int,
-        hidden_dim: int = 64,
+        hidden_dim: int = 128,
         num_freqs: int = 20,
         activation: nn.Module | None = None,
     ):
