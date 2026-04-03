@@ -181,13 +181,13 @@ def test_learned_latlon_varies_across_grid(
     assert not torch.allclose(spatial[0, 0, 0], spatial[0, 3, 3])
 
 
-def test_learned_latlon_requires_latlon_tensor(
+def test_learned_latlon_fallback_when_none(
     embedding_size: int,
     supported_modalities: list[ModalitySpec],
     max_sequence_length: int,
     timestamps: torch.Tensor,
 ) -> None:
-    """Should assert when latlon is None but use_learned_latlon_encoding=True."""
+    """When latlon is None, should fall back to (0,0) and still produce spatial encoding."""
     B, T = timestamps.shape[:2]
     H, W = 2, 2
     num_bandsets = 3
@@ -199,5 +199,8 @@ def test_learned_latlon_requires_latlon_tensor(
     )
 
     per_modality_tokens = {"sentinel2_l2a": tokens.clone()}
-    with pytest.raises(AssertionError):
-        ce.forward(per_modality_tokens, timestamps, patch_size, latlon=None)
+    out = ce.forward(per_modality_tokens, timestamps, patch_size, latlon=None)
+
+    n = embedding_size // 4
+    # Spatial slice should still be non-zero (relative positions from (0,0))
+    assert out["sentinel2_l2a"][..., n * 3 :].abs().sum() > 0

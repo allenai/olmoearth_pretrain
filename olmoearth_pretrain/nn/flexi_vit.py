@@ -938,10 +938,11 @@ class CompositeEncodings(nn.Module):
         if self.use_learned_latlon_encoding:
             # Learned per-token geographic encoding replaces both
             # spatial sinusoidal encoding and broadcast latlon encoding
-            assert latlon is not None, (
-                "latlon must be provided when use_learned_latlon_encoding=True"
-            )
             assert self.latlon_mlp is not None
+            if latlon is None:
+                # Fallback for eval datasets without geographic info:
+                # use (0, 0) so relative spatial structure is still encoded
+                latlon = torch.zeros(b, 2, device=device)
             if modality.is_spatial:
                 assert input_res is not None
                 assert patch_size is not None
