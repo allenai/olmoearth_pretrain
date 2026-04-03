@@ -384,6 +384,8 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
+    # this eval is very large and can lead to
+    # OOM errors. Skipping for now.
     # "oil_spill_detection": DownstreamTaskConfig(
     #     dataset="oil_spill_detection",
     #     embedding_batch_size=128,
