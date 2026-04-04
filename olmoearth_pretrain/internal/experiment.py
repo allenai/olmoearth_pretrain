@@ -334,19 +334,67 @@ def launch_benchmark(config: BenchmarkExperimentConfig) -> None:
     config.launch.launch(follow=False, torchrun=False)
 
 
+class _IndexedDataset:
+    """Wraps OlmoEarthDataset to yield (idx, patch_size, sample)."""
+
+    def __init__(self, inner: Any, patch_size: int, sampled_hw_p: int):
+        self.inner = inner
+        self.patch_size = patch_size
+        self.sampled_hw_p = sampled_hw_p
+
+    def __len__(self) -> int:
+        return len(self.inner)
+
+    def __getitem__(self, idx: int) -> tuple:
+        from olmoearth_pretrain.data.dataset import GetItemArgs
+
+        args = GetItemArgs(
+            idx=idx,
+            patch_size=self.patch_size,
+            sampled_hw_p=self.sampled_hw_p,
+        )
+        patch_size, sample = self.inner[args]
+        return idx, patch_size, sample
+
+
+def _extract_collate(batch: list[tuple]) -> tuple:
+    """Collate for extraction: batch samples and set all masks to ONLINE_ENCODER."""
+    import torch
+
+    from olmoearth_pretrain.data.collate import collate_olmoearth_pretrain
+    from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+
+    indices = [item[0] for item in batch]
+    raw_samples = [(item[1], item[2]) for item in batch]
+    patch_size, batched_sample = collate_olmoearth_pretrain(raw_samples)
+    latlons = batched_sample.latlon
+    masked_dict: dict[str, Any] = {}
+    for key, val in batched_sample.as_dict().items():
+        if key == "timestamps":
+            masked_dict[key] = val
+        elif val is None:
+            masked_dict[key] = None
+            masked_dict[MaskedOlmoEarthSample.get_masked_modality_name(key)] = None
+        else:
+            masked_dict[key] = val
+            masked_dict[MaskedOlmoEarthSample.get_masked_modality_name(key)] = (
+                torch.full(val.shape, MaskValue.ONLINE_ENCODER.value)
+            )
+    masked_sample = MaskedOlmoEarthSample(**masked_dict)
+    return (
+        patch_size,
+        masked_sample,
+        latlons,
+        torch.tensor(indices, dtype=torch.long),
+    )
+
+
 def extract(config: OlmoEarthExtractConfig) -> None:
     """Extract encoder embeddings from a checkpoint and save to disk."""
     import pandas as pd
     import torch
-    from torch.utils.data import DataLoader, Dataset
+    from torch.utils.data import DataLoader
 
-    from olmoearth_pretrain.data.collate import collate_olmoearth_pretrain
-    from olmoearth_pretrain.data.dataset import GetItemArgs
-    from olmoearth_pretrain.datatypes import (
-        MaskedOlmoEarthSample,
-        MaskValue,
-        OlmoEarthSample,
-    )
     from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 
     seed_all(config.init_seed)
@@ -371,56 +419,6 @@ def extract(config: OlmoEarthExtractConfig) -> None:
 
     # 2. Build dataset
     dataset = config.dataset.build()
-
-    class _IndexedDataset(Dataset):
-        """Wraps OlmoEarthDataset to yield (idx, patch_size, sample)."""
-
-        def __init__(self, inner: Dataset, patch_size: int, sampled_hw_p: int):
-            self.inner = inner
-            self.patch_size = patch_size
-            self.sampled_hw_p = sampled_hw_p
-
-        def __len__(self) -> int:
-            return len(self.inner)
-
-        def __getitem__(self, idx: int) -> tuple[int, int, OlmoEarthSample]:
-            args = GetItemArgs(
-                idx=idx,
-                patch_size=self.patch_size,
-                sampled_hw_p=self.sampled_hw_p,
-            )
-            patch_size, sample = self.inner[args]
-            return idx, patch_size, sample
-
-    def _extract_collate(
-        batch: list[tuple[int, int, OlmoEarthSample]],
-    ) -> tuple[int, MaskedOlmoEarthSample, torch.Tensor, torch.Tensor]:
-        indices = [item[0] for item in batch]
-        raw_samples = [(item[1], item[2]) for item in batch]
-        patch_size, batched_sample = collate_olmoearth_pretrain(raw_samples)
-        latlons = batched_sample.latlon
-        # Build MaskedOlmoEarthSample with all tokens as ONLINE_ENCODER.
-        # We cannot use from_olmoearthsample on a batched sample because
-        # it uses unbatched shape() for mask construction.
-        masked_dict: dict[str, Any] = {}
-        for key, val in batched_sample.as_dict().items():
-            if key == "timestamps":
-                masked_dict[key] = val
-            elif val is None:
-                masked_dict[key] = None
-                masked_dict[MaskedOlmoEarthSample.get_masked_modality_name(key)] = None
-            else:
-                masked_dict[key] = val
-                masked_dict[MaskedOlmoEarthSample.get_masked_modality_name(key)] = (
-                    torch.full(val.shape, MaskValue.ONLINE_ENCODER.value)
-                )
-        masked_sample = MaskedOlmoEarthSample(**masked_dict)
-        return (
-            patch_size,
-            masked_sample,
-            latlons,
-            torch.tensor(indices, dtype=torch.long),
-        )
 
     indexed_dataset = _IndexedDataset(dataset, config.patch_size, config.sampled_hw_p)
     dataloader = DataLoader(
