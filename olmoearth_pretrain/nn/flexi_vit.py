@@ -932,7 +932,7 @@ class CompositeEncodings(nn.Module):
             needs_dropout = torch.zeros(b, dtype=torch.bool, device=device)
             if latlon_missing:
                 needs_dropout[:] = True
-                latlon = torch.zeros(b, 2, device=device)
+                latlon = torch.zeros(b, 2, device=device, dtype=modality_tokens.dtype)
             elif self.training and self.latlon_dropout_rate > 0.0:
                 needs_dropout = torch.bernoulli(
                     torch.full((b,), self.latlon_dropout_rate, device=device)
@@ -941,14 +941,14 @@ class CompositeEncodings(nn.Module):
             # For dropped samples: replace latlon with random coordinates
             if needs_dropout.any():
                 num_dropped = needs_dropout.sum().item()
+                assert latlon is not None
                 random_latlon = torch.stack(
                     [
                         torch.rand(num_dropped, device=device) * 180 - 90,
                         torch.rand(num_dropped, device=device) * 360 - 180,
                     ],
                     dim=-1,
-                )
-                assert latlon is not None
+                ).to(dtype=latlon.dtype)
                 latlon = latlon.clone()
                 latlon[needs_dropout] = random_latlon
 
@@ -1058,7 +1058,7 @@ class CompositeEncodings(nn.Module):
             if latlon is None:
                 # Fallback for eval datasets without geographic info:
                 # use (0, 0) so relative spatial structure is still encoded
-                latlon = torch.zeros(b, 2, device=device)
+                latlon = torch.zeros(b, 2, device=device, dtype=modality_tokens.dtype)
             if modality.is_spatial:
                 assert input_res is not None
                 assert patch_size is not None
