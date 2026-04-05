@@ -502,6 +502,7 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        latlon: Tensor | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, pre_pooled_modality_to_dims_dict = (
@@ -518,6 +519,7 @@ class EncodeEarlyAttnPool(Encoder):
             timestamps,
             patch_size,
             input_res,
+            latlon=latlon,
         )
         tokens_dict.update(original_masks_dict)
 
