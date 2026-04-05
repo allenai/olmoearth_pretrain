@@ -27,6 +27,7 @@ from olmoearth_pretrain.nn.encodings import (
     LatLonMLP,
     TimestampEncodingMode,
     TimestampMLP,
+    build_spatial_local_freq_mask,
     compute_per_token_latlon,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -907,8 +908,31 @@ class CompositeEncodings(nn.Module):
                     )
 
             # Spatial: [0 : s_dim]
-            if latlon is None:
+            # Determine which samples need global-freq dropout
+            latlon_missing = latlon is None
+            needs_dropout = torch.zeros(b, dtype=torch.bool, device=device)
+            if latlon_missing:
+                needs_dropout[:] = True
                 latlon = torch.zeros(b, 2, device=device)
+            elif self.training and self.latlon_dropout_rate > 0.0:
+                needs_dropout = torch.bernoulli(
+                    torch.full((b,), self.latlon_dropout_rate, device=device)
+                ).bool()
+
+            # For dropped samples: replace latlon with random coordinates
+            if needs_dropout.any():
+                num_dropped = needs_dropout.sum().item()
+                random_latlon = torch.stack(
+                    [
+                        torch.rand(num_dropped, device=device) * 180 - 90,
+                        torch.rand(num_dropped, device=device) * 360 - 180,
+                    ],
+                    dim=-1,
+                )
+                assert latlon is not None
+                latlon = latlon.clone()
+                latlon[needs_dropout] = random_latlon
+
             if modality.is_spatial:
                 assert input_res is not None
                 assert patch_size is not None
@@ -927,6 +951,17 @@ class CompositeEncodings(nn.Module):
                 num_middle_dims = modality_embed.ndim - 2
                 view_shape = (b, *([1] * num_middle_dims), s_dim)
                 geo_embed = geo_embed_flat.to(device).view(*view_shape)
+
+            # Zero out global frequency bands for dropped/missing samples
+            if needs_dropout.any():
+                local_mask = build_spatial_local_freq_mask(s_dim).to(device)
+                # sample_drop: (b, 1, ..., 1) broadcast mask
+                sample_drop = needs_dropout.float().view(
+                    b, *([1] * (geo_embed.ndim - 2)), 1
+                )
+                # kept samples: 1.0, dropped samples: local_mask (0 global, 1 local)
+                geo_embed = geo_embed * (1.0 - sample_drop + sample_drop * local_mask)
+
             modality_embed[..., :s_dim] += geo_embed
 
             return modality_tokens + modality_embed
@@ -2509,9 +2544,13 @@ class EncoderConfig(Config):
             )
         if not 0.0 <= self.latlon_dropout_rate <= 1.0:
             raise ValueError("latlon_dropout_rate must be between 0 and 1")
-        if self.latlon_dropout_rate > 0.0 and not self.use_latlon_encoding:
+        if (
+            self.latlon_dropout_rate > 0.0
+            and not self.use_latlon_encoding
+            and self.timestamp_encoding_mode != "static"
+        ):
             raise ValueError(
-                "latlon_dropout_rate > 0 requires use_latlon_encoding=True"
+                "latlon_dropout_rate > 0 requires use_latlon_encoding=True or timestamp_encoding_mode='static'"
             )
 
     @property
@@ -2596,9 +2635,13 @@ class PredictorConfig(Config):
             )
         if not 0.0 <= self.latlon_dropout_rate <= 1.0:
             raise ValueError("latlon_dropout_rate must be between 0 and 1")
-        if self.latlon_dropout_rate > 0.0 and not self.use_latlon_encoding:
+        if (
+            self.latlon_dropout_rate > 0.0
+            and not self.use_latlon_encoding
+            and self.timestamp_encoding_mode != "static"
+        ):
             raise ValueError(
-                "latlon_dropout_rate > 0 requires use_latlon_encoding=True"
+                "latlon_dropout_rate > 0 requires use_latlon_encoding=True or timestamp_encoding_mode='static'"
             )
 
     @property

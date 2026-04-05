@@ -42,6 +42,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         timestamp_encoding_mode="static",
         spatial_dim_fraction=0.5,
         temporal_dim_fraction=0.25,
+        latlon_dropout_rate=0.5,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],

@@ -113,11 +113,12 @@ def test_static_mode_temporal_varies_across_timesteps() -> None:
 
 
 def test_static_mode_latlon_none_fallback() -> None:
-    """When latlon is None, should still produce spatial encoding using (0,0)."""
-    ce = _make_static_ce(embedding_size=48)
-    B, T, H, W = 2, 4, 2, 2
+    """When latlon is None, global freq bands are zeroed but local bands remain."""
+    # Need large enough embedding for local bands to exist above cutoff
+    ce = _make_static_ce(embedding_size=768)
+    B, T, H, W = 2, 4, 4, 4
     num_bandsets = 3
-    tokens = torch.zeros(B, H, W, T, num_bandsets, 48)
+    tokens = torch.zeros(B, H, W, T, num_bandsets, 768)
     timestamps = _make_timestamps(B, T)
     patch_size = 4
 
@@ -125,7 +126,9 @@ def test_static_mode_latlon_none_fallback() -> None:
     out = ce.forward(per_modality_tokens, timestamps, patch_size, latlon=None)
 
     s_dim = ce.spatial_dim
-    assert out["sentinel2_l2a"][..., :s_dim].abs().sum() > 0
+    spatial = out["sentinel2_l2a"][..., :s_dim]
+    # Local high-freq bands should be non-zero (from random offset)
+    assert spatial.abs().sum() > 0
 
 
 def test_static_mode_slices_independent() -> None:

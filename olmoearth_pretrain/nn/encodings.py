@@ -501,3 +501,39 @@ def get_static_spatial_encoding(
         result = torch.cat([result, pad], dim=-1)
 
     return result
+
+
+def build_spatial_local_freq_mask(
+    encoding_dim: int, cutoff_exp: float = 7.0
+) -> torch.Tensor:
+    """Build a mask that is 1.0 for local (high-freq) bands and 0.0 for global (low-freq).
+
+    Frequencies below 2^cutoff_exp are considered "global" (encode absolute
+    position on Earth) and are masked out. Frequencies at or above the cutoff
+    are "local" (encode relative position within a tile) and are kept.
+
+    Args:
+        encoding_dim: Total spatial encoding dimension.
+        cutoff_exp: Exponent threshold. Frequencies with exponent < cutoff_exp
+            are global. Default 7.0 (~1km resolution on the globe).
+
+    Returns:
+        Float tensor of shape (encoding_dim,) with 1.0 for local, 0.0 for global.
+    """
+    num_freqs = encoding_dim // 6
+    remainder = encoding_dim - num_freqs * 6
+
+    max_exp = min(21, max(num_freqs - 1, 0))
+    exponents = torch.linspace(0.0, max_exp, num_freqs)
+    freq_is_local = exponents >= cutoff_exp  # (num_freqs,) bool
+
+    # Per-coordinate layout: [sin_f0..fn, cos_f0..fn]
+    coord_mask = torch.cat([freq_is_local, freq_is_local])  # (2*num_freqs,)
+    # Repeat for 3 coordinates (x, y, z)
+    full_mask = coord_mask.repeat(3)  # (6*num_freqs,)
+
+    # Remainder dims (raw xyz etc.) — treat as local (keep)
+    if remainder > 0:
+        full_mask = torch.cat([full_mask, torch.ones(remainder, dtype=torch.bool)])
+
+    return full_mask.float()
