@@ -25,6 +25,7 @@ class TimestampEncodingMode(StrEnum):
     LEGACY = "legacy"
     UNIFIED = "unified"
     LEARNED = "learned"
+    STATIC = "static"
 
 
 def get_1d_sincos_pos_encoding(pos: torch.Tensor, encoding_dim: int) -> torch.Tensor:
@@ -404,3 +405,99 @@ class LatLonMLP(nn.Module):
         # Match the dtype of the MLP weights (e.g. bfloat16 under FSDP)
         x = x.to(dtype=next(self.mlp.parameters()).dtype)
         return self.mlp(x)
+
+
+def get_static_temporal_encoding(
+    timestamps: torch.Tensor, encoding_dim: int
+) -> torch.Tensor:
+    """Static multi-frequency sinusoidal temporal encoding.
+
+    Converts timestamps to a fractional year and applies geometric-spaced
+    sinusoidal frequencies ranging from ~128-year periods to daily resolution.
+    The 1-cycle/year frequency naturally produces identical values for the
+    same day-of-year across different years.
+
+    Args:
+        timestamps: Tensor of shape (B, T, 3) where [..., 0] is day (1-31),
+            [..., 1] is month (0-indexed, 0-11), [..., 2] is year.
+        encoding_dim: Output encoding dimension (must be even).
+
+    Returns:
+        Tensor of shape (B, T, encoding_dim).
+    """
+    assert encoding_dim % 2 == 0, f"encoding_dim must be even, got {encoding_dim}"
+    day = timestamps[..., 0].float()
+    month = timestamps[..., 1].float()
+    year = timestamps[..., 2].float()
+
+    day_of_year = month * 30.4375 + day
+    frac_year = year + day_of_year / 365.25 - 2020.0
+
+    num_freqs = encoding_dim // 2
+    # Geometric progression: 2^(-7) to 2^8.5 cycles/year
+    # Low = 128-year period, High ≈ daily resolution
+    exponents = torch.linspace(-7.0, 8.5, num_freqs, device=timestamps.device)
+    freqs = 2.0 * math.pi * (2.0**exponents)  # (num_freqs,)
+
+    # (B, T) x (num_freqs,) -> (B, T, num_freqs)
+    angles = frac_year.unsqueeze(-1) * freqs
+    return torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
+
+
+def get_static_spatial_encoding(
+    latlon: torch.Tensor, encoding_dim: int
+) -> torch.Tensor:
+    """Static multi-frequency sinusoidal geographic encoding.
+
+    Maps lat/lon to the unit sphere (x, y, z), then applies geometric-spaced
+    sinusoidal frequencies to each coordinate. Handles longitude wrap-around
+    naturally via the sphere mapping. Resolves positions down to ~30cm.
+
+    Args:
+        latlon: Tensor of shape (..., 2) where [..., 0] is latitude and
+            [..., 1] is longitude, both in degrees.
+        encoding_dim: Output encoding dimension.
+
+    Returns:
+        Tensor of shape (..., encoding_dim).
+    """
+    lat_rad = latlon[..., 0] * (math.pi / 180.0)
+    lon_rad = latlon[..., 1] * (math.pi / 180.0)
+
+    cos_lat = torch.cos(lat_rad)
+    x = cos_lat * torch.cos(lon_rad)
+    y = cos_lat * torch.sin(lon_rad)
+    z = torch.sin(lat_rad)
+    xyz = torch.stack([x, y, z], dim=-1)  # (..., 3)
+
+    num_freqs = encoding_dim // 6
+    remainder = encoding_dim - num_freqs * 6
+
+    # Geometric progression: 2^0 to 2^21 (planet-scale to ~30cm)
+    max_exp = min(21, max(num_freqs - 1, 0))
+    exponents = torch.linspace(0.0, max_exp, num_freqs, device=latlon.device)
+    freqs = math.pi * (2.0**exponents)  # (num_freqs,)
+
+    # (..., 3, 1) * (num_freqs,) -> (..., 3, num_freqs)
+    angles = xyz.unsqueeze(-1) * freqs
+    encoded = torch.cat(
+        [torch.sin(angles), torch.cos(angles)], dim=-1
+    )  # (..., 3, 2*num_freqs)
+    result = encoded.flatten(-2)  # (..., 6*num_freqs)
+
+    # Fill remainder dims with raw (x, y, z) or zero-pad
+    if remainder > 0:
+        pad = (
+            xyz[..., :remainder]
+            if remainder <= 3
+            else torch.cat(
+                [
+                    xyz,
+                    torch.zeros(*xyz.shape[:-1], remainder - 3, device=latlon.device),
+                ],
+                dim=-1,
+            )
+        )
+        result = torch.cat([result, pad], dim=-1)
+
+    return result

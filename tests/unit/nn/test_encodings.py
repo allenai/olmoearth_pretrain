@@ -11,6 +11,8 @@ from olmoearth_pretrain.nn.encodings import (
     get_2d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
+    get_static_spatial_encoding,
+    get_static_temporal_encoding,
     get_timestamp_encoding,
     latlon_to_learned_input,
     timestamps_to_learned_input,
@@ -365,3 +367,91 @@ def test_latlon_mlp_is_differentiable() -> None:
     out.sum().backward()
     for p in mlp.parameters():
         assert p.grad is not None
+
+
+# --- get_static_temporal_encoding tests ---
+
+
+def test_static_temporal_encoding_shape() -> None:
+    """Output shape should be (B, T, encoding_dim)."""
+    timestamps = torch.tensor([[[1, 0, 2020], [15, 6, 2021]]])
+    out = get_static_temporal_encoding(timestamps, 32)
+    assert out.shape == (1, 2, 32)
+
+
+def test_static_temporal_encoding_same_day_different_years() -> None:
+    """Same day-of-year in different years should be more similar than different seasons."""
+    ts_june_2020 = torch.tensor([[[15, 5, 2020]]])
+    ts_june_2021 = torch.tensor([[[15, 5, 2021]]])
+    ts_jan_2020 = torch.tensor([[[15, 0, 2020]]])  # Jan vs June
+    enc_june_2020 = get_static_temporal_encoding(ts_june_2020, 128)
+    enc_june_2021 = get_static_temporal_encoding(ts_june_2021, 128)
+    enc_jan_2020 = get_static_temporal_encoding(ts_jan_2020, 128)
+    # June 2020 vs June 2021 should be closer than June 2020 vs Jan 2020
+    dist_same_season = (enc_june_2020 - enc_june_2021).norm()
+    dist_diff_season = (enc_june_2020 - enc_jan_2020).norm()
+    assert dist_same_season < dist_diff_season
+
+
+def test_static_temporal_encoding_deterministic() -> None:
+    """Same input always produces same output."""
+    ts = torch.tensor([[[1, 0, 2020], [15, 6, 2021]]])
+    assert torch.equal(
+        get_static_temporal_encoding(ts, 16),
+        get_static_temporal_encoding(ts, 16),
+    )
+
+
+def test_static_temporal_encoding_values_bounded() -> None:
+    """All values should be in [-1, 1] (sin/cos range)."""
+    ts = torch.tensor([[[1, 0, 2015], [28, 11, 2025]]])
+    out = get_static_temporal_encoding(ts, 64)
+    assert out.min() >= -1.0
+    assert out.max() <= 1.0
+
+
+# --- get_static_spatial_encoding tests ---
+
+
+def test_static_spatial_encoding_shape() -> None:
+    """Output shape should match input leading dims + encoding_dim."""
+    latlon = torch.tensor([[45.0, 10.0], [-30.0, 120.0]])
+    out = get_static_spatial_encoding(latlon, 384)
+    assert out.shape == (2, 384)
+
+    latlon_4d = torch.randn(2, 4, 4, 2)
+    out_4d = get_static_spatial_encoding(latlon_4d, 384)
+    assert out_4d.shape == (2, 4, 4, 384)
+
+
+def test_static_spatial_encoding_remainder_dims() -> None:
+    """Should handle encoding_dim not divisible by 6."""
+    latlon = torch.tensor([[45.0, 10.0]])
+    out = get_static_spatial_encoding(latlon, 50)  # 50 % 6 = 2
+    assert out.shape == (1, 50)
+
+
+def test_static_spatial_encoding_nearby_points_differ() -> None:
+    """Points ~10m apart should produce different encodings."""
+    ll1 = torch.tensor([[45.0, 10.0]])
+    ll2 = torch.tensor([[45.00009, 10.0]])  # ~10m north
+    out1 = get_static_spatial_encoding(ll1, 384)
+    out2 = get_static_spatial_encoding(ll2, 384)
+    assert not torch.allclose(out1, out2, atol=0.01)
+
+
+def test_static_spatial_encoding_values_bounded() -> None:
+    """All values should be in [-1, 1]."""
+    latlon = torch.tensor([[90.0, 180.0], [-90.0, -180.0], [0.0, 0.0]])
+    out = get_static_spatial_encoding(latlon, 384)
+    assert out.min() >= -1.0
+    assert out.max() <= 1.0
+
+
+def test_static_spatial_encoding_deterministic() -> None:
+    """Same input always produces same output."""
+    latlon = torch.tensor([[45.0, 10.0]])
+    assert torch.equal(
+        get_static_spatial_encoding(latlon, 96),
+        get_static_spatial_encoding(latlon, 96),
+    )
