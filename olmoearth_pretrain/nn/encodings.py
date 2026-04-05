@@ -14,7 +14,6 @@ They cover the following:
 import math
 from enum import StrEnum
 
-import numpy as np
 import torch
 from torch import nn
 
@@ -126,7 +125,7 @@ def get_month_encoding_table(encoding_dim: int) -> torch.Tensor:
         month_table: position encoding for the given grid: size (M, D)
     """
     assert encoding_dim % 2 == 0
-    angles = torch.arange(0, 13) / (12 / (2 * np.pi))
+    angles = torch.arange(0, 13) / (12 / (2 * math.pi))
 
     dim_per_table = encoding_dim // 2
     sin_table = torch.sin(torch.stack([angles for _ in range(dim_per_table)], axis=-1))
@@ -210,8 +209,8 @@ def timestamps_to_learned_input(timestamps: torch.Tensor) -> torch.Tensor:
     day_of_year = month * 30.4375 + day
     fractional_year = year + day_of_year / 365.25 - 2020.0
 
-    sin_val = torch.sin(2 * np.pi * fractional_year)
-    cos_val = torch.cos(2 * np.pi * fractional_year)
+    sin_val = torch.sin(2 * math.pi * fractional_year)
+    cos_val = torch.cos(2 * math.pi * fractional_year)
 
     return torch.stack([fractional_year, sin_val, cos_val], dim=-1)
 

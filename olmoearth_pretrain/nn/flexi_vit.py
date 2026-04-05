@@ -644,7 +644,6 @@ class CompositeEncodings(nn.Module):
         latlon_num_freqs: int = 20,
         spatial_dim_fraction: float = 0.25,
         temporal_dim_fraction: float = 0.25,
-        channel_dim_fraction: float = 0.25,
     ):
         """Initialize the composite encodings.
 
@@ -676,8 +675,6 @@ class CompositeEncodings(nn.Module):
                 (only used when timestamp_encoding_mode="static")
             temporal_dim_fraction: Fraction of embedding_size for temporal encoding
                 (only used when timestamp_encoding_mode="static")
-            channel_dim_fraction: Fraction of embedding_size for channel encoding
-                (only used when timestamp_encoding_mode="static")
         """
         super().__init__()
         self.embedding_size = embedding_size
@@ -696,7 +693,7 @@ class CompositeEncodings(nn.Module):
             max_sequence_length  # This max sequence length is a time dim thing
         )
         if self.timestamp_encoding_mode == TimestampEncodingMode.STATIC:
-            # Static mode: configurable dimension layout [channel | temporal | spatial]
+            # Static mode: configurable dimension layout [spatial | temporal | channel]
             self.spatial_dim = (int(embedding_size * spatial_dim_fraction) // 6) * 6
             self.temporal_dim = int(embedding_size * temporal_dim_fraction)
             self.temporal_dim += self.temporal_dim % 2  # round up to even
@@ -708,6 +705,10 @@ class CompositeEncodings(nn.Module):
             self.month_embed = None
             self.timestamp_mlp: TimestampMLP | None = None
             self.latlon_mlp: LatLonMLP | None = None
+            self.register_buffer(
+                "_spatial_local_freq_mask",
+                build_spatial_local_freq_mask(self.spatial_dim),
+            )
         else:
             # Legacy/unified/learned modes: 4 equal quarters
             self.embedding_dim_per_embedding_type = int(embedding_size * 0.25)
@@ -786,6 +787,40 @@ class CompositeEncodings(nn.Module):
         """Calculate the Ground Sample Distance ratio."""
         return input_res * patch_size / BASE_GSD
 
+    @staticmethod
+    def _broadcast_temporal(
+        encoding: Tensor,
+        modality_embed: Tensor,
+        ein_string: str,
+        ein_dict: dict[str, int],
+        b: int,
+        t: int,
+        target_dim: int,
+    ) -> Tensor:
+        """Broadcast a (B, T, dim) temporal encoding to match modality_embed shape.
+
+        If ein_dict has a 't' key, reshapes encoding to match the full
+        ein_string layout. Otherwise, takes encoding[:, 0] and broadcasts
+        across all middle dimensions.
+        """
+        device = modality_embed.device
+        if "t" in ein_dict:
+            view_dims = []
+            for dim_name in ein_string.split():
+                if dim_name == "b":
+                    view_dims.append(b)
+                elif dim_name == "t":
+                    view_dims.append(t)
+                elif dim_name == "d":
+                    view_dims.append(target_dim)
+                else:
+                    view_dims.append(1)
+            return encoding.to(device).view(*view_dims)
+        else:
+            num_middle_dims = modality_embed.ndim - 2
+            view_shape = (b, *([1] * num_middle_dims), target_dim)
+            return encoding[:, 0].to(device).view(*view_shape)
+
     def _apply_encodings_per_modality(
         self,
         modality_name: str,
@@ -861,7 +896,7 @@ class CompositeEncodings(nn.Module):
         n = self.embedding_dim_per_embedding_type
         actual_bandsets = modality_tokens.shape[-2]
 
-        # ====== Static encoding mode: [channel | temporal | spatial] ======
+        # ====== Static encoding mode: [spatial | temporal | channel] ======
         if self.timestamp_encoding_mode == TimestampEncodingMode.STATIC:
             s_dim = self.spatial_dim
             t_dim = self.temporal_dim
@@ -886,26 +921,10 @@ class CompositeEncodings(nn.Module):
                 ts_embed = get_static_temporal_encoding(
                     timestamps, t_dim
                 )  # (B, T, t_dim)
-                if "t" in ein_dict:
-                    view_dims = []
-                    for dim_name in ein_string.split():
-                        if dim_name == "b":
-                            view_dims.append(b)
-                        elif dim_name == "t":
-                            view_dims.append(t)
-                        elif dim_name == "d":
-                            view_dims.append(t_dim)
-                        else:
-                            view_dims.append(1)
-                    modality_embed[..., s_dim : s_dim + t_dim] += ts_embed.to(
-                        device
-                    ).view(*view_dims)
-                else:
-                    num_middle_dims = modality_embed.ndim - 2
-                    view_shape = (b, *([1] * num_middle_dims), t_dim)
-                    modality_embed[..., s_dim : s_dim + t_dim] += (
-                        ts_embed[:, 0].to(device).view(*view_shape)
-                    )
+                ts_view = self._broadcast_temporal(
+                    ts_embed, modality_embed, ein_string, ein_dict, b, t, t_dim
+                )
+                modality_embed[..., s_dim : s_dim + t_dim] += ts_view
 
             # Spatial: [0 : s_dim]
             # Determine which samples need global-freq dropout
@@ -954,7 +973,7 @@ class CompositeEncodings(nn.Module):
 
             # Zero out global frequency bands for dropped/missing samples
             if needs_dropout.any():
-                local_mask = build_spatial_local_freq_mask(s_dim).to(device)
+                local_mask = self._spatial_local_freq_mask
                 # sample_drop: (b, 1, ..., 1) broadcast mask
                 sample_drop = needs_dropout.float().view(
                     b, *([1] * (geo_embed.ndim - 2)), 1
@@ -1013,61 +1032,25 @@ class CompositeEncodings(nn.Module):
                         )
                     )
                     ts_embed = ts_embed * drop_mask
-                # Broadcast (B, T, D) to match modality_embed shape
-                num_middle_dims = modality_embed.ndim - 2  # exclude B and D
-                # Insert 1s for spatial (h, w) and bandset dims, keep T
-                if "t" in ein_dict:
-                    # Shape has an explicit T dim — figure out where it is
-                    # Possible shapes: (B,H,W,T,B_S,D), (B,T,B_S,D), (B,H,W,T,D)
-                    view_dims = []
-                    for dim_name in ein_string.split():
-                        if dim_name == "b":
-                            view_dims.append(b)
-                        elif dim_name == "t":
-                            view_dims.append(t)
-                        elif dim_name == "d":
-                            view_dims.append(self.embedding_size)
-                        else:
-                            view_dims.append(1)
-                    modality_embed = modality_embed + ts_embed.to(device).view(
-                        *view_dims
-                    )
-                else:
-                    # No T dimension — broadcast as (B, 1..., D)
-                    view_shape = (
-                        b,
-                        *([1] * num_middle_dims),
-                        self.embedding_size,
-                    )
-                    modality_embed = modality_embed + ts_embed[:, 0].to(device).view(
-                        *view_shape
-                    )
+                ts_view = self._broadcast_temporal(
+                    ts_embed,
+                    modality_embed,
+                    ein_string,
+                    ein_dict,
+                    b,
+                    t,
+                    self.embedding_size,
+                )
+                modality_embed = modality_embed + ts_view
             elif self.timestamp_encoding_mode == TimestampEncodingMode.LEARNED:
                 # Learned timestamp encoding via MLP
                 assert timestamps is not None
                 assert self.timestamp_mlp is not None
                 ts_embed = self.timestamp_mlp(timestamps)  # (B, T, 2*n)
-                two_n = 2 * n
-                if "t" in ein_dict:
-                    view_dims = []
-                    for dim_name in ein_string.split():
-                        if dim_name == "b":
-                            view_dims.append(b)
-                        elif dim_name == "t":
-                            view_dims.append(t)
-                        elif dim_name == "d":
-                            view_dims.append(two_n)
-                        else:
-                            view_dims.append(1)
-                    modality_embed[..., n : n * 3] += ts_embed.to(device).view(
-                        *view_dims
-                    )
-                else:
-                    num_middle_dims = modality_embed.ndim - 2
-                    view_shape = (b, *([1] * num_middle_dims), two_n)
-                    modality_embed[..., n : n * 3] += (
-                        ts_embed[:, 0].to(device).view(*view_shape)
-                    )
+                ts_view = self._broadcast_temporal(
+                    ts_embed, modality_embed, ein_string, ein_dict, b, t, 2 * n
+                )
+                modality_embed[..., n : n * 3] += ts_view
         if self.use_learned_latlon_encoding:
             # Learned per-token geographic encoding replaces both
             # spatial sinusoidal encoding and broadcast latlon encoding
@@ -1191,7 +1174,6 @@ class FlexiVitBase(nn.Module):
         latlon_num_freqs: int = 20,
         spatial_dim_fraction: float = 0.25,
         temporal_dim_fraction: float = 0.25,
-        channel_dim_fraction: float = 0.25,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -1241,7 +1223,6 @@ class FlexiVitBase(nn.Module):
             latlon_num_freqs=latlon_num_freqs,
             spatial_dim_fraction=spatial_dim_fraction,
             temporal_dim_fraction=temporal_dim_fraction,
-            channel_dim_fraction=channel_dim_fraction,
         )
         self.apply(self._init_weights)
 
@@ -1449,7 +1430,6 @@ class Encoder(FlexiVitBase):
         latlon_num_freqs: int = 20,
         spatial_dim_fraction: float = 0.25,
         temporal_dim_fraction: float = 0.25,
-        channel_dim_fraction: float = 0.25,
     ):
         """Initialize the encoder.
 
@@ -1498,7 +1478,6 @@ class Encoder(FlexiVitBase):
             latlon_num_freqs: Number of frequency bands for spherical positional encoding.
             spatial_dim_fraction: Fraction of embedding_size for spatial encoding.
             temporal_dim_fraction: Fraction of embedding_size for temporal encoding.
-            channel_dim_fraction: Fraction of embedding_size for channel encoding.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1524,7 +1503,6 @@ class Encoder(FlexiVitBase):
             latlon_num_freqs=latlon_num_freqs,
             spatial_dim_fraction=spatial_dim_fraction,
             temporal_dim_fraction=temporal_dim_fraction,
-            channel_dim_fraction=channel_dim_fraction,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -2058,7 +2036,6 @@ class PredictorBase(FlexiVitBase):
         latlon_num_freqs: int = 20,
         spatial_dim_fraction: float = 0.25,
         temporal_dim_fraction: float = 0.25,
-        channel_dim_fraction: float = 0.25,
     ):
         """Initialize the predictor.
 
@@ -2091,7 +2068,6 @@ class PredictorBase(FlexiVitBase):
             latlon_num_freqs: Number of frequency bands for spherical positional encoding.
             spatial_dim_fraction: Fraction of embedding_size for spatial encoding.
             temporal_dim_fraction: Fraction of embedding_size for temporal encoding.
-            channel_dim_fraction: Fraction of embedding_size for channel encoding.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2117,7 +2093,6 @@ class PredictorBase(FlexiVitBase):
             latlon_num_freqs=latlon_num_freqs,
             spatial_dim_fraction=spatial_dim_fraction,
             temporal_dim_fraction=temporal_dim_fraction,
-            channel_dim_fraction=channel_dim_fraction,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -2457,6 +2432,44 @@ class Predictor(PredictorBase):
         return TokensAndMasks(**output_dict)
 
 
+def _validate_encoding_params(
+    timestamp_encoding_mode: str,
+    timestamp_dropout_rate: float,
+    latlon_dropout_rate: float,
+    use_latlon_encoding: bool,
+    spatial_dim_fraction: float,
+    temporal_dim_fraction: float,
+) -> None:
+    """Validate timestamp/latlon encoding parameters common to encoder and decoder configs."""
+    if timestamp_encoding_mode not in ("legacy", "unified", "learned", "static"):
+        raise ValueError(
+            f"timestamp_encoding_mode must be 'legacy', 'unified', 'learned', or 'static', "
+            f"got '{timestamp_encoding_mode}'"
+        )
+    if not 0.0 <= timestamp_dropout_rate <= 1.0:
+        raise ValueError("timestamp_dropout_rate must be between 0 and 1")
+    if timestamp_dropout_rate > 0.0 and timestamp_encoding_mode != "unified":
+        raise ValueError(
+            "timestamp_dropout_rate > 0 requires timestamp_encoding_mode='unified'"
+        )
+    if not 0.0 <= latlon_dropout_rate <= 1.0:
+        raise ValueError("latlon_dropout_rate must be between 0 and 1")
+    if (
+        latlon_dropout_rate > 0.0
+        and not use_latlon_encoding
+        and timestamp_encoding_mode != "static"
+    ):
+        raise ValueError(
+            "latlon_dropout_rate > 0 requires use_latlon_encoding=True or "
+            "timestamp_encoding_mode='static'"
+        )
+    if spatial_dim_fraction + temporal_dim_fraction > 1.0:
+        raise ValueError(
+            f"spatial_dim_fraction ({spatial_dim_fraction}) + temporal_dim_fraction "
+            f"({temporal_dim_fraction}) must be <= 1.0"
+        )
+
+
 @dataclass
 class EncoderConfig(Config):
     """Configuration for the Encoder."""
@@ -2497,7 +2510,6 @@ class EncoderConfig(Config):
     latlon_num_freqs: int = 20
     spatial_dim_fraction: float = 0.25
     temporal_dim_fraction: float = 0.25
-    channel_dim_fraction: float = 0.25
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2523,35 +2535,14 @@ class EncoderConfig(Config):
                 )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
-        if self.timestamp_encoding_mode not in (
-            "legacy",
-            "unified",
-            "learned",
-            "static",
-        ):
-            raise ValueError(
-                f"timestamp_encoding_mode must be 'legacy', 'unified', 'learned', or 'static', "
-                f"got '{self.timestamp_encoding_mode}'"
-            )
-        if not 0.0 <= self.timestamp_dropout_rate <= 1.0:
-            raise ValueError("timestamp_dropout_rate must be between 0 and 1")
-        if (
-            self.timestamp_dropout_rate > 0.0
-            and self.timestamp_encoding_mode != "unified"
-        ):
-            raise ValueError(
-                "timestamp_dropout_rate > 0 requires timestamp_encoding_mode='unified'"
-            )
-        if not 0.0 <= self.latlon_dropout_rate <= 1.0:
-            raise ValueError("latlon_dropout_rate must be between 0 and 1")
-        if (
-            self.latlon_dropout_rate > 0.0
-            and not self.use_latlon_encoding
-            and self.timestamp_encoding_mode != "static"
-        ):
-            raise ValueError(
-                "latlon_dropout_rate > 0 requires use_latlon_encoding=True or timestamp_encoding_mode='static'"
-            )
+        _validate_encoding_params(
+            self.timestamp_encoding_mode,
+            self.timestamp_dropout_rate,
+            self.latlon_dropout_rate,
+            self.use_latlon_encoding,
+            self.spatial_dim_fraction,
+            self.temporal_dim_fraction,
+        )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -2597,7 +2588,6 @@ class PredictorConfig(Config):
     latlon_num_freqs: int = 20
     spatial_dim_fraction: float = 0.25
     temporal_dim_fraction: float = 0.25
-    channel_dim_fraction: float = 0.25
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2614,35 +2604,14 @@ class PredictorConfig(Config):
                     raise ValueError(f"Modality {modality} is not supported")
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
-        if self.timestamp_encoding_mode not in (
-            "legacy",
-            "unified",
-            "learned",
-            "static",
-        ):
-            raise ValueError(
-                f"timestamp_encoding_mode must be 'legacy', 'unified', 'learned', or 'static', "
-                f"got '{self.timestamp_encoding_mode}'"
-            )
-        if not 0.0 <= self.timestamp_dropout_rate <= 1.0:
-            raise ValueError("timestamp_dropout_rate must be between 0 and 1")
-        if (
-            self.timestamp_dropout_rate > 0.0
-            and self.timestamp_encoding_mode != "unified"
-        ):
-            raise ValueError(
-                "timestamp_dropout_rate > 0 requires timestamp_encoding_mode='unified'"
-            )
-        if not 0.0 <= self.latlon_dropout_rate <= 1.0:
-            raise ValueError("latlon_dropout_rate must be between 0 and 1")
-        if (
-            self.latlon_dropout_rate > 0.0
-            and not self.use_latlon_encoding
-            and self.timestamp_encoding_mode != "static"
-        ):
-            raise ValueError(
-                "latlon_dropout_rate > 0 requires use_latlon_encoding=True or timestamp_encoding_mode='static'"
-            )
+        _validate_encoding_params(
+            self.timestamp_encoding_mode,
+            self.timestamp_dropout_rate,
+            self.latlon_dropout_rate,
+            self.use_latlon_encoding,
+            self.spatial_dim_fraction,
+            self.temporal_dim_fraction,
+        )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
