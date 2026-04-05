@@ -376,9 +376,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 (standard_hw, standard_hw, 1, 1), dtype=np.float32
             )
             output_dict["worldcover"] = mock_worldcover
-        if Modality.LATLON.name in self.dataset.training_modalities:
-            mock_latlon = rng.random((2,), dtype=np.float32)
-            output_dict["latlon"] = mock_latlon
+        # Latlon is always loaded from h5 files regardless of training_modalities
+        mock_latlon = rng.random((2,), dtype=np.float32)
+        output_dict["latlon"] = mock_latlon
         if Modality.OPENSTREETMAP_RASTER.name in self.dataset.training_modalities:
             mock_openstreetmap_raster = rng.random(
                 (standard_hw, standard_hw, 1, 30), dtype=np.float32
