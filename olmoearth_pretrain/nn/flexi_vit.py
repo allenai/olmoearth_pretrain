@@ -713,7 +713,7 @@ class CompositeEncodings(nn.Module):
                 build_spatial_local_freq_mask(self.spatial_dim),
             )
         else:
-            # Legacy/unified/learned modes: 4 equal quarters
+            # Legacy/unified/learned/static_temporal modes: 4 equal quarters
             self.embedding_dim_per_embedding_type = int(embedding_size * 0.25)
             self.spatial_dim = self.embedding_dim_per_embedding_type
             self.temporal_dim = 2 * self.embedding_dim_per_embedding_type
@@ -994,7 +994,7 @@ class CompositeEncodings(nn.Module):
 
             return modality_tokens + modality_embed
 
-        # ====== Legacy / Unified / Learned encoding modes ======
+        # ====== Legacy / Unified / Learned / Static-temporal encoding modes ======
         # Channel embeddings
         if use_modality_encodings:
             channel_embed = self.per_modality_channel_embeddings[modality.name]
