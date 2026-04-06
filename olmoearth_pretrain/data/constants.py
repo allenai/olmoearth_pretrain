@@ -440,6 +440,36 @@ class Modality:
         image_tile_size_factor=-256,
     )
 
+    ERA5L_DAY_10 = ModalitySpec(
+        name="era5l_day_10",
+        # ERA5-Land daily 9 km/pixel bands that we store at 2.56 km/pixel, T=720 daily timesteps, non-spatial.
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [
+                    "d2m",
+                    "e",
+                    "pev",
+                    "ro",
+                    "sp",
+                    "ssr",
+                    "ssrd",
+                    "str",
+                    "swvl1",
+                    "swvl2",
+                    "t2m",
+                    "tp",
+                    "u10",
+                    "v10",
+                ],
+                4096,
+            ),
+        ],
+        is_multitemporal=True,
+        ignore_when_parsing=False,
+        image_tile_size_factor=-256,
+    )
+
     LATLON = ModalitySpec(
         name="latlon",
         tile_resolution_factor=0,
