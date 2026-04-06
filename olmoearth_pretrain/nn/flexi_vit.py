@@ -657,7 +657,10 @@ class CompositeEncodings(nn.Module):
             tokenization_config: Optional config for custom band groupings
             timestamp_encoding_mode: "legacy" for old multi-part encoding,
                 "unified" for single sinusoidal encoding of the full timestamp,
-                "learned" for MLP-based encoding of fractional year + sin/cos cycle
+                "learned" for MLP-based encoding of fractional year + sin/cos cycle,
+                "static" for multi-frequency sinusoidal spatial+temporal with split dims,
+                "static_temporal" for legacy spatial/channel layout with multi-frequency
+                temporal encoding (replaces time-index + month embeddings)
             timestamp_dropout_rate: Probability of dropping timestamp encoding per sample
                 during training (only used when timestamp_encoding_mode="unified")
             timestamp_hidden_dim: Hidden layer dimension for the learned timestamp MLP
@@ -715,17 +718,23 @@ class CompositeEncodings(nn.Module):
             self.spatial_dim = self.embedding_dim_per_embedding_type
             self.temporal_dim = 2 * self.embedding_dim_per_embedding_type
             self.channel_dim = self.embedding_dim_per_embedding_type
-            # Position encodings for time dimension
-            self.pos_embed = nn.Parameter(
-                get_1d_sincos_pos_encoding(
-                    torch.arange(max_sequence_length),
-                    self.embedding_dim_per_embedding_type,
-                ),
-                requires_grad=False,
-            )
-            # Month encodings
-            month_tab = get_month_encoding_table(self.embedding_dim_per_embedding_type)
-            self.month_embed = nn.Embedding.from_pretrained(month_tab, freeze=True)
+            if self.timestamp_encoding_mode == TimestampEncodingMode.STATIC_TEMPORAL:
+                self.pos_embed = None
+                self.month_embed = None
+            else:
+                # Position encodings for time dimension
+                self.pos_embed = nn.Parameter(
+                    get_1d_sincos_pos_encoding(
+                        torch.arange(max_sequence_length),
+                        self.embedding_dim_per_embedding_type,
+                    ),
+                    requires_grad=False,
+                )
+                # Month encodings
+                month_tab = get_month_encoding_table(
+                    self.embedding_dim_per_embedding_type
+                )
+                self.month_embed = nn.Embedding.from_pretrained(month_tab, freeze=True)
             # Learned timestamp MLP
             if self.timestamp_encoding_mode == TimestampEncodingMode.LEARNED:
                 self.timestamp_mlp = TimestampMLP(
@@ -1047,6 +1056,13 @@ class CompositeEncodings(nn.Module):
                 assert timestamps is not None
                 assert self.timestamp_mlp is not None
                 ts_embed = self.timestamp_mlp(timestamps)  # (B, T, 2*n)
+                ts_view = self._broadcast_temporal(
+                    ts_embed, modality_embed, ein_string, ein_dict, b, t, 2 * n
+                )
+                modality_embed[..., n : n * 3] += ts_view
+            elif self.timestamp_encoding_mode == TimestampEncodingMode.STATIC_TEMPORAL:
+                assert timestamps is not None
+                ts_embed = get_static_temporal_encoding(timestamps, 2 * n)
                 ts_view = self._broadcast_temporal(
                     ts_embed, modality_embed, ein_string, ein_dict, b, t, 2 * n
                 )
@@ -1466,7 +1482,9 @@ class Encoder(FlexiVitBase):
                 modalities. If None, apply to all modalities. Default: None.
             timestamp_encoding_mode: "legacy" for old multi-part encoding,
                 "unified" for single sinusoidal encoding of the full timestamp,
-                "learned" for MLP-based encoding of fractional year + sin/cos cycle.
+                "learned" for MLP-based encoding of fractional year + sin/cos cycle,
+                "static" for multi-frequency sinusoidal spatial+temporal with split dims,
+                "static_temporal" for legacy layout with multi-frequency temporal only.
             timestamp_dropout_rate: Probability of dropping timestamp encoding per sample
                 during training (only used when timestamp_encoding_mode="unified").
             timestamp_hidden_dim: Hidden layer dimension for the learned timestamp MLP
@@ -2056,7 +2074,9 @@ class PredictorBase(FlexiVitBase):
             tokenization_config: Optional config for custom band groupings
             timestamp_encoding_mode: "legacy" for old multi-part encoding,
                 "unified" for single sinusoidal encoding of the full timestamp,
-                "learned" for MLP-based encoding of fractional year + sin/cos cycle.
+                "learned" for MLP-based encoding of fractional year + sin/cos cycle,
+                "static" for multi-frequency sinusoidal spatial+temporal with split dims,
+                "static_temporal" for legacy layout with multi-frequency temporal only.
             timestamp_dropout_rate: Probability of dropping timestamp encoding per sample
                 during training (only used when timestamp_encoding_mode="unified").
             timestamp_hidden_dim: Hidden layer dimension for the learned timestamp MLP
@@ -2441,10 +2461,16 @@ def _validate_encoding_params(
     temporal_dim_fraction: float,
 ) -> None:
     """Validate timestamp/latlon encoding parameters common to encoder and decoder configs."""
-    if timestamp_encoding_mode not in ("legacy", "unified", "learned", "static"):
+    if timestamp_encoding_mode not in (
+        "legacy",
+        "unified",
+        "learned",
+        "static",
+        "static_temporal",
+    ):
         raise ValueError(
-            f"timestamp_encoding_mode must be 'legacy', 'unified', 'learned', or 'static', "
-            f"got '{timestamp_encoding_mode}'"
+            "timestamp_encoding_mode must be 'legacy', 'unified', 'learned', 'static', "
+            f"or 'static_temporal', got '{timestamp_encoding_mode}'"
         )
     if not 0.0 <= timestamp_dropout_rate <= 1.0:
         raise ValueError("timestamp_dropout_rate must be between 0 and 1")
