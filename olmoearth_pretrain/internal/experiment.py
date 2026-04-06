@@ -419,6 +419,7 @@ def extract(config: OlmoEarthExtractConfig) -> None:
 
     # 2. Build dataset
     dataset = config.dataset.build()
+    dataset.prepare()
 
     indexed_dataset = _IndexedDataset(dataset, config.patch_size, config.sampled_hw_p)
     dataloader = DataLoader(
