@@ -1788,6 +1788,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         decode_ratio: float = 0.5,
         random_ratio: float = 0.5,
         only_decode_modalities: list[str] = [],
+        decode_everything_else: bool = True,
     ):
         """Random masking strategy except for decode modalities, which only get decoded.
 
@@ -1796,11 +1797,13 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         decode_ratio: how many encode-decode modalities get decode, **and** the random / time
                       decode ratio applied.
         random_ratio: how often to apply random masking vs time masking.
+        decode_everything_else: if true, anything not selected for encoding gets decoded.
         """
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
         self.only_decode_modalities = only_decode_modalities
         self.random_ratio = random_ratio
+        self.decode_everything_else = decode_everything_else
         if self.random_ratio > 1:
             raise ValueError(f"Random ratio must be <= 1, got {self.random_ratio}")
 
@@ -1981,23 +1984,27 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                         Modality.get(modality_name),
                         patch_size,
                         self.encode_ratio,
-                        0,
+                        1 - self.encode_ratio if self.decode_everything_else else 0,
                     )
                 for modality_name, bandset_idx in decode_bandsets:
                     masked_modality_name = (
                         MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                     )
-                    output_dict[masked_modality_name][
-                        i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
-                    ] = self._random_fill_unmasked(
+                    if not self.decode_everything_else:
                         output_dict[masked_modality_name][
                             i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
-                        ],
-                        Modality.get(modality_name),
-                        patch_size,
-                        0,
-                        self.decode_ratio,
-                    )
+                        ] = self._random_fill_unmasked(
+                            output_dict[masked_modality_name][
+                                i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                            ],
+                            Modality.get(modality_name),
+                            patch_size,
+                            0,
+                            self.decode_ratio,
+                        )
+                    else:
+                        # leave it as decode only
+                        continue
 
         return MaskedOlmoEarthSample(**output_dict)
 
