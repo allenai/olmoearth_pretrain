@@ -2,6 +2,7 @@
 
 import logging
 import math
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
@@ -620,7 +621,7 @@ class CompositeEncodings(nn.Module):
         self,
         embedding_size: int,
         supported_modalities: list[ModalitySpec],
-        max_sequence_length: int,
+        max_sequence_length: int | None = None,
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         tokenization_config: TokenizationConfig | None = None,
@@ -631,12 +632,20 @@ class CompositeEncodings(nn.Module):
             embedding_size: Size of token embeddings
             supported_modalities: Which modalities from Modality this model
                 instantiation supports
-            max_sequence_length: Maximum sequence length
+            max_sequence_length: Deprecated, has no effect. Temporal position
+                encodings are now computed on-the-fly.
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             tokenization_config: Optional config for custom band groupings
         """
         super().__init__()
+        if max_sequence_length is not None:
+            warnings.warn(
+                "max_sequence_length is deprecated and has no effect. "
+                "Temporal position encodings are now computed on-the-fly.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [
@@ -644,9 +653,6 @@ class CompositeEncodings(nn.Module):
         ]
         self.tokenization_config = tokenization_config or TokenizationConfig()
         self.embedding_size = embedding_size
-        self.max_sequence_length = (
-            max_sequence_length  # This max sequence length is a time dim thing
-        )
         # TODO: we need to be able to calculate the size of the param based on what types of embeddings it will get
 
         # we have 4 embeddings types (pos_in_time, pos_in_space, month, channel) so each get
