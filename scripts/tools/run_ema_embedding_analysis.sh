@@ -19,23 +19,23 @@ python -m olmoearth_pretrain.internal.full_eval_sweep \
     --cluster="${CLUSTER}" \
     --steps=20000,45000,65000,86500 \
     --embedding_diagnostics_only \
-    --model_name="henryh_emafull_sweep" \
+    --model_name="emafull_sweep" \
     "--trainer.callbacks.downstream_evaluator.tasks_to_run=${TASKS}" \
     "--trainer.callbacks.wandb.project=${PROJECT}" \
     '--common.training_modalities=["sentinel2_l2a","sentinel1","landsat"]' \
     "${EXTRA_CLUSTERS}"
 
-# --- joer base (no EMA, all modalities) ---
-echo "=== Launching Base no-EMA sweep ==="
-python -m olmoearth_pretrain.internal.full_eval_sweep \
-    --checkpoint_dir=/weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02 \
-    --module_path="${MODULE}" \
-    --cluster="${CLUSTER}" \
-    --steps=150000,300000,450000,600000 \
-    --embedding_diagnostics_only \
-    --model_name="joer_base_noema_sweep" \
-    "--trainer.callbacks.downstream_evaluator.tasks_to_run=${TASKS}" \
-    "--trainer.callbacks.wandb.project=${PROJECT}" \
-    "${EXTRA_CLUSTERS}"
+# # --- joer base (no EMA, all modalities) ---
+# echo "=== Launching Base no-EMA sweep ==="
+# python -m olmoearth_pretrain.internal.full_eval_sweep \
+#     --checkpoint_dir=/weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02 \
+#     --module_path="${MODULE}" \
+#     --cluster="${CLUSTER}" \
+#     --steps=150000,300000,450000,600000 \
+#     --embedding_diagnostics_only \
+#     --model_name="joer_base_noema_sweep" \
+#     "--trainer.callbacks.downstream_evaluator.tasks_to_run=${TASKS}" \
+#     "--trainer.callbacks.wandb.project=${PROJECT}" \
+#     "${EXTRA_CLUSTERS}"
 
-echo "Both jobs launched."
+# echo "Both jobs launched."
