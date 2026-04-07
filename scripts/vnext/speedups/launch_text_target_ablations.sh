@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-WANDB_PROJECT="2025_text_target_ablations"
+WANDB_PROJECT="2026_04_text_embed_targets"
 CLUSTERS="ai2/jupiter"
 NUM_GPUS=8
 
