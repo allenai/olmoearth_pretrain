@@ -128,6 +128,7 @@ def subset_sample_default(
     current_length: int,
     missing_timesteps_masks: dict[str, Any] | None = None,
     tokenization_config: TokenizationConfig | None = None,
+    center_crop: bool = False,
 ) -> OlmoEarthSample:
     """Subset a OlmoEarthSample using default rectangular cropping.
 
@@ -136,30 +137,43 @@ def subset_sample_default(
         patch_size: The patch size being applied to this sample.
         max_tokens_per_instance: The token budget when subsetting. This is used
             to determine the maximum number of timesteps possible for a given
-            height and width. If None, this operation is a no-op.
+            height and width. If None and center_crop is False, this is a no-op.
         sampled_hw_p: The number of tokens in the height and width dimensions.
         current_length: The current maximum sequence length of the sample.
         missing_timesteps_masks: A dictionary of missing timesteps masks.
         tokenization_config: Optional tokenization config for custom band groupings.
+        center_crop: If True, use center crop instead of random crop, and perform
+            spatial cropping even when token_budget is None (keeping all timesteps).
 
     Returns:
         A subsetted OlmoEarthSample with rectangular cropping applied.
     """
-    if max_tokens_per_instance is None:
+    if max_tokens_per_instance is None and not center_crop:
         return sample
     if missing_timesteps_masks is None:
         missing_timesteps_masks = {}
 
-    max_t = _get_max_t_within_token_budget(
-        sample, sampled_hw_p, max_tokens_per_instance, tokenization_config
-    )
-    valid_start_ts = get_valid_start_ts(missing_timesteps_masks, max_t, current_length)
-    start_t = np.random.choice(valid_start_ts)
+    sampled_hw = sampled_hw_p * patch_size
     new_data_dict: dict[str, ArrayTensor] = {}
 
-    sampled_hw = sampled_hw_p * patch_size
-    start_h = np.random.choice(sample.height - sampled_hw + 1)
-    start_w = np.random.choice(sample.width - sampled_hw + 1)
+    if max_tokens_per_instance is not None:
+        max_t = _get_max_t_within_token_budget(
+            sample, sampled_hw_p, max_tokens_per_instance, tokenization_config
+        )
+        valid_start_ts = get_valid_start_ts(
+            missing_timesteps_masks, max_t, current_length
+        )
+        start_t = np.random.choice(valid_start_ts)
+    else:
+        max_t = current_length
+        start_t = 0
+
+    if center_crop:
+        start_h = (sample.height - sampled_hw) // 2
+        start_w = (sample.width - sampled_hw) // 2
+    else:
+        start_h = np.random.choice(sample.height - sampled_hw + 1)
+        start_w = np.random.choice(sample.width - sampled_hw + 1)
 
     for attribute, modality in sample.as_dict().items():
         assert modality is not None
@@ -281,6 +295,7 @@ class GetItemArgs(NamedTuple):
     sampled_hw_p: int
     token_budget: int | None = None
     tokenization_config: TokenizationConfig | None = None
+    center_crop: bool = False
 
 
 # TODO should training modalities be str or modality_spec
@@ -817,6 +832,7 @@ class OlmoEarthDataset(Dataset):
                 current_length=current_length,
                 missing_timesteps_masks=missing_timesteps_masks,
                 tokenization_config=args.tokenization_config,
+                center_crop=args.center_crop,
             )
 
         sample_dict = subset_sample.as_dict()
