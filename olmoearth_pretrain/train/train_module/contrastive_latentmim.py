@@ -17,6 +17,7 @@ from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
+from olmoearth_pretrain.nn.pooling import PoolingType, pool_per_modality
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import (
@@ -55,6 +56,7 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
+    per_modality_contrastive: bool = False
     reinit_targets: bool = False
 
     def build(
@@ -106,34 +108,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         contrastive_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         reinit_targets: bool = False,
+        per_modality_contrastive: bool = False,
     ):
-        """Initialize the training module.
-
-        Args:
-            model: The transformer model to train.
-            optim_config: The corresponding optimizer config.
-            transform_config: The transform configuration for the model.
-            masking_config: The masking configuration for the model.
-            loss_config: The loss configuration for the model.
-            mae_loss_config: Optional loss config for masked auto-encoding.
-            rank_microbatch_size: The rank microbatch size in instances.
-            compile_model: Whether to compile to the model.
-            dp_config: Data parallel configuration for the model.
-            loss_fn: Loss function to use.
-            compile_loss: Whether to compile the loss function.
-            autocast_precision: Enable AMP with this data type.
-            max_grad_norm: Clip gradient norms to this value.
-            scheduler: Optional learning rate scheduler.
-            device: The device to train on.
-            state_dict_save_opts: Override state dict options for saving.
-            state_dict_load_opts: Override state dict options for loading.
-            ema_decay: EMA decay rate for target encoder, as a tuple of (start_ema_decay, end_ema_decay)
-            token_exit_cfg: The token exit configuration for the model.
-            regularizer_config: An optional regularizer configuration for the model.
-            contrastive_config: An optional contrastive configration for the model.
-            find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
-            reinit_targets: Whether or not to reinitialize the target encoder.
-        """
+        """Initialize the training module."""
         super().__init__(
             model=model,
             optim_config=optim_config,
@@ -170,6 +147,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
+        self.per_modality_contrastive = per_modality_contrastive
+
         if reinit_targets:
             if ema_decay != (0.0, 0.0):
                 logger.warning(
@@ -252,7 +231,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     )
 
                 if self.contrastive_loss is not None:
-                    contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
+                    if self.per_modality_contrastive:
+                        contrastive_loss = self._per_modality_contrastive(
+                            latent_a, latent_b
+                        )
+                    else:
+                        contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
                     loss += contrastive_loss
                     total_batch_con += (
                         get_local_tensor(contrastive_loss.detach()) / num_microbatches
@@ -291,6 +275,36 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
 
         del batch  # In case this helps with memory utilization.
         del masked_batch_a, masked_batch_b
+
+    def _per_modality_contrastive(
+        self,
+        latent_a: TokensAndMasks,
+        latent_b: TokensAndMasks,
+    ) -> torch.Tensor:
+        """Compute contrastive loss per encode modality, averaged."""
+        pooled_a = pool_per_modality(latent_a, PoolingType.MEAN)
+        pooled_b = pool_per_modality(latent_b, PoolingType.MEAN)
+
+        projection = self.model.encoder.project_and_aggregate.projection
+
+        losses = []
+        for mod_name in pooled_a:
+            if mod_name not in pooled_b:
+                continue
+            proj_a = projection(pooled_a[mod_name])
+            proj_b = projection(pooled_b[mod_name])
+            mod_loss = self.contrastive_loss.compute(proj_a, proj_b)
+            losses.append(mod_loss)
+            if not self.trainer.is_canceled:
+                self.trainer.record_metric(
+                    f"train/contrastive/{mod_name}",
+                    get_local_tensor(mod_loss.detach()),
+                    ReduceType.mean,
+                )
+
+        if not losses:
+            return torch.zeros([], device=self.device)
+        return sum(losses) / len(losses)
 
     def model_forward(
         self,

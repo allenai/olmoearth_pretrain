@@ -160,3 +160,32 @@ def pool_unmasked_tokens(
         return pool_instance_wise(tokens_and_masks, pooling_type)
     else:
         return pool_spatially(tokens_and_masks, pooling_type)
+
+
+def pool_per_modality(
+    tokens_and_masks: TokensAndMasks,
+    pooling_type: PoolingType = PoolingType.MEAN,
+) -> dict[str, Tensor]:
+    """Pool tokens per modality, returning {modality_name: [B, D]}.
+
+    Only includes modalities that have ONLINE_ENCODER tokens present.
+    """
+    per_mod_tokens, per_mod_masks = tokens_and_masks.flatten_tokens_and_masks_per_modality()
+    modality_names = tokens_and_masks.modalities
+
+    result: dict[str, Tensor] = {}
+    for name, x, mask in zip(modality_names, per_mod_tokens, per_mod_masks):
+        encoder_mask = (mask == MaskValue.ONLINE_ENCODER.value).long()
+        num_tokens = encoder_mask.sum(dim=-1, keepdim=True)
+        if (num_tokens == 0).all():
+            continue
+        x_masked = x * encoder_mask.unsqueeze(-1)
+        if pooling_type == PoolingType.MEAN:
+            num_tokens = num_tokens.clamp(min=1)
+            result[name] = x_masked.sum(dim=1) / num_tokens
+        elif pooling_type == PoolingType.MAX:
+            x_masked = x_masked.masked_fill(~encoder_mask.bool().unsqueeze(-1), float("-inf"))
+            result[name] = x_masked.max(dim=1).values
+        else:
+            raise ValueError(f"Invalid pooling type: {pooling_type}")
+    return result
