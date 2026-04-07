@@ -30,6 +30,9 @@ from olmoearth_pretrain.evals.datasets.configs import (
 )
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn_variable_time
+from olmoearth_pretrain.evals.embedding_diagnostics import (
+    compute_embedding_diagnostics,
+)
 from olmoearth_pretrain.evals.embedding_transforms import (
     dequantize_embeddings,
     reduce_embedding_dim,
@@ -60,6 +63,7 @@ class EvalMode(StrEnum):
     KNN = "knn"
     LINEAR_PROBE = "linear_probe"
     FINETUNE = "finetune"
+    EMBEDDING_DIAGNOSTICS = "embedding_diagnostics"
 
 
 @dataclass
@@ -112,6 +116,12 @@ class DownstreamTaskConfig:
     primary_metric: EvalMetric | None = None
     # Class index for CLASS_F1 primary metric. Required when primary_metric is CLASS_F1.
     primary_metric_class: int | None = None
+    # Compute embedding quality diagnostics (effective rank, uniformity, etc.)
+    run_embedding_diagnostics: bool = False
+    # For pretrain_subset dataset: path to training h5py data
+    h5py_dir: str | None = None
+    # For pretrain_subset: max samples to load
+    pretrain_max_samples: int = 512
 
 
 class DownstreamEvaluator:
@@ -171,6 +181,9 @@ class DownstreamEvaluator:
         self.use_dice_loss = task.use_dice_loss
         self.primary_metric = task.primary_metric
         self.primary_metric_class = task.primary_metric_class
+        self.run_embedding_diagnostics = task.run_embedding_diagnostics
+        self.h5py_dir = task.h5py_dir
+        self.pretrain_max_samples = task.pretrain_max_samples
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -252,6 +265,11 @@ class DownstreamEvaluator:
             generator.manual_seed(split_seed)
             worker_init_fn = partial(_seed_worker, base_seed=split_seed)
 
+        extra_kwargs: dict[str, Any] = {}
+        if self.dataset == "pretrain_subset" and self.h5py_dir is not None:
+            extra_kwargs["h5py_dir"] = self.h5py_dir
+            extra_kwargs["training_modalities"] = self.input_modalities
+            extra_kwargs["max_samples"] = self.pretrain_max_samples
         eval_ds = get_eval_dataset(
             eval_dataset=self.dataset,
             split=split,
@@ -259,6 +277,7 @@ class DownstreamEvaluator:
             norm_stats_from_pretrained=self.norm_stats_from_pretrained,
             input_modalities=self.input_modalities,
             norm_method=self.norm_method,
+            **extra_kwargs,
         )
         is_iterable = isinstance(eval_ds, IterableDataset)
         return DataLoader(
@@ -376,7 +395,13 @@ class DownstreamEvaluator:
         if test_labels is not None:
             logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
 
-        # Dequantize if embeddings were quantized
+        embedding_diagnostics_result: dict[str, float] | None = None
+        if self.run_embedding_diagnostics:
+            embedding_diagnostics_result = compute_embedding_diagnostics(val_embeddings)
+            logger.info(
+                f"Embedding diagnostics for {self.dataset}: {embedding_diagnostics_result}"
+            )
+
         if self.quantize_embeddings:
             logger.info(f"Dequantizing embeddings for {self.dataset}")
             train_embeddings = dequantize_embeddings(train_embeddings)
@@ -413,6 +438,9 @@ class DownstreamEvaluator:
             "bootstrap_seed": self.bootstrap_seed,
         }
         result = self.eval_function(**kwargs)  # type: ignore
+
+        if embedding_diagnostics_result is not None:
+            result.embedding_diagnostics = embedding_diagnostics_result
 
         # Free memory aggressively between evals
         del train_embeddings, train_labels, test_embeddings, test_labels
@@ -526,9 +554,25 @@ class DownstreamEvaluator:
         gc.collect()
         return result
 
+    def _val_embedding_diagnostics(self) -> EvalTaskResult:
+        """Compute embedding diagnostics only (no downstream task)."""
+        logger.info(f"Computing embedding diagnostics for {self.dataset}")
+        data_loader = self._get_data_loader("train", self.embedding_batch_size)
+        embeddings, _ = self._get_embeddings(data_loader, is_train=False)
+        logger.info(f"Embeddings shape for {self.dataset}: {embeddings.shape}")
+
+        diagnostics = compute_embedding_diagnostics(embeddings)
+        logger.info(f"Embedding diagnostics for {self.dataset}: {diagnostics}")
+
+        result = EvalTaskResult(val_result=None, test_result=None)
+        result.embedding_diagnostics = diagnostics
+        return result
+
     def val(self) -> EvalTaskResult:
         """Validate the model on the downstream task."""
-        if self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
+        if self.eval_mode == EvalMode.EMBEDDING_DIAGNOSTICS:
+            return self._val_embedding_diagnostics()
+        elif self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
             return self._val_embed_probe()
         elif self.eval_mode == EvalMode.FINETUNE:
             return self._val_finetune()
@@ -676,7 +720,6 @@ class DownstreamEvaluatorCallback(Callback):
         bootstrap_stats = result.bootstrap_stats
 
         if wandb_callback.enabled:
-            # Log validation results
             if val_result is not None:
                 _log_eval_result_to_wandb(
                     wandb_callback, "eval", evaluator.evaluation_name, val_result
@@ -684,6 +727,13 @@ class DownstreamEvaluatorCallback(Callback):
             wandb_callback.wandb.log(
                 {"eval_time/" + evaluator.evaluation_name: eval_time}
             )
+            if result.embedding_diagnostics:
+                wandb_callback.wandb.log(
+                    {
+                        f"eval_embed_diag/{evaluator.evaluation_name}/{k}": v
+                        for k, v in result.embedding_diagnostics.items()
+                    }
+                )
 
         # Separate finetune step metric per task
         if evaluator.eval_mode == EvalMode.FINETUNE:
@@ -804,6 +854,13 @@ class DownstreamEvaluatorCallback(Callback):
                 f"eval/test/{evaluator.evaluation_name}_bootstrap_ci_upper",
                 bootstrap_stats.get("ci_upper"),
             )
+        if result.embedding_diagnostics:
+            for metric_name, metric_value in result.embedding_diagnostics.items():
+                self.trainer.record_metric(
+                    f"eval_embed_diag/{evaluator.evaluation_name}/{metric_name}",
+                    metric_value,
+                )
+
         eval_time = time.monotonic() - start_time
         self.trainer.record_metric(f"eval_time/{evaluator.evaluation_name}", eval_time)
         logger.info(

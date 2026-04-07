@@ -49,6 +49,17 @@ class EvalDatasetConfig:
 
 
 DATASET_TO_CONFIG = {
+    "pretrain_subset": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[],
+        num_classes=1,
+        is_multilabel=False,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
     "m-eurosat": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
         imputes=[],

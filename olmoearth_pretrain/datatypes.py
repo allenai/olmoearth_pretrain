@@ -439,6 +439,21 @@ class MaskedOlmoEarthSample(NamedTuple):
                 updates[name] = val * (val == MaskValue.MISSING.value)
         return self._replace(**updates)
 
+    def unmask_excluding(self, exclude_modalities: list[str]) -> MaskedOlmoEarthSample:
+        """Unmask all modalities except those in exclude_modalities.
+
+        Excluded modalities keep their original mask values (e.g. DECODER),
+        so the target encoder won't process them. All other modalities are
+        unmasked to ONLINE_ENCODER (preserving MISSING).
+        """
+        exclude_mask_fields = {_get_masked_modality_name(m) for m in exclude_modalities}
+        updates = {}
+        for name in _MASKED_SAMPLE_MASK_FIELDS:
+            val = getattr(self, name)
+            if val is not None and name not in exclude_mask_fields:
+                updates[name] = val * (val == MaskValue.MISSING.value)
+        return self._replace(**updates)
+
     @classmethod
     def from_olmoearthsample(
         cls,

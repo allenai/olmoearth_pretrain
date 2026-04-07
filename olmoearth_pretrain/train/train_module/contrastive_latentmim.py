@@ -57,6 +57,7 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
     reinit_targets: bool = False
+    unmask_exclude_modalities: list[str] = field(default_factory=list)
 
     def build(
         self,
@@ -323,8 +324,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
+                if self.unmask_exclude_modalities:
+                    unmasked = batch.unmask_excluding(self.unmask_exclude_modalities)
+                else:
+                    unmasked = batch.unmask()
                 output_dict = self.model.target_encoder.forward(
-                    batch.unmask(),
+                    unmasked,
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
