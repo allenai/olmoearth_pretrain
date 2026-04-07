@@ -660,7 +660,8 @@ class CompositeEncodings(nn.Module):
                 "learned" for MLP-based encoding of fractional year + sin/cos cycle,
                 "static" for multi-frequency sinusoidal spatial+temporal with split dims,
                 "static_temporal" for legacy spatial/channel layout with multi-frequency
-                temporal encoding (replaces time-index + month embeddings)
+                temporal encoding (replaces time-index + month embeddings),
+                "static_spatial" for static per-token lat/lon spatial with legacy temporal
             timestamp_dropout_rate: Probability of dropping timestamp encoding per sample
                 during training (only used when timestamp_encoding_mode="unified")
             timestamp_hidden_dim: Hidden layer dimension for the learned timestamp MLP
@@ -695,23 +696,37 @@ class CompositeEncodings(nn.Module):
         self.max_sequence_length = (
             max_sequence_length  # This max sequence length is a time dim thing
         )
-        if self.timestamp_encoding_mode == TimestampEncodingMode.STATIC:
-            # Static mode: configurable dimension layout [spatial | temporal | channel]
+        if self.timestamp_encoding_mode in (
+            TimestampEncodingMode.STATIC,
+            TimestampEncodingMode.STATIC_SPATIAL,
+        ):
+            # Static spatial modes: configurable dimension layout [spatial | temporal | channel]
             self.spatial_dim = (int(embedding_size * spatial_dim_fraction) // 6) * 6
             self.temporal_dim = int(embedding_size * temporal_dim_fraction)
             self.temporal_dim += self.temporal_dim % 2  # round up to even
             self.channel_dim = embedding_size - self.spatial_dim - self.temporal_dim
             # Legacy compat: set embedding_dim_per_embedding_type for any code that reads it
             self.embedding_dim_per_embedding_type = self.channel_dim
-            # No pos_embed or month_embed needed — temporal encoding is computed on the fly
-            self.pos_embed = None
-            self.month_embed = None
             self.timestamp_mlp: TimestampMLP | None = None
             self.latlon_mlp: LatLonMLP | None = None
             self.register_buffer(
                 "_spatial_local_freq_mask",
                 build_spatial_local_freq_mask(self.spatial_dim),
             )
+            if self.timestamp_encoding_mode == TimestampEncodingMode.STATIC_SPATIAL:
+                # Legacy temporal embeddings (time-index + month) sized for the temporal slice
+                half_t = self.temporal_dim // 2
+                self.pos_embed = nn.Parameter(
+                    get_1d_sincos_pos_encoding(
+                        torch.arange(max_sequence_length), half_t
+                    ),
+                    requires_grad=False,
+                )
+                month_tab = get_month_encoding_table(half_t)
+                self.month_embed = nn.Embedding.from_pretrained(month_tab, freeze=True)
+            else:
+                self.pos_embed = None
+                self.month_embed = None
         else:
             # Legacy/unified/learned/static_temporal modes: 4 equal quarters
             self.embedding_dim_per_embedding_type = int(embedding_size * 0.25)
@@ -905,8 +920,11 @@ class CompositeEncodings(nn.Module):
         n = self.embedding_dim_per_embedding_type
         actual_bandsets = modality_tokens.shape[-2]
 
-        # ====== Static encoding mode: [spatial | temporal | channel] ======
-        if self.timestamp_encoding_mode == TimestampEncodingMode.STATIC:
+        # ====== Static spatial modes: [spatial | temporal | channel] ======
+        if self.timestamp_encoding_mode in (
+            TimestampEncodingMode.STATIC,
+            TimestampEncodingMode.STATIC_SPATIAL,
+        ):
             s_dim = self.spatial_dim
             t_dim = self.temporal_dim
             # Channel: [s_dim + t_dim : D]
@@ -926,14 +944,33 @@ class CompositeEncodings(nn.Module):
 
             # Temporal: [s_dim : s_dim + t_dim]
             if modality.is_multitemporal and use_temporal_encodings:
-                assert timestamps is not None
-                ts_embed = get_static_temporal_encoding(
-                    timestamps, t_dim
-                )  # (B, T, t_dim)
-                ts_view = self._broadcast_temporal(
-                    ts_embed, modality_embed, ein_string, ein_dict, b, t, t_dim
-                )
-                modality_embed[..., s_dim : s_dim + t_dim] += ts_view
+                if self.timestamp_encoding_mode == TimestampEncodingMode.STATIC:
+                    assert timestamps is not None
+                    ts_embed = get_static_temporal_encoding(
+                        timestamps, t_dim
+                    )  # (B, T, t_dim)
+                    ts_view = self._broadcast_temporal(
+                        ts_embed, modality_embed, ein_string, ein_dict, b, t, t_dim
+                    )
+                    modality_embed[..., s_dim : s_dim + t_dim] += ts_view
+                else:
+                    # STATIC_SPATIAL: legacy time-index + month in [s_dim : s_dim + t_dim]
+                    half_t = t_dim // 2
+                    assert self.pos_embed is not None
+                    time_embed = repeat(
+                        self.pos_embed[:t], f"t d -> {ein_string}", **ein_dict
+                    )
+                    modality_embed[..., s_dim : s_dim + half_t] += time_embed.to(device)
+                    assert timestamps is not None
+                    assert self.month_embed is not None
+                    months = timestamps[:, :, 1]
+                    month_embed = self.month_embed(months)
+                    month_embed = repeat(
+                        month_embed, f"b t d -> {ein_string}", **ein_dict
+                    )
+                    modality_embed[..., s_dim + half_t : s_dim + t_dim] += (
+                        month_embed.to(device)
+                    )
 
             # Spatial: [0 : s_dim]
             # Determine which samples need global-freq dropout
@@ -2467,10 +2504,11 @@ def _validate_encoding_params(
         "learned",
         "static",
         "static_temporal",
+        "static_spatial",
     ):
         raise ValueError(
             "timestamp_encoding_mode must be 'legacy', 'unified', 'learned', 'static', "
-            f"or 'static_temporal', got '{timestamp_encoding_mode}'"
+            f"'static_temporal', or 'static_spatial', got '{timestamp_encoding_mode}'"
         )
     if not 0.0 <= timestamp_dropout_rate <= 1.0:
         raise ValueError("timestamp_dropout_rate must be between 0 and 1")
@@ -2483,11 +2521,11 @@ def _validate_encoding_params(
     if (
         latlon_dropout_rate > 0.0
         and not use_latlon_encoding
-        and timestamp_encoding_mode != "static"
+        and timestamp_encoding_mode not in ("static", "static_spatial")
     ):
         raise ValueError(
             "latlon_dropout_rate > 0 requires use_latlon_encoding=True or "
-            "timestamp_encoding_mode='static'"
+            "timestamp_encoding_mode in ('static', 'static_spatial')"
         )
     if spatial_dim_fraction + temporal_dim_fraction > 1.0:
         raise ValueError(

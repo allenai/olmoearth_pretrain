@@ -26,6 +26,7 @@ class TimestampEncodingMode(StrEnum):
     LEARNED = "learned"
     STATIC = "static"
     STATIC_TEMPORAL = "static_temporal"
+    STATIC_SPATIAL = "static_spatial"
 
 
 def get_1d_sincos_pos_encoding(pos: torch.Tensor, encoding_dim: int) -> torch.Tensor:
