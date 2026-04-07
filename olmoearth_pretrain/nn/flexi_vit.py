@@ -644,6 +644,7 @@ class CompositeEncodings(nn.Module):
         latlon_num_freqs: int = 20,
         spatial_dim_fraction: float = 0.25,
         temporal_dim_fraction: float = 0.25,
+        freq_concentration: float = 1.0,
     ):
         """Initialize the composite encodings.
 
@@ -679,6 +680,8 @@ class CompositeEncodings(nn.Module):
                 (only used when timestamp_encoding_mode="static")
             temporal_dim_fraction: Fraction of embedding_size for temporal encoding
                 (only used when timestamp_encoding_mode="static")
+            freq_concentration: Controls spatial frequency distribution. 1.0 = uniform,
+                higher values bias toward high frequencies for better token discrimination.
         """
         super().__init__()
         self.embedding_size = embedding_size
@@ -687,6 +690,7 @@ class CompositeEncodings(nn.Module):
         self.use_latlon_encoding = use_latlon_encoding
         self.latlon_dropout_rate = latlon_dropout_rate
         self.use_learned_latlon_encoding = use_learned_latlon_encoding
+        self.freq_concentration = freq_concentration
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [
             modality.name for modality in supported_modalities
@@ -711,7 +715,7 @@ class CompositeEncodings(nn.Module):
             self.latlon_mlp: LatLonMLP | None = None
             self.register_buffer(
                 "_spatial_local_freq_mask",
-                build_spatial_local_freq_mask(self.spatial_dim),
+                build_spatial_local_freq_mask(self.spatial_dim, freq_concentration=freq_concentration),
             )
             if self.timestamp_encoding_mode == TimestampEncodingMode.STATIC_SPATIAL:
                 # Legacy temporal embeddings (time-index + month) sized for the temporal slice
@@ -1006,12 +1010,12 @@ class CompositeEncodings(nn.Module):
                     latlon, h, w, meters_per_token
                 )  # (B, H, W, 2)
                 geo_embed = get_static_spatial_encoding(
-                    per_token_ll.to(device), s_dim
+                    per_token_ll.to(device), s_dim, self.freq_concentration
                 )  # (B, H, W, s_dim)
                 geo_embed = repeat(geo_embed, f"b h w d -> {ein_string}", **ein_dict)
             else:
                 geo_embed_flat = get_static_spatial_encoding(
-                    latlon, s_dim
+                    latlon, s_dim, self.freq_concentration
                 )  # (B, s_dim)
                 num_middle_dims = modality_embed.ndim - 2
                 view_shape = (b, *([1] * num_middle_dims), s_dim)
@@ -1227,6 +1231,7 @@ class FlexiVitBase(nn.Module):
         latlon_num_freqs: int = 20,
         spatial_dim_fraction: float = 0.25,
         temporal_dim_fraction: float = 0.25,
+        freq_concentration: float = 1.0,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -1276,6 +1281,7 @@ class FlexiVitBase(nn.Module):
             latlon_num_freqs=latlon_num_freqs,
             spatial_dim_fraction=spatial_dim_fraction,
             temporal_dim_fraction=temporal_dim_fraction,
+            freq_concentration=freq_concentration,
         )
         self.apply(self._init_weights)
 
@@ -1483,6 +1489,7 @@ class Encoder(FlexiVitBase):
         latlon_num_freqs: int = 20,
         spatial_dim_fraction: float = 0.25,
         temporal_dim_fraction: float = 0.25,
+        freq_concentration: float = 1.0,
     ):
         """Initialize the encoder.
 
@@ -1533,6 +1540,8 @@ class Encoder(FlexiVitBase):
             latlon_num_freqs: Number of frequency bands for spherical positional encoding.
             spatial_dim_fraction: Fraction of embedding_size for spatial encoding.
             temporal_dim_fraction: Fraction of embedding_size for temporal encoding.
+            freq_concentration: Controls spatial frequency distribution. 1.0 = uniform,
+                higher = more high-frequency bands for better token discrimination.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1558,6 +1567,7 @@ class Encoder(FlexiVitBase):
             latlon_num_freqs=latlon_num_freqs,
             spatial_dim_fraction=spatial_dim_fraction,
             temporal_dim_fraction=temporal_dim_fraction,
+            freq_concentration=freq_concentration,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -2091,6 +2101,7 @@ class PredictorBase(FlexiVitBase):
         latlon_num_freqs: int = 20,
         spatial_dim_fraction: float = 0.25,
         temporal_dim_fraction: float = 0.25,
+        freq_concentration: float = 1.0,
     ):
         """Initialize the predictor.
 
@@ -2125,6 +2136,8 @@ class PredictorBase(FlexiVitBase):
             latlon_num_freqs: Number of frequency bands for spherical positional encoding.
             spatial_dim_fraction: Fraction of embedding_size for spatial encoding.
             temporal_dim_fraction: Fraction of embedding_size for temporal encoding.
+            freq_concentration: Controls spatial frequency distribution. 1.0 = uniform,
+                higher = more high-frequency bands for better token discrimination.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2150,6 +2163,7 @@ class PredictorBase(FlexiVitBase):
             latlon_num_freqs=latlon_num_freqs,
             spatial_dim_fraction=spatial_dim_fraction,
             temporal_dim_fraction=temporal_dim_fraction,
+            freq_concentration=freq_concentration,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -2496,6 +2510,7 @@ def _validate_encoding_params(
     use_latlon_encoding: bool,
     spatial_dim_fraction: float,
     temporal_dim_fraction: float,
+    freq_concentration: float = 1.0,
 ) -> None:
     """Validate timestamp/latlon encoding parameters common to encoder and decoder configs."""
     if timestamp_encoding_mode not in (
@@ -2531,6 +2546,10 @@ def _validate_encoding_params(
         raise ValueError(
             f"spatial_dim_fraction ({spatial_dim_fraction}) + temporal_dim_fraction "
             f"({temporal_dim_fraction}) must be <= 1.0"
+        )
+    if freq_concentration < 1.0:
+        raise ValueError(
+            f"freq_concentration must be >= 1.0, got {freq_concentration}"
         )
 
 
@@ -2574,6 +2593,7 @@ class EncoderConfig(Config):
     latlon_num_freqs: int = 20
     spatial_dim_fraction: float = 0.25
     temporal_dim_fraction: float = 0.25
+    freq_concentration: float = 1.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2606,6 +2626,7 @@ class EncoderConfig(Config):
             self.use_latlon_encoding,
             self.spatial_dim_fraction,
             self.temporal_dim_fraction,
+            self.freq_concentration,
         )
 
     @property
@@ -2652,6 +2673,7 @@ class PredictorConfig(Config):
     latlon_num_freqs: int = 20
     spatial_dim_fraction: float = 0.25
     temporal_dim_fraction: float = 0.25
+    freq_concentration: float = 1.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2675,6 +2697,7 @@ class PredictorConfig(Config):
             self.use_latlon_encoding,
             self.spatial_dim_fraction,
             self.temporal_dim_fraction,
+            self.freq_concentration,
         )
 
     @property

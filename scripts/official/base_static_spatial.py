@@ -1,8 +1,9 @@
-"""vnext base with static_spatial encoding: static per-token lat/lon spatial, legacy temporal.
+"""vnext base with static_spatial encoding + concentrated high-frequency spatial.
 
 Same as vnext/single_bandset_band_dropout/base_band_dropout_no_s1_drop_random_static.py
-but with timestamp_encoding_mode="static_spatial" instead of "static", so:
-- Spatial: static multi-frequency sinusoidal per-token lat/lon (get_static_spatial_encoding)
+but with timestamp_encoding_mode="static_spatial" and freq_concentration=4.0:
+- Spatial: static per-token lat/lon with fourth-root frequency curve (biased toward
+  high frequencies for better within-tile token discrimination)
 - Temporal: legacy time-index + month embeddings
 - Dimension layout: [spatial(50%) | temporal(25%) | channel(25%)]
 - Latlon dropout (50%) on encoder for robustness
@@ -222,7 +223,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "2026_04_06_static_spatial_encoding"
+    WANDB_PROJECT = "2026_04_07_static_spatial_freq_concentration"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
@@ -395,6 +396,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         spatial_dim_fraction=0.5,
         temporal_dim_fraction=0.25,
         latlon_dropout_rate=0.5,
+        freq_concentration=4.0,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
@@ -408,6 +410,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         timestamp_encoding_mode="static_spatial",
         spatial_dim_fraction=0.5,
         temporal_dim_fraction=0.25,
+        freq_concentration=4.0,
     )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,

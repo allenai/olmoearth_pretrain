@@ -445,8 +445,31 @@ def get_static_temporal_encoding(
     return torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
 
 
+def _spatial_exponents(
+    num_freqs: int, freq_concentration: float, device: torch.device
+) -> torch.Tensor:
+    """Compute frequency exponents for spatial encoding with optional concentration.
+
+    When freq_concentration=1.0, exponents are uniform from 0 to max_exp.
+    Higher values concentrate more frequencies at high exponents, improving
+    within-tile token discrimination at the cost of fewer planet-scale bands.
+
+    Args:
+        num_freqs: Number of frequency bands.
+        freq_concentration: Controls distribution shape. 1.0 = uniform,
+            4.0 = fourth-root curve (good default for token discrimination).
+        device: Torch device.
+
+    Returns:
+        Tensor of shape (num_freqs,) with exponent values.
+    """
+    max_exp = min(21, max(num_freqs - 1, 0))
+    t = torch.linspace(0.0, 1.0, num_freqs, device=device)
+    return max_exp * t.pow(1.0 / freq_concentration)
+
+
 def get_static_spatial_encoding(
-    latlon: torch.Tensor, encoding_dim: int
+    latlon: torch.Tensor, encoding_dim: int, freq_concentration: float = 1.0
 ) -> torch.Tensor:
     """Static multi-frequency sinusoidal geographic encoding.
 
@@ -458,6 +481,9 @@ def get_static_spatial_encoding(
         latlon: Tensor of shape (..., 2) where [..., 0] is latitude and
             [..., 1] is longitude, both in degrees.
         encoding_dim: Output encoding dimension.
+        freq_concentration: Controls frequency distribution. 1.0 = uniform
+            (current behavior), 4.0 = biased toward high frequencies for
+            better within-tile discrimination. Default: 1.0.
 
     Returns:
         Tensor of shape (..., encoding_dim).
@@ -474,9 +500,7 @@ def get_static_spatial_encoding(
     num_freqs = encoding_dim // 6
     remainder = encoding_dim - num_freqs * 6
 
-    # Geometric progression: 2^0 to 2^21 (planet-scale to ~30cm)
-    max_exp = min(21, max(num_freqs - 1, 0))
-    exponents = torch.linspace(0.0, max_exp, num_freqs, device=latlon.device)
+    exponents = _spatial_exponents(num_freqs, freq_concentration, latlon.device)
     freqs = math.pi * (2.0**exponents)  # (num_freqs,)
 
     # (..., 3, 1) * (num_freqs,) -> (..., 3, num_freqs)
@@ -505,7 +529,7 @@ def get_static_spatial_encoding(
 
 
 def build_spatial_local_freq_mask(
-    encoding_dim: int, cutoff_exp: float = 7.0
+    encoding_dim: int, cutoff_exp: float = 7.0, freq_concentration: float = 1.0
 ) -> torch.Tensor:
     """Build a mask that is 1.0 for local (high-freq) bands and 0.0 for global (low-freq).
 
@@ -517,6 +541,7 @@ def build_spatial_local_freq_mask(
         encoding_dim: Total spatial encoding dimension.
         cutoff_exp: Exponent threshold. Frequencies with exponent < cutoff_exp
             are global. Default 7.0 (~1km resolution on the globe).
+        freq_concentration: Must match the value used in get_static_spatial_encoding.
 
     Returns:
         Float tensor of shape (encoding_dim,) with 1.0 for local, 0.0 for global.
@@ -524,8 +549,7 @@ def build_spatial_local_freq_mask(
     num_freqs = encoding_dim // 6
     remainder = encoding_dim - num_freqs * 6
 
-    max_exp = min(21, max(num_freqs - 1, 0))
-    exponents = torch.linspace(0.0, max_exp, num_freqs)
+    exponents = _spatial_exponents(num_freqs, freq_concentration, torch.device("cpu"))
     freq_is_local = exponents >= cutoff_exp  # (num_freqs,) bool
 
     # Per-coordinate layout: [sin_f0..fn, cos_f0..fn]
