@@ -51,21 +51,32 @@ def build_common_components(
 SEASON_WINDOWS = [(0, 1, 2), (3, 4, 5), (6, 7, 8), (9, 10, 11)]
 
 
-def _select_seasonal_indices(sample: OlmoEarthSample) -> list[int]:
+def _select_seasonal_indices(
+    sample: OlmoEarthSample,
+) -> tuple[list[int], list[bool]]:
     """Pick one timestep per season, preferring the earliest with full coverage.
 
     For each 3-month window, iterates through month indices that fall within
     the sample's actual number of timesteps and checks that every multitemporal
-    modality present has real (non-MISSING) data at that timestep. Returns the
-    first fully-available index per window, or the first valid index as a
-    fallback. Windows entirely outside the available timesteps are skipped.
+    modality present has real (non-MISSING) data at that timestep.
+
+    Always returns exactly 4 entries (one per season). Seasons that fall
+    entirely outside the available timesteps use a placeholder index (0) and
+    are flagged as invalid so the caller can fill them with MISSING_VALUE.
+
+    Returns:
+        (indices, valid): both length-4 lists. ``valid[i]`` is False when
+        season *i* had no in-range timesteps.
     """
     T = len(sample.timestamps) if sample.timestamps is not None else 12
 
     selected: list[int] = []
+    valid: list[bool] = []
     for window in SEASON_WINDOWS:
         valid_months = [m for m in window if m < T]
         if not valid_months:
+            selected.append(0)
+            valid.append(False)
             continue
         chosen = valid_months[0]
         for month_idx in valid_months:
@@ -90,29 +101,43 @@ def _select_seasonal_indices(sample: OlmoEarthSample) -> list[int]:
                 chosen = month_idx
                 break
         selected.append(chosen)
-    return selected
+        valid.append(True)
+    return selected, valid
 
 
 def _slice_sample_seasonal(
-    sample: OlmoEarthSample, indices: list[int]
+    sample: OlmoEarthSample, indices: list[int], valid: list[bool]
 ) -> OlmoEarthSample:
-    """Reduce a 12-timestep sample to only the selected seasonal indices."""
+    """Reduce a sample to exactly 4 seasonal timesteps.
+
+    Timesteps corresponding to ``valid[i] == False`` are filled with
+    MISSING_VALUE so that every sample has a uniform time dimension of 4.
+    """
+    invalid_positions = [i for i, v in enumerate(valid) if not v]
     new_dict: dict[str, np.ndarray | None] = {}
     for field_name in sample._fields:
         data = getattr(sample, field_name)
         if data is None:
             new_dict[field_name] = None
         elif field_name == "timestamps":
-            new_dict[field_name] = data[indices]
+            sliced = data[indices].copy()
+            for i in invalid_positions:
+                sliced[i] = 0
+            new_dict[field_name] = sliced
         elif field_name == "latlon":
             new_dict[field_name] = data
         else:
             mod_spec = Modality.get(field_name)
             if mod_spec.is_multitemporal:
                 if mod_spec.is_spatial:
-                    new_dict[field_name] = data[:, :, indices, :]
+                    sliced = data[:, :, indices, :].copy()
+                    for i in invalid_positions:
+                        sliced[:, :, i, :] = MISSING_VALUE
                 else:
-                    new_dict[field_name] = data[indices]
+                    sliced = data[indices].copy()
+                    for i in invalid_positions:
+                        sliced[i] = MISSING_VALUE
+                new_dict[field_name] = sliced
             else:
                 new_dict[field_name] = data
     return OlmoEarthSample(**new_dict)
@@ -130,8 +155,8 @@ class _SeasonalIndexedDataset(_OriginalIndexedDataset):
 
     def __getitem__(self, idx: int) -> tuple:
         idx, patch_size, sample = super().__getitem__(idx)
-        indices = _select_seasonal_indices(sample)
-        sample = _slice_sample_seasonal(sample, indices)
+        indices, valid = _select_seasonal_indices(sample)
+        sample = _slice_sample_seasonal(sample, indices, valid)
         return idx, patch_size, sample
 
 
