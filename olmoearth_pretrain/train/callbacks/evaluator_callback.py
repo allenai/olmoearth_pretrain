@@ -32,6 +32,7 @@ from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn_variable_time
 from olmoearth_pretrain.evals.embedding_diagnostics import (
     compute_embedding_diagnostics,
+    compute_spatial_embedding_diagnostics,
 )
 from olmoearth_pretrain.evals.embedding_transforms import (
     dequantize_embeddings,
@@ -397,7 +398,10 @@ class DownstreamEvaluator:
 
         embedding_diagnostics_result: dict[str, float] | None = None
         if self.run_embedding_diagnostics:
-            embedding_diagnostics_result = compute_embedding_diagnostics(val_embeddings)
+            if val_embeddings.ndim >= 3:
+                embedding_diagnostics_result = compute_spatial_embedding_diagnostics(val_embeddings)
+            else:
+                embedding_diagnostics_result = compute_embedding_diagnostics(val_embeddings)
             logger.info(
                 f"Embedding diagnostics for {self.dataset}: {embedding_diagnostics_result}"
             )
@@ -561,7 +565,10 @@ class DownstreamEvaluator:
         embeddings, _ = self._get_embeddings(data_loader, is_train=False)
         logger.info(f"Embeddings shape for {self.dataset}: {embeddings.shape}")
 
-        diagnostics = compute_embedding_diagnostics(embeddings)
+        if embeddings.ndim >= 3:
+            diagnostics = compute_spatial_embedding_diagnostics(embeddings)
+        else:
+            diagnostics = compute_embedding_diagnostics(embeddings)
         logger.info(f"Embedding diagnostics for {self.dataset}: {diagnostics}")
 
         result = EvalTaskResult(val_result=None, test_result=None)
@@ -730,7 +737,7 @@ class DownstreamEvaluatorCallback(Callback):
             if result.embedding_diagnostics:
                 wandb_callback.wandb.log(
                     {
-                        f"eval_embed_diag/{evaluator.evaluation_name}/{k}": v
+                        f"eval_embed_diagnostics/{evaluator.evaluation_name}/{k}": v
                         for k, v in result.embedding_diagnostics.items()
                     }
                 )
@@ -857,7 +864,7 @@ class DownstreamEvaluatorCallback(Callback):
         if result.embedding_diagnostics:
             for metric_name, metric_value in result.embedding_diagnostics.items():
                 self.trainer.record_metric(
-                    f"eval_embed_diag/{evaluator.evaluation_name}/{metric_name}",
+                    f"eval_embed_diagnostics/{evaluator.evaluation_name}/{metric_name}",
                     metric_value,
                 )
 
@@ -931,7 +938,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                 continue
 
             config = dataset_to_config(task.dataset)
-            if config.task_type == TaskType.SEGMENTATION:
+            if config.task_type == TaskType.SEGMENTATION and task.eval_mode != EvalMode.EMBEDDING_DIAGNOSTICS:
                 if task.probe_lr is None and task.ft_lr is None:
                     raise ValueError(
                         f"probe_lr and ft_lr cannot both be None for {task.dataset}"

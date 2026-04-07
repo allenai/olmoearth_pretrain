@@ -135,7 +135,7 @@ def evaluate_checkpoints(
         wandb_callback.wandb.define_metric("eval/*", step_metric="checkpoint_step")
         wandb_callback.wandb.define_metric("eval/test/*", step_metric="checkpoint_step")
         wandb_callback.wandb.define_metric("eval_time/*", step_metric="checkpoint_step")
-        wandb_callback.wandb.define_metric("eval_embed_diag/*", step_metric="checkpoint_step")
+        wandb_callback.wandb.define_metric("eval_embed_diagnostics/*", step_metric="checkpoint_step")
 
     # Get the evaluator callback (contains the built evaluator objects)
     eval_callback = trainer.callbacks.get("downstream_evaluator")
@@ -184,7 +184,7 @@ def evaluate_checkpoints(
 
             if result.embedding_diagnostics:
                 for k, v in result.embedding_diagnostics.items():
-                    metrics[f"eval_embed_diag/{evaluator.evaluation_name}/{k}"] = v
+                    metrics[f"eval_embed_diagnostics/{evaluator.evaluation_name}/{k}"] = v
 
             metrics[f"eval_time/{evaluator.evaluation_name}"] = eval_time
 

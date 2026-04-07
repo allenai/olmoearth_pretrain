@@ -32,7 +32,7 @@ DownstreamTaskConfig(
 
 Existing eval modes (KNN, LINEAR_PROBE) can also run diagnostics by setting `run_embedding_diagnostics=True`.
 
-**Logging**: All metrics go to `eval_embed_diag/{task_name}/{metric}` in both trainer metrics and wandb.
+**Logging**: All metrics go to `eval_embed_diagnostics/{task_name}/{metric}` in both trainer metrics and wandb.
 
 ### 3. Pretrain Subset Dataset
 **File**: `olmoearth_pretrain/evals/datasets/pretrain_subset.py`
@@ -128,7 +128,7 @@ python -m olmoearth_pretrain.internal.full_eval_sweep \
     --run_embedding_diagnostics
 ```
 
-Metrics are logged to wandb under `eval_embed_diag/{task_name}/{metric}` with `checkpoint_step` as the x-axis (for multi-checkpoint sweeps).
+Metrics are logged to wandb under `eval_embed_diagnostics/{task_name}/{metric}` with `checkpoint_step` as the x-axis (for multi-checkpoint sweeps).
 
 The `--embedding_diagnostics_only` flag uses `EMBED_DIAG_TASKS` (m-eurosat, m-bigearthnet, m-forestnet, sen1floods11) with `EvalMode.EMBEDDING_DIAGNOSTICS` — no KNN/LP training, just embedding extraction + diagnostics. Much faster than a full eval sweep.
 

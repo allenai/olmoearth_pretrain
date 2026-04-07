@@ -5,10 +5,10 @@ import torch
 
 from olmoearth_pretrain.evals.embedding_diagnostics import (
     compute_embedding_diagnostics,
+    compute_spatial_embedding_diagnostics,
     effective_rank,
     embedding_norm_stats,
     pairwise_cosine_stats,
-    per_dim_variance_stats,
     uniformity,
 )
 
@@ -46,32 +46,6 @@ class TestEffectiveRank:
         embeddings = torch.randn(N, D)
         rank = effective_rank(embeddings)
         assert rank > D * 0.7
-
-
-class TestPerDimVarianceStats:
-    """Tests for per_dim_variance_stats function."""
-
-    def test_collapsed(self) -> None:
-        """Constant embeddings have all dead dims."""
-        embeddings = torch.ones(50, 16)
-        stats = per_dim_variance_stats(embeddings)
-        assert stats["num_dead_dims"] == 16
-        assert stats["frac_dead_dims"] == 1.0
-
-    def test_alive(self) -> None:
-        """Random embeddings have no dead dims."""
-        embeddings = torch.randn(50, 16)
-        stats = per_dim_variance_stats(embeddings)
-        assert stats["num_dead_dims"] == 0
-        assert stats["dim_var_mean"] > 0.5
-
-    def test_partial_collapse(self) -> None:
-        """Half alive, half dead."""
-        N, D = 50, 16
-        embeddings = torch.randn(N, D)
-        embeddings[:, D // 2 :] = 0.0
-        stats = per_dim_variance_stats(embeddings)
-        assert stats["num_dead_dims"] == D // 2
 
 
 class TestUniformity:
@@ -133,12 +107,6 @@ class TestComputeEmbeddingDiagnostics:
             "effective_rank",
             "embedding_dim",
             "num_samples",
-            "dim_var_mean",
-            "dim_var_min",
-            "dim_var_max",
-            "dim_var_std",
-            "num_dead_dims",
-            "frac_dead_dims",
             "norm_mean",
             "norm_std",
             "norm_min",
@@ -166,3 +134,40 @@ class TestComputeEmbeddingDiagnostics:
         metrics = compute_embedding_diagnostics(torch.randn(3, 32))
         assert "uniformity" not in metrics
         assert "effective_rank" in metrics
+
+
+class TestSpatialEmbeddingDiagnostics:
+    """Tests for compute_spatial_embedding_diagnostics."""
+
+    def test_returns_all_prefixes(self) -> None:
+        """Global, inter, and intra prefixes are present."""
+        embeddings = torch.randn(10, 16, 64)  # 10 images, 16 patches, 64-dim
+        metrics = compute_spatial_embedding_diagnostics(embeddings)
+        prefixes = {k.split("_")[0] for k in metrics}
+        assert {"global", "inter", "intra"}.issubset(prefixes)
+
+    def test_4d_input(self) -> None:
+        """Handles [N, H, W, D] input by flattening spatial dims."""
+        embeddings = torch.randn(8, 4, 4, 32)  # 8 images, 4x4 grid, 32-dim
+        metrics = compute_spatial_embedding_diagnostics(embeddings)
+        assert "intra_num_patches" in metrics
+        assert metrics["intra_num_patches"] == 16.0
+
+    def test_collapsed_patches_detected(self) -> None:
+        """Identical patches within images give high intra cosine sim."""
+        N, P, D = 10, 16, 64
+        per_image = torch.randn(N, 1, D)
+        embeddings = per_image.expand(N, P, D)
+        metrics = compute_spatial_embedding_diagnostics(embeddings)
+        assert metrics["intra_cosine_sim_mean"] > 0.99
+
+    def test_diverse_patches(self) -> None:
+        """Random patches give healthy intra-sample diversity."""
+        embeddings = torch.randn(10, 16, 64)
+        metrics = compute_spatial_embedding_diagnostics(embeddings)
+        assert metrics["intra_cosine_sim_mean"] < 0.5
+
+    def test_rejects_2d(self) -> None:
+        """2D input raises ValueError."""
+        with pytest.raises(ValueError, match="3\\+ dim"):
+            compute_spatial_embedding_diagnostics(torch.randn(10, 64))
