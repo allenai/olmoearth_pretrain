@@ -17,6 +17,10 @@ from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
+from olmoearth_pretrain.nn.text_targets import (
+    TextEmbeddingTargetConfig,
+    TextEmbeddingTargetGenerator,
+)
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import (
@@ -56,6 +60,7 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
     reinit_targets: bool = False
+    text_target_config: TextEmbeddingTargetConfig | None = None
 
     def build(
         self,
@@ -106,6 +111,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         contrastive_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         reinit_targets: bool = False,
+        text_target_config: TextEmbeddingTargetConfig | None = None,
     ):
         """Initialize the training module.
 
@@ -133,6 +139,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             contrastive_config: An optional contrastive configration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
             reinit_targets: Whether or not to reinitialize the target encoder.
+            text_target_config: Config for text-embedding targets on map modalities.
         """
         super().__init__(
             model=model,
@@ -176,6 +183,17 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     "Applying EMA updates to a randomly initialized target encoder."
                 )
             self.model.target_encoder.apply(self.model.target_encoder._init_weights)
+
+        self.text_target_generator: TextEmbeddingTargetGenerator | None = None
+        if text_target_config is not None:
+            self.text_target_generator = text_target_config.build()
+            if self.text_target_generator is not None:
+                if device is not None:
+                    self.text_target_generator = self.text_target_generator.to(device)
+                logger.info(
+                    f"Using text embedding targets for: "
+                    f"{self.text_target_generator.modalities}"
+                )
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -319,6 +337,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     token_exit_cfg=token_exit_cfg,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
+
+                if self.text_target_generator is not None:
+                    target_output = self.text_target_generator.replace_targets(
+                        target_output, batch, patch_size
+                    )
+
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
