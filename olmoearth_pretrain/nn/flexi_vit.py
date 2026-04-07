@@ -24,9 +24,11 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
+    TimestampEncodingMode,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
+    get_static_temporal_encoding,
 )
 from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
@@ -624,6 +626,7 @@ class CompositeEncodings(nn.Module):
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        timestamp_encoding_mode: str = "legacy",
     ):
         """Initialize the composite encodings.
 
@@ -635,8 +638,11 @@ class CompositeEncodings(nn.Module):
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             tokenization_config: Optional config for custom band groupings
+            timestamp_encoding_mode: "legacy" for time-index + month embeddings,
+                "static_temporal" for multi-frequency sinusoidal encoding
         """
         super().__init__()
+        self.timestamp_encoding_mode = TimestampEncodingMode(timestamp_encoding_mode)
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [
@@ -647,22 +653,20 @@ class CompositeEncodings(nn.Module):
         self.max_sequence_length = (
             max_sequence_length  # This max sequence length is a time dim thing
         )
-        # TODO: we need to be able to calculate the size of the param based on what types of embeddings it will get
-
-        # we have 4 embeddings types (pos_in_time, pos_in_space, month, channel) so each get
-        # 0.25 of the dimension
         self.embedding_dim_per_embedding_type = int(embedding_size * 0.25)
-        # Position encodings for time dimension initialized to 1D sinusoidal encodings
-        self.pos_embed = nn.Parameter(
-            get_1d_sincos_pos_encoding(
-                torch.arange(max_sequence_length),
-                self.embedding_dim_per_embedding_type,
-            ),
-            requires_grad=False,
-        )
-        # Month encodings
-        month_tab = get_month_encoding_table(self.embedding_dim_per_embedding_type)
-        self.month_embed = nn.Embedding.from_pretrained(month_tab, freeze=True)
+        if self.timestamp_encoding_mode == TimestampEncodingMode.STATIC_TEMPORAL:
+            self.pos_embed = None
+            self.month_embed = None
+        else:
+            self.pos_embed = nn.Parameter(
+                get_1d_sincos_pos_encoding(
+                    torch.arange(max_sequence_length),
+                    self.embedding_dim_per_embedding_type,
+                ),
+                requires_grad=False,
+            )
+            month_tab = get_month_encoding_table(self.embedding_dim_per_embedding_type)
+            self.month_embed = nn.Embedding.from_pretrained(month_tab, freeze=True)
         if not learnable_channel_embeddings and not random_channel_embeddings:
             self.per_modality_channel_embeddings = nn.ParameterDict()
             for modality in self.supported_modalities:
@@ -795,16 +799,27 @@ class CompositeEncodings(nn.Module):
             modality_embed[..., :n] += channel_embed
 
         if modality.is_multitemporal and use_temporal_encodings:
-            # Time position encodings
-            time_embed = repeat(self.pos_embed[:t], f"t d -> {ein_string}", **ein_dict)
-            modality_embed[..., n : n * 2] += time_embed.to(device)
+            if self.timestamp_encoding_mode == TimestampEncodingMode.STATIC_TEMPORAL:
+                assert timestamps is not None
+                ts_embed = get_static_temporal_encoding(timestamps, 2 * n)
+                ts_view = repeat(ts_embed, f"b t d -> {ein_string}", **ein_dict).to(
+                    device
+                )
+                modality_embed[..., n : n * 3] += ts_view
+            else:
+                # Legacy: time-index position + month embeddings
+                assert self.pos_embed is not None
+                time_embed = repeat(
+                    self.pos_embed[:t], f"t d -> {ein_string}", **ein_dict
+                )
+                modality_embed[..., n : n * 2] += time_embed.to(device)
 
-            # Month encodings
-            assert timestamps is not None
-            months = timestamps[:, :, 1]
-            month_embed = self.month_embed(months)
-            month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
-            modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
+                assert timestamps is not None
+                assert self.month_embed is not None
+                months = timestamps[:, :, 1]
+                month_embed = self.month_embed(months)
+                month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
+                modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
         if modality.is_spatial:
             # Spatial encodings
             assert input_res is not None
@@ -876,6 +891,7 @@ class FlexiVitBase(nn.Module):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        timestamp_encoding_mode: str = "legacy",
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -915,6 +931,7 @@ class FlexiVitBase(nn.Module):
             learnable_channel_embeddings,
             random_channel_embeddings,
             tokenization_config=self._base_tokenization_config,
+            timestamp_encoding_mode=timestamp_encoding_mode,
         )
         self.apply(self._init_weights)
 
@@ -1112,6 +1129,7 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        timestamp_encoding_mode: str = "legacy",
     ):
         """Initialize the encoder.
 
@@ -1145,6 +1163,7 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            timestamp_encoding_mode: "legacy" or "static_temporal"
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1160,6 +1179,7 @@ class Encoder(FlexiVitBase):
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
+            timestamp_encoding_mode=timestamp_encoding_mode,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1680,6 +1700,7 @@ class PredictorBase(FlexiVitBase):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        timestamp_encoding_mode: str = "legacy",
     ):
         """Initialize the predictor.
 
@@ -1698,6 +1719,7 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn: Whether to use flash attention
             qk_norm: Whether to apply normalization to Q and K in attention
             tokenization_config: Optional config for custom band groupings
+            timestamp_encoding_mode: "legacy" or "static_temporal"
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1713,6 +1735,7 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn=use_flash_attn,
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
+            timestamp_encoding_mode=timestamp_encoding_mode,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -2079,6 +2102,7 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+    timestamp_encoding_mode: str = "legacy"
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2104,6 +2128,11 @@ class EncoderConfig(Config):
                 )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
+        if self.timestamp_encoding_mode not in ("legacy", "static_temporal"):
+            raise ValueError(
+                f"timestamp_encoding_mode must be 'legacy' or 'static_temporal', "
+                f"got '{self.timestamp_encoding_mode}'"
+            )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -2139,6 +2168,7 @@ class PredictorConfig(Config):
     use_flash_attn: bool = False
     qk_norm: bool = False
     tokenization_config: TokenizationConfig | None = None
+    timestamp_encoding_mode: str = "legacy"
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2155,6 +2185,11 @@ class PredictorConfig(Config):
                     raise ValueError(f"Modality {modality} is not supported")
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
+        if self.timestamp_encoding_mode not in ("legacy", "static_temporal"):
+            raise ValueError(
+                f"timestamp_encoding_mode must be 'legacy' or 'static_temporal', "
+                f"got '{self.timestamp_encoding_mode}'"
+            )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
