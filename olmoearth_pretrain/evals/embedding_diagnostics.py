@@ -15,9 +15,6 @@ into the eval pipeline via the evaluator callback.
 from __future__ import annotations
 
 import logging
-import time
-from collections.abc import Callable
-from typing import Any
 
 import torch
 from torch import Tensor
@@ -92,15 +89,6 @@ def embedding_norm_stats(embeddings: Tensor) -> dict[str, float]:
     }
 
 
-def _timed(name: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-    """Run fn with timing and log the duration."""
-    t0 = time.monotonic()
-    result = fn(*args, **kwargs)
-    elapsed = time.monotonic() - t0
-    logger.info(f"  {name}: {elapsed:.2f}s")
-    return result
-
-
 def compute_embedding_diagnostics(embeddings: Tensor) -> dict[str, float]:
     """Compute all embedding quality diagnostics on [N, D] embeddings."""
     if embeddings.ndim != 2:
@@ -110,16 +98,15 @@ def compute_embedding_diagnostics(embeddings: Tensor) -> dict[str, float]:
         logger.warning("Need at least 2 samples for embedding diagnostics")
         return {}
 
-    logger.info(f"Computing diagnostics on [{n}, {d}] embeddings...")
     metrics: dict[str, float] = {}
-    metrics["effective_rank"] = _timed("effective_rank", effective_rank, embeddings)
+    metrics["effective_rank"] = effective_rank(embeddings)
     metrics["embedding_dim"] = float(d)
     metrics["num_samples"] = float(n)
-    metrics.update(_timed("norm_stats", embedding_norm_stats, embeddings))
+    metrics.update(embedding_norm_stats(embeddings))
 
     if n >= 4:
-        metrics["uniformity"] = _timed("uniformity", uniformity, embeddings)
-        metrics.update(_timed("cosine_stats", pairwise_cosine_stats, embeddings))
+        metrics["uniformity"] = uniformity(embeddings)
+        metrics.update(pairwise_cosine_stats(embeddings))
 
     return metrics
 
@@ -193,11 +180,6 @@ def compute_spatial_embedding_diagnostics(embeddings: Tensor) -> dict[str, float
         logger.warning("Need at least 2 samples for spatial embedding diagnostics")
         return {}
 
-    logger.info(
-        f"Computing spatial diagnostics: {n} images, {p} patches/image, {d}-dim"
-    )
-    t0 = time.monotonic()
-
     metrics: dict[str, float] = {}
 
     # Global: flatten all patches, subsample if huge
@@ -205,27 +187,17 @@ def compute_spatial_embedding_diagnostics(embeddings: Tensor) -> dict[str, float
     if flat.shape[0] > MAX_SVD_SAMPLES:
         idx = torch.randperm(flat.shape[0], device=flat.device)[:MAX_SVD_SAMPLES]
         flat = flat[idx]
-    logger.info(f"  [global] computing on [{flat.shape[0]}, {d}] patches...")
-    t1 = time.monotonic()
     for k, v in compute_embedding_diagnostics(flat).items():
         metrics[f"global_{k}"] = v
-    logger.info(f"  [global] done in {time.monotonic() - t1:.2f}s")
 
     # Inter-sample: mean pool patches per image -> [N, D]
-    logger.info(f"  [inter] computing on [{n}, {d}] pooled embeddings...")
     pooled = patches.float().mean(dim=1)
-    t1 = time.monotonic()
     for k, v in compute_embedding_diagnostics(pooled).items():
         metrics[f"inter_{k}"] = v
-    logger.info(f"  [inter] done in {time.monotonic() - t1:.2f}s")
 
     # Intra-sample: per-image patch diversity
     if p >= 2:
-        logger.info(f"  [intra] computing on up to {MAX_INTRA_SAMPLE_IMAGES} images...")
-        t1 = time.monotonic()
         for k, v in _compute_intra_sample_diagnostics(patches).items():
             metrics[f"intra_{k}"] = v
-        logger.info(f"  [intra] done in {time.monotonic() - t1:.2f}s")
 
-    logger.info(f"Spatial diagnostics complete in {time.monotonic() - t0:.2f}s")
     return metrics
