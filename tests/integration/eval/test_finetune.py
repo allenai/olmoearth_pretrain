@@ -37,14 +37,16 @@ def test_segmentation_eval_pipeline() -> None:
 
     # Verify return type is EvalResult
     assert isinstance(result, EvalResult)
-    expected_keys = {"miou", "overall_acc", "macro_acc", "macro_f1", "micro_f1"}
+    expected_keys = {"miou", "overall_acc", "macro_acc", "macro_f1", "micro_f1"} | {
+        f"f1_class_{i}" for i in range(num_classes)
+    }
     assert set(result.metrics.keys()) == expected_keys
 
     # Primary metric should be miou
     assert result.primary == result.metrics["miou"]
 
     # All values should be floats between 0 and 1
-    for key in expected_keys:
+    for key in result.metrics:
         assert isinstance(result.metrics[key], float), f"{key} should be float"
         assert 0.0 <= result.metrics[key] <= 1.0, f"{key} should be in [0, 1]"
 

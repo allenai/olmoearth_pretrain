@@ -129,6 +129,7 @@ class EvalResult:
         macro_acc: float,
         macro_f1: float,
         micro_f1: float,
+        per_class_f1: list[float] | None = None,
         primary_metric: EvalMetric | None = None,
         primary_metric_class: int | None = None,
     ) -> EvalResult:
@@ -140,6 +141,9 @@ class EvalResult:
             EvalMetric.MACRO_F1.value: macro_f1,
             EvalMetric.MICRO_F1.value: micro_f1,
         }
+        if per_class_f1 is not None:
+            for i, score in enumerate(per_class_f1):
+                metrics[f"f1_class_{i}"] = score
         if primary_metric is None:
             primary_metric = EvalMetric.MIOU
         resolved_key = cls._resolve_metric_key(primary_metric, primary_metric_class)
@@ -268,6 +272,7 @@ def segmentation_metrics(
         macro_acc=macro_acc,
         macro_f1=macro_f1,
         micro_f1=micro_f1,
+        per_class_f1=per_class_f1.tolist(),
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
     )
