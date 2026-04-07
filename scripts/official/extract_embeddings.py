@@ -54,15 +54,21 @@ SEASON_WINDOWS = [(0, 1, 2), (3, 4, 5), (6, 7, 8), (9, 10, 11)]
 def _select_seasonal_indices(sample: OlmoEarthSample) -> list[int]:
     """Pick one timestep per season, preferring the earliest with full coverage.
 
-    For each 3-month window, iterates through month indices and checks that
-    every multitemporal modality present in the sample has real (non-MISSING)
-    data at that timestep. Returns the first fully-available index per window,
-    or the window start as a fallback.
+    For each 3-month window, iterates through month indices that fall within
+    the sample's actual number of timesteps and checks that every multitemporal
+    modality present has real (non-MISSING) data at that timestep. Returns the
+    first fully-available index per window, or the first valid index as a
+    fallback. Windows entirely outside the available timesteps are skipped.
     """
+    T = len(sample.timestamps) if sample.timestamps is not None else 12
+
     selected: list[int] = []
     for window in SEASON_WINDOWS:
-        chosen = window[0]
-        for month_idx in window:
+        valid_months = [m for m in window if m < T]
+        if not valid_months:
+            continue
+        chosen = valid_months[0]
+        for month_idx in valid_months:
             all_available = True
             for field_name in sample._fields:
                 if field_name in ("timestamps", "latlon"):
