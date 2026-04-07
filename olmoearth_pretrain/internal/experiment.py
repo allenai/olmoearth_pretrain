@@ -352,6 +352,7 @@ class _IndexedDataset:
             idx=idx,
             patch_size=self.patch_size,
             sampled_hw_p=self.sampled_hw_p,
+            center_crop=True,
         )
         patch_size, sample = self.inner[args]
         return idx, patch_size, sample

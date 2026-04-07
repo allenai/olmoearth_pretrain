@@ -7,7 +7,7 @@ import torch
 
 from olmoearth_pretrain.data.collate import collate_olmoearth_pretrain
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
+from olmoearth_pretrain.data.dataset import OlmoEarthSample, subset_sample_default
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.flexi_vit import Encoder
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
@@ -107,3 +107,68 @@ def test_latlon_survives_collation() -> None:
     assert batched_sample.latlon is not None
     latlon_t = torch.as_tensor(batched_sample.latlon)
     assert latlon_t.shape == (B, 2)
+
+
+def test_center_crop_produces_correct_window() -> None:
+    """Verify center_crop=True extracts the centered spatial region."""
+    H, W, T = 128, 128, 4
+    PATCH_SIZE = 8
+    SAMPLED_HW_P = 12
+    CROP_PX = SAMPLED_HW_P * PATCH_SIZE  # 96
+
+    s2_C = Modality.SENTINEL2_L2A.num_bands
+    s2_data = np.arange(H * W * T * s2_C, dtype=np.float32).reshape(H, W, T, s2_C)
+    sample = OlmoEarthSample(
+        sentinel2_l2a=s2_data,
+        latlon=np.array([10.0, 20.0], dtype=np.float32),
+        timestamps=np.array(
+            [[15, 1, 2023], [15, 2, 2023], [15, 3, 2023], [15, 4, 2023]],
+            dtype=np.int32,
+        ),
+    )
+
+    cropped = subset_sample_default(
+        sample,
+        patch_size=PATCH_SIZE,
+        max_tokens_per_instance=None,
+        sampled_hw_p=SAMPLED_HW_P,
+        current_length=T,
+        center_crop=True,
+    )
+
+    offset = (128 - 96) // 2  # 16
+    assert cropped.sentinel2_l2a is not None
+    assert cropped.sentinel2_l2a.shape == (CROP_PX, CROP_PX, T, s2_C)
+    expected = s2_data[offset : offset + CROP_PX, offset : offset + CROP_PX, :, :]
+    np.testing.assert_array_equal(cropped.sentinel2_l2a, expected)
+    assert cropped.timestamps is not None
+    assert cropped.timestamps.shape == (T, 3)
+    np.testing.assert_array_equal(cropped.latlon, sample.latlon)
+
+
+def test_center_crop_is_deterministic() -> None:
+    """Verify center_crop produces identical results across calls."""
+    H, W, T = 128, 128, 2
+    s2_C = Modality.SENTINEL2_L2A.num_bands
+    s2_data = np.random.randn(H, W, T, s2_C).astype(np.float32)
+    sample = OlmoEarthSample(
+        sentinel2_l2a=s2_data,
+        latlon=np.array([0.0, 0.0], dtype=np.float32),
+        timestamps=np.array([[1, 1, 2023], [1, 2, 2023]], dtype=np.int32),
+    )
+
+    results = [
+        subset_sample_default(
+            sample,
+            patch_size=8,
+            max_tokens_per_instance=None,
+            sampled_hw_p=12,
+            current_length=T,
+            center_crop=True,
+        )
+        for _ in range(3)
+    ]
+    for r in results[1:]:
+        assert r.sentinel2_l2a is not None
+        assert results[0].sentinel2_l2a is not None
+        np.testing.assert_array_equal(r.sentinel2_l2a, results[0].sentinel2_l2a)
