@@ -389,8 +389,83 @@ def _extract_collate(batch: list[tuple]) -> tuple:
     )
 
 
+def _write_progress(output_dir: Any, shard_idx: int, num_samples: int) -> None:
+    """Atomically write extraction progress so we can resume after preemption."""
+    import json
+
+    progress = {"next_shard_idx": shard_idx, "num_samples_completed": num_samples}
+    tmp_path = output_dir / "progress.json.tmp"
+    with open(str(tmp_path), "w") as f:
+        json.dump(progress, f)
+    tmp_path.rename(output_dir / "progress.json")
+
+
+def _flush_shard(
+    output_dir: Any,
+    shard_idx: int,
+    shard_embeddings: list[np.ndarray],
+    shard_index_rows: list[dict],
+    total_samples: int,
+) -> None:
+    """Write a shard .npz, append its rows to index.csv, and update progress."""
+    import pandas as pd
+
+    np.savez(
+        output_dir / f"shard_{shard_idx:04d}.npz",
+        embeddings=np.stack(shard_embeddings),
+    )
+    logger.info("Wrote shard %d (%d samples)", shard_idx, len(shard_embeddings))
+
+    index_path = output_dir / "index.csv"
+    write_header = not index_path.exists()
+    pd.DataFrame(shard_index_rows).to_csv(
+        str(index_path), mode="a", header=write_header, index=False
+    )
+
+    _write_progress(output_dir, shard_idx + 1, total_samples)
+
+
+def _load_progress(output_dir: Any) -> tuple[int, int]:
+    """Load progress from a previous run, returning (next_shard_idx, num_samples_completed).
+
+    Returns (0, 0) if no progress file exists.
+    """
+    import json
+
+    progress_path = output_dir / "progress.json"
+    if not progress_path.exists():
+        return 0, 0
+    with open(str(progress_path)) as f:
+        progress = json.load(f)
+    return progress["next_shard_idx"], progress["num_samples_completed"]
+
+
+def _cleanup_partial_state(output_dir: Any, next_shard_idx: int) -> None:
+    """Remove any shard files or index rows written after the last checkpoint."""
+    import pandas as pd
+
+    for shard_file in output_dir.glob("shard_*.npz"):
+        idx = int(shard_file.stem.split("_")[1])
+        if idx >= next_shard_idx:
+            shard_file.unlink()
+            logger.info("Removed incomplete shard file %s", shard_file.name)
+
+    index_path = output_dir / "index.csv"
+    if index_path.exists() and next_shard_idx > 0:
+        df = pd.read_csv(str(index_path))
+        valid_shards = {f"shard_{i:04d}.npz" for i in range(next_shard_idx)}
+        df = df[df["shard"].isin(valid_shards)]
+        df.to_csv(str(index_path), index=False)
+
+
 def extract(config: OlmoEarthExtractConfig) -> None:
-    """Extract encoder embeddings from a checkpoint and save to disk."""
+    """Extract encoder embeddings from a checkpoint and save to disk.
+
+    This function is preemption-friendly: progress is checkpointed after each
+    shard flush, and a restarted job will resume from the last completed shard.
+    """
+    import itertools
+
     import pandas as pd
     import torch
     from torch.utils.data import DataLoader
@@ -431,17 +506,38 @@ def extract(config: OlmoEarthExtractConfig) -> None:
         pin_memory=True,
     )
 
-    # 3. Inference loop -- sharded output
+    # 3. Resume from previous progress if available
     output_dir = UPath(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    index_rows: list[dict] = []
-    shard_embeddings: list[np.ndarray] = []
-    shard_idx = 0
     shard_size = config.batch_size * 16
 
+    shard_idx, num_samples_completed = _load_progress(output_dir)
+    batches_to_skip = num_samples_completed // config.batch_size
+
+    if num_samples_completed > 0:
+        _cleanup_partial_state(output_dir, shard_idx)
+        logger.info(
+            "Resuming from shard %d, skipping %d samples (%d batches)",
+            shard_idx,
+            num_samples_completed,
+            batches_to_skip,
+        )
+    else:
+        for f in output_dir.glob("shard_*.npz"):
+            f.unlink()
+        index_path = output_dir / "index.csv"
+        if index_path.exists():
+            index_path.unlink()
+
+    # 4. Inference loop -- sharded output
+    shard_embeddings: list[np.ndarray] = []
+    shard_index_rows: list[dict] = []
+    total_samples = num_samples_completed
+
     logger.info("Starting embedding extraction to %s", output_dir)
+    batch_iter = itertools.islice(enumerate(dataloader), batches_to_skip, None)
     with torch.no_grad():
-        for batch_idx, batch in enumerate(dataloader):
+        for batch_idx, batch in batch_iter:
             patch_size, masked_sample, latlons, sample_indices = batch
             masked_sample = masked_sample.to_device(device)
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
@@ -454,7 +550,7 @@ def extract(config: OlmoEarthExtractConfig) -> None:
 
             for i in range(embeddings_np.shape[0]):
                 shard_embeddings.append(embeddings_np[i])
-                index_rows.append(
+                shard_index_rows.append(
                     {
                         "sample_idx": int(sample_indices[i]),
                         "shard": f"shard_{shard_idx:04d}.npz",
@@ -464,33 +560,39 @@ def extract(config: OlmoEarthExtractConfig) -> None:
                     }
                 )
                 if len(shard_embeddings) >= shard_size:
-                    np.savez(
-                        output_dir / f"shard_{shard_idx:04d}.npz",
-                        embeddings=np.stack(shard_embeddings),
-                    )
-                    logger.info(
-                        "Wrote shard %d (%d samples)", shard_idx, len(shard_embeddings)
+                    total_samples += len(shard_embeddings)
+                    _flush_shard(
+                        output_dir,
+                        shard_idx,
+                        shard_embeddings,
+                        shard_index_rows,
+                        total_samples,
                     )
                     shard_embeddings = []
+                    shard_index_rows = []
                     shard_idx += 1
 
             if batch_idx % 50 == 0:
                 logger.info("Processed batch %d", batch_idx)
 
     if shard_embeddings:
-        np.savez(
-            output_dir / f"shard_{shard_idx:04d}.npz",
-            embeddings=np.stack(shard_embeddings),
+        total_samples += len(shard_embeddings)
+        _flush_shard(
+            output_dir,
+            shard_idx,
+            shard_embeddings,
+            shard_index_rows,
+            total_samples,
         )
-        logger.info(
-            "Wrote final shard %d (%d samples)", shard_idx, len(shard_embeddings)
-        )
+        shard_idx += 1
 
-    pd.DataFrame(index_rows).to_csv(output_dir / "index.csv", index=False)
+    _write_progress(output_dir, shard_idx, total_samples)
+
+    total_index = pd.read_csv(str(output_dir / "index.csv"))
     logger.info(
         "Extraction complete: %d samples, %d shards, index at %s/index.csv",
-        len(index_rows),
-        shard_idx + 1,
+        len(total_index),
+        shard_idx,
         output_dir,
     )
 
