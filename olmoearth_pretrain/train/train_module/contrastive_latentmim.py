@@ -339,6 +339,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 target_output, _, _ = unpack_encoder_output(output_dict)
 
                 if self.text_target_generator is not None:
+                    logger.debug("Replacing text targets...")
                     target_output = self.text_target_generator.replace_targets(
                         target_output, batch, patch_size
                     )
