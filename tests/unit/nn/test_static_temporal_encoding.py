@@ -1,9 +1,13 @@
 """Tests for static_temporal encoding mode and get_static_temporal_encoding."""
 
+import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.nn.encodings import get_static_temporal_encoding
+from olmoearth_pretrain.nn.encodings import (
+    build_static_temporal_freqs,
+    get_static_temporal_encoding,
+)
 from olmoearth_pretrain.nn.flexi_vit import CompositeEncodings
 
 
@@ -28,23 +32,38 @@ def _make_timestamps(b: int = 2, t: int = 4) -> torch.Tensor:
 def test_get_static_temporal_encoding_shape() -> None:
     """Output shape should be (B, T, encoding_dim)."""
     ts = _make_timestamps(3, 5)
-    enc = get_static_temporal_encoding(ts, 64)
+    freqs = build_static_temporal_freqs(64)
+    enc = get_static_temporal_encoding(ts, freqs)
     assert enc.shape == (3, 5, 64)
 
 
 def test_get_static_temporal_encoding_deterministic() -> None:
     """Same input should produce same output."""
     ts = torch.tensor([[[15, 6, 2021], [1, 0, 2020]]])
-    a = get_static_temporal_encoding(ts, 32)
-    b = get_static_temporal_encoding(ts, 32)
+    freqs = build_static_temporal_freqs(32)
+    a = get_static_temporal_encoding(ts, freqs)
+    b = get_static_temporal_encoding(ts, freqs)
     assert torch.allclose(a, b)
 
 
 def test_get_static_temporal_encoding_different_dates_differ() -> None:
     """Different dates should produce different encodings."""
     ts = torch.tensor([[[1, 0, 2020], [1, 6, 2021]]])
-    enc = get_static_temporal_encoding(ts, 32)
+    freqs = build_static_temporal_freqs(32)
+    enc = get_static_temporal_encoding(ts, freqs)
     assert not torch.allclose(enc[0, 0], enc[0, 1])
+
+
+def test_build_static_temporal_freqs_odd_dim_raises() -> None:
+    """Odd encoding_dim should raise AssertionError."""
+    with pytest.raises(AssertionError, match="encoding_dim must be even"):
+        build_static_temporal_freqs(33)
+
+
+def test_invalid_timestamp_encoding_mode_raises() -> None:
+    """Invalid mode should raise ValueError."""
+    with pytest.raises(ValueError):
+        _make_ce("nonexistent_mode")
 
 
 def test_static_temporal_no_pos_embed() -> None:
@@ -52,6 +71,14 @@ def test_static_temporal_no_pos_embed() -> None:
     ce = _make_ce("static_temporal")
     assert ce.pos_embed is None
     assert ce.month_embed is None
+
+
+def test_static_temporal_has_freqs_buffer() -> None:
+    """static_temporal mode should register precomputed frequencies buffer."""
+    ce = _make_ce("static_temporal")
+    assert hasattr(ce, "_static_temporal_freqs")
+    n = ce.embedding_dim_per_embedding_type
+    assert ce._static_temporal_freqs.shape == (n,)
 
 
 def test_legacy_has_pos_embed() -> None:
@@ -80,7 +107,6 @@ def test_static_temporal_same_date_same_encoding() -> None:
     out = ce.forward({"sentinel2_l2a": tokens}, ts, patch_size=4)
     result = out["sentinel2_l2a"]
     n = ce.embedding_dim_per_embedding_type
-    # All time slots should have identical temporal encoding
     assert torch.allclose(
         result[0, 0, 0, 0, 0, n : 3 * n],
         result[0, 0, 0, 1, 0, n : 3 * n],
@@ -93,7 +119,7 @@ def test_static_temporal_differs_from_legacy() -> None:
     ce_lg = _make_ce("legacy", embedding_size=16)
     B, H, W, T = 1, 2, 2, 4
     tokens = torch.zeros(B, H, W, T, 3, 16)
-    ts = _make_timestamps(B, T)
+    ts = torch.tensor([[[1, 0, 2020], [15, 6, 2020], [1, 0, 2021], [15, 6, 2021]]])
     out_st = ce_st.forward({"sentinel2_l2a": tokens}, ts, patch_size=4)
     out_lg = ce_lg.forward({"sentinel2_l2a": tokens}, ts, patch_size=4)
     n = ce_st.embedding_dim_per_embedding_type
