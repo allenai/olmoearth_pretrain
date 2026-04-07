@@ -643,7 +643,13 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         .with_callback(
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
-                tasks=EMBED_DIAG_TASKS if os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY") else (FT_EVAL_TASKS if os.environ.get("FINETUNE") else EVAL_TASKS),
+                tasks=(
+                    EMBED_DIAG_TASKS
+                    if os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY")
+                    else FT_EVAL_TASKS
+                    if os.environ.get("FINETUNE")
+                    else EVAL_TASKS
+                ),
                 eval_on_startup=True,
                 cancel_after_first_eval=True,
                 run_on_test=True,

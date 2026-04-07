@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
+from typing import Any
 
 import torch
 from torch import Tensor
@@ -90,7 +92,7 @@ def embedding_norm_stats(embeddings: Tensor) -> dict[str, float]:
     }
 
 
-def _timed(name: str, fn, *args, **kwargs):
+def _timed(name: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Run fn with timing and log the duration."""
     t0 = time.monotonic()
     result = fn(*args, **kwargs)
@@ -219,9 +221,7 @@ def compute_spatial_embedding_diagnostics(embeddings: Tensor) -> dict[str, float
 
     # Intra-sample: per-image patch diversity
     if p >= 2:
-        logger.info(
-            f"  [intra] computing on up to {MAX_INTRA_SAMPLE_IMAGES} images..."
-        )
+        logger.info(f"  [intra] computing on up to {MAX_INTRA_SAMPLE_IMAGES} images...")
         t1 = time.monotonic()
         for k, v in _compute_intra_sample_diagnostics(patches).items():
             metrics[f"intra_{k}"] = v

@@ -399,9 +399,13 @@ class DownstreamEvaluator:
         embedding_diagnostics_result: dict[str, float] | None = None
         if self.run_embedding_diagnostics:
             if val_embeddings.ndim >= 3:
-                embedding_diagnostics_result = compute_spatial_embedding_diagnostics(val_embeddings)
+                embedding_diagnostics_result = compute_spatial_embedding_diagnostics(
+                    val_embeddings
+                )
             else:
-                embedding_diagnostics_result = compute_embedding_diagnostics(val_embeddings)
+                embedding_diagnostics_result = compute_embedding_diagnostics(
+                    val_embeddings
+                )
             logger.info(
                 f"Embedding diagnostics for {self.dataset}: {embedding_diagnostics_result}"
             )
@@ -938,7 +942,10 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                 continue
 
             config = dataset_to_config(task.dataset)
-            if config.task_type == TaskType.SEGMENTATION and task.eval_mode != EvalMode.EMBEDDING_DIAGNOSTICS:
+            if (
+                config.task_type == TaskType.SEGMENTATION
+                and task.eval_mode != EvalMode.EMBEDDING_DIAGNOSTICS
+            ):
                 if task.probe_lr is None and task.ft_lr is None:
                     raise ValueError(
                         f"probe_lr and ft_lr cannot both be None for {task.dataset}"

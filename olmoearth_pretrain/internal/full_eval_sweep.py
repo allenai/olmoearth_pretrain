@@ -845,7 +845,9 @@ def _build_checkpoint_sweep_command(
             cmd_args += embed_diag_args
     cmd_args += _get_load_checkpoints_args(args.model)
 
-    env_prefix = _get_env_prefix(args, module_path) + f" CHECKPOINT_DIR={checkpoint_dir}"
+    env_prefix = (
+        _get_env_prefix(args, module_path) + f" CHECKPOINT_DIR={checkpoint_dir}"
+    )
     if args.steps:
         env_prefix += f" CHECKPOINT_STEPS={args.steps}"
 
