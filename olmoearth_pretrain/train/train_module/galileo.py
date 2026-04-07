@@ -371,13 +371,13 @@ class GalileoTrainModule(OlmoEarthTrainModule):
             with torch.no_grad():
                 logger.info("target encoder running here")
                 output_dict = self.model.target_encoder.forward(
-                    batch_a.unmask(),
+                    batch_a.unmask_for_target(token_exit_cfg_a),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg_a,
                 )
                 target_output_a, _, _ = unpack_encoder_output(output_dict)
                 output_dict = self.model.target_encoder.forward(
-                    batch_b.unmask(),
+                    batch_b.unmask_for_target(token_exit_cfg_b),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg_b,
                 )

@@ -280,7 +280,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
                 output_dict = self.model.target_encoder.forward(
-                    batch.unmask(),
+                    batch.unmask_for_target(token_exit_cfg),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )

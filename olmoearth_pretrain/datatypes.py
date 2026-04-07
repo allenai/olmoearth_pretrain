@@ -439,6 +439,28 @@ class MaskedOlmoEarthSample(NamedTuple):
                 updates[name] = val * (val == MaskValue.MISSING.value)
         return self._replace(**updates)
 
+    def unmask_for_target(
+        self, token_exit_cfg: dict[str, int]
+    ) -> MaskedOlmoEarthSample:
+        """Return an unmasked sample with exit_depth=0 modalities set to MISSING.
+
+        Modalities with exit_depth=0 in token_exit_cfg should not participate
+        in the target encoder's attention, so their masks are set to MISSING.
+        """
+        unmasked = self.unmask()
+        updates = {}
+        for modality, exit_depth in token_exit_cfg.items():
+            if exit_depth == 0:
+                mask_name = _get_masked_modality_name(modality)
+                mask_val = getattr(unmasked, mask_name, None)
+                if mask_val is not None:
+                    updates[mask_name] = torch.full_like(
+                        mask_val, MaskValue.MISSING.value
+                    )
+        if updates:
+            return unmasked._replace(**updates)
+        return unmasked
+
     @classmethod
     def from_olmoearthsample(
         cls,

@@ -190,7 +190,7 @@ class MAETrainModule(OlmoEarthTrainModule):
                 with torch.no_grad():
                     logger.info("Target Encoder forward pass...")
                     output_dict = self.model.encoder.forward(
-                        x.unmask(),
+                        x.unmask_for_target(self.token_exit_cfg),
                         patch_size=patch_size,
                         token_exit_cfg=self.token_exit_cfg,
                     )
