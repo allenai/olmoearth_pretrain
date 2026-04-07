@@ -17,7 +17,6 @@ from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
-from olmoearth_pretrain.nn.supervision_head import compute_supervision_loss
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import (
@@ -57,7 +56,6 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
     reinit_targets: bool = False
-    unmask_exclude_modalities: list[str] = field(default_factory=list)
 
     def build(
         self,
@@ -172,14 +170,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
-
-        self._supervised_modality_names: list[str] = []
-        if self.model.supervision_head is not None:
-            self._supervised_modality_names = list(
-                self.model.supervision_head.modality_configs.keys()
-            )
-            self.total_loss_name = f"{self.total_loss_name}+supervision"
-
         if reinit_targets:
             if ema_decay != (0.0, 0.0):
                 logger.warning(
@@ -318,18 +308,13 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 latent_projected_and_pooled,
                 reconstructed,
                 extra_metrics,
-                supervision_preds,
             ) = self.model(batch, patch_size)
             if extra_metrics is not None:
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
-                if self.unmask_exclude_modalities:
-                    unmasked = batch.unmask_excluding(self.unmask_exclude_modalities)
-                else:
-                    unmasked = batch.unmask()
                 output_dict = self.model.target_encoder.forward(
-                    unmasked,
+                    batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
@@ -337,21 +322,4 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
-
-            # --- Supervision loss ---
-            if (
-                supervision_preds is not None
-                and self.model.supervision_head is not None
-            ):
-                if extra_metrics is None:
-                    extra_metrics = {}
-                sup_loss, per_modality_losses = compute_supervision_loss(
-                    supervision_preds,
-                    batch,
-                    self.model.supervision_head,
-                )
-                loss = loss + sup_loss
-                for mod_name, mod_loss in per_modality_losses.items():
-                    extra_metrics[f"supervision/{mod_name}"] = mod_loss
-
             return loss, latent, decoded, target_output, latent_projected_and_pooled

@@ -85,6 +85,53 @@ Based on the supervision script with:
 | cosine_sim_mean → 1 | Full collapse | Should be near 0 for random-like |
 | norm_std → 0 | Norm collapse | Should have healthy variance |
 
+## Running embedding diagnostics on checkpoints
+
+The `--run_embedding_diagnostics` flag on `full_eval_sweep.py` enables embedding diagnostics on all eval tasks. This injects `run_embedding_diagnostics=True` into every task config so you get effective rank, uniformity, cosine sim stats, etc. alongside the normal KNN/LP metrics.
+
+### Diagnostics only (no KNN/LP) — single checkpoint
+```bash
+python -m olmoearth_pretrain.internal.full_eval_sweep \
+    --checkpoint_path=/path/to/step450000 \
+    --module_path=scripts/official/base.py \
+    --cluster=local \
+    --defaults_only \
+    --embedding_diagnostics_only
+```
+
+### Diagnostics only — sweep checkpoint directory
+```bash
+python -m olmoearth_pretrain.internal.full_eval_sweep \
+    --checkpoint_dir=/path/to/checkpoints/my_run \
+    --module_path=scripts/official/base.py \
+    --cluster=local \
+    --embedding_diagnostics_only
+```
+
+### Diagnostics only — specific steps
+```bash
+python -m olmoearth_pretrain.internal.full_eval_sweep \
+    --checkpoint_dir=/path/to/checkpoints/my_run \
+    --module_path=scripts/official/base.py \
+    --cluster=local \
+    --steps=5000,10000,20000 \
+    --embedding_diagnostics_only
+```
+
+### Full evals + diagnostics (adds diagnostics alongside KNN/LP)
+```bash
+python -m olmoearth_pretrain.internal.full_eval_sweep \
+    --checkpoint_path=/path/to/step450000 \
+    --module_path=scripts/official/base.py \
+    --cluster=local \
+    --defaults_only \
+    --run_embedding_diagnostics
+```
+
+Metrics are logged to wandb under `eval_embed_diag/{task_name}/{metric}` with `checkpoint_step` as the x-axis (for multi-checkpoint sweeps).
+
+The `--embedding_diagnostics_only` flag uses `EMBED_DIAG_TASKS` (m-eurosat, m-bigearthnet, m-forestnet, sen1floods11) with `EvalMode.EMBEDDING_DIAGNOSTICS` — no KNN/LP training, just embedding extraction + diagnostics. Much faster than a full eval sweep.
+
 ### Failure modes NOT yet detected
 - **Student-teacher divergence**: Would need comparing student vs target encoder outputs. Not implemented as an eval (would need both encoders at eval time).
 - **Prediction head collapse**: Diagnostics only measure encoder embeddings. If the projector/predictor collapses but the backbone is fine, we'd miss it. Could add diagnostics on `latent_projected_and_pooled` in a future iteration.

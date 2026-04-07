@@ -400,6 +400,51 @@ EVAL_TASKS = {
     ),
 }
 
+EMBED_DIAG_TASKS = {
+    "m_eurosat": DownstreamTaskConfig(
+        dataset="m-eurosat",
+        embedding_batch_size=128,
+        num_workers=0,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        eval_interval=Duration.epochs(1),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.EMBEDDING_DIAGNOSTICS,
+    ),
+    "m_bigearthnet": DownstreamTaskConfig(
+        dataset="m-bigearthnet",
+        embedding_batch_size=64,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        eval_interval=Duration.epochs(1),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.EMBEDDING_DIAGNOSTICS,
+    ),
+    "m_forestnet": DownstreamTaskConfig(
+        dataset="m-forestnet",
+        embedding_batch_size=64,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        eval_interval=Duration.epochs(1),
+        input_modalities=[Modality.LANDSAT.name],
+        eval_mode=EvalMode.EMBEDDING_DIAGNOSTICS,
+    ),
+    "sen1floods11": DownstreamTaskConfig(
+        dataset="sen1floods11",
+        embedding_batch_size=128,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        eval_interval=Duration.epochs(1),
+        input_modalities=[Modality.SENTINEL1.name],
+        eval_mode=EvalMode.EMBEDDING_DIAGNOSTICS,
+    ),
+}
+
 FT_EVAL_TASKS = {
     "m_eurosat": DownstreamTaskConfig(
         dataset="m-eurosat",
@@ -532,7 +577,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         .with_callback(
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
-                tasks=FT_EVAL_TASKS if os.environ.get("FINETUNE") else EVAL_TASKS,
+                tasks=EMBED_DIAG_TASKS if os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY") else (FT_EVAL_TASKS if os.environ.get("FINETUNE") else EVAL_TASKS),
                 eval_on_startup=True,
                 cancel_after_first_eval=True,
                 run_on_test=True,
