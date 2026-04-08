@@ -17,7 +17,6 @@ from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
-from olmoearth_pretrain.nn.pooling import PoolingType, pool_per_modality
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import (
@@ -209,10 +208,10 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 masked_batch_b = microbatch_b.to_device(self.device)
 
                 # Run Encoder and decoder on the augmented input
-                loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
+                loss_a, latent_a, decoded_a, target_output_a, pooled_a, per_mod_a = (
                     self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
                 )
-                loss_b, latent_b, decoded_b, target_output_b, pooled_b = (
+                loss_b, latent_b, decoded_b, target_output_b, pooled_b, per_mod_b = (
                     self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
                 )
                 loss = (loss_a + loss_b) / 2
@@ -231,9 +230,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     )
 
                 if self.contrastive_loss is not None:
-                    if self.per_modality_contrastive:
+                    if self.per_modality_contrastive and per_mod_a and per_mod_b:
                         contrastive_loss = self._per_modality_contrastive(
-                            latent_a, latent_b
+                            per_mod_a, per_mod_b
                         )
                     else:
                         contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
@@ -278,22 +277,21 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
 
     def _per_modality_contrastive(
         self,
-        latent_a: TokensAndMasks,
-        latent_b: TokensAndMasks,
+        projected_a: dict[str, torch.Tensor],
+        projected_b: dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        """Compute contrastive loss per encode modality, averaged."""
-        pooled_a = pool_per_modality(latent_a, PoolingType.MEAN)
-        pooled_b = pool_per_modality(latent_b, PoolingType.MEAN)
+        """Compute contrastive loss per modality using pre-projected embeddings.
 
-        projection = self.model.encoder.project_and_aggregate.projection
-
+        Uses per-modality projected embeddings computed inside the encoder's
+        FSDP forward pass to avoid DTensor/Tensor mixing errors.
+        """
         losses = []
-        for mod_name in pooled_a:
-            if mod_name not in pooled_b:
+        for mod_name in projected_a:
+            if mod_name not in projected_b:
                 continue
-            proj_a = projection(pooled_a[mod_name])
-            proj_b = projection(pooled_b[mod_name])
-            mod_loss = self.contrastive_loss.compute(proj_a, proj_b)
+            mod_loss = self.contrastive_loss.compute(
+                projected_a[mod_name], projected_b[mod_name]
+            )
             losses.append(mod_loss)
             if not self.trainer.is_canceled:
                 self.trainer.record_metric(
@@ -312,7 +310,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         patch_size: int,
         token_exit_cfg: dict[str, int],
     ) -> tuple[
-        torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
+        torch.Tensor,
+        TokensAndMasks,
+        TokensAndMasks,
+        TokensAndMasks,
+        torch.Tensor,
+        dict[str, torch.Tensor] | None,
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
@@ -323,7 +326,11 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 reconstructed,
                 extra_metrics,
             ) = self.model(batch, patch_size)
+            per_modality_projected = None
             if extra_metrics is not None:
+                per_modality_projected = extra_metrics.pop(
+                    "per_modality_projected", None
+                )
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
@@ -336,4 +343,11 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
-            return loss, latent, decoded, target_output, latent_projected_and_pooled
+            return (
+                loss,
+                latent,
+                decoded,
+                target_output,
+                latent_projected_and_pooled,
+                per_modality_projected,
+            )

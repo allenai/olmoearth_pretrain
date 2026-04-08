@@ -32,7 +32,11 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
-from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
+from olmoearth_pretrain.nn.pooling import (
+    PoolingType,
+    pool_per_modality,
+    pool_unmasked_tokens,
+)
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
@@ -1635,6 +1639,11 @@ class Encoder(FlexiVitBase):
 
         if not fast_pass:
             output_dict["project_aggregated"] = self.project_and_aggregate(output)
+            per_mod = pool_per_modality(output, PoolingType.MEAN)
+            output_dict["per_modality_projected"] = {
+                name: self.project_and_aggregate.projection(emb)
+                for name, emb in per_mod.items()
+            }
 
         return output_dict
 
