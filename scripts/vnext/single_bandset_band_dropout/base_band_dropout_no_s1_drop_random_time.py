@@ -131,7 +131,7 @@ def _masking_config(
             "type": "random_time_with_decode",
             "encode_ratio": 0.5,
             "decode_ratio": 0.5,
-            "random_ratio": 0.5,
+            "random_ratio": 1.0,
             "only_decode_modalities": ONLY_DECODE_MODALITIES,
         },
         tokenization_config=tokenization_config,
