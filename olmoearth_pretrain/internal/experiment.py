@@ -335,7 +335,13 @@ def launch_benchmark(config: BenchmarkExperimentConfig) -> None:
 
 
 class _IndexedDataset:
-    """Wraps OlmoEarthDataset to yield (idx, patch_size, sample)."""
+    """Wraps OlmoEarthDataset to yield (h5_index, patch_size, sample).
+
+    The returned index is the resolved h5 file index (i.e. the N in
+    ``sample_N.h5``), not the DataLoader positional index.  This ensures
+    that downstream consumers (e.g. index.csv) reference the real sample
+    identity even when the dataset filters out samples during prepare().
+    """
 
     def __init__(self, inner: Any, patch_size: int, sampled_hw_p: int):
         self.inner = inner
@@ -355,7 +361,14 @@ class _IndexedDataset:
             center_crop=True,
         )
         patch_size, sample = self.inner[args]
-        return idx, patch_size, sample
+
+        h5_index = idx
+        if (
+            hasattr(self.inner, "sample_indices")
+            and self.inner.sample_indices is not None
+        ):
+            h5_index = int(self.inner.sample_indices[idx])
+        return h5_index, patch_size, sample
 
 
 def _extract_collate(batch: list[tuple]) -> tuple:
