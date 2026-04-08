@@ -12,6 +12,7 @@ import logging
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from upath import UPath
 
 from olmoearth_pretrain.data.dataset import GetItemArgs, OlmoEarthDataset
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
@@ -45,7 +46,7 @@ class PretrainSubsetDataset(Dataset):
         self.max_samples = max_samples
 
         self._dataset = OlmoEarthDataset(
-            h5py_dir=h5py_dir,
+            h5py_dir=UPath(h5py_dir),
             training_modalities=training_modalities,
             dtype=np.float32,
             normalize=True,
