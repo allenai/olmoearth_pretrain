@@ -446,8 +446,14 @@ class MaskedOlmoEarthSample(NamedTuple):
 
         Modalities with exit_depth=0 in token_exit_cfg should not participate
         in the target encoder's attention, so their masks are set to MISSING.
+
+        If all exit depths are the same, this is a no-op (returns unmask() as-is)
+        to avoid setting all modalities to MISSING when exit_depth=0 for everything.
         """
         unmasked = self.unmask()
+        exit_depths = set(token_exit_cfg.values())
+        if len(exit_depths) <= 1:
+            return unmasked
         updates = {}
         for modality, exit_depth in token_exit_cfg.items():
             if exit_depth == 0:
