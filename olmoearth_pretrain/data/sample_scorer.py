@@ -25,7 +25,7 @@ from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 
 logger = logging.getLogger(__name__)
 
-ScorerFn = Callable[[dict[str, np.ndarray], dict[str, Any]], dict[str, float]]
+ScorerFn = Callable[[dict[str, np.ndarray], dict[str, Any]], dict[str, Any]]
 SCORER_REGISTRY: dict[str, ScorerFn] = {}
 
 # ---------------------------------------------------------------------------
@@ -232,6 +232,7 @@ def score_land_cover(
         features["lc_num_classes"] = 0.0
         features["lc_dominant_class_id"] = 0.0
         features["lc_edge_density"] = 0.0
+        features["worldcover_classes_present"] = ""
         return features
 
     wc_flat = wc[_valid_pixels(wc)].flatten()
@@ -243,6 +244,7 @@ def score_land_cover(
         features["lc_num_classes"] = 0.0
         features["lc_dominant_class_id"] = 0.0
         features["lc_edge_density"] = 0.0
+        features["worldcover_classes_present"] = ""
         return features
 
     features["has_worldcover"] = 1.0
@@ -256,6 +258,10 @@ def score_land_cover(
         fracs.append(frac)
 
     frac_arr = np.array(fracs)
+    present_classes = [
+        name for name, frac in zip(WORLDCOVER_CLASSES.values(), fracs) if frac > 0
+    ]
+    features["worldcover_classes_present"] = ",".join(present_classes)
     frac_arr = frac_arr[frac_arr > 0]
 
     features["lc_entropy"] = float(entropy(frac_arr)) if frac_arr.size > 0 else 0.0
@@ -979,6 +985,7 @@ def score_infrastructure(
             "osm_diversity": 0.0,
             "has_buildings": 0.0,
             "has_roads": 0.0,
+            "osm_features_present": "",
         }
 
     features["has_osm"] = 1.0
@@ -992,6 +999,7 @@ def score_infrastructure(
             "osm_diversity": 0.0,
             "has_buildings": 0.0,
             "has_roads": 0.0,
+            "osm_features_present": "",
         }
 
     # osm shape: [H, W, 1, C] where C = 29 OSM feature layers
@@ -1015,6 +1023,9 @@ def score_infrastructure(
 
     features["osm_feature_count"] = float(sum(layer_active))
     features["osm_coverage_fraction"] = _safe_mean(np.array(layer_coverage))
+    features["osm_features_present"] = ",".join(
+        name for name, active in zip(osm_bands, layer_active) if active > 0
+    )
 
     # Diversity: entropy across layer coverages
     cov_arr = np.array(layer_coverage)
@@ -1118,6 +1129,7 @@ def score_agriculture(
         features["cdl_entropy"] = 0.0
 
     # WorldCereal crop fractions
+    wc_bands = Modality.WORLDCEREAL.band_order
     wc = sample.get("worldcereal")
     if wc is not None:
         valid = _valid_pixels(wc)
@@ -1125,12 +1137,23 @@ def score_agriculture(
         if wc_v.size > 0:
             features["has_worldcereal"] = 1.0
             features["worldcereal_crop_fraction"] = float(np.mean(wc_v > 0))
+            present = []
+            for c, band_name in enumerate(wc_bands):
+                if c >= wc.shape[-1]:
+                    break
+                layer = wc[..., c]
+                lv = layer[_valid_pixels(layer)]
+                if lv.size > 0 and np.any(lv > 0):
+                    present.append(band_name)
+            features["worldcereal_classes_present"] = ",".join(present)
         else:
             features["has_worldcereal"] = 0.0
             features["worldcereal_crop_fraction"] = 0.0
+            features["worldcereal_classes_present"] = ""
     else:
         features["has_worldcereal"] = 0.0
         features["worldcereal_crop_fraction"] = 0.0
+        features["worldcereal_classes_present"] = ""
 
     # Canopy height
     ch = sample.get("wri_canopy_height_map")
