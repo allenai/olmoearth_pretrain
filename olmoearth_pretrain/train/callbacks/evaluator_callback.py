@@ -117,8 +117,6 @@ class DownstreamTaskConfig:
     primary_metric: EvalMetric | None = None
     # Class index for CLASS_F1 primary metric. Required when primary_metric is CLASS_F1.
     primary_metric_class: int | None = None
-    # Compute embedding quality diagnostics (effective rank, uniformity, etc.)
-    run_embedding_diagnostics: bool = False
     # For pretrain_subset dataset: path to training h5py data
     h5py_dir: str | None = None
     # For pretrain_subset: max samples to load
@@ -182,7 +180,6 @@ class DownstreamEvaluator:
         self.use_dice_loss = task.use_dice_loss
         self.primary_metric = task.primary_metric
         self.primary_metric_class = task.primary_metric_class
-        self.run_embedding_diagnostics = task.run_embedding_diagnostics
         self.h5py_dir = task.h5py_dir
         self.pretrain_max_samples = task.pretrain_max_samples
         self.run_on_test = run_on_test
@@ -396,20 +393,6 @@ class DownstreamEvaluator:
         if test_labels is not None:
             logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
 
-        embedding_diagnostics_result: dict[str, float] | None = None
-        if self.run_embedding_diagnostics:
-            if val_embeddings.ndim >= 3:
-                embedding_diagnostics_result = compute_spatial_embedding_diagnostics(
-                    val_embeddings
-                )
-            else:
-                embedding_diagnostics_result = compute_embedding_diagnostics(
-                    val_embeddings
-                )
-            logger.info(
-                f"Embedding diagnostics for {self.dataset}: {embedding_diagnostics_result}"
-            )
-
         if self.quantize_embeddings:
             logger.info(f"Dequantizing embeddings for {self.dataset}")
             train_embeddings = dequantize_embeddings(train_embeddings)
@@ -446,9 +429,6 @@ class DownstreamEvaluator:
             "bootstrap_seed": self.bootstrap_seed,
         }
         result = self.eval_function(**kwargs)  # type: ignore
-
-        if embedding_diagnostics_result is not None:
-            result.embedding_diagnostics = embedding_diagnostics_result
 
         # Free memory aggressively between evals
         del train_embeddings, train_labels, test_embeddings, test_labels

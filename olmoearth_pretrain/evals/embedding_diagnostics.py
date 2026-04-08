@@ -21,7 +21,7 @@ from torch import Tensor
 
 logger = logging.getLogger(__name__)
 
-MAX_UNIFORMITY_SAMPLES = 2048
+MAX_PAIRWISE_SAMPLES = 2048
 MAX_SVD_SAMPLES = 4096
 MAX_INTRA_SAMPLE_IMAGES = 256
 
@@ -49,10 +49,10 @@ def uniformity(embeddings: Tensor, t: float = 2.0) -> float:
     """Uniformity metric (Wang & Isola 2020). More negative = more uniform."""
     z = torch.nn.functional.normalize(embeddings.float(), dim=-1)
     n = z.shape[0]
-    if n > MAX_UNIFORMITY_SAMPLES:
-        idx = torch.randperm(n, device=z.device)[:MAX_UNIFORMITY_SAMPLES]
+    if n > MAX_PAIRWISE_SAMPLES:
+        idx = torch.randperm(n, device=z.device)[:MAX_PAIRWISE_SAMPLES]
         z = z[idx]
-        n = MAX_UNIFORMITY_SAMPLES
+        n = MAX_PAIRWISE_SAMPLES
     sq_dists = torch.cdist(z, z, p=2).pow(2)
     mask = torch.triu(torch.ones(n, n, device=z.device, dtype=torch.bool), diagonal=1)
     sq_dists_upper = sq_dists[mask]
@@ -63,10 +63,10 @@ def pairwise_cosine_stats(embeddings: Tensor) -> dict[str, float]:
     """Pairwise cosine similarity stats. High mean + low std = crowding."""
     z = torch.nn.functional.normalize(embeddings.float(), dim=-1)
     n = z.shape[0]
-    if n > MAX_UNIFORMITY_SAMPLES:
-        idx = torch.randperm(n, device=z.device)[:MAX_UNIFORMITY_SAMPLES]
+    if n > MAX_PAIRWISE_SAMPLES:
+        idx = torch.randperm(n, device=z.device)[:MAX_PAIRWISE_SAMPLES]
         z = z[idx]
-        n = MAX_UNIFORMITY_SAMPLES
+        n = MAX_PAIRWISE_SAMPLES
     sim = z @ z.T
     mask = torch.triu(torch.ones(n, n, device=z.device, dtype=torch.bool), diagonal=1)
     sims = sim[mask]

@@ -49,6 +49,7 @@ class EvalDatasetConfig:
 
 
 DATASET_TO_CONFIG = {
+    # Dummy config — only used for embedding diagnostics, not actual classification.
     "pretrain_subset": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
         imputes=[],
