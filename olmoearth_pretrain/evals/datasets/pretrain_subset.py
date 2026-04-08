@@ -51,6 +51,7 @@ class PretrainSubsetDataset(Dataset):
             dtype=np.float32,
             normalize=True,
         )
+        self._dataset.prepare()
 
         total = len(self._dataset)
         n = min(max_samples, total)
