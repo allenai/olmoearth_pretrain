@@ -156,6 +156,7 @@ class TestFlexiVitBase:
         }
         tokens, masks = flexi_helios_base.collapse_and_combine_hwtc(x)
         assert tokens.shape == (B, 5, D)
+        assert masks is not None
         assert masks.shape == (B, 5)
 
     def test_split_and_expand_per_modality(self) -> None:
