@@ -1,10 +1,10 @@
-"""Base script for single bandset + random band dropout (no S1) + random time with decode masking + masked-negatives loss + spatial CLS tokens.
+"""Base script for single bandset + random band dropout (no S1) + random time with decode masking + masked-negatives loss + spatial CLS tokens + supervision.
 
-Identical to base_band_dropout_no_s1_drop_random_time.py but with spatial CLS tokens
-enabled in the encoder, which:
-- Adds H*W learnable spatial CLS tokens to the encoder (one per grid position)
-- Uses them as decoder cross-attention context instead of unmasked encoder tokens
-- Mean-pools them for the contrastive loss instead of pooling all tokens
+Identical to base_band_dropout_no_s1_drop_random_time.py but with:
+- Spatial CLS tokens enabled in the encoder (one per grid position)
+- Decoder cross-attention context comes from spatial CLS tokens
+- Contrastive loss uses mean-pooled spatial CLS tokens
+- Direct supervision of decode-only modalities from spatial CLS tokens
 """
 
 import logging
@@ -50,6 +50,11 @@ from olmoearth_pretrain.nn.flexihelios import (
     PredictorConfig,
 )
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
+from olmoearth_pretrain.nn.supervision_head import (
+    SupervisionHeadConfig,
+    SupervisionModalityConfig,
+    SupervisionTaskType,
+)
 from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -111,6 +116,51 @@ BAND_DROPOUT_MODALITIES = [
     Modality.SENTINEL2_L2A.name,
     Modality.LANDSAT.name,
 ]
+
+SUPERVISION_WEIGHT = 0.1
+TASK_TYPE_WEIGHTS = {
+    SupervisionTaskType.CLASSIFICATION: 0.1,
+    SupervisionTaskType.BINARY_CLASSIFICATION: 0.1,
+    SupervisionTaskType.REGRESSION: 1.0,
+}
+
+WORLDCOVER_CLASS_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
+SUPERVISION_MODALITY_CONFIGS = {
+    "worldcover": SupervisionModalityConfig(
+        task_type=SupervisionTaskType.CLASSIFICATION,
+        num_output_channels=11,
+        weight=SUPERVISION_WEIGHT
+        * TASK_TYPE_WEIGHTS[SupervisionTaskType.CLASSIFICATION],
+        class_values=WORLDCOVER_CLASS_VALUES,
+    ),
+    "srtm": SupervisionModalityConfig(
+        task_type=SupervisionTaskType.REGRESSION,
+        num_output_channels=1,
+        weight=SUPERVISION_WEIGHT * TASK_TYPE_WEIGHTS[SupervisionTaskType.REGRESSION],
+    ),
+    "openstreetmap_raster": SupervisionModalityConfig(
+        task_type=SupervisionTaskType.BINARY_CLASSIFICATION,
+        num_output_channels=30,
+        weight=SUPERVISION_WEIGHT
+        * TASK_TYPE_WEIGHTS[SupervisionTaskType.BINARY_CLASSIFICATION],
+    ),
+    "wri_canopy_height_map": SupervisionModalityConfig(
+        task_type=SupervisionTaskType.REGRESSION,
+        num_output_channels=1,
+        weight=SUPERVISION_WEIGHT * TASK_TYPE_WEIGHTS[SupervisionTaskType.REGRESSION],
+    ),
+    "cdl": SupervisionModalityConfig(
+        task_type=SupervisionTaskType.REGRESSION,
+        num_output_channels=1,
+        weight=SUPERVISION_WEIGHT * TASK_TYPE_WEIGHTS[SupervisionTaskType.REGRESSION],
+    ),
+    "worldcereal": SupervisionModalityConfig(
+        task_type=SupervisionTaskType.BINARY_CLASSIFICATION,
+        num_output_channels=8,
+        weight=SUPERVISION_WEIGHT
+        * TASK_TYPE_WEIGHTS[SupervisionTaskType.BINARY_CLASSIFICATION],
+    ),
+}
 
 
 def _tokenization_config() -> TokenizationConfig:
@@ -404,9 +454,13 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_sequence_length=12,
         tokenization_config=common.tokenization_config,
     )
+    supervision_head_config = SupervisionHeadConfig(
+        modality_configs=SUPERVISION_MODALITY_CONFIGS,
+    )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
+        supervision_head_config=supervision_head_config,
     )
     return model_config
 

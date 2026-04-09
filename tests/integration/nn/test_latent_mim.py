@@ -232,7 +232,7 @@ def test_latentmim_with_spatial_cls(
     assert not latentmim.target_encoder.use_spatial_cls
 
     # Run forward pass
-    latent, decoded, latent_projected_and_pooled, reconstructed, extra_metrics = (
+    latent, decoded, latent_projected_and_pooled, reconstructed, extra_metrics, _ = (
         latentmim.forward(x, patch_size)
     )
 

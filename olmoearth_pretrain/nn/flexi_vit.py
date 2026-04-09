@@ -1113,6 +1113,7 @@ class Encoder(FlexiVitBase):
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
         use_spatial_cls: bool = False,
+        spatial_cls_scale: float = 1.0,
     ):
         """Initialize the encoder.
 
@@ -1148,6 +1149,11 @@ class Encoder(FlexiVitBase):
                 modalities. If None, apply to all modalities. Default: None.
             use_spatial_cls: If True, add H*W spatial CLS tokens to the encoder that
                 aggregate cross-modal information at each spatial location.
+            spatial_cls_scale: Scaling factor for spatial positional encoding on CLS
+                tokens. Higher values strengthen the spatial locality bias. Default 1.0
+                means the spatial encoding has the same magnitude as for patch tokens.
+                A value of 4.0 roughly compensates for encoding only occupying 25% of
+                the embedding dimension.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1174,6 +1180,8 @@ class Encoder(FlexiVitBase):
             )
         if self.use_spatial_cls:
             self.spatial_cls_token = nn.Parameter(torch.zeros(1, embedding_size))
+            self.spatial_cls_norm = nn.LayerNorm(embedding_size)
+            self.spatial_cls_scale = spatial_cls_scale
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
@@ -1285,9 +1293,9 @@ class Encoder(FlexiVitBase):
             device=device,
         )  # [1, H*W, n]
 
-        # Add spatial encoding in the spatial slice [3n:4n]
+        # Add scaled spatial encoding in the spatial slice [3n:4n]
         embed = torch.zeros(num_spatial, self.embedding_size, device=device)
-        embed[:, 3 * n : 4 * n] = spatial_embed.squeeze(0)
+        embed[:, 3 * n : 4 * n] = self.spatial_cls_scale * spatial_embed.squeeze(0)
         cls_tokens = cls_tokens + embed
 
         # Expand to batch
@@ -1672,9 +1680,18 @@ class Encoder(FlexiVitBase):
                 input=tokens,
                 other=exited_tokens,
             )
-        # we apply the norm before we add the removed tokens,
-        # so that the norm is only computed against "real" tokens
-        tokens = self.norm(tokens)
+        # Apply separate LayerNorms to spatial CLS tokens and patch tokens
+        if self.use_spatial_cls and num_spatial_cls > 0:
+            tokens = torch.cat(
+                [
+                    self.spatial_cls_norm(tokens[:, :num_spatial_cls]),
+                    self.norm(tokens[:, num_spatial_cls:]),
+                ],
+                dim=1,
+            )
+        else:
+            tokens = self.norm(tokens)
+
         # we don't care about the mask returned by add_removed_tokens, since we will
         # just use the original, unclipped mask here
         tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
@@ -2266,6 +2283,7 @@ class EncoderConfig(Config):
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
     use_spatial_cls: bool = False
+    spatial_cls_scale: float = 1.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""

@@ -95,13 +95,18 @@ class LatentMIM(nn.Module, DistributedMixins):
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
+        # Extract spatial CLS tokens before decoder call (they're also passed to decoder)
+        spatial_cls_tokens = decoder_kwargs.get("spatial_cls_tokens", None)
+
         decoded = self.decoder(
             latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
         )
 
         supervision_preds = None
         if self.supervision_head is not None:
-            supervision_preds = self.supervision_head(decoded, x)
+            supervision_preds = self.supervision_head(
+                decoded, x, spatial_cls_tokens=spatial_cls_tokens
+            )
 
         return (
             latent,
@@ -192,14 +197,23 @@ class LatentMIMConfig(Config):
         )
         supervision_head = None
         if self.supervision_head_config is not None:
-            output_embed_size = getattr(
-                self.decoder_config, "output_embedding_size", None
-            )
-            embedding_dim = (
-                output_embed_size
-                if output_embed_size is not None
-                else self.encoder_config.embedding_size
-            )
+            use_spatial_cls = getattr(self.encoder_config, "use_spatial_cls", False)
+            if use_spatial_cls:
+                # Spatial CLS tokens have encoder output dim
+                embedding_dim = (
+                    self.encoder_config.output_embedding_size
+                    or self.encoder_config.embedding_size
+                )
+            else:
+                # Decoder output dim
+                output_embed_size = getattr(
+                    self.decoder_config, "output_embedding_size", None
+                )
+                embedding_dim = (
+                    output_embed_size
+                    if output_embed_size is not None
+                    else self.encoder_config.embedding_size
+                )
             supervision_head = self.supervision_head_config.build(
                 embedding_dim=embedding_dim,
                 max_patch_size=self.encoder_config.max_patch_size,

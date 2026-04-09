@@ -160,21 +160,96 @@ class SupervisionHead(nn.Module):
         self,
         decoded: TokensAndMasks,
         batch: MaskedOlmoEarthSample,
+        spatial_cls_tokens: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Produce per-supervised-modality predictions at pixel resolution.
 
-        Each modality head operates on that modality's own decoder tokens.
-        Under FSDP every head must run on every rank, so we use dummy zero
-        features when a modality's tokens are absent from the decoder output.
+        When spatial_cls_tokens are provided, all supervision heads operate on
+        the shared spatial CLS features [B, H*W, D] rather than per-modality
+        decoder tokens. This encourages the spatial CLS tokens to encode
+        information useful for supervised targets.
+
+        When spatial_cls_tokens are not provided, falls back to using each
+        modality's own decoder tokens.
 
         Args:
             decoded: Decoder output TokensAndMasks.
             batch: The original batch (used to determine target spatial dims).
+            spatial_cls_tokens: Optional spatial CLS tokens from the encoder,
+                shape [B, H*W, D].
 
         Returns:
             Dictionary mapping supervised modality name to predictions.
-            Shape is [B, H, W, T, C] (T preserved from decoder tokens).
+            Shape is [B, H, W, C] when using spatial CLS tokens, or
+            [B, H, W, T, C] when using decoder tokens.
         """
+        if spatial_cls_tokens is not None:
+            return self._forward_from_spatial_cls(spatial_cls_tokens, batch)
+        return self._forward_from_decoded(decoded, batch)
+
+    def _forward_from_spatial_cls(
+        self,
+        spatial_cls_tokens: Tensor,
+        batch: MaskedOlmoEarthSample,
+    ) -> dict[str, Tensor]:
+        """Predict from shared spatial CLS tokens [B, H*W, D]."""
+        mps = self.max_patch_size
+        b, num_spatial, d = spatial_cls_tokens.shape
+        # Infer grid size (assume square if not obvious)
+        ph = pw = int(num_spatial**0.5)
+        assert ph * pw == num_spatial, (
+            f"spatial_cls_tokens length {num_spatial} is not a perfect square"
+        )
+        features = rearrange(
+            spatial_cls_tokens, "b (ph pw) d -> b ph pw d", ph=ph, pw=pw
+        )  # [B, P_H, P_W, D]
+
+        predictions: dict[str, Tensor] = {}
+        for sup_name, head in self.heads.items():
+            if sup_name in self._non_spatial_modalities:
+                # Non-spatial: pool all spatial CLS tokens
+                pooled = spatial_cls_tokens.mean(dim=1)  # [B, D]
+                predictions[sup_name] = head(pooled)  # [B, C]
+                continue
+
+            num_channels = self.modality_configs[sup_name].num_output_channels
+            raw = head(features)  # [B, P_H, P_W, mps^2 * C]
+
+            output = rearrange(
+                raw,
+                "b ph pw (c i j) -> b (ph i) (pw j) c",
+                c=num_channels,
+                i=mps,
+                j=mps,
+            )  # [B, P_H*mps, P_W*mps, C]
+
+            raw_target = getattr(batch, sup_name, None)
+            if raw_target is not None:
+                target_h, target_w = raw_target.shape[1], raw_target.shape[2]
+                if output.shape[1] != target_h or output.shape[2] != target_w:
+                    orig_dtype = output.dtype
+                    output = rearrange(output, "b h w c -> b c h w")
+                    output = F.interpolate(
+                        output.float(),
+                        size=(target_h, target_w),
+                        mode="bilinear",
+                        align_corners=False,
+                    ).to(orig_dtype)
+                    output = rearrange(output, "b c h w -> b h w c")
+
+            # Add T=1 dim to match [B, H, W, T, C] shape expected by loss fns
+            output = output.unsqueeze(-2)
+
+            predictions[sup_name] = output
+
+        return predictions
+
+    def _forward_from_decoded(
+        self,
+        decoded: TokensAndMasks,
+        batch: MaskedOlmoEarthSample,
+    ) -> dict[str, Tensor]:
+        """Predict from per-modality decoder tokens (original path)."""
         mps = self.max_patch_size
         device = next(self.parameters()).device
         dtype = next(self.parameters()).dtype
