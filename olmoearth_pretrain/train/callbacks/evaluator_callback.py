@@ -735,13 +735,9 @@ class DownstreamEvaluatorCallback(Callback):
                 )
                 wandb_callback.wandb.log({f"{evaluator.evaluation_name}_step": 0})
 
-        # Check if results are valid
-        val_valid = val_result is not None and val_result.primary >= 0
+        # Log test results and bootstrap stats independently of val validity
         test_valid = test_result is not None and test_result.primary >= 0
-
-        # Only logging valid results to wandb
-        if wandb_callback.enabled and val_valid and test_valid:
-            # Log bootstrap statistics if available
+        if wandb_callback.enabled and test_valid:
             if bootstrap_stats:
                 wandb_callback.wandb.log(
                     {
