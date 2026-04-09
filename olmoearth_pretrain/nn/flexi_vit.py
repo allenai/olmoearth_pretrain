@@ -948,8 +948,6 @@ class FlexiVitBase(nn.Module):
         Args:
             x: Dict of per-modality tensors (and optionally their masks).
             include_masks: If True, also collapse and return the mask tensors.
-                When False, only token tensors are required in *x* and the
-                returned mask will be ``None``.
         """
         tokens: list[Tensor] = []
         masks: list[Tensor] = []
@@ -1334,6 +1332,7 @@ class Encoder(FlexiVitBase):
         token_exit_cfg: dict[str, int] | None,
     ) -> Tensor | None:
         """Create the exit sequences and tokens."""
+        # Check that tokens_only_dict doesn't contain any mask keys
         assert all(not key.endswith("_mask") for key in tokens_only_dict), (
             "tokens_only_dict should not contain mask keys"
         )
@@ -1477,6 +1476,7 @@ class Encoder(FlexiVitBase):
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
+        # already a no-op but we could remove entirely
         exit_ids_seq = self.create_exit_seqs(tokens_only_dict, token_exit_cfg)
         # exited tokens are just the linear projection
         exited_tokens, _ = self.collapse_and_combine_hwtc(x, include_masks=False)
