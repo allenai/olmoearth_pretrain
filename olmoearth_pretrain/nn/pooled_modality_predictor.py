@@ -502,7 +502,9 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
-    ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
+    ) -> tuple[
+        dict[str, Tensor], dict[str, Any] | None, Tensor | None, tuple[int, int] | None
+    ]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, pre_pooled_modality_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
@@ -621,7 +623,7 @@ class EncodeEarlyAttnPool(Encoder):
             tokens, pooled_dims
         )
         out_dict["modality_pooled_masks"] = original_pooled_masks
-        return out_dict, token_norm_stats
+        return out_dict, token_norm_stats, None, None
 
     def forward(
         self,
@@ -649,7 +651,7 @@ class EncodeEarlyAttnPool(Encoder):
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
-            pooled_tokens_and_masks, token_norm_stats = self.apply_attn(
+            pooled_tokens_and_masks, token_norm_stats, _, _ = self.apply_attn(
                 x=patchified_tokens_and_masks,
                 timestamps=x.timestamps,
                 patch_size=patch_size,

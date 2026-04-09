@@ -22,6 +22,8 @@ def unpack_encoder_output(
     # Pass through all other outputs that might be specific to an encoder decoder pair
     # remove token_norm_stats
     output_dict.pop("token_norm_stats", None)
+    # remove spatial_cls_grid_size (only used by evals, not decoder)
+    output_dict.pop("spatial_cls_grid_size", None)
     decoder_kwargs = output_dict
     return latent, latent_projected_and_pooled, decoder_kwargs
 

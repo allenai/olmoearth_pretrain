@@ -176,3 +176,105 @@ def test_latentmim_with_loss(
             assert param.grad is not None, name
     for name, param in latentmim.target_encoder.named_parameters():
         assert param.grad is None, name
+
+
+def test_latentmim_with_spatial_cls(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    masked_sample_dict: dict[str, torch.Tensor],
+) -> None:
+    """Test LatentMIM with spatial CLS tokens enabled."""
+    supported_modalities = [
+        Modality.SENTINEL2_L2A,
+        Modality.LATLON,
+        Modality.WORLDCOVER,
+    ]
+    sentinel2_l2a_num_band_sets, sentinel2_l2a_num_bands = (
+        modality_band_set_len_and_total_bands["sentinel2_l2a"]
+    )
+    B, H, W, T, C = masked_sample_dict["sentinel2_l2a"].shape
+    x = MaskedOlmoEarthSample(**masked_sample_dict)
+
+    patch_size = 4
+    MAX_PATCH_SIZE = 8
+    NUM_HEADS = 2
+    MLP_RATIO = 4.0
+    MAX_SEQ_LENGTH = 12
+    DEPTH = 2
+    DROP_PATH = 0.1
+    ENCODER_EMBEDDING_SIZE = 16
+    DECODER_EMBEDDING_SIZE = 16
+
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=ENCODER_EMBEDDING_SIZE,
+        max_patch_size=MAX_PATCH_SIZE,
+        min_patch_size=1,
+        num_heads=NUM_HEADS,
+        mlp_ratio=MLP_RATIO,
+        max_sequence_length=MAX_SEQ_LENGTH,
+        depth=DEPTH,
+        drop_path=DROP_PATH,
+        use_spatial_cls=True,
+    )
+    predictor = Predictor(
+        supported_modalities=supported_modalities,
+        encoder_embedding_size=ENCODER_EMBEDDING_SIZE,
+        decoder_embedding_size=DECODER_EMBEDDING_SIZE,
+        depth=DEPTH,
+        mlp_ratio=MLP_RATIO,
+        num_heads=NUM_HEADS,
+        max_sequence_length=MAX_SEQ_LENGTH,
+        drop_path=DROP_PATH,
+    )
+    latentmim = LatentMIM(encoder, predictor)
+
+    # Verify target encoder has spatial CLS disabled
+    assert not latentmim.target_encoder.use_spatial_cls
+
+    # Run forward pass
+    latent, decoded, latent_projected_and_pooled, reconstructed, extra_metrics = (
+        latentmim.forward(x, patch_size)
+    )
+
+    patched_H = H // patch_size
+    patched_W = W // patch_size
+
+    # Verify contrastive projection has correct shape
+    assert latent_projected_and_pooled.shape == (B, ENCODER_EMBEDDING_SIZE)
+
+    # Verify decoded output shapes
+    assert decoded.sentinel2_l2a is not None
+    assert decoded.sentinel2_l2a.shape == (
+        B,
+        patched_H,
+        patched_W,
+        T,
+        sentinel2_l2a_num_band_sets,
+        predictor.output_embedding_size,
+    )
+
+    # Run loss backward to verify gradients flow
+    loss_fn = PatchDiscriminationLoss()
+    with torch.no_grad():
+        output_dict = latentmim.target_encoder.forward(
+            x.unmask(),
+            patch_size=patch_size,
+            token_exit_cfg={
+                modality: 0 for modality in latentmim.encoder.supported_modality_names
+            },
+        )
+        target_output, _, _ = unpack_encoder_output(output_dict)
+    loss = loss_fn.compute(decoded, target_output)
+    loss.backward()
+
+    # Verify spatial_cls_token gets gradients
+    assert encoder.spatial_cls_token.grad is not None, (
+        "spatial_cls_token should receive gradients"
+    )
+
+    # Verify project_and_aggregate does NOT get gradients (bypassed by spatial CLS pooling)
+    for name, param in encoder.project_and_aggregate.named_parameters():
+        assert param.grad is None or (param.grad == 0).all(), (
+            f"project_and_aggregate.{name} should not receive gradients "
+            f"when use_spatial_cls=True"
+        )

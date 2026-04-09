@@ -50,6 +50,10 @@ class LatentMIM(nn.Module, DistributedMixins):
         # Disable band dropout on target encoder so it always sees full spectral info.
         if hasattr(self.target_encoder, "disable_band_dropout"):
             self.target_encoder.disable_band_dropout()
+        # Disable spatial CLS on target encoder to avoid token exit complications
+        # and save compute (target encoder output is only used for reconstruction targets).
+        if hasattr(self.target_encoder, "use_spatial_cls"):
+            self.target_encoder.use_spatial_cls = False
 
     def forward(
         self, x: MaskedOlmoEarthSample, patch_size: int

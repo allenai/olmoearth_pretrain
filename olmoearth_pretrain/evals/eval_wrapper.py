@@ -24,7 +24,6 @@ from olmoearth_pretrain.evals.models import (
 )
 from olmoearth_pretrain.nn.flexi_vit import (
     FlexiVitBase,
-    TokensAndMasks,
 )
 from olmoearth_pretrain.nn.pooled_modality_predictor import EncodeEarlyAttnPool
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
@@ -112,16 +111,30 @@ class OlmoEarthEvalWrapper(EvalWrapper):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         if not self.use_pooled_tokens:
-            batch_embeddings: TokensAndMasks = self.model(
+            output_dict = self.model(
                 masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True
-            )["tokens_and_masks"]  # (bsz, dim)
-            # Concat features across modalities in space averaged across time
-            batch_embeddings = pool_unmasked_tokens(
-                batch_embeddings,
-                self.pooling_type,
-                spatial_pooling=self.spatial_pool,
-                concat_features=self.concat_features,
             )
+
+            if "spatial_cls_tokens" in output_dict:
+                # Use spatial CLS tokens as features
+                spatial_cls = output_dict["spatial_cls_tokens"]  # [B, H*W, D]
+                if self.spatial_pool:
+                    h, w = output_dict["spatial_cls_grid_size"]
+                    batch_embeddings = rearrange(
+                        spatial_cls, "b (h w) d -> b h w d", h=h, w=w
+                    )
+                else:
+                    batch_embeddings = reduce(
+                        spatial_cls, "b n d -> b d", self.pooling_type
+                    )
+            else:
+                # Default: pool all unmasked tokens
+                batch_embeddings = pool_unmasked_tokens(
+                    output_dict["tokens_and_masks"],
+                    self.pooling_type,
+                    spatial_pooling=self.spatial_pool,
+                    concat_features=self.concat_features,
+                )
         else:
             pooled_tokens_dict = self.model(
                 masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True

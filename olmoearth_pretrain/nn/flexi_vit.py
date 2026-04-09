@@ -1112,6 +1112,7 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        use_spatial_cls: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1145,6 +1146,8 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            use_spatial_cls: If True, add H*W spatial CLS tokens to the encoder that
+                aggregate cross-modal information at each spatial location.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1164,10 +1167,13 @@ class Encoder(FlexiVitBase):
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
         self.log_token_norm_stats = log_token_norm_stats
+        self.use_spatial_cls = use_spatial_cls
         if self.has_register_tokens:
             self.register_tokens = nn.Parameter(
                 torch.zeros(num_register_tokens, embedding_size)
             )
+        if self.use_spatial_cls:
+            self.spatial_cls_token = nn.Parameter(torch.zeros(1, embedding_size))
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
@@ -1212,6 +1218,8 @@ class Encoder(FlexiVitBase):
                 p.requires_grad = False
         if self.has_register_tokens:
             self._init_register_tokens()
+        if self.use_spatial_cls:
+            self._init_spatial_cls_token()
 
     def disable_band_dropout(self) -> None:
         """Disable band dropout (e.g. for target/EMA encoder)."""
@@ -1220,6 +1228,70 @@ class Encoder(FlexiVitBase):
     def _init_register_tokens(self) -> None:
         """Initialize the register tokens."""
         nn.init.xavier_uniform_(self.register_tokens)
+
+    def _init_spatial_cls_token(self) -> None:
+        """Initialize the spatial CLS token."""
+        nn.init.xavier_uniform_(self.spatial_cls_token)
+
+    @staticmethod
+    def _get_spatial_grid_size(
+        modalities_to_dims_dict: dict[str, tuple],
+    ) -> tuple[int, int]:
+        """Extract the spatial grid size (H, W) from modality shapes.
+
+        Spatial modalities have shapes like (B, H, W, T, BandSets, D) (ndim=6)
+        or (B, H, W, BandSets, D) (ndim=5). H is at index 1, W at index 2.
+        """
+        h, w = None, None
+        for modality_name, shape in modalities_to_dims_dict.items():
+            modality = Modality.get(modality_name)
+            if modality.is_spatial and len(shape) >= 5:
+                mod_h, mod_w = shape[1], shape[2]
+                if h is not None:
+                    assert h == mod_h and w == mod_w, (
+                        f"Spatial modalities have different grid sizes: "
+                        f"({h}, {w}) vs ({mod_h}, {mod_w})"
+                    )
+                h, w = mod_h, mod_w
+        if h is None or w is None:
+            return (0, 0)
+        return (h, w)
+
+    def _build_spatial_cls_tokens(
+        self,
+        batch_size: int,
+        h: int,
+        w: int,
+        patch_size: int,
+        input_res: int,
+        device: torch.device,
+    ) -> Tensor:
+        """Build spatial CLS tokens with sinusoidal spatial positional encodings.
+
+        Creates H*W tokens from a single learnable token, differentiated by
+        2D sinusoidal spatial encoding in the same embedding slice as patch tokens.
+        """
+        num_spatial = h * w
+        # Tile the learnable token to H*W positions
+        cls_tokens = self.spatial_cls_token.expand(num_spatial, -1)  # [H*W, D]
+
+        # Compute spatial encoding (same function used for patch tokens)
+        n = self.composite_encodings.embedding_dim_per_embedding_type
+        gsd_ratio = CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
+        spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
+            grid_size=(h, w),
+            res=torch.ones(1, device=device) * gsd_ratio,
+            encoding_dim=n,
+            device=device,
+        )  # [1, H*W, n]
+
+        # Add spatial encoding in the spatial slice [3n:4n]
+        embed = torch.zeros(num_spatial, self.embedding_size, device=device)
+        embed[:, 3 * n : 4 * n] = spatial_embed.squeeze(0)
+        cls_tokens = cls_tokens + embed
+
+        # Expand to batch
+        return cls_tokens.unsqueeze(0).expand(batch_size, -1, -1)  # [B, H*W, D]
 
     def create_token_exit_ids(
         self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
@@ -1468,11 +1540,25 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
-    ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
+    ) -> tuple[
+        dict[str, Tensor],
+        dict[str, Any] | None,
+        Tensor | None,
+        tuple[int, int] | None,
+    ]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
+
+        # Determine spatial CLS grid size before collapse
+        if self.use_spatial_cls:
+            spatial_h, spatial_w = self._get_spatial_grid_size(modalities_to_dims_dict)
+            num_spatial_cls = spatial_h * spatial_w
+        else:
+            num_spatial_cls = 0
+            spatial_h, spatial_w = 0, 0
+
         # already a no-op but we could remove entirely
         exit_ids_seq = self.create_exit_seqs(
             tokens_only_dict, original_masks_dict, token_exit_cfg
@@ -1489,6 +1575,23 @@ class Encoder(FlexiVitBase):
         tokens_dict.update(original_masks_dict)
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+
+        # Prepend spatial CLS tokens before masked token removal so they
+        # participate in attention. They get ONLINE_ENCODER mask so they
+        # survive removal and the stable sort keeps them at the front.
+        if self.use_spatial_cls and num_spatial_cls > 0:
+            batch_size = tokens.shape[0]
+            spatial_cls = self._build_spatial_cls_tokens(
+                batch_size, spatial_h, spatial_w, patch_size, input_res, tokens.device
+            )
+            cls_mask = torch.full(
+                (batch_size, num_spatial_cls),
+                MaskValue.ONLINE_ENCODER.value,
+                dtype=mask.dtype,
+                device=mask.device,
+            )
+            tokens = torch.cat([spatial_cls, tokens], dim=1)
+            mask = torch.cat([cls_mask, mask], dim=1)
 
         tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
             self._maybe_remove_masked_tokens(tokens, mask, fast_pass)
@@ -1576,12 +1679,26 @@ class Encoder(FlexiVitBase):
         # just use the original, unclipped mask here
         tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
 
+        # Pop spatial CLS tokens before splitting back into per-modality structure
+        if self.use_spatial_cls and num_spatial_cls > 0:
+            spatial_cls_out = tokens[:, :num_spatial_cls]
+            tokens = tokens[:, num_spatial_cls:]
+            spatial_cls_grid_size = (spatial_h, spatial_w)
+        else:
+            spatial_cls_out = None
+            spatial_cls_grid_size = None
+
         tokens_per_modality_dict = self.split_and_expand_per_modality(
             tokens, modalities_to_dims_dict
         )
         # merge original masks and the processed tokens
         tokens_per_modality_dict.update(original_masks_dict)
-        return tokens_per_modality_dict, token_norm_stats
+        return (
+            tokens_per_modality_dict,
+            token_norm_stats,
+            spatial_cls_out,
+            spatial_cls_grid_size,
+        )
 
     def forward(
         self,
@@ -1611,7 +1728,12 @@ class Encoder(FlexiVitBase):
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
-            patchified_tokens_and_masks, token_norm_stats = self.apply_attn(
+            (
+                patchified_tokens_and_masks,
+                token_norm_stats,
+                spatial_cls_out,
+                spatial_cls_grid_size,
+            ) = self.apply_attn(
                 x=patchified_tokens_and_masks,
                 timestamps=x.timestamps,
                 patch_size=patch_size,
@@ -1621,6 +1743,8 @@ class Encoder(FlexiVitBase):
             )
         else:
             token_norm_stats = {}
+            spatial_cls_out = None
+            spatial_cls_grid_size = None
         output = TokensAndMasks(**patchified_tokens_and_masks)
 
         # Project to output_embedding_size if configured
@@ -1633,8 +1757,23 @@ class Encoder(FlexiVitBase):
         if token_norm_stats:
             output_dict["token_norm_stats"] = token_norm_stats
 
+        if self.use_spatial_cls and spatial_cls_out is not None:
+            # Project spatial CLS tokens if embedding_projector is set
+            if self.embedding_projector is not None:
+                spatial_cls_out = self.embedding_projector.projection(spatial_cls_out)
+            # Always return spatial CLS tokens (used by decoder and evals)
+            output_dict["spatial_cls_tokens"] = spatial_cls_out
+            output_dict["spatial_cls_grid_size"] = spatial_cls_grid_size
+
         if not fast_pass:
-            output_dict["project_aggregated"] = self.project_and_aggregate(output)
+            if self.use_spatial_cls and spatial_cls_out is not None:
+                # Mean-pool spatial CLS tokens then project for contrastive loss
+                spatial_cls_pooled = spatial_cls_out.mean(dim=1)  # [B, D]
+                output_dict["project_aggregated"] = (
+                    self.project_and_aggregate.projection(spatial_cls_pooled)
+                )
+            else:
+                output_dict["project_aggregated"] = self.project_and_aggregate(output)
 
         return output_dict
 
@@ -1904,6 +2043,7 @@ class Predictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int,
+        spatial_cls_tokens: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply attention to the tokens."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1926,6 +2066,30 @@ class Predictor(PredictorBase):
             max_length_of_tokens_to_decode,
             max_length_of_unmasked_tokens,
         ) = self.split_x_y(all_tokens, mask)
+
+        # Save original unmasked tokens for combine_x_y (restoring output structure)
+        unmasked_tokens_orig = unmasked_tokens
+        unmasked_tokens_mask_orig = unmasked_tokens_mask
+
+        # Replace cross-attention context with spatial CLS tokens if provided
+        if spatial_cls_tokens is not None:
+            batch_size = spatial_cls_tokens.shape[0]
+            num_spatial = spatial_cls_tokens.shape[1]
+            unmasked_tokens = spatial_cls_tokens
+            unmasked_tokens_mask = torch.ones(
+                batch_size,
+                num_spatial,
+                dtype=unmasked_tokens_mask_orig.dtype,
+                device=spatial_cls_tokens.device,
+            )
+            seqlens_unmasked_tokens = torch.full(
+                (batch_size,),
+                num_spatial,
+                dtype=seqlens_unmasked_tokens.dtype,
+                device=spatial_cls_tokens.device,
+            )
+            max_length_of_unmasked_tokens = num_spatial
+
         # Pack x tokens
         if self.use_flash_attn:
             og_shape_tokens_to_decode = tokens_to_decode.shape
@@ -1967,15 +2131,25 @@ class Predictor(PredictorBase):
                 tokens_to_decode_mask.bool(),
                 og_shape_tokens_to_decode,
             )
-            unmasked_tokens = self.unpack_tokens(
-                unmasked_tokens, unmasked_tokens_mask.bool(), og_shape_unmasked_tokens
-            )
+            # Unpack original unmasked tokens (not spatial CLS) for combine_x_y
+            if spatial_cls_tokens is not None:
+                # spatial CLS tokens don't need unpacking for combine_x_y;
+                # we use the original unmasked tokens instead
+                pass
+            else:
+                unmasked_tokens_orig = self.unpack_tokens(
+                    unmasked_tokens,
+                    unmasked_tokens_mask.bool(),
+                    og_shape_unmasked_tokens,
+                )
+                unmasked_tokens_mask_orig = unmasked_tokens_mask
 
+        # Always use original unmasked tokens for combine_x_y to restore output structure
         x = self.combine_x_y(
             tokens_to_decode=tokens_to_decode,
-            unmasked_tokens=unmasked_tokens,
+            unmasked_tokens=unmasked_tokens_orig,
             tokens_to_decode_mask=tokens_to_decode_mask,
-            unmasked_tokens_mask=unmasked_tokens_mask,
+            unmasked_tokens_mask=unmasked_tokens_mask_orig,
             indices=indices,
         )
         tokens_per_modality_dict = self.split_and_expand_per_modality(
@@ -1990,6 +2164,7 @@ class Predictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        spatial_cls_tokens: Tensor | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -1998,6 +2173,8 @@ class Predictor(PredictorBase):
             timestamps: Timestamps of the tokens
             patch_size: Patch size of the tokens
             input_res: Input resolution of the tokens
+            spatial_cls_tokens: If provided, use these as cross-attention context
+                instead of the unmasked encoder tokens. Shape [B, H*W, D_enc].
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
@@ -2019,10 +2196,19 @@ class Predictor(PredictorBase):
                 x, masked_modality_name
             )
 
+        # Project spatial CLS tokens to decoder embedding size
+        if spatial_cls_tokens is not None:
+            spatial_cls_tokens = self.input_norm(spatial_cls_tokens)
+            spatial_cls_tokens = self.encoder_to_decoder_embed(spatial_cls_tokens)
+
         tokens_only_dict = self.add_masks(decoder_emedded_dict)
         decoder_emedded_dict.update(tokens_only_dict)
         tokens_and_masks = self.apply_attn(
-            decoder_emedded_dict, timestamps, patch_size, input_res
+            decoder_emedded_dict,
+            timestamps,
+            patch_size,
+            input_res,
+            spatial_cls_tokens=spatial_cls_tokens,
         )
         # TODO: Factor this out into a more readable function
         output_dict = {}
@@ -2079,6 +2265,7 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+    use_spatial_cls: bool = False
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
