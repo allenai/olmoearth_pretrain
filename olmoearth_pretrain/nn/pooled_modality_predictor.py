@@ -507,11 +507,9 @@ class EncodeEarlyAttnPool(Encoder):
         tokens_only_dict, original_masks_dict, pre_pooled_modality_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
-        exit_ids_seq = self.create_exit_seqs(
-            tokens_only_dict, original_masks_dict, token_exit_cfg
-        )
+        exit_ids_seq = self.create_exit_seqs(tokens_only_dict, token_exit_cfg)
         # exited tokens are just the linear projection
-        exited_tokens, _ = self.collapse_and_combine_hwtc(x)
+        exited_tokens, _ = self.collapse_and_combine_hwtc(x, include_masks=False)
 
         tokens_dict = self.composite_encodings.forward(
             tokens_only_dict,
