@@ -649,12 +649,12 @@ class CompositeEncodings(nn.Module):
         # 0.25 of the dimension
         self.embedding_dim_per_embedding_type = int(embedding_size * 0.25)
         # Position encodings for time dimension initialized to 1D sinusoidal encodings
-        self.pos_embed = nn.Parameter(
+        self.register_buffer(
+            "pos_embed",
             get_1d_sincos_pos_encoding(
                 torch.arange(max_sequence_length),
                 self.embedding_dim_per_embedding_type,
             ),
-            requires_grad=False,
         )
         # Month encodings
         month_tab = get_month_encoding_table(self.embedding_dim_per_embedding_type)
