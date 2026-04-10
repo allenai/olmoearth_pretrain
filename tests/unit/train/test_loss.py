@@ -2,6 +2,7 @@
 
 import logging
 
+import pytest
 import torch
 
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
@@ -17,6 +18,7 @@ from olmoearth_pretrain.train.loss import (
     ModalityPatchDiscriminationMaskedNegatives,
     PatchDiscriminationLoss,
     PatchDiscriminationLossNew,
+    VICRegViewsLoss,
 )
 from olmoearth_pretrain.train.masking import MaskValue
 
@@ -1142,3 +1144,37 @@ def test_modality_patch_discrimination_masked_negatives() -> None:
 
     # Masking removes false negatives from denominator, so loss should be lower
     assert loss_value < loss_no_mask_value
+
+
+def test_vicreg_views_loss_identical_views() -> None:
+    """When both views are identical, invariance is zero; only var/cov remain."""
+    n, d = 16, 32
+    torch.manual_seed(42)
+    z = torch.randn(n, d)
+    loss_fn = VICRegViewsLoss(inv_weight=25.0, var_weight=25.0, cov_weight=1.0)
+    loss = loss_fn.compute(z, z.clone())
+    assert loss >= 0
+
+
+def test_vicreg_views_loss_far_views() -> None:
+    """Distant views should produce a larger loss than identical views."""
+    n, d = 16, 32
+    torch.manual_seed(42)
+    z_a = torch.randn(n, d)
+    z_b = torch.randn(n, d) + 5.0
+    loss_fn = VICRegViewsLoss(inv_weight=25.0, var_weight=25.0, cov_weight=1.0)
+    loss_same = loss_fn.compute(z_a, z_a.clone())
+    loss_far = loss_fn.compute(z_a, z_b)
+    assert loss_far > loss_same
+
+
+def test_vicreg_views_loss_collapsed_batch() -> None:
+    """Collapsed representations (all same) should incur a high variance penalty."""
+    n, d = 16, 32
+    z = torch.ones(n, d)
+    loss_fn = VICRegViewsLoss(
+        inv_weight=0.0, var_weight=25.0, cov_weight=0.0, gamma=1.0
+    )
+    loss = loss_fn.compute(z, z.clone())
+    # Std ≈ sqrt(eps) ≈ 0.01, so relu(1 - 0.01) ≈ 0.99 per dim → var_weight * 0.99
+    assert loss.item() == pytest.approx(24.75, abs=0.1)

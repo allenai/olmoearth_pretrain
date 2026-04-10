@@ -55,6 +55,7 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
+    vicreg_views_config: LossConfig | None = None
     reinit_targets: bool = False
 
     def build(
@@ -104,6 +105,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         ema_decay: tuple[float, float] = (0.996, 1.0),
         regularizer_config: LossConfig | None = None,
         contrastive_config: LossConfig | None = None,
+        vicreg_views_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         reinit_targets: bool = False,
     ):
@@ -131,6 +133,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             token_exit_cfg: The token exit configuration for the model.
             regularizer_config: An optional regularizer configuration for the model.
             contrastive_config: An optional contrastive configration for the model.
+            vicreg_views_config: Optional VICReg between two masked views.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
             reinit_targets: Whether or not to reinitialize the target encoder.
         """
@@ -163,6 +166,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.contrastive_loss = (
             contrastive_config.build() if contrastive_config is not None else None
         )
+        self.vicreg_views_loss = (
+            vicreg_views_config.build() if vicreg_views_config is not None else None
+        )
         self.total_loss_name = self.base_loss.name
         if self.regularizer is not None:
             self.total_loss_name = f"{self.base_loss.name}+{self.regularizer.name}"
@@ -170,6 +176,10 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
+        if self.vicreg_views_loss is not None:
+            self.total_loss_name = (
+                f"{self.total_loss_name}+{self.vicreg_views_loss.name}"
+            )
         if reinit_targets:
             if ema_decay != (0.0, 0.0):
                 logger.warning(
@@ -209,6 +219,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_con = torch.zeros([], device=self.device)
+        total_batch_vicreg = torch.zeros([], device=self.device)
 
         # Unpack batch
         patch_size = batch[0]
@@ -258,6 +269,13 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                         get_local_tensor(contrastive_loss.detach()) / num_microbatches
                     )
 
+                if self.vicreg_views_loss is not None:
+                    vicreg_loss = self.vicreg_views_loss.compute(pooled_a, pooled_b)
+                    loss += vicreg_loss
+                    total_batch_vicreg += (
+                        get_local_tensor(vicreg_loss.detach()) / num_microbatches
+                    )
+
                 loss = loss / num_microbatches
                 loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
@@ -285,6 +303,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             self.trainer.record_metric(
                 f"train/{self.contrastive_loss.name}",
                 total_batch_con,
+                ReduceType.mean,
+            )
+        if self.vicreg_views_loss is not None:
+            self.trainer.record_metric(
+                f"train/{self.vicreg_views_loss.name}",
+                total_batch_vicreg,
                 ReduceType.mean,
             )
         self.log_regularization(total_batch_reg)

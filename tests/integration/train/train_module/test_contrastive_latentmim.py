@@ -189,6 +189,54 @@ def test_train_batch_without_missing_modalities(
         check_loss_is_a_reasonable_value(mock_trainer._metrics["train/InfoNCE"])
 
 
+def test_train_batch_with_vicreg_views(
+    samples_without_missing_modalities: list[tuple[int, OlmoEarthSample]],
+    latent_mim_model: LatentMIM,
+    optim_config: AdamWConfig,
+    set_random_seeds: None,
+) -> None:
+    """VICReg on two masked views (pooled_a vs pooled_b), no InfoNCE."""
+    token_exit_cfg = {modality: 0 for modality in Modality.names()}
+    config = ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=optim_config,
+        rank_microbatch_size=3,
+        loss_config=LossConfig(loss_config={"type": "patch_discrimination"}),
+        contrastive_config=None,
+        vicreg_views_config=LossConfig(
+            loss_config={
+                "type": "vicreg_views",
+                "inv_weight": 1.0,
+                "var_weight": 1.0,
+                "cov_weight": 1.0,
+            }
+        ),
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        token_exit_cfg=token_exit_cfg,
+        ema_decay=(0.996, 1.0),
+        max_grad_norm=1.0,
+        transform_config=TransformConfig(transform_type="no_transform"),
+    )
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    batch = collate_double_masked_batched(
+        samples_without_missing_modalities,
+        transform=None,
+        masking_strategy=masking_strategy,
+        masking_strategy_b=None,
+    )
+    train_module = config.build(latent_mim_model, device="cpu")
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        mock_trainer = MockTrainer()
+        on_attach_mock = MagicMock(return_value=None)
+        train_module.on_attach = on_attach_mock  # type: ignore
+        train_module._attach_trainer(mock_trainer)
+        train_module.train_batch(batch)
+    assert "train/VICRegViews" in mock_trainer._metrics
+    check_loss_is_a_reasonable_value(mock_trainer._metrics["train/VICRegViews"])
+    check_loss_is_a_reasonable_value(
+        mock_trainer._metrics["train/PatchDisc+VICRegViews"]
+    )
+
+
 def test_train_batch_with_missing_modalities(
     samples_with_missing_modalities: list[tuple[int, OlmoEarthSample]],
     latent_mim_model: LatentMIM,

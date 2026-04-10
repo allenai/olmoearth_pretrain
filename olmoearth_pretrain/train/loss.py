@@ -1009,6 +1009,78 @@ class InfoNCELoss(Loss):
         return self.weight * F.cross_entropy(logits / self.tau, labels)
 
 
+@LOSS_REGISTRY.register("vicreg_views")
+class VICRegViewsLoss(Loss):
+    """VICReg between two differently-masked views of the same samples (student-only).
+
+    Invariance: MSE between the two pooled projections.
+    Variance: hinge on per-dim std (computed on each view independently).
+    Covariance: off-diagonal penalty (computed on each view independently).
+    """
+
+    name = "VICRegViews"
+
+    def __init__(
+        self,
+        inv_weight: float = 25.0,
+        var_weight: float = 25.0,
+        cov_weight: float = 1.0,
+        gamma: float = 1.0,
+        eps: float = 1e-4,
+    ):
+        """Initialize view–view VICReg.
+
+        Args:
+            inv_weight: Weight for MSE(view_a, view_b).
+            var_weight: Weight for variance regularization (per view).
+            cov_weight: Weight for covariance regularization (per view).
+            gamma: Target standard deviation per dimension (variance hinge).
+            eps: Small constant for numerical stability.
+        """
+        self.inv_weight = inv_weight
+        self.var_weight = var_weight
+        self.cov_weight = cov_weight
+        self.gamma = gamma
+        self.eps = eps
+
+    def _variance_loss(self, z: Tensor) -> Tensor:
+        std = torch.sqrt(z.var(dim=0, unbiased=False) + self.eps)
+        return torch.mean(F.relu(self.gamma - std))
+
+    def _covariance_loss(self, z: Tensor) -> Tensor:
+        n, d = z.shape
+        if n < 2:
+            return z.new_tensor(0.0)
+        z = z - z.mean(dim=0)
+        cov = (z.T @ z) / (n - 1)
+        off_diag = cov - torch.diag(torch.diag(cov))
+        return (off_diag**2).sum() / d
+
+    def compute(
+        self, predictions: torch.Tensor, targets: torch.Tensor, **kwargs: Any
+    ) -> Tensor:
+        """Compute VICReg between two views ``predictions`` (view_a) and ``targets`` (view_b).
+
+        Args:
+            predictions: Pooled projection from view A ``[N, D]``.
+            targets: Pooled projection from view B ``[N, D]``.
+            **kwargs: Unused.
+
+        Returns:
+            Scalar loss.
+        """
+        inv_loss = F.mse_loss(predictions, targets)
+        var_loss = (self._variance_loss(predictions) + self._variance_loss(targets)) / 2
+        cov_loss = (
+            self._covariance_loss(predictions) + self._covariance_loss(targets)
+        ) / 2
+        return (
+            self.inv_weight * inv_loss
+            + self.var_weight * var_loss
+            + self.cov_weight * cov_loss
+        )
+
+
 @LOSS_REGISTRY.register("KoLeo")
 class KoLeoLoss(Loss):
     """Loss function for cross entropy.
