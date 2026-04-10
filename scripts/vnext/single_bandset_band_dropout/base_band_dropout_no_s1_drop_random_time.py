@@ -128,7 +128,7 @@ def _masking_config(
 ) -> MaskingConfig:
     return MaskingConfig(
         strategy_config={
-            "type": "random_with_decode",
+            "type": "random_time_with_decode",
             "encode_ratio": 0.5,
             "decode_ratio": 0.5,
             "random_ratio": 0.75,
