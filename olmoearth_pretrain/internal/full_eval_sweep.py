@@ -1113,7 +1113,8 @@ def main() -> None:
     parser.add_argument(
         "--embedding_diagnostics_only",
         action="store_true",
-        help="If set, run ONLY embedding diagnostics (no KNN/LP). Much faster than full eval.",
+        help="If set, run ONLY embedding diagnostics (no KNN/LP) on EMBED_DIAG_TASKS "
+        "in all_evals.py (EuroSAT, So2Sat, PASTIS S2 by default). Sets EMBEDDING_DIAGNOSTICS_ONLY=1.",
     )
     parser.add_argument(
         "--checkpoint_dir",

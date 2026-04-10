@@ -401,22 +401,41 @@ EVAL_TASKS = {
     ),
 }
 
+# Used when EMBEDDING_DIAGNOSTICS_ONLY=1 (e.g. full_eval_sweep --embedding_diagnostics_only).
+# Downstream datasets only — no KNN/LP; see EvalMode.EMBEDDING_DIAGNOSTICS.
 EMBED_DIAG_TASKS = {
-    "pretrain_subset": DownstreamTaskConfig(
-        dataset="pretrain_subset",
-        embedding_batch_size=4,
-        num_workers=2,
+    "m_eurosat": DownstreamTaskConfig(
+        dataset="m-eurosat",
+        embedding_batch_size=128,
+        num_workers=0,
         pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=False,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         eval_interval=Duration.epochs(1),
-        input_modalities=[
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.LANDSAT.name,
-        ],
+        input_modalities=[Modality.SENTINEL2_L2A.name],
         eval_mode=EvalMode.EMBEDDING_DIAGNOSTICS,
-        h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828",
-        pretrain_max_samples=256,
+    ),
+    "m_so2sat": DownstreamTaskConfig(
+        dataset="m-so2sat",
+        embedding_batch_size=128,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        eval_interval=Duration.epochs(1),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.EMBEDDING_DIAGNOSTICS,
+    ),
+    "pastis_sentinel2": DownstreamTaskConfig(
+        dataset="pastis",
+        embedding_batch_size=32,
+        num_workers=2,
+        pooling_type=PoolingType.MAX,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        eval_interval=Duration.epochs(1),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.EMBEDDING_DIAGNOSTICS,
     ),
 }
 
