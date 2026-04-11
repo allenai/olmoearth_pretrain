@@ -55,6 +55,7 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
+    sigreg_config: LossConfig | None = None
     reinit_targets: bool = False
 
     def build(
@@ -104,6 +105,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         ema_decay: tuple[float, float] = (0.996, 1.0),
         regularizer_config: LossConfig | None = None,
         contrastive_config: LossConfig | None = None,
+        sigreg_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         reinit_targets: bool = False,
     ):
@@ -131,6 +133,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             token_exit_cfg: The token exit configuration for the model.
             regularizer_config: An optional regularizer configuration for the model.
             contrastive_config: An optional contrastive configration for the model.
+            sigreg_config: An optional SIGReg configuration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
             reinit_targets: Whether or not to reinitialize the target encoder.
         """
@@ -163,6 +166,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.contrastive_loss = (
             contrastive_config.build() if contrastive_config is not None else None
         )
+        self.sigreg_loss = sigreg_config.build() if sigreg_config is not None else None
         self.total_loss_name = self.base_loss.name
         if self.regularizer is not None:
             self.total_loss_name = f"{self.base_loss.name}+{self.regularizer.name}"
@@ -209,6 +213,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_con = torch.zeros([], device=self.device)
+        total_batch_sigreg = torch.zeros([], device=self.device)
 
         # Unpack batch
         patch_size = batch[0]
@@ -258,6 +263,13 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                         get_local_tensor(contrastive_loss.detach()) / num_microbatches
                     )
 
+                if self.sigreg_loss is not None:
+                    sigreg_loss = self.sigreg_loss.compute(pooled_a, pooled_b)
+                    loss += sigreg_loss
+                    total_batch_sigreg += (
+                        get_local_tensor(sigreg_loss.detach()) / num_microbatches
+                    )
+
                 loss = loss / num_microbatches
                 loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
@@ -285,6 +297,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             self.trainer.record_metric(
                 f"train/{self.contrastive_loss.name}",
                 total_batch_con,
+                ReduceType.mean,
+            )
+        if self.sigreg_loss is not None:
+            self.trainer.record_metric(
+                f"train/{self.sigreg_loss.name}",
+                total_batch_sigreg,
                 ReduceType.mean,
             )
         self.log_regularization(total_batch_reg)

@@ -17,6 +17,7 @@ from olmoearth_pretrain.train.loss import (
     ModalityPatchDiscriminationMaskedNegatives,
     PatchDiscriminationLoss,
     PatchDiscriminationLossNew,
+    SIGRegLoss,
 )
 from olmoearth_pretrain.train.masking import MaskValue
 
@@ -242,6 +243,34 @@ def test_infonce_loss() -> None:
     loss = InfoNCELoss(weight=0.1)
     w_loss_value = loss.compute(torch.ones((b, d)), torch.zeros((b, d)))
     assert 0.1 * loss_value == w_loss_value
+
+
+def test_sigreg_loss() -> None:
+    """SIGReg should return a finite scalar on pooled embeddings."""
+    b, d = 16, 128
+    torch.manual_seed(0)
+    preds = torch.randn((b, d))
+    targets = torch.randn((b, d))
+
+    loss_value = SIGRegLoss().compute(preds, targets)
+
+    assert loss_value.ndim == 0
+    assert torch.isfinite(loss_value)
+
+
+def test_sigreg_loss_weight() -> None:
+    """SIGReg weight should scale the sampled objective."""
+    b, d = 16, 128
+    preds = torch.randn((b, d))
+    targets = torch.randn((b, d))
+
+    torch.manual_seed(123)
+    loss_value = SIGRegLoss(weight=1.0).compute(preds, targets)
+
+    torch.manual_seed(123)
+    weighted_loss_value = SIGRegLoss(weight=0.1).compute(preds, targets)
+
+    assert torch.isclose(weighted_loss_value, 0.1 * loss_value)
 
 
 def test_koleo_loss_instance_mode_tokens_and_masks() -> None:

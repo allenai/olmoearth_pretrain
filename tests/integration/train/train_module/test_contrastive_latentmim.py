@@ -219,6 +219,39 @@ def test_train_batch_with_missing_modalities(
         check_loss_is_a_reasonable_value(mock_trainer._metrics["train/InfoNCE"])
 
 
+def test_train_batch_with_sigreg(
+    samples_without_missing_modalities: list[tuple[int, OlmoEarthSample]],
+    latent_mim_model: LatentMIM,
+    train_module_config: ContrastiveLatentMIMTrainModuleConfig,
+    set_random_seeds: None,
+) -> None:
+    """Train batch should log the optional SIGReg auxiliary loss."""
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    batch = collate_double_masked_batched(
+        samples_without_missing_modalities,
+        transform=None,
+        masking_strategy=masking_strategy,
+        masking_strategy_b=None,
+    )
+    train_module_config.sigreg_config = LossConfig(
+        loss_config={
+            "type": "SIGReg",
+            "weight": 0.01,
+            "num_slices": 32,
+        }
+    )
+    train_module = train_module_config.build(latent_mim_model, device="cpu")
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        mock_trainer = MockTrainer()
+        on_attach_mock = MagicMock(return_value=None)
+        train_module.on_attach = on_attach_mock  # type: ignore
+        train_module._attach_trainer(mock_trainer)
+        train_module.train_batch(batch)
+        check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc"])
+        check_loss_is_a_reasonable_value(mock_trainer._metrics["train/InfoNCE"])
+        check_loss_is_a_reasonable_value(mock_trainer._metrics["train/SIGReg"])
+
+
 def _run_train_batch_and_get_loss(
     model: LatentMIM,
     config: ContrastiveLatentMIMTrainModuleConfig,
