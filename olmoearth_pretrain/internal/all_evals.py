@@ -515,6 +515,7 @@ FT_EVAL_TASKS = {
         epochs=50,
         primary_metric=EvalMetric.MIOU,
     ),
+    # Cashew plant requires a larger patch size; 16 performed best.
     "m_cashew_plant": DownstreamTaskConfig(
         dataset="m-cashew-plant",
         ft_batch_size=4,
@@ -523,6 +524,7 @@ FT_EVAL_TASKS = {
         norm_stats_from_pretrained=False,
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         epochs=50,
+        patch_size=16,
         primary_metric=EvalMetric.MIOU,
     ),
     "m_forestnet": DownstreamTaskConfig(
