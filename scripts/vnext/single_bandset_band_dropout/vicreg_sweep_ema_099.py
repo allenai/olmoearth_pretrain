@@ -1,11 +1,4 @@
-"""VICReg views experiment: base_band_dropout + VICReg on two masked views.
-
-Identical to base_band_dropout_no_s1_drop_random_time_ema_full_target except:
-- Adds VICReg views loss between pooled_a and pooled_b (two masked views, student-only).
-- Adds embedding diagnostics evals (EuroSAT, So2Sat, PASTIS) alongside normal downstream evals.
-- VICReg weights: inv=0.1, var=0.1, cov=0.01 — conservative so total contribution
-  is comparable to InfoNCE (weight=0.05).
-"""
+"""VICReg sweep: more aggressive EMA (0.99 -> 1.0 instead of 0.996 -> 1.0)."""
 
 import logging
 
@@ -199,7 +192,7 @@ def build_train_module_config(
         token_exit_cfg=_token_exit_cfg_full_ema(common),
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(warmup_steps=8000),
-        ema_decay=(0.996, 1.0),
+        ema_decay=(0.99, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
             param_dtype=DType.bfloat16,
