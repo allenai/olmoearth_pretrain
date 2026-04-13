@@ -195,7 +195,15 @@ class Attention(nn.Module):
             x = x.transpose(1, 2)
         elif self.fast_attn:
             if attn_mask is not None:
-                attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, n, 1))
+                if attn_mask.ndim == 2:
+                    pass  # (N, N) -- SDPA broadcasts over B and H
+                elif attn_mask.ndim == 3:
+                    attn_mask = attn_mask.unsqueeze(1)  # (B, N, N) -> (B, 1, N, N)
+                else:
+                    # 1D token-visibility mask (B, N) -> (B, H, N, N)
+                    attn_mask = attn_mask[:, None, None].repeat(
+                        (1, self.num_heads, n, 1)
+                    )
             x = F.scaled_dot_product_attention(
                 q,
                 k,

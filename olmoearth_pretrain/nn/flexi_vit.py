@@ -58,6 +58,73 @@ def return_modalities_from_dict(
     ]
 
 
+def compute_token_spatial_positions(
+    modalities_to_dims_dict: dict[str, tuple],
+    device: torch.device | str = "cpu",
+) -> tuple[Tensor, Tensor]:
+    """Compute (row, col) for every token in the flattened sequence.
+
+    The ordering matches collapse_and_combine_hwtc: tokens are flattened row-major
+    per modality then concatenated across modalities. Non-spatial modalities get
+    sentinel coordinates (-1_000_000) so they only attend to each other.
+
+    Args:
+        modalities_to_dims_dict: maps modality name to its original tensor shape.
+        device: device for the output tensors.
+
+    Returns:
+        (rows, cols) each of shape (N_total,).
+    """
+    rows_list: list[Tensor] = []
+    cols_list: list[Tensor] = []
+
+    for dims in modalities_to_dims_dict.values():
+        if len(dims) == 6:
+            _, h, w, t, c, _ = dims
+            n = h * w * t * c
+            positions = torch.arange(n, device=device)
+            tc = t * c
+            rows_list.append(positions // (w * tc))
+            cols_list.append((positions // tc) % w)
+        elif len(dims) == 5:
+            _, h, w, c, _ = dims
+            n = h * w * c
+            positions = torch.arange(n, device=device)
+            rows_list.append(positions // (w * c))
+            cols_list.append((positions // c) % w)
+        elif len(dims) == 3:
+            _, n_tok, _ = dims
+            rows_list.append(torch.full((n_tok,), -1_000_000, device=device))
+            cols_list.append(torch.full((n_tok,), -1_000_000, device=device))
+        else:
+            n_tok = math.prod(dims[1:-1])
+            rows_list.append(torch.full((n_tok,), -1_000_000, device=device))
+            cols_list.append(torch.full((n_tok,), -1_000_000, device=device))
+
+    return torch.cat(rows_list), torch.cat(cols_list)
+
+
+def build_local_attention_mask(
+    rows: Tensor,
+    cols: Tensor,
+    window_size: int,
+) -> Tensor:
+    """Build a boolean local attention mask from row/col position tensors.
+
+    Args:
+        rows: token row positions. 1D (N,) or 2D (B, N).
+        cols: token col positions. Same shape as rows.
+        window_size: full side length of the square attention window in token units.
+
+    Returns:
+        (N, N) mask if inputs are 1D, or (B, N, N) if inputs are 2D.
+    """
+    radius = window_size // 2
+    row_diff = (rows.unsqueeze(-1) - rows.unsqueeze(-2)).abs()
+    col_diff = (cols.unsqueeze(-1) - cols.unsqueeze(-2)).abs()
+    return (row_diff <= radius) & (col_diff <= radius)
+
+
 # TokensAndMasks is imported from datatypes and re-exported here for backwards compatibility
 # See olmoearth_pretrain.datatypes.TokensAndMasks for the implementation
 
@@ -1464,6 +1531,7 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        local_attention_window: int | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1507,10 +1575,32 @@ class Encoder(FlexiVitBase):
         else:
             cu_seqlens = None
 
-        attn_mask = self._maybe_get_attn_mask(
-            new_mask,
-            fast_pass=fast_pass,
-        )
+        if local_attention_window is not None:
+            all_rows, all_cols = compute_token_spatial_positions(
+                modalities_to_dims_dict, device=tokens.device
+            )
+            if indices is not None:
+                # Tokens were removed (fast_pass=False).
+                # indices[:, :N_kept] maps compacted positions -> original positions.
+                n_kept = tokens.shape[1]
+                surviving = indices[:, :n_kept]
+                rows = all_rows[surviving]
+                cols = all_cols[surviving]
+                attn_mask = build_local_attention_mask(
+                    rows, cols, local_attention_window
+                )
+                if new_mask is not None:
+                    attn_mask = attn_mask & new_mask.bool().unsqueeze(1)
+            else:
+                # No removal (fast_pass=True). Simple (N, N) mask.
+                attn_mask = build_local_attention_mask(
+                    all_rows, all_cols, local_attention_window
+                )
+        else:
+            attn_mask = self._maybe_get_attn_mask(
+                new_mask,
+                fast_pass=fast_pass,
+            )
 
         if self.has_register_tokens:
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
@@ -1586,6 +1676,7 @@ class Encoder(FlexiVitBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
+        local_attention_window: int | None = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -1595,12 +1686,24 @@ class Encoder(FlexiVitBase):
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
+            local_attention_window: If set, restrict each token's attention to a
+                square spatial window of this side length (in token units). Requires
+                use_flash_attn=False and no register tokens.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
         """
         if fast_pass and token_exit_cfg is not None:
             raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
+        if local_attention_window is not None:
+            if self.use_flash_attn:
+                raise ValueError(
+                    "local_attention_window is not supported with flash attention"
+                )
+            if self.has_register_tokens:
+                raise ValueError(
+                    "local_attention_window is not supported with register tokens"
+                )
 
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
 
@@ -1614,6 +1717,7 @@ class Encoder(FlexiVitBase):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 fast_pass=fast_pass,
+                local_attention_window=local_attention_window,
             )
         else:
             token_norm_stats = {}
