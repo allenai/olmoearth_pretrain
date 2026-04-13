@@ -426,6 +426,21 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 dtype=np.float32,
             )
             output_dict["eurocrops"] = mock_eurocrops
+        if (
+            Modality.OLMOEARTH_V1_BASE_EMBEDDING.name
+            in self.dataset.training_modalities
+        ):
+            embedding_hw = standard_hw // 4
+            mock_embedding = rng.random(
+                (
+                    embedding_hw,
+                    embedding_hw,
+                    1,
+                    Modality.OLMOEARTH_V1_BASE_EMBEDDING.num_bands,
+                ),
+                dtype=np.float32,
+            )
+            output_dict["olmoearth_v1_base_embedding"] = mock_embedding
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))

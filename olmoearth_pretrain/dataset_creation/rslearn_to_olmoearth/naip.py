@@ -55,7 +55,7 @@ def convert_naip(window: Window, olmoearth_path: UPath) -> None:
     assert len(Modality.NAIP.band_sets) == 1
     band_set = Modality.NAIP.band_sets[0]
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
-    image = raster_format.decode_raster(raster_dir, window.projection, window.bounds)
+    raster = raster_format.decode_raster(raster_dir, window.projection, window.bounds)
     dst_fname = get_modality_fname(
         olmoearth_path,
         Modality.NAIP,
@@ -68,7 +68,7 @@ def convert_naip(window: Window, olmoearth_path: UPath) -> None:
         path=dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,
-        array=image,
+        raster=raster,
         fname=dst_fname.name,
     )
     metadata_fname = get_modality_temp_meta_fname(

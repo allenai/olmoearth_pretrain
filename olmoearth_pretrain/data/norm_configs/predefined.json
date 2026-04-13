@@ -431,6 +431,4616 @@
       "min": -1
     }
   },
+  "olmoearth_v1_base_embedding": {
+    "B0": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B1": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B10": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B100": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B101": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B102": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B103": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B104": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B105": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B106": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B107": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B108": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B109": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B11": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B110": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B111": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B112": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B113": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B114": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B115": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B116": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B117": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B118": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B119": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B12": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B120": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B121": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B122": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B123": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B124": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B125": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B126": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B127": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B128": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B129": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B13": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B130": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B131": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B132": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B133": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B134": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B135": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B136": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B137": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B138": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B139": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B14": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B140": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B141": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B142": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B143": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B144": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B145": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B146": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B147": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B148": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B149": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B15": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B150": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B151": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B152": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B153": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B154": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B155": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B156": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B157": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B158": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B159": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B16": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B160": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B161": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B162": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B163": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B164": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B165": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B166": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B167": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B168": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B169": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B17": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B170": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B171": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B172": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B173": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B174": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B175": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B176": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B177": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B178": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B179": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B18": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B180": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B181": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B182": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B183": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B184": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B185": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B186": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B187": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B188": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B189": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B19": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B190": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B191": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B192": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B193": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B194": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B195": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B196": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B197": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B198": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B199": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B2": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B20": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B200": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B201": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B202": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B203": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B204": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B205": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B206": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B207": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B208": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B209": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B21": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B210": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B211": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B212": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B213": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B214": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B215": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B216": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B217": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B218": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B219": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B22": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B220": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B221": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B222": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B223": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B224": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B225": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B226": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B227": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B228": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B229": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B23": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B230": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B231": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B232": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B233": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B234": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B235": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B236": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B237": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B238": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B239": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B24": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B240": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B241": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B242": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B243": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B244": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B245": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B246": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B247": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B248": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B249": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B25": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B250": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B251": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B252": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B253": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B254": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B255": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B256": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B257": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B258": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B259": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B26": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B260": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B261": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B262": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B263": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B264": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B265": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B266": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B267": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B268": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B269": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B27": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B270": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B271": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B272": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B273": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B274": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B275": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B276": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B277": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B278": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B279": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B28": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B280": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B281": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B282": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B283": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B284": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B285": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B286": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B287": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B288": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B289": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B29": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B290": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B291": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B292": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B293": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B294": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B295": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B296": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B297": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B298": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B299": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B3": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B30": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B300": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B301": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B302": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B303": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B304": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B305": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B306": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B307": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B308": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B309": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B31": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B310": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B311": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B312": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B313": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B314": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B315": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B316": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B317": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B318": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B319": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B32": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B320": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B321": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B322": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B323": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B324": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B325": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B326": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B327": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B328": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B329": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B33": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B330": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B331": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B332": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B333": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B334": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B335": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B336": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B337": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B338": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B339": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B34": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B340": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B341": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B342": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B343": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B344": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B345": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B346": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B347": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B348": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B349": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B35": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B350": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B351": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B352": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B353": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B354": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B355": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B356": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B357": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B358": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B359": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B36": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B360": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B361": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B362": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B363": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B364": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B365": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B366": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B367": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B368": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B369": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B37": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B370": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B371": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B372": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B373": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B374": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B375": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B376": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B377": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B378": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B379": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B38": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B380": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B381": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B382": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B383": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B384": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B385": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B386": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B387": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B388": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B389": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B39": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B390": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B391": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B392": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B393": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B394": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B395": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B396": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B397": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B398": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B399": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B4": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B40": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B400": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B401": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B402": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B403": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B404": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B405": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B406": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B407": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B408": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B409": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B41": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B410": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B411": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B412": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B413": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B414": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B415": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B416": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B417": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B418": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B419": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B42": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B420": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B421": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B422": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B423": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B424": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B425": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B426": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B427": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B428": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B429": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B43": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B430": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B431": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B432": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B433": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B434": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B435": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B436": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B437": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B438": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B439": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B44": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B440": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B441": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B442": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B443": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B444": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B445": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B446": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B447": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B448": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B449": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B45": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B450": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B451": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B452": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B453": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B454": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B455": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B456": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B457": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B458": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B459": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B46": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B460": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B461": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B462": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B463": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B464": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B465": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B466": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B467": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B468": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B469": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B47": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B470": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B471": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B472": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B473": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B474": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B475": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B476": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B477": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B478": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B479": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B48": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B480": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B481": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B482": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B483": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B484": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B485": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B486": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B487": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B488": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B489": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B49": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B490": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B491": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B492": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B493": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B494": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B495": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B496": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B497": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B498": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B499": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B5": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B50": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B500": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B501": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B502": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B503": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B504": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B505": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B506": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B507": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B508": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B509": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B51": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B510": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B511": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B512": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B513": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B514": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B515": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B516": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B517": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B518": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B519": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B52": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B520": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B521": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B522": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B523": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B524": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B525": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B526": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B527": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B528": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B529": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B53": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B530": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B531": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B532": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B533": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B534": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B535": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B536": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B537": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B538": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B539": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B54": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B540": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B541": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B542": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B543": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B544": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B545": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B546": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B547": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B548": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B549": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B55": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B550": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B551": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B552": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B553": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B554": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B555": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B556": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B557": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B558": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B559": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B56": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B560": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B561": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B562": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B563": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B564": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B565": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B566": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B567": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B568": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B569": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B57": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B570": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B571": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B572": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B573": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B574": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B575": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B576": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B577": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B578": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B579": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B58": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B580": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B581": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B582": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B583": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B584": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B585": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B586": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B587": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B588": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B589": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B59": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B590": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B591": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B592": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B593": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B594": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B595": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B596": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B597": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B598": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B599": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B6": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B60": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B600": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B601": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B602": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B603": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B604": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B605": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B606": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B607": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B608": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B609": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B61": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B610": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B611": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B612": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B613": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B614": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B615": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B616": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B617": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B618": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B619": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B62": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B620": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B621": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B622": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B623": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B624": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B625": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B626": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B627": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B628": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B629": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B63": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B630": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B631": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B632": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B633": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B634": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B635": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B636": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B637": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B638": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B639": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B64": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B640": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B641": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B642": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B643": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B644": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B645": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B646": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B647": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B648": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B649": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B65": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B650": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B651": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B652": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B653": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B654": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B655": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B656": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B657": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B658": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B659": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B66": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B660": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B661": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B662": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B663": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B664": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B665": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B666": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B667": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B668": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B669": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B67": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B670": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B671": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B672": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B673": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B674": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B675": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B676": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B677": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B678": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B679": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B68": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B680": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B681": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B682": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B683": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B684": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B685": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B686": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B687": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B688": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B689": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B69": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B690": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B691": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B692": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B693": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B694": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B695": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B696": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B697": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B698": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B699": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B7": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B70": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B700": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B701": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B702": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B703": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B704": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B705": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B706": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B707": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B708": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B709": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B71": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B710": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B711": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B712": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B713": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B714": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B715": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B716": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B717": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B718": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B719": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B72": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B720": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B721": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B722": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B723": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B724": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B725": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B726": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B727": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B728": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B729": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B73": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B730": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B731": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B732": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B733": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B734": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B735": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B736": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B737": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B738": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B739": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B74": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B740": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B741": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B742": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B743": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B744": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B745": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B746": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B747": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B748": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B749": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B75": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B750": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B751": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B752": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B753": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B754": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B755": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B756": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B757": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B758": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B759": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B76": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B760": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B761": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B762": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B763": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B764": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B765": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B766": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B767": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B77": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B78": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B79": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B8": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B80": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B81": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B82": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B83": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B84": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B85": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B86": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B87": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B88": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B89": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B9": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B90": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B91": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B92": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B93": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B94": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B95": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B96": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B97": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B98": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    },
+    "B99": {
+      "count": 100,
+      "mean": 0,
+      "std": 1,
+      "var": 1
+    }
+  },
   "openstreetmap_raster": {
     "aerialway_pylon": {
       "max": 1,

@@ -269,6 +269,7 @@ python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.worldcereal -
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.worldcover --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.wri_canopy_height_map --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 # The modalities below are not used in our final dataset but supported in this code.
+python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.olmoearth_v1_base_embedding --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.era5 --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.gse --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.naip --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
@@ -297,6 +298,7 @@ python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality worldcover
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality wri_canopy_height_map
 # The modalities below are not used in our final dataset but supported in this code.
+python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality olmoearth_v1_base_embedding
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality era5 --time_span two_week
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality era5 --time_span year
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality gse

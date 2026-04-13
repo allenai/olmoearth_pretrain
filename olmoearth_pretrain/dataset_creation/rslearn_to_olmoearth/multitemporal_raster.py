@@ -9,6 +9,7 @@ import numpy.typing as npt
 from rslearn.data_sources import Item
 from rslearn.dataset import Window
 from rslearn.utils.geometry import PixelBounds, Projection
+from rslearn.utils.raster_array import RasterArray
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import BandSet, ModalitySpec, TimeSpan
@@ -155,9 +156,10 @@ def convert_freq(
                 window.bounds,
                 adjusted_bounds,
             )
-            image = GEOTIFF_RASTER_FORMAT.decode_raster(
+            raster = GEOTIFF_RASTER_FORMAT.decode_raster(
                 raster_dir, adjusted_projection, adjusted_bounds
             )
+            image = raster.get_chw_array()
             expected_image_size = band_set.get_expected_image_size(
                 window_metadata.get_resolution_factor()
             )
@@ -206,7 +208,7 @@ def convert_freq(
                 path=dst_fname.parent,
                 projection=adjusted_projection,
                 bounds=adjusted_bounds,
-                array=stacked_image,
+                raster=RasterArray(chw_array=stacked_image),
                 fname=dst_fname.name,
             )
 
@@ -286,9 +288,10 @@ def convert_monthly(
             if not raster_dir.exists():
                 break
 
-            image = GEOTIFF_RASTER_FORMAT.decode_raster(
+            raster = GEOTIFF_RASTER_FORMAT.decode_raster(
                 raster_dir, adjusted_projection, adjusted_bounds
             )
+            image = raster.get_chw_array()
             expected_image_size = band_set.get_expected_image_size(
                 modality.tile_resolution_factor
             )
@@ -337,7 +340,7 @@ def convert_monthly(
                 path=dst_fname.parent,
                 projection=adjusted_projection,
                 bounds=adjusted_bounds,
-                array=stacked_image,
+                raster=RasterArray(chw_array=stacked_image),
                 fname=dst_fname.name,
             )
 

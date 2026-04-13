@@ -40,15 +40,15 @@ def convert_chm(window: Window, olmoearth_path: UPath) -> None:
     assert len(Modality.WRI_CANOPY_HEIGHT_MAP.band_sets) == 1
     band_set = Modality.WRI_CANOPY_HEIGHT_MAP.band_sets[0]
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
-    image = GEOTIFF_RASTER_FORMAT.decode_raster(
+    raster = GEOTIFF_RASTER_FORMAT.decode_raster(
         raster_dir, window.projection, window.bounds
     )
 
     # Skip areas with any nodata (255).
-    if image.max() == 255:
+    if raster.array.max() == 255:
         return
     # Also skip if there are not enough positive pixels.
-    if np.count_nonzero(image) / image.size < 0.2:
+    if np.count_nonzero(raster.array) / raster.array.size < 0.2:
         return
 
     dst_fname = get_modality_fname(
@@ -63,7 +63,7 @@ def convert_chm(window: Window, olmoearth_path: UPath) -> None:
         path=dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,
-        array=image,
+        raster=raster,
         fname=dst_fname.name,
     )
     metadata_fname = get_modality_temp_meta_fname(
