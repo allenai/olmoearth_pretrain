@@ -9,6 +9,12 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
+from torch.nn.attention.flex_attention import (
+    BlockMask,
+)
+from torch.nn.attention.flex_attention import (
+    flex_attention as torch_flex_attention,
+)
 
 try:
     import flash_attn
@@ -155,7 +161,7 @@ class Attention(nn.Module):
         max_seqlen: int | None = None,
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
-        attn_mask: torch.Tensor | None = None,
+        attn_mask: torch.Tensor | BlockMask | None = None,
     ) -> torch.Tensor:
         """Compute scaled dot product attention.
 
@@ -164,7 +170,7 @@ class Attention(nn.Module):
             k: Key tensor of shape (B, H, N, D)
             v: Value tensor of shape (B, H, N, D)
             n: Number of tokens
-            attn_mask: Attention mask. Defaults to None.
+            attn_mask: Attention mask (dense Tensor, BlockMask, or None).
             cu_seqlens: Optional cumulative sequence lengths for the input tensor needed for varlen flash attention
             cu_seqlens_q: Optional cumulative sequence lengths for the query tensor, needed for cross varlen flash attention
             cu_seqlens_k: Optional cumulative sequence lengths for the key tensor, needed for cross varlen flash attention
@@ -193,6 +199,8 @@ class Attention(nn.Module):
             # Output is (B, Nq, H, D), transpose back to (B, H, Nq, D)
             # matching the transpose of the other attention implementations that need to be transposed back
             x = x.transpose(1, 2)
+        elif isinstance(attn_mask, BlockMask):
+            x = torch_flex_attention(q, k, v, block_mask=attn_mask)
         elif self.fast_attn:
             if attn_mask is not None:
                 if attn_mask.ndim == 2:
@@ -234,14 +242,14 @@ class Attention(nn.Module):
         max_seqlen: int | None = None,
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
-        attn_mask: torch.Tensor | None = None,
+        attn_mask: torch.Tensor | BlockMask | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
         Args:
             x: Input tensor of shape (B, N, C) or (B* N , C) if packed
             y: Second input for cross-attention. Defaults to None.
-            attn_mask: Attention mask. Defaults to None.
+            attn_mask: Attention mask (dense Tensor, BlockMask, or None).
             cu_seqlens: Optional cumulative sequence lengths for the input tensor needed for varlen flash attention
             cu_seqlens_q: Optional cumulative sequence lengths for the query tensor, needed for cross varlen flash attention
             cu_seqlens_k: Optional cumulative sequence lengths for the key tensor, needed for cross varlen flash attention
@@ -521,14 +529,14 @@ class Block(nn.Module):
         max_seqlen: int | None = None,
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
-        attn_mask: torch.Tensor | None = None,
+        attn_mask: torch.Tensor | BlockMask | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
         Args:
             x: Input tensor of shape (B, N, C)
             y: Optional context tensor for cross attention of shape (B, M, C)
-            attn_mask: Optional attention mask tensor
+            attn_mask: Attention mask (dense Tensor, BlockMask, or None).
             cu_seqlens: Optional cumulative sequence lengths for the input tensor needed for varlen flash attention
             cu_seqlens_q: Optional cumulative sequence lengths for the query tensor, needed for cross varlen flash attention
             cu_seqlens_k: Optional cumulative sequence lengths for the key tensor, needed for cross varlen flash attention

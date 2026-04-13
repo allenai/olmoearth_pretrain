@@ -6,9 +6,11 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from einops import rearrange, reduce, repeat
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
+from torch.nn.attention.flex_attention import BlockMask
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
@@ -58,71 +60,306 @@ def return_modalities_from_dict(
     ]
 
 
-def compute_token_spatial_positions(
-    modalities_to_dims_dict: dict[str, tuple],
-    device: torch.device | str = "cpu",
-) -> tuple[Tensor, Tensor]:
-    """Compute (row, col) for every token in the flattened sequence.
+# ---------------------------------------------------------------------------
+# Spatial-block-aligned collapsing for analytical flex_attention BlockMask
+# ---------------------------------------------------------------------------
 
-    The ordering matches collapse_and_combine_hwtc: tokens are flattened row-major
-    per modality then concatenated across modalities. Non-spatial modalities get
-    sentinel coordinates (-1_000_000) so they only attend to each other.
+_NON_SPATIAL_SENTINEL = -1_000_000
+
+
+@dataclass
+class _ModalityBlockMeta:
+    """Per-modality metadata used to reverse collapse_block_aligned."""
+
+    name: str
+    is_spatial: bool
+    original_n_tokens: int
+    padded_n_tokens: int
+    num_bh: int = 0
+    num_bw: int = 0
+    t_x_bs: int = 0
+    t: int = 0
+    bs: int = 0
+    law: int = 0
+    original_shape: tuple = ()
+
+
+def collapse_block_aligned(
+    x: dict[str, Tensor],
+    law: int,
+    modalities_to_process: list[str],
+) -> tuple[Tensor, Tensor, list[_ModalityBlockMeta]]:
+    """Collapse tokens into spatial-block-aligned order for flex_attention.
+
+    Spatial modalities are rearranged so that each consecutive chunk of
+    ``law * law`` tokens corresponds to one (t, band_set) slice of a
+    LAW x LAW spatial square.  Non-spatial modalities are padded to a
+    multiple of ``law * law``.
 
     Args:
-        modalities_to_dims_dict: maps modality name to its original tensor shape.
-        device: device for the output tensors.
+        x: dict mapping modality names and ``{name}_mask`` to tensors.
+        law: local attention window size (spatial block side length in tokens).
+        modalities_to_process: ordered list of modality names.
 
     Returns:
-        (rows, cols) each of shape (N_total,).
+        tokens: ``(B, N_padded, D)`` block-aligned token tensor.
+        validity: ``(B, N_padded)`` bool tensor (True where mask == ONLINE_ENCODER).
+        meta: per-modality metadata for reversing the operation.
+    """
+    block_size = law * law
+    all_tokens: list[Tensor] = []
+    all_masks: list[Tensor] = []
+    meta: list[_ModalityBlockMeta] = []
+
+    for modality in modalities_to_process:
+        mask_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+        tok = x[modality]
+        msk = x[mask_name]
+        ndim = tok.ndim
+
+        if ndim == 6:
+            B, H, W, T, bs, D = tok.shape
+            if H % law != 0 or W % law != 0:
+                raise ValueError(
+                    f"Spatial dims ({H}, {W}) of '{modality}' must be "
+                    f"multiples of local_attention_window={law}"
+                )
+            num_bh, num_bw = H // law, W // law
+            flat_tok = rearrange(
+                tok,
+                "b (bh lh) (bw lw) t bs d -> b (bh bw t bs lh lw) d",
+                lh=law,
+                lw=law,
+            )
+            flat_msk = rearrange(
+                msk,
+                "b (bh lh) (bw lw) t bs -> b (bh bw t bs lh lw)",
+                lh=law,
+                lw=law,
+            )
+            n_tokens = flat_tok.shape[1]
+            meta.append(
+                _ModalityBlockMeta(
+                    name=modality,
+                    is_spatial=True,
+                    original_n_tokens=n_tokens,
+                    padded_n_tokens=n_tokens,
+                    num_bh=num_bh,
+                    num_bw=num_bw,
+                    t_x_bs=T * bs,
+                    t=T,
+                    bs=bs,
+                    law=law,
+                    original_shape=tok.shape,
+                )
+            )
+        else:
+            flat_tok = rearrange(tok, "b ... d -> b (...) d")
+            flat_msk = rearrange(msk, "b ... -> b (...)")
+            n_tokens = flat_tok.shape[1]
+            padded = math.ceil(n_tokens / block_size) * block_size
+            if padded > n_tokens:
+                flat_tok = F.pad(flat_tok, (0, 0, 0, padded - n_tokens))
+                flat_msk = F.pad(
+                    flat_msk,
+                    (0, padded - n_tokens),
+                    value=MaskValue.MISSING.value,
+                )
+            meta.append(
+                _ModalityBlockMeta(
+                    name=modality,
+                    is_spatial=False,
+                    original_n_tokens=n_tokens,
+                    padded_n_tokens=padded,
+                    original_shape=tok.shape,
+                )
+            )
+
+        all_tokens.append(flat_tok)
+        all_masks.append(flat_msk)
+
+    tokens = torch.cat(all_tokens, dim=1)
+    masks = torch.cat(all_masks, dim=1)
+    validity = masks == MaskValue.ONLINE_ENCODER.value
+
+    return tokens, validity, meta
+
+
+def expand_block_aligned(
+    tokens: Tensor,
+    meta: list[_ModalityBlockMeta],
+) -> Tensor:
+    """Reverse collapse_block_aligned: block-aligned -> row-major flat.
+
+    Returns ``(B, N_original, D)`` in the same token order as
+    ``collapse_and_combine_hwtc`` would produce.
+    """
+    parts: list[Tensor] = []
+    offset = 0
+
+    for m in meta:
+        chunk = tokens[:, offset : offset + m.padded_n_tokens, :]
+        offset += m.padded_n_tokens
+
+        chunk = chunk[:, : m.original_n_tokens, :]
+
+        if m.is_spatial:
+            chunk = rearrange(
+                chunk,
+                "b (bh bw t bs lh lw) d -> b (bh lh bw lw t bs) d",
+                bh=m.num_bh,
+                bw=m.num_bw,
+                t=m.t,
+                bs=m.bs,
+                lh=m.law,
+                lw=m.law,
+            )
+
+        parts.append(chunk)
+
+    return torch.cat(parts, dim=1)
+
+
+def compute_block_aligned_positions(
+    meta: list[_ModalityBlockMeta],
+    device: torch.device | str = "cpu",
+) -> tuple[Tensor, Tensor]:
+    """Compute (row, col) for every token in block-aligned order.
+
+    Spatial tokens get their real grid position. Non-spatial and padding
+    tokens get ``_NON_SPATIAL_SENTINEL``.
     """
     rows_list: list[Tensor] = []
     cols_list: list[Tensor] = []
 
-    for dims in modalities_to_dims_dict.values():
-        if len(dims) == 6:
-            _, h, w, t, c, _ = dims
-            n = h * w * t * c
+    for m in meta:
+        if m.is_spatial:
+            n = m.original_n_tokens
             positions = torch.arange(n, device=device)
-            tc = t * c
-            rows_list.append(positions // (w * tc))
-            cols_list.append((positions // tc) % w)
-        elif len(dims) == 5:
-            _, h, w, c, _ = dims
-            n = h * w * c
-            positions = torch.arange(n, device=device)
-            rows_list.append(positions // (w * c))
-            cols_list.append((positions // c) % w)
-        elif len(dims) == 3:
-            _, n_tok, _ = dims
-            rows_list.append(torch.full((n_tok,), -1_000_000, device=device))
-            cols_list.append(torch.full((n_tok,), -1_000_000, device=device))
+            law_sq = m.law * m.law
+            spatial_block_stride = m.t_x_bs * law_sq
+
+            linear_spatial_block = positions // spatial_block_stride
+            bh = linear_spatial_block // m.num_bw
+            bw = linear_spatial_block % m.num_bw
+
+            within_tile = positions % law_sq
+            dh = within_tile // m.law
+            dw = within_tile % m.law
+
+            rows_list.append(bh * m.law + dh)
+            cols_list.append(bw * m.law + dw)
         else:
-            n_tok = math.prod(dims[1:-1])
-            rows_list.append(torch.full((n_tok,), -1_000_000, device=device))
-            cols_list.append(torch.full((n_tok,), -1_000_000, device=device))
+            rows_list.append(
+                torch.full((m.padded_n_tokens,), _NON_SPATIAL_SENTINEL, device=device)
+            )
+            cols_list.append(
+                torch.full((m.padded_n_tokens,), _NON_SPATIAL_SENTINEL, device=device)
+            )
 
     return torch.cat(rows_list), torch.cat(cols_list)
 
 
-def build_local_attention_mask(
+def build_analytical_block_mask(
+    meta: list[_ModalityBlockMeta],
+    law: int,
+    validity: Tensor,
     rows: Tensor,
     cols: Tensor,
-    window_size: int,
-) -> Tensor:
-    """Build a boolean local attention mask from row/col position tensors.
+    device: torch.device | str = "cpu",
+) -> BlockMask:
+    """Construct a BlockMask analytically without create_block_mask.
 
-    Args:
-        rows: token row positions. 1D (N,) or 2D (B, N).
-        cols: token col positions. Same shape as rows.
-        window_size: full side length of the square attention window in token units.
+    Block adjacency rules (O(num_blocks) construction):
+      - Spatial blocks at ``(bh, bw)`` attend to all blocks whose spatial
+        square ``(bh', bw')`` satisfies ``|bh-bh'| <= 1`` and
+        ``|bw-bw'| <= 1``, across all spatial modalities and (t, b_s) slices.
+      - Non-spatial blocks attend to all other non-spatial blocks.
+      - No cross-type (spatial vs non-spatial) attention.
 
-    Returns:
-        (N, N) mask if inputs are 1D, or (B, N, N) if inputs are 2D.
+    A ``mask_mod`` closure handles element-level spatial proximity and
+    per-batch token validity.
     """
-    radius = window_size // 2
-    row_diff = (rows.unsqueeze(-1) - rows.unsqueeze(-2)).abs()
-    col_diff = (cols.unsqueeze(-1) - cols.unsqueeze(-2)).abs()
-    return (row_diff <= radius) & (col_diff <= radius)
+    block_size = law * law
+    total_tokens = sum(m.padded_n_tokens for m in meta)
+    num_blocks = total_tokens // block_size
+
+    # Map each flex-block to its type ------------------------------------------
+    block_bh = torch.zeros(num_blocks, dtype=torch.long)
+    block_bw = torch.zeros(num_blocks, dtype=torch.long)
+
+    spatial_blocks_at: dict[tuple[int, int], list[int]] = {}
+    non_spatial_block_indices: list[int] = []
+
+    block_offset = 0
+    for m in meta:
+        n_blocks_m = m.padded_n_tokens // block_size
+        if m.is_spatial:
+            for j in range(n_blocks_m):
+                idx = block_offset + j
+                spatial_sq = j // m.t_x_bs
+                bh = spatial_sq // m.num_bw
+                bw = spatial_sq % m.num_bw
+                block_bh[idx] = bh
+                block_bw[idx] = bw
+                key = (bh, bw)
+                if key not in spatial_blocks_at:
+                    spatial_blocks_at[key] = []
+                spatial_blocks_at[key].append(idx)
+        else:
+            for j in range(n_blocks_m):
+                non_spatial_block_indices.append(block_offset + j)
+        block_offset += n_blocks_m
+
+    # Build kv_num_blocks / kv_indices -----------------------------------------
+    # Last dim of kv_idx must be num_blocks so that _ordered_to_dense inside
+    # BlockMask.from_kv_blocks can build a (Q_blocks, KV_blocks) dense matrix
+    # large enough for all block indices.
+    kv_num = torch.zeros(1, 1, num_blocks, dtype=torch.int32, device=device)
+    kv_idx = torch.zeros(1, 1, num_blocks, num_blocks, dtype=torch.int32, device=device)
+
+    block_is_spatial = [False] * num_blocks
+    block_offset = 0
+    for m in meta:
+        n_blocks_m = m.padded_n_tokens // block_size
+        if m.is_spatial:
+            for j in range(n_blocks_m):
+                block_is_spatial[block_offset + j] = True
+        block_offset += n_blocks_m
+
+    for q in range(num_blocks):
+        if block_is_spatial[q]:
+            bh = block_bh[q].item()
+            bw = block_bw[q].item()
+            neighbors: list[int] = []
+            for dbh in (-1, 0, 1):
+                for dbw in (-1, 0, 1):
+                    neighbors.extend(spatial_blocks_at.get((bh + dbh, bw + dbw), []))
+            kv_num[0, 0, q] = len(neighbors)
+            for i, n in enumerate(neighbors):
+                kv_idx[0, 0, q, i] = n
+        else:
+            kv_num[0, 0, q] = len(non_spatial_block_indices)
+            for i, n in enumerate(non_spatial_block_indices):
+                kv_idx[0, 0, q, i] = n
+
+    # mask_mod closure ---------------------------------------------------------
+    radius = law // 2
+
+    def mask_mod(b: Tensor, h: Tensor, q_idx: Tensor, kv_idx: Tensor) -> Tensor:
+        is_self = q_idx == kv_idx
+        both_valid = validity[b, q_idx] & validity[b, kv_idx]
+        dr = (rows[q_idx] - rows[kv_idx]).abs()
+        dc = (cols[q_idx] - cols[kv_idx]).abs()
+        in_window = (dr <= radius) & (dc <= radius)
+        return is_self | (both_valid & in_window)
+
+    return BlockMask.from_kv_blocks(
+        kv_num_blocks=kv_num,
+        kv_indices=kv_idx,
+        BLOCK_SIZE=block_size,
+        mask_mod=mask_mod,
+    )
 
 
 # TokensAndMasks is imported from datatypes and re-exported here for backwards compatibility
@@ -1531,7 +1768,6 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
-        local_attention_window: int | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1575,32 +1811,10 @@ class Encoder(FlexiVitBase):
         else:
             cu_seqlens = None
 
-        if local_attention_window is not None:
-            all_rows, all_cols = compute_token_spatial_positions(
-                modalities_to_dims_dict, device=tokens.device
-            )
-            if indices is not None:
-                # Tokens were removed (fast_pass=False).
-                # indices[:, :N_kept] maps compacted positions -> original positions.
-                n_kept = tokens.shape[1]
-                surviving = indices[:, :n_kept]
-                rows = all_rows[surviving]
-                cols = all_cols[surviving]
-                attn_mask = build_local_attention_mask(
-                    rows, cols, local_attention_window
-                )
-                if new_mask is not None:
-                    attn_mask = attn_mask & new_mask.bool().unsqueeze(1)
-            else:
-                # No removal (fast_pass=True). Simple (N, N) mask.
-                attn_mask = build_local_attention_mask(
-                    all_rows, all_cols, local_attention_window
-                )
-        else:
-            attn_mask = self._maybe_get_attn_mask(
-                new_mask,
-                fast_pass=fast_pass,
-            )
+        attn_mask = self._maybe_get_attn_mask(
+            new_mask,
+            fast_pass=fast_pass,
+        )
 
         if self.has_register_tokens:
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
@@ -1669,6 +1883,74 @@ class Encoder(FlexiVitBase):
         tokens_per_modality_dict.update(original_masks_dict)
         return tokens_per_modality_dict, token_norm_stats
 
+    def apply_attn_local(
+        self,
+        x: dict[str, Tensor],
+        timestamps: Tensor,
+        patch_size: int,
+        input_res: int,
+        local_attention_window: int,
+        fast_pass: bool = False,
+    ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
+        """Apply attention with spatial-block-aligned local attention.
+
+        Instead of removing masked tokens and using dense / flash attention,
+        this method keeps all tokens, reorders them into spatial blocks of
+        ``local_attention_window x local_attention_window``, and builds a
+        ``BlockMask`` analytically so that each block only attends to its
+        spatial 3x3 neighborhood.  Token validity is handled inside
+        ``mask_mod``.
+        """
+        tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
+            self.split_tokens_masks_and_dims(x)
+        )
+
+        tokens_dict = self.composite_encodings.forward(
+            tokens_only_dict,
+            timestamps,
+            patch_size,
+            input_res,
+        )
+        tokens_dict.update(original_masks_dict)
+
+        available_modalities = return_modalities_from_dict(tokens_dict)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+
+        tokens, validity, meta = collapse_block_aligned(
+            tokens_dict, local_attention_window, modalities_to_process
+        )
+
+        rows, cols = compute_block_aligned_positions(meta, device=tokens.device)
+
+        attn_mask = build_analytical_block_mask(
+            meta,
+            local_attention_window,
+            validity,
+            rows,
+            cols,
+            device=tokens.device,
+        )
+
+        for blk in self.blocks:
+            tokens = blk(
+                x=tokens,
+                cu_seqlens=None,
+                max_seqlen=None,
+                attn_mask=attn_mask,
+            )
+
+        tokens = self.norm(tokens)
+        tokens = tokens * validity.unsqueeze(-1).to(tokens.dtype)
+        tokens = expand_block_aligned(tokens, meta)
+
+        tokens_per_modality_dict = self.split_and_expand_per_modality(
+            tokens, modalities_to_dims_dict
+        )
+        tokens_per_modality_dict.update(original_masks_dict)
+        return tokens_per_modality_dict, None
+
     def forward(
         self,
         x: MaskedOlmoEarthSample,
@@ -1687,8 +1969,9 @@ class Encoder(FlexiVitBase):
             token_exit_cfg: Configuration for token exit
             fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
             local_attention_window: If set, restrict each token's attention to a
-                square spatial window of this side length (in token units). Requires
-                use_flash_attn=False and no register tokens.
+                square spatial window of this side length (in token units). Uses
+                flex_attention with block-sparse masks (requires CUDA). Incompatible
+                with flash_attn, register tokens, and token_exit_cfg.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -1704,10 +1987,23 @@ class Encoder(FlexiVitBase):
                 raise ValueError(
                     "local_attention_window is not supported with register tokens"
                 )
+            if token_exit_cfg is not None:
+                raise ValueError(
+                    "local_attention_window is not supported with token_exit_cfg"
+                )
 
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
 
-        if token_exit_cfg is None or any(
+        if local_attention_window is not None:
+            patchified_tokens_and_masks, token_norm_stats = self.apply_attn_local(
+                x=patchified_tokens_and_masks,
+                timestamps=x.timestamps,
+                patch_size=patch_size,
+                input_res=input_res,
+                local_attention_window=local_attention_window,
+                fast_pass=fast_pass,
+            )
+        elif token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
             patchified_tokens_and_masks, token_norm_stats = self.apply_attn(
@@ -1717,7 +2013,6 @@ class Encoder(FlexiVitBase):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 fast_pass=fast_pass,
-                local_attention_window=local_attention_window,
             )
         else:
             token_norm_stats = {}
