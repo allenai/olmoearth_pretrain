@@ -1,10 +1,10 @@
-"""Base script for single bandset + random band dropout (no S1) + random time with decode masking + base loss.
+"""Base script for single bandset + random band dropout (no S1) + modality_cross_random masking + masked-negatives loss.
 
 - Single bandset S2 (all 12 bands) / Landsat (all 11 bands)
 - Random band dropout (rate ~ Uniform(0, 0.3)) on S2 and Landsat only (no S1 dropout)
-- Random time with decode masking
-- Base patch discrimination loss (modality_patch_discrimination_new) — same as scripts/official/script.py
-- InfoNCE weight 0.1
+- modality_cross_random masking (same as scripts/official/script.py)
+- Masked negatives patch discrimination loss (same as base_band_dropout_no_s1_drop_random.py)
+- InfoNCE weight 0.05
 - Rank microbatch size 64
 """
 
@@ -128,10 +128,10 @@ def _masking_config(
 ) -> MaskingConfig:
     return MaskingConfig(
         strategy_config={
-            "type": "random_time_with_decode",
+            "type": "modality_cross_random",
             "encode_ratio": 0.5,
             "decode_ratio": 0.5,
-            "random_ratio": 0.5,
+            "allow_encoding_decoding_same_bandset": True,
             "only_decode_modalities": ONLY_DECODE_MODALITIES,
         },
         tokenization_config=tokenization_config,
@@ -168,14 +168,16 @@ def build_train_module_config(
         masking_config=_masking_config(common.tokenization_config),
         loss_config=LossConfig(
             loss_config={
-                "type": "modality_patch_discrimination_new",
+                "type": "modality_patch_discrimination_masked_negatives",
                 "tau": 0.1,
+                "same_target_threshold": 0.999,
+                "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
             }
         ),
         contrastive_config=LossConfig(
             loss_config={
                 "type": "InfoNCE",
-                "weight": 0.1,
+                "weight": 0.05,
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
