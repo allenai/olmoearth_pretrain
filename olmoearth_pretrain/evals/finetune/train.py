@@ -52,6 +52,25 @@ def _get_wandb_logger(trainer: Trainer) -> Any | None:
     return None
 
 
+def _save_best_and_cleanup(
+    best_state: dict[str, torch.Tensor],
+    best_checkpoint_path: str | None,
+    resume_checkpoint_path: str | None,
+) -> None:
+    """Save the best model checkpoint and remove the resume checkpoint."""
+    if best_checkpoint_path is not None:
+        dir_path = os.path.dirname(best_checkpoint_path)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
+        torch.save(best_state, best_checkpoint_path)
+        logger.info(f"Saved best checkpoint to {best_checkpoint_path}")
+    else:
+        logger.info("No best checkpoint path provided, skipping saving best checkpoint")
+    if resume_checkpoint_path and os.path.exists(resume_checkpoint_path):
+        os.remove(resume_checkpoint_path)
+        logger.info(f"Removed resume checkpoint {resume_checkpoint_path}")
+
+
 def compute_eval_metrics(
     ft: nn.Module,
     task_config: EvalDatasetConfig,
@@ -199,7 +218,6 @@ def run_finetune_eval(
 
     best_state = snapshot_state_dict(ft)
     best_val_metric = float("-inf")
-    best_val_result: EvalResult | None = None
     start_epoch = 0
 
     # Resume from checkpoint if it exists
@@ -218,6 +236,27 @@ def run_finetune_eval(
             f"Resumed from epoch {start_epoch}, best_val_metric={best_val_metric:.4f}, "
             f"backbone_unfrozen={backbone_unfrozen}"
         )
+
+        # All epochs already completed in a previous run — save best, clean up, evaluate.
+        if start_epoch >= epochs:
+            logger.info(
+                "All epochs already completed before preemption. "
+                "Saving best checkpoint and evaluating."
+            )
+            ft.load_state_dict(best_state)
+            _save_best_and_cleanup(
+                best_state, best_checkpoint_path, resume_checkpoint_path
+            )
+            return compute_eval_metrics(
+                ft,
+                task_config,
+                val_loader,
+                test_loader,
+                device,
+                patch_size,
+                primary_metric=primary_metric,
+                primary_metric_class=primary_metric_class,
+            )
 
     ft.train()
     wandb_logger = _get_wandb_logger(trainer)
@@ -312,7 +351,6 @@ def run_finetune_eval(
         # This assumes that the validation metric is the higher the better.
         if val_result.primary > best_val_metric:
             best_val_metric = val_result.primary
-            best_val_result = val_result
             best_state = snapshot_state_dict(ft)
             logger.info(
                 f"New best validation metric {best_val_metric:.4f} at epoch {epoch + 1}"
@@ -334,44 +372,14 @@ def run_finetune_eval(
         ft.train()
 
     ft.load_state_dict(best_state)
-    if best_checkpoint_path is not None:
-        dir_path = os.path.dirname(best_checkpoint_path)
-        if dir_path:
-            os.makedirs(dir_path, exist_ok=True)
-        torch.save(best_state, best_checkpoint_path)
-        logger.info(f"Saved best checkpoint to {best_checkpoint_path}")
-    else:
-        logger.info("No best checkpoint path provided, skipping saving best checkpoint")
-
-    # Clean up resume checkpoint after successful completion
-    if resume_checkpoint_path and os.path.exists(resume_checkpoint_path):
-        os.remove(resume_checkpoint_path)
-        logger.info(f"Removed resume checkpoint {resume_checkpoint_path}")
-
-    # Evaluate test set
-    test_result: EvalResult | None = None
-    if test_loader is not None:
-        if task_config.task_type == TaskType.CLASSIFICATION:
-            test_result = eval_cls(
-                ft,
-                test_loader,
-                device,
-                task_config.is_multilabel,
-                primary_metric=primary_metric,
-                primary_metric_class=primary_metric_class,
-            )
-        else:
-            test_result = eval_seg(
-                ft,
-                test_loader,
-                device,
-                task_config.num_classes,
-                patch_size,
-                primary_metric=primary_metric,
-                primary_metric_class=primary_metric_class,
-            )
-
-    return EvalTaskResult(
-        val_result=best_val_result,
-        test_result=test_result,
+    _save_best_and_cleanup(best_state, best_checkpoint_path, resume_checkpoint_path)
+    return compute_eval_metrics(
+        ft,
+        task_config,
+        val_loader,
+        test_loader,
+        device,
+        patch_size,
+        primary_metric=primary_metric,
+        primary_metric_class=primary_metric_class,
     )
