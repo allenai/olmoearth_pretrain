@@ -1077,6 +1077,28 @@ class FlexiVitBase(nn.Module):
             block.apply_compile()
 
 
+class VMFBottleneck(nn.Module):
+    """Von Mises-Fisher bottleneck: L2-normalize onto the unit hypersphere.
+
+    During training, adds VMF-distributed noise controlled by concentration kappa.
+    Higher kappa = less noise. At inference, returns the deterministic mean direction.
+    """
+
+    def __init__(self, kappa: float = 8e3):
+        """Initialize VMF bottleneck with concentration parameter kappa."""
+        super().__init__()
+        self.kappa = kappa
+
+    def forward(self, x: Tensor) -> Tensor:
+        """L2-normalize and optionally add VMF noise during training."""
+        z = torch.nn.functional.normalize(x, p=2, dim=-1)
+        if self.training and self.kappa < float("inf"):
+            noise = torch.randn_like(z)
+            noise = torch.nn.functional.normalize(noise, p=2, dim=-1)
+            z = torch.nn.functional.normalize(z + noise / self.kappa, p=2, dim=-1)
+        return z
+
+
 class Encoder(FlexiVitBase):
     """Encoder module that processes masked input samples into token representations."""
 
@@ -1103,6 +1125,7 @@ class Encoder(FlexiVitBase):
         qk_norm: bool = False,
         log_token_norm_stats: bool = False,
         output_embedding_size: int | None = None,
+        vmf_bottleneck_kappa: float | None = None,
         tokenization_config: TokenizationConfig | None = None,
         use_linear_patch_embed: bool = True,
         band_dropout_rate: float = 0.0,
@@ -1134,6 +1157,8 @@ class Encoder(FlexiVitBase):
             qk_norm: Whether to apply normalization to Q and K in attention
             log_token_norm_stats: Whether to log the token norm stats
             output_embedding_size: If set, project tokens to this size after attention
+            vmf_bottleneck_kappa: If set (requires output_embedding_size), apply VMF bottleneck
+                after projection — L2-normalizes onto S^(d-1) and adds VMF noise during training.
             tokenization_config: Optional config for custom band groupings
             use_linear_patch_embed: If True, use nn.Linear for patch projection (faster).
                 Set False to load checkpoints trained before this flag existed (Conv2d weights).
@@ -1194,6 +1219,13 @@ class Encoder(FlexiVitBase):
             final_embedding_size = output_embedding_size
         else:
             final_embedding_size = self.embedding_size
+        self.vmf_bottleneck: VMFBottleneck | None = None
+        if vmf_bottleneck_kappa is not None:
+            if output_embedding_size is None:
+                raise ValueError(
+                    "vmf_bottleneck_kappa requires output_embedding_size to be set"
+                )
+            self.vmf_bottleneck = VMFBottleneck(kappa=vmf_bottleneck_kappa)
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=final_embedding_size,
             num_layers=num_projection_layers,
@@ -1622,6 +1654,13 @@ class Encoder(FlexiVitBase):
         # Project to output_embedding_size if configured
         if self.embedding_projector is not None:
             output = self.embedding_projector(output)
+
+        # Apply VMF bottleneck (L2-norm + noise) on projected tokens
+        if self.vmf_bottleneck is not None:
+            d = output._asdict()
+            for modality in output.modalities:
+                d[modality] = self.vmf_bottleneck(getattr(output, modality))
+            output = TokensAndMasks(**d)
 
         output_dict: dict[str, Any] = {
             "tokens_and_masks": output,
@@ -2070,6 +2109,7 @@ class EncoderConfig(Config):
     qk_norm: bool = False
     log_token_norm_stats: bool = False
     output_embedding_size: int | None = None
+    vmf_bottleneck_kappa: float | None = None
     tokenization_config: TokenizationConfig | None = None
     use_linear_patch_embed: bool = True
     band_dropout_rate: float = 0.0

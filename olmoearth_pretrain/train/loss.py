@@ -1262,6 +1262,36 @@ class KoLeoLoss(Loss):
         return self.weight * -torch.log(distances_to_nn + self.eps).mean()
 
 
+@LOSS_REGISTRY.register("batch_uniformity")
+class BatchUniformityLoss(Loss):
+    """Batch uniformity loss from AlphaEarth Foundations.
+
+    Encourages uniform distribution on the unit hypersphere by minimizing
+    the absolute dot product between each embedding and a batch-rotated copy.
+    Requires L2-normalized inputs.
+    """
+
+    name = "BatchUniformity"
+
+    def __init__(self, weight: float = 0.05):
+        """Initialize batch uniformity loss with the given weight."""
+        self.weight = weight
+
+    def compute(
+        self, predictions: Tensor, targets: Tensor | None = None, **kwargs: Any
+    ) -> Tensor:
+        """Compute batch uniformity on L2-normalized embeddings.
+
+        Args:
+            predictions: [B, D] embeddings (will be L2-normalized internally).
+            targets: Unused.
+            **kwargs: Additional keyword arguments.
+        """
+        normed = F.normalize(predictions, p=2, dim=-1)
+        rotated = torch.roll(normed, shifts=1, dims=0)
+        return self.weight * torch.abs(normed * rotated).sum(dim=-1).mean()
+
+
 @dataclass
 class LossConfig(Config):
     """Configuration for loss functions.
