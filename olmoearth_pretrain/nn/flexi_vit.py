@@ -1232,6 +1232,7 @@ class Encoder(FlexiVitBase):
             aggregate_then_project=aggregate_then_project,
         )
         self.norm = nn.LayerNorm(self.embedding_size)
+        self._intermediate_pooled: dict[int, Tensor] | None = None
 
         self.apply(self._init_weights)
 
@@ -1634,7 +1635,7 @@ class Encoder(FlexiVitBase):
                 intermediate_pooled[depth] = self.project_and_aggregate(
                     TokensAndMasks(**snap_dict)
                 )
-            self._intermediate_pooled: dict[int, Tensor] | None = intermediate_pooled  # type: ignore[no-redef]
+            self._intermediate_pooled = intermediate_pooled
         else:
             self._intermediate_pooled = None
 
@@ -1665,10 +1666,22 @@ class Encoder(FlexiVitBase):
         if fast_pass and token_exit_cfg is not None:
             raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
 
+        if capture_at is not None:
+            num_blocks = len(self.blocks)
+            invalid = {d for d in capture_at if d < 1 or d > num_blocks}
+            if invalid:
+                raise ValueError(
+                    f"capture_at depths {invalid} out of range [1, {num_blocks}]"
+                )
+
+        self._intermediate_pooled = None
+
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
 
-        if token_exit_cfg is None or any(
-            [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
+        if (
+            token_exit_cfg is None
+            or any(exit_depth > 0 for exit_depth in token_exit_cfg.values())
+            or capture_at is not None
         ):
             patchified_tokens_and_masks, token_norm_stats = self.apply_attn(
                 x=patchified_tokens_and_masks,

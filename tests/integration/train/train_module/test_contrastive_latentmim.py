@@ -436,11 +436,37 @@ def test_train_batch_with_pooled_target_align(
 
 def test_train_batch_with_multi_level_supervision(
     samples_without_missing_modalities: list[tuple[int, OlmoEarthSample]],
-    latent_mim_model: LatentMIM,
+    supported_modality_names: list[str],
     optim_config: AdamWConfig,
     set_random_seeds: None,
 ) -> None:
-    """End-to-end: multi_level_depths captures intermediates and adds MSE at specified depths."""
+    """Multi-level supervision at depths [2, 4] on a depth-6 encoder produces distinct intermediate losses."""
+    deep_encoder_config = EncoderConfig(
+        supported_modality_names=supported_modality_names,
+        embedding_size=16,
+        max_patch_size=8,
+        num_heads=2,
+        mlp_ratio=1.0,
+        depth=6,
+        drop_path=0.0,
+        max_sequence_length=12,
+    )
+    predictor_config = PredictorConfig(
+        supported_modality_names=supported_modality_names,
+        encoder_embedding_size=16,
+        decoder_embedding_size=16,
+        depth=2,
+        mlp_ratio=1.0,
+        num_heads=2,
+        max_sequence_length=12,
+        drop_path=0.0,
+    )
+    model = LatentMIMConfig(
+        encoder_config=deep_encoder_config,
+        decoder_config=predictor_config,
+    ).build()
+    model.to(device="cpu")
+
     masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
     batch = collate_double_masked_batched(
         samples_without_missing_modalities,
@@ -460,11 +486,11 @@ def test_train_batch_with_multi_level_supervision(
         token_exit_cfg=token_exit_cfg,
         ema_decay=(0.996, 1.0),
         max_grad_norm=1.0,
-        multi_level_depths=[1],
+        multi_level_depths=[2, 4],
         multi_level_weight=1.0,
     )
 
-    train_module = config.build(latent_mim_model, device="cpu")
+    train_module = config.build(model, device="cpu")
     with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
         mock_trainer = MockTrainer()
         on_attach_mock = MagicMock(return_value=None)
@@ -472,6 +498,7 @@ def test_train_batch_with_multi_level_supervision(
         train_module._attach_trainer(mock_trainer)
         train_module.train_batch(batch)
         logger.info(mock_trainer._metrics)
+
         check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc"])
         check_loss_is_a_reasonable_value(mock_trainer._metrics["train/InfoNCE"])
         assert "train/multi_level_mse" in mock_trainer._metrics, (
@@ -479,4 +506,74 @@ def test_train_batch_with_multi_level_supervision(
         )
         ml_mse = mock_trainer._metrics["train/multi_level_mse"]
         assert torch.isfinite(ml_mse), f"multi_level_mse is not finite: {ml_mse}"
-        assert ml_mse >= 0, f"multi_level_mse should be non-negative: {ml_mse}"
+        assert ml_mse > 0, f"multi_level_mse should be positive: {ml_mse}"
+
+    # Verify intermediates were actually captured at the right depths
+    student_inter = model.encoder._intermediate_pooled
+    assert student_inter is not None, "Student intermediates should be captured"
+    assert set(student_inter.keys()) == {2, 4}, (
+        f"Expected depths {{2, 4}}, got {set(student_inter.keys())}"
+    )
+    for depth, pooled in student_inter.items():
+        assert pooled.ndim == 2, f"Depth {depth}: expected [B, D], got {pooled.shape}"
+
+
+def test_multi_level_validation_rejects_invalid_depth(
+    samples_without_missing_modalities: list[tuple[int, OlmoEarthSample]],
+    supported_modality_names: list[str],
+    optim_config: AdamWConfig,
+    set_random_seeds: None,
+) -> None:
+    """capture_at with out-of-range depths raises ValueError during training."""
+    deep_model = LatentMIMConfig(
+        encoder_config=EncoderConfig(
+            supported_modality_names=supported_modality_names,
+            embedding_size=16,
+            max_patch_size=8,
+            num_heads=2,
+            mlp_ratio=1.0,
+            depth=4,
+            drop_path=0.0,
+            max_sequence_length=12,
+        ),
+        decoder_config=PredictorConfig(
+            supported_modality_names=supported_modality_names,
+            encoder_embedding_size=16,
+            decoder_embedding_size=16,
+            depth=2,
+            mlp_ratio=1.0,
+            num_heads=2,
+            max_sequence_length=12,
+            drop_path=0.0,
+        ),
+    ).build()
+    deep_model.to(device="cpu")
+
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    batch = collate_double_masked_batched(
+        samples_without_missing_modalities,
+        transform=None,
+        masking_strategy=masking_strategy,
+        masking_strategy_b=None,
+    )
+
+    config = ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=optim_config,
+        rank_microbatch_size=3,
+        loss_config=LossConfig(loss_config={"type": "patch_discrimination"}),
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        token_exit_cfg={modality: 0 for modality in Modality.names()},
+        ema_decay=(0.996, 1.0),
+        max_grad_norm=1.0,
+        multi_level_depths=[5],
+        multi_level_weight=1.0,
+    )
+
+    train_module = config.build(deep_model, device="cpu")
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        mock_trainer = MockTrainer()
+        on_attach_mock = MagicMock(return_value=None)
+        train_module.on_attach = on_attach_mock  # type: ignore
+        train_module._attach_trainer(mock_trainer)
+        with pytest.raises(ValueError, match="capture_at depths .* out of range"):
+            train_module.train_batch(batch)
