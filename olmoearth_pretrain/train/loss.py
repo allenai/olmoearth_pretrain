@@ -1081,6 +1081,94 @@ class VICRegViewsLoss(Loss):
         )
 
 
+class SIGReg:
+    """Sliced characteristic-function regularizer for pooled embeddings."""
+
+    def __init__(
+        self,
+        knots: int = 17,
+        num_slices: int = 256,
+        t_max: float = 3.0,
+    ) -> None:
+        """Initialize the integration grid and Gaussian target."""
+        if knots < 2:
+            raise ValueError(f"knots must be at least 2, got {knots}")
+        if num_slices < 1:
+            raise ValueError(f"num_slices must be positive, got {num_slices}")
+
+        t = torch.linspace(0, t_max, knots, dtype=torch.float32)
+        dt = t_max / (knots - 1)
+
+        weights = torch.full((knots,), 2 * dt, dtype=torch.float32)
+        weights[[0, -1]] = dt
+
+        window = torch.exp(-t.square() / 2.0)
+
+        self.num_slices = num_slices
+        self.t = t
+        self.phi = window
+        self.weights = weights * window
+
+    def compute(self, proj: torch.Tensor) -> Tensor:
+        """Compute SIGReg on a batch of instance embeddings."""
+        if proj.ndim != 2:
+            raise ValueError(f"Expected proj with shape [B, D], got {proj.shape}")
+        if proj.shape[0] == 0:
+            raise ValueError("Expected at least one embedding for SIGReg")
+
+        device = proj.device
+        dtype = proj.dtype
+
+        directions = torch.randn(
+            proj.size(-1),
+            self.num_slices,
+            device=device,
+            dtype=dtype,
+        )
+        directions = directions / directions.norm(p=2, dim=0, keepdim=True).clamp_min(
+            1e-12
+        )
+
+        x_t = (proj @ directions).unsqueeze(-1) * self.t.to(device=device, dtype=dtype)
+        cos_mean = x_t.cos().mean(dim=0)
+        sin_mean = x_t.sin().mean(dim=0)
+
+        phi = self.phi.to(device=device, dtype=dtype)
+        weights = self.weights.to(device=device, dtype=dtype)
+
+        err = (cos_mean - phi).square() + sin_mean.square()
+        statistic = (err @ weights) * proj.size(0)
+        return statistic.mean()
+
+
+@LOSS_REGISTRY.register("SIGReg")
+class SIGRegLoss(Loss):
+    """Apply SIGReg independently to two pooled instance embeddings."""
+
+    name = "SIGReg"
+
+    def __init__(
+        self,
+        weight: float = 0.05,
+        knots: int = 17,
+        num_slices: int = 256,
+        t_max: float = 3.0,
+    ) -> None:
+        """Initialize the SIGReg auxiliary loss."""
+        self.weight = weight
+        self.sigreg = SIGReg(knots=knots, num_slices=num_slices, t_max=t_max)
+
+    def compute(
+        self, predictions: torch.Tensor, targets: torch.Tensor, **kwargs: Any
+    ) -> Tensor:
+        """Compute SIGReg on both views and average the result."""
+        return (
+            self.weight
+            * (self.sigreg.compute(predictions) + self.sigreg.compute(targets))
+            / 2
+        )
+
+
 @LOSS_REGISTRY.register("KoLeo")
 class KoLeoLoss(Loss):
     """Loss function for cross entropy.
