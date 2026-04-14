@@ -1,4 +1,4 @@
-"""Base script with single bandset and L1 loss instead of patch discrimination."""
+"""Base script with single bandset + random time with decode masking + L1 loss (no patch discrimination)."""
 
 import logging
 
@@ -119,10 +119,10 @@ def _masking_config(
 ) -> MaskingConfig:
     return MaskingConfig(
         strategy_config={
-            "type": "modality_cross_random",
+            "type": "random_time_with_decode",
             "encode_ratio": 0.5,
             "decode_ratio": 0.5,
-            "allow_encoding_decoding_same_bandset": True,
+            "random_ratio": 0.5,
             "only_decode_modalities": ONLY_DECODE_MODALITIES,
         },
         tokenization_config=tokenization_config,
