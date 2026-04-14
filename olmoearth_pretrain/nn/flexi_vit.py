@@ -1496,6 +1496,7 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        capture_at: set[int] | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1548,6 +1549,7 @@ class Encoder(FlexiVitBase):
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
 
         # Apply attn with varying encoder depths
+        captured_snapshots: dict[int, Tensor] = {}
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
             if (exit_ids_seq is not None) and (i_blk > 0):
@@ -1572,6 +1574,9 @@ class Encoder(FlexiVitBase):
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
             )
+
+            if capture_at is not None and (i_blk + 1) in capture_at:
+                captured_snapshots[i_blk + 1] = tokens.clone()
 
         if self.has_register_tokens:
             tokens, register_tokens = self.pop_register_tokens(tokens)
@@ -1609,6 +1614,30 @@ class Encoder(FlexiVitBase):
         )
         # merge original masks and the processed tokens
         tokens_per_modality_dict.update(original_masks_dict)
+
+        # Process captured intermediate snapshots into pooled representations
+        if captured_snapshots:
+            intermediate_pooled: dict[int, Tensor] = {}
+            for depth, snap in captured_snapshots.items():
+                if self.has_register_tokens:
+                    snap, _ = self.pop_register_tokens(snap)
+                if self.use_flash_attn:
+                    snap = self.unpack_tokens(snap, new_mask, og_shape)
+                snap = self.norm(snap)
+                snap = self._maybe_add_removed_tokens(
+                    snap, indices, new_mask, fast_pass
+                )
+                snap_dict = self.split_and_expand_per_modality(
+                    snap, modalities_to_dims_dict
+                )
+                snap_dict.update(original_masks_dict)
+                intermediate_pooled[depth] = self.project_and_aggregate(
+                    TokensAndMasks(**snap_dict)
+                )
+            self._intermediate_pooled: dict[int, Tensor] | None = intermediate_pooled  # type: ignore[no-redef]
+        else:
+            self._intermediate_pooled = None
+
         return tokens_per_modality_dict, token_norm_stats
 
     def forward(
@@ -1618,6 +1647,7 @@ class Encoder(FlexiVitBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
+        capture_at: set[int] | None = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -1627,6 +1657,7 @@ class Encoder(FlexiVitBase):
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
+            capture_at: Set of block depths at which to capture intermediate pooled representations.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -1646,6 +1677,7 @@ class Encoder(FlexiVitBase):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 fast_pass=fast_pass,
+                capture_at=capture_at,
             )
         else:
             token_norm_stats = {}

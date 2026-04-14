@@ -58,6 +58,8 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     contrastive_config: LossConfig | None = None
     vicreg_views_config: LossConfig | None = None
     pooled_target_align_weight: float = 0.0
+    multi_level_depths: list[int] = field(default_factory=list)
+    multi_level_weight: float = 0.0
     reinit_targets: bool = False
 
     def build(
@@ -109,6 +111,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         contrastive_config: LossConfig | None = None,
         vicreg_views_config: LossConfig | None = None,
         pooled_target_align_weight: float = 0.0,
+        multi_level_depths: list[int] | None = None,
+        multi_level_weight: float = 0.0,
         find_unused_parameters: bool = True,
         reinit_targets: bool = False,
     ):
@@ -138,6 +142,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             contrastive_config: An optional contrastive configration for the model.
             vicreg_views_config: Optional VICReg between two masked views.
             pooled_target_align_weight: Weight for MSE between student and target pooled representations.
+            multi_level_depths: Block depths at which to apply intermediate supervision (e.g. [6, 12]).
+            multi_level_weight: Weight for MSE loss at intermediate depths.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
             reinit_targets: Whether or not to reinitialize the target encoder.
         """
@@ -174,6 +180,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             vicreg_views_config.build() if vicreg_views_config is not None else None
         )
         self.pooled_target_align_weight = pooled_target_align_weight
+        self.capture_at = set(multi_level_depths) if multi_level_depths else None
+        self.multi_level_weight = multi_level_weight
         self.total_loss_name = self.base_loss.name
         if self.regularizer is not None:
             self.total_loss_name = f"{self.base_loss.name}+{self.regularizer.name}"
@@ -226,6 +234,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         total_batch_con = torch.zeros([], device=self.device)
         total_batch_vicreg = torch.zeros([], device=self.device)
         total_batch_pooled_target = torch.zeros([], device=self.device)
+        total_batch_multi_level = torch.zeros([], device=self.device)
 
         # Unpack batch
         patch_size = batch[0]
@@ -254,6 +263,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     target_output_a,
                     pooled_a,
                     target_pooled_a,
+                    student_inter_a,
+                    target_inter_a,
                 ) = self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
                 (
                     loss_b,
@@ -262,6 +273,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     target_output_b,
                     pooled_b,
                     target_pooled_b,
+                    student_inter_b,
+                    target_inter_b,
                 ) = self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
                 loss = (loss_a + loss_b) / 2
 
@@ -307,6 +320,29 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                         get_local_tensor(pt_loss.detach()) / num_microbatches
                     )
 
+                if (
+                    self.multi_level_weight > 0
+                    and student_inter_a is not None
+                    and target_inter_a is not None
+                    and student_inter_b is not None
+                    and target_inter_b is not None
+                ):
+                    ml_loss = torch.zeros([], device=self.device)
+                    for depth in student_inter_a:
+                        ml_loss += F.mse_loss(
+                            student_inter_a[depth], target_inter_a[depth].detach()
+                        )
+                        ml_loss += F.mse_loss(
+                            student_inter_b[depth], target_inter_b[depth].detach()
+                        )
+                    ml_loss = (
+                        self.multi_level_weight * ml_loss / (2 * len(student_inter_a))
+                    )
+                    loss += ml_loss
+                    total_batch_multi_level += (
+                        get_local_tensor(ml_loss.detach()) / num_microbatches
+                    )
+
                 loss = loss / num_microbatches
                 loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
@@ -348,6 +384,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 total_batch_pooled_target,
                 ReduceType.mean,
             )
+        if self.multi_level_weight > 0:
+            self.trainer.record_metric(
+                "train/multi_level_mse",
+                total_batch_multi_level,
+                ReduceType.mean,
+            )
         self.log_regularization(total_batch_reg)
 
         del batch  # In case this helps with memory utilization.
@@ -365,6 +407,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         TokensAndMasks,
         torch.Tensor,
         torch.Tensor | None,
+        dict[int, torch.Tensor] | None,
+        dict[int, torch.Tensor] | None,
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
@@ -374,7 +418,10 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 latent_projected_and_pooled,
                 reconstructed,
                 extra_metrics,
-            ) = self.model(batch, patch_size)
+            ) = self.model(batch, patch_size, capture_at=self.capture_at)
+            student_intermediates = getattr(
+                self.model.encoder, "_intermediate_pooled", None
+            )
             if extra_metrics is not None:
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
@@ -383,8 +430,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
+                    capture_at=self.capture_at,
                 )
                 target_output, target_pooled, _ = unpack_encoder_output(output_dict)
+                target_intermediates = getattr(
+                    self.model.target_encoder, "_intermediate_pooled", None
+                )
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
@@ -395,4 +446,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 target_output,
                 latent_projected_and_pooled,
                 target_pooled,
+                student_intermediates,
+                target_intermediates,
             )

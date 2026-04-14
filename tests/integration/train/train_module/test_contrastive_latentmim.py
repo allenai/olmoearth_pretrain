@@ -432,3 +432,51 @@ def test_train_batch_with_pooled_target_align(
         pt_mse = mock_trainer._metrics["train/pooled_target_mse"]
         assert torch.isfinite(pt_mse), f"pooled_target_mse is not finite: {pt_mse}"
         assert pt_mse >= 0, f"pooled_target_mse should be non-negative: {pt_mse}"
+
+
+def test_train_batch_with_multi_level_supervision(
+    samples_without_missing_modalities: list[tuple[int, OlmoEarthSample]],
+    latent_mim_model: LatentMIM,
+    optim_config: AdamWConfig,
+    set_random_seeds: None,
+) -> None:
+    """End-to-end: multi_level_depths captures intermediates and adds MSE at specified depths."""
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    batch = collate_double_masked_batched(
+        samples_without_missing_modalities,
+        transform=None,
+        masking_strategy=masking_strategy,
+        masking_strategy_b=None,
+    )
+
+    token_exit_cfg = {modality: 0 for modality in Modality.names()}
+
+    config = ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=optim_config,
+        rank_microbatch_size=3,
+        loss_config=LossConfig(loss_config={"type": "patch_discrimination"}),
+        contrastive_config=LossConfig(loss_config={"type": "InfoNCE", "weight": 0.1}),
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        token_exit_cfg=token_exit_cfg,
+        ema_decay=(0.996, 1.0),
+        max_grad_norm=1.0,
+        multi_level_depths=[1],
+        multi_level_weight=1.0,
+    )
+
+    train_module = config.build(latent_mim_model, device="cpu")
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        mock_trainer = MockTrainer()
+        on_attach_mock = MagicMock(return_value=None)
+        train_module.on_attach = on_attach_mock  # type: ignore
+        train_module._attach_trainer(mock_trainer)
+        train_module.train_batch(batch)
+        logger.info(mock_trainer._metrics)
+        check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc"])
+        check_loss_is_a_reasonable_value(mock_trainer._metrics["train/InfoNCE"])
+        assert "train/multi_level_mse" in mock_trainer._metrics, (
+            f"multi_level_mse not logged. Metrics: {list(mock_trainer._metrics.keys())}"
+        )
+        ml_mse = mock_trainer._metrics["train/multi_level_mse"]
+        assert torch.isfinite(ml_mse), f"multi_level_mse is not finite: {ml_mse}"
+        assert ml_mse >= 0, f"multi_level_mse should be non-negative: {ml_mse}"

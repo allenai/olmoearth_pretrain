@@ -52,7 +52,10 @@ class LatentMIM(nn.Module, DistributedMixins):
             self.target_encoder.disable_band_dropout()
 
     def forward(
-        self, x: MaskedOlmoEarthSample, patch_size: int
+        self,
+        x: MaskedOlmoEarthSample,
+        patch_size: int,
+        capture_at: set[int] | None = None,
     ) -> tuple[
         TokensAndMasks,
         TokensAndMasks,
@@ -69,7 +72,7 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        output_dict = self.encoder(x, patch_size=patch_size)
+        output_dict = self.encoder(x, patch_size=patch_size, capture_at=capture_at)
         token_norm_stats = output_dict.pop("token_norm_stats", None)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict
