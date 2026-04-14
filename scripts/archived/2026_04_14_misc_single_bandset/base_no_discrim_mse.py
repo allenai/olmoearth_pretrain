@@ -159,7 +159,7 @@ def build_train_module_config(
         masking_config=_masking_config(common.tokenization_config),
         loss_config=LossConfig(
             loss_config={
-                "type": "mse",
+                "type": "l2",
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
