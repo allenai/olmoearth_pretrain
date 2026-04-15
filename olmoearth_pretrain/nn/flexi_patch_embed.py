@@ -372,6 +372,7 @@ class ChannelAttentionPatchEmbed(nn.Module):
         p_h, p_w = self.base_patch_size
 
         self.band_proj = nn.Linear(p_h * p_w, attn_dim)
+        self.band_proj._skip_custom_init = True  # type: ignore[attr-defined]
         self.band_embeddings = nn.Parameter(torch.randn(num_bands, attn_dim) * 0.02)
         self.query = nn.Parameter(torch.randn(1, 1, attn_dim) * 0.02)
 
@@ -477,7 +478,7 @@ class ChannelAttentionPatchEmbed(nn.Module):
         if key_padding_mask is not None:
             # [BL, C] -> [BL, 1, 1, C] broadcast to [BL, num_heads, 1, C]
             attn_mask = key_padding_mask.unsqueeze(1).unsqueeze(2)
-            attn_mask = torch.where(attn_mask, float("-inf"), 0.0)
+            attn_mask = torch.where(attn_mask, float("-inf"), 0.0).to(q.dtype)
 
         x = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
         x = (
