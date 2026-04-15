@@ -7,10 +7,21 @@ They cover the following:
 - 2D sinusoidal position encoding (for spatial data)
 - 1D sinusoidal position encoding (for temporal data)
 - Month encoding (for temporal data)
+- Static multi-frequency temporal encoding
 """
+
+import math
+from enum import StrEnum
 
 import numpy as np
 import torch
+
+
+class TimestampEncodingMode(StrEnum):
+    """Mode for encoding temporal information."""
+
+    LEGACY = "legacy"
+    STATIC_TEMPORAL = "static_temporal"
 
 
 def get_1d_sincos_pos_encoding(pos: torch.Tensor, encoding_dim: int) -> torch.Tensor:
@@ -119,3 +130,37 @@ def get_month_encoding_table(encoding_dim: int) -> torch.Tensor:
     month_table = torch.concatenate([sin_table[:-1], cos_table[:-1]], axis=-1)
 
     return month_table  # (M, D)
+
+
+def get_static_temporal_encoding(
+    timestamps: torch.Tensor, encoding_dim: int
+) -> torch.Tensor:
+    """Static multi-frequency sinusoidal temporal encoding.
+
+    Converts timestamps to a fractional year and applies geometric-spaced
+    sinusoidal frequencies ranging from ~128-year periods to daily resolution.
+    The 1-cycle/year frequency naturally produces identical values for the
+    same day-of-year across different years.
+
+    Args:
+        timestamps: Tensor of shape (B, T, 3) where [..., 0] is day (1-31),
+            [..., 1] is month (0-indexed, 0-11), [..., 2] is year.
+        encoding_dim: Output encoding dimension (must be even).
+
+    Returns:
+        Tensor of shape (B, T, encoding_dim).
+    """
+    assert encoding_dim % 2 == 0, f"encoding_dim must be even, got {encoding_dim}"
+    day = timestamps[..., 0].float()
+    month = timestamps[..., 1].float()
+    year = timestamps[..., 2].float()
+
+    day_of_year = month * 30.4375 + day
+    frac_year = year + day_of_year / 365.25 - 2020.0
+
+    num_freqs = encoding_dim // 2
+    exponents = torch.linspace(-7.0, 8.5, num_freqs, device=timestamps.device)
+    freqs = 2.0 * math.pi * (2.0**exponents)  # (num_freqs,)
+
+    angles = frac_year.unsqueeze(-1) * freqs  # (B, T, num_freqs)
+    return torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
