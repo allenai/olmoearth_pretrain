@@ -25,7 +25,6 @@ from olmoearth_pretrain.datatypes import (
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
     TimestampEncodingMode,
-    build_static_temporal_freqs,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
@@ -657,10 +656,6 @@ class CompositeEncodings(nn.Module):
         if self.timestamp_encoding_mode == TimestampEncodingMode.STATIC_TEMPORAL:
             self.pos_embed = None
             self.month_embed = None
-            self.register_buffer(
-                "_static_temporal_freqs",
-                build_static_temporal_freqs(2 * self.embedding_dim_per_embedding_type),
-            )
         else:
             self.pos_embed = nn.Parameter(
                 get_1d_sincos_pos_encoding(
@@ -806,7 +801,7 @@ class CompositeEncodings(nn.Module):
             if self.timestamp_encoding_mode == TimestampEncodingMode.STATIC_TEMPORAL:
                 assert timestamps is not None
                 ts_embed = get_static_temporal_encoding(
-                    timestamps, self._static_temporal_freqs
+                    timestamps, 2 * self.embedding_dim_per_embedding_type
                 )
                 ts_view = repeat(ts_embed, f"b t d -> {ein_string}", **ein_dict).to(
                     device
