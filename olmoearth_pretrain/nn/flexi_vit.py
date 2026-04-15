@@ -29,6 +29,7 @@ from olmoearth_pretrain.nn.encodings import (
     get_month_encoding_table,
 )
 from olmoearth_pretrain.nn.flexi_patch_embed import (
+    ChannelAttentionPatchEmbed,
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
@@ -193,6 +194,8 @@ class MultiModalPatchEmbeddings(nn.Module):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        channel_attn_dim: int | None = None,
+        channel_attn_num_heads: int = 8,
     ):
         """Initialize the patch embeddings.
 
@@ -213,6 +216,9 @@ class MultiModalPatchEmbeddings(nn.Module):
                 and acts as stronger augmentation. Default: False (fixed rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            channel_attn_dim: If set, use ChannelAttentionPatchEmbed with this attention
+                dimension for bandsets with >1 band. None means use FlexiPatchEmbed.
+            channel_attn_num_heads: Number of attention heads for channel cross-attention.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -223,6 +229,8 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
+        self.channel_attn_dim = channel_attn_dim
+        self.channel_attn_num_heads = channel_attn_num_heads
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -261,14 +269,9 @@ class MultiModalPatchEmbeddings(nn.Module):
     def _get_patch_embedding_module_for_modality(self, modality: str) -> nn.Module:
         """Get the patch embedding module for a modality."""
         modality_spec = Modality.get(modality)
-        # Get bandset indices from tokenization config (may be overridden)
         bandset_indices = self.tokenization_config.get_bandset_indices(modality)
 
-        # Based on the modality name we choose the way to embed the data
-        # I likely will need to know about what the embedding strategy is in the forward as well
-        # Static modality
         if not modality_spec.is_spatial:
-            # static in space
             return nn.ModuleDict(
                 {
                     self._get_embedding_module_name(modality, idx): nn.Linear(
@@ -277,19 +280,59 @@ class MultiModalPatchEmbeddings(nn.Module):
                     for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
             )
-        else:
-            return nn.ModuleDict(
-                {
-                    self._get_embedding_module_name(modality, idx): FlexiPatchEmbed(
-                        in_chans=len(channel_set_idxs),
-                        embedding_size=self.embedding_size,
-                        base_patch_size_at_16=self.max_patch_size,
-                        modality_spec=modality_spec,
-                        use_linear_patch_embed=self.use_linear_patch_embed,
-                    )
-                    for idx, channel_set_idxs in enumerate(bandset_indices)
-                }
-            )
+
+        modules = {}
+        for idx, channel_set_idxs in enumerate(bandset_indices):
+            num_bands = len(channel_set_idxs)
+            if self.channel_attn_dim is not None and num_bands > 1:
+                module = ChannelAttentionPatchEmbed(
+                    modality_spec=modality_spec,
+                    base_patch_size_at_16=self.max_patch_size,
+                    num_bands=num_bands,
+                    embedding_size=self.embedding_size,
+                    attn_dim=self.channel_attn_dim,
+                    num_heads=self.channel_attn_num_heads,
+                )
+            else:
+                module = FlexiPatchEmbed(
+                    in_chans=num_bands,
+                    embedding_size=self.embedding_size,
+                    base_patch_size_at_16=self.max_patch_size,
+                    modality_spec=modality_spec,
+                    use_linear_patch_embed=self.use_linear_patch_embed,
+                )
+            modules[self._get_embedding_module_name(modality, idx)] = module
+        return nn.ModuleDict(modules)
+
+    def _get_band_dropout_rate(self, device: torch.device) -> float:
+        """Sample the band dropout rate for this forward call."""
+        if self.random_band_dropout:
+            return torch.rand(1, device=device).item() * self.band_dropout_rate
+        return self.band_dropout_rate
+
+    def _should_apply_band_dropout(self, modality: str, num_bands: int) -> bool:
+        """Check if band dropout should be applied for this modality and bandset."""
+        if not self.training or self.band_dropout_rate <= 0.0 or num_bands <= 1:
+            return False
+        return (
+            self.band_dropout_modalities is None
+            or modality in self.band_dropout_modalities
+        )
+
+    @staticmethod
+    def _generate_band_mask(
+        batch_size: int, num_bands: int, rate: float, device: torch.device
+    ) -> Tensor:
+        """Generate a boolean band dropout mask (True = dropped).
+
+        Guarantees at least one band is kept per sample.
+        """
+        drop_mask = torch.rand(batch_size, num_bands, device=device) < rate
+        all_dropped = drop_mask.all(dim=1)
+        if all_dropped.any():
+            keep_idx = torch.randint(num_bands, (all_dropped.sum(),), device=device)
+            drop_mask[all_dropped, keep_idx] = False
+        return drop_mask
 
     def apply_embedding_to_modality(
         self,
@@ -310,7 +353,6 @@ class MultiModalPatchEmbeddings(nn.Module):
         for idx in range(num_band_sets):
             modality_specific_kwargs = {}
             if not modality_spec.is_spatial:
-                # static in time
                 token_mask = modality_mask[..., idx]
             else:
                 token_mask = modality_mask[
@@ -325,27 +367,22 @@ class MultiModalPatchEmbeddings(nn.Module):
             buffer_name = self._get_buffer_name(modality, idx)
             inp_data = torch.index_select(modality_data, -1, getattr(self, buffer_name))
 
-            # Check if we should apply band dropout for this bandset
-            apply_dropout = (
-                self.band_dropout_modalities is None
-                or modality in self.band_dropout_modalities
-            )
-            if self.training and apply_dropout and self.band_dropout_rate > 0.0:
-                num_bands = inp_data.shape[-1]
-                # Only apply band dropout if there are more than 1 band
-                if num_bands > 1:
-                    if self.random_band_dropout:
-                        rate = (
-                            torch.rand(1, device=inp_data.device).item()
-                            * self.band_dropout_rate
-                        )
-                    else:
-                        rate = self.band_dropout_rate
-                    inp_data = self._apply_band_dropout(inp_data, rate)
-
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
             ]
+            num_bands = inp_data.shape[-1]
+            use_attn_dropout = isinstance(embedding_module, ChannelAttentionPatchEmbed)
+
+            if self._should_apply_band_dropout(modality, num_bands):
+                rate = self._get_band_dropout_rate(inp_data.device)
+                if use_attn_dropout:
+                    band_mask = self._generate_band_mask(
+                        inp_data.shape[0], num_bands, rate, inp_data.device
+                    )
+                    modality_specific_kwargs["band_mask"] = band_mask
+                else:
+                    inp_data = self._apply_band_dropout(inp_data, rate)
+
             patchified_data = embedding_module(inp_data, **modality_specific_kwargs)
 
             modality_tokens.append(patchified_data)
@@ -1108,6 +1145,8 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        channel_attn_dim: int | None = None,
+        channel_attn_num_heads: int = 8,
     ):
         """Initialize the encoder.
 
@@ -1141,6 +1180,8 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            channel_attn_dim: If set, use ChannelAttentionPatchEmbed for multi-band bandsets.
+            channel_attn_num_heads: Number of heads for channel cross-attention.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1171,6 +1212,8 @@ class Encoder(FlexiVitBase):
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
+        self.channel_attn_dim = channel_attn_dim
+        self.channel_attn_num_heads = channel_attn_num_heads
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
@@ -1180,6 +1223,8 @@ class Encoder(FlexiVitBase):
             band_dropout_rate=self.band_dropout_rate,
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
+            channel_attn_dim=self.channel_attn_dim,
+            channel_attn_num_heads=self.channel_attn_num_heads,
         )
         self.output_embedding_size = output_embedding_size
         # If output_embedding_size is set, project tokens to that size after attention
@@ -2075,6 +2120,8 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+    channel_attn_dim: int | None = None
+    channel_attn_num_heads: int = 8
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2083,6 +2130,14 @@ class EncoderConfig(Config):
 
     def validate(self) -> None:
         """Validate the configuration."""
+        if (
+            self.channel_attn_dim is not None
+            and self.channel_attn_dim % self.channel_attn_num_heads != 0
+        ):
+            raise ValueError(
+                f"channel_attn_dim ({self.channel_attn_dim}) must be divisible by "
+                f"channel_attn_num_heads ({self.channel_attn_num_heads})"
+            )
         if len(self.supported_modalities) == 0:
             raise ValueError("At least one modality must be added!")
         else:
