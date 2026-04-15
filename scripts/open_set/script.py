@@ -75,7 +75,7 @@ MIN_PATCH_SIZE = 1
 TEXT_ENCODER_MODEL = "google/siglip2-so400m-patch14-384"
 TEXT_DIM = 1152
 
-WANDB_PROJECT = "20260515_open_set"
+WANDB_PROJECT = "2026_05_15_open_set"
 WANDB_USERNAME = "eai-ai2"  # nosec
 
 
