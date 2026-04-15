@@ -295,7 +295,7 @@ class DownstreamEvaluator:
         self, data_loader: DataLoader, is_train: bool
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Get the embeddings for the given data loader."""
-        print(
+        logger.info(
             f"Getting embeddings for {self.dataset} with norm method {self.norm_method}"
         )
         if hasattr(self.trainer.train_module.model, "encoder"):
@@ -578,7 +578,9 @@ class DownstreamEvaluator:
                 f"got shape {embeddings.shape}. Use a segmentation-type dataset."
             )
 
-        diagnostics = compute_tiling_artifact_metrics(embeddings, patch_size=self.patch_size)
+        diagnostics = compute_tiling_artifact_metrics(
+            embeddings, patch_size=self.patch_size
+        )
         logger.info(f"Tiling artifact metrics for {self.dataset}: {diagnostics}")
 
         pca_rgb = None
@@ -973,11 +975,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                 continue
 
             config = dataset_to_config(task.dataset)
-            if (
-                config.task_type == TaskType.SEGMENTATION
-                and task.eval_mode
-                not in (EvalMode.EMBEDDING_DIAGNOSTICS, EvalMode.TILING_DIAGNOSTICS)
-            ):
+            if config.task_type == TaskType.SEGMENTATION:
                 if task.probe_lr is None and task.ft_lr is None:
                     raise ValueError(
                         f"probe_lr and ft_lr cannot both be None for {task.dataset}"
