@@ -48,6 +48,7 @@ from olmo_core.utils import get_default_device, prepare_cli_environment, seed_al
 from olmoearth_pretrain.internal.all_evals import (
     EMBED_DIAG_TASKS,
     EVAL_TASKS,
+    TILING_DIAG_TASKS,
     load_user_module,
 )
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
@@ -190,6 +191,17 @@ def evaluate_checkpoints(
                         f"eval_embed_diagnostics/{evaluator.evaluation_name}/{k}"
                     ] = v
 
+            if result.pca_rgb is not None and wandb_callback.enabled and get_rank() == 0:
+                wandb_callback.wandb.log(
+                    {
+                        f"eval_embed_diagnostics/{evaluator.evaluation_name}/pca_rgb": wandb_callback.wandb.Image(
+                            result.pca_rgb,
+                            caption=f"PCA RGB — {evaluator.evaluation_name} (step {step_num})",
+                        ),
+                        "checkpoint_step": step_num,
+                    }
+                )
+
             metrics[f"eval_time/{evaluator.evaluation_name}"] = eval_time
 
             logger.info(
@@ -213,7 +225,9 @@ def evaluate_checkpoints(
 
 
 def _get_eval_tasks() -> dict:
-    """Select task set based on EMBEDDING_DIAGNOSTICS_ONLY env var."""
+    """Select task set based on environment variables."""
+    if os.environ.get("TILING_DIAGNOSTICS_ONLY"):
+        return TILING_DIAG_TASKS
     if os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY"):
         return EMBED_DIAG_TASKS
     return EVAL_TASKS

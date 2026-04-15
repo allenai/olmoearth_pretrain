@@ -49,18 +49,23 @@ class EvalDatasetConfig:
 
 
 DATASET_TO_CONFIG = {
-    # Dummy config — only used for embedding diagnostics, not actual classification.
-    "pretrain_subset": EvalDatasetConfig(
-        task_type=TaskType.CLASSIFICATION,
-        imputes=[],
-        num_classes=1,
-        is_multilabel=False,
-        supported_modalities=[
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.LANDSAT.name,
-        ],
-    ),
+    # Pretrain subset configs for tiling diagnostics at different spatial sizes.
+    # Uses SEGMENTATION so the eval wrapper preserves spatial dims [N, H, W, D].
+    **{
+        f"pretrain_subset_{px}": EvalDatasetConfig(
+            task_type=TaskType.SEGMENTATION,
+            imputes=[],
+            num_classes=1,
+            is_multilabel=False,
+            height_width=px,
+            supported_modalities=[
+                Modality.SENTINEL2_L2A.name,
+                Modality.SENTINEL1.name,
+                Modality.LANDSAT.name,
+            ],
+        )
+        for px in (64, 128)
+    },
     "m-eurosat": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
         imputes=[],
