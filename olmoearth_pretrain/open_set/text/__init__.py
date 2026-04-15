@@ -5,12 +5,14 @@ swapped for RemoteCLIP, GeoRSCLIP, etc. without touching downstream code.
 """
 
 from olmoearth_pretrain.open_set.text.base import TextEncoder, TextEncoding
-from olmoearth_pretrain.open_set.text.embedding_cache import TextEmbeddingCache
-from olmoearth_pretrain.open_set.text.siglip_encoder import SigLIPTextEncoder
+from olmoearth_pretrain.open_set.text.embedding_cache import (
+    TextEmbeddingCache,
+    TextEncoderConfig,
+)
 
 __all__ = [
-    "SigLIPTextEncoder",
     "TextEmbeddingCache",
     "TextEncoder",
+    "TextEncoderConfig",
     "TextEncoding",
 ]

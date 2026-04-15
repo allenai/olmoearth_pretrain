@@ -14,6 +14,7 @@ from olmoearth_pretrain.open_set.data.sampler import (
     ClassSampler,
     PerImageClassSelection,
     RandomNegativeSampler,
+    RandomNegativeSamplerConfig,
 )
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     "ModalitySubsampler",
     "PerImageClassSelection",
     "RandomNegativeSampler",
+    "RandomNegativeSamplerConfig",
     "extract_per_image_class_assignments",
     "subsample_modalities",
     "subsample_modalities_masked",

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import torch
 
+from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.open_set.catalog.registry import ClassEntry, ClassRegistry
 from olmoearth_pretrain.open_set.text.base import TextEncoder, TextEncoding
 
@@ -273,3 +274,40 @@ class TextEmbeddingCache:
 def default_cache_path(cache_dir: Path | str, encoder: TextEncoder) -> Path:
     """Return the default cache filename for an encoder under ``cache_dir``."""
     return Path(cache_dir) / _safe_filename(encoder.name)
+
+
+@dataclass
+class TextEncoderConfig(Config):
+    """Configuration for the text encoder + on-disk cache.
+
+    The text encoder is loaded lazily inside ``build`` so that this config
+    can round-trip through the olmo-core serializer without importing
+    Hugging Face ``transformers``.
+
+    Attributes:
+        model_name: HF model id (or local path) for the SigLIP encoder.
+        cache_dir: Directory in which to store the on-disk text-embedding
+            cache. If None, the cache is in-memory only — fine for testing
+            but means SigLIP runs every time training starts.
+    """
+
+    # Default chosen at the entrypoint to avoid a top-level import of the
+    # SigLIP module (which would import transformers eagerly).
+    model_name: str = "google/siglip2-so400m-patch14-384"
+    cache_dir: str | None = None
+
+    def build(self, registry: ClassRegistry) -> TextEmbeddingCache:
+        """Construct the encoder, populate (or load) the cache, return it."""
+        # Lazy import — keeps the optional ``transformers`` dependency out of
+        # the import path until the user actually launches training.
+        from olmoearth_pretrain.open_set.text.siglip_encoder import SigLIPTextEncoder
+
+        encoder = SigLIPTextEncoder(model_name=self.model_name, device="cpu")
+        cache_path = (
+            default_cache_path(self.cache_dir, encoder)
+            if self.cache_dir is not None
+            else None
+        )
+        cache = TextEmbeddingCache(encoder, cache_path=cache_path)
+        cache.populate(registry)
+        return cache

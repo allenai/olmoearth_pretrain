@@ -9,7 +9,7 @@ forward, and accumulate per-(image, class) BCE.
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from logging import getLogger
 
 import torch
@@ -23,6 +23,7 @@ from olmo_core.train.common import ReduceType
 from olmoearth_pretrain.config import require_olmo_core
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.open_set.catalog import build_default_registry
 from olmoearth_pretrain.open_set.catalog.registry import ClassEntry, ClassRegistry
 from olmoearth_pretrain.open_set.data.modality_subsample import (
     ModalitySubsampleConfig,
@@ -31,9 +32,13 @@ from olmoearth_pretrain.open_set.data.modality_subsample import (
 from olmoearth_pretrain.open_set.data.sampler import (
     ClassSampler,
     PerImageClassSelection,
+    RandomNegativeSamplerConfig,
 )
 from olmoearth_pretrain.open_set.model.open_set_model import OpenSetSegmenter
-from olmoearth_pretrain.open_set.text.embedding_cache import TextEmbeddingCache
+from olmoearth_pretrain.open_set.text.embedding_cache import (
+    TextEmbeddingCache,
+    TextEncoderConfig,
+)
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
@@ -48,15 +53,16 @@ logger = getLogger(__name__)
 class OpenSetTrainModuleConfig(OlmoEarthTrainModuleConfig):
     """Configuration for :class:`OpenSetTrainModule`.
 
-    The fields inherited from :class:`OlmoEarthTrainModuleConfig` cover the
-    optimizer, transform, autocast, FSDP, etc. We only add the open-set
-    specific knobs here.
-
-    Note that the registry, sampler, and text cache cannot be serialized
-    cleanly into JSON, so they are passed through ``build`` rather than
-    being declared as config fields.
+    Inherits the optimizer / transform / FSDP / autocast knobs from
+    :class:`OlmoEarthTrainModuleConfig` and adds the open-set specific
+    pieces. Calling ``build(model)`` constructs the registry, text-embedding
+    cache, and sampler — matching the contract of the standard
+    ``train(config)`` flow in :mod:`olmoearth_pretrain.internal.experiment`.
 
     Attributes:
+        text_encoder_config: SigLIP encoder + on-disk cache configuration.
+        sampler_config: Random-negative sampler configuration. Replace with
+            a hard-negative variant when one lands.
         modality_subsample_config: Optional config for stochastic input-modality
             dropping. If None, all modalities present on the batch are kept.
         seed: Seed used for class sampling and modality subsampling.
@@ -66,6 +72,10 @@ class OpenSetTrainModuleConfig(OlmoEarthTrainModuleConfig):
             source on each batch.
     """
 
+    text_encoder_config: TextEncoderConfig = field(default_factory=TextEncoderConfig)
+    sampler_config: RandomNegativeSamplerConfig = field(
+        default_factory=RandomNegativeSamplerConfig
+    )
     modality_subsample_config: ModalitySubsampleConfig | None = None
     seed: int | None = None
     target_size_source: str | None = "openstreetmap_raster"
@@ -73,18 +83,24 @@ class OpenSetTrainModuleConfig(OlmoEarthTrainModuleConfig):
     def build(  # type: ignore[override]
         self,
         model: OpenSetSegmenter,
-        registry: ClassRegistry,
-        text_cache: TextEmbeddingCache,
-        sampler: ClassSampler,
         device: torch.device | None = None,
     ) -> OpenSetTrainModule:
-        """Build the train module.
+        """Build the train module, including registry/text_cache/sampler.
 
-        ``registry``, ``text_cache``, and ``sampler`` are constructed by the
-        entrypoint (since they involve loading HF models and need not be
-        round-tripped through the olmo-core config system).
+        The registry is sourced from ``build_default_registry`` (currently
+        OSM only). The text cache is populated lazily from ``self.text_encoder_config``
+        — this is the slow step (loading SigLIP). The sampler is cheap.
         """
+        registry = build_default_registry()
+        text_cache = self.text_encoder_config.build(registry)
+        sampler = self.sampler_config.build(registry)
+
         kwargs = self.prepare_kwargs()
+        # ``build`` consumes these — they should not be forwarded to the
+        # train module's __init__.
+        kwargs.pop("text_encoder_config", None)
+        kwargs.pop("sampler_config", None)
+
         return OpenSetTrainModule(
             model=model,
             registry=registry,

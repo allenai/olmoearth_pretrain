@@ -26,7 +26,10 @@ from olmoearth_pretrain.open_set.model.cross_attn_decoder import (
     CrossAttnDecoder,
     CrossAttnDecoderConfig,
 )
-from olmoearth_pretrain.open_set.model.encoder_wrapper import FrozenOlmoEarthEncoder
+from olmoearth_pretrain.open_set.model.encoder_wrapper import (
+    FrozenOlmoEarthEncoder,
+    load_encoder_from_distributed_checkpoint,
+)
 
 logger = getLogger(__name__)
 
@@ -73,6 +76,62 @@ class OpenSetSegmenterConfig(Config):
     ) -> OpenSetSegmenter:
         """Build the open-set segmenter."""
         return OpenSetSegmenter(self, encoder=encoder)
+
+
+@dataclass
+class OpenSetModelConfig(Config):
+    """Top-level model config used by the olmo-core ``train(config)`` flow.
+
+    Calling ``build()`` (no args) loads the OlmoEarth encoder from
+    ``checkpoint_path``, wraps it in :class:`FrozenOlmoEarthEncoder`, and
+    constructs the :class:`OpenSetSegmenter`. This matches the contract
+    expected by ``OlmoEarthExperimentConfig.model.build()`` so that no
+    additional plumbing is needed at launch time.
+
+    Attributes:
+        checkpoint_path: Path to a distributed olmo-core checkpoint
+            (``step{N}/`` containing ``config.json`` + ``model_and_optim/``)
+            or to a consolidated checkpoint (``config.json`` + ``weights.pth``).
+        decoder_config: Cross-attention decoder configuration.
+        text_dim: Dimensionality of the text encoder's embeddings (must match
+            the encoder configured on the train module).
+        head_dim: Joint pixel/class embedding dim. Defaults to decoder dim.
+        reference_modalities: Spatial-modality preference order.
+        upsample_mode: Mode passed to ``F.interpolate`` when downsampling.
+        trainable_encoder: If True, do *not* freeze the encoder. Default False.
+    """
+
+    checkpoint_path: str = ""
+    decoder_config: CrossAttnDecoderConfig = field(
+        default_factory=CrossAttnDecoderConfig
+    )
+    text_dim: int = 1152
+    head_dim: int | None = None
+    reference_modalities: tuple[str, ...] = DEFAULT_REFERENCE_MODALITIES
+    upsample_mode: str = "bilinear"
+    trainable_encoder: bool = False
+
+    def validate(self) -> None:
+        """Validate the model config."""
+        if not self.checkpoint_path:
+            raise ValueError(
+                "checkpoint_path is required — pass it via "
+                "--model.checkpoint_path=/path/to/step{N}"
+            )
+
+    def build(self) -> OpenSetSegmenter:
+        """Load the frozen encoder and wire up the segmenter."""
+        self.validate()
+        encoder = load_encoder_from_distributed_checkpoint(self.checkpoint_path)
+        frozen = FrozenOlmoEarthEncoder(encoder, trainable=self.trainable_encoder)
+        segmenter_config = OpenSetSegmenterConfig(
+            decoder_config=self.decoder_config,
+            text_dim=self.text_dim,
+            head_dim=self.head_dim,
+            reference_modalities=self.reference_modalities,
+            upsample_mode=self.upsample_mode,
+        )
+        return segmenter_config.build(frozen)
 
 
 class OpenSetSegmenter(nn.Module):

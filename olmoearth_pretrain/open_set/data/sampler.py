@@ -20,6 +20,7 @@ from typing import Protocol
 
 import torch
 
+from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, OlmoEarthSample
 from olmoearth_pretrain.open_set.catalog.registry import ClassEntry, ClassRegistry
 
@@ -194,3 +195,23 @@ class RandomNegativeSampler:
                 )
             )
         return selections
+
+
+@dataclass
+class RandomNegativeSamplerConfig(Config):
+    """Serializable configuration for :class:`RandomNegativeSampler`."""
+
+    k_pos: int = 2
+    k_neg: int = 2
+    seed: int | None = None
+    restrict_negatives_to_present_sources: bool = True
+
+    def build(self, registry: ClassRegistry) -> RandomNegativeSampler:
+        """Build the sampler against ``registry``."""
+        return RandomNegativeSampler(
+            registry=registry,
+            k_pos=self.k_pos,
+            k_neg=self.k_neg,
+            seed=self.seed,
+            restrict_negatives_to_present_sources=self.restrict_negatives_to_present_sources,
+        )

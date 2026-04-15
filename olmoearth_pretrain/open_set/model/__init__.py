@@ -9,6 +9,7 @@ from olmoearth_pretrain.open_set.model.encoder_wrapper import (
     load_encoder_from_distributed_checkpoint,
 )
 from olmoearth_pretrain.open_set.model.open_set_model import (
+    OpenSetModelConfig,
     OpenSetSegmenter,
     OpenSetSegmenterConfig,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "CrossAttnDecoder",
     "CrossAttnDecoderConfig",
     "FrozenOlmoEarthEncoder",
+    "OpenSetModelConfig",
     "OpenSetSegmenter",
     "OpenSetSegmenterConfig",
     "load_encoder_from_distributed_checkpoint",
