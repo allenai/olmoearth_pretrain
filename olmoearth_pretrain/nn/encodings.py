@@ -132,40 +132,25 @@ def get_month_encoding_table(encoding_dim: int) -> torch.Tensor:
     return month_table  # (M, D)
 
 
-def build_static_temporal_freqs(encoding_dim: int) -> torch.Tensor:
-    """Precompute geometric-spaced angular frequencies for static temporal encoding.
-
-    Args:
-        encoding_dim: Total encoding dimension (must be even). Uses encoding_dim/2
-            distinct frequencies.
-
-    Returns:
-        Tensor of shape (encoding_dim // 2,) containing angular frequencies.
-    """
-    assert encoding_dim % 2 == 0, f"encoding_dim must be even, got {encoding_dim}"
-    num_freqs = encoding_dim // 2
-    exponents = torch.linspace(-7.0, 8.5, num_freqs)
-    return 2.0 * math.pi * (2.0**exponents)
-
-
 def get_static_temporal_encoding(
-    timestamps: torch.Tensor,
-    freqs: torch.Tensor,
+    timestamps: torch.Tensor, encoding_dim: int
 ) -> torch.Tensor:
     """Static multi-frequency sinusoidal temporal encoding.
 
-    Converts timestamps to a fractional year and applies precomputed
+    Converts timestamps to a fractional year and applies geometric-spaced
     sinusoidal frequencies ranging from ~128-year periods to daily resolution.
-    Day-of-year is approximated as ``month * 30.4375 + day``.
+    The 1-cycle/year frequency naturally produces identical values for the
+    same day-of-year across different years.
 
     Args:
-        timestamps: Tensor of shape (B, T, 3) where [..., 0] is day,
+        timestamps: Tensor of shape (B, T, 3) where [..., 0] is day (1-31),
             [..., 1] is month (0-indexed, 0-11), [..., 2] is year.
-        freqs: Precomputed angular frequencies from ``build_static_temporal_freqs``.
+        encoding_dim: Output encoding dimension (must be even).
 
     Returns:
-        Tensor of shape (B, T, 2 * len(freqs)).
+        Tensor of shape (B, T, encoding_dim).
     """
+    assert encoding_dim % 2 == 0, f"encoding_dim must be even, got {encoding_dim}"
     day = timestamps[..., 0].float()
     month = timestamps[..., 1].float()
     year = timestamps[..., 2].float()
@@ -173,5 +158,9 @@ def get_static_temporal_encoding(
     day_of_year = month * 30.4375 + day
     frac_year = year + day_of_year / 365.25 - 2020.0
 
-    angles = frac_year.unsqueeze(-1) * freqs.to(timestamps.device)  # (B, T, num_freqs)
+    num_freqs = encoding_dim // 2
+    exponents = torch.linspace(-7.0, 8.5, num_freqs, device=timestamps.device)
+    freqs = 2.0 * math.pi * (2.0**exponents)  # (num_freqs,)
+
+    angles = frac_year.unsqueeze(-1) * freqs  # (B, T, num_freqs)
     return torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
