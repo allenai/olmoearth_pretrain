@@ -328,7 +328,7 @@ class NLPSupervisionDecoder(nn.Module):
         text_rep = text_tokens.unsqueeze(1).expand(-1, b, -1, -1)
         text_rep = rearrange(text_rep, "c b l d -> (c b) l d")
         if text_attn_mask is not None:
-            text_mask_rep = text_attn_mask.unsqueeze(1).expand(-1, b, -1)
+            text_mask_rep = text_attn_mask.bool().unsqueeze(1).expand(-1, b, -1)
             text_mask_rep = rearrange(text_mask_rep, "c b l -> (c b) l")
         else:
             text_mask_rep = None
