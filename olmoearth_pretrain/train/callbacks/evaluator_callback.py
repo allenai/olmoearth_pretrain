@@ -975,7 +975,10 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                 continue
 
             config = dataset_to_config(task.dataset)
-            if config.task_type == TaskType.SEGMENTATION:
+            if config.task_type == TaskType.SEGMENTATION and task.eval_mode not in (
+                EvalMode.EMBEDDING_DIAGNOSTICS,
+                EvalMode.TILING_DIAGNOSTICS,
+            ):
                 if task.probe_lr is None and task.ft_lr is None:
                     raise ValueError(
                         f"probe_lr and ft_lr cannot both be None for {task.dataset}"
