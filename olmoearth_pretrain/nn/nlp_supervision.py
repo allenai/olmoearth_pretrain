@@ -163,7 +163,7 @@ def _compute_classification_loss(
     valid = target != MISSING_VALUE
     if not valid.any():
         return pred.new_zeros([])
-    return F.binary_cross_entropy_with_logits(pred[valid], target[valid])
+    return F.binary_cross_entropy_with_logits(pred[valid], target[valid].to(pred.dtype))
 
 
 def _compute_regression_loss(
@@ -182,7 +182,7 @@ def _compute_regression_loss(
     valid = target != MISSING_VALUE
     if not valid.any():
         return pred.new_zeros([])
-    return F.mse_loss(pred[valid], target[valid])
+    return F.mse_loss(pred[valid], target[valid].to(pred.dtype))
 
 
 # ---------------------------------------------------------------------------
