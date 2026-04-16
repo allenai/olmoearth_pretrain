@@ -1,0 +1,9 @@
+datamapplot
+glasbey
+hdbscan
+numpy
+scikit-learn
+scipy
+# cuml -- install via RAPIDS conda/pip channel, not plain pip.
+# See: https://docs.rapids.ai/install
+# Example:  pip install --extra-index-url=https://pypi.nvidia.com cuml-cu12
