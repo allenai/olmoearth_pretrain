@@ -149,18 +149,19 @@ class TextEmbeddingCache:
 
     def _encode_and_store(self, entries: Iterable[ClassEntry], batch_size: int) -> None:
         entries = list(entries)
-        for start in range(0, len(entries), batch_size):
-            chunk = entries[start : start + batch_size]
-            encoding = self._encoder.encode([e.text for e in chunk])
-            tokens = encoding.tokens.cpu()
-            pooled = encoding.pooled.cpu()
-            attn = encoding.attention_mask.cpu()
-            for i, entry in enumerate(chunk):
-                self._entries[_key(entry)] = _CachedEntry(
-                    tokens=tokens[i],
-                    pooled=pooled[i],
-                    attention_mask=attn[i],
-                )
+        # Encode all entries in one call so that padding length is consistent
+        # across all cached tensors (required by get_many's torch.stack).
+        # Class texts are short strings so this is always feasible.
+        encoding = self._encoder.encode([e.text for e in entries])
+        tokens = encoding.tokens.cpu()
+        pooled = encoding.pooled.cpu()
+        attn = encoding.attention_mask.cpu()
+        for i, entry in enumerate(entries):
+            self._entries[_key(entry)] = _CachedEntry(
+                tokens=tokens[i],
+                pooled=pooled[i],
+                attention_mask=attn[i],
+            )
 
     # ------------------------------------------------------------------
     # Lookup

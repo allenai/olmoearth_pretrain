@@ -72,7 +72,7 @@ class SigLIPTextEncoder:
             # Best-effort fallback — run one token through the model.
             with torch.no_grad():
                 probe = self._tokenizer(
-                    ["a"], padding="max_length", return_tensors="pt"
+                    ["a"], padding=True, truncation=True, return_tensors="pt"
                 ).to(self._device)
                 out = self._call_model(probe)
                 hidden = out["last_hidden_state"].shape[-1]
@@ -111,9 +111,12 @@ class SigLIPTextEncoder:
         """
         if not texts:
             raise ValueError("encode() requires at least one string")
+        # Use ``padding=True`` (pad to longest in batch) rather than
+        # ``padding="max_length"`` — some SigLIP tokenizer versions report
+        # an astronomically large ``model_max_length`` which causes OOM.
         encoded = self._tokenizer(
             texts,
-            padding="max_length",
+            padding=True,
             truncation=True,
             return_tensors="pt",
         )
