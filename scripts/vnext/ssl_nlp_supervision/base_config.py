@@ -25,6 +25,14 @@ from olmo_core.distributed.parallel.data_parallel import (
 )
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
+from olmo_core.train.callbacks import (
+    BeakerCallback,
+    CheckpointerCallback,
+    ConfigSaverCallback,
+    GarbageCollectorCallback,
+    GPUMemoryMonitorCallback,
+)
+from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 
@@ -59,18 +67,6 @@ from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModuleConfig,
     NLPSupervisionTrainConfig,
 )
-
-try:
-    from olmo_core.train.callbacks import (
-        BeakerCallback,
-        CheckpointerCallback,
-        CheckpointerConfig,
-        ConfigSaverCallback,
-        GarbageCollectorCallback,
-        GPUMemoryMonitorCallback,
-    )
-except ImportError:
-    pass
 
 logger = logging.getLogger(__name__)
 
