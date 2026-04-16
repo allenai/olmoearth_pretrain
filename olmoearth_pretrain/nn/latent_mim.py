@@ -17,6 +17,10 @@ from torch.distributed.fsdp import (
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.nn.nlp_supervision import (
+    NLPSupervisionDecoder,
+    NLPSupervisionDecoderConfig,
+)
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
 
 logger = logging.getLogger(__name__)
@@ -32,6 +36,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         encoder: nn.Module,
         decoder: nn.Module,
         reconstructor: torch.nn.Module | None = None,
+        nlp_supervision_decoder: NLPSupervisionDecoder | None = None,
     ):
         """Initialize the Latent MIM Style.
 
@@ -39,11 +44,14 @@ class LatentMIM(nn.Module, DistributedMixins):
             encoder: The encoder to use.
             decoder: The decoder to use.
             reconstructor: Optional reconstructor for auto-encoding.
+            nlp_supervision_decoder: Optional text-conditioned decoder for
+                supervised map modality prediction.
         """
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.reconstructor = reconstructor
+        self.nlp_supervision_decoder = nlp_supervision_decoder
         self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
@@ -109,6 +117,8 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.target_encoder.apply_fsdp(**fsdp_config)
         if self.reconstructor:
             self.reconstructor.apply_fsdp(**fsdp_config)
+        if self.nlp_supervision_decoder is not None:
+            self.nlp_supervision_decoder.apply_fsdp(**fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
@@ -122,6 +132,9 @@ class LatentMIM(nn.Module, DistributedMixins):
         logger.info("Applied torch.compile to the decoder")
         self.target_encoder.apply_compile()
         logger.info("Applied torch.compile to the target encoder")
+        if self.nlp_supervision_decoder is not None:
+            self.nlp_supervision_decoder.apply_compile()
+            logger.info("Applied torch.compile to the NLP supervision decoder")
 
 
 @dataclass
@@ -131,6 +144,7 @@ class LatentMIMConfig(Config):
     encoder_config: Config
     decoder_config: Config
     reconstructor_config: Config | None = None
+    nlp_supervision_decoder_config: NLPSupervisionDecoderConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -163,8 +177,19 @@ class LatentMIMConfig(Config):
             if self.reconstructor_config is not None
             else None
         )
+        nlp_supervision_decoder = None
+        if self.nlp_supervision_decoder_config is not None:
+            encoder_output_size = (
+                self.encoder_config.output_embedding_size
+                or self.encoder_config.embedding_size
+            )
+            nlp_supervision_decoder = self.nlp_supervision_decoder_config.build(
+                encoder_dim=encoder_output_size,
+                max_patch_size=self.encoder_config.max_patch_size,
+            )
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
+            nlp_supervision_decoder=nlp_supervision_decoder,
         )

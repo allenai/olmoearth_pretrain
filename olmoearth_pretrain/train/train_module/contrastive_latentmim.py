@@ -1,5 +1,8 @@
 """Training and optimizer abstraction for OlmoEarth Pretrain."""
 
+from __future__ import annotations
+
+import random
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any
@@ -18,6 +21,14 @@ from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
+from olmoearth_pretrain.open_set.catalog import ClassRegistry, build_default_registry
+from olmoearth_pretrain.open_set.catalog.registry import ClassEntry
+from olmoearth_pretrain.open_set.data.sampler import (
+    PerImageClassSelection,
+    RandomNegativeSampler,
+)
+from olmoearth_pretrain.open_set.text.embedding_cache import TextEmbeddingCache
+from olmoearth_pretrain.open_set.text.siglip_encoder import SigLIPTextEncoder
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import (
     MaskingConfig,
@@ -30,6 +41,61 @@ from olmoearth_pretrain.train.train_module.train_module import (
 from olmoearth_pretrain.train.utils import split_masked_batch
 
 logger = getLogger(__name__)
+
+
+def _build_per_image_selections(
+    selections: list[PerImageClassSelection],
+    class_union: list[ClassEntry],
+) -> list[list[tuple[int, ClassEntry, bool]]]:
+    """Convert sampler output to the format NLPSupervisionDecoder expects.
+
+    Returns a list (per image) of ``(class_index_in_union, entry, is_positive)``
+    tuples.
+    """
+    union_index: dict[tuple[str, str], int] = {
+        (e.source, e.text): i for i, e in enumerate(class_union)
+    }
+    result: list[list[tuple[int, ClassEntry, bool]]] = []
+    for sel in selections:
+        image_entries: list[tuple[int, ClassEntry, bool]] = []
+        for entry in sel.positives:
+            key = (entry.source, entry.text)
+            if key in union_index:
+                image_entries.append((union_index[key], entry, True))
+        for entry in sel.negatives:
+            key = (entry.source, entry.text)
+            if key in union_index:
+                image_entries.append((union_index[key], entry, False))
+        result.append(image_entries)
+    return result
+
+
+def _deduplicate_class_union(
+    selections: list[PerImageClassSelection],
+) -> list[ClassEntry]:
+    """Build a deduplicated union of all class entries across all images."""
+    seen: set[tuple[str, str]] = set()
+    union: list[ClassEntry] = []
+    for sel in selections:
+        for entry in sel.all_entries:
+            key = (entry.source, entry.text)
+            if key not in seen:
+                seen.add(key)
+                union.append(entry)
+    return union
+
+
+@dataclass
+class NLPSupervisionTrainConfig:
+    """Runtime configuration for NLP supervision in the training loop."""
+
+    text_encoder_name: str = "google/siglip2-so400m-patch14-384"
+    text_cache_dir: str = ""
+    sampler_k_pos: int = 2
+    sampler_k_neg: int = 2
+    sampler_seed: int | None = None
+    target_size_source: str = "openstreetmap_raster"
+    catalog_sources: list[str] | None = None
 
 
 @dataclass
@@ -56,12 +122,13 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
     reinit_targets: bool = False
+    nlp_supervision_train_config: NLPSupervisionTrainConfig | None = None
 
     def build(
         self,
         model: LatentMIM,
         device: torch.device | None = None,
-    ) -> "ContrastiveLatentMIMTrainModuleConfig":
+    ) -> ContrastiveLatentMIMTrainModuleConfig:
         """Build the corresponding :class:`ContrastiveLatentMIMTrainModuleConfig`.
 
         Args:
@@ -106,6 +173,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         contrastive_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         reinit_targets: bool = False,
+        nlp_supervision_train_config: NLPSupervisionTrainConfig | None = None,
     ):
         """Initialize the training module.
 
@@ -133,6 +201,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             contrastive_config: An optional contrastive configration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
             reinit_targets: Whether or not to reinitialize the target encoder.
+            nlp_supervision_train_config: Runtime config for NLP supervision.
         """
         super().__init__(
             model=model,
@@ -176,6 +245,44 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     "Applying EMA updates to a randomly initialized target encoder."
                 )
             self.model.target_encoder.apply(self.model.target_encoder._init_weights)
+
+        # NLP supervision setup.
+        self._has_nlp_supervision = self.model.nlp_supervision_decoder is not None
+        self._nlp_sampler: RandomNegativeSampler | None = None
+        self._nlp_text_cache: TextEmbeddingCache | None = None
+        self._nlp_rng: random.Random | None = None
+        self._nlp_target_size_source: str = "openstreetmap_raster"
+
+        if self._has_nlp_supervision and nlp_supervision_train_config is not None:
+            cfg = nlp_supervision_train_config
+            self._nlp_target_size_source = cfg.target_size_source
+
+            # Build catalog (optionally restricted to specific sources).
+            registry = build_default_registry()
+            if cfg.catalog_sources is not None:
+                filtered = [e for e in registry if e.source in cfg.catalog_sources]
+                registry = ClassRegistry(filtered)
+            logger.info(
+                f"NLP supervision: {len(registry)} classes across {registry.sources()}"
+            )
+
+            # Build text embedding cache.
+            text_encoder = SigLIPTextEncoder(model_name=cfg.text_encoder_name)
+            self._nlp_text_cache = TextEmbeddingCache(
+                encoder=text_encoder,
+                cache_path=cfg.text_cache_dir or None,
+            )
+            self._nlp_text_cache.populate(registry)
+
+            # Build sampler.
+            self._nlp_sampler = RandomNegativeSampler(
+                registry=registry,
+                k_pos=cfg.sampler_k_pos,
+                k_neg=cfg.sampler_k_neg,
+                seed=cfg.sampler_seed,
+            )
+            self._nlp_rng = random.Random(cfg.sampler_seed)
+            self.total_loss_name = f"{self.total_loss_name}+nlp_supervision"
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -292,6 +399,17 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         del batch  # In case this helps with memory utilization.
         del masked_batch_a, masked_batch_b
 
+    def _determine_target_size(
+        self, batch: MaskedOlmoEarthSample
+    ) -> tuple[int, int] | None:
+        """Determine the output spatial size from a GT modality on the batch."""
+        source = self._nlp_target_size_source
+        tensor = getattr(batch, source, None)
+        if tensor is None:
+            return None
+        # tensor: [B, H, W, 1, C]
+        return (tensor.shape[1], tensor.shape[2])
+
     def model_forward(
         self,
         batch: MaskedOlmoEarthSample,
@@ -309,8 +427,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 reconstructed,
                 extra_metrics,
             ) = self.model(batch, patch_size)
-            if extra_metrics is not None:
-                self.log_extra_metrics(extra_metrics)
+            if extra_metrics is None:
+                extra_metrics = {}
+            self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
                 output_dict = self.model.target_encoder.forward(
@@ -322,4 +441,35 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
+
+            # NLP supervision.
+            if (
+                self._has_nlp_supervision
+                and self._nlp_sampler is not None
+                and self._nlp_text_cache is not None
+                and self.model.nlp_supervision_decoder is not None
+            ):
+                # Sample classes for this batch.
+                selections = self._nlp_sampler.sample(batch, self._nlp_rng)
+                class_union = _deduplicate_class_union(selections)
+                if class_union:
+                    per_image = _build_per_image_selections(selections, class_union)
+                    text_encoding = self._nlp_text_cache.get_many(class_union)
+                    target_size = self._determine_target_size(batch)
+
+                    nlp_loss, nlp_metrics = self.model.nlp_supervision_decoder(
+                        tokens_and_masks=latent,
+                        batch=batch,
+                        patch_size=patch_size,
+                        text_tokens=text_encoding.tokens.to(self.device),
+                        text_attn_mask=text_encoding.attention_mask.to(self.device),
+                        class_entries=class_union,
+                        per_image_selections=per_image,
+                        target_size=target_size,
+                    )
+                    loss = loss + nlp_loss
+                    for k, v in nlp_metrics.items():
+                        if isinstance(v, int | float):
+                            extra_metrics[k] = v
+
             return loss, latent, decoded, target_output, latent_projected_and_pooled
