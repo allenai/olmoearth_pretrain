@@ -586,7 +586,8 @@ class NLPSupervisionDecoder(nn.Module):
             fully_shard(layer, **fsdp_config)
         fully_shard(self.cross_attn_decoder, **fsdp_config)
         if self.regression_heads is not None:
-            fully_shard(self.regression_heads, **fsdp_config)
+            for head in self.regression_heads.values():
+                fully_shard(head, **fsdp_config)
         fully_shard(self, **fsdp_config)
 
     def apply_compile(self) -> None:
