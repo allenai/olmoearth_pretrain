@@ -105,6 +105,7 @@ beaker = [
     "pytest>=8.4.2",
     "rasterio>=1.4.3",
     "rioxarray>=0.19.0",
+    "google-cloud-bigquery>=3.35",
     "rslearn>=0.0.19",
     "torch>=2.7,<2.8",
     "universal-pathlib>=0.2.5",

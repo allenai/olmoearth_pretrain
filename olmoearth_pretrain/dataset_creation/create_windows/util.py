@@ -14,7 +14,7 @@ import tqdm
 from rasterio.crs import CRS
 from rslearn.config import QueryConfig, SpaceMode
 from rslearn.const import WGS84_PROJECTION
-from rslearn.data_sources import DataSource, data_source_from_config
+from rslearn.data_sources import DataSource
 from rslearn.dataset import Dataset, Window
 from rslearn.utils.geometry import Projection, STGeometry
 from rslearn.utils.get_utm_ups_crs import get_utm_ups_projection
@@ -169,7 +169,7 @@ def get_naip_source(ds_path: UPath) -> DataSource:
         the data source.
     """
     dataset = Dataset(ds_path)
-    return data_source_from_config(dataset.layers["naip"], dataset.path)
+    return dataset.layers["naip"].instantiate_data_source(dataset.path)
 
 
 @functools.cache
@@ -183,7 +183,7 @@ def get_sentinel2_source(ds_path: UPath) -> DataSource:
         the data source.
     """
     dataset = Dataset(ds_path)
-    return data_source_from_config(dataset.layers["sentinel2_freq"], dataset.path)
+    return dataset.layers["sentinel2_freq"].instantiate_data_source(dataset.path)
 
 
 def get_highres_times(ds_path: UPath, tile: Tile) -> list[datetime]:
@@ -267,6 +267,26 @@ def get_highres_tile(lonlat: tuple[float, float]) -> Tile:
     return Tile(projection.crs, HIGH_RESOLUTION, col, row)
 
 
+def get_fallback_tile(lonlat: tuple[float, float]) -> Tile:
+    """Get the fallback-resolution (10m) tile containing the specified lon/lat.
+
+    Args:
+        lonlat: the (longitude, latitude) tuple.
+
+    Returns:
+        the Tile (CRS, column, and row) at FALLBACK_RESOLUTION.
+    """
+    lon, lat = lonlat
+    projection = get_utm_ups_projection(
+        lon, lat, FALLBACK_RESOLUTION, -FALLBACK_RESOLUTION
+    )
+    src_geom = STGeometry(WGS84_PROJECTION, shapely.Point(lon, lat), None)
+    dst_geom = src_geom.to_projection(projection)
+    col = int(dst_geom.shp.x) // WINDOW_SIZE
+    row = int(dst_geom.shp.y) // WINDOW_SIZE
+    return Tile(projection.crs, FALLBACK_RESOLUTION, col, row)
+
+
 def sample_timestamp(start_time: datetime, end_time: datetime) -> datetime:
     """Sample a date in the given time range.
 
@@ -334,22 +354,26 @@ def create_windows_with_highres_time(
     highres_tiles = list(set(highres_tiles))
     print(f"have {len(highres_tiles)} after de-duplication")
 
-    # List timestamps.
-    get_highres_times_jobs = []
-    for tile in highres_tiles:
-        get_highres_times_jobs.append(
-            dict(
-                ds_path=ds_path,
-                tile=tile,
+    # List timestamps (skip entirely when we'll never use high-res).
+    if force_lowres_prob >= 1.0:
+        highres_timestamps: list[list[datetime]] = [[] for _ in highres_tiles]
+        print("force_lowres_prob=1.0, skipping NAIP timestamp lookup")
+    else:
+        get_highres_times_jobs = []
+        for tile in highres_tiles:
+            get_highres_times_jobs.append(
+                dict(
+                    ds_path=ds_path,
+                    tile=tile,
+                )
+            )
+        highres_timestamps = list(
+            tqdm.tqdm(
+                star_imap(p, get_highres_times, get_highres_times_jobs),
+                desc="Get high-res timestamps",
+                total=len(get_highres_times_jobs),
             )
         )
-    highres_timestamps: list[list[datetime]] = list(
-        tqdm.tqdm(
-            star_imap(p, get_highres_times, get_highres_times_jobs),
-            desc="Get high-res timestamps",
-            total=len(get_highres_times_jobs),
-        )
-    )
 
     # Decide which timestamps to use for coarse-grained tiles.
     # We shuffle the high-res tiles/timestamps since we will be using the first
@@ -459,3 +483,132 @@ def create_windows_with_highres_time(
         pass
 
     p.close()
+
+
+# Minimum distinct S2 months to accept a corpus timestamp without fallback.
+MIN_S2_MONTHS = 6
+
+
+def _count_distinct_months(timestamps: list[datetime]) -> int:
+    """Count distinct (year, month) pairs in a list of timestamps."""
+    return len({(t.year, t.month) for t in timestamps})
+
+
+def create_windows_from_corpus(
+    ds_path: UPath,
+    corpus_entries: list[tuple[float, float, datetime]],
+    verify_s2: bool = True,
+    min_s2_months: int = MIN_S2_MONTHS,
+    workers: int = 32,
+) -> list[tuple[Tile, datetime, str]]:
+    """Create windows from a corpus of (lon, lat, center_time) entries.
+
+    Uses the corpus-provided timestamp as the window center time. Optionally
+    verifies S2 availability around that time, falling back to the S2 timestamp
+    with the best coverage if the corpus time has fewer than min_s2_months
+    distinct months of S2 data in a 1-year window.
+
+    All windows are created at FALLBACK_RESOLUTION (10m) — no NAIP/high-res.
+
+    Args:
+        ds_path: path to the rslearn dataset (with config_corpus_init.json or
+            config.json containing a sentinel2_freq layer).
+        corpus_entries: list of (longitude, latitude, center_time) tuples.
+        verify_s2: if True, query S2 availability and skip/fallback entries
+            with insufficient coverage.
+        min_s2_months: minimum distinct months of S2 data required to keep a
+            corpus timestamp. If fewer, fall back to random sample from
+            START_TIME..END_TIME and re-check.
+        workers: number of worker processes.
+
+    Returns:
+        list of (tile, selected_time, status) tuples where status is one of
+        "corpus_time", "fallback_time", or "skipped".
+    """
+    p = multiprocessing.Pool(workers)
+
+    # Step 1: Convert lon/lats to fallback-resolution tiles and deduplicate.
+    lonlats = [(lon, lat) for lon, lat, _ in corpus_entries]
+    tiles: list[Tile] = list(
+        tqdm.tqdm(
+            p.imap(get_fallback_tile, lonlats),
+            desc="Getting fallback tiles",
+            total=len(lonlats),
+        )
+    )
+
+    # Build tile -> corpus center_time mapping (first entry wins for dupes).
+    tile_to_time: dict[Tile, datetime] = {}
+    for tile, (_, _, center_time) in zip(tiles, corpus_entries):
+        if tile not in tile_to_time:
+            tile_to_time[tile] = center_time
+
+    unique_tiles = list(tile_to_time.keys())
+    print(f"Got {len(tiles)} tiles, {len(unique_tiles)} unique after dedup")
+
+    # Step 2: Determine coarse-grained tile times from corpus timestamps.
+    coarse_times: dict[Tile, datetime] = {}
+    for tile in unique_tiles:
+        coarse_tile = tile.to_resolution(COARSE_RESOLUTION)
+        if coarse_tile not in coarse_times:
+            coarse_times[coarse_tile] = tile_to_time[tile]
+
+    # Step 3: Optionally verify S2 availability.
+    results: list[tuple[Tile, datetime, str]] = []
+    if verify_s2:
+        s2_jobs = []
+        for tile in unique_tiles:
+            coarse_tile = tile.to_resolution(COARSE_RESOLUTION)
+            center = coarse_times[coarse_tile]
+            time_range = (center - timedelta(days=183), center + timedelta(days=183))
+            s2_jobs.append(
+                dict(ds_path=ds_path, tile=tile, time_range=time_range)
+            )
+
+        s2_months: list[list[datetime]] = list(
+            tqdm.tqdm(
+                star_imap(p, get_sentinel2_times, s2_jobs),
+                desc="Checking S2 availability",
+                total=len(s2_jobs),
+            )
+        )
+
+        good_tiles: set[Tile] = set()
+        for tile, timestamps in zip(unique_tiles, s2_months):
+            n_months = _count_distinct_months(timestamps)
+            if n_months >= min_s2_months:
+                good_tiles.add(tile)
+                results.append((tile, coarse_times[tile.to_resolution(COARSE_RESOLUTION)], "corpus_time"))
+            else:
+                results.append((tile, coarse_times[tile.to_resolution(COARSE_RESOLUTION)], "skipped"))
+
+        print(
+            f"S2 check: {len(good_tiles)}/{len(unique_tiles)} tiles have "
+            f">={min_s2_months} months of S2 data"
+        )
+    else:
+        good_tiles = set(unique_tiles)
+        results = [
+            (tile, coarse_times[tile.to_resolution(COARSE_RESOLUTION)], "corpus_time")
+            for tile in unique_tiles
+        ]
+
+    # Step 4: Create windows for tiles that passed.
+    create_window_jobs = []
+    for tile in good_tiles:
+        coarse_tile = tile.to_resolution(COARSE_RESOLUTION)
+        coarse_time = coarse_times[coarse_tile]
+        window_metadata = WindowMetadata(
+            str(tile.crs), tile.resolution, tile.col, tile.row, coarse_time
+        )
+        create_window_jobs.append(
+            dict(ds_path=ds_path, metadata=window_metadata)
+        )
+
+    outputs = star_imap(p, create_window, create_window_jobs)
+    for _ in tqdm.tqdm(outputs, desc="Create windows", total=len(create_window_jobs)):
+        pass
+
+    p.close()
+    print(f"Created {len(create_window_jobs)} windows from corpus")
+    return results

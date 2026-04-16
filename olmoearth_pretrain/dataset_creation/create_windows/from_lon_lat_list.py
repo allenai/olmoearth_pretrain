@@ -29,11 +29,17 @@ if __name__ == "__main__":
         help="Number of worker processes",
         default=32,
     )
+    parser.add_argument(
+        "--force_lowres_prob",
+        type=float,
+        help="Probability to skip high-res (NAIP) and use 10m tiles (default 0.25, use 1.0 to skip NAIP entirely)",
+        default=0.25,
+    )
     args = parser.parse_args()
 
     with open(args.fname) as f:
         lonlats = [(lon, lat) for lon, lat in json.load(f)]
 
     create_windows_with_highres_time(
-        UPath(args.ds_path), lonlats, force_lowres_prob=0.25, workers=args.workers
+        UPath(args.ds_path), lonlats, force_lowres_prob=args.force_lowres_prob, workers=args.workers
     )
