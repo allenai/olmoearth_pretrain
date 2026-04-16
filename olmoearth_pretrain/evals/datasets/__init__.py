@@ -1,6 +1,7 @@
 """OlmoEarth Pretrain eval datasets."""
 
 import logging
+from typing import Any
 
 from olmo_core.config import StrEnum
 from torch.utils.data import Dataset
@@ -14,6 +15,7 @@ from .geobench_dataset import GeobenchDataset
 from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset
+from .pretrain_subset import PretrainSubsetDataset
 from .rslearn_dataset import from_registry_entry
 
 logger = logging.getLogger(__name__)
@@ -40,9 +42,19 @@ def get_eval_dataset(
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: str = NormMethod.NORM_NO_CLIP_2_STD,
+    **kwargs: Any,
 ) -> Dataset:
     """Retrieve an eval dataset from the dataset name."""
-    if eval_dataset.startswith("m-"):
+    if eval_dataset == "pretrain_subset":
+        return PretrainSubsetDataset(
+            h5py_dir=kwargs["h5py_dir"],
+            training_modalities=kwargs.get("training_modalities", input_modalities),
+            max_samples=kwargs.get("max_samples", 512),
+            patch_size=kwargs.get("pretrain_patch_size", 4),
+            hw_p=kwargs.get("pretrain_hw_p", 8),
+            seed=kwargs.get("pretrain_seed", 42),
+        )
+    elif eval_dataset.startswith("m-"):
         # m- == "modified for geobench"
         return GeobenchDataset(
             geobench_dir=paths.GEOBENCH_DIR,
