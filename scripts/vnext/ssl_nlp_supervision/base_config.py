@@ -305,7 +305,6 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
         seed=3622,
         num_masked_views=2,
         masking_config=_masking_config(tokenization_config),
-        training_modalities=common.training_modalities,
     )
 
 
