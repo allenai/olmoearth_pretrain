@@ -164,7 +164,7 @@ def _masking_config(
             "encode_ratio": 0.5,
             "decode_ratio": 0.5,
             "random_ratio": 0.5,
-            "only_decode_modalities": [],
+            "only_decode_modalities": MAP_MODALITIES,
         },
         tokenization_config=tokenization_config,
     )
