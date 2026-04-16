@@ -191,7 +191,11 @@ def evaluate_checkpoints(
                         f"eval_embed_diagnostics/{evaluator.evaluation_name}/{k}"
                     ] = v
 
-            if result.pca_rgb is not None and wandb_callback.enabled and get_rank() == 0:
+            if (
+                result.pca_rgb is not None
+                and wandb_callback.enabled
+                and get_rank() == 0
+            ):
                 wandb_callback.wandb.log(
                     {
                         f"eval_embed_diagnostics/{evaluator.evaluation_name}/pca_rgb": wandb_callback.wandb.Image(

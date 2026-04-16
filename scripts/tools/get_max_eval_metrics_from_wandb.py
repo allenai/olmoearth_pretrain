@@ -8,8 +8,8 @@ from collections import defaultdict
 
 import numpy as np
 import pandas as pd
-import wandb
 
+import wandb
 from olmoearth_pretrain.evals.models import (
     MODELS_WITH_MULTIPLE_SIZES,
     BaselineModelName,
