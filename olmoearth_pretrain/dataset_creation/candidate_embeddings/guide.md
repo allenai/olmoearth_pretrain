@@ -1,68 +1,56 @@
-## prelim steps for VIZ
+## optional prelim steps for HDBSCAN / t-sne clustering
+- only needed for visualization with t-sne or hdbscan, not for candidate scoring/selection
 install cuml:
 ```shell
 pip install --extra-index-url=https://pypi.nvidia.com cuml-cu12
 ```
+<br/>
 
-# SIMPLE VISUALIZATIONS
 ---
 ---
-
-## Launch viz
-```shell
-python scripts/embeddings/visualize_embeddings.py --input-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_cc_4s_s2 --darkmode --seed 1234 --pca-dim 128 --tsne-dim 2
-```
-
-## Launch cluster - HDBSCAN
-```shell
-python scripts/embeddings/cluster_embeddings.py   --input-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_cc_4s_s2   --seed 1234   --pca-dim 25   hdbscan   --min-cluster-size 15
-  --min-samples 10
-```
+# SECTION A: K-MEANS clustering and visualization
 ---
 ---
-
-# K-MEANS clustering and visualization
----
----
-## Launch cluster - KMEANS
+<br/>
+## Launch KMEANS clustering
 notes:
 1. points within a cluster are based of a 2D PCA projection of the residual vectors (point minus centroid)
 2. The distances between points and centroids are consistent across clusters
 3. The distance between clusters is not consistent with distance between points and centroids
-4. MDS minimizes the stress (distortion) between the input high-D distances and the output 2D distances. With only 15 clusters mapped to 2D, MDS should achieve very low stress — meaning clusters close in cosine space will be close on the plot, and far clusters will be far. The relative positioning is faithful to the high-D inter-centroid geometry.
+4. MDS minimizes the stress (distortion) between the input high-D distances and the output 2D distances. With only 15 clusters mapped to 2D, MDS should achieve very low stress, meaning clusters close in cosine space will be close on the plot, and far clusters will be far. The relative positioning is faithful to the high-D inter-centroid geometry.
 ```shell
 export OPENBLAS_NUM_THREADS=16
 export OMP_NUM_THREADS=16
-python scripts/embeddings/cluster_embeddings.py   --input-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp16_4s_s2_ixes   --seed 1234   --pca-dim 128   kmeans   --k 15   --spherical
+python scripts/embeddings/cluster_embeddings.py   --input-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes   --seed 1234   --pca-dim 128   kmeans   --k 15   --spherical
 ```
 
 
-## Viz with cluster labels
+### Viz with cluster labels - simple
 ```shell
 python scripts/embeddings/visualize_embeddings.py --input-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes --darkmode --seed 1234 --labels /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/labels_kmeans.npy
 ```
 
 
-## Viz with cluster bundles (distance based)
+### Viz with cluster labels - Distance based
 ```shell
 python scripts/embeddings/visualize_embeddings.py --layout cluster --cluster-bundle /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_cc_4s_s2/_cluster/cluster_bundle_kmeans.npz  --metric cosine  --separation 3  --darkmode  --metadata /weka/dfive-default/henryh/helios/olmoearth_pretrain/v0_1_osm_sampling_scores.parquet  --output-name embedding_map_metadata_test.html   --metadata-columns filename elevation_mean is_temperate is_subtropical is_tropical is_boreal_polar is_mountainous ndwi_mean patch_uniformity spatial_homogeneity canopy_height_mean
 ```
 
 
-#### map on the globe
+### Viz: globe map with cluster colors
 ```shell
 python scripts/embeddings/visualize_map.py   --index-csv /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/index.csv   --labels-npy /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/labels_kmeans_int.npy   --lat-bounds 40 85 --lon-bounds -145 -50   --darkmode   --output-name globe_map_kmeans_nolegendtitle.png --no-legend --no-title
 ```
 
 <br/>
-
----
----
-
 <br/>
 
-## Click-to-view image thumbnails
-
+---
+---
+# SECTION B1: Click-to-view image thumbnails support
+---
+---
+<br/>
 Three steps: generate thumbnails, build the map with `--thumbnail-url-prefix`, serve via HTTP.
 
 ### Optional Step0 : Delete pre-existing thumbnails
@@ -91,13 +79,93 @@ python scripts/embeddings/serve_map.py   --viz-dir /weka/dfive-default/hadriens/
 # Option B: plain Python HTTP server (thumbnails must be inside _viz/thumbnails/)
 python -m http.server 8765 -d /path/to/_viz
 ```
-Cursor/VS Code auto-forwards the port -- click "Open in Browser" when prompted.
-Click any point on the map to see its thumbnail + metadata.
+Cursor/VS Code auto-forwards the port
 
+<br/>
+<br/>
 
+---
+---
 
+# SECTION B2: NESTED HDBSCAN WITHIN K-MEANS CLUSTERS
+---
+---
+<br/>
+## Launch cluster - KMEANS + residual HDBSCAN
+notes:
+1. this keeps the existing K-means cluster bundle as the geometry used by `--layout cluster`
+2. within each K-means cluster, residuals are defined as `(point - parent centroid)`
+3. those residuals are reduced to `30D` PCA before applying HDBSCAN
+4. nested labels are written in a compact form like `K0_H2`
+5. the nested HDBSCAN result is saved as a separate labels file and does not change the current capabilities
 
-## Overlay a new embedding set on the frozen reference subclusters
+```shell
+export OPENBLAS_NUM_THREADS=16
+export OMP_NUM_THREADS=16
+python scripts/embeddings/cluster_embeddings.py \
+  --input-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes \
+  --seed 1234 \
+  --pca-dim 128 \
+  kmeans-hdbscan \
+  --k 15 \
+  --spherical \
+  --residual-pca-dim 30 \
+  --min-cluster-size 100 \
+  --min-samples 30
+```
+
+This produces, in addition to the existing K-means outputs:
+1. `labels_kmeans_residual_hdbscan.npy`
+2. `labels_kmeans_residual_hdbscan_int.npy`
+
+## Viz with cluster bundles + nested HDBSCAN labels
+The point placement still comes from `cluster_bundle_kmeans.npz`.
+The nested HDBSCAN labels only override displayed colors / search / polygons.
+
+```shell
+python scripts/embeddings/visualize_embeddings.py \
+  --layout cluster \
+  --cluster-bundle /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/cluster_bundle_kmeans.npz \
+  --labels /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/labels_kmeans_residual_hdbscan.npy \
+  --metric cosine \
+  --separation 3 \
+  --darkmode \
+  --metadata /weka/dfive-default/henryh/helios/olmoearth_pretrain/v0_1_osm_sampling_scores.parquet \
+  --output-name embedding_map_kmeans_residual_hdbscan.html \
+  --metadata-columns filename elevation_mean is_temperate is_subtropical is_tropical is_boreal_polar is_mountainous ndwi_mean patch_uniformity spatial_homogeneity canopy_height_mean
+```
+
+## Viz with thumbnails + nested HDBSCAN labels
+```shell
+python scripts/embeddings/visualize_embeddings.py \
+  --layout cluster \
+  --cluster-bundle /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/cluster_bundle_kmeans.npz \
+  --labels /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/labels_kmeans_residual_hdbscan.npy \
+  --metric cosine \
+  --separation 3 \
+  --darkmode \
+  --metadata /weka/dfive-default/henryh/helios/olmoearth_pretrain/v0_1_osm_sampling_scores.parquet \
+  --metadata-columns filename elevation_mean is_temperate is_subtropical is_tropical is_boreal_polar is_mountainous ndwi_mean patch_uniformity spatial_homogeneity canopy_height_mean \
+  --output-name embedding_map_with_images_nested_hdbscan.html \
+  --thumbnail-url-prefix ./thumbnails/
+```
+
+### Step 3: Serve and open in browser
+```shell
+export IMAGES_DIR="/weka/dfive-default/helios/dataset/osm_sampling/thumbnails/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/"
+# Option A: convenience script (handles thumbnail dir symlinks)
+python scripts/embeddings/serve_map.py   --viz-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/_viz   --thumbnail-dir "$IMAGES_DIR"
+```
+
+<br/>
+<br/>
+
+---
+---
+# SECTION C: Overlay new embeddings on frozen reference subclusters
+---
+---
+<br/>
 Use this when you want a fast visual sanity check that a newly computed
 embedding set mixes into the existing reference subclusters instead of drifting
 into obviously different geometry.
@@ -108,8 +176,6 @@ This mode:
 3. renders all reference points in gray
 4. projects the new embeddings with the frozen reference PCA + parent clusters
 5. renders the new points as black dots with a sharp light-green outline
-
-No metadata or thumbnail support is needed for this check.
 
 ```shell
 python scripts/embeddings/visualize_embeddings.py \
@@ -129,22 +195,24 @@ Important:
 2. if you want the nested HDBSCAN partition shown, pass the nested labels file with `--labels`
 3. the new points are overlaid only for visualization; they do not change the reference partition
 
+<br/>
+<br/>
 
 ---
 ---
-
-# SELECTION / DATASET EXPANSION
+# SECTION D: SELECTION / DATASET EXPANSION
 ---
 ---
-
+<br/>
 ## Fit frozen reference artifacts
-This is the selection workflow used to compare a new candidate embedding set
+This is the selection workflow used to compare/score a new candidate embedding set
 against the current OLMoEarth pretraining embeddings.
+Note: Use the same seed to obtain similar K-means cluster than other sections
 
 It fits:
 1. a frozen global PCA model
 2. frozen parent spherical k-means clusters
-3. residual-space kNN novelty thresholds calibrated per parent cluster
+3. per-parent novelty thresholds in residual space: for every reference point, compute its mean distance to the `--knn-k` nearest reference residuals **inside the same parent cluster**, and return the `--percentile` of the distribution per parent cluster.
 
 ```shell
 export OPENBLAS_NUM_THREADS=16
@@ -335,14 +403,17 @@ Interpretation:
 2. this favors representative candidates rather than novel or tail candidates
 3. with `--coverage-k > 0`, candidates in already-dense prototype regions are penalized relative to candidates in sparser regions of the same prototype
 
-### When to use which score
-1. `select_embeddings.py novelty-score` (`Novelty score`): isolated / novel points
-2. `score_acquisition.py xglobal_bridge`: edge cases between parent clusters
-3. `score_acquisition.py sparse-infill`: sparse-but-supported coverage gaps
-4. `score_acquisition.py xlocal_bridge`: connectors between local modes
-5. `score_acquisition.py prototypes`: clean representatives of dense regions
 
-## Combine strategy outputs
+<br/>
+
+---
+---
+
+# SECTION E: Combine strategy scores and select candidates
+
+---
+---
+<br/>
 Use this when you want one final ranking that mixes several acquisition goals
 instead of selecting from a single score.
 
@@ -353,6 +424,7 @@ By default this combines:
 4. xlocal_bridge: `0.1`
 5. prototypes: `0.1`
 
+## X-strategy scoring
 Each strategy score is normalized first, then combined with the chosen
 weights. `rank` normalization is the safest default because the raw score
 scales differ across strategies.
@@ -383,15 +455,7 @@ How it works:
 
 ### Ablation mode
 Add `--ablation` to the same command to also measure the marginal value of
-each strategy in your production weighting (leave-one-out). The chosen
-weights above are still used for the main `combined_score` -- the ablation
-variants are added as extra columns and extra ranked-sample-idx files.
-
-
-Extra columns added to `combined_acquisition_scores.parquet`:
-1. `combined_score_drop_<strategy>` for each active strategy -- weighted mean with that strategy's weight set to 0 and the remaining weights renormalized
-Extra files written alongside `combined_ranked_sample_idx.npy`:
-1. `combined_ranked_sample_idx_drop_<strategy>.npy` for each active strategy
+each strategy in your production weighting (leave-one-out).
 
 
 ## Build a top-X selection table across strategies and ablations
@@ -422,76 +486,3 @@ Output: `selection_top<X>.parquet` written next to the input parquet
 Each row appears exactly once (duplicates across selections are merged); a
 sample that satisfies several criteria simply has `1` in several indicator
 columns. No scores are carried over -- only metadata plus the 0/1 indicators.
-
-
----
----
-
-# NESTED HDBSCAN WITHIN K-MEANS CLUSTERS
----
----
-
-## Launch cluster - KMEANS + residual HDBSCAN
-notes:
-1. this keeps the existing K-means cluster bundle as the geometry used by `--layout cluster`
-2. within each K-means cluster, residuals are defined as `(point - parent centroid)`
-3. those residuals are reduced to `30D` PCA before applying HDBSCAN
-4. nested labels are written in a compact form like `K0_H2`
-5. the nested HDBSCAN result is saved as a separate labels file and does not change the current capabilities
-
-```shell
-export OPENBLAS_NUM_THREADS=16
-export OMP_NUM_THREADS=16
-python scripts/embeddings/cluster_embeddings.py \
-  --input-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes \
-  --seed 1234 \
-  --pca-dim 128 \
-  kmeans-hdbscan \
-  --k 15 \
-  --spherical \
-  --residual-pca-dim 30 \
-  --min-cluster-size 100 \
-  --min-samples 30
-```
-
-This produces, in addition to the existing K-means outputs:
-1. `labels_kmeans_residual_hdbscan.npy`
-2. `labels_kmeans_residual_hdbscan_int.npy`
-
-## Viz with cluster bundles + nested HDBSCAN labels
-The point placement still comes from `cluster_bundle_kmeans.npz`.
-The nested HDBSCAN labels only override displayed colors / search / polygons.
-
-```shell
-python scripts/embeddings/visualize_embeddings.py \
-  --layout cluster \
-  --cluster-bundle /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp16_4s_s2_ixes/_cluster/cluster_bundle_kmeans.npz \
-  --labels /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp16_4s_s2_ixes/_cluster/labels_kmeans_residual_hdbscan.npy \
-  --metric cosine \
-  --separation 3 \
-  --darkmode \
-  --metadata /weka/dfive-default/henryh/helios/olmoearth_pretrain/v0_1_osm_sampling_scores.parquet \
-  --output-name embedding_map_kmeans_residual_hdbscan.html \
-  --metadata-columns filename elevation_mean is_temperate is_subtropical is_tropical is_boreal_polar is_mountainous ndwi_mean patch_uniformity spatial_homogeneity canopy_height_mean
-```
-
-## Viz with thumbnails + nested HDBSCAN labels
-```shell
-python scripts/embeddings/visualize_embeddings.py \
-  --layout cluster \
-  --cluster-bundle /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/cluster_bundle_kmeans.npz \
-  --labels /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/labels_kmeans_residual_hdbscan.npy \
-  --metric cosine \
-  --separation 3 \
-  --darkmode \
-  --metadata /weka/dfive-default/henryh/helios/olmoearth_pretrain/v0_1_osm_sampling_scores.parquet \
-  --metadata-columns filename elevation_mean is_temperate is_subtropical is_tropical is_boreal_polar is_mountainous ndwi_mean patch_uniformity spatial_homogeneity canopy_height_mean \
-  --output-name embedding_map_with_images_nested_hdbscan.html \
-  --thumbnail-url-prefix ./thumbnails/
-```
-
-### Step 3: Serve and open in browser
-```shell
-export IMAGES_DIR="/weka/dfive-default/helios/dataset/osm_sampling/thumbnails/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/"
-# Option A: convenience script (handles thumbnail dir symlinks)
-python scripts/embeddings/serve_map.py   --viz-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/_viz   --thumbnail-dir "$IMAGES_DIR"
