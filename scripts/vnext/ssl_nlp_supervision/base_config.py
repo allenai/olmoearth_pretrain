@@ -225,6 +225,7 @@ def build_model_config(
             mlp_ratio=4.0,
             qk_norm=False,
             use_flash_attn=False,
+            gradient_checkpointing=True,
         ),
         text_dim=1152,
         reference_modalities=("sentinel2_l2a", "sentinel1", "landsat"),
@@ -250,7 +251,7 @@ def build_train_module_config(
 
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
-        rank_microbatch_size=32,
+        rank_microbatch_size=64,
         masking_config=_masking_config(tokenization_config),
         loss_config=LossConfig(loss_config=copy.deepcopy(_LOSS_CONFIG_DICT)),
         contrastive_config=LossConfig(
@@ -268,8 +269,8 @@ def build_train_module_config(
         nlp_supervision_train_config=NLPSupervisionTrainConfig(
             text_encoder_name="google/siglip2-so400m-patch14-384",
             text_cache_dir="",
-            sampler_k_pos=1,
-            sampler_k_neg=1,
+            sampler_k_pos=3,
+            sampler_k_neg=3,
             sampler_seed=42,
             target_size_source="openstreetmap_raster",
             catalog_sources=MAP_MODALITIES,

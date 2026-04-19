@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.nn.attention import Block
@@ -109,6 +110,9 @@ class CrossAttnDecoderConfig(Config):
         attn_drop: Attention dropout rate.
         drop_path: Stochastic depth rate.
         use_flash_attn: Use flash attention if available.
+        gradient_checkpointing: If True, recompute each decoder layer's
+            activations during backward instead of storing them, trading
+            ~30% extra compute for a large reduction in activation memory.
     """
 
     dim: int = 512
@@ -121,6 +125,7 @@ class CrossAttnDecoderConfig(Config):
     attn_drop: float = 0.0
     drop_path: float = 0.0
     use_flash_attn: bool = False
+    gradient_checkpointing: bool = False
 
     def build(self, image_dim: int, text_dim: int) -> CrossAttnDecoder:
         """Build the decoder, projecting from encoder/text dims to ``dim``."""
@@ -186,11 +191,22 @@ class CrossAttnDecoder(nn.Module):
         """Run the full decoder."""
         image_tokens = self.image_proj(image_tokens)
         text_tokens = self.text_proj(text_tokens)
+        use_ckpt = self.config.gradient_checkpointing and self.training
         for layer in self.layers:
-            image_tokens = layer(
-                image_tokens=image_tokens,
-                text_tokens=text_tokens,
-                text_attn_mask=text_attn_mask,
-                image_attn_mask=image_attn_mask,
-            )
+            if use_ckpt:
+                image_tokens = checkpoint(
+                    layer,
+                    image_tokens,
+                    text_tokens,
+                    text_attn_mask,
+                    image_attn_mask,
+                    use_reentrant=False,
+                )
+            else:
+                image_tokens = layer(
+                    image_tokens=image_tokens,
+                    text_tokens=text_tokens,
+                    text_attn_mask=text_attn_mask,
+                    image_attn_mask=image_attn_mask,
+                )
         return self.norm(image_tokens)

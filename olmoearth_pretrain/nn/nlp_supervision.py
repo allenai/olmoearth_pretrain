@@ -436,6 +436,12 @@ class NLPSupervisionDecoder(nn.Module):
     ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Run NLP supervision: predict and compute loss.
 
+        For memory efficiency, each CLIP class is processed in its own forward
+        pass through the cross-attention decoder (one class at a time rather
+        than replicating tokens across all classes at once).  This trades some
+        speed for a large reduction in peak activation memory during the
+        decoder forward, enabling larger microbatch sizes.
+
         Args:
             tokens_and_masks: Encoder output (encode-decode modalities only).
             batch: Full sample including map modality raw data for GT.
@@ -456,57 +462,30 @@ class NLPSupervisionDecoder(nn.Module):
 
         # Split entries: which go through the CLIP decoder vs direct regression.
         if self.text_condition_regression:
-            clip_entries = class_entries
-            direct_regression_entries: list[ClassEntry] = []
+            clip_keys = {(e.source, e.text) for e in class_entries}
+            direct_regression_keys: set[tuple[str, str]] = set()
         else:
-            clip_entries = [e for e in class_entries if not e.is_regression]
-            direct_regression_entries = [e for e in class_entries if e.is_regression]
+            clip_keys = {
+                (e.source, e.text) for e in class_entries if not e.is_regression
+            }
+            direct_regression_keys = {
+                (e.source, e.text) for e in class_entries if e.is_regression
+            }
 
-        # Build index maps for the CLIP path.
-        clip_entry_to_idx: dict[tuple[str, str], int] = {}
-        clip_text_indices: list[int] = []
-        for i, entry in enumerate(class_entries):
-            if entry in clip_entries:
-                clip_entry_to_idx[(entry.source, entry.text)] = len(clip_text_indices)
-                clip_text_indices.append(i)
+        # Build per-class assignment lookup: (source, text) -> list of image indices.
+        clip_assignments: dict[tuple[str, str], list[int]] = {}
+        direct_assignments: dict[str, list[tuple[int, ClassEntry]]] = {}
+        for image_index, assignments in enumerate(per_image_selections):
+            for _class_idx_in_union, entry, _is_positive in assignments:
+                key = (entry.source, entry.text)
+                if key in clip_keys:
+                    clip_assignments.setdefault(key, []).append(image_index)
+                elif key in direct_regression_keys:
+                    direct_assignments.setdefault(entry.source, []).append(
+                        (image_index, entry)
+                    )
 
-        # Run text-conditioned predictions for CLIP entries.
-        clip_preds: torch.Tensor | None = None
-        if clip_entries and clip_text_indices:
-            clip_text_tokens = text_tokens[clip_text_indices]
-            clip_text_mask = (
-                text_attn_mask[clip_text_indices]
-                if text_attn_mask is not None
-                else None
-            )
-            clip_preds = self._predict_text_conditioned(
-                encoder_tokens=encoder_tokens,
-                context_mask=context_mask,
-                shapes=shapes,
-                text_tokens=clip_text_tokens,
-                text_attn_mask=clip_text_mask,
-                n_classes=len(clip_text_indices),
-                target_size=target_size,
-            )  # [C_clip, B, H, W]
-
-        # Run direct regression predictions for mode (a).
-        direct_preds: dict[str, torch.Tensor] = {}
-        if direct_regression_entries and self.regression_heads is not None:
-            seen_sources: set[str] = set()
-            for entry in direct_regression_entries:
-                if (
-                    entry.source not in seen_sources
-                    and entry.source in self.regression_heads
-                ):
-                    direct_preds[entry.source] = self._predict_regression_direct(
-                        encoder_tokens=encoder_tokens,
-                        shapes=shapes,
-                        modality_name=entry.source,
-                        target_size=target_size,
-                    )  # [B, H, W]
-                    seen_sources.add(entry.source)
-
-        # Compute loss across all (image, class) assignments.
+        # Loss accumulators.
         total_loss = encoder_tokens.new_zeros([])
         per_source_loss: dict[str, float] = {}
         per_source_count: dict[str, int] = {}
@@ -515,46 +494,84 @@ class NLPSupervisionDecoder(nn.Module):
         # Cache extracted GT maps per (source, text).
         gt_cache: dict[tuple[str, str], torch.Tensor] = {}
 
-        for image_index, assignments in enumerate(per_image_selections):
-            for class_idx_in_union, entry, _is_positive in assignments:
-                # Extract ground-truth.
-                gt_key = (entry.source, entry.text)
-                if gt_key not in gt_cache:
-                    source_tensor = getattr(batch, entry.source, None)
-                    if source_tensor is None:
-                        continue
-                    gt_cache[gt_key] = entry.extractor(source_tensor)
-                gt = gt_cache[gt_key][image_index]  # [H, W]
+        # Process CLIP classes one at a time: each class gets its own decoder
+        # forward pass on [1*B, N, D] instead of a single [C*B, N, D] pass.
+        for global_idx, entry in enumerate(class_entries):
+            key = (entry.source, entry.text)
+            if key not in clip_keys:
+                continue
+            image_indices = clip_assignments.get(key, [])
+            if not image_indices:
+                continue
 
-                # Get prediction.
-                entry_key = (entry.source, entry.text)
-                if entry.is_regression and not self.text_condition_regression:
-                    # Mode (a): direct regression head.
-                    if entry.source not in direct_preds:
-                        continue
-                    pred = direct_preds[entry.source][image_index]  # [H, W]
-                else:
-                    # CLIP decoder path.
-                    if clip_preds is None or entry_key not in clip_entry_to_idx:
-                        continue
-                    clip_idx = clip_entry_to_idx[entry_key]
-                    pred = clip_preds[clip_idx, image_index]  # [H, W]
+            # Run the cross-attn decoder for this single class.
+            class_text_tokens = text_tokens[global_idx : global_idx + 1]
+            class_text_mask = (
+                text_attn_mask[global_idx : global_idx + 1]
+                if text_attn_mask is not None
+                else None
+            )
+            preds = self._predict_text_conditioned(
+                encoder_tokens=encoder_tokens,
+                context_mask=context_mask,
+                shapes=shapes,
+                text_tokens=class_text_tokens,
+                text_attn_mask=class_text_mask,
+                n_classes=1,
+                target_size=target_size,
+            )  # [1, B, H, W]
 
-                # Compute loss based on task type.
+            # Extract GT for this class once (covers all image assignments).
+            if key not in gt_cache:
+                source_tensor = getattr(batch, entry.source, None)
+                if source_tensor is None:
+                    continue
+                gt_cache[key] = entry.extractor(source_tensor)
+            gt_all = gt_cache[key]  # [B, H, W]
+
+            # Accumulate loss for each image that sampled this class.
+            for image_index in image_indices:
+                pred = preds[0, image_index]
+                gt = gt_all[image_index]
                 if entry.is_regression:
                     pair_loss = _compute_regression_loss(pred, gt)
                 else:
                     pair_loss = _compute_classification_loss(pred, gt)
-
                 total_loss = total_loss + pair_loss
                 num_assignments += 1
-
-                # Track per-source metrics.
                 src = entry.source
                 per_source_loss[src] = (
                     per_source_loss.get(src, 0.0) + pair_loss.detach().item()
                 )
                 per_source_count[src] = per_source_count.get(src, 0) + 1
+
+        # Direct regression path for mode (a) — one forward per regression modality.
+        if direct_regression_keys and self.regression_heads is not None:
+            for source, assignments_for_source in direct_assignments.items():
+                if source not in self.regression_heads:
+                    continue
+                preds = self._predict_regression_direct(
+                    encoder_tokens=encoder_tokens,
+                    shapes=shapes,
+                    modality_name=source,
+                    target_size=target_size,
+                )  # [B, H, W]
+                for image_index, entry in assignments_for_source:
+                    key = (entry.source, entry.text)
+                    if key not in gt_cache:
+                        source_tensor = getattr(batch, entry.source, None)
+                        if source_tensor is None:
+                            continue
+                        gt_cache[key] = entry.extractor(source_tensor)
+                    gt = gt_cache[key][image_index]
+                    pred = preds[image_index]
+                    pair_loss = _compute_regression_loss(pred, gt)
+                    total_loss = total_loss + pair_loss
+                    num_assignments += 1
+                    per_source_loss[source] = (
+                        per_source_loss.get(source, 0.0) + pair_loss.detach().item()
+                    )
+                    per_source_count[source] = per_source_count.get(source, 0) + 1
 
         # Normalize by number of assignments.
         if num_assignments > 0:
