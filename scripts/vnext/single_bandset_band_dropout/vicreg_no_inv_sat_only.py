@@ -1,8 +1,8 @@
-"""Ablation: VICRegViews with no invariance term (inv=0.0, var=0.05, cov=0.005).
+"""Ablation: VICRegViews no-invariance on satellite modalities only (S2/S1/Landsat).
 
-Matches ``vicreg_sweep_half.py`` but zeroes out the invariance (MSE-between-
-views) term to test the hypothesis that the invariance term is the primary
-driver of intra-sample patch collapse seen in the VICReg runs.
+Like ``vicreg_no_inv.py`` (full-depth EMA + VICRegViews with inv_weight=0.0),
+but drops all map modalities from training. Isolates the full-depth EMA
+dynamics without the map-only-decode path muddying the signal.
 """
 
 import logging
@@ -90,14 +90,7 @@ LANDSAT_SINGLE_BANDSET = ModalityTokenization(
     ]
 )
 
-ONLY_DECODE_MODALITIES = [
-    Modality.WORLDCOVER.name,
-    Modality.SRTM.name,
-    Modality.OPENSTREETMAP_RASTER.name,
-    Modality.WRI_CANOPY_HEIGHT_MAP.name,
-    Modality.CDL.name,
-    Modality.WORLDCEREAL.name,
-]
+ONLY_DECODE_MODALITIES: list[str] = []
 
 BAND_DROPOUT_MODALITIES = [
     Modality.SENTINEL2_L2A.name,
@@ -138,12 +131,6 @@ def build_common_components(
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
-        Modality.WORLDCOVER.name,
-        Modality.SRTM.name,
-        Modality.OPENSTREETMAP_RASTER.name,
-        Modality.WRI_CANOPY_HEIGHT_MAP.name,
-        Modality.CDL.name,
-        Modality.WORLDCEREAL.name,
     ]
     config.tokenization_config = _tokenization_config()
     return config
@@ -155,12 +142,6 @@ def _token_exit_cfg_full_ema(common: CommonComponents) -> dict[str, int]:
         Modality.SENTINEL2_L2A.name: depth,
         Modality.SENTINEL1.name: depth,
         Modality.LANDSAT.name: depth,
-        Modality.WORLDCOVER.name: 0,
-        Modality.SRTM.name: 0,
-        Modality.OPENSTREETMAP_RASTER.name: 0,
-        Modality.WRI_CANOPY_HEIGHT_MAP.name: 0,
-        Modality.CDL.name: 0,
-        Modality.WORLDCEREAL.name: 0,
     }
 
 
