@@ -265,10 +265,7 @@ class TimeMaskingStrategy(MaskingStrategy):
         decode_times = max(int(self.decode_ratio * present_t), 1)
         target_times = present_t - encode_times - decode_times
         logger.info(
-            "Encode times: %s, Decode times: %s, Target times: %s",
-            encode_times,
-            decode_times,
-            target_times,
+            f"Encode times: {encode_times}, Decode times: {decode_times}, Target times: {target_times}"
         )
         # Create mask values only for the encodable timesteps
         encodable_mask_values = torch.cat(
@@ -342,8 +339,7 @@ class TimeMaskingStrategy(MaskingStrategy):
                     if temporal_mask is None:
                         # if there are timesteps that we wouldn't want to pick we should call a seprate mask creation function
                         logger.info(
-                            "Creating temporal mask for modality %s",
-                            modality.name,
+                            f"Creating temporal mask for modality {modality.name}"
                         )
                         temporal_mask = self._create_temporal_mask(
                             shape, timesteps_with_at_least_one_modality, device
@@ -495,8 +491,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
             shape = instance.shape
             if not modality.is_spatial:
                 logger.warning(
-                    "Modality %s is not spatial, random masking strategy will be applied",
-                    modality.name,
+                    f"Modality {modality.name} is not spatial, random masking strategy will be applied"
                 )
                 mask = self._create_random_mask(modality, shape, patch_size, device)
             else:
@@ -857,9 +852,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 ]
                 if modality not in available_modalities:
                     logger.debug(
-                        "Modality %s not present for sample %s",
-                        modality,
-                        sample_idx,
+                        f"Modality {modality} not present for sample {sample_idx}"
                     )
                     continue
 
@@ -880,10 +873,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                         else:
                             continue
                         logger.debug(
-                            "Setting %s bandset %s to %s",
-                            modality,
-                            bandset_idx,
-                            forced_mask_value,
+                            f"Setting {modality} bandset {bandset_idx} to {forced_mask_value}"
                         )
                         not_missing_mask = (
                             modality_mask[sample_idx, ..., bandset_idx]

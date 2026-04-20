@@ -1,0 +1,107 @@
+Metadata-Version: 2.4
+Name: olmoearth-pretrain
+Version: 0.1.0
+Summary: A library for developing earth system foundation models
+Author: OlmoEarth Team
+Requires-Python: <3.14,>=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: einops>=0.7.0
+Requires-Dist: huggingface_hub
+Requires-Dist: jupyter>=1.1.1
+Requires-Dist: numpy>=1.26.4
+Requires-Dist: torch<2.8,>=2.7
+Requires-Dist: universal-pathlib>=0.2.5
+Provides-Extra: training
+Requires-Dist: ai2-olmo-core==2.3.0; extra == "training"
+Requires-Dist: albumentations>=1.4.10; extra == "training"
+Requires-Dist: cartopy>=0.25.0; extra == "training"
+Requires-Dist: class-registry>=2.1.2; extra == "training"
+Requires-Dist: gcsfs>=2025.9.0; extra == "training"
+Requires-Dist: hdf5plugin>=6.0.0; extra == "training"
+Requires-Dist: matplotlib>=3.10.7; extra == "training"
+Requires-Dist: pandas>=2.2; extra == "training"
+Requires-Dist: psutil>=7.1.1; extra == "training"
+Requires-Dist: rasterio>=1.4.3; extra == "training"
+Requires-Dist: shapely>=2; extra == "training"
+Requires-Dist: torchvision>=0.22.1; extra == "training"
+Requires-Dist: universal-pathlib>=0.2.5; extra == "training"
+Requires-Dist: wandb>=0.19.0; extra == "training"
+Provides-Extra: beaker
+Requires-Dist: beaker-py==1.34.1; extra == "beaker"
+Requires-Dist: docker<8.0,>=5.0; extra == "beaker"
+Requires-Dist: packaging>=24.2; extra == "beaker"
+Requires-Dist: pydantic<3.0,>=1.8.2; extra == "beaker"
+Requires-Dist: pyyaml>=6.0.3; extra == "beaker"
+Requires-Dist: requests>=2.32.5; extra == "beaker"
+Requires-Dist: rich<14.0,>=12.3; extra == "beaker"
+Requires-Dist: google-cloud-compute; extra == "beaker"
+Provides-Extra: dataset-creation
+Requires-Dist: class-registry>=2.1.2; extra == "dataset-creation"
+Requires-Dist: einops==0.7.0; extra == "dataset-creation"
+Requires-Dist: gcsfs>=2025.9.0; extra == "dataset-creation"
+Requires-Dist: geobench>=1.0.1; extra == "dataset-creation"
+Requires-Dist: interrogate>=1.7.0; extra == "dataset-creation"
+Requires-Dist: numpy>=1.26.4; extra == "dataset-creation"
+Requires-Dist: pandas>=2.3.3; extra == "dataset-creation"
+Requires-Dist: pandera>=0.26.1; extra == "dataset-creation"
+Requires-Dist: pytest>=8.4.2; extra == "dataset-creation"
+Requires-Dist: rasterio>=1.4.3; extra == "dataset-creation"
+Requires-Dist: rioxarray>=0.19.0; extra == "dataset-creation"
+Requires-Dist: rslearn>=0.0.19; extra == "dataset-creation"
+Requires-Dist: torch<2.8,>=2.7; extra == "dataset-creation"
+Requires-Dist: universal-pathlib>=0.2.5; extra == "dataset-creation"
+Requires-Dist: wandb>=0.19.0; extra == "dataset-creation"
+Provides-Extra: dev
+Requires-Dist: pip>=25.2; extra == "dev"
+Requires-Dist: gitpython<4.0,>=3.0; extra == "dev"
+Requires-Dist: interrogate>=1.7.0; extra == "dev"
+Requires-Dist: pre-commit>=4.3.0; extra == "dev"
+Requires-Dist: pytest>=8.4.2; extra == "dev"
+Requires-Dist: pytest-xdist>=3.8.0; extra == "dev"
+Requires-Dist: ruff>=0.14.1; extra == "dev"
+Provides-Extra: eval
+Requires-Dist: albumentations>=1.4.10; extra == "eval"
+Requires-Dist: claymodel; extra == "eval"
+Requires-Dist: geobench; extra == "eval"
+Requires-Dist: geopandas>=1.1.1; extra == "eval"
+Requires-Dist: pydantic<3,>=2; extra == "eval"
+Requires-Dist: pytorch-lightning==2.5.5; extra == "eval"
+Requires-Dist: pyyaml>=6.0; extra == "eval"
+Requires-Dist: rioxarray>=0.19.0; extra == "eval"
+Requires-Dist: rslearn>=0.0.26; extra == "eval"
+Requires-Dist: satlaspretrain-models>=0.3.1; extra == "eval"
+Requires-Dist: scikit-learn>=1.7.2; extra == "eval"
+Requires-Dist: terratorch==1.1; extra == "eval"
+Requires-Dist: timm==1.0.20; extra == "eval"
+Requires-Dist: torchmetrics==1.7.1; extra == "eval"
+Requires-Dist: xarray>=2025.10.1; extra == "eval"
+Requires-Dist: tqdm>=4.66.0; extra == "eval"
+Provides-Extra: flash-attn
+Requires-Dist: flash-attn>=2.4.0; extra == "flash-attn"
+Provides-Extra: all-no-flash
+Requires-Dist: olmoearth-pretrain[beaker,dataset-creation,dev,eval,training]; extra == "all-no-flash"
+
+# Projects in Data Science Course 2026 - Geospatial Foundation Models
+
+In this course we will learn about state-of-the-art geospatial foundation models. Our case study will be the omloearth foundation model by the Allen institute
+
+## Setup
+
+We will use `uv` to create a python environment with all of the required dependencies.
+
+To create such an environments and test that it works, please follow these steps:
+
+1. If uv is not installed on your machine, please go to the following [link](https://docs.astral.sh/uv/getting-started/installation/) to install it.
+
+2. Clone the repo, create a pyhton environment and install dependencies by running this command:
+
+```
+git clone https://github.com/yinonbaron/WIS_data_science_olmoearth_pretrain_2026.git
+cd WIS_data_science_olmoearth_pretrain_2026
+uv sync --locked --extra all-no-flash --python 3.12
+```
+3. Test that the installation worked by running the following command:
+
+```uv run assignments/01_data/01_olmo.py```
+
+4. If the script runs with not It should run with no errors, you're done!

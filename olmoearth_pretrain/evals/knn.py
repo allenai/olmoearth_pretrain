@@ -11,12 +11,7 @@ from olmo_core.data.utils import get_rng
 from sklearn.metrics import accuracy_score, f1_score
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
-from olmoearth_pretrain.evals.metrics import (
-    EvalMetric,
-    EvalResult,
-    EvalTaskResult,
-    classification_metrics,
-)
+from olmoearth_pretrain.evals.metrics import EvalResult, EvalTaskResult
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +29,6 @@ def run_knn(
     skip_idx: bool = False,
     n_bootstrap: int = 0,
     bootstrap_seed: int = 42,
-    primary_metric: EvalMetric | None = None,
-    primary_metric_class: int | None = None,
 ) -> EvalTaskResult:
     """Run KNN on the OlmoEarth Pretrain model.
 
@@ -52,8 +45,6 @@ def run_knn(
         skip_idx: Whether to skip the first neighbor (for train set evaluation)
         n_bootstrap: Number of bootstrap samples for uncertainty estimation (0 = no bootstrap)
         bootstrap_seed: Random seed for bootstrap sampling
-        primary_metric: Override the default primary metric (None = task default)
-        primary_metric_class: Class index for CLASS_F1 primary metric
 
     Returns:
         Dictionary with keys:
@@ -74,13 +65,7 @@ def run_knn(
             device=device,
             skip_idx=skip_idx,
         )
-        val_result = classification_metrics(
-            predictions=val_predictions,
-            labels=val_labels,
-            is_multilabel=False,
-            primary_metric=primary_metric,
-            primary_metric_class=primary_metric_class,
-        )
+        val_score = accuracy_score(y_true=val_labels, y_pred=val_predictions)
 
         if test_embeddings is not None:
             if test_labels is None:
@@ -94,13 +79,8 @@ def run_knn(
                 device=device,
                 skip_idx=skip_idx,
             )
-            test_result = classification_metrics(
-                predictions=test_predictions,
-                labels=test_labels,
-                is_multilabel=False,
-                primary_metric=primary_metric,
-                primary_metric_class=primary_metric_class,
-            )
+            test_score = accuracy_score(y_true=test_labels, y_pred=test_predictions)
+            test_result = EvalResult.from_classification(test_score)
 
             # Perform bootstrap sampling if requested
             if n_bootstrap > 0:
@@ -118,7 +98,7 @@ def run_knn(
                 )
 
         return EvalTaskResult(
-            val_result=val_result,
+            val_result=EvalResult.from_classification(val_score),
             test_result=test_result,
             bootstrap_stats=bootstrap_stats,
         )
@@ -162,25 +142,16 @@ def run_knn(
         val_predictions = torch.stack(
             val_predictions, dim=1
         )  # (num_samples, num_classes)
-        val_result = classification_metrics(
-            predictions=val_predictions,
-            labels=val_labels,
-            is_multilabel=True,
-            primary_metric=primary_metric,
-            primary_metric_class=primary_metric_class,
-        )
+        val_score = f1_score(y_true=val_labels, y_pred=val_predictions, average="micro")
 
         if len(test_predictions) > 0:
             test_predictions = torch.stack(
                 test_predictions, dim=1
             )  # (num_samples, num_classes)
-            test_result = classification_metrics(
-                predictions=test_predictions,
-                labels=test_labels,
-                is_multilabel=True,
-                primary_metric=primary_metric,
-                primary_metric_class=primary_metric_class,
+            test_score = f1_score(
+                y_true=test_labels, y_pred=test_predictions, average="micro"
             )
+            test_result = EvalResult.from_classification(test_score)
 
             # Perform bootstrap sampling if requested
             if n_bootstrap > 0:
@@ -198,7 +169,7 @@ def run_knn(
                 )
 
         return EvalTaskResult(
-            val_result=val_result,
+            val_result=EvalResult.from_classification(val_score),
             test_result=test_result,
             bootstrap_stats=bootstrap_stats,
         )

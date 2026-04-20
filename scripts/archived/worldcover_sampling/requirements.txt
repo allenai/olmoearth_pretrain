@@ -1,5 +1,0 @@
-geopandas
-numpy
-pandas
-rioxarray
-tqdm

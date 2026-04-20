@@ -19,11 +19,7 @@ from olmoearth_pretrain.evals.models import (
     get_launch_script_path,
 )
 from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
-from olmoearth_pretrain.internal.constants import (
-    CHECKPOINT_SWEEP_LAUNCH_PATH,
-    EVAL_LAUNCH_PATH,
-    EVAL_WANDB_PROJECT,
-)
+from olmoearth_pretrain.internal.constants import EVAL_LAUNCH_PATH, EVAL_WANDB_PROJECT
 from olmoearth_pretrain.internal.experiment import SubCmd
 from olmoearth_pretrain.nn.pooling import PoolingType
 
@@ -122,11 +118,11 @@ def lr_only_params() -> Generator[dict[str, Any], None, None]:
 def select_best_val_args() -> str:
     """Get the early stopping arguments.
 
-    Selects the best test result based on the epoch with the best primary validation metric.
+    This is used to select the final test miou based on the epoch of the max val miou.
     """
     return " ".join(
         [
-            f" --trainer.callbacks.downstream_evaluator.tasks.{task_name}.select_best_by_primary_metric=True  --trainer.callbacks.downstream_evaluator.tasks.{task_name}.linear_probe_eval_interval=5"
+            f" --trainer.callbacks.downstream_evaluator.tasks.{task_name}.select_final_test_miou_based_on_epoch_of_max_val_miou=True  --trainer.callbacks.downstream_evaluator.tasks.{task_name}.linear_probe_eval_interval=5"
             for task_name in EVAL_TASKS.keys()
         ]
     )
@@ -517,14 +513,6 @@ def _get_pooling_type_str(pooling_type: str) -> str:
 LAUNCH_OVERRIDES = "--launch.priority=high --launch.num_gpus=1 --launch.task_name=eval"
 
 
-def _get_env_prefix(args: argparse.Namespace, module_path: str) -> str:
-    """Build the environment variable prefix for commands."""
-    prefix = f"TRAIN_SCRIPT_PATH={module_path}"
-    if getattr(args, "embedding_diagnostics_only", False):
-        prefix += " EMBEDDING_DIAGNOSTICS_ONLY=1"
-    return prefix
-
-
 def _build_default_command(
     args: argparse.Namespace,
     base_run_name: str,
@@ -543,7 +531,10 @@ def _build_default_command(
         f"Running defaults: {norm_mode} normalization, lr={lr}, pooling={pooling_type}"
     )
     run_name = f"{base_run_name}_df"
-    cmd_args = ""
+    cmd_args = _get_model_specific_args(args.model)
+
+    # Add normalization-specific args
+    cmd_args += _get_normalization_args(args.model, norm_mode)
 
     module_path = (
         args.module_path
@@ -551,29 +542,23 @@ def _build_default_command(
         else _get_module_path(args.model)
     )
     logger.info(f"Using module path {module_path}")
+    cmd_args += _get_model_size_args(args.model, size)
+    cmd_args += _get_load_checkpoints_args(args.model)
 
-    # Per-task overrides reference EVAL_TASKS keys — skip when using EMBED_DIAG_TASKS
-    if not getattr(args, "embedding_diagnostics_only", False):
-        cmd_args += _get_model_specific_args(args.model)
-        cmd_args += _get_normalization_args(args.model, norm_mode)
-        cmd_args += _get_model_size_args(args.model, size)
-        cmd_args += _get_load_checkpoints_args(args.model)
+    # Add quantization args if enabled
+    if getattr(args, "quantize_embeddings", False):
+        cmd_args += quantize_args
+        run_name += "_qt"
 
-        if getattr(args, "quantize_embeddings", False):
-            cmd_args += quantize_args
-            run_name += "_qt"
-
-        embedding_dim = getattr(args, "embedding_dim", None)
-        if embedding_dim is not None:
-            cmd_args += get_embedding_dim_args(embedding_dim)
-            run_name += f"_dim{embedding_dim}"
-    else:
-        cmd_args += _get_load_checkpoints_args(args.model)
+    # Add embedding dim args if enabled
+    embedding_dim = getattr(args, "embedding_dim", None)
+    if embedding_dim is not None:
+        cmd_args += get_embedding_dim_args(embedding_dim)
+        run_name += f"_dim{embedding_dim}"
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
-    env_prefix = _get_env_prefix(args, module_path)
     return (
-        f"{env_prefix} {launch_command} {EVAL_LAUNCH_PATH} "
+        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {run_name} {args.cluster} {launch_overrides} "
         f"{checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
     )
@@ -627,6 +612,7 @@ def _build_hyperparameter_command(
         cmd_args += quantize_args
         run_name += "_qt"
 
+    # Add embedding dim args if enabled
     embedding_dim = getattr(args, "embedding_dim", None)
     if embedding_dim is not None:
         cmd_args += get_embedding_dim_args(embedding_dim)
@@ -636,9 +622,8 @@ def _build_hyperparameter_command(
     # if init_seed is set add to base run name
     if "init_seed" in extra:
         run_name += f"_seed{extra.split('init_seed=')[1].split(' ')[0]}"
-    env_prefix = _get_env_prefix(args, module_path)
     return (
-        f"{env_prefix} {launch_command} {EVAL_LAUNCH_PATH} "
+        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {run_name} {args.cluster} {launch_overrides} {cmd_args} "
         f"{checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
     )
@@ -771,6 +756,7 @@ def _build_command_from_eval_settings(
         cmd_args += quantize_args
         run_name += "_qt"
 
+    # Add embedding dim args if enabled
     embedding_dim = getattr(args, "embedding_dim", None)
     if embedding_dim is not None:
         cmd_args += get_embedding_dim_args(embedding_dim)
@@ -780,9 +766,8 @@ def _build_command_from_eval_settings(
     # if init_seed is set add to base run name
     if "init_seed" in extra:
         run_name += f"_seed{extra.split('init_seed=')[1].split(' ')[0]}"
-    env_prefix = _get_env_prefix(args, module_path)
     return (
-        f"{env_prefix} {launch_command} {EVAL_LAUNCH_PATH} "
+        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {run_name} {args.cluster} {launch_overrides} {cmd_args} "
         f"{checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
     )
@@ -795,48 +780,6 @@ def _get_module_path(model: BaselineModelName | None) -> str:
     return get_launch_script_path(model)
 
 
-def _build_checkpoint_sweep_command(
-    args: argparse.Namespace,
-    sub_command: str,
-    launch_command: str,
-    project_name: str,
-    extra: str,
-) -> str:
-    """Build a single command that evaluates all checkpoints in a directory."""
-    checkpoint_dir = args.checkpoint_dir.rstrip("/")
-    base_run_name = os.path.basename(checkpoint_dir) + "_sweep"
-    if args.model_name:
-        base_run_name = args.model_name
-
-    module_path = (
-        args.module_path
-        if args.module_path is not None
-        else _get_module_path(args.model)
-    )
-
-    cmd_args = ""
-    if not getattr(args, "embedding_diagnostics_only", False):
-        cmd_args += _get_model_specific_args(args.model)
-        cmd_args += _get_normalization_args(args.model, Normalization_MODES[0])
-        if args.size:
-            cmd_args += _get_model_size_args(args.model, args.size)
-    cmd_args += _get_load_checkpoints_args(args.model)
-
-    env_prefix = (
-        _get_env_prefix(args, module_path) + f" CHECKPOINT_DIR={checkpoint_dir}"
-    )
-    if args.steps:
-        env_prefix += f" CHECKPOINT_STEPS={args.steps}"
-
-    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
-    return (
-        f"{env_prefix} "
-        f"{launch_command} {CHECKPOINT_SWEEP_LAUNCH_PATH} "
-        f"{sub_command} {base_run_name} {args.cluster} {launch_overrides} "
-        f"--trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
-    )
-
-
 def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     """Build the commands for the sweep."""
     project_name = args.project_name or EVAL_WANDB_PROJECT
@@ -844,14 +787,6 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
 
     sub_command = _get_sub_command(args)
     launch_command = "python3" if not sub_command == SubCmd.evaluate else "torchrun"
-
-    # Checkpoint sweep mode: evaluate all checkpoints in a directory
-    if args.checkpoint_dir:
-        cmd = _build_checkpoint_sweep_command(
-            args, sub_command, launch_command, project_name, extra
-        )
-        return [cmd]
-
     checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
 
     commands_to_run = []
@@ -1109,25 +1044,6 @@ def main() -> None:
         type=int,
         default=None,
         help="If set, reduce embeddings to this dimensionality via PCA (e.g., 128, 64)",
-    )
-    parser.add_argument(
-        "--embedding_diagnostics_only",
-        action="store_true",
-        help="If set, run ONLY embedding diagnostics (no KNN/LP). Much faster than full eval.",
-    )
-    parser.add_argument(
-        "--checkpoint_dir",
-        type=str,
-        default=None,
-        help="Directory containing step{N}/ checkpoint folders. "
-        "Evaluates all checkpoints and logs to a single wandb run.",
-    )
-    parser.add_argument(
-        "--steps",
-        type=str,
-        default=None,
-        help="Comma-separated list of step numbers to evaluate "
-        "(e.g. '5000,10000,15000'). Only used with --checkpoint_dir.",
     )
 
     args, extra_cli = parser.parse_known_args()

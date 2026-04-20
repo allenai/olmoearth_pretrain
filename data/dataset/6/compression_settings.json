@@ -1,0 +1,5 @@
+{
+  "compression": "zstd",
+  "compression_opts": 3,
+  "shuffle": null
+}

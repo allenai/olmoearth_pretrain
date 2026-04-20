@@ -70,8 +70,6 @@ class ProjectAndAggregate(nn.Module):
         embedding_size: int,
         num_layers: int,
         aggregate_then_project: bool = True,
-        output_embedding_size: int | None = None,
-        only_project: bool = False,
     ):
         """Initialize the linear module.
 
@@ -80,27 +78,12 @@ class ProjectAndAggregate(nn.Module):
             a ReLU activation will be applied between layers
         aggregate_then_project: If True, then we will average the tokens before applying
             the projection. If False, we will apply the projection first.
-        output_embedding_size: If provided, the final layer will output this size instead
-            of embedding_size.
-        only_project: If True, only project the tokens without aggregation.
         """
         super().__init__()
-        self.only_project = only_project
-        out_size = (
-            output_embedding_size
-            if output_embedding_size is not None
-            else embedding_size
-        )
-        # Build projection layers: all intermediate layers use embedding_size, final uses out_size
-        if num_layers == 1:
-            projections = [nn.Linear(embedding_size, out_size)]
-        else:
-            projections = [nn.Linear(embedding_size, embedding_size)]
-            for _ in range(1, num_layers - 1):
-                projections.append(nn.ReLU())
-                projections.append(nn.Linear(embedding_size, embedding_size))
+        projections = [nn.Linear(embedding_size, embedding_size)]
+        for _ in range(1, num_layers):
             projections.append(nn.ReLU())
-            projections.append(nn.Linear(embedding_size, out_size))
+            projections.append(nn.Linear(embedding_size, embedding_size))
         self.projection = nn.Sequential(*projections)
         self.aggregate_then_project = aggregate_then_project
 
@@ -144,40 +127,16 @@ class ProjectAndAggregate(nn.Module):
             raise ValueError(f"Invalid input type: {type(x)}")
         return projected_pooled
 
-    def apply_project_only(
-        self, x: TokensAndMasks | torch.Tensor
-    ) -> TokensAndMasks | torch.Tensor:
-        """Apply projection without aggregation, preserving token structure."""
-        if isinstance(x, TokensAndMasks):
-            decoder_emedded_dict = x._asdict()
-            for modality in x.modalities:
-                x_modality = getattr(x, modality)
-                x_modality = self.projection(x_modality)
-                masked_modality_name = x.get_masked_modality_name(modality)
-                decoder_emedded_dict[modality] = x_modality
-                decoder_emedded_dict[masked_modality_name] = getattr(
-                    x, masked_modality_name
-                )
-            return TokensAndMasks(**decoder_emedded_dict)
-        elif isinstance(x, torch.Tensor):
-            return self.projection(x)
-        else:
-            raise ValueError(f"Invalid input type: {type(x)}")
-
-    def forward(
-        self, x: TokensAndMasks | torch.Tensor
-    ) -> torch.Tensor | TokensAndMasks:
+    def forward(self, x: TokensAndMasks | torch.Tensor) -> torch.Tensor:
         """Apply a (non)linear projection to an input TokensAndMasks.
 
         This can be applied either before or after pooling the tokens.
-        If only_project is True, returns projected tokens without aggregation.
         """
-        if self.only_project:
-            return self.apply_project_only(x)
-        elif self.aggregate_then_project:
-            return self.apply_aggregate_then_project(x)
-        else:
-            return self.apply_project_then_aggregate(x)
+        return (
+            self.apply_aggregate_then_project(x)
+            if self.aggregate_then_project
+            else self.apply_project_then_aggregate(x)
+        )
 
 
 class MultiModalPatchEmbeddings(nn.Module):
@@ -189,7 +148,6 @@ class MultiModalPatchEmbeddings(nn.Module):
         max_patch_size: int,
         embedding_size: int,
         tokenization_config: TokenizationConfig | None = None,
-        use_linear_patch_embed: bool = True,
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
@@ -202,8 +160,6 @@ class MultiModalPatchEmbeddings(nn.Module):
             max_patch_size: Maximum size of patches
             embedding_size: Size of embeddings
             tokenization_config: Optional config for custom band groupings
-            use_linear_patch_embed: Passed through to FlexiPatchEmbed. Set False to load
-                checkpoints trained before this flag existed (which used Conv2d).
             band_dropout_rate: Probability of dropping each band channel during training.
                 When > 0, randomly zeroes out bands before the patch embedding Conv2d,
                 forcing the model to learn cross-spectral representations. Only active
@@ -219,7 +175,6 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.embedding_size = embedding_size
         self.supported_modality_names = supported_modality_names
         self.tokenization_config = tokenization_config or TokenizationConfig()
-        self.use_linear_patch_embed = use_linear_patch_embed
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
@@ -283,9 +238,8 @@ class MultiModalPatchEmbeddings(nn.Module):
                     self._get_embedding_module_name(modality, idx): FlexiPatchEmbed(
                         in_chans=len(channel_set_idxs),
                         embedding_size=self.embedding_size,
-                        base_patch_size_at_16=self.max_patch_size,
+                        patch_size_at_16=self.max_patch_size,
                         modality_spec=modality_spec,
-                        use_linear_patch_embed=self.use_linear_patch_embed,
                     )
                     for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
@@ -323,7 +277,9 @@ class MultiModalPatchEmbeddings(nn.Module):
                 modality_specific_kwargs = {"patch_size": patch_size}
 
             buffer_name = self._get_buffer_name(modality, idx)
-            inp_data = torch.index_select(modality_data, -1, getattr(self, buffer_name))
+            patchified_data = torch.index_select(
+                modality_data, -1, getattr(self, buffer_name)
+            )
 
             # Check if we should apply band dropout for this bandset
             apply_dropout = (
@@ -331,22 +287,24 @@ class MultiModalPatchEmbeddings(nn.Module):
                 or modality in self.band_dropout_modalities
             )
             if self.training and apply_dropout and self.band_dropout_rate > 0.0:
-                num_bands = inp_data.shape[-1]
+                num_bands = patchified_data.shape[-1]
                 # Only apply band dropout if there are more than 1 band
                 if num_bands > 1:
                     if self.random_band_dropout:
                         rate = (
-                            torch.rand(1, device=inp_data.device).item()
+                            torch.rand(1, device=patchified_data.device).item()
                             * self.band_dropout_rate
                         )
                     else:
                         rate = self.band_dropout_rate
-                    inp_data = self._apply_band_dropout(inp_data, rate)
+                    patchified_data = self._apply_band_dropout(patchified_data, rate)
 
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
             ]
-            patchified_data = embedding_module(inp_data, **modality_specific_kwargs)
+            patchified_data = embedding_module(
+                patchified_data, **modality_specific_kwargs
+            )
 
             modality_tokens.append(patchified_data)
             modality_masks.append(token_mask)
@@ -688,8 +646,6 @@ class CompositeEncodings(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module) -> None:
-        if getattr(m, "_skip_custom_init", False):
-            return
         if isinstance(m, nn.Linear):
             # we use xavier_uniform following official JAX ViT:
             torch.nn.init.xavier_uniform_(m.weight)
@@ -915,9 +871,6 @@ class FlexiVitBase(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module) -> None:
-        if getattr(m, "_skip_custom_init", False):
-            logger.debug(f"Skipping custom init for {m}")
-            return
         if isinstance(m, nn.Linear):
             # we use xavier_uniform following official JAX ViT:
             torch.nn.init.xavier_uniform_(m.weight)
@@ -1102,9 +1055,7 @@ class Encoder(FlexiVitBase):
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
         log_token_norm_stats: bool = False,
-        output_embedding_size: int | None = None,
         tokenization_config: TokenizationConfig | None = None,
-        use_linear_patch_embed: bool = True,
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
@@ -1133,10 +1084,7 @@ class Encoder(FlexiVitBase):
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
             log_token_norm_stats: Whether to log the token norm stats
-            output_embedding_size: If set, project tokens to this size after attention
             tokenization_config: Optional config for custom band groupings
-            use_linear_patch_embed: If True, use nn.Linear for patch projection (faster).
-                Set False to load checkpoints trained before this flag existed (Conv2d weights).
             band_dropout_rate: Probability of dropping each band channel during training.
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
@@ -1167,7 +1115,6 @@ class Encoder(FlexiVitBase):
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
-        self.use_linear_patch_embed = use_linear_patch_embed
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
@@ -1176,26 +1123,12 @@ class Encoder(FlexiVitBase):
             self.max_patch_size,
             self.embedding_size,
             tokenization_config=self.tokenization_config,
-            use_linear_patch_embed=self.use_linear_patch_embed,
             band_dropout_rate=self.band_dropout_rate,
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
         )
-        self.output_embedding_size = output_embedding_size
-        # If output_embedding_size is set, project tokens to that size after attention
-        self.embedding_projector: ProjectAndAggregate | None = None
-        if output_embedding_size is not None:
-            self.embedding_projector = ProjectAndAggregate(
-                embedding_size=self.embedding_size,
-                num_layers=1,
-                output_embedding_size=output_embedding_size,
-                only_project=True,
-            )
-            final_embedding_size = output_embedding_size
-        else:
-            final_embedding_size = self.embedding_size
         self.project_and_aggregate = ProjectAndAggregate(
-            embedding_size=final_embedding_size,
+            embedding_size=self.embedding_size,
             num_layers=num_projection_layers,
             aggregate_then_project=aggregate_then_project,
         )
@@ -1618,11 +1551,6 @@ class Encoder(FlexiVitBase):
         else:
             token_norm_stats = {}
         output = TokensAndMasks(**patchified_tokens_and_masks)
-
-        # Project to output_embedding_size if configured
-        if self.embedding_projector is not None:
-            output = self.embedding_projector(output)
-
         output_dict: dict[str, Any] = {
             "tokens_and_masks": output,
         }
@@ -2069,9 +1997,7 @@ class EncoderConfig(Config):
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
     log_token_norm_stats: bool = False
-    output_embedding_size: int | None = None
     tokenization_config: TokenizationConfig | None = None
-    use_linear_patch_embed: bool = True
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None

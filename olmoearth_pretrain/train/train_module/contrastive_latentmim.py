@@ -61,7 +61,7 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
         self,
         model: LatentMIM,
         device: torch.device | None = None,
-    ) -> "ContrastiveLatentMIMTrainModuleConfig":
+    ) -> "ContrastiveLatentMIMTrainModule":
         """Build the corresponding :class:`ContrastiveLatentMIMTrainModuleConfig`.
 
         Args:
@@ -202,13 +202,13 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             batch: A (patch_size, MaskedOlmoEarthSample_a, MaskedOlmoEarthSample_b) tuple from the dataloader.
             dry_run: If True, skip metric recording and just run forward/backward.
         """
-        if not dry_run:
-            self.update_target_encoder()
+        # if not dry_run:
+        #     self.update_target_encoder()
         # Set the model to train mode
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
-        total_batch_con = torch.zeros([], device=self.device)
+        total_batch_con = torch.tensor(0.0, device=self.device)
 
         # Unpack batch
         patch_size = batch[0]
@@ -237,7 +237,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
                 )
                 loss = (loss_a + loss_b) / 2
-
+                # return loss
                 # Scale loss by number of microbatches
                 reg_term_a = self.compute_regularization(pooled_a)
                 reg_term_b = self.compute_regularization(pooled_b)
@@ -272,7 +272,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
 
                 del latent_a, latent_b
                 loss.backward()
-
+        return loss
         if dry_run:
             return
 

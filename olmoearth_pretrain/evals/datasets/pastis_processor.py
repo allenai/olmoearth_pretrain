@@ -12,7 +12,6 @@ import torch
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 
 logger = logging.getLogger(__name__)
 
@@ -146,9 +145,9 @@ class PASTISRProcessor:
         s1_images, _ = self.aggregate_months(Modality.SENTINEL1.name, s1_images, dates)
 
         targets = torch.tensor(targets, dtype=torch.long)
-        # PASTIS has 19 classes, the last one is void label, convert to ignore label
+        # PASTIS has 19 classes, the last one is void label, convert it to -1 to ignore
         # https://github.com/VSainteuf/pastis-benchmark
-        targets[targets == 19] = SEGMENTATION_IGNORE_LABEL
+        targets[targets == 19] = -1
 
         def split_images(images: torch.Tensor) -> torch.Tensor:
             """Split images into 4 quadrants."""

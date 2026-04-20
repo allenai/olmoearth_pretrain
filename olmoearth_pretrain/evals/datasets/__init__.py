@@ -1,13 +1,11 @@
 """OlmoEarth Pretrain eval datasets."""
 
 import logging
-from typing import Any
 
 from olmo_core.config import StrEnum
 from torch.utils.data import Dataset
 
 import olmoearth_pretrain.evals.datasets.paths as paths
-from olmoearth_pretrain.evals.studio_ingest.registry import get_dataset_entry
 
 from .breizhcrops import BreizhCropsDataset
 from .floods_dataset import Sen1Floods11Dataset
@@ -15,8 +13,7 @@ from .geobench_dataset import GeobenchDataset
 from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset
-from .pretrain_subset import PretrainSubsetDataset
-from .rslearn_dataset import from_registry_entry
+from .rslearn_dataset import RslearnToOlmoEarthDataset
 
 logger = logging.getLogger(__name__)
 
@@ -38,23 +35,26 @@ def get_eval_dataset(
     split: str,
     norm_stats_from_pretrained: bool = False,
     input_modalities: list[str] = [],
+    input_layers: list[str] = [],
     partition: str = EvalDatasetPartition.TRAIN1X,
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: str = NormMethod.NORM_NO_CLIP_2_STD,
-    **kwargs: Any,
 ) -> Dataset:
     """Retrieve an eval dataset from the dataset name."""
-    if eval_dataset == "pretrain_subset":
-        return PretrainSubsetDataset(
-            h5py_dir=kwargs["h5py_dir"],
-            training_modalities=kwargs.get("training_modalities", input_modalities),
-            max_samples=kwargs.get("max_samples", 512),
-            patch_size=kwargs.get("pretrain_patch_size", 4),
-            hw_p=kwargs.get("pretrain_hw_p", 8),
-            seed=kwargs.get("pretrain_seed", 42),
-        )
-    elif eval_dataset.startswith("m-"):
+    if input_modalities:
+        if eval_dataset not in ["pastis", "pastis128", "nandi", "awf"]:
+            raise ValueError(
+                f"input_modalities is only supported for multimodal tasks, got {eval_dataset}"
+            )
+
+    if input_layers:
+        if eval_dataset not in ["nandi", "awf"]:
+            raise ValueError(
+                f"input_layers is only supported for rslearn tasks, got {eval_dataset}"
+            )
+
+    if eval_dataset.startswith("m-"):
         # m- == "modified for geobench"
         return GeobenchDataset(
             geobench_dir=paths.GEOBENCH_DIR,
@@ -107,12 +107,49 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
-    else:
-        eval_dataset_entry = get_dataset_entry(eval_dataset)
-        return from_registry_entry(
-            entry=eval_dataset_entry,
+    elif eval_dataset == "nandi":
+        return RslearnToOlmoEarthDataset(
+            ds_path=paths.NANDI_DIR,
+            ds_groups=["groundtruth_polygon_split_window_32"],
+            layers=input_layers,
+            input_size=4,
             split=split,
+            property_name="category",
+            classes=["Coffee", "Trees", "Grassland", "Maize", "Sugarcane", "Tea"],
+            partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
-            input_modalities_override=input_modalities if input_modalities else None,
+            input_modalities=input_modalities,
+            start_time="2022-09-01",
+            end_time="2023-09-01",
+            ds_norm_stats_json="nandi_band_stats.json",
         )
+    elif eval_dataset == "awf":
+        return RslearnToOlmoEarthDataset(
+            ds_path=paths.AWF_DIR,
+            ds_groups=["20250822"],
+            layers=input_layers,
+            input_size=32,
+            split=split,
+            property_name="lulc",
+            classes=[
+                "Agriculture/Settlement",
+                "Grassland/barren",
+                "Herbaceous wetland",
+                "Lava forest",
+                "Montane forest",
+                "Open water",
+                "Shrubland/Savanna",
+                "Urban/dense development",
+                "Woodland forest (>40% canopy)",
+            ],
+            partition=partition,
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
+            input_modalities=input_modalities,
+            start_time="2023-01-01",
+            end_time="2023-12-31",
+            ds_norm_stats_json="awf_band_stats.json",
+        )
+    else:
+        raise ValueError(f"Unrecognized eval_dataset {eval_dataset}")
