@@ -57,6 +57,7 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
     vicreg_views_config: LossConfig | None = None
+    patch_varcov_config: LossConfig | None = None
     pooled_target_align_weight: float = 0.0
     multi_level_depths: list[int] = field(default_factory=list)
     multi_level_weight: float = 0.0
@@ -110,6 +111,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         regularizer_config: LossConfig | None = None,
         contrastive_config: LossConfig | None = None,
         vicreg_views_config: LossConfig | None = None,
+        patch_varcov_config: LossConfig | None = None,
         pooled_target_align_weight: float = 0.0,
         multi_level_depths: list[int] | None = None,
         multi_level_weight: float = 0.0,
@@ -141,6 +143,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             regularizer_config: An optional regularizer configuration for the model.
             contrastive_config: An optional contrastive configration for the model.
             vicreg_views_config: Optional VICReg between two masked views.
+            patch_varcov_config: Optional patch-level variance+covariance regularization on student latent.
             pooled_target_align_weight: Weight for MSE between student and target pooled representations.
             multi_level_depths: Block depths at which to apply intermediate supervision (e.g. [6, 12]).
             multi_level_weight: Weight for MSE loss at intermediate depths.
@@ -179,6 +182,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.vicreg_views_loss = (
             vicreg_views_config.build() if vicreg_views_config is not None else None
         )
+        self.patch_varcov_loss = (
+            patch_varcov_config.build() if patch_varcov_config is not None else None
+        )
         self.pooled_target_align_weight = pooled_target_align_weight
         self.capture_at = set(multi_level_depths) if multi_level_depths else None
         self.multi_level_weight = multi_level_weight
@@ -192,6 +198,10 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         if self.vicreg_views_loss is not None:
             self.total_loss_name = (
                 f"{self.total_loss_name}+{self.vicreg_views_loss.name}"
+            )
+        if self.patch_varcov_loss is not None:
+            self.total_loss_name = (
+                f"{self.total_loss_name}+{self.patch_varcov_loss.name}"
             )
         if reinit_targets:
             if ema_decay != (0.0, 0.0):
@@ -233,6 +243,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_con = torch.zeros([], device=self.device)
         total_batch_vicreg = torch.zeros([], device=self.device)
+        total_batch_patch_varcov = torch.zeros([], device=self.device)
         total_batch_pooled_target = torch.zeros([], device=self.device)
         total_batch_multi_level = torch.zeros([], device=self.device)
 
@@ -303,6 +314,15 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     loss += vicreg_loss
                     total_batch_vicreg += (
                         get_local_tensor(vicreg_loss.detach()) / num_microbatches
+                    )
+
+                if self.patch_varcov_loss is not None:
+                    patch_varcov_loss = self.patch_varcov_loss.compute(
+                        latent_a, latent_b
+                    )
+                    loss += patch_varcov_loss
+                    total_batch_patch_varcov += (
+                        get_local_tensor(patch_varcov_loss.detach()) / num_microbatches
                     )
 
                 if (
@@ -376,6 +396,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             self.trainer.record_metric(
                 f"train/{self.vicreg_views_loss.name}",
                 total_batch_vicreg,
+                ReduceType.mean,
+            )
+        if self.patch_varcov_loss is not None:
+            self.trainer.record_metric(
+                f"train/{self.patch_varcov_loss.name}",
+                total_batch_patch_varcov,
                 ReduceType.mean,
             )
         if self.pooled_target_align_weight > 0:

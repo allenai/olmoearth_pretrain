@@ -18,6 +18,7 @@ from olmoearth_pretrain.train.loss import (
     ModalityPatchDiscriminationMaskedNegatives,
     PatchDiscriminationLoss,
     PatchDiscriminationLossNew,
+    PatchVarCovLoss,
     SIGRegLoss,
     VICRegViewsLoss,
 )
@@ -1207,3 +1208,115 @@ def test_vicreg_views_loss_collapsed_batch() -> None:
     loss = loss_fn.compute(z, z.clone())
     # Std ≈ sqrt(eps) ≈ 0.01, so relu(1 - 0.01) ≈ 0.99 per dim → var_weight * 0.99
     assert loss.item() == pytest.approx(24.75, abs=0.1)
+
+
+def _make_view(
+    s2: torch.Tensor, s1: torch.Tensor, s2_mask: torch.Tensor, s1_mask: torch.Tensor
+) -> TokensAndMasks:
+    """Helper: build a TokensAndMasks with S2 + S1 only."""
+    return TokensAndMasks(
+        sentinel2_l2a=s2,
+        sentinel2_l2a_mask=s2_mask,
+        sentinel1=s1,
+        sentinel1_mask=s1_mask,
+    )
+
+
+def test_patch_var_cov_collapsed_patches_high_var_penalty() -> None:
+    """All patches identical -> near-zero std -> ~gamma per dim."""
+    b, h, w, t, d = 2, 3, 3, 2, 16
+    s2 = torch.ones((b, h, w, t, d))
+    s2_mask = torch.full((b, h, w, t), MaskValue.ONLINE_ENCODER.value)
+    s1 = torch.ones((b, h, w, t, d))
+    s1_mask = torch.full((b, h, w, t), MaskValue.ONLINE_ENCODER.value)
+    view = _make_view(s2, s1, s2_mask, s1_mask)
+    loss_fn = PatchVarCovLoss(
+        var_weight=1.0, cov_weight=0.0, gamma=1.0, modalities=["sentinel2_l2a"]
+    )
+    loss = loss_fn.compute(view, view)
+    # std ≈ sqrt(eps) ≈ 0.01 -> relu(1 - 0.01) ≈ 0.99 per dim.
+    assert loss.item() == pytest.approx(0.99, abs=0.02)
+
+
+def test_patch_var_cov_random_patches_low_penalty() -> None:
+    """Diverse random patches -> std ≈ 1 -> variance hinge ≈ 0.
+
+    With N >> D per modality the finite-sample cov off-diag shrinks to ~0.
+    Variance hinge is the dominant diagnostic here and should be ~0.
+    """
+    torch.manual_seed(0)
+    b, h, w, t, d = 8, 8, 8, 2, 16
+    s2 = torch.randn((b, h, w, t, d))
+    s1 = torch.randn((b, h, w, t, d))
+    s2_mask = torch.full((b, h, w, t), MaskValue.ONLINE_ENCODER.value)
+    s1_mask = torch.full((b, h, w, t), MaskValue.ONLINE_ENCODER.value)
+    view = _make_view(s2, s1, s2_mask, s1_mask)
+    var_only = PatchVarCovLoss(var_weight=1.0, cov_weight=0.0, gamma=1.0).compute(
+        view, view
+    )
+    assert var_only.item() < 0.05  # std ≈ 1, hinge ≈ 0
+    # And total loss should be finite and modest.
+    full = PatchVarCovLoss(var_weight=1.0, cov_weight=1.0, gamma=1.0).compute(
+        view, view
+    )
+    assert torch.isfinite(full)
+    assert full.item() < 0.5
+
+
+def test_patch_var_cov_modality_filter() -> None:
+    """modalities=[s2] ignores S1 entirely: matches loss on a view w/o S1."""
+    b, h, w, t, d = 2, 3, 3, 2, 16
+    torch.manual_seed(0)
+    s2 = torch.randn((b, h, w, t, d))
+    s1_collapsed = torch.ones((b, h, w, t, d))
+    s2_mask = torch.full((b, h, w, t), MaskValue.ONLINE_ENCODER.value)
+    s1_mask = torch.full((b, h, w, t), MaskValue.ONLINE_ENCODER.value)
+    view_with_s1 = _make_view(s2, s1_collapsed, s2_mask, s1_mask)
+    view_s2_only = TokensAndMasks(sentinel2_l2a=s2, sentinel2_l2a_mask=s2_mask)
+
+    loss_fn = PatchVarCovLoss(
+        var_weight=1.0, cov_weight=1.0, gamma=1.0, modalities=["sentinel2_l2a"]
+    )
+    loss_filtered = loss_fn.compute(view_with_s1, view_with_s1)
+    loss_ref = loss_fn.compute(view_s2_only, view_s2_only)
+    # Filtering to S2 should exactly reproduce the S2-only view's loss.
+    assert torch.allclose(loss_filtered, loss_ref, atol=1e-6)
+
+    # Sanity: if we also include the collapsed S1, the loss should be larger.
+    loss_both = PatchVarCovLoss(
+        var_weight=1.0,
+        cov_weight=1.0,
+        gamma=1.0,
+        modalities=["sentinel2_l2a", "sentinel1"],
+    ).compute(view_with_s1, view_with_s1)
+    assert loss_both > loss_filtered
+
+
+def test_patch_var_cov_respects_encoder_mask() -> None:
+    """Only ONLINE_ENCODER tokens are used; DECODER/MISSING tokens are ignored."""
+    b, h, w, t, d = 2, 3, 3, 2, 16
+    s2 = torch.ones((b, h, w, t, d))
+    # Mark everything as DECODER so nothing is encoder-visible.
+    s2_mask = torch.full((b, h, w, t), MaskValue.DECODER.value)
+    s1 = torch.ones((b, h, w, t, d))
+    s1_mask = torch.full((b, h, w, t), MaskValue.DECODER.value)
+    view = _make_view(s2, s1, s2_mask, s1_mask)
+    loss_fn = PatchVarCovLoss(var_weight=1.0, cov_weight=1.0, gamma=1.0)
+    loss = loss_fn.compute(view, view)
+    assert loss.item() == 0.0
+
+
+def test_patch_var_cov_gradient_flows() -> None:
+    """Gradients should flow back to encoder tokens."""
+    torch.manual_seed(0)
+    b, h, w, t, d = 2, 3, 3, 2, 16
+    s2 = torch.randn((b, h, w, t, d), requires_grad=True)
+    s1 = torch.randn((b, h, w, t, d), requires_grad=True)
+    s2_mask = torch.full((b, h, w, t), MaskValue.ONLINE_ENCODER.value)
+    s1_mask = torch.full((b, h, w, t), MaskValue.ONLINE_ENCODER.value)
+    view = _make_view(s2, s1, s2_mask, s1_mask)
+    loss_fn = PatchVarCovLoss(var_weight=1.0, cov_weight=1.0, gamma=1.0)
+    loss = loss_fn.compute(view, view)
+    loss.backward()
+    assert s2.grad is not None and torch.isfinite(s2.grad).all()
+    assert s1.grad is not None and torch.isfinite(s1.grad).all()

@@ -1141,6 +1141,116 @@ class SIGReg:
         return statistic.mean()
 
 
+@LOSS_REGISTRY.register("patch_var_cov")
+class PatchVarCovLoss(Loss):
+    """Patch-level variance + covariance regularization on encoder-visible tokens.
+
+    Collapse in self-supervised EO training often shows up first at the patch
+    level (high cosine similarity between patches within a sample, dead
+    dimensions across patches). This loss regularizes the encoder's latent
+    patch features directly, rather than only their pooled instance projection.
+
+    For each view's ``TokensAndMasks``, and for each selected modality:
+      1. Keep only tokens with ``MaskValue.ONLINE_ENCODER`` (encoder-visible).
+      2. Flatten to ``z`` of shape ``[N_modality, D]``.
+      3. Variance: hinge on per-dim std to avoid dead dimensions.
+      4. Covariance: off-diagonal squared penalty to decorrelate dimensions.
+    Per-modality var and cov terms are averaged across the selected modalities
+    and the two views.
+
+    Per-modality (vs pooling all modalities together) gives each modality its
+    own decorrelation constraint in the shared latent space, which is more
+    targeted when a single modality starts to collapse.
+    """
+
+    name = "PatchVarCov"
+
+    def __init__(
+        self,
+        var_weight: float = 0.05,
+        cov_weight: float = 0.005,
+        gamma: float = 1.0,
+        eps: float = 1e-4,
+        modalities: list[str] | None = None,
+    ):
+        """Initialize patch-level var+cov loss.
+
+        Args:
+            var_weight: Weight for the variance hinge term.
+            cov_weight: Weight for the off-diagonal covariance term.
+            gamma: Target per-dim std (hinge threshold).
+            eps: Numerical stability epsilon inside the std.
+            modalities: Subset of modalities to regularize. If ``None``, all
+                modalities present in the input are used.
+        """
+        self.var_weight = var_weight
+        self.cov_weight = cov_weight
+        self.gamma = gamma
+        self.eps = eps
+        self.modalities = set(modalities) if modalities is not None else None
+
+    def _variance_loss(self, z: Tensor) -> Tensor:
+        std = torch.sqrt(z.var(dim=0, unbiased=False) + self.eps)
+        return torch.mean(F.relu(self.gamma - std))
+
+    def _covariance_loss(self, z: Tensor) -> Tensor:
+        n, d = z.shape
+        if n < 2:
+            return z.new_tensor(0.0)
+        z = z - z.mean(dim=0)
+        cov = (z.T @ z) / (n - 1)
+        off_diag = cov - torch.diag(torch.diag(cov))
+        return (off_diag**2).sum() / d
+
+    def _per_modality_terms(self, view: TokensAndMasks) -> list[tuple[Tensor, Tensor]]:
+        """Compute (var_term, cov_term) per selected modality on this view."""
+        modality_tokens, modality_masks = view.flatten_tokens_and_masks_per_modality()
+        present_modalities = view.modalities
+        out: list[tuple[Tensor, Tensor]] = []
+        for modality_name, tokens, masks in zip(
+            present_modalities, modality_tokens, modality_masks
+        ):
+            if self.modalities is not None and modality_name not in self.modalities:
+                continue
+            keep = masks == MaskValue.ONLINE_ENCODER.value
+            if not keep.any():
+                continue
+            z = tokens[keep]
+            if z.shape[0] < 2:
+                continue
+            z = z.float()
+            out.append((self._variance_loss(z), self._covariance_loss(z)))
+        return out
+
+    def compute(
+        self,
+        predictions: TokensAndMasks,
+        targets: TokensAndMasks,
+        **kwargs: Any,
+    ) -> Tensor:
+        """Compute patch-level var+cov per modality, averaged over views.
+
+        Args:
+            predictions: Student latent from view A.
+            targets: Student latent from view B.
+            **kwargs: Unused.
+
+        Returns:
+            Scalar ``var_weight * mean(var_m) + cov_weight * mean(cov_m)``
+            where the mean is taken over ``modalities x views``.
+        """
+        terms: list[tuple[Tensor, Tensor]] = []
+        for view in (predictions, targets):
+            terms.extend(self._per_modality_terms(view))
+        if not terms:
+            # Preserve graph connectivity with a zero anchored to an input tensor.
+            any_tokens = getattr(predictions, predictions.modalities[0])
+            return any_tokens.new_tensor(0.0)
+        var_term = torch.stack([t[0] for t in terms]).mean()
+        cov_term = torch.stack([t[1] for t in terms]).mean()
+        return self.var_weight * var_term + self.cov_weight * cov_term
+
+
 @LOSS_REGISTRY.register("SIGReg")
 class SIGRegLoss(Loss):
     """Apply SIGReg independently to two pooled instance embeddings."""
