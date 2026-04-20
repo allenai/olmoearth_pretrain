@@ -19,6 +19,6 @@ uv sync --locked --extra all-no-flash --python 3.12
 ```
 3. Test that the installation worked by running the following command:
 
-```uv run assignments/01_data/01_olmo.py```
+```uv run test_install.py```
 
 4. If the script runs with not It should run with no errors, you're done!
