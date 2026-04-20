@@ -541,7 +541,7 @@ class NLPSupervisionDecoder(nn.Module):
                 else:
                     dummy_text = text_tokens.new_zeros((1, 1, text_tokens.shape[-1]))
                     dummy_mask = None
-                _ = self._predict_text_conditioned(
+                dummy_preds = self._predict_text_conditioned(
                     encoder_tokens=encoder_tokens,
                     context_mask=context_mask,
                     shapes=shapes,
@@ -550,6 +550,10 @@ class NLPSupervisionDecoder(nn.Module):
                     n_classes=1,
                     target_size=target_size,
                 )
+                # Add a zero-scaled term so backward flows through the decoder
+                # (keeps FSDP reduce-scatter for decoder params in sync across
+                # ranks).  Does not affect the numerical loss value.
+                total_loss = total_loss + 0.0 * dummy_preds.sum()
                 continue
 
             global_idx, entry = item
@@ -609,6 +613,11 @@ class NLPSupervisionDecoder(nn.Module):
                     target_size=target_size,
                 )  # [B, H, W]
                 assignments_for_source = direct_assignments.get(source, [])
+                if not assignments_for_source:
+                    # No local assignments — keep the head's backward in sync
+                    # with other ranks by adding a zero-scaled term.
+                    total_loss = total_loss + 0.0 * preds.sum()
+                    continue
                 for image_index, entry in assignments_for_source:
                     key = (entry.source, entry.text)
                     if key not in gt_cache:
