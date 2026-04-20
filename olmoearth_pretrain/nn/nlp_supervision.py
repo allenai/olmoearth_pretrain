@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
@@ -139,6 +140,15 @@ def _to_pixel_grid(modality_tokens: torch.Tensor) -> torch.Tensor:
     if modality_tokens.ndim == 4:
         return modality_tokens
     raise ValueError(f"Unexpected token shape {tuple(modality_tokens.shape)}")
+
+
+def _all_reduce_max_int(value: int, device: torch.device) -> int:
+    """Return the maximum of ``value`` across all ranks (or local value if not distributed)."""
+    if not (dist.is_available() and dist.is_initialized()):
+        return value
+    t = torch.tensor([value], dtype=torch.long, device=device)
+    dist.all_reduce(t, op=dist.ReduceOp.MAX)
+    return int(t.item())
 
 
 # ---------------------------------------------------------------------------
@@ -494,15 +504,54 @@ class NLPSupervisionDecoder(nn.Module):
         # Cache extracted GT maps per (source, text).
         gt_cache: dict[tuple[str, str], torch.Tensor] = {}
 
-        # Process CLIP classes one at a time: each class gets its own decoder
-        # forward pass on [1*B, N, D] instead of a single [C*B, N, D] pass.
+        # Build the per-rank list of CLIP classes to process.  Under FSDP
+        # every rank MUST run the cross-attn decoder the same number of times
+        # (each forward triggers an all-gather on the sharded decoder params).
+        # We all-reduce the local count to a global max and pad with dummy
+        # forwards that don't contribute to the loss.
+        local_clip_iter: list[tuple[int, ClassEntry] | None] = []
         for global_idx, entry in enumerate(class_entries):
             key = (entry.source, entry.text)
             if key not in clip_keys:
                 continue
-            image_indices = clip_assignments.get(key, [])
-            if not image_indices:
+            if not clip_assignments.get(key):
                 continue
+            local_clip_iter.append((global_idx, entry))
+
+        global_clip_count = _all_reduce_max_int(
+            len(local_clip_iter), encoder_tokens.device
+        )
+        while len(local_clip_iter) < global_clip_count:
+            local_clip_iter.append(None)
+
+        # Process CLIP classes one at a time: each class gets its own decoder
+        # forward pass on [1*B, N, D] instead of a single [C*B, N, D] pass.
+        for item in local_clip_iter:
+            if item is None:
+                # Dummy forward to keep FSDP all-gathers in sync across ranks.
+                # Use class 0's text (or zeros if the text buffer is empty).
+                if text_tokens.shape[0] > 0:
+                    dummy_text = text_tokens[0:1]
+                    dummy_mask = (
+                        text_attn_mask[0:1] if text_attn_mask is not None else None
+                    )
+                else:
+                    dummy_text = text_tokens.new_zeros((1, 1, text_tokens.shape[-1]))
+                    dummy_mask = None
+                _ = self._predict_text_conditioned(
+                    encoder_tokens=encoder_tokens,
+                    context_mask=context_mask,
+                    shapes=shapes,
+                    text_tokens=dummy_text,
+                    text_attn_mask=dummy_mask,
+                    n_classes=1,
+                    target_size=target_size,
+                )
+                continue
+
+            global_idx, entry = item
+            key = (entry.source, entry.text)
+            image_indices = clip_assignments.get(key, [])
 
             # Run the cross-attn decoder for this single class.
             class_text_tokens = text_tokens[global_idx : global_idx + 1]
@@ -545,17 +594,18 @@ class NLPSupervisionDecoder(nn.Module):
                 )
                 per_source_count[src] = per_source_count.get(src, 0) + 1
 
-        # Direct regression path for mode (a) — one forward per regression modality.
-        if direct_regression_keys and self.regression_heads is not None:
-            for source, assignments_for_source in direct_assignments.items():
-                if source not in self.regression_heads:
-                    continue
+        # Direct regression path for mode (a).  Every rank must run every
+        # configured regression head (same ordered set) to keep FSDP in sync,
+        # even if this rank has no local assignments for that modality.
+        if self.regression_heads is not None and len(self.regression_heads) > 0:
+            for source in sorted(self.regression_heads.keys()):
                 preds = self._predict_regression_direct(
                     encoder_tokens=encoder_tokens,
                     shapes=shapes,
                     modality_name=source,
                     target_size=target_size,
                 )  # [B, H, W]
+                assignments_for_source = direct_assignments.get(source, [])
                 for image_index, entry in assignments_for_source:
                     key = (entry.source, entry.text)
                     if key not in gt_cache:
