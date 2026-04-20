@@ -239,3 +239,116 @@ class RandomNegativeSamplerConfig(Config):
             seed=self.seed,
             restrict_negatives_to_present_sources=self.restrict_negatives_to_present_sources,
         )
+
+
+class PerBatchClassSampler:
+    """Sample a fixed set of classes once per batch (shared across all images).
+
+    Unlike :class:`RandomNegativeSampler` (which samples per image), this
+    samples ``k_per_batch`` classification classes once per batch and gives
+    every image the same class list.  Each (image, class) pair contributes
+    supervision based on that image's per-pixel ground truth — a class that
+    happens to be absent from a given image just produces an all-zero target
+    (valid BCE supervision toward "not present").
+
+    All regression entries whose source is present on the batch are always
+    included (they are few and information-dense).
+
+    When all ranks share the same ``seed`` and call :meth:`sample` the same
+    number of times, they produce the same class list every step — so every
+    rank runs the decoder for the same set of classes and no cross-rank
+    synchronization is needed.
+
+    Compared to :class:`RandomNegativeSampler`, this produces far fewer
+    decoder forwards (``k_per_batch`` vs. up to ``B * (k_pos + k_neg)``
+    classes in the batch union).
+    """
+
+    def __init__(
+        self,
+        registry: ClassRegistry,
+        k_per_batch: int = 4,
+        seed: int | None = None,
+    ) -> None:
+        """Initialize the sampler.
+
+        Args:
+            registry: Catalog of all classes the model knows about.
+            k_per_batch: Number of classification classes to sample per batch.
+                Regression entries are always included when present in
+                addition to this.
+            seed: Optional seed.  For FSDP/distributed training, every rank
+                must pass the same seed so that sampled classes stay in sync.
+        """
+        self._registry = registry
+        self._k_per_batch = k_per_batch
+        self._seed = seed
+
+    @property
+    def registry(self) -> ClassRegistry:
+        """The wrapped registry."""
+        return self._registry
+
+    @property
+    def k_per_batch(self) -> int:
+        """Number of classification classes sampled per batch."""
+        return self._k_per_batch
+
+    def _candidate_entries(self, sample: SampleLike) -> list[ClassEntry]:
+        """All entries whose source is present on the batch."""
+        present_sources = set(sample.modalities)
+        return [e for e in self._registry if e.source in present_sources]
+
+    def sample(
+        self,
+        sample: SampleLike,
+        rng: random.Random | None = None,
+    ) -> list[PerImageClassSelection]:
+        """Sample ``k_per_batch`` classes for the whole batch.
+
+        Every image in the batch gets the same class list.  Classes are
+        returned in the ``positives`` slot (loss computation does not
+        distinguish positive vs. negative — it supervises directly against
+        the per-image ground-truth mask).
+        """
+        if rng is None:
+            rng = random.Random(self._seed)
+
+        candidates = self._candidate_entries(sample)
+        classification_candidates = [e for e in candidates if not e.is_regression]
+        regression_candidates = [e for e in candidates if e.is_regression]
+
+        k = min(self._k_per_batch, len(classification_candidates))
+        if k > 0:
+            sampled_classification = rng.sample(classification_candidates, k)
+        else:
+            sampled_classification = []
+
+        sampled = sampled_classification + regression_candidates
+
+        # Give every image the same class list.  The list is a fresh ``list``
+        # per image to avoid any aliasing surprises downstream.
+        return [
+            PerImageClassSelection(
+                image_index=i,
+                positives=list(sampled),
+                negatives=[],
+            )
+            for i in range(sample.batch_size)
+        ]
+
+
+@dataclass
+class PerBatchClassSamplerConfig(Config):
+    """Serializable configuration for :class:`PerBatchClassSampler`."""
+
+    k_per_batch: int = 4
+    seed: int | None = None
+
+    def build(self, registry: ClassRegistry) -> PerBatchClassSampler:
+        """Build the sampler against ``registry``."""
+        return PerBatchClassSampler(
+            registry=registry,
+            k_per_batch=self.k_per_batch,
+            seed=self.seed,
+        )

@@ -24,6 +24,8 @@ from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.open_set.catalog import ClassRegistry, build_default_registry
 from olmoearth_pretrain.open_set.catalog.registry import ClassEntry
 from olmoearth_pretrain.open_set.data.sampler import (
+    ClassSampler,
+    PerBatchClassSampler,
     PerImageClassSelection,
     RandomNegativeSampler,
 )
@@ -87,7 +89,20 @@ def _deduplicate_class_union(
 
 @dataclass
 class NLPSupervisionTrainConfig:
-    """Runtime configuration for NLP supervision in the training loop."""
+    """Runtime configuration for NLP supervision in the training loop.
+
+    Two sampling modes are supported:
+
+    - **Per-image sampling** (``per_batch_sampling=False``, default): each
+      image in the microbatch gets its own ``sampler_k_pos`` positive +
+      ``sampler_k_neg`` negative classes.  The union across images drives
+      how many decoder forwards run per step.
+    - **Per-batch sampling** (``per_batch_sampling=True``): a single set of
+      ``sampler_k_per_batch`` classes is sampled for the whole microbatch
+      and shared across all images.  With a shared seed this is also
+      identical across ranks, so no rank synchronization / dummy forwards
+      are needed.  Dramatically fewer decoder forwards per step.
+    """
 
     text_encoder_name: str = "google/siglip2-so400m-patch14-384"
     text_cache_dir: str = ""
@@ -96,6 +111,8 @@ class NLPSupervisionTrainConfig:
     sampler_seed: int | None = None
     target_size_source: str = "openstreetmap_raster"
     catalog_sources: list[str] | None = None
+    per_batch_sampling: bool = False
+    sampler_k_per_batch: int = 4
 
 
 @dataclass
@@ -248,7 +265,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
 
         # NLP supervision setup.
         self._has_nlp_supervision = self.model.nlp_supervision_decoder is not None
-        self._nlp_sampler: RandomNegativeSampler | None = None
+        self._nlp_sampler: ClassSampler | None = None
         self._nlp_text_cache: TextEmbeddingCache | None = None
         self._nlp_rng: random.Random | None = None
         self._nlp_target_size_source: str = "openstreetmap_raster"
@@ -274,13 +291,30 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             )
             self._nlp_text_cache.populate(registry)
 
-            # Build sampler.
-            self._nlp_sampler = RandomNegativeSampler(
-                registry=registry,
-                k_pos=cfg.sampler_k_pos,
-                k_neg=cfg.sampler_k_neg,
-                seed=cfg.sampler_seed,
-            )
+            # Build sampler.  Per-batch sampling samples a single class list
+            # per microbatch (shared across images and ranks via the shared
+            # seed) — vastly fewer decoder forwards than per-image sampling.
+            if cfg.per_batch_sampling:
+                self._nlp_sampler = PerBatchClassSampler(
+                    registry=registry,
+                    k_per_batch=cfg.sampler_k_per_batch,
+                    seed=cfg.sampler_seed,
+                )
+                logger.info(
+                    f"NLP supervision: per-batch sampling with "
+                    f"k_per_batch={cfg.sampler_k_per_batch}"
+                )
+            else:
+                self._nlp_sampler = RandomNegativeSampler(
+                    registry=registry,
+                    k_pos=cfg.sampler_k_pos,
+                    k_neg=cfg.sampler_k_neg,
+                    seed=cfg.sampler_seed,
+                )
+                logger.info(
+                    f"NLP supervision: per-image sampling with "
+                    f"k_pos={cfg.sampler_k_pos}, k_neg={cfg.sampler_k_neg}"
+                )
             self._nlp_rng = random.Random(cfg.sampler_seed)
             self.total_loss_name = f"{self.total_loss_name}+nlp_supervision"
 

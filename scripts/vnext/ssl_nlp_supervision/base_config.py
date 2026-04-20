@@ -269,11 +269,13 @@ def build_train_module_config(
         nlp_supervision_train_config=NLPSupervisionTrainConfig(
             text_encoder_name="google/siglip2-so400m-patch14-384",
             text_cache_dir="",
-            sampler_k_pos=3,
-            sampler_k_neg=3,
             sampler_seed=42,
             target_size_source="openstreetmap_raster",
             catalog_sources=MAP_MODALITIES,
+            # Per-batch sampling: one class list shared across all images in
+            # the microbatch AND across ranks.  Far fewer decoder forwards.
+            per_batch_sampling=True,
+            sampler_k_per_batch=6,
         ),
     )
 
