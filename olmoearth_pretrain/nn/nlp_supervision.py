@@ -251,6 +251,7 @@ class NLPSupervisionDecoderConfig(Config):
         return NLPSupervisionDecoder(
             cross_attn_decoder=cross_attn_decoder,
             max_patch_size=max_patch_size,
+            text_dim=self.text_dim,
             reference_modalities=self.reference_modalities,
             text_condition_regression=self.text_condition_regression,
             supervision_weight=self.supervision_weight,
@@ -278,6 +279,7 @@ class NLPSupervisionDecoder(nn.Module):
         self,
         cross_attn_decoder: CrossAttnDecoder,
         max_patch_size: int,
+        text_dim: int,
         reference_modalities: tuple[str, ...] = DEFAULT_REFERENCE_MODALITIES,
         text_condition_regression: bool = True,
         supervision_weight: float = 1.0,
@@ -288,6 +290,7 @@ class NLPSupervisionDecoder(nn.Module):
         super().__init__()
         self.cross_attn_decoder = cross_attn_decoder
         self.max_patch_size = max_patch_size
+        self.text_dim = text_dim
         self.reference_modalities = reference_modalities
         self.text_condition_regression = text_condition_regression
         self.supervision_weight = supervision_weight

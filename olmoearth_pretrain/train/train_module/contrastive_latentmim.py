@@ -442,34 +442,46 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
 
-            # NLP supervision.
+            # NLP supervision.  Always called (even when this rank's local
+            # class_union is empty) so that the decoder's FSDP collectives stay
+            # in sync with other ranks that may have sampled classes.
             if (
                 self._has_nlp_supervision
                 and self._nlp_sampler is not None
                 and self._nlp_text_cache is not None
                 and self.model.nlp_supervision_decoder is not None
             ):
-                # Sample classes for this batch.
                 selections = self._nlp_sampler.sample(batch, self._nlp_rng)
                 class_union = _deduplicate_class_union(selections)
-                if class_union:
-                    per_image = _build_per_image_selections(selections, class_union)
-                    text_encoding = self._nlp_text_cache.get_many(class_union)
-                    target_size = self._determine_target_size(batch)
+                per_image = _build_per_image_selections(selections, class_union)
+                target_size = self._determine_target_size(batch)
 
-                    nlp_loss, nlp_metrics = self.model.nlp_supervision_decoder(
-                        tokens_and_masks=latent,
-                        batch=batch,
-                        patch_size=patch_size,
-                        text_tokens=text_encoding.tokens.to(self.device),
-                        text_attn_mask=text_encoding.attention_mask.to(self.device),
-                        class_entries=class_union,
-                        per_image_selections=per_image,
-                        target_size=target_size,
+                if class_union:
+                    text_encoding = self._nlp_text_cache.get_many(class_union)
+                    text_tokens = text_encoding.tokens.to(self.device)
+                    text_attn_mask = text_encoding.attention_mask.to(self.device)
+                else:
+                    # Placeholder text tensors so the decoder can still run
+                    # dummy forwards to match other ranks' FSDP collectives.
+                    text_dim = self.model.nlp_supervision_decoder.text_dim
+                    text_tokens = torch.zeros((0, 1, text_dim), device=self.device)
+                    text_attn_mask = torch.zeros(
+                        (0, 1), dtype=torch.long, device=self.device
                     )
-                    loss = loss + nlp_loss
-                    for k, v in nlp_metrics.items():
-                        if isinstance(v, int | float):
-                            extra_metrics[k] = v
+
+                nlp_loss, nlp_metrics = self.model.nlp_supervision_decoder(
+                    tokens_and_masks=latent,
+                    batch=batch,
+                    patch_size=patch_size,
+                    text_tokens=text_tokens,
+                    text_attn_mask=text_attn_mask,
+                    class_entries=class_union,
+                    per_image_selections=per_image,
+                    target_size=target_size,
+                )
+                loss = loss + nlp_loss
+                for k, v in nlp_metrics.items():
+                    if isinstance(v, int | float):
+                        extra_metrics[k] = v
 
             return loss, latent, decoded, target_output, latent_projected_and_pooled
