@@ -1,13 +1,18 @@
-# Dockerfile for ingesting data.
+# Dockerfile for dataset creation (CPU-only — no GPU needed for data ingestion).
 
-FROM pytorch/pytorch:2.5.0-cuda11.8-cudnn9-runtime@sha256:d15e9803095e462e351f097fb1f5e7cdaa4f5e855d7ff6d6f36ec4c2aa2938ea
+FROM python:3.12-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libpq-dev ffmpeg libsm6 libxext6 git wget && \
+    apt-get install -y --no-install-recommends \
+        libpq-dev ffmpeg libsm6 libxext6 git wget libgdal-dev && \
     apt-get clean && \
-    rm -rf /var/lib/apt/lists/* && \
-    git clone https://github.com/allenai/rslearn.git /opt/rslearn && \
-    pip install --no-cache-dir /opt/rslearn[extra]
+    rm -rf /var/lib/apt/lists/*
 
 COPY . /opt/olmoearth_pretrain/
 WORKDIR /opt/olmoearth_pretrain/
+
+# Install CPU-only torch first (rslearn requires torch but we don't need CUDA),
+# then the package + dataset-creation extras.
+RUN pip install --no-cache-dir \
+        torch==2.7.0+cpu --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir ".[dataset-creation]"

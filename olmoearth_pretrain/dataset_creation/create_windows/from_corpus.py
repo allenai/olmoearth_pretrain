@@ -1,9 +1,9 @@
-"""Deprecated entry point for the lon/lat list path.
+"""Deprecated entry point for the studio corpus CSV path.
 
 Prefer:
 
     python -m olmoearth_pretrain.dataset_creation.create_windows \
-        --ds_path ... --lonlats_json ...
+        --ds_path ... --corpus_csv ... [--verify_s2]
 
 This shim simply forwards to the unified CLI.
 """

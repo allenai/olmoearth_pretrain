@@ -14,8 +14,9 @@ import tqdm
 from rasterio.crs import CRS
 from rslearn.config import QueryConfig, SpaceMode
 from rslearn.const import WGS84_PROJECTION
-from rslearn.data_sources import DataSource, data_source_from_config
+from rslearn.data_sources import DataSource
 from rslearn.dataset import Dataset, Window
+from rslearn.dataset.storage.storage import WindowStorage
 from rslearn.utils.geometry import Projection, STGeometry
 from rslearn.utils.get_utm_ups_crs import get_utm_ups_projection
 from rslearn.utils.mp import StarImapUnorderedWrapper
@@ -92,6 +93,15 @@ def star_imap(
     return p.imap(StarImapUnorderedWrapper(fn), kwargs_list)
 
 
+@functools.cache
+def _get_window_storage(ds_path: UPath) -> WindowStorage:
+    """Load (and cache) the WindowStorage for an rslearn dataset.
+
+    Cached per worker process so multiprocessing workers only parse config.json once.
+    """
+    return Dataset(ds_path).storage
+
+
 def create_window(ds_path: UPath, metadata: WindowMetadata) -> list[Window]:
     """Create one or more rslearn windows for ingesting data for OlmoEarth Pretrain.
 
@@ -145,7 +155,7 @@ def create_window(ds_path: UPath, metadata: WindowMetadata) -> list[Window]:
 
         # Create the window.
         window = Window(
-            path=Window.get_window_root(ds_path, group, window_name),
+            storage=_get_window_storage(ds_path),
             group=group,
             name=window_name,
             projection=projection,
@@ -169,7 +179,7 @@ def get_naip_source(ds_path: UPath) -> DataSource:
         the data source.
     """
     dataset = Dataset(ds_path)
-    return data_source_from_config(dataset.layers["naip"], dataset.path)
+    return dataset.layers["naip"].instantiate_data_source(dataset.path)
 
 
 @functools.cache
@@ -177,13 +187,13 @@ def get_sentinel2_source(ds_path: UPath) -> DataSource:
     """Get a Sentinel-2 data source for looking up available images.
 
     Args:
-        ds_path: the dataset path, with config_init.json.
+        ds_path: the dataset path, with config_init.json (or config_corpus_init.json).
 
     Returns:
         the data source.
     """
     dataset = Dataset(ds_path)
-    return data_source_from_config(dataset.layers["sentinel2_freq"], dataset.path)
+    return dataset.layers["sentinel2_freq"].instantiate_data_source(dataset.path)
 
 
 def get_highres_times(ds_path: UPath, tile: Tile) -> list[datetime]:
@@ -265,6 +275,29 @@ def get_highres_tile(lonlat: tuple[float, float]) -> Tile:
     col = int(dst_geom.shp.x) // WINDOW_SIZE
     row = int(dst_geom.shp.y) // WINDOW_SIZE
     return Tile(projection.crs, HIGH_RESOLUTION, col, row)
+
+
+def get_fallback_tile(lonlat: tuple[float, float]) -> Tile:
+    """Get the fallback-resolution (10 m/pixel) tile containing a longitude/latitude.
+
+    Used by the studio-corpus path where we start at FALLBACK_RESOLUTION because the
+    corpus provides its own timestamp and we don't need to gate on NAIP availability.
+
+    Args:
+        lonlat: the (longitude, latitude) tuple.
+
+    Returns:
+        the Tile (CRS, column, and row) at FALLBACK_RESOLUTION.
+    """
+    lon, lat = lonlat
+    projection = get_utm_ups_projection(
+        lon, lat, FALLBACK_RESOLUTION, -FALLBACK_RESOLUTION
+    )
+    src_geom = STGeometry(WGS84_PROJECTION, shapely.Point(lon, lat), None)
+    dst_geom = src_geom.to_projection(projection)
+    col = int(dst_geom.shp.x) // WINDOW_SIZE
+    row = int(dst_geom.shp.y) // WINDOW_SIZE
+    return Tile(projection.crs, FALLBACK_RESOLUTION, col, row)
 
 
 def sample_timestamp(start_time: datetime, end_time: datetime) -> datetime:
@@ -459,3 +492,150 @@ def create_windows_with_highres_time(
         pass
 
     p.close()
+
+
+# Status codes returned by create_windows_from_corpus, one per input entry.
+STATUS_CREATED = "created"
+STATUS_SKIPPED_NO_S2 = "skipped_no_s2"
+
+
+def _count_distinct_months(timestamps: list[datetime]) -> int:
+    """Count the number of distinct calendar months present in `timestamps`."""
+    return len({(t.year, t.month) for t in timestamps})
+
+
+def create_windows_from_corpus(
+    ds_path: UPath,
+    corpus_entries: list[tuple[float, float, datetime]],
+    verify_s2: bool = False,
+    min_s2_months: int = 6,
+    workers: int = 32,
+) -> list[tuple[Tile, datetime, str]]:
+    """Create windows from a studio corpus that provides its own per-point timestamps.
+
+    Unlike create_windows_with_highres_time, we never gate on NAIP: the corpus already
+    carries the user-picked center_time for each point, so we start at FALLBACK_RESOLUTION
+    and create windows at every resolution >= FALLBACK_RESOLUTION.
+
+    As with the high-res path, all windows that fall inside the same coarse-resolution
+    tile share a single center_time. We pick that shared timestamp by shuffling the
+    input entries and keeping the first center_time seen per coarse tile.
+
+    Args:
+        ds_path: the rslearn dataset path. Its config (config.json or
+            config_corpus_init.json) must define a `sentinel2_freq` layer if
+            `verify_s2=True`.
+        corpus_entries: list of (lon, lat, center_time) tuples.
+        verify_s2: if True, drop any coarse tile that doesn't have at least
+            `min_s2_months` distinct months of Sentinel-2 scenes in the window duration
+            centered on the chosen center_time.
+        min_s2_months: minimum distinct months required when verify_s2=True.
+        workers: number of worker processes for tile lookup / S2 verification / window
+            creation.
+
+    Returns:
+        A list aligned with `corpus_entries`. Each element is
+        `(fallback_tile, selected_center_time, status)`, where status is one of
+        STATUS_CREATED or STATUS_SKIPPED_NO_S2.
+    """
+    p = multiprocessing.Pool(workers)
+    try:
+        lonlats = [(lon, lat) for lon, lat, _ in corpus_entries]
+        fallback_tiles: list[Tile] = list(
+            tqdm.tqdm(
+                p.imap(get_fallback_tile, lonlats),
+                desc="Getting fallback tiles",
+                total=len(lonlats),
+            )
+        )
+
+        # Pick one center_time per coarse tile (first-wins after shuffle) so every
+        # window inside the coarse cell shares the same time range.
+        shuffled = list(range(len(corpus_entries)))
+        random.shuffle(shuffled)
+        coarse_times: dict[Tile, datetime] = {}
+        for idx in shuffled:
+            coarse_tile = fallback_tiles[idx].to_resolution(COARSE_RESOLUTION)
+            if coarse_tile in coarse_times:
+                continue
+            coarse_times[coarse_tile] = corpus_entries[idx][2]
+        print(
+            f"got {len(set(fallback_tiles))} unique fallback tiles across "
+            f"{len(coarse_times)} coarse tiles"
+        )
+
+        # Optionally verify Sentinel-2 coverage per coarse tile.
+        dropped: set[Tile] = set()
+        if verify_s2:
+            coarse_tiles = list(coarse_times.keys())
+            jobs = [
+                dict(
+                    ds_path=ds_path,
+                    tile=coarse_tile.to_resolution(FALLBACK_RESOLUTION),
+                    time_range=(
+                        coarse_times[coarse_tile] - WINDOW_DURATION // 2,
+                        coarse_times[coarse_tile] + WINDOW_DURATION // 2,
+                    ),
+                )
+                for coarse_tile in coarse_tiles
+            ]
+            s2_timestamps: list[list[datetime]] = list(
+                tqdm.tqdm(
+                    star_imap(p, get_sentinel2_times, jobs),
+                    desc="Verify Sentinel-2 coverage",
+                    total=len(jobs),
+                )
+            )
+            for coarse_tile, ts in zip(coarse_tiles, s2_timestamps):
+                if _count_distinct_months(ts) < min_s2_months:
+                    dropped.add(coarse_tile)
+            print(
+                f"dropped {len(dropped)} / {len(coarse_tiles)} coarse tiles "
+                f"lacking {min_s2_months}+ S2 months"
+            )
+
+        # Build create_window jobs, de-duplicating on fallback_tile so we don't
+        # double-create windows when multiple corpus entries map to the same tile.
+        create_window_jobs = []
+        seen_tiles: set[Tile] = set()
+        for fallback_tile in fallback_tiles:
+            coarse_tile = fallback_tile.to_resolution(COARSE_RESOLUTION)
+            if coarse_tile in dropped:
+                continue
+            if fallback_tile in seen_tiles:
+                continue
+            seen_tiles.add(fallback_tile)
+            coarse_time = coarse_times[coarse_tile]
+            create_window_jobs.append(
+                dict(
+                    ds_path=ds_path,
+                    metadata=WindowMetadata(
+                        str(fallback_tile.crs),
+                        fallback_tile.resolution,
+                        fallback_tile.col,
+                        fallback_tile.row,
+                        coarse_time,
+                    ),
+                )
+            )
+
+        outputs = star_imap(p, create_window, create_window_jobs)
+        for _ in tqdm.tqdm(
+            outputs, desc="Create windows", total=len(create_window_jobs)
+        ):
+            pass
+        print(f"created windows for {len(create_window_jobs)} fallback tiles")
+
+        # Build aligned per-input result list.
+        results: list[tuple[Tile, datetime, str]] = []
+        for fallback_tile in fallback_tiles:
+            coarse_tile = fallback_tile.to_resolution(COARSE_RESOLUTION)
+            coarse_time = coarse_times[coarse_tile]
+            status = (
+                STATUS_SKIPPED_NO_S2 if coarse_tile in dropped else STATUS_CREATED
+            )
+            results.append((fallback_tile, coarse_time, status))
+        return results
+    finally:
+        p.close()
+        p.join()
