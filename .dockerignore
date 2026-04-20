@@ -1,0 +1,24 @@
+.venv/
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Large data / output files that should not be in the image
+ablation_filters/
+local_output/
+v0_1_osm_sampling_scores*
+*.parquet
+*.npy
+*.h5
+nohup.out
+
+# IDE / editor
+.cursor/
+.vscode/
+
+# Docs / non-runtime
+docs/
+*.md
+!README.md
