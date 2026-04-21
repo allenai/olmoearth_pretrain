@@ -15,6 +15,7 @@ from olmoearth_pretrain.train.loss import (
     ModalityPatchDiscriminationLossNew,
     ModalityPatchDiscriminationLossVec,
     ModalityPatchDiscriminationMaskedNegatives,
+    ModalityPatchDiscriminationMaskedNegativesVec,
     PatchDiscriminationLoss,
     PatchDiscriminationLossNew,
 )
@@ -1142,3 +1143,209 @@ def test_modality_patch_discrimination_masked_negatives() -> None:
 
     # Masking removes false negatives from denominator, so loss should be lower
     assert loss_value < loss_no_mask_value
+
+
+# ---------------------------------------------------------------------------
+# ModalityPatchDiscriminationMaskedNegativesVec vs sequential
+# ---------------------------------------------------------------------------
+
+
+def _make_masked_neg_pair(
+    tau: float = 0.1, threshold: float = 0.999, mask_modalities: list[str] | None = None
+) -> tuple:
+    """Return (sequential, vec) loss instances with matching params."""
+    seq = ModalityPatchDiscriminationMaskedNegatives(
+        tau=tau,
+        same_target_threshold=threshold,
+        mask_negatives_for_modalities=mask_modalities,
+    )
+    vec = ModalityPatchDiscriminationMaskedNegativesVec(
+        tau=tau,
+        same_target_threshold=threshold,
+        mask_negatives_for_modalities=mask_modalities,
+    )
+    return seq, vec
+
+
+def test_masked_neg_vec_matches_sequential_uniform() -> None:
+    """Vec matches sequential when all tokens are decoder tokens."""
+    b, t_h, t_w, t, d = 4, 3, 3, 2, 16
+    torch.manual_seed(42)
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+
+    seq, vec = _make_masked_neg_pair()
+    loss_seq = seq.compute(preds, targets)
+    loss_vec = vec.compute(preds, targets)
+    assert torch.isclose(loss_seq, loss_vec, rtol=1e-4, atol=1e-6), (
+        f"seq={loss_seq.item()}, vec={loss_vec.item()}"
+    )
+
+
+def test_masked_neg_vec_matches_sequential_uneven() -> None:
+    """Vec matches sequential with uneven decoder token counts."""
+    b, t_h, t_w, t, d = 6, 4, 4, 2, 8
+
+    for seed in range(20):
+        torch.manual_seed(seed)
+        s2_mask = torch.randint(0, 4, (b, t_h, t_w, t))
+        preds = TokensAndMasks(
+            sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+            sentinel2_l2a_mask=s2_mask,
+        )
+        targets = TokensAndMasks(
+            sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+            sentinel2_l2a_mask=s2_mask,
+        )
+        seq, vec = _make_masked_neg_pair()
+        loss_seq = seq.compute(preds, targets)
+        loss_vec = vec.compute(preds, targets)
+        assert torch.isclose(loss_seq, loss_vec, rtol=1e-4, atol=1e-6), (
+            f"seed={seed}: seq={loss_seq.item()}, vec={loss_vec.item()}"
+        )
+
+
+def test_masked_neg_vec_with_identical_targets() -> None:
+    """Test masking behavior when some targets are identical (triggers skip)."""
+    b, t_h, t_w, t, d = 4, 2, 2, 2, 8
+    torch.manual_seed(7)
+
+    target_s2 = torch.randn((b, t_h, t_w, t, d))
+    # Make ALL tokens in sample 0 identical → should be skipped
+    target_s2[0] = target_s2[0, 0, 0, 0].expand_as(target_s2[0])
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=target_s2,
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+
+    seq, vec = _make_masked_neg_pair()
+    loss_seq = seq.compute(preds, targets)
+    loss_vec = vec.compute(preds, targets)
+    assert torch.isclose(loss_seq, loss_vec, rtol=1e-4, atol=1e-6), (
+        f"identical targets: seq={loss_seq.item()}, vec={loss_vec.item()}"
+    )
+
+
+def test_masked_neg_vec_gradients() -> None:
+    """Gradients match between sequential and vec."""
+    b, t_h, t_w, t, d = 4, 3, 3, 2, 16
+
+    for seed in [0, 7, 42, 999]:
+        torch.manual_seed(seed)
+        s2_mask = torch.randint(0, 4, (b, t_h, t_w, t))
+        s2_data = torch.randn((b, t_h, t_w, t, d))
+        s2_tgt = torch.randn((b, t_h, t_w, t, d))
+
+        # Sequential
+        s2_seq = s2_data.clone().requires_grad_(True)
+        preds_s = TokensAndMasks(sentinel2_l2a=s2_seq, sentinel2_l2a_mask=s2_mask)
+        targets_s = TokensAndMasks(
+            sentinel2_l2a=s2_tgt.clone(), sentinel2_l2a_mask=s2_mask
+        )
+        seq, vec = _make_masked_neg_pair()
+        loss_s = seq.compute(preds_s, targets_s)
+        loss_s.backward()
+
+        # Vec
+        s2_vec = s2_data.clone().requires_grad_(True)
+        preds_v = TokensAndMasks(sentinel2_l2a=s2_vec, sentinel2_l2a_mask=s2_mask)
+        targets_v = TokensAndMasks(
+            sentinel2_l2a=s2_tgt.clone(), sentinel2_l2a_mask=s2_mask
+        )
+        loss_v = vec.compute(preds_v, targets_v)
+        loss_v.backward()
+
+        assert torch.isclose(loss_s, loss_v, rtol=1e-4, atol=1e-6), (
+            f"seed={seed}: loss seq={loss_s.item()}, vec={loss_v.item()}"
+        )
+        assert torch.allclose(s2_seq.grad, s2_vec.grad, rtol=1e-4, atol=1e-6), (
+            f"seed={seed}: grad max diff="
+            f"{(s2_seq.grad - s2_vec.grad).abs().max().item()}"
+        )
+
+
+def test_masked_neg_vec_missing_samples() -> None:
+    """Vec matches sequential when some samples have no decoder tokens."""
+    b, t_h, t_w, t, d = 5, 4, 4, 2, 8
+    torch.manual_seed(456)
+
+    s2_mask = torch.randint(0, 3, (b, t_h, t_w, t))
+    s2_mask[0] = MaskValue.ONLINE_ENCODER.value
+    s2_mask[2] = MaskValue.MISSING.value
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=s2_mask,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=s2_mask,
+    )
+
+    seq, vec = _make_masked_neg_pair()
+    loss_seq = seq.compute(preds, targets)
+    loss_vec = vec.compute(preds, targets)
+    assert torch.isclose(loss_seq, loss_vec, rtol=1e-4, atol=1e-6), (
+        f"seq={loss_seq.item()}, vec={loss_vec.item()}"
+    )
+
+
+def test_masked_neg_vec_selective_modality_masking() -> None:
+    """Masking only applied to specified modalities."""
+    b, t_h, t_w, t, d = 4, 3, 3, 2, 16
+    torch.manual_seed(99)
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+        worldcover=torch.randn((b, t_h, t_w, 1, d)),
+        worldcover_mask=torch.ones((b, t_h, t_w, 1)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+        worldcover=torch.randn((b, t_h, t_w, 1, d)),
+        worldcover_mask=torch.ones((b, t_h, t_w, 1)) * MaskValue.DECODER.value,
+    )
+
+    seq, vec = _make_masked_neg_pair(mask_modalities=["worldcover"])
+    loss_seq = seq.compute(preds, targets)
+    loss_vec = vec.compute(preds, targets)
+    assert torch.isclose(loss_seq, loss_vec, rtol=1e-4, atol=1e-6), (
+        f"selective: seq={loss_seq.item()}, vec={loss_vec.item()}"
+    )
+
+
+def test_masked_neg_vec_large_batch() -> None:
+    """Equivalence at training-like batch size."""
+    b, t_h, t_w, t, d = 32, 4, 4, 2, 64
+    torch.manual_seed(2024)
+    s2_mask = torch.randint(0, 4, (b, t_h, t_w, t))
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=s2_mask,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=s2_mask,
+    )
+
+    seq, vec = _make_masked_neg_pair()
+    loss_seq = seq.compute(preds, targets)
+    loss_vec = vec.compute(preds, targets)
+    assert torch.isclose(loss_seq, loss_vec, rtol=1e-3, atol=1e-5), (
+        f"large batch: seq={loss_seq.item()}, vec={loss_vec.item()}"
+    )
