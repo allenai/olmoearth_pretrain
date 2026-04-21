@@ -103,8 +103,6 @@ beaker = [
     "numpy>=1.26.4",
     "pandas>=2.3.3",
     "pandera>=0.26.1",
-    "planetary-computer>=1.0",
-    "pystac-client>=0.9",
     "pytest>=8.4.2",
     "rasterio>=1.4.3",
     "rioxarray>=0.19.0",
@@ -112,15 +110,16 @@ beaker = [
     "torch>=2.7,<2.8",
     "universal-pathlib>=0.2.5",
     "wandb>=0.19.0",
-    "xarray>=2024.1",
-    # rslearn data source deps for our modalities:
-    # planetary_computer (S1, S2_L2A), gcp_public_data (corpus init S2),
-    # aws_landsat + worldcover (boto3), openstreetmap (osmium)
-    "aiobotocore>=2.19.0",
+    # rslearn[extra] can't be used directly: claymodel pins einops<0.8 while
+    # rslearn[extra] requires einops>=0.8. List the data source deps we need.
+    "planetary-computer",
+    "pystac-client",
+    "xarray",
+    "google-cloud-bigquery",
+    "google-cloud-storage",
+    "aiobotocore",
     "fsspec[s3]",
-    "google-cloud-bigquery>=3.35",
-    "google-cloud-storage>=2.18",
-    "osmium>=4.0.2",
+    "osmium",
 ]
 dev = [
     "pip>=25.2",
