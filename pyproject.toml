@@ -48,6 +48,20 @@ addopts = [
     "--import-mode=importlib",
 ]
 
+# dataset-creation uses rslearn[extra] (einops>=0.8);
+# eval uses claymodel (einops<0.8). They can't coexist.
+[tool.uv]
+conflicts = [
+    [
+        { extra = "dataset-creation" },
+        { extra = "eval" },
+    ],
+    [
+        { extra = "dataset-creation" },
+        { extra = "all-no-flash" },
+    ],
+]
+
 [tool.uv.sources]
 claymodel = { git = "https://github.com/Clay-foundation/model.git" }
 geobench = { git = "https://github.com/ServiceNow/geo-bench.git" }
@@ -96,7 +110,7 @@ beaker = [
 "dataset-creation" = [
     "beaker-py==1.34.1",
     "class-registry>=2.1.2",
-    "einops==0.7.0",
+    "einops>=0.7.0",
     "gcsfs>=2025.9.0",
     "geobench>=1.0.1",
     "interrogate>=1.7.0",
@@ -106,20 +120,10 @@ beaker = [
     "pytest>=8.4.2",
     "rasterio>=1.4.3",
     "rioxarray>=0.19.0",
-    "rslearn>=0.1.4",
+    "rslearn[extra]>=0.1.4",
     "torch>=2.7,<2.8",
     "universal-pathlib>=0.2.5",
     "wandb>=0.19.0",
-    # rslearn[extra] can't be used directly: claymodel pins einops<0.8 while
-    # rslearn[extra] requires einops>=0.8. List the data source deps we need.
-    "planetary-computer",
-    "pystac-client",
-    "xarray",
-    "google-cloud-bigquery",
-    "google-cloud-storage",
-    "aiobotocore",
-    "fsspec[s3]",
-    "osmium",
 ]
 dev = [
     "pip>=25.2",
@@ -152,7 +156,7 @@ flash-attn = [
     "flash-attn>=2.4.0",
 ]
 "all-no-flash" = [
-    "olmoearth-pretrain[training,beaker,dataset-creation,dev,eval]",
+    "olmoearth-pretrain[training,beaker,dev,eval]",
 ]
 
 [tool.uv.extra-build-dependencies]
