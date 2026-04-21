@@ -106,8 +106,8 @@ class BeakerJobConfig:
 
     beaker_image: str = DEFAULT_BEAKER_IMAGE
     clusters: Sequence[str] = ()
-    workspace: str = "ai2/earth-systems"
-    budget: str = "ai2/d5"
+    workspace: str = "ai2/earth-systems"  # matches WORKSPACE in common.py
+    budget: str = "ai2/es-platform"  # matches BUDGET in common.py
     priority: str = "normal"
     preemptible: bool = True
     weka_buckets: Sequence[str] = ("dfive-default",)

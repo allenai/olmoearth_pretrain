@@ -51,6 +51,8 @@ from olmoearth_pretrain.dataset_creation.orchestrator import (
     run,
 )
 
+BUDGET = "ai2/es-platform"
+WORKSPACE = "ai2/earth-systems"
 DEFAULT_CLUSTERS = (
     "ai2/jupiter-cirrascale-2,ai2/saturn-cirrascale,ai2/ceres-cirrascale"
 )
@@ -89,8 +91,6 @@ def _beaker_parser_opts(p: argparse.ArgumentParser) -> None:
     p.add_argument("--beaker_image", default=DEFAULT_BEAKER_IMAGE,
                     help=f"Beaker image (default: {DEFAULT_BEAKER_IMAGE})")
     p.add_argument("--clusters", default=DEFAULT_CLUSTERS)
-    p.add_argument("--workspace", default="ai2/earth-systems")
-    p.add_argument("--budget", default="ai2/d5")
     p.add_argument("--priority", default="normal")
     p.add_argument("--no_preemptible", action="store_true")
     p.add_argument(
@@ -157,8 +157,8 @@ def _build_cfg(args: argparse.Namespace) -> tuple[OrchestratorConfig, list[Modal
     job = BeakerJobConfig(
         beaker_image=getattr(args, "beaker_image", DEFAULT_BEAKER_IMAGE),
         clusters=tuple(getattr(args, "clusters", DEFAULT_CLUSTERS).split(",")),
-        workspace=getattr(args, "workspace", "ai2/earth-systems"),
-        budget=getattr(args, "budget", "ai2/d5"),
+        workspace=WORKSPACE,
+        budget=BUDGET,
         priority=getattr(args, "priority", "normal"),
         preemptible=not getattr(args, "no_preemptible", False),
         git_ref=git_ref,
@@ -301,8 +301,6 @@ def _build_parser() -> argparse.ArgumentParser:
     _common_parser_opts(dry_p)
     dry_p.add_argument("--beaker_image", default="<dry-run-image>")
     dry_p.add_argument("--clusters", default=DEFAULT_CLUSTERS)
-    dry_p.add_argument("--workspace", default="ai2/earth-systems")
-    dry_p.add_argument("--budget", default="ai2/d5")
     dry_p.add_argument("--priority", default="normal")
     dry_p.add_argument("--no_preemptible", action="store_true")
     dry_p.add_argument("--beaker_token_secret", default=None)
