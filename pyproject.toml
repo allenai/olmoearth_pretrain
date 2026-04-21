@@ -103,6 +103,7 @@ beaker = [
     "numpy>=1.26.4",
     "pandas>=2.3.3",
     "pandera>=0.26.1",
+    "planetary-computer>=1.0",
     "pytest>=8.4.2",
     "rasterio>=1.4.3",
     "rioxarray>=0.19.0",
