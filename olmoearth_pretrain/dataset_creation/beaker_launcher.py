@@ -70,12 +70,13 @@ DEFAULT_BEAKER_IMAGE = "ai2/cuda12.8-ubuntu22.04-torch2.7.1"
 # olmoearth_pretrain/internal/common.py: clone repo at a pinned git ref,
 # install deps with uv, activate the venv.
 SETUP_STEPS = (
-    "set -euo pipefail",
+    "set -euxo pipefail",
     # gh CLI for private repo clone — conda is available on ai2 base images.
     "conda install gh --channel conda-forge -y -q",
     'echo "$GITHUB_TOKEN" | gh auth login --with-token',
     "gh auth status",
-    'gh repo clone "$REPO_URL" . -- --depth=1 -b "$GIT_BRANCH"',
+    # Clone repo + checkout exact ref. Matches the pattern in common.py.
+    'gh repo clone "$REPO_URL" .',
     'git checkout "$GIT_REF"',
     "pip install -q uv",
     'export PATH="/root/.local/bin:$PATH"',
