@@ -14,7 +14,15 @@ WINDOW_SIZE = 256
 
 # Columns in the per-modality metadata CSVs.
 METADATA_COLUMNS = [
+    "use_grid_reference",
+    "sample_id",
     "crs",
+    "x_resolution",
+    "y_resolution",
+    "bounds_left",
+    "bounds_bottom",
+    "bounds_right",
+    "bounds_top",
     "col",
     "row",
     "tile_time",
@@ -27,3 +35,9 @@ GEOTIFF_BLOCK_SIZE = 32
 GEOTIFF_RASTER_FORMAT = GeotiffRasterFormat(
     block_size=GEOTIFF_BLOCK_SIZE, always_enable_tiling=True
 )
+
+# Window option keys used to carry the raw dataset contract through rslearn windows.
+USE_GRID_REFERENCE_OPTION = "use_grid_reference"
+SAMPLE_ID_OPTION = "sample_id"
+
+DEFAULT_USE_GRID_REFERENCE = True

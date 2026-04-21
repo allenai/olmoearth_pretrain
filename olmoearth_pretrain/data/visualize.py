@@ -60,7 +60,7 @@ def visualize_sample(
     args = GetItemArgs(
         idx=sample_index,
         patch_size=1,
-        sampled_hw_p=256,
+        sampled_hw_p=dataset.tile_size,
     )
     _, sample = dataset[args]
     modalities = sample.modalities

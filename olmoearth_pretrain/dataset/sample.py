@@ -11,8 +11,6 @@ import rasterio.windows
 from pyproj import Transformer
 
 from olmoearth_pretrain.data.constants import (
-    BASE_RESOLUTION,
-    IMAGE_TILE_SIZE,
     PROJECTION_CRS,
     Modality,
     ModalitySpec,
@@ -49,12 +47,9 @@ class SampleInformation:
 
     def get_latlon(self) -> np.ndarray:
         """Get the latlon of the sample."""
-        # Get coordinates at projection units, and then transform to latlon
-        grid_resolution = self.grid_tile.resolution_factor * BASE_RESOLUTION
-        x, y = (
-            (self.grid_tile.col + 0.5) * grid_resolution * IMAGE_TILE_SIZE,
-            (self.grid_tile.row + 0.5) * -grid_resolution * IMAGE_TILE_SIZE,
-        )
+        x0, y0, x1, y1 = self.grid_tile.get_projected_extent()
+        x = (x0 + x1) / 2
+        y = (y0 + y1) / 2
         transformer = Transformer.from_crs(
             self.grid_tile.crs, PROJECTION_CRS, always_xy=True
         )
@@ -93,11 +88,18 @@ def image_tiles_to_samples(
     # Convert from (modality -> time_span -> tile list) to
     # (modality, grid_tile, time_span) -> tile).
     image_tile_index: dict[tuple[ModalitySpec, GridTile, TimeSpan], ModalityTile] = {}
+    sample_id_index: dict[tuple[ModalitySpec, str, TimeSpan], list[ModalityTile]] = {}
+    geometry_index: dict[tuple[ModalitySpec, TimeSpan, str], list[ModalityTile]] = {}
     for modality, modality_tiles in image_tiles.items():
         for time_span, time_span_tiles in modality_tiles.items():
             for tile in time_span_tiles:
                 index_key = (modality, tile.grid_tile, time_span)
                 image_tile_index[index_key] = tile
+                if tile.grid_tile.sample_id:
+                    sample_id_key = (modality, tile.grid_tile.sample_id, time_span)
+                    sample_id_index.setdefault(sample_id_key, []).append(tile)
+                geometry_key = (modality, time_span, tile.grid_tile.crs)
+                geometry_index.setdefault(geometry_key, []).append(tile)
 
     # Enumerate all the (grid_tile, time_span) tuples present in the dataset.
     # Each of these identifies a training example.
@@ -161,25 +163,63 @@ def image_tiles_to_samples(
             else:
                 lookup_time_span = TimeSpan.STATIC  # type: ignore
 
-            # We need to downscale the grid tile for the lookup.
-            modality_grid_tile = GridTile(
-                crs=grid_tile.crs,
-                resolution_factor=modality.tile_resolution_factor,
-                col=grid_tile.col // downscale_factor,
-                row=grid_tile.row // downscale_factor,
-            )
-
-            index_key = (modality, modality_grid_tile, lookup_time_span)
-            if index_key not in image_tile_index:
-                logger.debug(
-                    f"ignoring modality {modality.name} because no tile found for index_key={index_key}"
+            image_tile: ModalityTile | None = None
+            if (
+                grid_tile.use_grid_reference
+                and grid_tile.col is not None
+                and grid_tile.row is not None
+            ):
+                modality_grid_tile = GridTile(
+                    crs=grid_tile.crs,
+                    resolution_factor=modality.tile_resolution_factor,
+                    col=grid_tile.col // downscale_factor,
+                    row=grid_tile.row // downscale_factor,
                 )
-                continue
-            image_tile = image_tile_index[index_key]
+                index_key = (modality, modality_grid_tile, lookup_time_span)
+                image_tile = image_tile_index.get(index_key)
+                if image_tile is None:
+                    logger.debug(
+                        "ignoring modality %s because no tile found for index_key=%s",
+                        modality.name,
+                        index_key,
+                    )
+            else:
+                if grid_tile.sample_id:
+                    sample_id_key = (modality, grid_tile.sample_id, lookup_time_span)
+                    candidates = sample_id_index.get(sample_id_key, [])
+                    containing_tiles = [
+                        candidate
+                        for candidate in candidates
+                        if candidate.grid_tile.contains(grid_tile)
+                    ]
+                    if containing_tiles:
+                        image_tile = min(
+                            containing_tiles,
+                            key=lambda candidate: candidate.grid_tile.area(),
+                        )
 
-            # We found a tile, so we just add it in the modality map for this sample.
-            # The ImageTile object includes all the information needed to load the
-            # image (potentially requiring cropping).
+                if image_tile is None:
+                    geometry_key = (modality, lookup_time_span, grid_tile.crs)
+                    containing_tiles = [
+                        candidate
+                        for candidate in geometry_index.get(geometry_key, [])
+                        if candidate.grid_tile.contains(grid_tile)
+                    ]
+                    if containing_tiles:
+                        image_tile = min(
+                            containing_tiles,
+                            key=lambda candidate: candidate.grid_tile.area(),
+                        )
+
+                if image_tile is None:
+                    logger.debug(
+                        "ignoring modality %s because no containing tile found for sample_id=%s",
+                        modality.name,
+                        grid_tile.sample_id,
+                    )
+                    continue
+
+            assert image_tile is not None
             sample.modalities[modality] = image_tile
 
         samples.append(sample)
@@ -209,9 +249,10 @@ def load_image_for_sample(
         function.
     """
     # Compute the factor by which image_tile is bigger (coarser) than the sample.
-    factor = (
-        image_tile.grid_tile.resolution_factor // sample.grid_tile.resolution_factor
+    factor = max(
+        1, image_tile.grid_tile.resolution_factor // sample.grid_tile.resolution_factor
     )
+    sample_tile_size = sample.grid_tile.get_tile_size()
     # Read the modality image one band set at a time.
     # For now we resample all bands to the grid resolution of the modality.
     band_set_images = []
@@ -237,27 +278,35 @@ def load_image_for_sample(
                     continue
 
                 # Assuming all tiles cover the same area as the resolution factor 16 tile
-                subtile_size = raster.width // factor
-                col_offset = subtile_size * (sample.grid_tile.col % factor)
-                row_offset = subtile_size * (sample.grid_tile.row % factor)
-
-                # Now we can perform a windowed read.
-                rasterio_window = rasterio.windows.Window(
-                    col_off=col_offset,
-                    row_off=row_offset,
-                    width=subtile_size,
-                    height=subtile_size,
-                )
-                logger.debug(f"reading window={rasterio_window} from {fname}")
-                image: npt.NDArray = raster.read(window=rasterio_window)  # type: ignore
+                if (
+                    image_tile.grid_tile.contains(sample.grid_tile)
+                    and image_tile.grid_tile.get_projected_extent()
+                    != sample.grid_tile.get_projected_extent()
+                ):
+                    col_offset, row_offset, crop_width, crop_height = (
+                        image_tile.grid_tile.get_crop_window(
+                            sample.grid_tile, raster.width, raster.height
+                        )
+                    )
+                    rasterio_window = rasterio.windows.Window(
+                        col_off=col_offset,
+                        row_off=row_offset,
+                        width=crop_width,
+                        height=crop_height,
+                    )
+                    logger.debug(f"reading window={rasterio_window} from {fname}")
+                    image = raster.read(window=rasterio_window)  # type: ignore
+                else:
+                    image = raster.read()
                 logger.debug(f"image.shape={image.shape}")
+                subtile_size = image.shape[1]
 
                 # And then for now resample it to the grid resolution.
                 # The difference in resolution should always be a power of 2.
                 # If the factor is less than 1 we want the desired size to be multiplied by the thing
                 # If the tile size is greater we want to keep that extent
                 desired_subtile_size = int(
-                    IMAGE_TILE_SIZE
+                    sample_tile_size
                     * image_tile.modality.image_tile_size_factor
                     // factor
                 )

@@ -8,7 +8,6 @@ assigned in file order so that hierarchically similar crops have close IDs.
 """
 
 import argparse
-import csv
 import json
 import multiprocessing
 from collections.abc import Callable
@@ -18,7 +17,6 @@ import numpy.typing as npt
 import shapely
 import skimage.draw
 import tqdm
-from rasterio.crs import CRS
 from rslearn.data_sources import Item
 from rslearn.dataset import Dataset, Window
 from rslearn.utils.geometry import flatten_shape
@@ -27,9 +25,14 @@ from rslearn.utils.vector_format import GeojsonVectorFormat
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality, TimeSpan
-from olmoearth_pretrain.dataset.utils import get_modality_dir
+from olmoearth_pretrain.dataset.utils import get_modality_dir, get_modality_fname
 
-from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
+from ..constants import GEOTIFF_RASTER_FORMAT
+from ..util import (
+    get_modality_temp_meta_fname,
+    get_window_metadata,
+    write_single_metadata_row,
+)
 
 # Use the EUROCROPS modality from constants.
 MODALITY = Modality.EUROCROPS
@@ -127,11 +130,7 @@ def convert_eurocrops(
         )
         return
 
-    # Parse window metadata from name.
-    fname_parts = window.name.split("_")
-    crs = CRS.from_string(fname_parts[0])
-    col = int(fname_parts[2])
-    row = int(fname_parts[3])
+    window_metadata = get_window_metadata(window)
 
     # Get output size from window bounds.
     output_width = window.bounds[2] - window.bounds[0]
@@ -185,9 +184,13 @@ def convert_eurocrops(
         return
 
     # Write the rasterized data as GeoTIFF.
-    out_modality_dir = get_modality_dir(olmoearth_path, MODALITY, TimeSpan.STATIC)
-    out_fname = (
-        out_modality_dir / f"{crs}_{col}_{row}_{window.projection.x_resolution}.tif"
+    out_fname = get_modality_fname(
+        olmoearth_path,
+        MODALITY,
+        TimeSpan.STATIC,
+        window_metadata,
+        window.projection.x_resolution,
+        "tif",
     )
     GEOTIFF_RASTER_FORMAT.encode_raster(
         path=out_fname.parent,
@@ -198,23 +201,16 @@ def convert_eurocrops(
     )
 
     # Write metadata.
-    metadata_dir = olmoearth_path / f"{out_modality_dir.name}_meta"
-    metadata_dir.mkdir(parents=True, exist_ok=True)
-    metadata_fname = metadata_dir / f"{window.name}.csv"
-    with metadata_fname.open("w") as f:
-        writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
-        writer.writeheader()
-        writer.writerow(
-            dict(
-                crs=str(crs),
-                col=col,
-                row=row,
-                tile_time=window.time_range[0].isoformat() if window.time_range else "",
-                image_idx="0",
-                start_time=start_time.isoformat(),
-                end_time=end_time.isoformat(),
-            )
-        )
+    metadata_fname = get_modality_temp_meta_fname(
+        olmoearth_path, MODALITY, TimeSpan.STATIC, window.name
+    )
+    write_single_metadata_row(
+        metadata_fname,
+        window_metadata,
+        "0",
+        start_time,
+        end_time,
+    )
 
 
 if __name__ == "__main__":

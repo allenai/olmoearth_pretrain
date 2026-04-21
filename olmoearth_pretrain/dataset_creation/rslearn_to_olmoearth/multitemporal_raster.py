@@ -1,6 +1,5 @@
 """Helper functions to convert multitemporal rasters into OlmoEarth Pretrain dataset."""
 
-import csv
 import logging
 from datetime import timedelta
 
@@ -14,8 +13,13 @@ from upath import UPath
 from olmoearth_pretrain.data.constants import BandSet, ModalitySpec, TimeSpan
 from olmoearth_pretrain.dataset.utils import get_modality_fname
 
-from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
-from ..util import get_modality_temp_meta_fname, get_window_metadata
+from ..constants import GEOTIFF_RASTER_FORMAT
+from ..util import (
+    get_metadata_row,
+    get_modality_temp_meta_fname,
+    get_window_metadata,
+    write_metadata_rows,
+)
 
 PIXELS_PER_TILE = 256
 EPSILON = 1e-6
@@ -159,7 +163,8 @@ def convert_freq(
                 raster_dir, adjusted_projection, adjusted_bounds
             )
             expected_image_size = band_set.get_expected_image_size(
-                window_metadata.get_resolution_factor()
+                window_metadata.get_resolution_factor(),
+                window_metadata.get_tile_size(),
             )
             if (
                 image.shape[1] != expected_image_size
@@ -213,22 +218,13 @@ def convert_freq(
         metadata_fname = get_modality_temp_meta_fname(
             olmoearth_path, modality, TimeSpan.TWO_WEEK, window.name
         )
-        metadata_fname.parent.mkdir(parents=True, exist_ok=True)
-        with metadata_fname.open("w") as f:
-            writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
-            writer.writeheader()
-            for group_idx, timestamp in enumerate(timestamps):
-                writer.writerow(
-                    dict(
-                        crs=window_metadata.crs,
-                        col=window_metadata.col,
-                        row=window_metadata.row,
-                        tile_time=window_metadata.time.isoformat(),
-                        image_idx=group_idx,
-                        start_time=timestamp,
-                        end_time=timestamp,
-                    )
-                )
+        write_metadata_rows(
+            metadata_fname,
+            [
+                get_metadata_row(window_metadata, group_idx, timestamp, timestamp)
+                for group_idx, timestamp in enumerate(timestamps)
+            ],
+        )
 
 
 def convert_monthly(
@@ -290,7 +286,8 @@ def convert_monthly(
                 raster_dir, adjusted_projection, adjusted_bounds
             )
             expected_image_size = band_set.get_expected_image_size(
-                modality.tile_resolution_factor
+                modality.tile_resolution_factor,
+                window_metadata.get_tile_size(),
             )
             if (
                 image.shape[1] != expected_image_size
@@ -344,19 +341,10 @@ def convert_monthly(
         metadata_fname = get_modality_temp_meta_fname(
             olmoearth_path, modality, TimeSpan.YEAR, window.name
         )
-        metadata_fname.parent.mkdir(parents=True, exist_ok=True)
-        with metadata_fname.open("w") as f:
-            writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
-            writer.writeheader()
-            for image_idx, (start_time, end_time) in enumerate(time_ranges):
-                writer.writerow(
-                    dict(
-                        crs=window_metadata.crs,
-                        col=window_metadata.col,
-                        row=window_metadata.row,
-                        tile_time=window_metadata.time.isoformat(),
-                        image_idx=image_idx,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
-                )
+        write_metadata_rows(
+            metadata_fname,
+            [
+                get_metadata_row(window_metadata, image_idx, start_time, end_time)
+                for image_idx, (start_time, end_time) in enumerate(time_ranges)
+            ],
+        )

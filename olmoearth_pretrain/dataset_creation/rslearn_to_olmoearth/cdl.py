@@ -1,7 +1,6 @@
 """Post-process ingested CDL crop type data into the OlmoEarth Pretrain dataset."""
 
 import argparse
-import csv
 import multiprocessing
 
 import tqdm
@@ -13,8 +12,12 @@ from upath import UPath
 from olmoearth_pretrain.data.constants import Modality, TimeSpan
 from olmoearth_pretrain.dataset.utils import get_modality_fname
 
-from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
-from ..util import get_modality_temp_meta_fname, get_window_metadata
+from ..constants import GEOTIFF_RASTER_FORMAT
+from ..util import (
+    get_modality_temp_meta_fname,
+    get_window_metadata,
+    write_single_metadata_row,
+)
 
 # Layer name in the input rslearn dataset.
 LAYER_NAME = "cdl"
@@ -70,21 +73,13 @@ def convert_cdl(window: Window, olmoearth_path: UPath) -> None:
     metadata_fname = get_modality_temp_meta_fname(
         olmoearth_path, Modality.CDL, TimeSpan.STATIC, window.name
     )
-    metadata_fname.parent.mkdir(parents=True, exist_ok=True)
-    with metadata_fname.open("w") as f:
-        writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
-        writer.writeheader()
-        writer.writerow(
-            dict(
-                crs=window_metadata.crs,
-                col=window_metadata.col,
-                row=window_metadata.row,
-                tile_time=window_metadata.time.isoformat(),
-                image_idx="0",
-                start_time=start_time.isoformat(),
-                end_time=end_time.isoformat(),
-            )
-        )
+    write_single_metadata_row(
+        metadata_fname,
+        window_metadata,
+        "0",
+        start_time,
+        end_time,
+    )
 
 
 if __name__ == "__main__":

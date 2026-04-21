@@ -1,49 +1,62 @@
 """Utilities and base classes relating to the OlmoEarth Pretrain dataset structure."""
 
+from dataclasses import dataclass
 from datetime import datetime
+from typing import cast
 
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import (
     BASE_RESOLUTION,
+    IMAGE_TILE_SIZE,
     ModalitySpec,
     TimeSpan,
 )
 
 
+@dataclass(frozen=True)
 class WindowMetadata:
     """Class to represent the metadata associated with an rslearn window used for OlmoEarth Pretrain.
 
-    The window name specifies the CRS, column, row, resolution, and timestamp.
-    These can also be derived from the rslearn window metadata.
+    Historically the raw dataset contract used ``crs/col/row`` as the canonical
+    identifier. Newer datasets can opt out of that and instead use ``sample_id`` along
+    with geometry fields persisted in the per-modality CSVs.
     """
 
-    def __init__(
-        self,
-        crs: str,
-        resolution: float,
-        col: int,
-        row: int,
-        time: datetime,
-    ):
-        """Create a new WindowMetadata.
+    crs: str
+    resolution: float
+    time: datetime
+    col: int | None = None
+    row: int | None = None
+    sample_id: str | None = None
+    use_grid_reference: bool = True
+    x_resolution: float | None = None
+    y_resolution: float | None = None
+    bounds: tuple[int, int, int, int] | None = None
 
-        Args:
-            crs: the UTM CRS that the example is in.
-            resolution: the resolution of the grid that this window is on.
-            col: the column of the tile in the grid.
-            row: the row of the tile in the grid.
-            time: the center time used at this tile.
-        """
-        self.crs = crs
-        self.resolution = resolution
-        self.col = col
-        self.row = row
-        self.time = time
+    def __post_init__(self) -> None:  # noqa: D105
+        if self.use_grid_reference and (self.col is None or self.row is None):
+            raise ValueError("grid-referenced metadata requires both col and row")
+        if not self.use_grid_reference and not self.sample_id:
+            raise ValueError("sample-id metadata requires sample_id")
+        if self.bounds is not None and len(self.bounds) != 4:
+            raise ValueError("bounds must contain exactly four values")
 
     def get_window_name(self) -> str:
         """Encode the metadata back to a window name."""
-        return f"{self.crs}_{self.resolution}_{self.col}_{self.row}"
+        if self.use_grid_reference:
+            if self.col is None or self.row is None:
+                raise ValueError("grid-referenced metadata is missing col/row")
+            return f"{self.crs}_{self.resolution}_{self.col}_{self.row}"
+        return cast(str, self.sample_id)
+
+    def get_example_id(self) -> str:
+        """Get the identifier shared across raw data files for this sample."""
+        if self.use_grid_reference:
+            if self.col is None or self.row is None:
+                raise ValueError("grid-referenced metadata is missing col/row")
+            return f"{self.crs}_{self.col}_{self.row}"
+        return cast(str, self.sample_id)
 
     def get_resolution_factor(self) -> int:
         """Get the resolution factor.
@@ -51,6 +64,24 @@ class WindowMetadata:
         See helios.data.constants.
         """
         return round(self.resolution / BASE_RESOLUTION)
+
+    def get_x_resolution(self) -> float:
+        """Get the x resolution in projection units."""
+        if self.x_resolution is not None:
+            return self.x_resolution
+        return self.resolution
+
+    def get_y_resolution(self) -> float:
+        """Get the y resolution in projection units."""
+        if self.y_resolution is not None:
+            return self.y_resolution
+        return -self.resolution
+
+    def get_tile_size(self) -> int:
+        """Get the raw tile size in pixels along one axis."""
+        if self.bounds is None:
+            return IMAGE_TILE_SIZE
+        return self.bounds[2] - self.bounds[0]
 
 
 def get_modality_dir(path: UPath, modality: ModalitySpec, time_span: TimeSpan) -> UPath:
@@ -119,8 +150,5 @@ def get_modality_fname(
         the filename to store the data in.
     """
     modality_dir = get_modality_dir(path, modality, time_span)
-    crs = window_metadata.crs
-    col = window_metadata.col
-    row = window_metadata.row
-    fname = f"{crs}_{col}_{row}_{resolution}.{ext}"
+    fname = f"{window_metadata.get_example_id()}_{resolution}.{ext}"
     return modality_dir / fname

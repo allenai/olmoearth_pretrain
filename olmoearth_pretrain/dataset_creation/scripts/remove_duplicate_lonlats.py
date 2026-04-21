@@ -11,6 +11,8 @@ from rslearn.utils.geometry import STGeometry
 from rslearn.utils.get_utm_ups_crs import get_utm_ups_projection
 from upath import UPath
 
+from ..util import derive_grid_reference, parse_bool
+
 WINDOW_SIZE = 256
 
 
@@ -43,8 +45,15 @@ def get_existing_tiles(ds_path: UPath) -> list[tuple[str, int, int]]:
     """
     existing_tiles = []
     for window_dir in (ds_path / "windows" / "res_10").iterdir():
-        projection, _, col, row = window_dir.name.split("_")
-        existing_tiles.append((projection, int(col), int(row)))
+        metadata_path = window_dir / "metadata.json"
+        with metadata_path.open() as f:
+            metadata = json.load(f)
+        if not parse_bool(metadata.get("options", {}).get("use_grid_reference"), True):
+            continue
+        projection = metadata["projection"]["crs"]
+        raw_bounds: tuple[int, int, int, int] = tuple(metadata["bounds"])  # type: ignore[assignment]
+        col, row = derive_grid_reference(raw_bounds)
+        existing_tiles.append((projection, col, row))
     return existing_tiles
 
 

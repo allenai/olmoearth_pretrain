@@ -14,7 +14,6 @@ from olmo_core.utils import prepare_cli_environment
 from tqdm import tqdm
 
 from olmoearth_pretrain.data.constants import (
-    IMAGE_TILE_SIZE,
     MISSING_VALUE,
     Modality,
 )
@@ -48,7 +47,7 @@ def compute_normalization_values(
         indices_to_sample = list(range(dataset_len))
     norm_dict: dict[str, Any] = {}
     for i in tqdm(indices_to_sample):
-        get_item_args = GetItemArgs(idx=i, patch_size=1, sampled_hw_p=IMAGE_TILE_SIZE)
+        get_item_args = GetItemArgs(idx=i, patch_size=1, sampled_hw_p=dataset.tile_size)
         _, sample = dataset[get_item_args]
         for modality in sample.modalities:
             # Shall we compute the norm stats for worldcover?

@@ -11,6 +11,7 @@ from torch.utils.data import ConcatDataset, Dataset
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.data.constants import IMAGE_TILE_SIZE
 
 from .dataset import GetItemArgs
 
@@ -94,11 +95,14 @@ class OlmoEarthConcatDataset(ConcatDataset):
 
         # Set training modalities attribute (accessed by data loader).
         self.training_modalities = self.datasets[0].training_modalities
+        self.tile_size = getattr(self.datasets[0], "tile_size", IMAGE_TILE_SIZE)
         for dataset in self.datasets:
             if self.training_modalities != dataset.training_modalities:
                 raise ValueError(
                     "expected all sub datasets to have same training modalities"
                 )
+            if self.tile_size != getattr(dataset, "tile_size", IMAGE_TILE_SIZE):
+                raise ValueError("expected all sub datasets to have the same tile_size")
 
 
 @dataclass

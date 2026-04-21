@@ -118,17 +118,21 @@ def create_window(ds_path: UPath, metadata: WindowMetadata) -> list[Window]:
         # Adjust the metadata for this resolution (i.e., compute the window that is
         # aligned with the grid in case the resolution is coarser).
         factor = round(resolution / metadata.resolution)
+        if metadata.col is None or metadata.row is None:
+            raise ValueError("grid-referenced metadata requires both col and row")
         cur_metadata = WindowMetadata(
-            metadata.crs,
-            resolution,
-            metadata.col // factor,
-            metadata.row // factor,
-            metadata.time,
+            crs=metadata.crs,
+            resolution=resolution,
+            time=metadata.time,
+            col=metadata.col // factor,
+            row=metadata.row // factor,
         )
 
         # Compute the window attributes based on the WindowMetadata.
         group = f"res_{resolution}"
         window_name = cur_metadata.get_window_name()
+        if cur_metadata.col is None or cur_metadata.row is None:
+            raise ValueError("grid-referenced metadata requires both col and row")
         bounds = (
             cur_metadata.col * WINDOW_SIZE,
             cur_metadata.row * WINDOW_SIZE,
@@ -445,7 +449,11 @@ def create_windows_with_highres_time(
         coarse_tile = tile.to_resolution(COARSE_RESOLUTION)
         coarse_time = coarse_times[coarse_tile]
         window_metadata = WindowMetadata(
-            str(tile.crs), tile.resolution, tile.col, tile.row, coarse_time
+            crs=str(tile.crs),
+            resolution=tile.resolution,
+            time=coarse_time,
+            col=tile.col,
+            row=tile.row,
         )
         create_window_jobs.append(
             dict(
