@@ -91,7 +91,7 @@ def _beaker_parser_opts(p: argparse.ArgumentParser) -> None:
     p.add_argument("--beaker_image", default=DEFAULT_BEAKER_IMAGE,
                     help=f"Beaker image (default: {DEFAULT_BEAKER_IMAGE})")
     p.add_argument("--clusters", default=DEFAULT_CLUSTERS)
-    p.add_argument("--priority", default="normal")
+    p.add_argument("--priority", default="high")
     p.add_argument("--no_preemptible", action="store_true")
     p.add_argument(
         "--beaker_token_secret",
@@ -302,7 +302,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _common_parser_opts(dry_p)
     dry_p.add_argument("--beaker_image", default="<dry-run-image>")
     dry_p.add_argument("--clusters", default=DEFAULT_CLUSTERS)
-    dry_p.add_argument("--priority", default="normal")
+    dry_p.add_argument("--priority", default="high")
     dry_p.add_argument("--no_preemptible", action="store_true")
     dry_p.add_argument("--beaker_token_secret", default=None)
     dry_p.add_argument("--pc_subscription_secret", default=None)

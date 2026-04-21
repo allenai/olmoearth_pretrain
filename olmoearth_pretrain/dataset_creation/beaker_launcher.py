@@ -108,7 +108,7 @@ class BeakerJobConfig:
     clusters: Sequence[str] = ()
     workspace: str = "ai2/earth-systems"  # matches WORKSPACE in common.py
     budget: str = "ai2/es-platform"  # matches BUDGET in common.py
-    priority: str = "normal"
+    priority: str = "high"
     preemptible: bool = True
     weka_buckets: Sequence[str] = ("dfive-default",)
     git_ref: str = ""
