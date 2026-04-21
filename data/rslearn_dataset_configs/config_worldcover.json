@@ -12,7 +12,7 @@
       "data_source": {
         "class_path": "rslearn.data_sources.worldcover.WorldCover",
         "init_args": {
-          "worldcover_dir": "source_data/worldcover/"
+          "metadata_cache_dir": "source_data/worldcover/"
         }
       },
       "resampling_method": "nearest",
