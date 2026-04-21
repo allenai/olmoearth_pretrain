@@ -430,7 +430,7 @@ weights. `rank` normalization is the safest default because the raw score
 scales differ across strategies.
 
 ```shell
-python scripts/embeddings/combine_acquisition.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/combine_acquisition.py \
   --scores-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings/_scores" \
   --normalization rank \
   --weight-novelty 0.4 \
