@@ -71,10 +71,13 @@ DEFAULT_BEAKER_IMAGE = "ai2/cuda12.8-ubuntu22.04-torch2.7.1"
 # install deps with uv, activate the venv.
 SETUP_STEPS = (
     "set -euxo pipefail",
+    # Clone into a clean working directory.
+    "mkdir -p /tmp/repo && cd /tmp/repo && rm -rf ./*",
     # Exact same setup pattern as olmoearth_pretrain/internal/common.py
     "conda install gh --channel conda-forge",
     "gh auth status",
-    "gh repo clone $REPO_URL .",
+    "gh repo clone $REPO_URL /tmp/repo",
+    "cd /tmp/repo",
     'git checkout "$GIT_REF"',
     "git submodule update --init --recursive",
     "pip install uv",
