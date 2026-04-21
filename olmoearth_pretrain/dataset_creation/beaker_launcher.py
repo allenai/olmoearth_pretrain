@@ -212,7 +212,7 @@ def launch_beaker_task(
         experiment = beaker.experiment.create(task_name, spec, workspace=job.workspace)
     except ExperimentConflict:
         # Name collision -> treat as resume: reuse the existing experiment.
-        existing = beaker.experiment.get(task_name, workspace=job.workspace)
+        existing = beaker.experiment.get(task_name)
         logger.info("Reusing existing Beaker experiment %s (%s)", existing.id, task_name)
         return existing.id
 

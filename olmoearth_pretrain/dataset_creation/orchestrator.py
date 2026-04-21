@@ -34,6 +34,7 @@ into each Beaker experiment's description.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -156,6 +157,11 @@ class OrchestratorConfig:
     def __post_init__(self) -> None:
         if not (bool(self.corpus_csv) ^ bool(self.lonlats_json)):
             raise ValueError("Exactly one of corpus_csv / lonlats_json must be set.")
+
+    @property
+    def run_prefix(self) -> str:
+        """Short hash of ds_path used to namespace Beaker experiment names per run."""
+        return hashlib.blake2b(str(self.ds_path).encode(), digest_size=4).hexdigest()
 
 
 # ─── progress file helpers ────────────────────────────────────────────────
@@ -365,7 +371,7 @@ def _launch_sharded_materialize(
         )
         exp_id = launch_beaker_task(
             beaker,
-            name=f"{modality.name}-materialize-{i:04d}",
+            name=f"{cfg.run_prefix}-{modality.name}-materialize-{i:04d}",
             description=(
                 f"{modality.name} materialize shard {i}/{num_shards} "
                 f"({len(names)} windows)"
@@ -518,7 +524,7 @@ def run(cfg: OrchestratorConfig, modalities: list[ModalitySpec]) -> bool:
                         b,
                         c,
                         m.prepare_stage,
-                        task_name=f"{m.name}-prepare",
+                        task_name=f"{c.run_prefix}-{m.name}-prepare",
                         description=f"{m.name} prepare",
                         command=_build_shard_command(
                             c, m, 0, "prepare", shard_file=None
@@ -538,7 +544,7 @@ def run(cfg: OrchestratorConfig, modalities: list[ModalitySpec]) -> bool:
                         b,
                         c,
                         m.ingest_stage,
-                        task_name=f"{m.name}-ingest",
+                        task_name=f"{c.run_prefix}-{m.name}-ingest",
                         description=f"{m.name} ingest",
                         command=_build_shard_command(
                             c, m, 0, "ingest", shard_file=None
@@ -567,7 +573,7 @@ def run(cfg: OrchestratorConfig, modalities: list[ModalitySpec]) -> bool:
                         b,
                         c,
                         m.export_stage,
-                        task_name=f"{m.name}-export",
+                        task_name=f"{c.run_prefix}-{m.name}-export",
                         description=f"{m.name} export to olmoearth tiles",
                         command=_build_export_command(c, m),
                     )
@@ -586,7 +592,7 @@ def run(cfg: OrchestratorConfig, modalities: list[ModalitySpec]) -> bool:
                     b,
                     c,
                     "osm_rasterize",
-                    task_name="osm-rasterize",
+                    task_name=f"{c.run_prefix}-osm-rasterize",
                     description="rasterize openstreetmap",
                     command=[
                         "python",
