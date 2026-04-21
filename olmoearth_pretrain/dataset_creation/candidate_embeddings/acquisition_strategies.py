@@ -15,7 +15,7 @@ The goal is to expose several complementary acquisition scores:
 from __future__ import annotations
 
 import numpy as np
-from select_embeddings import EPS
+from reference_model import EPS
 
 
 def _safe_scale(values: np.ndarray, fallback: float = 1.0) -> float:

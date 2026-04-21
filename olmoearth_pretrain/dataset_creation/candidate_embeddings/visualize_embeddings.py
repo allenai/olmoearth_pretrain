@@ -603,7 +603,7 @@ def _project_residuals_with_local_pca(
 
 
 def load_reference_model(reference_model_path: str) -> dict[str, np.ndarray]:
-    """Load frozen PCA/k-means reference artifacts from select_embeddings.py."""
+    """Load frozen PCA/k-means reference artifacts from reference_model.py."""
     with np.load(reference_model_path, allow_pickle=False) as data:
         return {key: data[key] for key in data.files}
 
@@ -1279,7 +1279,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     cl_group.add_argument(
         "--overlay-reference-model",
         default=None,
-        help="Path to reference_model.npz from select_embeddings.py fit-reference. "
+        help="Path to reference_model.npz from reference_model.py. "
         "Used to project --overlay-input-dir into the reference PCA and "
         "parent clusters.",
     )

@@ -1,8 +1,8 @@
 """Score candidate embeddings with multiple acquisition strategies.
 
 This CLI reuses the frozen reference artifacts produced by
-``select_embeddings.py fit-reference`` and exposes additional acquisition
-signals beyond novelty:
+``reference_model.py`` and exposes additional acquisition signals beyond
+novelty:
 
 - xglobal_bridge
 - sparse-infill
@@ -20,7 +20,7 @@ from typing import TypedDict
 import acquisition_strategies as strat
 import numpy as np
 import pandas as pd
-from select_embeddings import (
+from reference_model import (
     assign_spherical_kmeans,
     compute_residuals,
     ensure_index_rows,
@@ -295,7 +295,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.add_argument(
             "--reference-dir",
             required=True,
-            help="Directory containing reference artifacts from select_embeddings.py",
+            help="Directory containing reference artifacts from reference_model.py",
         )
         p.add_argument(
             "--output-dir",

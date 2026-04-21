@@ -217,8 +217,7 @@ It fits:
 ```shell
 export OPENBLAS_NUM_THREADS=16
 export OMP_NUM_THREADS=16
-python scripts/embeddings/select_embeddings.py \
-  fit-reference \
+python scripts/embeddings/reference_model.py \
   --input-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes \
   --output-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_scores \
   --seed 1234 \
@@ -249,8 +248,7 @@ Each candidate is:
 ```shell
 export OPENBLAS_NUM_THREADS=16
 export OMP_NUM_THREADS=16
-python scripts/embeddings/select_embeddings.py \
-  novelty-score \
+python scripts/embeddings/score_novelty.py \
   --input-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings" \
   --reference-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_scores \
   --output-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings/_scores"
@@ -443,9 +441,8 @@ python scripts/embeddings/combine_acquisition.py \
 
 Outputs:
 1. `combined_acquisition_scores.parquet`
-2. `selected_sample_ids.json` – flat JSON list of all selected `window_name` values
-3. `combined_ranked_sample_idx.npy`
-4. `combined_acquisition_summary.json`
+2. `combined_ranked_sample_idx.npy`
+3. `combined_acquisition_summary.json`
 
 How it works:
 1. the script loads the novelty and acquisition score parquet files already written under `_scores/` (legacy `.csv` files are still accepted)
@@ -477,8 +474,11 @@ python scripts/embeddings/select_top_samples.py \
   --num-samples 250000
 ```
 
-Output: `selection_top<X>.parquet` written next to the input parquet
-(override with `--output-dir`). Columns:
+Outputs (written next to the input parquet, override with `--output-dir`):
+1. `selection_top<X>.parquet`
+2. `selected_sample_ids_top<X>.json` – flat JSON list of the selected `window_name` values
+
+Columns in the parquet:
 1. sample metadata: `sample_idx`, `window_name`, `lat`, `lon`, `parent_label`
 2. `in_top_combined` -- 1 if the sample was in the top-X of `combined_score`
 3. `in_top_solo_<strategy>` for each of the 5 strategies -- 1 if the sample was in the top-3X/5 of that strategy's standalone normalized score

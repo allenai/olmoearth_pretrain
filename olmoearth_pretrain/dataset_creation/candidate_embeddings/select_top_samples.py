@@ -19,6 +19,7 @@ several selections has ``1`` in several columns.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -165,10 +166,15 @@ def main(argv: list[str] | None = None) -> str:
     output_path = os.path.join(output_dir, f"selection_top{X}.parquet")
     result.to_parquet(output_path, index=False)
 
+    ids_path = os.path.join(output_dir, f"selected_sample_ids_top{X}.json")
+    with open(ids_path, "w") as f:
+        json.dump(result["window_name"].tolist(), f)
+
     print(
         f"[save] Selection parquet -> {output_path} "
         f"({len(result):,} unique samples; k_solo={k_solo}, k_drop={k_drop}, k_full={k_full})"
     )
+    print(f"[save] Selected sample IDs -> {ids_path}")
     return output_path
 
 
