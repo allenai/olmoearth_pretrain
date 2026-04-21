@@ -64,6 +64,38 @@ def _sanitize_name(name: str, max_len: int = 120) -> str:
     return cleaned
 
 
+DEFAULT_BEAKER_IMAGE = "ai2/cuda12.8-ubuntu22.04-torch2.7.1"
+
+# Setup steps run before the task command. Mirrors the pattern in
+# olmoearth_pretrain/internal/common.py: clone repo at a pinned git ref,
+# install deps with uv, activate the venv.
+SETUP_STEPS = (
+    "set -euo pipefail",
+    # gh CLI for private repo clone — conda is available on ai2 base images.
+    "conda install gh --channel conda-forge -y -q",
+    'echo "$GITHUB_TOKEN" | gh auth login --with-token',
+    "gh auth status",
+    'gh repo clone "$REPO_URL" . -- --depth=1 -b "$GIT_BRANCH"',
+    'git checkout "$GIT_REF"',
+    "pip install -q uv",
+    'export PATH="/root/.local/bin:$PATH"',
+    "uv sync --locked --extra dataset-creation",
+    # Activate the uv-managed venv for the actual command.
+    "venv_path=$(uv run python -c 'import sys; print(sys.executable)')",
+    'source "$(dirname "$venv_path")/activate"',
+)
+
+
+def build_setup_command(command: Sequence[str]) -> list[str]:
+    """Wrap `command` with the repo-clone + uv-install setup steps.
+
+    Returns a ``["bash", "-c", "..."]`` invocation so Beaker runs
+    everything in a single shell.
+    """
+    script_lines = list(SETUP_STEPS) + [" ".join(command)]
+    return ["bash", "-c", "\n".join(script_lines)]
+
+
 @dataclass(frozen=True)
 class BeakerJobConfig:
     """Shared Beaker settings every orchestrator-launched task uses.
@@ -72,13 +104,16 @@ class BeakerJobConfig:
     it to every `launch_beaker_task` call, rather than threading ~10 kwargs.
     """
 
-    beaker_image: str
-    clusters: Sequence[str]
+    beaker_image: str = DEFAULT_BEAKER_IMAGE
+    clusters: Sequence[str] = ()
     workspace: str = "ai2/earth-systems"
     budget: str = "ai2/d5"
     priority: str = "normal"
     preemptible: bool = True
     weka_buckets: Sequence[str] = ("dfive-default",)
+    git_ref: str = ""
+    git_repo_url: str = ""
+    git_branch: str = ""
     env_vars: Mapping[str, str] = field(default_factory=dict)
     env_secrets: Mapping[str, str] = field(default_factory=dict)
 
@@ -93,14 +128,15 @@ def _build_mounts(weka_buckets: Sequence[str]) -> list[DataMount]:
     ]
 
 
-def _build_env_vars(
-    env_vars: Mapping[str, str],
-    env_secrets: Mapping[str, str],
-) -> list[EnvVar]:
+def _build_env_vars(job: BeakerJobConfig) -> list[EnvVar]:
     out: list[EnvVar] = []
-    for k, v in env_vars.items():
+    # Git context for the setup steps.
+    out.append(EnvVar(name="REPO_URL", value=job.git_repo_url))
+    out.append(EnvVar(name="GIT_REF", value=job.git_ref))
+    out.append(EnvVar(name="GIT_BRANCH", value=job.git_branch))
+    for k, v in job.env_vars.items():
         out.append(EnvVar(name=k, value=v))
-    for k, secret in env_secrets.items():
+    for k, secret in job.env_secrets.items():
         out.append(EnvVar(name=k, secret=secret))
     return out
 
@@ -149,6 +185,9 @@ def launch_beaker_task(
     if extra_datasets:
         datasets.extend(extra_datasets)
 
+    # Wrap the actual command with repo-clone + uv-install setup.
+    full_command = build_setup_command(command)
+
     spec = ExperimentSpec(
         budget=job.budget,
         description=description,
@@ -156,13 +195,13 @@ def launch_beaker_task(
             TaskSpec.new(
                 name=task_name,
                 beaker_image=job.beaker_image,
-                command=list(command),
+                command=full_command,
                 cluster=list(job.clusters),
                 priority=Priority(job.priority),
                 preemptible=job.preemptible,
                 resources=resources,
                 datasets=datasets,
-                env_vars=_build_env_vars(job.env_vars, job.env_secrets),
+                env_vars=_build_env_vars(job),
             )
         ],
     )

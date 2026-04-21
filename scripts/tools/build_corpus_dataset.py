@@ -32,13 +32,17 @@ Example::
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 import uuid
 from pathlib import Path
 
 from upath import UPath
 
-from olmoearth_pretrain.dataset_creation.beaker_launcher import BeakerJobConfig
+from olmoearth_pretrain.dataset_creation.beaker_launcher import (
+    DEFAULT_BEAKER_IMAGE,
+    BeakerJobConfig,
+)
 from olmoearth_pretrain.dataset_creation.orchestrator import (
     DEFAULT_MODALITIES,
     ModalitySpec,
@@ -82,7 +86,8 @@ def _common_parser_opts(p: argparse.ArgumentParser) -> None:
 
 
 def _beaker_parser_opts(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--beaker_image", required=True)
+    p.add_argument("--beaker_image", default=DEFAULT_BEAKER_IMAGE,
+                    help=f"Beaker image (default: {DEFAULT_BEAKER_IMAGE})")
     p.add_argument("--clusters", default=DEFAULT_CLUSTERS)
     p.add_argument("--workspace", default="ai2/earth-systems")
     p.add_argument("--budget", default="ai2/d5")
@@ -106,41 +111,59 @@ def _beaker_parser_opts(p: argparse.ArgumentParser) -> None:
     )
 
 
-def _resolve_beaker_token_secret(explicit: str | None) -> str:
-    """Derive the Beaker secret name for BEAKER_TOKEN.
+def _resolve_beaker_secrets() -> tuple[str, str, str]:
+    """Auto-detect Beaker username and derive secret names.
 
-    If the user passed --beaker_token_secret, use that. Otherwise auto-detect
-    via `beaker account whoami` → '<username>_BEAKER_TOKEN', matching the
-    convention in olmoearth_pretrain/internal/common.py.
+    Returns (beaker_token_secret, github_token_secret, username).
+    Follows the convention in olmoearth_pretrain/internal/common.py:
+    ``<username>_BEAKER_TOKEN``, ``<username>_GITHUB_TOKEN``.
     """
-    if explicit:
-        return explicit
     from beaker import Beaker
 
     beaker = Beaker.from_env()
     username = beaker.account.whoami().name
-    secret = f"{username}_BEAKER_TOKEN"
-    print(f"Auto-detected beaker token secret: {secret}")
-    return secret
+    print(f"Auto-detected beaker user: {username}")
+    return f"{username}_BEAKER_TOKEN", f"{username}_GITHUB_TOKEN", username
+
+
+def _get_git_info() -> tuple[str, str, str]:
+    """Get the current git ref, branch, and repo URL."""
+    ref = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], text=True
+    ).strip()
+    branch = subprocess.check_output(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True
+    ).strip()
+    url = subprocess.check_output(
+        ["git", "remote", "get-url", "origin"], text=True
+    ).strip()
+    print(f"Git: {url} @ {branch} ({ref[:8]})")
+    return ref, branch, url
 
 
 def _build_cfg(args: argparse.Namespace) -> tuple[OrchestratorConfig, list[ModalitySpec]]:
-    env_secrets = {}
-    # Only resolve the token secret for subcommands that actually launch Beaker tasks.
+    env_secrets: dict[str, str] = {}
+    git_ref, git_branch, git_repo_url = "", "", ""
+
     if getattr(args, "command", None) in ("run", "launch"):
-        token_secret = _resolve_beaker_token_secret(
-            getattr(args, "beaker_token_secret", None)
-        )
-        env_secrets["BEAKER_TOKEN"] = token_secret
+        beaker_token_secret, github_token_secret, _ = _resolve_beaker_secrets()
+        env_secrets["BEAKER_TOKEN"] = beaker_token_secret
+        env_secrets["GITHUB_TOKEN"] = github_token_secret
+        git_ref, git_branch, git_repo_url = _get_git_info()
+
     if getattr(args, "pc_subscription_secret", None):
         env_secrets["PC_SDK_SUBSCRIPTION_KEY"] = args.pc_subscription_secret
+
     job = BeakerJobConfig(
-        beaker_image=getattr(args, "beaker_image", ""),
+        beaker_image=getattr(args, "beaker_image", DEFAULT_BEAKER_IMAGE),
         clusters=tuple(getattr(args, "clusters", DEFAULT_CLUSTERS).split(",")),
         workspace=getattr(args, "workspace", "ai2/earth-systems"),
         budget=getattr(args, "budget", "ai2/d5"),
         priority=getattr(args, "priority", "normal"),
         preemptible=not getattr(args, "no_preemptible", False),
+        git_ref=git_ref,
+        git_branch=git_branch,
+        git_repo_url=git_repo_url,
         env_secrets=env_secrets,
     )
     modalities = [
