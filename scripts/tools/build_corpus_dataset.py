@@ -257,7 +257,8 @@ def _cmd_launch(args: argparse.Namespace) -> int:
         job=cfg.job,
         cpu_count=2,
     )
-    print(f"Launched orchestrator experiment {exp_id}")
+    url = f"https://beaker.org/ex/{exp_id}"
+    print(f"Launched orchestrator experiment: {url}")
     return 0
 
 
