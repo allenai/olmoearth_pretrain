@@ -24,6 +24,7 @@ them.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -334,6 +335,11 @@ def main(argv: list[str] | None = None) -> None:
     parquet_path = os.path.join(output_dir, "combined_acquisition_scores.parquet")
     combined_df.to_parquet(parquet_path, index=False)
     print(f"[save] Combined parquet -> {parquet_path}")
+
+    selected_ids_path = os.path.join(output_dir, "selected_sample_ids.json")
+    with open(selected_ids_path, "w") as f:
+        json.dump(combined_df["window_name"].tolist(), f)
+    print(f"[save] Selected sample IDs -> {selected_ids_path}")
 
     sample_indices = base["sample_idx"].to_numpy(dtype=np.int64)
     save_ranked_indices(

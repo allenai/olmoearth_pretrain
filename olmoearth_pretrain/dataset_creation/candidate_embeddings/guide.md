@@ -443,8 +443,9 @@ python scripts/embeddings/combine_acquisition.py \
 
 Outputs:
 1. `combined_acquisition_scores.parquet`
-2. `combined_ranked_sample_idx.npy`
-3. `combined_acquisition_summary.json`
+2. `selected_sample_ids.json` – flat JSON list of all selected `window_name` values
+3. `combined_ranked_sample_idx.npy`
+4. `combined_acquisition_summary.json`
 
 How it works:
 1. the script loads the novelty and acquisition score parquet files already written under `_scores/` (legacy `.csv` files are still accepted)
