@@ -21,25 +21,25 @@ notes:
 ```shell
 export OPENBLAS_NUM_THREADS=16
 export OMP_NUM_THREADS=16
-python scripts/embeddings/cluster_embeddings.py   --input-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes   --seed 1234   --pca-dim 128   kmeans   --k 15   --spherical
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/cluster_embeddings.py   --input-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes   --seed 1234   --pca-dim 128   kmeans   --k 15   --spherical
 ```
 
 
 ### Viz with cluster labels - simple
 ```shell
-python scripts/embeddings/visualize_embeddings.py --input-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes --darkmode --seed 1234 --labels /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/labels_kmeans.npy
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/visualize_embeddings.py --input-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes --darkmode --seed 1234 --labels /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/labels_kmeans.npy
 ```
 
 
 ### Viz with cluster labels - Distance based
 ```shell
-python scripts/embeddings/visualize_embeddings.py --layout cluster --cluster-bundle /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_cc_4s_s2/_cluster/cluster_bundle_kmeans.npz  --metric cosine  --separation 3  --darkmode  --metadata /weka/dfive-default/henryh/helios/olmoearth_pretrain/v0_1_osm_sampling_scores.parquet  --output-name embedding_map_metadata_test.html   --metadata-columns filename elevation_mean is_temperate is_subtropical is_tropical is_boreal_polar is_mountainous ndwi_mean patch_uniformity spatial_homogeneity canopy_height_mean
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/visualize_embeddings.py --layout cluster --cluster-bundle /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_cc_4s_s2/_cluster/cluster_bundle_kmeans.npz  --metric cosine  --separation 3  --darkmode  --metadata /weka/dfive-default/henryh/helios/olmoearth_pretrain/v0_1_osm_sampling_scores.parquet  --output-name embedding_map_metadata_test.html   --metadata-columns filename elevation_mean is_temperate is_subtropical is_tropical is_boreal_polar is_mountainous ndwi_mean patch_uniformity spatial_homogeneity canopy_height_mean
 ```
 
 
 ### Viz: globe map with cluster colors
 ```shell
-python scripts/embeddings/visualize_map.py   --index-csv /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/index.csv   --labels-npy /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/labels_kmeans_int.npy   --lat-bounds 40 85 --lon-bounds -145 -50   --darkmode   --output-name globe_map_kmeans_nolegendtitle.png --no-legend --no-title
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/visualize_map.py   --index-csv /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/index.csv   --labels-npy /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/labels_kmeans_int.npy   --lat-bounds 40 85 --lon-bounds -145 -50   --darkmode   --output-name globe_map_kmeans_nolegendtitle.png --no-legend --no-title
 ```
 
 <br/>
@@ -62,19 +62,19 @@ rsync -av --delete --dry-run /weka/dfive-default/empty_dir_for_rsync_wipe/ /weka
 ### Optional Step 1: Generate thumbnails from H5 files
 ```shell
 # Generate thumbnails (adapt RGB_BANDS / S2_KEY in the script if needed):
-python scripts/embeddings/generate_thumbnails.py   --h5-dir /weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldpop_wri_canopy_height_map/1138828   --output-dir /weka/dfive-default/helios/dataset/osm_sampling/thumbnails/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldpop_wri_canopy_height_map/   --metadata /weka/dfive-default/henryh/helios/olmoearth_pretrain/v0_1_osm_sampling_scores.parquet   --workers 8
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/generate_thumbnails.py   --h5-dir /weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldpop_wri_canopy_height_map/1138828   --output-dir /weka/dfive-default/helios/dataset/osm_sampling/thumbnails/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldpop_wri_canopy_height_map/   --metadata /weka/dfive-default/henryh/helios/olmoearth_pretrain/v0_1_osm_sampling_scores.parquet   --workers 8
 ```
 
 ### Step 2: Build the map with image support
 ```shell
-python scripts/embeddings/visualize_embeddings.py   --layout cluster   --cluster-bundle /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/cluster_bundle_kmeans.npz   --metric cosine   --separation 3   --darkmode   --metadata /weka/dfive-default/henryh/helios/olmoearth_pretrain/v0_1_osm_sampling_scores.parquet   --metadata-columns filename elevation_mean is_temperate is_subtropical is_tropical is_boreal_polar is_mountainous ndwi_mean patch_uniformity spatial_homogeneity canopy_height_mean   --output-name embedding_map_with_images.html   --thumbnail-url-prefix ./thumbnails/
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/visualize_embeddings.py   --layout cluster   --cluster-bundle /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/cluster_bundle_kmeans.npz   --metric cosine   --separation 3   --darkmode   --metadata /weka/dfive-default/henryh/helios/olmoearth_pretrain/v0_1_osm_sampling_scores.parquet   --metadata-columns filename elevation_mean is_temperate is_subtropical is_tropical is_boreal_polar is_mountainous ndwi_mean patch_uniformity spatial_homogeneity canopy_height_mean   --output-name embedding_map_with_images.html   --thumbnail-url-prefix ./thumbnails/
 ```
 
 ### Step 3: Serve and open in browser
 ```shell
 export IMAGES_DIR="/weka/dfive-default/helios/dataset/osm_sampling/thumbnails/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/"
 # Option A: convenience script (handles thumbnail dir symlinks)
-python scripts/embeddings/serve_map.py   --viz-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/_viz   --thumbnail-dir "$IMAGES_DIR"
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/serve_map.py   --viz-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/_viz   --thumbnail-dir "$IMAGES_DIR"
 
 # Option B: plain Python HTTP server (thumbnails must be inside _viz/thumbnails/)
 python -m http.server 8765 -d /path/to/_viz
@@ -102,7 +102,7 @@ notes:
 ```shell
 export OPENBLAS_NUM_THREADS=16
 export OMP_NUM_THREADS=16
-python scripts/embeddings/cluster_embeddings.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/cluster_embeddings.py \
   --input-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes \
   --seed 1234 \
   --pca-dim 128 \
@@ -123,7 +123,7 @@ The point placement still comes from `cluster_bundle_kmeans.npz`.
 The nested HDBSCAN labels only override displayed colors / search / polygons.
 
 ```shell
-python scripts/embeddings/visualize_embeddings.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/visualize_embeddings.py \
   --layout cluster \
   --cluster-bundle /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/cluster_bundle_kmeans.npz \
   --labels /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/labels_kmeans_residual_hdbscan.npy \
@@ -154,7 +154,7 @@ python olmoearth_pretrain/dataset_creation/candidate_embeddings/visualize_embedd
 ```shell
 export IMAGES_DIR="/weka/dfive-default/helios/dataset/osm_sampling/thumbnails/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/"
 # Option A: convenience script (handles thumbnail dir symlinks)
-python scripts/embeddings/serve_map.py   --viz-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/_viz   --thumbnail-dir "$IMAGES_DIR"
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/serve_map.py   --viz-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/_viz   --thumbnail-dir "$IMAGES_DIR"
 ```
 
 <br/>
@@ -178,7 +178,7 @@ This mode:
 5. renders the new points as black dots with a sharp light-green outline
 
 ```shell
-python scripts/embeddings/visualize_embeddings.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/visualize_embeddings.py \
   --layout cluster \
   --cluster-bundle /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/cluster_bundle_kmeans.npz \
   --labels /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/labels_kmeans_residual_hdbscan.npy \
@@ -217,7 +217,7 @@ It fits:
 ```shell
 export OPENBLAS_NUM_THREADS=16
 export OMP_NUM_THREADS=16
-python scripts/embeddings/reference_model.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/reference_model.py \
   --input-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes \
   --output-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_scores \
   --seed 1234 \
@@ -248,7 +248,7 @@ Each candidate is:
 ```shell
 export OPENBLAS_NUM_THREADS=16
 export OMP_NUM_THREADS=16
-python scripts/embeddings/score_novelty.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_novelty.py \
   --input-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings" \
   --reference-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_scores \
   --output-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings/_scores"
@@ -289,7 +289,7 @@ Best when you want candidates that sit between two parent clusters rather than
 deep inside one of them.
 
 ```shell
-python scripts/embeddings/score_acquisition.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_acquisition.py \
   xglobal_bridge \
   --input-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings" \
   --reference-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_scores \
@@ -320,7 +320,7 @@ Best when you want points in sparse-but-still-supported regions of an existing
 parent manifold, not just extreme outliers.
 
 ```shell
-python scripts/embeddings/score_acquisition.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_acquisition.py \
   sparse-infill \
   --input-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings" \
   --reference-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_scores \
@@ -351,7 +351,7 @@ Best when you want candidates that connect two nearby local modes inside the
 same parent cluster.
 
 ```shell
-python scripts/embeddings/score_acquisition.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_acquisition.py \
   xlocal_bridge \
   --input-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings" \
   --reference-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_scores \
@@ -377,7 +377,7 @@ Interpretation:
 Best when you want clean, representative points from dense local neighborhoods.
 
 ```shell
-python scripts/embeddings/score_acquisition.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_acquisition.py \
   prototypes \
   --input-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings" \
   --reference-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_scores \
@@ -469,7 +469,7 @@ For budget `X` it picks:
 3. top `X` candidates for the full weighted `combined_score`
 
 ```shell
-python scripts/embeddings/select_top_samples.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/select_top_samples.py \
   --combined-parquet "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings/_scores/combined_acquisition_scores.parquet" \
   --num-samples 250000
 ```
