@@ -45,7 +45,11 @@ from olmo_core.train.common import Duration
 from olmo_core.train.config import TrainerConfig
 from olmo_core.utils import get_default_device, prepare_cli_environment, seed_all
 
-from olmoearth_pretrain.internal.all_evals import EVAL_TASKS, load_user_module
+from olmoearth_pretrain.internal.all_evals import (
+    EMBED_DIAG_TASKS,
+    EVAL_TASKS,
+    load_user_module,
+)
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
 from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
@@ -131,6 +135,9 @@ def evaluate_checkpoints(
         wandb_callback.wandb.define_metric("eval/*", step_metric="checkpoint_step")
         wandb_callback.wandb.define_metric("eval/test/*", step_metric="checkpoint_step")
         wandb_callback.wandb.define_metric("eval_time/*", step_metric="checkpoint_step")
+        wandb_callback.wandb.define_metric(
+            "eval_embed_diagnostics/*", step_metric="checkpoint_step"
+        )
 
     # Get the evaluator callback (contains the built evaluator objects)
     eval_callback = trainer.callbacks.get("downstream_evaluator")
@@ -177,6 +184,12 @@ def evaluate_checkpoints(
                 for k, v in test_result.metrics.items():
                     metrics[f"eval/test/{evaluator.evaluation_name}/{k}"] = v
 
+            if result.embedding_diagnostics:
+                for k, v in result.embedding_diagnostics.items():
+                    metrics[
+                        f"eval_embed_diagnostics/{evaluator.evaluation_name}/{k}"
+                    ] = v
+
             metrics[f"eval_time/{evaluator.evaluation_name}"] = eval_time
 
             logger.info(
@@ -197,6 +210,13 @@ def evaluate_checkpoints(
     if wandb_callback.enabled and get_rank() == 0:
         wandb_callback.wandb.finish()
     logger.info("Checkpoint sweep evaluation complete.")
+
+
+def _get_eval_tasks() -> dict:
+    """Select task set based on EMBEDDING_DIAGNOSTICS_ONLY env var."""
+    if os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY"):
+        return EMBED_DIAG_TASKS
+    return EVAL_TASKS
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
@@ -225,7 +245,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         .with_callback(
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
-                tasks=EVAL_TASKS,
+                tasks=_get_eval_tasks(),
                 eval_on_startup=False,
                 cancel_after_first_eval=False,
                 run_on_test=True,

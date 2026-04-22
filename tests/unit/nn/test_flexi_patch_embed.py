@@ -20,7 +20,7 @@ def _make_seeded_conv_and_linear_pair(
     torch.manual_seed(seed)
     embed_conv = FlexiPatchEmbed(
         modality_spec=modality,
-        patch_size_at_16=patch_size_at_16,
+        base_patch_size_at_16=patch_size_at_16,
         in_chans=in_chans,
         embedding_size=embedding_size,
         use_linear_patch_embed=False,
@@ -28,7 +28,7 @@ def _make_seeded_conv_and_linear_pair(
     torch.manual_seed(seed)
     embed_linear = FlexiPatchEmbed(
         modality_spec=modality,
-        patch_size_at_16=patch_size_at_16,
+        base_patch_size_at_16=patch_size_at_16,
         in_chans=in_chans,
         embedding_size=embedding_size,
         use_linear_patch_embed=True,
@@ -46,14 +46,14 @@ def _make_weight_matched_conv_and_linear_pair(
     torch.manual_seed(0)
     embed_conv = FlexiPatchEmbed(
         modality_spec=modality,
-        patch_size_at_16=patch_size_at_16,
+        base_patch_size_at_16=patch_size_at_16,
         in_chans=in_chans,
         embedding_size=embedding_size,
         use_linear_patch_embed=False,
     )
     embed_linear = FlexiPatchEmbed(
         modality_spec=modality,
-        patch_size_at_16=patch_size_at_16,
+        base_patch_size_at_16=patch_size_at_16,
         in_chans=in_chans,
         embedding_size=embedding_size,
         use_linear_patch_embed=True,
@@ -113,7 +113,7 @@ def test_linear_vs_conv_patch_embed_equivalence(
         modality, in_chans, embedding_size, patch_size_at_16
     )
 
-    p_h, _ = embed_conv.patch_size
+    p_h, _ = embed_conv.base_patch_size
     H = W = max(p_h * 2, 16)
 
     x_4d = torch.randn(2, H, W, in_chans)
@@ -145,13 +145,13 @@ def test_linear_vs_conv_spatial_ordering(patch_size_at_16: int) -> None:
     torch.manual_seed(0)
     embed_conv = FlexiPatchEmbed(
         modality_spec=modality,
-        patch_size_at_16=patch_size_at_16,
+        base_patch_size_at_16=patch_size_at_16,
         in_chans=in_chans,
         embedding_size=embedding_size,
         use_linear_patch_embed=False,
     )
 
-    p_h, _ = embed_conv.patch_size
+    p_h, _ = embed_conv.base_patch_size
     with torch.no_grad():
         embed_conv.proj.weight.zero_()
         embed_conv.proj.bias.zero_()
@@ -160,7 +160,7 @@ def test_linear_vs_conv_spatial_ordering(patch_size_at_16: int) -> None:
 
     embed_linear = FlexiPatchEmbed(
         modality_spec=modality,
-        patch_size_at_16=patch_size_at_16,
+        base_patch_size_at_16=patch_size_at_16,
         in_chans=in_chans,
         embedding_size=embedding_size,
         use_linear_patch_embed=True,
@@ -202,7 +202,7 @@ def test_linear_vs_conv_with_flexi_patch_resize(
         modality, in_chans, embedding_size, patch_size_at_16
     )
 
-    p_h, _ = embed_conv.patch_size
+    p_h, _ = embed_conv.base_patch_size
     H = W = max(p_h * 4, 32)
     x = torch.randn(2, H, W, 2, in_chans)
 

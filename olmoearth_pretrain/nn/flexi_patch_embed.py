@@ -34,7 +34,7 @@ class FlexiPatchEmbed(nn.Module):
     def __init__(
         self,
         modality_spec: ModalitySpec,
-        patch_size_at_16: int | tuple[int, int],
+        base_patch_size_at_16: int | tuple[int, int],
         in_chans: int = 3,
         embedding_size: int = 128,
         norm_layer: nn.Module | None = None,
@@ -50,7 +50,7 @@ class FlexiPatchEmbed(nn.Module):
 
         Args:
             modality_spec: The modality spec for this modality
-            patch_size_at_16: Base patch size. i.e the size of the parameter buffer at a resolution of 16
+            base_patch_size_at_16: Base patch size. i.e the size of the parameter buffer at a resolution of 16
             in_chans: Number of input image channels
             embedding_size: Network embedding dimension size
             norm_layer: Optional normalization layer
@@ -66,11 +66,11 @@ class FlexiPatchEmbed(nn.Module):
         self.use_linear_patch_embed = use_linear_patch_embed
 
         self.modality_spec = modality_spec
-        self.patch_size = _to_2tuple(
-            patch_size_at_16 * modality_spec.image_tile_size_factor
+        self.base_patch_size = _to_2tuple(
+            base_patch_size_at_16 * modality_spec.image_tile_size_factor
         )
 
-        p_h, p_w = self.patch_size
+        p_h, p_w = self.base_patch_size
         if use_linear_patch_embed:
             # Reshape patches to (p1 p2 c) then project — hits cuBLAS GEMM (always fast
             # on TensorCores) vs Conv2d which hits slow cuDNN paths for small in_chans.
@@ -83,8 +83,8 @@ class FlexiPatchEmbed(nn.Module):
             self.proj = nn.Conv2d(
                 in_chans,
                 embedding_size,
-                kernel_size=self.patch_size,
-                stride=self.patch_size,
+                kernel_size=self.base_patch_size,
+                stride=self.base_patch_size,
                 bias=bias,
             )
         self.norm = norm_layer(embedding_size) if norm_layer else nn.Identity()
@@ -96,7 +96,7 @@ class FlexiPatchEmbed(nn.Module):
     ) -> tuple[int, int]:
         """Resolve the effective patch size, applying the modality tile size factor."""
         if not patch_size:
-            return self.patch_size
+            return self.base_patch_size
         if isinstance(patch_size, tuple):
             patch_size = (
                 patch_size[0] * self.modality_spec.image_tile_size_factor,
@@ -118,7 +118,7 @@ class FlexiPatchEmbed(nn.Module):
         num_timesteps: int,
     ) -> Tensor:
         """Project patches using nn.Linear (reshape → cuBLAS GEMM → reshape)."""
-        p_h, p_w = self.patch_size
+        p_h, p_w = self.base_patch_size
         x = rearrange(x, "b c (h p1) (w p2) -> b (h w) (p1 p2 c)", p1=p_h, p2=p_w)
         x = self.proj(x)
         if has_time_dim:
@@ -162,7 +162,7 @@ class FlexiPatchEmbed(nn.Module):
 
         Args:
             x: Input tensor with shape [b, h, w, (t), c]
-            patch_size: Patch size to use for the embedding. If None, uses the base patch size.
+            patch_size: Requested patch size to use for the embedding. If None, uses the base patch size.
         """
         batch_size = x.shape[0]
         has_time_dim = len(x.shape) == 5
@@ -173,20 +173,20 @@ class FlexiPatchEmbed(nn.Module):
         else:
             x = rearrange(x, "b h w c -> b c h w")
 
-        patch_size = self._resolve_patch_size(patch_size)
+        req_patch_size = self._resolve_patch_size(patch_size)
 
-        if patch_size != self.patch_size:
+        if req_patch_size != self.base_patch_size:
             shape = x.shape[-2:]
             new_shape = (
-                shape[0] // patch_size[0] * self.patch_size[0],
-                shape[1] // patch_size[1] * self.patch_size[1],
+                shape[0] // req_patch_size[0] * self.base_patch_size[0],
+                shape[1] // req_patch_size[1] * self.base_patch_size[1],
             )
             x = F.interpolate(
                 x, size=new_shape, mode=self.interpolation, antialias=self.antialias
             )
 
-        p_h, p_w = self.patch_size
-        h_patches, w_patches = x.shape[2] // p_h, x.shape[3] // p_w
+        p_h, p_w = self.base_patch_size
+        h_patches, w_patches = x.shape[-2] // p_h, x.shape[-1] // p_w
 
         if self.use_linear_patch_embed:
             x = self._project_linear(
