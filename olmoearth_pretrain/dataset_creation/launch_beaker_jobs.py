@@ -22,14 +22,14 @@ import os
 import uuid
 
 import tqdm
-from beaker import (
-    Beaker,
-    BeakerConstraints,
-    BeakerDataMount,
-    BeakerDataSource,
-    BeakerEnvVar,
-    BeakerExperimentSpec,
-    BeakerJobPriority,
+from beaker import Beaker
+from beaker.data_model.experiment_spec import (
+    Constraints,
+    DataMount,
+    DataSource,
+    EnvVar,
+    ExperimentSpec,
+    Priority,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,38 +53,38 @@ SETUP_COMMANDS = (
 STAGES = ("prepare", "ingest", "materialize")
 
 
-def _get_env_vars() -> list[BeakerEnvVar]:
+def _get_env_vars() -> list[EnvVar]:
     """Build the environment variables for dataset creation Beaker jobs."""
     env_vars = [
-        BeakerEnvVar(
+        EnvVar(
             name="GOOGLE_APPLICATION_CREDENTIALS",  # nosec
             value="/etc/credentials/gcp_credentials.json",  # nosec
         ),
-        BeakerEnvVar(
+        EnvVar(
             name="GCLOUD_PROJECT",  # nosec
             value="earthsystem-dev-c3po",  # nosec
         ),
-        BeakerEnvVar(
+        EnvVar(
             name="GOOGLE_CLOUD_PROJECT",  # nosec
             value="earthsystem-dev-c3po",  # nosec
         ),
-        BeakerEnvVar(
+        EnvVar(
             name="WEKA_ACCESS_KEY_ID",  # nosec
             secret="RSLEARN_WEKA_KEY",  # nosec
         ),
-        BeakerEnvVar(
+        EnvVar(
             name="WEKA_SECRET_ACCESS_KEY",  # nosec
             secret="RSLEARN_WEKA_SECRET",  # nosec
         ),
-        BeakerEnvVar(
+        EnvVar(
             name="WEKA_ENDPOINT_URL",  # nosec
             value="https://weka-aus.beaker.org:9000",  # nosec
         ),
-        BeakerEnvVar(
+        EnvVar(
             name="MKL_THREADING_LAYER",
             value="GNU",
         ),
-        BeakerEnvVar(
+        EnvVar(
             name="EARTHDATAHUB_TOKEN",
             secret="RSLEARN_EARTHDATAHUB_TOKEN",  # nosec
         ),
@@ -92,21 +92,19 @@ def _get_env_vars() -> list[BeakerEnvVar]:
 
     if "NASA_EARTHDATA_USERNAME" in os.environ:
         env_vars += [
-            BeakerEnvVar(
+            EnvVar(
                 name="NASA_EARTHDATA_USERNAME",
                 value=os.environ["NASA_EARTHDATA_USERNAME"],
             ),
-            BeakerEnvVar(
+            EnvVar(
                 name="NASA_EARTHDATA_PASSWORD",
                 value=os.environ["NASA_EARTHDATA_PASSWORD"],
             ),
         ]
     if "HTTP_PROXY" in os.environ:
-        env_vars.append(BeakerEnvVar(name="HTTP_PROXY", value=os.environ["HTTP_PROXY"]))
+        env_vars.append(EnvVar(name="HTTP_PROXY", value=os.environ["HTTP_PROXY"]))
     if "HTTPS_PROXY" in os.environ:
-        env_vars.append(
-            BeakerEnvVar(name="HTTPS_PROXY", value=os.environ["HTTPS_PROXY"])
-        )
+        env_vars.append(EnvVar(name="HTTPS_PROXY", value=os.environ["HTTPS_PROXY"]))
 
     return env_vars
 
@@ -114,16 +112,16 @@ def _get_env_vars() -> list[BeakerEnvVar]:
 def _create_gcp_credentials_mount(
     secret: str = "RSLEARN_GCP_CREDENTIALS",
     mount_path: str = "/etc/credentials/gcp_credentials.json",
-) -> BeakerDataMount:
-    return BeakerDataMount(
-        source=BeakerDataSource(secret=secret),  # nosec
+) -> DataMount:
+    return DataMount(
+        source=DataSource(secret=secret),  # nosec
         mount_path=mount_path,  # nosec
     )
 
 
 def _create_gee_credentials_mount(
     mount_path: str = "/etc/credentials/gee_credentials.json",
-) -> BeakerDataMount:
+) -> DataMount:
     secret = os.environ.get(
         "GEE_CREDENTIALS_MOUNT_SECRET", "GCP_HELIOS_SERVICE_ACCOUNT"
     )
@@ -280,7 +278,7 @@ def launch_beaker_job(
     rslearn_version: str | None,
     hostname: str | None = None,
     clusters: list[str] | None = None,
-    priority: BeakerJobPriority = BeakerJobPriority.high,
+    priority: Priority = Priority.normal,
 ) -> str:
     """Create and submit a single Beaker experiment.
 
@@ -300,43 +298,43 @@ def launch_beaker_job(
     setup = SETUP_COMMANDS.format(version_spec=version_spec)
     full_command = f"{setup} && {command_str}"
 
-    with Beaker.from_env(default_workspace=DEFAULT_WORKSPACE) as beaker:
-        experiment_name = f"ds-{modality_name}-{str(uuid.uuid4())[:8]}"
+    beaker = Beaker.from_env(default_workspace=DEFAULT_WORKSPACE)
+    experiment_name = f"ds-{modality_name}-{str(uuid.uuid4())[:8]}"
 
-        weka_mount = BeakerDataMount(
-            source=BeakerDataSource(weka=WEKA_BUCKET),
-            mount_path=f"/weka/{WEKA_BUCKET}",
-        )
+    weka_mount = DataMount(
+        source=DataSource(weka=WEKA_BUCKET),
+        mount_path=f"/weka/{WEKA_BUCKET}",
+    )
 
-        env_vars = _get_env_vars()
+    env_vars = _get_env_vars()
 
-        resources: dict | None
-        constraints: BeakerConstraints
-        if hostname is None:
-            resources = {"gpuCount": 1}
-            constraints = BeakerConstraints(cluster=clusters)
-        else:
-            resources = None
-            constraints = BeakerConstraints(hostname=[hostname])
+    resources: dict | None
+    constraints: Constraints
+    if hostname is None:
+        resources = {"gpuCount": 0}
+        constraints = Constraints(cluster=clusters)
+    else:
+        resources = None
+        constraints = Constraints(hostname=[hostname])
 
-        experiment_spec = BeakerExperimentSpec.new(
-            budget=DEFAULT_BUDGET,
-            task_name=experiment_name,
-            docker_image=base_image,
-            priority=priority,
-            command=["bash", "-c", full_command],
-            datasets=[
-                weka_mount,
-                _create_gcp_credentials_mount(),
-                _create_gee_credentials_mount(),
-            ],
-            resources=resources,
-            preemptible=True,
-            constraints=constraints,
-            env_vars=env_vars,
-        )
-        beaker.experiment.create(name=experiment_name, spec=experiment_spec)
-        return experiment_name
+    experiment_spec = ExperimentSpec.new(
+        budget=DEFAULT_BUDGET,
+        task_name=experiment_name,
+        docker_image=base_image,
+        priority=priority,
+        command=["bash", "-c", full_command],
+        datasets=[
+            weka_mount,
+            _create_gcp_credentials_mount(),
+            _create_gee_credentials_mount(),
+        ],
+        resources=resources,
+        preemptible=True,
+        constraints=constraints,
+        env_vars=env_vars,
+    )
+    beaker.experiment.create(name=experiment_name, spec=experiment_spec)
+    return experiment_name
 
 
 def launch_jobs(
@@ -350,7 +348,7 @@ def launch_jobs(
     workers: int = 64,
     base_image: str = DEFAULT_BASE_IMAGE,
     rslearn_version: str | None = None,
-    priority: BeakerJobPriority = BeakerJobPriority.high,
+    priority: Priority = Priority.normal,
     extra_args: list[str] | None = None,
 ) -> None:
     """Launch Beaker jobs for rslearn dataset creation, one modality per job.
@@ -511,9 +509,9 @@ def main() -> None:
     )
     launch_parser.add_argument(
         "--priority",
-        default="high",
+        default="normal",
         choices=["low", "normal", "high", "urgent"],
-        help="Beaker job priority (default: high).",
+        help="Beaker job priority (default: normal).",
     )
     launch_parser.add_argument(
         "--extra-rslearn-args",
@@ -535,10 +533,10 @@ def main() -> None:
     stages = list(STAGES) if args.stage == "all" else [args.stage]
 
     priority_map = {
-        "low": BeakerJobPriority.low,
-        "normal": BeakerJobPriority.normal,
-        "high": BeakerJobPriority.high,
-        "urgent": BeakerJobPriority.urgent,
+        "low": Priority.low,
+        "normal": Priority.normal,
+        "high": Priority.high,
+        "urgent": Priority.urgent,
     }
 
     launch_jobs(

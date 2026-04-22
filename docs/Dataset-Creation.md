@@ -239,6 +239,7 @@ python -m olmoearth_pretrain.dataset_creation.launch_beaker_jobs launch \
 ```
 
 Alternatively, target Beaker clusters instead of specific hosts:
+Note: jobs may be scheduled on the same node, to avoid this specify the --hosts
 
 ```
 python -m olmoearth_pretrain.dataset_creation.launch_beaker_jobs launch \
