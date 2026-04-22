@@ -633,7 +633,7 @@ def main() -> None:
     parser.add_argument(
         "--masking_type",
         type=str,
-        default="modality_cross_random",
+        default="random_time_with_decode",
         help="Type of masking strategy",
     )
     parser.add_argument(

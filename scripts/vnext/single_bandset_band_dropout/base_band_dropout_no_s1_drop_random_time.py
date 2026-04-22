@@ -168,7 +168,7 @@ def build_train_module_config(
         masking_config=_masking_config(common.tokenization_config),
         loss_config=LossConfig(
             loss_config={
-                "type": "modality_patch_discrimination_masked_negatives",
+                "type": "modality_patch_discrimination_masked_negatives_vec",
                 "tau": 0.1,
                 "same_target_threshold": 0.999,
                 "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,

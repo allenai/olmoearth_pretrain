@@ -171,6 +171,13 @@ def build_launch_config(
     if experiment is not None:
         logger.info(f"Propagating experiment key to experiment: {experiment}")
         env_vars.append(BeakerEnvVar(name="EXPERIMENT", value=experiment))
+    embedding_diagnostics_only = os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY")
+    if embedding_diagnostics_only is not None:
+        env_vars.append(
+            BeakerEnvVar(
+                name="EMBEDDING_DIAGNOSTICS_ONLY", value=embedding_diagnostics_only
+            )
+        )
 
     return OlmoEarthBeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",

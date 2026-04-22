@@ -283,7 +283,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                     self._get_embedding_module_name(modality, idx): FlexiPatchEmbed(
                         in_chans=len(channel_set_idxs),
                         embedding_size=self.embedding_size,
-                        patch_size_at_16=self.max_patch_size,
+                        base_patch_size_at_16=self.max_patch_size,
                         modality_spec=modality_spec,
                         use_linear_patch_embed=self.use_linear_patch_embed,
                     )
@@ -323,9 +323,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                 modality_specific_kwargs = {"patch_size": patch_size}
 
             buffer_name = self._get_buffer_name(modality, idx)
-            patchified_data = torch.index_select(
-                modality_data, -1, getattr(self, buffer_name)
-            )
+            inp_data = torch.index_select(modality_data, -1, getattr(self, buffer_name))
 
             # Check if we should apply band dropout for this bandset
             apply_dropout = (
@@ -333,24 +331,22 @@ class MultiModalPatchEmbeddings(nn.Module):
                 or modality in self.band_dropout_modalities
             )
             if self.training and apply_dropout and self.band_dropout_rate > 0.0:
-                num_bands = patchified_data.shape[-1]
+                num_bands = inp_data.shape[-1]
                 # Only apply band dropout if there are more than 1 band
                 if num_bands > 1:
                     if self.random_band_dropout:
                         rate = (
-                            torch.rand(1, device=patchified_data.device).item()
+                            torch.rand(1, device=inp_data.device).item()
                             * self.band_dropout_rate
                         )
                     else:
                         rate = self.band_dropout_rate
-                    patchified_data = self._apply_band_dropout(patchified_data, rate)
+                    inp_data = self._apply_band_dropout(inp_data, rate)
 
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
             ]
-            patchified_data = embedding_module(
-                patchified_data, **modality_specific_kwargs
-            )
+            patchified_data = embedding_module(inp_data, **modality_specific_kwargs)
 
             modality_tokens.append(patchified_data)
             modality_masks.append(token_mask)
