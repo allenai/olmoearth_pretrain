@@ -42,6 +42,7 @@ class FlexiPatchEmbed(nn.Module):
         interpolation: str = "bicubic",
         antialias: bool = True,
         use_linear_patch_embed: bool = True,
+        patch_embed_hidden_sizes: list[int] | None = None,
     ) -> None:
         """2D image to patch embedding w/ flexible patch sizes.
 
@@ -59,6 +60,16 @@ class FlexiPatchEmbed(nn.Module):
             antialias: Whether to apply antialiasing resizing
             use_linear_patch_embed: If True, use nn.Linear (reshape + matmul via cuBLAS GEMM).
                 If False, use nn.Conv2d (required to load checkpoints trained before this flag existed).
+            patch_embed_hidden_sizes: Optional list of hidden layer widths for a
+                per-pixel MLP applied BEFORE patchification. If None or empty, the
+                projection is a single nn.Linear over the flattened patch (current
+                behavior). Otherwise, each pixel's ``in_chans`` channels are first
+                mapped through
+                Linear(in_chans, h[0]) -> ReLU -> Linear(h[0], h[1]) -> ReLU -> ... -> Linear(h[-2], h[-1]) -> ReLU
+                (weights shared across all pixels), producing an ``H x W x h[-1]``
+                feature map, which is then patchified and projected to
+                ``embedding_size`` with a final Linear(h[-1] * p_h * p_w, embedding_size).
+                Only supported when use_linear_patch_embed=True.
         """
         super().__init__()
 
@@ -70,11 +81,35 @@ class FlexiPatchEmbed(nn.Module):
             base_patch_size_at_16 * modality_spec.image_tile_size_factor
         )
 
+        if patch_embed_hidden_sizes and not use_linear_patch_embed:
+            raise ValueError(
+                "patch_embed_hidden_sizes requires use_linear_patch_embed=True"
+            )
+
         p_h, p_w = self.base_patch_size
+        self.pixel_proj: nn.Sequential | None = None
         if use_linear_patch_embed:
             # Reshape patches to (p1 p2 c) then project — hits cuBLAS GEMM (always fast
             # on TensorCores) vs Conv2d which hits slow cuDNN paths for small in_chans.
-            self.proj = nn.Linear(in_chans * p_h * p_w, embedding_size, bias=bias)
+            if patch_embed_hidden_sizes:
+                # Per-pixel MLP that maps ``in_chans -> h[0] -> ... -> h[-1]`` with
+                # ReLU activations (weights shared across every pixel). Applied before
+                # patchification; the per-patch projection below then maps the flattened
+                # ``h[-1] * p_h * p_w`` pixel features to ``embedding_size``.
+                pixel_layers: list[nn.Module] = []
+                prev = in_chans
+                for h in patch_embed_hidden_sizes:
+                    pixel_layers.append(nn.Linear(prev, h, bias=bias))
+                    pixel_layers.append(nn.ReLU(inplace=True))
+                    prev = h
+                self.pixel_proj = nn.Sequential(*pixel_layers)
+                for m in self.pixel_proj:
+                    if isinstance(m, nn.Linear):
+                        m._skip_custom_init = True
+                patch_in_features = prev * p_h * p_w
+            else:
+                patch_in_features = in_chans * p_h * p_w
+            self.proj = nn.Linear(patch_in_features, embedding_size, bias=bias)
             # Keep PyTorch's default nn.Linear initialization (kaiming_uniform_) for
             # patch projection to match prior Conv2d behavior; overriding this with
             # encoder-level Xavier init correlated with a PASTIS regression.
@@ -119,7 +154,15 @@ class FlexiPatchEmbed(nn.Module):
     ) -> Tensor:
         """Project patches using nn.Linear (reshape → cuBLAS GEMM → reshape)."""
         p_h, p_w = self.base_patch_size
-        x = rearrange(x, "b c (h p1) (w p2) -> b (h w) (p1 p2 c)", p1=p_h, p2=p_w)
+        if self.pixel_proj is not None:
+            # Per-pixel MLP over channels (weights shared across all pixels):
+            # [b, c, H, W] -> [b, H, W, c] -> MLP -> [b, H, W, h[-1]]
+            # Then patchify: [b, h_patches, w_patches, p_h * p_w * h[-1]]
+            x = rearrange(x, "b c h w -> b h w c")
+            x = self.pixel_proj(x)
+            x = rearrange(x, "b (h p1) (w p2) c -> b (h w) (p1 p2 c)", p1=p_h, p2=p_w)
+        else:
+            x = rearrange(x, "b c (h p1) (w p2) -> b (h w) (p1 p2 c)", p1=p_h, p2=p_w)
         x = self.proj(x)
         if has_time_dim:
             return rearrange(
