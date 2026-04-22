@@ -137,7 +137,7 @@ python scripts/embeddings/visualize_embeddings.py \
 
 ## Viz with thumbnails + nested HDBSCAN labels
 ```shell
-python scripts/embeddings/visualize_embeddings.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/visualize_embeddings.py \
   --layout cluster \
   --cluster-bundle /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/cluster_bundle_kmeans.npz \
   --labels /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_cluster/labels_kmeans_residual_hdbscan.npy \
