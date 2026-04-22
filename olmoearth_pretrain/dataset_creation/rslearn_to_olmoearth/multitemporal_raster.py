@@ -8,6 +8,7 @@ import numpy.typing as npt
 from rslearn.data_sources import Item
 from rslearn.dataset import Window
 from rslearn.utils.geometry import PixelBounds, Projection
+from rslearn.utils.raster_format import GeotiffRasterFormat
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import BandSet, ModalitySpec, TimeSpan
@@ -348,3 +349,147 @@ def convert_monthly(
                 for image_idx, (start_time, end_time) in enumerate(time_ranges)
             ],
         )
+
+
+def convert_temporal_stack(
+    window: Window,
+    olmoearth_path: UPath,
+    layer_name: str,
+    modality: ModalitySpec,
+    missing_okay: bool = False,
+) -> None:
+    """Convert a single-layer temporal stack (period_duration layout) to OlmoEarth format.
+
+    This handles the newer rslearn config where one layer has multiple item groups
+    (one per period), each materialized at a separate group_idx, instead of the legacy
+    layout with 12 separate ``_moNN`` layers.
+
+    Args:
+        window: the rslearn window to read data from.
+        olmoearth_path: OlmoEarth Pretrain dataset path to write to.
+        layer_name: the rslearn layer name (e.g. "sentinel1", "sentinel2_l2a").
+        modality: the modality.
+        missing_okay: skip groups whose rasters are missing on disk.
+    """
+    window_metadata = get_window_metadata(window)
+    layer_datas = window.load_layer_datas()
+
+    if abs(window_metadata.resolution - modality.get_tile_resolution()) > EPSILON:
+        raise ValueError(
+            f"window ({window_metadata.resolution}) must have same "
+            f"resolution as modality ({modality.get_tile_resolution()})"
+        )
+
+    if layer_name not in layer_datas:
+        if missing_okay:
+            return
+        raise ValueError(
+            f"layer {layer_name} missing from layer datas for window {window.name}"
+        )
+
+    layer_data = layer_datas[layer_name]
+    num_groups = len(layer_data.serialized_item_groups)
+
+    images: dict[BandSet, list[npt.NDArray]] = {
+        band_set: [] for band_set in modality.band_sets
+    }
+    time_ranges: list[tuple[str, str]] = []
+
+    geotiff_fmt = GeotiffRasterFormat(block_size=32, always_enable_tiling=True)
+
+    for group_idx in range(num_groups):
+        # Derive time range for this group from items.json group_time_ranges,
+        # falling back to item geometry if not available.
+        if layer_data.group_time_ranges and layer_data.group_time_ranges[group_idx]:
+            start_time = layer_data.group_time_ranges[group_idx][0]
+            end_time = layer_data.group_time_ranges[group_idx][1]
+        else:
+            group_items = layer_data.serialized_item_groups[group_idx]
+            if not group_items:
+                continue
+            item = Item.deserialize(group_items[0])
+            start_time = item.geometry.time_range[0]
+            end_time = item.geometry.time_range[1]
+
+        cur_images: dict[BandSet, npt.NDArray] = {}
+
+        for band_set in modality.band_sets:
+            adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
+                modality, band_set, window.projection, window.bounds
+            )
+
+            raster_dir = window.get_raster_dir(layer_name, band_set.bands, group_idx)
+
+            if not raster_dir.exists():
+                if missing_okay:
+                    break
+                raise FileNotFoundError(
+                    f"raster dir {raster_dir} missing for {layer_name} group {group_idx}"
+                )
+
+            raster_array = geotiff_fmt.decode_raster(
+                raster_dir, adjusted_projection, adjusted_bounds
+            )
+            # RasterArray has shape (C, T, H, W); squeeze T for per-period mosaics.
+            image = raster_array.array
+            if image.ndim == 4 and image.shape[1] == 1:
+                image = image[:, 0, :, :]  # (C, H, W)
+
+            expected_size = band_set.get_expected_image_size(
+                modality.tile_resolution_factor,
+                window_metadata.get_tile_size(),
+            )
+            h_idx, w_idx = (-2, -1)
+            if image.shape[h_idx] != expected_size or image.shape[w_idx] != expected_size:
+                raise ValueError(
+                    f"expected image size {expected_size} but got shape {image.shape}"
+                )
+
+            cur_images[band_set] = image
+
+        if len(cur_images) < len(modality.band_sets):
+            continue
+
+        all_blank = all(img.max() == 0 for img in cur_images.values())
+        if all_blank:
+            continue
+
+        time_ranges.append((start_time.isoformat(), end_time.isoformat()))
+        for band_set, image in cur_images.items():
+            images[band_set].append(image)
+
+    if not images[modality.band_sets[0]]:
+        return
+
+    for band_set, band_set_images in images.items():
+        adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
+            modality, band_set, window.projection, window.bounds
+        )
+
+        stacked_image = np.concatenate(band_set_images, axis=0)
+        dst_fname = get_modality_fname(
+            olmoearth_path,
+            modality,
+            TimeSpan.YEAR,
+            window_metadata,
+            band_set.get_resolution(),
+            "tif",
+        )
+        GEOTIFF_RASTER_FORMAT.encode_raster(
+            path=dst_fname.parent,
+            projection=adjusted_projection,
+            bounds=adjusted_bounds,
+            array=stacked_image,
+            fname=dst_fname.name,
+        )
+
+    metadata_fname = get_modality_temp_meta_fname(
+        olmoearth_path, modality, TimeSpan.YEAR, window.name
+    )
+    write_metadata_rows(
+        metadata_fname,
+        [
+            get_metadata_row(window_metadata, image_idx, start_time, end_time)
+            for image_idx, (start_time, end_time) in enumerate(time_ranges)
+        ],
+    )

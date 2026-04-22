@@ -14,8 +14,10 @@ import tqdm
 from rasterio.crs import CRS
 from rslearn.config import QueryConfig, SpaceMode
 from rslearn.const import WGS84_PROJECTION
-from rslearn.data_sources import DataSource, data_source_from_config
+from rslearn.data_sources import DataSource
 from rslearn.dataset import Dataset, Window
+from rslearn.dataset.storage.file import FileWindowStorage
+from rslearn.dataset.storage.storage import WindowStorage
 from rslearn.utils.geometry import Projection, STGeometry
 from rslearn.utils.get_utm_ups_crs import get_utm_ups_projection
 from rslearn.utils.mp import StarImapUnorderedWrapper
@@ -92,6 +94,18 @@ def star_imap(
     return p.imap(StarImapUnorderedWrapper(fn), kwargs_list)
 
 
+def _get_window_storage(ds_path: UPath) -> WindowStorage:
+    """Return a WindowStorage for the given dataset path.
+
+    If the dataset has a config.json we honor it (in case storage is customized);
+    otherwise fall back to the default file-based storage so window creation does
+    not require a config to already exist.
+    """
+    if (ds_path / "config.json").exists():
+        return Dataset(ds_path).storage
+    return FileWindowStorage(ds_path)
+
+
 def create_window(ds_path: UPath, metadata: WindowMetadata) -> list[Window]:
     """Create one or more rslearn windows for ingesting data for OlmoEarth Pretrain.
 
@@ -109,6 +123,7 @@ def create_window(ds_path: UPath, metadata: WindowMetadata) -> list[Window]:
     Returns:
         the new windows.
     """
+    storage = _get_window_storage(ds_path)
     windows = []
     for resolution in WINDOW_RESOLUTIONS:
         # Only create windows at resolutions equal to or coarser than the provided one.
@@ -131,8 +146,6 @@ def create_window(ds_path: UPath, metadata: WindowMetadata) -> list[Window]:
         # Compute the window attributes based on the WindowMetadata.
         group = f"res_{resolution}"
         window_name = cur_metadata.get_window_name()
-        if cur_metadata.col is None or cur_metadata.row is None:
-            raise ValueError("grid-referenced metadata requires both col and row")
         bounds = (
             cur_metadata.col * WINDOW_SIZE,
             cur_metadata.row * WINDOW_SIZE,
@@ -147,9 +160,8 @@ def create_window(ds_path: UPath, metadata: WindowMetadata) -> list[Window]:
             CRS.from_string(cur_metadata.crs), resolution, -resolution
         )
 
-        # Create the window.
         window = Window(
-            path=Window.get_window_root(ds_path, group, window_name),
+            storage=storage,
             group=group,
             name=window_name,
             projection=projection,
@@ -160,6 +172,17 @@ def create_window(ds_path: UPath, metadata: WindowMetadata) -> list[Window]:
         windows.append(window)
 
     return windows
+
+
+def _data_source_from_config(layer_config, ds_path: UPath) -> DataSource:
+    # `data_source_from_config` lived at `rslearn.data_sources` pre-0.1.4 and was
+    # moved; import lazily so importers of this module don't crash when the symbol
+    # isn't needed (e.g. the corpus flow in `from_corpus.py`).
+    try:
+        from rslearn.data_sources import data_source_from_config as _fn  # type: ignore[attr-defined]
+    except ImportError:
+        from rslearn.data_sources.utils import data_source_from_config as _fn  # type: ignore[attr-defined]
+    return _fn(layer_config, ds_path)
 
 
 @functools.cache
@@ -173,7 +196,7 @@ def get_naip_source(ds_path: UPath) -> DataSource:
         the data source.
     """
     dataset = Dataset(ds_path)
-    return data_source_from_config(dataset.layers["naip"], dataset.path)
+    return _data_source_from_config(dataset.layers["naip"], dataset.path)
 
 
 @functools.cache
@@ -187,7 +210,7 @@ def get_sentinel2_source(ds_path: UPath) -> DataSource:
         the data source.
     """
     dataset = Dataset(ds_path)
-    return data_source_from_config(dataset.layers["sentinel2_freq"], dataset.path)
+    return _data_source_from_config(dataset.layers["sentinel2_freq"], dataset.path)
 
 
 def get_highres_times(ds_path: UPath, tile: Tile) -> list[datetime]:

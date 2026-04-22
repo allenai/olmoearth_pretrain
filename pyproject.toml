@@ -48,6 +48,18 @@ addopts = [
     "--import-mode=importlib",
 ]
 
+[tool.uv]
+conflicts = [
+    [
+        { extra = "dataset-creation" },
+        { extra = "eval" },
+    ],
+    [
+        { extra = "dataset-creation" },
+        { extra = "all-no-flash" },
+    ],
+]
+
 [tool.uv.sources]
 claymodel = { git = "https://github.com/Clay-foundation/model.git" }
 geobench = { git = "https://github.com/ServiceNow/geo-bench.git" }
@@ -94,8 +106,9 @@ beaker = [
     "google-cloud-compute",
 ]
 "dataset-creation" = [
+    "beaker-py==1.34.1",
     "class-registry>=2.1.2",
-    "einops==0.7.0",
+    "einops>=0.7.0",
     "gcsfs>=2025.9.0",
     "geobench>=1.0.1",
     "interrogate>=1.7.0",
@@ -105,7 +118,7 @@ beaker = [
     "pytest>=8.4.2",
     "rasterio>=1.4.3",
     "rioxarray>=0.19.0",
-    "rslearn>=0.0.19",
+    "rslearn[extra]>=0.1.4",
     "torch>=2.7,<2.8",
     "universal-pathlib>=0.2.5",
     "wandb>=0.19.0",
@@ -141,11 +154,5 @@ flash-attn = [
     "flash-attn>=2.4.0",
 ]
 "all-no-flash" = [
-    "olmoearth-pretrain[training,beaker,dataset-creation,dev,eval]",
+    "olmoearth-pretrain[training,beaker,dev,eval]",
 ]
-
-[tool.uv.extra-build-dependencies]
-flash-attn = [{ requirement = "torch", match-runtime = true }]
-
-[tool.uv.extra-build-variables]
-flash-attn = { FLASH_ATTENTION_SKIP_CUDA_BUILD = "TRUE" }
