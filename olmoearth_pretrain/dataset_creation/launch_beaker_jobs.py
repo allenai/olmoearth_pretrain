@@ -11,6 +11,9 @@ Usage:
         --ds-path /weka/dfive-default/helios/dataset_creation/candidates \
         --stage materialize --group res_10 \
         --hosts host1 host2 host3 --workers 64
+
+    When launching from a machine without the dataset mounted, pass a local copy of
+    config.json via --local-config-path; rslearn in Beaker still uses --ds-path.
 """
 
 from __future__ import annotations
@@ -128,16 +131,18 @@ def _create_gee_credentials_mount(
     return _create_gcp_credentials_mount(secret, mount_path)
 
 
-def load_layer_names(ds_path: str) -> list[str]:
+def load_layer_names(ds_path: str, config_json_path: str | None = None) -> list[str]:
     """Read layer names from the dataset's config.json.
 
     Args:
-        ds_path: path to the rslearn dataset root (local or Weka).
+        ds_path: path to the rslearn dataset root (used to default config location).
+        config_json_path: if set, read this file instead of ``{ds_path}/config.json``.
+            Use when planning jobs locally while ``ds_path`` only exists on cluster mounts.
 
     Returns:
         sorted list of layer names defined in config.json.
     """
-    config_path = os.path.join(ds_path, "config.json")
+    config_path = config_json_path or os.path.join(ds_path, "config.json")
     with open(config_path) as f:
         config = json.load(f)
     return sorted(config["layers"].keys())
@@ -350,11 +355,13 @@ def launch_jobs(
     rslearn_version: str | None = None,
     priority: Priority = Priority.normal,
     extra_args: list[str] | None = None,
+    local_config_path: str | None = None,
 ) -> None:
     """Launch Beaker jobs for rslearn dataset creation, one modality per job.
 
     Args:
-        ds_path: path to the rslearn dataset (must contain config.json).
+        ds_path: path to the rslearn dataset on workers (and default config location
+            for the launcher if ``local_config_path`` is not set).
         stages: list of stages to run (prepare, ingest, materialize).
         group: optional rslearn --group value (e.g. "res_10").
         hosts: list of Beaker hostnames to pin jobs to.
@@ -366,6 +373,8 @@ def launch_jobs(
         rslearn_version: optional rslearn version pin.
         priority: Beaker job priority.
         extra_args: extra CLI flags forwarded to every rslearn command.
+        local_config_path: optional path to config.json on the launch machine for
+            layer/modality planning only; ``ds_path`` is still passed to rslearn in jobs.
     """
     if (clusters is not None and hosts is not None) or (
         clusters is None and hosts is None
@@ -374,7 +383,7 @@ def launch_jobs(
     if clusters is not None and num_jobs is None:
         raise ValueError("--num-jobs is required when using --clusters")
 
-    all_layers = load_layer_names(ds_path)
+    all_layers = load_layer_names(ds_path, config_json_path=local_config_path)
     modalities = group_layers_into_modalities(all_layers)
 
     logger.info(
@@ -440,7 +449,12 @@ def main() -> None:
     list_parser.add_argument(
         "--ds-path",
         required=True,
-        help="Path to the rslearn dataset root (must contain config.json).",
+        help="Path to the rslearn dataset root (used only to default config.json location).",
+    )
+    list_parser.add_argument(
+        "--local-config-path",
+        default=None,
+        help="Path to config.json for layer/modality detection (overrides {ds-path}/config.json).",
     )
 
     # --- launch subcommand ---
@@ -451,7 +465,16 @@ def main() -> None:
     launch_parser.add_argument(
         "--ds-path",
         required=True,
-        help="Path to the rslearn dataset root (must contain config.json).",
+        help="Path to the rslearn dataset on Beaker workers (rslearn uses this path).",
+    )
+    launch_parser.add_argument(
+        "--local-config-path",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Optional path to config.json on this machine for layer/modality planning and "
+            "--disabled-layers. If omitted, reads {ds-path}/config.json (must be reachable here)."
+        ),
     )
     launch_parser.add_argument(
         "--stage",
@@ -523,7 +546,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "list-modalities":
-        all_layers = load_layer_names(args.ds_path)
+        all_layers = load_layer_names(
+            args.ds_path, config_json_path=args.local_config_path
+        )
         modalities = group_layers_into_modalities(all_layers)
         print(f"Detected {len(modalities)} modalities from {len(all_layers)} layers:\n")
         for name, layers in sorted(modalities.items()):
@@ -552,6 +577,7 @@ def main() -> None:
         rslearn_version=args.rslearn_version,
         priority=priority_map[args.priority],
         extra_args=args.extra_rslearn_args,
+        local_config_path=args.local_config_path,
     )
 
 
