@@ -11,7 +11,24 @@ from rslearn.const import WGS84_PROJECTION
 from rslearn.utils.geometry import Projection, STGeometry
 from upath import UPath
 
+from ..util import derive_grid_reference, parse_bool
+
 WINDOW_SIZE = 256
+
+
+def get_window_tile(window_dir: UPath) -> tuple[str, int, int] | None:
+    """Get the legacy grid tile for a window directory if one exists."""
+    metadata_path = window_dir / "metadata.json"
+    with metadata_path.open() as f:
+        metadata = json.load(f)
+
+    if not parse_bool(metadata.get("options", {}).get("use_grid_reference"), True):
+        return None
+
+    projection = metadata["projection"]["crs"]
+    raw_bounds: tuple[int, int, int, int] = tuple(metadata["bounds"])  # type: ignore[assignment]
+    col, row = derive_grid_reference(raw_bounds)
+    return (projection, col, row)
 
 
 def tile_to_lon_lat(tile: tuple[Projection, int, int]) -> tuple[float, float]:
@@ -53,8 +70,9 @@ def get_neighbor_lon_lat(
     print("enumerate existing tiles")
     existing_tiles = set()
     for window_dir in (existing_ds_path / "windows" / "res_10").iterdir():
-        projection, _, col, row = window_dir.name.split("_")
-        existing_tiles.add((projection, int(col), int(row)))
+        tile = get_window_tile(window_dir)
+        if tile is not None:
+            existing_tiles.add(tile)
 
     print("identify new tiles")
     new_tiles = set()

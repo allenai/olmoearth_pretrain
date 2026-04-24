@@ -31,7 +31,7 @@ from olmoearth_pretrain.data.collate import (
     collate_single_masked_batched,
 )
 from olmoearth_pretrain.data.concat import OlmoEarthConcatDataset
-from olmoearth_pretrain.data.constants import IMAGE_TILE_SIZE, Modality
+from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import (
     GetItemArgs,
     OlmoEarthDataset,
@@ -564,7 +564,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         for idx in indices:
             if instances_processed % rank_batch_size == 0:
                 patch_size = rng.choice(patch_size_array)
-                max_height_width_tokens = int(IMAGE_TILE_SIZE / patch_size)
+                max_height_width_tokens = int(self.dataset.tile_size / patch_size)
                 filtered_hw_p_to_sample_array = hw_p_to_sample_array[
                     hw_p_to_sample_array <= max_height_width_tokens
                 ]

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import re
 import shutil
 import time
 from dataclasses import dataclass
@@ -24,6 +26,7 @@ from olmoearth_pretrain._compat import (
 )
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
+    IMAGE_TILE_SIZE,
     MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
     Modality,
@@ -337,6 +340,7 @@ class OlmoEarthDataset(Dataset):
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         self.training_modalities = training_modalities
+        self.tile_size = self._load_tile_size()
 
         self.dtype = dtype
         self.normalize = normalize
@@ -364,6 +368,24 @@ class OlmoEarthDataset(Dataset):
             )
         else:
             self.indices_to_filter = None
+
+    def _load_tile_size(self) -> int:
+        """Infer the H5 sample tile size for this dataset."""
+        settings_path = self.h5py_dir / ConvertToH5py.compression_settings_fname
+        if settings_path.exists():
+            with settings_path.open() as f:
+                settings = json.load(f)
+            tile_size = settings.get("tile_size")
+            if tile_size is not None:
+                return int(tile_size)
+
+        # Backwards compatibility for older datasets that only encode the tile size in
+        # the folder name, e.g. h5py_data_w_missing_timesteps_zstd_3_128_x_4.
+        folder_name = self.h5py_dir.parent.parent.name
+        match = re.search(r"_(\d+)_x_\d+$", folder_name)
+        if match:
+            return int(match.group(1))
+        return IMAGE_TILE_SIZE
 
     @property
     def fingerprint_version(self) -> str:

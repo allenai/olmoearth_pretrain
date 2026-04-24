@@ -1,7 +1,6 @@
 """Post-process ingested ERA5_10 data into the OlmoEarth Pretrain dataset."""
 
 import argparse
-import csv
 import logging
 import multiprocessing
 from datetime import datetime
@@ -19,8 +18,13 @@ from upath import UPath
 from olmoearth_pretrain.data.constants import Modality, TimeSpan
 from olmoearth_pretrain.dataset.utils import get_modality_fname
 
-from ..constants import METADATA_COLUMNS
-from ..util import get_modality_temp_meta_fname, get_window_metadata
+from ..util import (
+    get_metadata_row,
+    get_modality_temp_meta_fname,
+    get_window_metadata,
+    write_metadata_rows,
+    write_single_metadata_row,
+)
 from .multitemporal_raster import get_adjusted_projection_and_bounds
 
 # Layer name in the input rslearn dataset.
@@ -140,22 +144,18 @@ def convert_era5(window: Window, olmoearth_path: UPath) -> None:
     year_metadata_fname = get_modality_temp_meta_fname(
         olmoearth_path, Modality.ERA5_10, TimeSpan.YEAR, window.name
     )
-    year_metadata_fname.parent.mkdir(parents=True, exist_ok=True)
-    with year_metadata_fname.open("w") as f:
-        writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
-        writer.writeheader()
-        for group_idx, time_range in enumerate(year_time_ranges):
-            writer.writerow(
-                dict(
-                    crs=window_metadata.crs,
-                    col=window_metadata.col,
-                    row=window_metadata.row,
-                    tile_time=window_metadata.time.isoformat(),
-                    image_idx=group_idx,
-                    start_time=time_range[0].isoformat(),
-                    end_time=time_range[1].isoformat(),
-                )
+    write_metadata_rows(
+        year_metadata_fname,
+        [
+            get_metadata_row(
+                window_metadata,
+                group_idx,
+                time_range[0],
+                time_range[1],
             )
+            for group_idx, time_range in enumerate(year_time_ranges)
+        ],
+    )
 
     # Save the two-week image and metadata.
     two_week_dst_fname = get_modality_fname(
@@ -176,21 +176,13 @@ def convert_era5(window: Window, olmoearth_path: UPath) -> None:
     two_week_metadata_fname = get_modality_temp_meta_fname(
         olmoearth_path, Modality.ERA5_10, TimeSpan.TWO_WEEK, window.name
     )
-    two_week_metadata_fname.parent.mkdir(parents=True, exist_ok=True)
-    with two_week_metadata_fname.open("w") as f:
-        writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
-        writer.writeheader()
-        writer.writerow(
-            dict(
-                crs=window_metadata.crs,
-                col=window_metadata.col,
-                row=window_metadata.row,
-                tile_time=window_metadata.time.isoformat(),
-                image_idx="0",
-                start_time=two_week_time_range[0].isoformat(),
-                end_time=two_week_time_range[1].isoformat(),
-            )
-        )
+    write_single_metadata_row(
+        two_week_metadata_fname,
+        window_metadata,
+        "0",
+        two_week_time_range[0],
+        two_week_time_range[1],
+    )
 
 
 if __name__ == "__main__":

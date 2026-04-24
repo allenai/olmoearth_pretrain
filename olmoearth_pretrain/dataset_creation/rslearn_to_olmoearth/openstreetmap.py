@@ -10,7 +10,6 @@ the data for training even at coarser resolution.
 """
 
 import argparse
-import csv
 import multiprocessing
 from datetime import UTC, datetime
 
@@ -23,8 +22,11 @@ from upath import UPath
 from olmoearth_pretrain.data.constants import Modality, TimeSpan
 from olmoearth_pretrain.dataset.utils import get_modality_fname
 
-from ..constants import METADATA_COLUMNS
-from ..util import get_modality_temp_meta_fname, get_window_metadata
+from ..util import (
+    get_modality_temp_meta_fname,
+    get_window_metadata,
+    write_single_metadata_row,
+)
 
 # Placeholder time range for OpenStreetMap.
 START_TIME = datetime(2020, 1, 1, tzinfo=UTC)
@@ -83,21 +85,13 @@ def convert_openstreetmap(window: Window, olmoearth_path: UPath) -> None:
     metadata_fname = get_modality_temp_meta_fname(
         olmoearth_path, Modality.OPENSTREETMAP, TimeSpan.STATIC, window.name
     )
-    metadata_fname.parent.mkdir(parents=True, exist_ok=True)
-    with metadata_fname.open("w") as f:
-        writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
-        writer.writeheader()
-        writer.writerow(
-            dict(
-                crs=window_metadata.crs,
-                col=window_metadata.col,
-                row=window_metadata.row,
-                tile_time=window_metadata.time.isoformat(),
-                image_idx="N/A",
-                start_time=START_TIME.isoformat(),
-                end_time=END_TIME.isoformat(),
-            )
-        )
+    write_single_metadata_row(
+        metadata_fname,
+        window_metadata,
+        "N/A",
+        START_TIME,
+        END_TIME,
+    )
 
 
 if __name__ == "__main__":

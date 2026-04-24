@@ -139,15 +139,24 @@ class ConvertToH5py:
         self.chunk_options = chunk_options
         self.h5py_dir: UPath | None = None
         self.required_modalities = required_modalities
-        if IMAGE_TILE_SIZE % tile_size != 0:
-            raise ValueError(
-                f"Tile size {tile_size} must be a factor of {IMAGE_TILE_SIZE}"
-            )
         self.tile_size = tile_size
+        self.raw_tile_size: int | None = None
         # Tile_size_split_factor is the factor by which the tile size is split into subtiles
-        self.num_subtiles_per_dim = IMAGE_TILE_SIZE // tile_size
-        self.num_subtiles = self.num_subtiles_per_dim**2
+        self.num_subtiles_per_dim: int | None = None
+        self.num_subtiles: int | None = None
         self.reserved_cores = reserved_cores
+
+    def _set_raw_tile_size(self, raw_tile_size: int) -> None:
+        """Set and validate the raw tile size for this dataset."""
+        if raw_tile_size <= 0:
+            raise ValueError(f"raw tile size must be positive but got {raw_tile_size}")
+        if raw_tile_size % self.tile_size != 0:
+            raise ValueError(
+                f"H5 tile size {self.tile_size} must divide raw tile size {raw_tile_size}"
+            )
+        self.raw_tile_size = raw_tile_size
+        self.num_subtiles_per_dim = raw_tile_size // self.tile_size
+        self.num_subtiles = self.num_subtiles_per_dim**2
 
     @property
     def compression_settings_suffix(self) -> str:
@@ -167,12 +176,23 @@ class ConvertToH5py:
     @property
     def image_tile_size_suffix(self) -> str:
         """String representation of the image tile size."""
+        if self.num_subtiles is None:
+            raise ValueError(
+                "raw tile size must be known before building the output path"
+            )
         return f"_{self.tile_size}_x_{self.num_subtiles}"
 
     def _get_samples(self) -> list[SampleInformation]:
         """Get the samples from the raw dataset (image tile directory)."""
         tiles = parse_dataset(self.tile_path, self.supported_modalities)
         samples = image_tiles_to_samples(tiles, self.supported_modalities)
+        raw_tile_sizes = {sample.grid_tile.get_tile_size() for sample in samples}
+        if len(raw_tile_sizes) > 1:
+            raise ValueError(
+                f"expected one raw tile size but found {sorted(raw_tile_sizes)}"
+            )
+        raw_tile_size = raw_tile_sizes.pop() if raw_tile_sizes else IMAGE_TILE_SIZE
+        self._set_raw_tile_size(raw_tile_size)
         logger.info(f"Total samples: {len(samples)}")
         logger.info("Distribution of samples before filtering:\n")
         self._log_modality_distribution(samples)
@@ -321,6 +341,12 @@ class ConvertToH5py:
                     f"Image for modality {modality.name} is all zeros, removing this modality"
                 )
                 modalities_to_remove.add(modality)
+            # Remove ERA5L daily if it contains any nodata sentinel values (-9999.0)
+            if modality == Modality.ERA5L_DAY_10 and np.any(image == -9999.0):
+                logger.warning(
+                    f"Image for modality {modality.name} contains nodata values, removing this modality"
+                )
+                modalities_to_remove.add(modality)
             # Remove S1 if it contains any nodata values
             if modality == Modality.SENTINEL1 and np.any(image == SENTINEL1_NODATA):
                 logger.warning(
@@ -393,6 +419,10 @@ class ConvertToH5py:
                 image = convert_to_db(image)
 
             if modality.is_spatial:
+                if self.num_subtiles_per_dim is None:
+                    raise ValueError(
+                        "raw tile size must be set before creating spatial H5 samples"
+                    )
                 # Calculate row and column indices for grid
                 if image.shape[0] != image.shape[1]:
                     raise ValueError("Expected image width to match image height")
@@ -661,6 +691,10 @@ class ConvertToH5py:
                 else None
             ),
             "shuffle": bool(self.shuffle) if self.shuffle is not None else None,
+            "tile_size": self.tile_size,
+            "raw_tile_size": self.raw_tile_size,
+            "num_subtiles": self.num_subtiles,
+            "num_subtiles_per_dim": self.num_subtiles_per_dim,
         }
 
         settings_path = self.h5py_dir / self.compression_settings_fname
@@ -670,6 +704,15 @@ class ConvertToH5py:
 
     def prepare_h5_dataset(self, samples: list[SampleInformation]) -> None:
         """Prepare the h5 dataset."""
+        if self.num_subtiles is None:
+            raw_tile_sizes = {sample.grid_tile.get_tile_size() for sample in samples}
+            if len(raw_tile_sizes) > 1:
+                raise ValueError(
+                    f"expected one raw tile size but found {sorted(raw_tile_sizes)}"
+                )
+            raw_tile_size = raw_tile_sizes.pop() if raw_tile_sizes else IMAGE_TILE_SIZE
+            self._set_raw_tile_size(raw_tile_size)
+        assert self.num_subtiles is not None
         tuples = []
         for sample in samples:
             for j in range(self.num_subtiles):

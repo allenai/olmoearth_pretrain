@@ -6,6 +6,7 @@ the pre-training dataset, you can download it from
 [Hugging Face](https://huggingface.co/datasets/allenai/olmoearth_pretrain_dataset).
 
 There are three steps:
+
 1. Initialize an rslearn dataset with windows corresponding to desired UTM tiles.
 2. Use rslearn to materialize data from various data sources.
 3. Convert the data to OlmoEarth format.
@@ -49,8 +50,10 @@ for initializing the dataset (it has NAIP and Sentinel-2 data sources configured
 are used to pick the window timestamp and filter out windows that don't have Sentinel-2
 coverage).
 
-    mkdir dataset/
-    cp data/rslearn_dataset_configs/config_init.json dataset/config.json
+```
+mkdir dataset/
+cp data/rslearn_dataset_configs/config_init.json dataset/config.json
+```
 
 The NAIP data source derives data from an AWS bucket, and so AWS credentials must be
 set (i.e. the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables).
@@ -62,7 +65,7 @@ python -m olmoearth_pretrain.dataset_creation.create_windows.from_lon_lat_list -
 ```
 
 To use the same tiles as our dataset, download the JSON file of longitudes/latitudes
-from https://huggingface.co/datasets/allenai/olmoearth_pretrain_dataset/blob/main/lon_lats.json.
+from [https://huggingface.co/datasets/allenai/olmoearth_pretrain_dataset/blob/main/lon_lats.json](https://huggingface.co/datasets/allenai/olmoearth_pretrain_dataset/blob/main/lon_lats.json).
 
 ### Alternative Sampling Strategies
 
@@ -132,20 +135,24 @@ rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --n
 
 ### Landsat
 
-Landsat 8/9 data is from an AWS bucket and should be materialized on an AWS machine.
+openstreetmapLandsat 8/9 data is from an AWS bucket and should be materialized on an AWS machine.
 Then the data can be transferred back after converting to OlmoEarth Pretrain format. This minimizes
 the egress fee.
 
 First copy the res_10 windows to the AWS machine:
 
-    rsync -av --exclude layers --exclude items.json $DATASET_PATH/windows/res_10/ ubuntu@X:/mnt/rslearn_dataset/windows/res_10/
+```
+rsync -av --exclude layers --exclude items.json $DATASET_PATH/windows/res_10/ ubuntu@X:/mnt/rslearn_dataset/windows/res_10/
+```
 
 Then materialize the data on the AWS machine:
 
-    export DATASET_PATH=/mnt/rslearn_dataset
-    cp data/rslearn_dataset_configs/config_landsat.json $DATASET_PATH/config.json
-    rslearn dataset prepare --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
-    rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job --ignore-errors --retry-max-attempts 4 --retry-backoff-seconds 1
+```
+export DATASET_PATH=/mnt/rslearn_dataset
+cp data/rslearn_dataset_configs/config_landsat.json $DATASET_PATH/config.json
+rslearn dataset prepare --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
+rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job --ignore-errors --retry-max-attempts 4 --retry-backoff-seconds 1
+```
 
 ### Other Modalities
 
@@ -190,10 +197,70 @@ rslearn dataset prepare --root $DATASET_PATH --group res_10 --workers 64
 rslearn dataset materialize --root $DATASET_PATH --workers 32 --load-workers 128 --group res_10 --no-use-initial-job --ignore-errors
 ```
 
-### Parallelizing Materialization
+### Parallelizing with Beaker
 
-For Sentinel-1 and Sentinel-2 L2A, it is helpful to parallelize the materialization
-jobs. You can build a Docker image for this purpose:
+For large datasets it is helpful to distribute the work across multiple machines.
+The `launch_beaker_jobs` module launches one Beaker job per modality, each pinned to a
+different host. It uses a single merged `config.json` that contains all layers and
+rslearn's `--disabled-layers` flag so each job only processes its assigned modality.
+
+No pre-built Docker image is required. The launcher uses a generic PyTorch base image
+and installs rslearn at job start via `pip install rslearn[extra]`.
+
+First, list the modalities that the launcher detects from your config:
+
+```
+python -m olmoearth_pretrain.dataset_creation.launch_beaker_jobs \
+  list-modalities --ds-path $DATASET_PATH
+```
+
+Then launch jobs across hosts (one modality per host, round-robin):
+
+```
+python -m olmoearth_pretrain.dataset_creation.launch_beaker_jobs launch \
+  --ds-path $DATASET_PATH \
+  --stage all \
+  --group res_10 \
+  --hosts host1.reviz.ai2.in host2.reviz.ai2.in host3.reviz.ai2.in \
+  --workers 64
+```
+
+The `--stage` flag accepts `prepare`, `ingest`, `materialize`, or `all` (which runs
+all three sequentially). You can restrict to specific modalities with `--modalities`:
+
+```
+python -m olmoearth_pretrain.dataset_creation.launch_beaker_jobs launch \
+  --ds-path $DATASET_PATH \
+  --stage materialize \
+  --group res_10 \
+  --hosts host1.reviz.ai2.in host2.reviz.ai2.in \
+  --modalities sentinel1 sentinel2_l2a \
+  --workers 64
+```
+
+Alternatively, target Beaker clusters instead of specific hosts:
+Note: jobs may be scheduled on the same node, to avoid this specify the --hosts
+
+```
+python -m olmoearth_pretrain.dataset_creation.launch_beaker_jobs launch \
+  --ds-path $DATASET_PATH \
+  --stage materialize \
+  --group res_10 \
+  --clusters ai2/jupiter ai2/saturn \
+  --num-jobs 8 \
+  --workers 64
+```
+
+Additional options:
+
+- `--rslearn-version 0.1.3` to pin a specific rslearn version.
+- `--base-image <image>` to override the default PyTorch base image.
+- `--priority low|normal|high|urgent` to set the Beaker job priority.
+- `--extra-rslearn-args` to pass additional flags to every rslearn command.
+
+#### Legacy: Building a Docker Image
+
+You can still build a Docker image for manual use:
 
 ```
 docker build -f olmoearth_pretrain/dataset_creation/Dockerfile -t olmoearth-dataset-creation .
@@ -228,6 +295,7 @@ docker image push us-west1-docker.pkg.dev/GCP_PROJECT/olmoearth/olmoearth-sentin
 ```
 
 Launch the jobs:
+
 ```
 gsutil cp data/rslearn_dataset_configs/config_sentinel2.json $GCS_DATASET_PATH/config.json
 # Test with 1 job first.

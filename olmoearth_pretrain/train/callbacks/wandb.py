@@ -14,7 +14,7 @@ from olmo_core.train.callbacks.wandb import WANDB_API_KEY_ENV_VAR, WandBCallback
 from tqdm import tqdm
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
-from olmoearth_pretrain.data.constants import IMAGE_TILE_SIZE, Modality
+from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoader
 from olmoearth_pretrain.data.dataset import GetItemArgs, OlmoEarthDataset
 from olmoearth_pretrain.data.utils import (
@@ -48,7 +48,7 @@ def get_sample_data_for_histogram(
     # Assume samples could include different modalities and bands
     # TODO: compute the histogram for each modality and band directly
     for i in tqdm(indices_to_sample):
-        get_item_args = GetItemArgs(idx=i, patch_size=1, sampled_hw_p=IMAGE_TILE_SIZE)
+        get_item_args = GetItemArgs(idx=i, patch_size=1, sampled_hw_p=dataset.tile_size)
         _, sample = dataset[get_item_args]
         for modality in sample.modalities:
             if modality == "latlon":

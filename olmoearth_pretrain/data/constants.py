@@ -69,16 +69,19 @@ class BandSet:
         """Compute the resolution."""
         return get_resolution(self.resolution_factor)
 
-    def get_expected_image_size(self, modality_resolution_factor: int) -> int:
+    def get_expected_image_size(
+        self, modality_resolution_factor: int, base_tile_size: int = IMAGE_TILE_SIZE
+    ) -> int:
         """Get the expected size of images containing these bands.
 
         Args:
             modality_resolution_factor: the resolution factor of the modality.
+            base_tile_size: the reference tile size in pixels.
 
         Returns:
             the expected image size.
         """
-        return IMAGE_TILE_SIZE // (self.resolution_factor // modality_resolution_factor)
+        return base_tile_size // (self.resolution_factor // modality_resolution_factor)
 
 
 class TimeSpan(str, Enum):
@@ -431,6 +434,36 @@ class Modality:
                     "10m-u-component-of-wind",
                     "10m-v-component-of-wind",
                     "total-precipitation",
+                ],
+                4096,
+            ),
+        ],
+        is_multitemporal=True,
+        ignore_when_parsing=False,
+        image_tile_size_factor=-256,
+    )
+
+    ERA5L_DAY_10 = ModalitySpec(
+        name="era5l_day_10",
+        # ERA5-Land daily 9 km/pixel bands that we store at 2.56 km/pixel, T=720 daily timesteps, non-spatial.
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [
+                    "d2m",
+                    "e",
+                    "pev",
+                    "ro",
+                    "sp",
+                    "ssr",
+                    "ssrd",
+                    "str",
+                    "swvl1",
+                    "swvl2",
+                    "t2m",
+                    "tp",
+                    "u10",
+                    "v10",
                 ],
                 4096,
             ),
