@@ -12,7 +12,7 @@ Usage:
         --stage materialize --group res_10 \
         --hosts host1 host2 host3 --workers 64
 
-    When launching from a machine without the dataset mounted, pass a local copy of
+    When launching from a machine without weka mounted, pass a local copy of
     config.json via --local-config-path; rslearn in Beaker still uses --ds-path.
 """
 
