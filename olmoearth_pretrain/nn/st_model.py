@@ -751,6 +751,10 @@ class STEncoder(STBase):
         fuse_using_cross_attn: bool = True,
         tokenization_config: TokenizationConfig | None = None,
         use_linear_patch_embed: bool = True,
+        band_dropout_rate: float = 0.0,
+        random_band_dropout: bool = False,
+        band_dropout_modalities: list[str] | None = None,
+        output_embedding_size: int | None = None,
     ):
         """Initialize the encoder.
 
@@ -779,6 +783,10 @@ class STEncoder(STBase):
             tokenization_config: Optional config for custom band groupings
             use_linear_patch_embed: If True, use nn.Linear for patch projection (faster).
                 Set False to load checkpoints trained before this flag existed (Conv2d weights).
+            band_dropout_rate: Probability of dropping each band channel during training.
+            random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
+            band_dropout_modalities: If provided, only apply band dropout to these modalities.
+            output_embedding_size: If set, project tokens to this size after attention.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -801,16 +809,35 @@ class STEncoder(STBase):
         self.fuse_layers = fuse_layers
         self.layer_attention_modes = layer_attention_modes
         self.fuse_using_cross_attn = fuse_using_cross_attn
+        self.band_dropout_rate = band_dropout_rate
+        self.random_band_dropout = random_band_dropout
+        self.band_dropout_modalities = band_dropout_modalities
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
             self.embedding_size,
             tokenization_config=self.tokenization_config,
             use_linear_patch_embed=use_linear_patch_embed,
+            band_dropout_rate=self.band_dropout_rate,
+            random_band_dropout=self.random_band_dropout,
+            band_dropout_modalities=self.band_dropout_modalities,
         )
+        self.output_embedding_size = output_embedding_size
+        # If output_embedding_size is set, project tokens to that size after attention
+        self.embedding_projector: ProjectAndAggregate | None = None
+        if output_embedding_size is not None:
+            self.embedding_projector = ProjectAndAggregate(
+                embedding_size=self.embedding_size,
+                num_layers=1,
+                output_embedding_size=output_embedding_size,
+                only_project=True,
+            )
+            final_embedding_size = output_embedding_size
+        else:
+            final_embedding_size = self.embedding_size
         # TODO: add backwards compatibility without the project and aggregate module
         self.project_and_aggregate = ProjectAndAggregate(
-            embedding_size=self.embedding_size,
+            embedding_size=final_embedding_size,
             num_layers=num_projection_layers,
             aggregate_then_project=aggregate_then_project,
         )
@@ -1111,13 +1138,17 @@ class STEncoder(STBase):
 
         return x
 
+    def disable_band_dropout(self) -> None:
+        """Disable band dropout (e.g. for target/EMA encoder)."""
+        self.patch_embeddings.band_dropout_rate = 0.0
+
     def forward(
         self,
         x: MaskedOlmoEarthSample,
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
-    ) -> tuple[TokensAndMasks, Tensor]:
+    ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
         Args:
@@ -1127,7 +1158,7 @@ class STEncoder(STBase):
             token_exit_cfg: Configuration for token exit
 
         Returns:
-            TokensAndMasks containing the encoded representations and their masks
+            Dict with 'tokens_and_masks' and 'project_aggregated' keys.
         """
         # TODO: Add step to validate the exit config is valid
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
@@ -1142,7 +1173,15 @@ class STEncoder(STBase):
                 token_exit_cfg=token_exit_cfg,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
-        return output, self.project_and_aggregate(output)
+
+        # Project to output_embedding_size if configured
+        if self.embedding_projector is not None:
+            output = self.embedding_projector(output)
+
+        return {
+            "tokens_and_masks": output,
+            "project_aggregated": self.project_and_aggregate(output),
+        }
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
@@ -1519,6 +1558,10 @@ class STEncoderConfig(Config):
     fuse_using_cross_attn: bool = True
     tokenization_config: TokenizationConfig | None = None
     use_linear_patch_embed: bool = True
+    output_embedding_size: int | None = None
+    band_dropout_rate: float = 0.0
+    random_band_dropout: bool = False
+    band_dropout_modalities: list[str] | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -1533,6 +1576,15 @@ class STEncoderConfig(Config):
             for modality in self.supported_modalities:
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
+        if self.band_dropout_modalities is not None:
+            unknown = set(self.band_dropout_modalities) - set(
+                self.supported_modality_names
+            )
+            if unknown:
+                raise ValueError(
+                    f"band_dropout_modalities contains modalities not in "
+                    f"supported_modality_names: {unknown}"
+                )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
 
