@@ -3,7 +3,7 @@
 - Single bandset S2 (all 12 bands) / Landsat (all 11 bands)
 - Random band dropout (rate ~ Uniform(0, 0.3)) on S2 and Landsat only (no S1 dropout)
 - Random time with decode masking
-- Original modality_patch_discrimination_new loss (as in official/base.py)
+- Original modality_patch_discrimination_vec loss (as in official/base.py)
 - InfoNCE weight 0.05
 - Rank microbatch size 64
 """
@@ -168,7 +168,7 @@ def build_train_module_config(
         masking_config=_masking_config(common.tokenization_config),
         loss_config=LossConfig(
             loss_config={
-                "type": "modality_patch_discrimination_new",
+                "type": "modality_patch_discrimination_vec",
                 "tau": 0.1,
             }
         ),
