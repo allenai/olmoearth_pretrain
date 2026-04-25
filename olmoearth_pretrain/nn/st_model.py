@@ -1148,6 +1148,7 @@ class STEncoder(STBase):
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
+        fast_pass: bool = False,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -1156,10 +1157,14 @@ class STEncoder(STBase):
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
+            fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
 
         Returns:
             Dict with 'tokens_and_masks' and 'project_aggregated' keys.
         """
+        if fast_pass and token_exit_cfg is not None:
+            raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
+
         # TODO: Add step to validate the exit config is valid
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
         if token_exit_cfg is None or any(
@@ -1178,10 +1183,14 @@ class STEncoder(STBase):
         if self.embedding_projector is not None:
             output = self.embedding_projector(output)
 
-        return {
+        output_dict: dict[str, Any] = {
             "tokens_and_masks": output,
-            "project_aggregated": self.project_and_aggregate(output),
         }
+
+        if not fast_pass:
+            output_dict["project_aggregated"] = self.project_and_aggregate(output)
+
+        return output_dict
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
