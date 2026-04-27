@@ -1,6 +1,6 @@
 """Same as official script except EVAL_TASKS.
 
-Only tolbi_crop, canada_wildfire_sat_eval_split, yemen_crop,
+Only tolbi_crop, burnrisk_8d_nbac, yemen_crop,
 geo_ecosystem_annual_test, forest_loss_driver, nigeria_settlement,
 nandi_crop_map, awf_lulc_map, oil_spill_detection as loop evals every 5k steps.
 """
@@ -29,6 +29,7 @@ from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
 from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.common import (
     build_common_components as build_common_components_default,
 )
@@ -103,28 +104,12 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
-    "canada_wildfire_sat_eval_split": DownstreamTaskConfig(
-        dataset="canada_wildfire_sat_eval_split",
-        embedding_batch_size=32,
-        probe_batch_size=16,
-        patch_size=5,
-        num_workers=2,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
-        probe_lr=0.1,
-        eval_interval=LOOP_EVAL_INTERVAL,
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
-        use_dice_loss=True,
-    ),
     "burnrisk_8d_nbac": DownstreamTaskConfig(
         dataset="burnrisk_8d_nbac",
         embedding_batch_size=32,
         probe_batch_size=16,
         patch_size=5,
-        num_workers=16,
+        num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
@@ -134,6 +119,8 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         use_dice_loss=True,
+        primary_metric=EvalMetric.CLASS_F1,
+        primary_metric_class=1,
     ),
     "yemen_crop": DownstreamTaskConfig(
         dataset="yemen_crop",
