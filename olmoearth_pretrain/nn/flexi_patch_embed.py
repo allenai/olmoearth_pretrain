@@ -7,12 +7,14 @@ by https://github.com/bwconrad/flexivit/
 import logging
 from collections.abc import Iterable
 
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor
 
 from olmoearth_pretrain.data.constants import ModalitySpec
+from olmoearth_pretrain.nn.attention import Block
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +198,228 @@ class FlexiPatchEmbed(nn.Module):
             x = self._project_conv(x, batch_size, has_time_dim, num_timesteps)
 
         return self.norm(x)
+
+
+class CrossAttentionPatchEmbed(nn.Module):
+    """Patch embedding that patchifies each band independently and fuses via cross-attention.
+
+    Instead of concatenating all bands before projection, each band is patchified
+    and projected independently to an intermediate embedding. A learned query then
+    cross-attends to these per-band embeddings to produce the final token. Band
+    dropout is implemented by masking bands in the cross-attention, so dropped bands
+    receive -inf logits and softmax renormalizes over the surviving bands.
+    """
+
+    def __init__(
+        self,
+        modality_spec: ModalitySpec,
+        base_patch_size_at_16: int | tuple[int, int],
+        in_chans: int,
+        embedding_size: int,
+        cross_attn_embedding_size: int,
+        num_heads: int = 1,
+        band_dropout_rate: float = 0.0,
+        random_band_dropout: bool = False,
+        interpolation: str = "bicubic",
+        antialias: bool = True,
+    ) -> None:
+        """Initialize CrossAttentionPatchEmbed.
+
+        Args:
+            modality_spec: The modality spec for this modality.
+            base_patch_size_at_16: Base patch size at resolution 16.
+            in_chans: Number of input band channels in this bandset.
+            embedding_size: Final output embedding dimension (model embedding size).
+            cross_attn_embedding_size: Intermediate per-band embedding dimension.
+            num_heads: Number of attention heads for cross-attention.
+            band_dropout_rate: Probability of masking each band during training.
+            random_band_dropout: If True, sample rate from Uniform(0, band_dropout_rate).
+            interpolation: Resize interpolation type.
+            antialias: Whether to apply antialiasing when resizing.
+        """
+        super().__init__()
+
+        self.modality_spec = modality_spec
+        self.base_patch_size = _to_2tuple(
+            base_patch_size_at_16 * modality_spec.image_tile_size_factor
+        )
+        self.in_chans = in_chans
+        self.embedding_size = embedding_size
+        self.cross_attn_embedding_size = cross_attn_embedding_size
+        self.band_dropout_rate = band_dropout_rate
+        self.random_band_dropout = random_band_dropout
+        self.interpolation = interpolation
+        self.antialias = antialias
+
+        p_h, p_w = self.base_patch_size
+        patch_flat_size = p_h * p_w  # e.g. 64 for 8x8
+
+        # Per-band projections: each band gets its own linear projection
+        self.per_band_projs = nn.ModuleList(
+            [
+                nn.Linear(patch_flat_size, cross_attn_embedding_size)
+                for _ in range(in_chans)
+            ]
+        )
+        for proj in self.per_band_projs:
+            proj._skip_custom_init = True
+
+        # Learned query for this bandset (one query token)
+        self.query_embed = nn.Parameter(torch.zeros(1, 1, cross_attn_embedding_size))
+        nn.init.xavier_uniform_(self.query_embed.view(1, -1))
+
+        # Pre-norm for cross-attention keys/values (Block only norms the query)
+        self.kv_norm = nn.LayerNorm(cross_attn_embedding_size)
+
+        # Cross-attention block: norm + attention + residual + MLP + residual
+        self.cross_attn_block = Block(
+            dim=cross_attn_embedding_size,
+            num_heads=num_heads,
+            qkv_bias=True,
+            cross_attn=True,
+            use_flash_attn=False,
+        )
+
+        # Project from intermediate to final embedding size
+        self.output_proj = nn.Linear(cross_attn_embedding_size, embedding_size)
+        self.output_proj._skip_custom_init = True
+
+    def _resolve_patch_size(
+        self, patch_size: int | tuple[int, int] | None
+    ) -> tuple[int, int]:
+        """Resolve the effective patch size, applying the modality tile size factor."""
+        if not patch_size:
+            return self.base_patch_size
+        if isinstance(patch_size, tuple):
+            patch_size = (
+                patch_size[0] * self.modality_spec.image_tile_size_factor,
+                patch_size[1] * self.modality_spec.image_tile_size_factor,
+            )
+        else:
+            patch_size = patch_size * self.modality_spec.image_tile_size_factor
+        resolved = _to_2tuple(patch_size)
+        assert isinstance(resolved, tuple) and len(resolved) == 2
+        return resolved
+
+    def _generate_band_dropout_mask(
+        self, batch_size: int, num_bands: int, device: torch.device
+    ) -> torch.Tensor | None:
+        """Generate attention mask for band dropout.
+
+        Returns a boolean mask of shape [batch_size, num_bands] where True means
+        the band participates in attention. Returns None if no dropout should
+        be applied (eval mode, rate=0, or single band).
+        """
+        if not self.training or self.band_dropout_rate <= 0.0 or num_bands <= 1:
+            return None
+
+        if self.random_band_dropout:
+            rate = torch.rand(1, device=device).item() * self.band_dropout_rate
+        else:
+            rate = self.band_dropout_rate
+
+        keep_mask = torch.rand(batch_size, num_bands, device=device) >= rate
+        # Ensure at least one band is kept per sample
+        no_bands_kept = ~keep_mask.any(dim=1)
+        if no_bands_kept.any():
+            rand_idx = torch.randint(num_bands, (no_bands_kept.sum(),), device=device)
+            keep_mask[no_bands_kept, rand_idx] = True
+        return keep_mask
+
+    def forward(
+        self,
+        x: Tensor,
+        patch_size: int | tuple[int, int] | None = None,
+    ) -> Tensor:
+        """Forward pass.
+
+        Args:
+            x: Input tensor with shape [B, H, W, (T), C] where C = number of bands.
+            patch_size: Requested patch size. If None, uses the base patch size.
+
+        Returns:
+            Tensor with shape [B, h_patches, w_patches, (T), embedding_size].
+        """
+        batch_size = x.shape[0]
+        has_time_dim = len(x.shape) == 5
+        num_timesteps = x.shape[3] if has_time_dim else 0
+        num_bands = x.shape[-1]
+
+        # Rearrange to [N_batch, C, H, W] where N_batch = B*T or B
+        if has_time_dim:
+            x = rearrange(x, "b h w t c -> (b t) c h w")
+        else:
+            x = rearrange(x, "b h w c -> b c h w")
+
+        # Resize if patch_size != base_patch_size
+        req_patch_size = self._resolve_patch_size(patch_size)
+        if req_patch_size != self.base_patch_size:
+            shape = x.shape[-2:]
+            new_shape = (
+                shape[0] // req_patch_size[0] * self.base_patch_size[0],
+                shape[1] // req_patch_size[1] * self.base_patch_size[1],
+            )
+            x = F.interpolate(
+                x, size=new_shape, mode=self.interpolation, antialias=self.antialias
+            )
+
+        p_h, p_w = self.base_patch_size
+        h_patches = x.shape[-2] // p_h
+        w_patches = x.shape[-1] // p_w
+
+        # Rearrange to per-band patches:
+        # [n_batch, C, H, W] -> [n_batch, C, h_patches, p_h, w_patches, p_w]
+        # -> [n_batch * h_patches * w_patches, C, p_h * p_w]
+        x = rearrange(
+            x,
+            "n c (h p1) (w p2) -> (n h w) c (p1 p2)",
+            p1=p_h,
+            p2=p_w,
+        )
+        # x shape: [N, C, patch_flat] where N = n_batch * h_patches * w_patches
+        N = x.shape[0]
+
+        # Project each band independently: [N, C, patch_flat] -> [N, C, D]
+        band_embeds = torch.stack(
+            [proj(x[:, i, :]) for i, proj in enumerate(self.per_band_projs)],
+            dim=1,
+        )
+
+        # Generate band dropout mask
+        attn_mask = self._generate_band_dropout_mask(N, num_bands, x.device)
+
+        # Cross-attention: query [N, 1, D] attends to band_embeds [N, C, D]
+        query = self.query_embed.expand(N, -1, -1)
+
+        # Pre-norm kv (Block only norms the query internally)
+        kv = self.kv_norm(band_embeds)
+
+        # Block handles: norm(query) -> cross-attn + residual -> MLP + residual
+        query = self.cross_attn_block(x=query, y=kv, attn_mask=attn_mask)
+
+        # Project to final embedding: [N, 1, D] -> [N, embedding_size]
+        out = self.output_proj(query.squeeze(1))
+
+        # Reshape back to spatial dimensions
+        if has_time_dim:
+            out = rearrange(
+                out,
+                "(b t h w) d -> b h w t d",
+                b=batch_size,
+                t=num_timesteps,
+                h=h_patches,
+                w=w_patches,
+            )
+        else:
+            out = rearrange(
+                out,
+                "(b h w) d -> b h w d",
+                b=batch_size,
+                h=h_patches,
+                w=w_patches,
+            )
+
+        return out
 
 
 class FlexiPatchReconstruction(nn.Module):

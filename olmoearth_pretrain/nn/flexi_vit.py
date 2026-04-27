@@ -29,6 +29,7 @@ from olmoearth_pretrain.nn.encodings import (
     get_month_encoding_table,
 )
 from olmoearth_pretrain.nn.flexi_patch_embed import (
+    CrossAttentionPatchEmbed,
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
@@ -193,6 +194,9 @@ class MultiModalPatchEmbeddings(nn.Module):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        cross_attn_band_dropout: bool = False,
+        cross_attn_embedding_size: int | None = None,
+        cross_attn_num_heads: int = 1,
     ):
         """Initialize the patch embeddings.
 
@@ -213,6 +217,13 @@ class MultiModalPatchEmbeddings(nn.Module):
                 and acts as stronger augmentation. Default: False (fixed rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            cross_attn_band_dropout: If True, use CrossAttentionPatchEmbed for eligible
+                spatial modalities instead of FlexiPatchEmbed. Band dropout is then
+                implemented via attention masking in the cross-attention layer.
+            cross_attn_embedding_size: Intermediate per-band embedding dimension for
+                CrossAttentionPatchEmbed. Required when cross_attn_band_dropout=True.
+            cross_attn_num_heads: Number of attention heads for the cross-attention
+                band fusion. Default: 1.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -223,6 +234,9 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
+        self.cross_attn_band_dropout = cross_attn_band_dropout
+        self.cross_attn_embedding_size = cross_attn_embedding_size
+        self.cross_attn_num_heads = cross_attn_num_heads
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -258,6 +272,14 @@ class MultiModalPatchEmbeddings(nn.Module):
         """
         return f"{modality}__{idx}"
 
+    def _should_use_cross_attn_embed(self, modality: str) -> bool:
+        """Check if a modality should use CrossAttentionPatchEmbed."""
+        if not self.cross_attn_band_dropout:
+            return False
+        if self.band_dropout_modalities is not None:
+            return modality in self.band_dropout_modalities
+        return True
+
     def _get_patch_embedding_module_for_modality(self, modality: str) -> nn.Module:
         """Get the patch embedding module for a modality."""
         modality_spec = Modality.get(modality)
@@ -273,6 +295,25 @@ class MultiModalPatchEmbeddings(nn.Module):
                 {
                     self._get_embedding_module_name(modality, idx): nn.Linear(
                         len(channel_set_idxs), self.embedding_size
+                    )
+                    for idx, channel_set_idxs in enumerate(bandset_indices)
+                }
+            )
+        elif self._should_use_cross_attn_embed(modality):
+            assert self.cross_attn_embedding_size is not None
+            return nn.ModuleDict(
+                {
+                    self._get_embedding_module_name(
+                        modality, idx
+                    ): CrossAttentionPatchEmbed(
+                        in_chans=len(channel_set_idxs),
+                        embedding_size=self.embedding_size,
+                        cross_attn_embedding_size=self.cross_attn_embedding_size,
+                        num_heads=self.cross_attn_num_heads,
+                        base_patch_size_at_16=self.max_patch_size,
+                        modality_spec=modality_spec,
+                        band_dropout_rate=self.band_dropout_rate,
+                        random_band_dropout=self.random_band_dropout,
                     )
                     for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
@@ -325,12 +366,23 @@ class MultiModalPatchEmbeddings(nn.Module):
             buffer_name = self._get_buffer_name(modality, idx)
             inp_data = torch.index_select(modality_data, -1, getattr(self, buffer_name))
 
-            # Check if we should apply band dropout for this bandset
-            apply_dropout = (
-                self.band_dropout_modalities is None
-                or modality in self.band_dropout_modalities
-            )
-            if self.training and apply_dropout and self.band_dropout_rate > 0.0:
+            embedding_module = self.per_modality_embeddings[modality][
+                self._get_embedding_module_name(modality, idx)
+            ]
+
+            # CrossAttentionPatchEmbed handles band dropout internally via
+            # attention masking, so skip the zero-masking path for those modules.
+            use_cross_attn = isinstance(embedding_module, CrossAttentionPatchEmbed)
+
+            if (
+                not use_cross_attn
+                and self.training
+                and (
+                    self.band_dropout_modalities is None
+                    or modality in self.band_dropout_modalities
+                )
+                and self.band_dropout_rate > 0.0
+            ):
                 num_bands = inp_data.shape[-1]
                 # Only apply band dropout if there are more than 1 band
                 if num_bands > 1:
@@ -343,9 +395,6 @@ class MultiModalPatchEmbeddings(nn.Module):
                         rate = self.band_dropout_rate
                     inp_data = self._apply_band_dropout(inp_data, rate)
 
-            embedding_module = self.per_modality_embeddings[modality][
-                self._get_embedding_module_name(modality, idx)
-            ]
             patchified_data = embedding_module(inp_data, **modality_specific_kwargs)
 
             modality_tokens.append(patchified_data)
@@ -1108,6 +1157,9 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        cross_attn_band_dropout: bool = False,
+        cross_attn_embedding_size: int | None = None,
+        cross_attn_num_heads: int = 1,
     ):
         """Initialize the encoder.
 
@@ -1141,6 +1193,11 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            cross_attn_band_dropout: If True, use CrossAttentionPatchEmbed for eligible
+                modalities. Band dropout is implemented via attention masking.
+            cross_attn_embedding_size: Intermediate per-band embedding dimension.
+                Required when cross_attn_band_dropout=True.
+            cross_attn_num_heads: Number of heads for cross-attention band fusion.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1171,6 +1228,9 @@ class Encoder(FlexiVitBase):
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
+        self.cross_attn_band_dropout = cross_attn_band_dropout
+        self.cross_attn_embedding_size = cross_attn_embedding_size
+        self.cross_attn_num_heads = cross_attn_num_heads
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
@@ -1180,6 +1240,9 @@ class Encoder(FlexiVitBase):
             band_dropout_rate=self.band_dropout_rate,
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
+            cross_attn_band_dropout=self.cross_attn_band_dropout,
+            cross_attn_embedding_size=self.cross_attn_embedding_size,
+            cross_attn_num_heads=self.cross_attn_num_heads,
         )
         self.output_embedding_size = output_embedding_size
         # If output_embedding_size is set, project tokens to that size after attention
@@ -1212,6 +1275,10 @@ class Encoder(FlexiVitBase):
     def disable_band_dropout(self) -> None:
         """Disable band dropout (e.g. for target/EMA encoder)."""
         self.patch_embeddings.band_dropout_rate = 0.0
+        # Also disable dropout on CrossAttentionPatchEmbed modules
+        for module in self.patch_embeddings.modules():
+            if isinstance(module, CrossAttentionPatchEmbed):
+                module.band_dropout_rate = 0.0
 
     def _init_register_tokens(self) -> None:
         """Initialize the register tokens."""
@@ -2075,6 +2142,9 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+    cross_attn_band_dropout: bool = False
+    cross_attn_embedding_size: int | None = None
+    cross_attn_num_heads: int = 1
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2098,6 +2168,11 @@ class EncoderConfig(Config):
                     f"band_dropout_modalities contains modalities not in "
                     f"supported_modality_names: {unknown}"
                 )
+        if self.cross_attn_band_dropout and self.cross_attn_embedding_size is None:
+            raise ValueError(
+                "cross_attn_embedding_size must be set when "
+                "cross_attn_band_dropout=True"
+            )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
 
