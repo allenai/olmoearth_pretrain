@@ -193,6 +193,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        scale_band_dropout: bool = False,
     ):
         """Initialize the patch embeddings.
 
@@ -213,6 +214,11 @@ class MultiModalPatchEmbeddings(nn.Module):
                 and acts as stronger augmentation. Default: False (fixed rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            scale_band_dropout: If True, divide kept bands by (1 - rate) so the
+                expected input magnitude is preserved (inverted-dropout style).
+                Without this, downstream weights drift upward over training to
+                compensate for the reduced average magnitude, which can cause
+                gradient norms to grow unboundedly. Default: False.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -223,6 +229,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
+        self.scale_band_dropout = scale_band_dropout
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -341,7 +348,9 @@ class MultiModalPatchEmbeddings(nn.Module):
                         )
                     else:
                         rate = self.band_dropout_rate
-                    inp_data = self._apply_band_dropout(inp_data, rate)
+                    inp_data = self._apply_band_dropout(
+                        inp_data, rate, scale=self.scale_band_dropout
+                    )
 
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
@@ -353,12 +362,18 @@ class MultiModalPatchEmbeddings(nn.Module):
         return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
 
     @staticmethod
-    def _apply_band_dropout(patchified_data: Tensor, rate: float) -> Tensor:
+    def _apply_band_dropout(
+        patchified_data: Tensor, rate: float, scale: bool = False
+    ) -> Tensor:
         """Randomly zero out band channels to force cross-spectral learning.
 
         Args:
             patchified_data: Input tensor with bands in the last dimension.
             rate: Probability of dropping each band (per sample).
+            scale: If True, divide the kept bands by (1 - rate) so that the expected
+                input magnitude is preserved (inverted-dropout style, matching
+                ``nn.Dropout``). Eliminates the train/inference magnitude mismatch
+                that otherwise pushes downstream weights to drift upward to compensate.
 
         Returns:
             Tensor with randomly zeroed bands, at least 1 band kept per sample.
@@ -377,7 +392,10 @@ class MultiModalPatchEmbeddings(nn.Module):
             keep_mask[no_bands_kept, rand_idx] = True
         # Broadcast: [B, 1, 1, ..., num_bands]
         view_shape = [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
-        return patchified_data * keep_mask.view(*view_shape).to(patchified_data.dtype)
+        out = patchified_data * keep_mask.view(*view_shape).to(patchified_data.dtype)
+        if scale:
+            out = out / max(1.0 - rate, 1e-6)
+        return out
 
     @staticmethod
     def is_any_data_seen_by_encoder(modality_mask: Tensor) -> bool:
@@ -1108,6 +1126,7 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        scale_band_dropout: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1141,6 +1160,8 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            scale_band_dropout: If True, divide kept bands by (1 - rate) to preserve
+                expected input magnitude (inverted-dropout style). Default: False.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1171,6 +1192,7 @@ class Encoder(FlexiVitBase):
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
+        self.scale_band_dropout = scale_band_dropout
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
@@ -1180,6 +1202,7 @@ class Encoder(FlexiVitBase):
             band_dropout_rate=self.band_dropout_rate,
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
+            scale_band_dropout=self.scale_band_dropout,
         )
         self.output_embedding_size = output_embedding_size
         # If output_embedding_size is set, project tokens to that size after attention
@@ -2075,6 +2098,7 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+    scale_band_dropout: bool = False
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
