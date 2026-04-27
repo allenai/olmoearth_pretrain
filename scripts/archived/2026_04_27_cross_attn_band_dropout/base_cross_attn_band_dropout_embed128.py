@@ -380,7 +380,7 @@ def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_size = MODEL_SIZE_ARGS["tiny_shallow_decoder"]
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
     encoder_config = EncoderConfig(
         embedding_size=model_size["encoder_embedding_size"],
