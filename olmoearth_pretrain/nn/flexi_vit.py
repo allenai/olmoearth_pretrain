@@ -197,6 +197,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         cross_attn_band_dropout: bool = False,
         cross_attn_embedding_size: int | None = None,
         cross_attn_num_heads: int = 1,
+        per_patch_band_dropout: bool = False,
     ):
         """Initialize the patch embeddings.
 
@@ -224,6 +225,9 @@ class MultiModalPatchEmbeddings(nn.Module):
                 CrossAttentionPatchEmbed. Required when cross_attn_band_dropout=True.
             cross_attn_num_heads: Number of attention heads for the cross-attention
                 band fusion. Default: 1.
+            per_patch_band_dropout: If True, each spatial patch gets an independent
+                band dropout mask. If False (default), all patches in the same image
+                share the same mask. Only used with cross_attn_band_dropout.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -237,6 +241,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.cross_attn_band_dropout = cross_attn_band_dropout
         self.cross_attn_embedding_size = cross_attn_embedding_size
         self.cross_attn_num_heads = cross_attn_num_heads
+        self.per_patch_band_dropout = per_patch_band_dropout
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -314,6 +319,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                         modality_spec=modality_spec,
                         band_dropout_rate=self.band_dropout_rate,
                         random_band_dropout=self.random_band_dropout,
+                        per_patch_band_dropout=self.per_patch_band_dropout,
                     )
                     for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
@@ -1160,6 +1166,7 @@ class Encoder(FlexiVitBase):
         cross_attn_band_dropout: bool = False,
         cross_attn_embedding_size: int | None = None,
         cross_attn_num_heads: int = 1,
+        per_patch_band_dropout: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1198,6 +1205,9 @@ class Encoder(FlexiVitBase):
             cross_attn_embedding_size: Intermediate per-band embedding dimension.
                 Required when cross_attn_band_dropout=True.
             cross_attn_num_heads: Number of heads for cross-attention band fusion.
+            per_patch_band_dropout: If True, each spatial patch gets an independent
+                band dropout mask. If False (default), all patches in the same image
+                share the same mask. Only used with cross_attn_band_dropout.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1231,6 +1241,7 @@ class Encoder(FlexiVitBase):
         self.cross_attn_band_dropout = cross_attn_band_dropout
         self.cross_attn_embedding_size = cross_attn_embedding_size
         self.cross_attn_num_heads = cross_attn_num_heads
+        self.per_patch_band_dropout = per_patch_band_dropout
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
@@ -1243,6 +1254,7 @@ class Encoder(FlexiVitBase):
             cross_attn_band_dropout=self.cross_attn_band_dropout,
             cross_attn_embedding_size=self.cross_attn_embedding_size,
             cross_attn_num_heads=self.cross_attn_num_heads,
+            per_patch_band_dropout=self.per_patch_band_dropout,
         )
         self.output_embedding_size = output_embedding_size
         # If output_embedding_size is set, project tokens to that size after attention
@@ -2145,6 +2157,7 @@ class EncoderConfig(Config):
     cross_attn_band_dropout: bool = False
     cross_attn_embedding_size: int | None = None
     cross_attn_num_heads: int = 1
+    per_patch_band_dropout: bool = False
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""

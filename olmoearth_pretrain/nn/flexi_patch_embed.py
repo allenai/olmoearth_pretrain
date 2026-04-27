@@ -220,6 +220,7 @@ class CrossAttentionPatchEmbed(nn.Module):
         num_heads: int = 1,
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
+        per_patch_band_dropout: bool = False,
         interpolation: str = "bicubic",
         antialias: bool = True,
     ) -> None:
@@ -234,6 +235,11 @@ class CrossAttentionPatchEmbed(nn.Module):
             num_heads: Number of attention heads for cross-attention.
             band_dropout_rate: Probability of masking each band during training.
             random_band_dropout: If True, sample rate from Uniform(0, band_dropout_rate).
+            per_patch_band_dropout: If True, sample an independent band dropout mask
+                for every spatial patch. If False (default), all spatial patches
+                within the same image share the same band dropout mask, which is
+                stronger augmentation since the model cannot lean on neighboring
+                patches to recover dropped bands.
             interpolation: Resize interpolation type.
             antialias: Whether to apply antialiasing when resizing.
         """
@@ -248,30 +254,29 @@ class CrossAttentionPatchEmbed(nn.Module):
         self.cross_attn_embedding_size = cross_attn_embedding_size
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
+        self.per_patch_band_dropout = per_patch_band_dropout
         self.interpolation = interpolation
         self.antialias = antialias
 
         p_h, p_w = self.base_patch_size
         patch_flat_size = p_h * p_w  # e.g. 64 for 8x8
 
-        # Per-band projections: each band gets its own linear projection
-        self.per_band_projs = nn.ModuleList(
-            [
-                nn.Linear(patch_flat_size, cross_attn_embedding_size)
-                for _ in range(in_chans)
-            ]
+        # Batched per-band projection: [C, patch_flat, D]
+        self.band_proj_weight = nn.Parameter(
+            torch.empty(in_chans, patch_flat_size, cross_attn_embedding_size)
         )
-        for proj in self.per_band_projs:
-            proj._skip_custom_init = True
+        self.band_proj_bias = nn.Parameter(
+            torch.zeros(in_chans, cross_attn_embedding_size)
+        )
+        nn.init.kaiming_uniform_(self.band_proj_weight, a=5**0.5)
 
         # Learned query for this bandset (one query token)
         self.query_embed = nn.Parameter(torch.zeros(1, 1, cross_attn_embedding_size))
         nn.init.xavier_uniform_(self.query_embed.view(1, -1))
 
-        # Pre-norm for cross-attention keys/values (Block only norms the query)
-        self.kv_norm = nn.LayerNorm(cross_attn_embedding_size)
-
         # Cross-attention block: norm + attention + residual + MLP + residual
+        # Following the codebase pattern, kv is passed unnormalized; Block's
+        # norm1 only applies to the query.
         self.cross_attn_block = Block(
             dim=cross_attn_embedding_size,
             num_heads=num_heads,
@@ -379,23 +384,28 @@ class CrossAttentionPatchEmbed(nn.Module):
         # x shape: [N, C, patch_flat] where N = n_batch * h_patches * w_patches
         N = x.shape[0]
 
-        # Project each band independently: [N, C, patch_flat] -> [N, C, D]
-        band_embeds = torch.stack(
-            [proj(x[:, i, :]) for i, proj in enumerate(self.per_band_projs)],
-            dim=1,
-        )
+        # Batched per-band projection: [N, C, patch_flat] @ [C, patch_flat, D] -> [N, C, D]
+        band_embeds = torch.einsum(
+            "ncf,cfd->ncd", x, self.band_proj_weight
+        ) + self.band_proj_bias.unsqueeze(0)
 
-        # Generate band dropout mask
-        attn_mask = self._generate_band_dropout_mask(N, num_bands, x.device)
+        # Generate band dropout mask.  When per_patch_band_dropout is False the
+        # mask is sampled per image (n_batch) and broadcast across spatial patches.
+        if self.per_patch_band_dropout:
+            attn_mask = self._generate_band_dropout_mask(N, num_bands, x.device)
+        else:
+            n_batch = batch_size * num_timesteps if has_time_dim else batch_size
+            attn_mask = self._generate_band_dropout_mask(n_batch, num_bands, x.device)
+            if attn_mask is not None:
+                # Broadcast: [n_batch, C] -> [n_batch * h * w, C]
+                attn_mask = attn_mask.repeat_interleave(h_patches * w_patches, dim=0)
 
         # Cross-attention: query [N, 1, D] attends to band_embeds [N, C, D]
         query = self.query_embed.expand(N, -1, -1)
 
-        # Pre-norm kv (Block only norms the query internally)
-        kv = self.kv_norm(band_embeds)
-
         # Block handles: norm(query) -> cross-attn + residual -> MLP + residual
-        query = self.cross_attn_block(x=query, y=kv, attn_mask=attn_mask)
+        # Following codebase convention, kv (band_embeds) is passed unnormalized.
+        query = self.cross_attn_block(x=query, y=band_embeds, attn_mask=attn_mask)
 
         # Project to final embedding: [N, 1, D] -> [N, embedding_size]
         out = self.output_proj(query.squeeze(1))
