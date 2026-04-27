@@ -393,7 +393,6 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         num_heads=model_size["decoder_num_heads"],
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
-        windowed_attention_size=WINDOWED_ATTENTION_SIZE,
         tokenization_config=common.tokenization_config,
     )
     model_config = LatentMIMConfig(
