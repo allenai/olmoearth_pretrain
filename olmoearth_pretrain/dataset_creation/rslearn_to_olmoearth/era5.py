@@ -12,6 +12,7 @@ import tqdm
 from rslearn.data_sources import Item
 from rslearn.dataset import Dataset, Window
 from rslearn.utils.mp import star_imap_unordered
+from rslearn.utils.raster_array import RasterArray
 from rslearn.utils.raster_format import GeotiffRasterFormat
 from upath import UPath
 
@@ -72,7 +73,7 @@ def convert_era5(window: Window, olmoearth_path: UPath) -> None:
         raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands, group_idx)
         image = raster_format.decode_raster(
             raster_dir, window.projection, window.bounds
-        )
+        ).get_chw_array()
 
         year_images.append(image)
         year_time_ranges.append(time_range)
@@ -119,7 +120,7 @@ def convert_era5(window: Window, olmoearth_path: UPath) -> None:
         path=year_dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,
-        array=year_stacked_image,
+        raster=RasterArray(chw_array=year_stacked_image),
         fname=year_dst_fname.name,
     )
     year_metadata_fname = get_modality_temp_meta_fname(
@@ -155,7 +156,7 @@ def convert_era5(window: Window, olmoearth_path: UPath) -> None:
         path=two_week_dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,
-        array=two_week_image,
+        raster=RasterArray(chw_array=two_week_image),
         fname=two_week_dst_fname.name,
     )
     two_week_metadata_fname = get_modality_temp_meta_fname(
