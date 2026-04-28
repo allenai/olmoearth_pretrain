@@ -109,6 +109,13 @@ if __name__ == "__main__":
         help="Number of workers to use",
         default=32,
     )
+    parser.add_argument(
+        "--group",
+        type=str,
+        nargs="+",
+        help="rslearn window group(s) to convert",
+        default=["res_0.625"],
+    )
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))
@@ -116,7 +123,7 @@ if __name__ == "__main__":
 
     jobs = []
     for window in dataset.load_windows(
-        workers=args.workers, show_progress=True, groups=["res_0.625"]
+        workers=args.workers, show_progress=True, groups=args.group
     ):
         jobs.append(
             dict(

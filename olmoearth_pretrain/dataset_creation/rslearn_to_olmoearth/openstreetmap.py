@@ -118,13 +118,22 @@ if __name__ == "__main__":
         help="Number of workers to use",
         default=32,
     )
+    parser.add_argument(
+        "--group",
+        type=str,
+        nargs="+",
+        help="rslearn window group(s) to convert; defaults to all groups",
+        default=None,
+    )
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))
     olmoearth_path = UPath(args.olmoearth_path)
 
     jobs = []
-    for window in dataset.load_windows(workers=args.workers, show_progress=True):
+    for window in dataset.load_windows(
+        workers=args.workers, show_progress=True, groups=args.group
+    ):
         jobs.append(
             dict(
                 window=window,
