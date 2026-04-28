@@ -27,6 +27,46 @@ EPSILON = 1e-6
 logger = logging.getLogger(__name__)
 
 
+def _decode_chw_raster(
+    raster_dir: UPath, projection: Projection, bounds: PixelBounds
+) -> npt.NDArray:
+    """Decode a single-timestep raster as a CHW NumPy array."""
+    image = GEOTIFF_RASTER_FORMAT.decode_raster(raster_dir, projection, bounds)
+    if hasattr(image, "get_chw_array"):
+        return image.get_chw_array()
+    return image
+
+
+def _encode_chw_raster(
+    path: UPath,
+    projection: Projection,
+    bounds: PixelBounds,
+    array: npt.NDArray,
+    fname: str,
+) -> None:
+    """Encode a CHW NumPy array across old and new rslearn raster APIs."""
+    try:
+        GEOTIFF_RASTER_FORMAT.encode_raster(
+            path=path,
+            projection=projection,
+            bounds=bounds,
+            array=array,
+            fname=fname,
+        )
+    except TypeError as e:
+        if "array" not in str(e):
+            raise
+        from rslearn.utils.raster_array import RasterArray
+
+        GEOTIFF_RASTER_FORMAT.encode_raster(
+            path=path,
+            projection=projection,
+            bounds=bounds,
+            raster=RasterArray(chw_array=array),
+            fname=fname,
+        )
+
+
 def get_adjusted_projection_and_bounds(
     modality: ModalitySpec,
     band_set: BandSet,
@@ -159,9 +199,7 @@ def convert_freq(
                 window.bounds,
                 adjusted_bounds,
             )
-            image = GEOTIFF_RASTER_FORMAT.decode_raster(
-                raster_dir, adjusted_projection, adjusted_bounds
-            )
+            image = _decode_chw_raster(raster_dir, adjusted_projection, adjusted_bounds)
             expected_image_size = band_set.get_expected_image_size(
                 window_metadata.get_resolution_factor(),
                 window_metadata.get_tile_size(),
@@ -207,7 +245,7 @@ def convert_freq(
                 band_set.get_resolution(),
                 "tif",
             )
-            GEOTIFF_RASTER_FORMAT.encode_raster(
+            _encode_chw_raster(
                 path=dst_fname.parent,
                 projection=adjusted_projection,
                 bounds=adjusted_bounds,
@@ -282,9 +320,7 @@ def convert_monthly(
             if not raster_dir.exists():
                 break
 
-            image = GEOTIFF_RASTER_FORMAT.decode_raster(
-                raster_dir, adjusted_projection, adjusted_bounds
-            )
+            image = _decode_chw_raster(raster_dir, adjusted_projection, adjusted_bounds)
             expected_image_size = band_set.get_expected_image_size(
                 modality.tile_resolution_factor,
                 window_metadata.get_tile_size(),
@@ -330,7 +366,7 @@ def convert_monthly(
                 band_set.get_resolution(),
                 "tif",
             )
-            GEOTIFF_RASTER_FORMAT.encode_raster(
+            _encode_chw_raster(
                 path=dst_fname.parent,
                 projection=adjusted_projection,
                 bounds=adjusted_bounds,
