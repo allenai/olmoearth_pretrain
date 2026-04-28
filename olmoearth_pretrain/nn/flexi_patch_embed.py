@@ -12,6 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from olmoearth_pretrain.data.constants import ModalitySpec
 from olmoearth_pretrain.nn.attention import Block
@@ -405,7 +406,10 @@ class CrossAttentionPatchEmbed(nn.Module):
 
         # Block handles: norm(query) -> cross-attn + residual -> MLP + residual
         # Following codebase convention, kv (band_embeds) is passed unnormalized.
-        query = self.cross_attn_block(x=query, y=band_embeds, attn_mask=attn_mask)
+        # Force the math SDPA backend: flash/mem-efficient kernels can fail with
+        # the very short query sequence length (1 token) used in cross-attention.
+        with sdpa_kernel(backends=[SDPBackend.MATH]):
+            query = self.cross_attn_block(x=query, y=band_embeds, attn_mask=attn_mask)
 
         # Project to final embedding: [N, 1, D] -> [N, embedding_size]
         out = self.output_proj(query.squeeze(1))
