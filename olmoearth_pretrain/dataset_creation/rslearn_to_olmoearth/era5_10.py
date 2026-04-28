@@ -25,6 +25,7 @@ from ..util import (
     write_single_metadata_row,
 )
 from .multitemporal_raster import get_adjusted_projection_and_bounds
+from .raster_api import decode_chw_raster, encode_chw_raster
 
 # Layer name in the input rslearn dataset.
 LAYER_NAME = "era5_10"
@@ -82,8 +83,8 @@ def convert_era5(window: Window, olmoearth_path: UPath) -> None:
         )
 
         raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands, group_idx)
-        image = raster_format.decode_raster(
-            raster_dir, adjusted_projection, adjusted_bounds
+        image = decode_chw_raster(
+            raster_format, raster_dir, adjusted_projection, adjusted_bounds
         )
 
         year_images.append(image)
@@ -133,7 +134,8 @@ def convert_era5(window: Window, olmoearth_path: UPath) -> None:
         band_set.get_resolution(),
         "tif",
     )
-    raster_format.encode_raster(
+    encode_chw_raster(
+        raster_format,
         path=year_dst_fname.parent,
         projection=adjusted_projection,
         bounds=adjusted_bounds,
@@ -165,7 +167,8 @@ def convert_era5(window: Window, olmoearth_path: UPath) -> None:
         band_set.get_resolution(),
         "tif",
     )
-    raster_format.encode_raster(
+    encode_chw_raster(
+        raster_format,
         path=two_week_dst_fname.parent,
         projection=adjusted_projection,
         bounds=adjusted_bounds,

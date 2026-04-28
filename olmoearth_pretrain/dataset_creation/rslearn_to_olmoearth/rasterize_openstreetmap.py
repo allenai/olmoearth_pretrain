@@ -26,6 +26,7 @@ from olmoearth_pretrain.dataset.utils import (
 
 from ..constants import GEOTIFF_RASTER_FORMAT
 from ..util import parse_bool
+from .raster_api import encode_chw_raster
 
 WINDOW_SIZE = 256
 # Factor to zoom in for output. So output will be 1024x1024.
@@ -204,7 +205,8 @@ def rasterize_openstreetmap(job: OpenStreetMapRasterJob) -> None:
             raise ValueError(f"cannot handle geometry type {geometry['type']}")
 
     # Upload the rasterized data as GeoTIFF.
-    GEOTIFF_RASTER_FORMAT.encode_raster(
+    encode_chw_raster(
+        GEOTIFF_RASTER_FORMAT,
         path=job.out_fname.parent,
         projection=job.projection,
         bounds=job.bounds,

@@ -33,6 +33,7 @@ from ..util import (
     get_window_metadata,
     write_single_metadata_row,
 )
+from .raster_api import encode_chw_raster
 
 # Use the EUROCROPS modality from constants.
 MODALITY = Modality.EUROCROPS
@@ -192,7 +193,8 @@ def convert_eurocrops(
         window.projection.x_resolution,
         "tif",
     )
-    GEOTIFF_RASTER_FORMAT.encode_raster(
+    encode_chw_raster(
+        GEOTIFF_RASTER_FORMAT,
         path=out_fname.parent,
         projection=window.projection,
         bounds=window.bounds,

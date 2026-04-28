@@ -18,6 +18,7 @@ from ..util import (
     get_window_metadata,
     write_single_metadata_row,
 )
+from .raster_api import decode_chw_raster, encode_chw_raster
 
 # Layer name in the input rslearn dataset.
 LAYER_NAME = "naip"
@@ -57,7 +58,9 @@ def convert_naip(window: Window, olmoearth_path: UPath) -> None:
     assert len(Modality.NAIP.band_sets) == 1
     band_set = Modality.NAIP.band_sets[0]
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
-    image = raster_format.decode_raster(raster_dir, window.projection, window.bounds)
+    image = decode_chw_raster(
+        raster_format, raster_dir, window.projection, window.bounds
+    )
     dst_fname = get_modality_fname(
         olmoearth_path,
         Modality.NAIP,
@@ -66,7 +69,8 @@ def convert_naip(window: Window, olmoearth_path: UPath) -> None:
         band_set.get_resolution(),
         "tif",
     )
-    raster_format.encode_raster(
+    encode_chw_raster(
+        raster_format,
         path=dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,

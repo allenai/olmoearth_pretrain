@@ -19,6 +19,7 @@ from ..util import (
     get_window_metadata,
     write_single_metadata_row,
 )
+from .raster_api import decode_chw_raster, encode_chw_raster
 
 # Fake time range, it actually varies across the data.
 START_TIME = datetime(2020, 1, 1, tzinfo=UTC)
@@ -43,8 +44,8 @@ def convert_chm(window: Window, olmoearth_path: UPath) -> None:
     assert len(Modality.WRI_CANOPY_HEIGHT_MAP.band_sets) == 1
     band_set = Modality.WRI_CANOPY_HEIGHT_MAP.band_sets[0]
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
-    image = GEOTIFF_RASTER_FORMAT.decode_raster(
-        raster_dir, window.projection, window.bounds
+    image = decode_chw_raster(
+        GEOTIFF_RASTER_FORMAT, raster_dir, window.projection, window.bounds
     )
 
     # Skip areas with any nodata (255).
@@ -62,7 +63,8 @@ def convert_chm(window: Window, olmoearth_path: UPath) -> None:
         band_set.get_resolution(),
         "tif",
     )
-    GEOTIFF_RASTER_FORMAT.encode_raster(
+    encode_chw_raster(
+        GEOTIFF_RASTER_FORMAT,
         path=dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,

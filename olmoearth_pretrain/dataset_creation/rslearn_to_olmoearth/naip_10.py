@@ -19,6 +19,7 @@ from ..util import (
     write_single_metadata_row,
 )
 from .multitemporal_raster import get_adjusted_projection_and_bounds
+from .raster_api import decode_chw_raster, encode_chw_raster
 
 # Layer name in the input rslearn dataset.
 LAYER_NAME = "naip_10"
@@ -65,8 +66,8 @@ def convert_naip(window: Window, olmoearth_path: UPath) -> None:
         Modality.NAIP_10, band_set, window.projection, window.bounds
     )
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
-    image = raster_format.decode_raster(
-        raster_dir, adjusted_projection, adjusted_bounds
+    image = decode_chw_raster(
+        raster_format, raster_dir, adjusted_projection, adjusted_bounds
     )
     dst_fname = get_modality_fname(
         olmoearth_path,
@@ -76,7 +77,8 @@ def convert_naip(window: Window, olmoearth_path: UPath) -> None:
         band_set.get_resolution(),
         "tif",
     )
-    raster_format.encode_raster(
+    encode_chw_raster(
+        raster_format,
         path=dst_fname.parent,
         projection=adjusted_projection,
         bounds=adjusted_bounds,

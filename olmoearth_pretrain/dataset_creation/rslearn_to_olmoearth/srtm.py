@@ -18,6 +18,7 @@ from ..util import (
     get_window_metadata,
     write_single_metadata_row,
 )
+from .raster_api import decode_chw_raster, encode_chw_raster
 
 START_TIME = datetime(2000, 1, 1, tzinfo=UTC)
 END_TIME = datetime(2001, 1, 1, tzinfo=UTC)
@@ -41,8 +42,8 @@ def convert_srtm(window: Window, olmoearth_path: UPath) -> None:
     assert len(Modality.SRTM.band_sets) == 1
     band_set = Modality.SRTM.band_sets[0]
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
-    image = GEOTIFF_RASTER_FORMAT.decode_raster(
-        raster_dir, window.projection, window.bounds
+    image = decode_chw_raster(
+        GEOTIFF_RASTER_FORMAT, raster_dir, window.projection, window.bounds
     )
     dst_fname = get_modality_fname(
         olmoearth_path,
@@ -52,7 +53,8 @@ def convert_srtm(window: Window, olmoearth_path: UPath) -> None:
         band_set.get_resolution(),
         "tif",
     )
-    GEOTIFF_RASTER_FORMAT.encode_raster(
+    encode_chw_raster(
+        GEOTIFF_RASTER_FORMAT,
         path=dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,
