@@ -8,6 +8,7 @@ import tqdm
 from rslearn.data_sources import Item
 from rslearn.dataset import Dataset, Window
 from rslearn.utils.mp import star_imap_unordered
+from rslearn.utils.raster_array import RasterArray
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality, TimeSpan
@@ -44,12 +45,12 @@ def convert_cdl(window: Window, olmoearth_path: UPath) -> None:
     assert len(Modality.CDL.band_sets) == 1
     band_set = Modality.CDL.band_sets[0]
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
-    raster = GEOTIFF_RASTER_FORMAT.decode_raster(
+    image = GEOTIFF_RASTER_FORMAT.decode_raster(
         raster_dir, window.projection, window.bounds
-    )
+    ).get_chw_array()
 
     # Skip if there are any background/nodata.
-    if raster.array.min() == 0:
+    if image.min() == 0:
         return
 
     dst_fname = get_modality_fname(
@@ -64,7 +65,7 @@ def convert_cdl(window: Window, olmoearth_path: UPath) -> None:
         path=dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,
-        raster=raster,
+        raster=RasterArray(chw_array=image),
         fname=dst_fname.name,
     )
     metadata_fname = get_modality_temp_meta_fname(

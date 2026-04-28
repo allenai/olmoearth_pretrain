@@ -38,7 +38,7 @@ def convert_worldcover(window: Window, olmoearth_path: UPath) -> None:
     assert len(Modality.WORLDCOVER.band_sets) == 1
     band_set = Modality.WORLDCOVER.band_sets[0]
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
-    raster = GEOTIFF_RASTER_FORMAT.decode_raster(
+    image = GEOTIFF_RASTER_FORMAT.decode_raster(
         raster_dir, window.projection, window.bounds
     )
     dst_fname = get_modality_fname(
@@ -53,7 +53,7 @@ def convert_worldcover(window: Window, olmoearth_path: UPath) -> None:
         path=dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,
-        raster=raster,
+        raster=image,
         fname=dst_fname.name,
     )
     metadata_fname = get_modality_temp_meta_fname(
