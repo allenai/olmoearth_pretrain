@@ -42,7 +42,7 @@ def convert_chm(window: Window, olmoearth_path: UPath) -> None:
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
     raster = GEOTIFF_RASTER_FORMAT.decode_raster(
         raster_dir, window.projection, window.bounds
-    )
+    ).get_chw_array()
 
     # Skip areas with any nodata (255).
     if raster.array.max() == 255:

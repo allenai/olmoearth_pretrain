@@ -40,7 +40,7 @@ def convert_worldpop(window: Window, olmoearth_path: UPath) -> None:
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
     raster = GEOTIFF_RASTER_FORMAT.decode_raster(
         raster_dir, window.projection, window.bounds
-    )
+    ).get_chw_array()
 
     # Clip population count to 0. NODATA is -99999 and includes locations that are
     # mapped as "unsettled" but really that is 0 population.

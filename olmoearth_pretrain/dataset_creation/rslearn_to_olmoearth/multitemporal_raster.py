@@ -156,10 +156,9 @@ def convert_freq(
                 window.bounds,
                 adjusted_bounds,
             )
-            raster = GEOTIFF_RASTER_FORMAT.decode_raster(
+            image = GEOTIFF_RASTER_FORMAT.decode_raster(
                 raster_dir, adjusted_projection, adjusted_bounds
-            )
-            image = raster.get_chw_array()
+            ).get_chw_array()
             expected_image_size = band_set.get_expected_image_size(
                 window_metadata.get_resolution_factor()
             )
@@ -288,10 +287,9 @@ def convert_monthly(
             if not raster_dir.exists():
                 break
 
-            raster = GEOTIFF_RASTER_FORMAT.decode_raster(
+            image = GEOTIFF_RASTER_FORMAT.decode_raster(
                 raster_dir, adjusted_projection, adjusted_bounds
-            )
-            image = raster.get_chw_array()
+            ).get_chw_array()
             expected_image_size = band_set.get_expected_image_size(
                 modality.tile_resolution_factor
             )

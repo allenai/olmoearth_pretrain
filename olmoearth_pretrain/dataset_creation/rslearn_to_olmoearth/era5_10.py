@@ -79,10 +79,9 @@ def convert_era5(window: Window, olmoearth_path: UPath) -> None:
         )
 
         raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands, group_idx)
-        raster = raster_format.decode_raster(
+        image = raster_format.decode_raster(
             raster_dir, adjusted_projection, adjusted_bounds
-        )
-        image = raster.get_chw_array()
+        ).get_chw_array()
 
         year_images.append(image)
         year_time_ranges.append(time_range)

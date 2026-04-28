@@ -57,10 +57,11 @@ def convert_worldcereal(window: Window, olmoearth_path: UPath) -> None:
             continue
         window_dir = window.get_raster_dir(band, [band])
 
-        raster = GEOTIFF_RASTER_FORMAT.decode_raster(
-            path=window_dir, projection=window.projection, bounds=window.bounds
+        ndarrays.append(
+            GEOTIFF_RASTER_FORMAT.decode_raster(
+                path=window_dir, projection=window.projection, bounds=window.bounds
+            ).get_chw_array()
         )
-        ndarrays.append(raster.get_chw_array())
 
     assert len(ndarrays) == len(band_set.bands), (
         f"Expected {len(band_set.bands)} arrays, got {len(ndarrays)}"
