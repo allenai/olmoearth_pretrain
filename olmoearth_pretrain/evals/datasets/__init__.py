@@ -7,16 +7,7 @@ from olmo_core.config import StrEnum
 from torch.utils.data import Dataset
 
 import olmoearth_pretrain.evals.datasets.paths as paths
-from olmoearth_pretrain.evals.studio_ingest.registry import get_dataset_entry
-
-from .breizhcrops import BreizhCropsDataset
-from .floods_dataset import Sen1Floods11Dataset
-from .geobench_dataset import GeobenchDataset
-from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
-from .pastis_dataset import PASTISRDataset
-from .pretrain_subset import PretrainSubsetDataset
-from .rslearn_dataset import from_registry_entry
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +37,8 @@ def get_eval_dataset(
 ) -> Dataset:
     """Retrieve an eval dataset from the dataset name."""
     if eval_dataset == "pretrain_subset":
+        from .pretrain_subset import PretrainSubsetDataset
+
         return PretrainSubsetDataset(
             h5py_dir=kwargs["h5py_dir"],
             training_modalities=kwargs.get("training_modalities", input_modalities),
@@ -54,7 +47,19 @@ def get_eval_dataset(
             hw_p=kwargs.get("pretrain_hw_p", 8),
             seed=kwargs.get("pretrain_seed", 42),
         )
-    elif eval_dataset.startswith("m-"):
+    if eval_dataset.startswith("gb2-"):
+        from .geobench_v2_dataset import GeobenchV2Dataset
+
+        return GeobenchV2Dataset(
+            dataset=eval_dataset,
+            split=split,
+            partition=partition,
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
+        )
+    if eval_dataset.startswith("m-"):
+        from .geobench_dataset import GeobenchDataset
+
         # m- == "modified for geobench"
         return GeobenchDataset(
             geobench_dir=paths.GEOBENCH_DIR,
@@ -64,7 +69,9 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
-    elif eval_dataset == "mados":
+    if eval_dataset == "mados":
+        from .mados_dataset import MADOSDataset
+
         if norm_stats_from_pretrained:
             logger.warning(
                 "MADOS has very different norm stats than our pretraining dataset"
@@ -76,7 +83,9 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
-    elif eval_dataset == "sen1floods11":
+    if eval_dataset == "sen1floods11":
+        from .floods_dataset import Sen1Floods11Dataset
+
         return Sen1Floods11Dataset(
             path_to_splits=paths.FLOODS_DIR,
             split=split,
@@ -84,8 +93,10 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
-    elif eval_dataset.startswith("pastis"):
-        kwargs = {
+    if eval_dataset.startswith("pastis"):
+        from .pastis_dataset import PASTISRDataset
+
+        pastis_kwargs: dict[str, Any] = {
             "split": split,
             "partition": partition,
             "norm_stats_from_pretrained": norm_stats_from_pretrained,
@@ -94,12 +105,13 @@ def get_eval_dataset(
             "dir_partition": paths.PASTIS_DIR_PARTITION,
         }
         if "128" in eval_dataset:
-            # "pastis128"
-            kwargs["path_to_splits"] = paths.PASTIS_DIR_ORIG
+            pastis_kwargs["path_to_splits"] = paths.PASTIS_DIR_ORIG
         else:
-            kwargs["path_to_splits"] = paths.PASTIS_DIR
-        return PASTISRDataset(**kwargs)  # type: ignore
-    elif eval_dataset == "breizhcrops":
+            pastis_kwargs["path_to_splits"] = paths.PASTIS_DIR
+        return PASTISRDataset(**pastis_kwargs)  # type: ignore
+    if eval_dataset == "breizhcrops":
+        from .breizhcrops import BreizhCropsDataset
+
         return BreizhCropsDataset(
             path_to_splits=paths.BREIZHCROPS_DIR,
             split=split,
@@ -107,12 +119,24 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
-    else:
-        eval_dataset_entry = get_dataset_entry(eval_dataset)
-        return from_registry_entry(
-            entry=eval_dataset_entry,
-            split=split,
-            norm_stats_from_pretrained=norm_stats_from_pretrained,
-            norm_method=norm_method,
-            input_modalities_override=input_modalities if input_modalities else None,
-        )
+    from olmoearth_pretrain.evals.studio_ingest.registry import get_dataset_entry
+
+    from .rslearn_dataset import from_registry_entry
+
+    eval_dataset_entry = get_dataset_entry(eval_dataset)
+    return from_registry_entry(
+        entry=eval_dataset_entry,
+        split=split,
+        norm_stats_from_pretrained=norm_stats_from_pretrained,
+        norm_method=norm_method,
+        input_modalities_override=input_modalities if input_modalities else None,
+    )
+
+
+def __getattr__(name: str) -> Any:
+    """Support ``from olmoearth_pretrain.evals.datasets import GeobenchDataset`` without eager imports."""
+    if name == "GeobenchDataset":
+        from .geobench_dataset import GeobenchDataset
+
+        return GeobenchDataset
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

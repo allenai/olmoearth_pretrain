@@ -6,8 +6,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+import numpy as np
 import torch
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_squared_error, r2_score
 
 
 class EvalMetric(StrEnum):
@@ -21,6 +22,9 @@ class EvalMetric(StrEnum):
     OVERALL_ACC = "overall_acc"
     MACRO_ACC = "macro_acc"
     MACRO_F1 = "macro_f1"
+    RMSE = "rmse"
+    MAE = "mae"
+    R2 = "r2"
 
 
 # Label value used to mark invalid/ignored pixels in segmentation targets.
@@ -159,6 +163,48 @@ class EvalResult:
             primary_metric_key=resolved_key,
             metrics=metrics,
         )
+
+    @classmethod
+    def from_regression(
+        cls,
+        rmse: float,
+        mae: float,
+        r2: float,
+        primary_metric: EvalMetric | None = None,
+    ) -> EvalResult:
+        """Create EvalResult from regression metrics."""
+        metrics = {
+            EvalMetric.RMSE.value: rmse,
+            EvalMetric.MAE.value: mae,
+            EvalMetric.R2.value: r2,
+        }
+        if primary_metric is None:
+            primary_metric = EvalMetric.RMSE
+        key = cls._resolve_metric_key(primary_metric)
+        if key not in metrics:
+            raise ValueError(
+                f"primary_metric '{key}' not found in computed metrics: {list(metrics.keys())}"
+            )
+        return cls(
+            primary=metrics[key],
+            primary_metric=primary_metric,
+            primary_metric_key=key,
+            metrics=metrics,
+        )
+
+
+def regression_metrics(
+    predictions: torch.Tensor,
+    labels: torch.Tensor,
+    primary_metric: EvalMetric | None = None,
+) -> EvalResult:
+    """Compute RMSE, MAE, and R² for scalar regression."""
+    p = predictions.detach().cpu().numpy().reshape(-1)
+    y = labels.detach().cpu().numpy().reshape(-1)
+    rmse = float(np.sqrt(mean_squared_error(y, p)))
+    mae = float(mean_absolute_error(y, p))
+    r2 = float(r2_score(y, p))
+    return EvalResult.from_regression(rmse=rmse, mae=mae, r2=r2, primary_metric=primary_metric)
 
 
 def _build_confusion_matrix(

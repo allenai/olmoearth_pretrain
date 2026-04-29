@@ -24,6 +24,7 @@ from olmoearth_pretrain.evals.metrics import (
     EvalResult,
     EvalTaskResult,
     classification_metrics,
+    regression_metrics,
     segmentation_metrics,
 )
 from olmoearth_pretrain.evals.utils import adjust_learning_rate
@@ -180,6 +181,10 @@ def train_and_eval_probe(
             ).to(device)
         else:
             raise ValueError(f"Probe type {probe_type} not supported for segmentation.")
+    elif config.task_type == TaskType.REGRESSION:
+        if probe_type != ProbeType.LINEAR:
+            raise ValueError(f"Probe type {probe_type} not supported for regression.")
+        probe = LinearProbe(in_dim=in_features, out_dim=1, use_batchnorm=True).to(device)
     else:
         if probe_type == ProbeType.LINEAR:
             probe = LinearProbe(
@@ -440,7 +445,9 @@ def train_probe(
     opt = torch.optim.AdamW(probe.parameters(), lr=lr)
 
     probe = probe.train()
-    if use_dice_loss:
+    if task_type == TaskType.REGRESSION:
+        loss_function = nn.MSELoss()
+    elif use_dice_loss:
         loss_function = functools.partial(weighted_dice_loss, num_classes=num_classes)
     else:
         loss_function = nn.CrossEntropyLoss(ignore_index=SEGMENTATION_IGNORE_LABEL)
@@ -481,7 +488,12 @@ def train_probe(
                             mode="bilinear",
                             align_corners=True,
                         )  # (bsz, num_classes, H, W)
-                loss = loss_function(logits, batch_labels.to(device))
+                if task_type == TaskType.REGRESSION:
+                    loss = loss_function(
+                        logits.squeeze(-1), batch_labels.float().to(device)
+                    )
+                else:
+                    loss = loss_function(logits, batch_labels.to(device))
 
             loss.backward()
             adjust_learning_rate(
@@ -548,7 +560,10 @@ def get_probe_predictions(
                             align_corners=True,
                         )  # (bsz, num_classes, H, W)
 
-            preds = torch.argmax(logits, dim=1).cpu()
+            if task_type == TaskType.REGRESSION:
+                preds = logits.squeeze(-1).float().cpu()
+            else:
+                preds = torch.argmax(logits, dim=1).cpu()
             all_preds.append(preds)
             all_labels.append(batch_labels)
             if probe_type == ProbeType.ATTNPOOL:
@@ -584,13 +599,18 @@ def compute_metric(
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
         )
-    else:
-        return classification_metrics(
-            predictions=preds,
-            labels=labels,
+    if task_type == TaskType.REGRESSION:
+        return regression_metrics(
+            preds,
+            labels,
             primary_metric=primary_metric,
-            primary_metric_class=primary_metric_class,
         )
+    return classification_metrics(
+        predictions=preds,
+        labels=labels,
+        primary_metric=primary_metric,
+        primary_metric_class=primary_metric_class,
+    )
 
 
 def evaluate_probe(

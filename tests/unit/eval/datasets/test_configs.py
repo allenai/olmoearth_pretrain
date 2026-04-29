@@ -1,7 +1,24 @@
 """Test configs are properly constructed."""
 
-from olmoearth_pretrain.evals.datasets.configs import DATASET_TO_CONFIG, TaskType
+from olmoearth_pretrain.evals.datasets.configs import DATASET_TO_CONFIG, TaskType, dataset_to_config
 from olmoearth_pretrain.evals.studio_ingest.schema import EvalDatasetEntry
+
+
+def test_gb2_dataset_configs() -> None:
+    """Every ``gb2-*`` entry resolves and satisfies task-type constraints."""
+    gb2_names = sorted(k for k in DATASET_TO_CONFIG if k.startswith("gb2-"))
+    assert gb2_names
+    for name in gb2_names:
+        cfg = dataset_to_config(name)
+        assert cfg.supported_modalities
+        assert cfg.num_classes >= 1
+        if cfg.task_type == TaskType.SEGMENTATION:
+            assert cfg.height_width is not None
+        elif cfg.task_type == TaskType.REGRESSION:
+            assert cfg.height_width is None
+        else:
+            assert cfg.task_type == TaskType.CLASSIFICATION
+            assert cfg.height_width is None
 
 
 def test_segmentation_tasks_have_hw() -> None:

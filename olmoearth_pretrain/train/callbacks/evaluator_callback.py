@@ -919,7 +919,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
 
             config = dataset_to_config(task.dataset)
             if (
-                config.task_type == TaskType.SEGMENTATION
+                config.task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION)
                 and task.eval_mode != EvalMode.EMBEDDING_DIAGNOSTICS
             ):
                 if task.probe_lr is None and task.ft_lr is None:
