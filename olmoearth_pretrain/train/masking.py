@@ -2121,7 +2121,10 @@ class MostlyEncodeMostlyDecodeMaskingStrategy(MaskingStrategy):
                 num_not_missing = not_missing_flat.sum().item()
                 if num_not_missing == 0:
                     continue
-                num_encode = max(int(num_not_missing * encode_fraction), 0)
+                if num_not_missing == 1:
+                    num_encode = 1 if encode_fraction > 0.5 else 0
+                else:
+                    num_encode = max(int(num_not_missing * encode_fraction), 0)
                 perm = torch.randperm(num_not_missing, device=device)
                 # Start with all DECODER, set the first num_encode to ONLINE_ENCODER.
                 values = torch.full(
