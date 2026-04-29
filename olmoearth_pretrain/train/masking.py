@@ -2166,7 +2166,7 @@ class MostlyEncodeMostlyDecodeMaskingStrategy(MaskingStrategy):
                     (num_not_missing,), MaskValue.DECODER.value, device=device
                 )
                 values[perm[:num_encode]] = MaskValue.ONLINE_ENCODER.value
-                ts_flat = ts_mask.flatten()
+                ts_flat = ts_mask.flatten().clone()
                 ts_flat[not_missing_flat] = values
                 ts_mask[:] = ts_flat.view(ts_mask.shape)
 
