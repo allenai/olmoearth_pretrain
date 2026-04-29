@@ -2101,6 +2101,8 @@ class MostlyEncodeMostlyDecodeMaskingStrategy(MaskingStrategy):
         decode_timestamps: torch.Tensor,
         mostly_encode_masking_ratio: float,
         mostly_decode_masking_ratio: float,
+        modality: ModalitySpec,
+        patch_size_at_16: int,
     ) -> torch.Tensor:
         """Apply per-timestep masking with different encode/decode ratios.
 
@@ -2110,30 +2112,45 @@ class MostlyEncodeMostlyDecodeMaskingStrategy(MaskingStrategy):
         becomes ONLINE_ENCODER, the rest DECODER.
         MISSING tokens are always preserved.
 
+        Operates at patch granularity for spatial modalities so that the mask
+        is consistent within each patch (matching the tokenizer's subsampling).
+
         Args:
             mask: Tensor of shape (B=1, H, W, T, C=1).
             encode_timestamps: Indices of mostly-encode timesteps.
             decode_timestamps: Indices of mostly-decode timesteps.
             mostly_encode_masking_ratio: Fraction decoded at encode timesteps (0-0.2).
             mostly_decode_masking_ratio: Fraction decoded at decode timesteps (0.8-1.0).
+            modality: The modality spec for this bandset.
+            patch_size_at_16: The base patch size (before tile-size scaling).
 
         Returns:
             The modified mask tensor.
         """
         assert mask.shape[0] == 1 and mask.shape[-1] == 1  # B=1, C=1
         device = mask.device
-        missing_mask = mask == MaskValue.MISSING.value
+
+        # Work at patch level for spatial modalities so the mask is uniform
+        # within each patch (the tokenizer subsamples at 0::patch_size).
+        if modality.is_spatial:
+            ps = patch_size_at_16 * modality.image_tile_size_factor
+            work_mask = mask[:, 0::ps, 0::ps].clone()
+        else:
+            ps = None
+            work_mask = mask
+
+        missing_mask = work_mask == MaskValue.MISSING.value
 
         # Default everything to DECODER, then selectively set ONLINE_ENCODER.
-        mask[:] = MaskValue.DECODER.value
+        work_mask[:] = MaskValue.DECODER.value
 
         def _apply_ratio_at_timesteps(
             timesteps: torch.Tensor, encode_fraction: float
         ) -> None:
             for t_idx in timesteps:
                 t = t_idx.item()
-                # slice shape: (1, H, W, 1)
-                ts_mask = mask[:, :, :, t : t + 1, :]
+                # slice shape: (1, P_H, P_W, 1, 1) or (1, H, W, 1, 1)
+                ts_mask = work_mask[:, :, :, t : t + 1, :]
                 ts_missing = missing_mask[:, :, :, t : t + 1, :]
                 not_missing_flat = ~ts_missing.flatten()
                 num_not_missing = not_missing_flat.sum().item()
@@ -2163,7 +2180,16 @@ class MostlyEncodeMostlyDecodeMaskingStrategy(MaskingStrategy):
             )
 
         # Restore missing tokens.
-        mask[missing_mask] = MaskValue.MISSING.value
+        work_mask[missing_mask] = MaskValue.MISSING.value
+
+        # Repeat patch-level values back to pixel level.
+        if ps is not None:
+            mask[:] = repeat(
+                work_mask,
+                "b h w t c -> b (h hp) (w wp) t c",
+                hp=ps,
+                wp=ps,
+            )
         return mask
 
     def apply_mask(
@@ -2339,6 +2365,8 @@ class MostlyEncodeMostlyDecodeMaskingStrategy(MaskingStrategy):
                         decode_timestamps,
                         mostly_encode_masking_ratio,
                         mostly_decode_masking_ratio,
+                        modality_spec,
+                        patch_size,
                     )
                 else:
                     # Non-spacetime-varying or no valid timesteps: random masking
