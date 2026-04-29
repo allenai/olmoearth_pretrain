@@ -2077,6 +2077,24 @@ class MostlyEncodeMostlyDecodeMaskingStrategy(MaskingStrategy):
         self.only_decode_modalities = only_decode_modalities
 
     @staticmethod
+    def _bandset_has_data_at_timestamps(
+        output_dict: dict[str, ArrayTensor | None],
+        modality_name: str,
+        bandset_idx: int,
+        instance_idx: int,
+        timestamps: torch.Tensor,
+    ) -> bool:
+        """Check if a bandset has any non-missing data at the given timestamps."""
+        masked_name = MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+        mask = output_dict[masked_name]
+        assert mask is not None
+        # mask shape: B, H, W, T, C
+        bandset_mask = mask[instance_idx, :, :, :, bandset_idx]  # H, W, T
+        return bool(
+            (bandset_mask[:, :, timestamps] != MaskValue.MISSING.value).any().item()
+        )
+
+    @staticmethod
     def _time_masking_with_ratios(
         mask: torch.Tensor,
         encode_timestamps: torch.Tensor,
@@ -2300,11 +2318,17 @@ class MostlyEncodeMostlyDecodeMaskingStrategy(MaskingStrategy):
                 )
                 modality_spec = Modality.get(modality_name)
 
-                if (
+                use_time_masking = (
                     modality_spec.is_spacetime_varying
                     and encode_timestamps is not None
                     and len(encode_timestamps) > 0
+                )
+                if use_time_masking and not self._bandset_has_data_at_timestamps(
+                    output_dict, modality_name, bandset_idx, i, encode_timestamps
                 ):
+                    use_time_masking = False
+
+                if use_time_masking:
                     output_dict[masked_modality_name][
                         i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
                     ] = self._time_masking_with_ratios(
