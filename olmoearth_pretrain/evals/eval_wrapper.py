@@ -11,6 +11,7 @@ from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_cla
 from olmoearth_pretrain.evals.datasets.configs import TaskType
 from olmoearth_pretrain.evals.models import (
     AnySat,
+    Clay,
     Croma,
     DINOv3,
     GalileoWrapper,
@@ -391,16 +392,6 @@ class TesseraEvalWrapper(EvalWrapper):
         return batch_embeddings, labels
 
 
-def _clay_model_type() -> type | None:
-    """Return Clay model class if ``claymodel`` is installed."""
-    try:
-        from olmoearth_pretrain.evals.models.clay.clay import Clay
-
-        return Clay
-    except ImportError:
-        return None
-
-
 def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     """Factory function to get the appropriate eval wrapper for a given model.
 
@@ -423,7 +414,7 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     elif isinstance(model, Croma):
         logger.info("Using CromaEvalWrapper")
         return CromaEvalWrapper(model=model, **kwargs)
-    elif (_clay := _clay_model_type()) is not None and isinstance(model, _clay):
+    elif isinstance(model, Clay):
         logger.info("Using ClayEvalWrapper")
         return ClayEvalWrapper(model=model, **kwargs)
     elif isinstance(model, GalileoWrapper):

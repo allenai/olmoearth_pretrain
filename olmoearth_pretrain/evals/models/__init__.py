@@ -4,6 +4,7 @@ from enum import StrEnum
 from typing import Any
 
 from olmoearth_pretrain.evals.models.anysat.anysat import AnySat, AnySatConfig
+from olmoearth_pretrain.evals.models.clay.clay import Clay, ClayConfig
 from olmoearth_pretrain.evals.models.croma.croma import CROMA_SIZES, Croma, CromaConfig
 from olmoearth_pretrain.evals.models.dinov3.constants import DinoV3Models
 from olmoearth_pretrain.evals.models.dinov3.dinov3 import DINOv3, DINOv3Config
@@ -81,19 +82,6 @@ def get_launch_script_path(model_name: str) -> str:
         return "olmoearth_pretrain/evals/models/prithviv2/prithviv2_launch.py"
     else:
         raise ValueError(f"Invalid model name: {model_name}")
-
-
-def __getattr__(name: str) -> Any:
-    """Lazy-load Clay types so ``claymodel`` is optional (install separately for Clay baselines)."""
-    if name == "Clay":
-        from olmoearth_pretrain.evals.models.clay.clay import Clay
-
-        return Clay
-    if name == "ClayConfig":
-        from olmoearth_pretrain.evals.models.clay.clay import ClayConfig
-
-        return ClayConfig
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # TODO: assert that they all store a patch_size variable and supported modalities
