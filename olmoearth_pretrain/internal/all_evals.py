@@ -278,16 +278,16 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
-    "canada_wildfire_sat_eval_split": DownstreamTaskConfig(
-        dataset="canada_wildfire_sat_eval_split",
+    "burnrisk_8d_nbac": DownstreamTaskConfig(
+        dataset="burnrisk_8d_nbac",
         embedding_batch_size=32,
         probe_batch_size=16,
-        patch_size=5,  # TODO: This is changeable but we should know the valid sizes for inputs
-        num_workers=2,
+        patch_size=5,
+        num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
-        probe_lr=0.1,
+        probe_lr=0.0001,
         eval_interval=Duration.epochs(10),
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
@@ -323,7 +323,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
-        primary_metric=EvalMetric.ACCURACY,
+        primary_metric=EvalMetric.OVERALL_ACC,
     ),
     "forest_loss_driver": DownstreamTaskConfig(
         dataset="forest_loss_driver",
