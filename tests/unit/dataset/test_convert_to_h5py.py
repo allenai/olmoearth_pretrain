@@ -1,11 +1,20 @@
 """Unit tests for convert_to_h5py module."""
 
+from datetime import UTC, datetime, timedelta
+
 import numpy as np
 import pytest
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.data.constants import (
+    HIGH_FREQ_NUM_TIMESTEPS,
+    Modality,
+    ModalitySpec,
+    TimeSpan,
+)
 from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
+from olmoearth_pretrain.dataset.parse import GridTile, ModalityImage, ModalityTile
+from olmoearth_pretrain.dataset.sample import SampleInformation
 
 
 @pytest.fixture
@@ -87,3 +96,98 @@ def test_create_missing_timesteps_masks_all_match() -> None:
 
     assert masks[Modality.SENTINEL1.name].all()  # All timestamps present
     assert masks[Modality.SENTINEL2.name].all()  # All timestamps present
+
+
+def _make_high_freq_sample(
+    missing_indices: set[int],
+    center_time: datetime,
+) -> SampleInformation:
+    start_time = datetime(2020, 1, 1, tzinfo=UTC)
+    period = timedelta(days=5)
+    images = [
+        ModalityImage(
+            start_time=start_time + period * idx,
+            end_time=start_time + period * (idx + 1),
+        )
+        for idx in range(HIGH_FREQ_NUM_TIMESTEPS)
+        if idx not in missing_indices
+    ]
+    grid_tile = GridTile(
+        "EPSG:32610",
+        Modality.SENTINEL2_L2A.tile_resolution_factor,
+        0,
+        0,
+    )
+    modality_tile = ModalityTile(
+        grid_tile=grid_tile,
+        images=images,
+        center_time=center_time,
+        band_sets={},
+        modality=Modality.SENTINEL2_L2A,
+    )
+    return SampleInformation(
+        grid_tile=grid_tile,
+        time_span=TimeSpan.HIGH_FREQ,
+        modalities={Modality.SENTINEL2_L2A: modality_tile},
+    )
+
+
+def test_high_freq_reference_timestamps_include_missing_periods() -> None:
+    """High-frequency masks align to the full 72-period grid."""
+    start_time = datetime(2020, 1, 1, tzinfo=UTC)
+    period = timedelta(days=5)
+    missing_indices = {0, 7, 17, 42, 71}
+    sample = _make_high_freq_sample(
+        missing_indices=missing_indices,
+        center_time=start_time + period * HIGH_FREQ_NUM_TIMESTEPS / 2,
+    )
+    converter = ConvertToH5py(
+        tile_path=UPath("dummy_path"),
+        supported_modalities=[Modality.SENTINEL2_L2A],
+    )
+
+    timestamps_dict = sample.get_timestamps()
+    reference_timestamps = converter._get_reference_timestamps_array(
+        sample,
+        timestamps_dict,
+    )
+    masks = converter._create_missing_timesteps_masks(
+        timestamps_dict,
+        reference_timestamps,
+    )
+
+    assert len(reference_timestamps) == HIGH_FREQ_NUM_TIMESTEPS
+    assert masks[Modality.SENTINEL2_L2A.name].sum() == (
+        HIGH_FREQ_NUM_TIMESTEPS - len(missing_indices)
+    )
+    for missing_idx in missing_indices:
+        assert not masks[Modality.SENTINEL2_L2A.name][missing_idx]
+
+
+def test_high_freq_reference_timestamps_support_legacy_tile_time() -> None:
+    """Existing hfreq CSVs used window_start + 7 days as tile_time."""
+    start_time = datetime(2020, 1, 1, tzinfo=UTC)
+    missing_indices = {0, 5, 71}
+    sample = _make_high_freq_sample(
+        missing_indices=missing_indices,
+        center_time=start_time + timedelta(days=7),
+    )
+    converter = ConvertToH5py(
+        tile_path=UPath("dummy_path"),
+        supported_modalities=[Modality.SENTINEL2_L2A],
+    )
+
+    timestamps_dict = sample.get_timestamps()
+    reference_timestamps = converter._get_reference_timestamps_array(
+        sample,
+        timestamps_dict,
+    )
+    masks = converter._create_missing_timesteps_masks(
+        timestamps_dict,
+        reference_timestamps,
+    )
+
+    assert len(reference_timestamps) == HIGH_FREQ_NUM_TIMESTEPS
+    assert not masks[Modality.SENTINEL2_L2A.name][0]
+    assert not masks[Modality.SENTINEL2_L2A.name][5]
+    assert not masks[Modality.SENTINEL2_L2A.name][71]

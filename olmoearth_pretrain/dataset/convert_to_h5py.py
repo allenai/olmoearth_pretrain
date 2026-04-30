@@ -4,7 +4,9 @@ import json
 import logging
 import multiprocessing as mp
 import os
+from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
 import h5py
@@ -17,6 +19,7 @@ from upath import UPath
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
+    HIGH_FREQ_NUM_TIMESTEPS,
     IMAGE_TILE_SIZE,
     SENTINEL1_NODATA,
     YEAR_NUM_TIMESTEPS,
@@ -339,6 +342,160 @@ class ConvertToH5py:
             missing_timesteps_masks_data[mod_spec.name] = mask
         return missing_timesteps_masks_data
 
+    def _get_timestamp_array(self, timestamps: list[datetime]) -> np.ndarray:
+        """Convert datetimes to the compact timestamp format stored in H5 files."""
+        dt = pd.to_datetime(timestamps)
+        return np.array([dt.day, dt.month - 1, dt.year]).T
+
+    def _get_high_freq_period_duration(
+        self, sample: SampleInformation, modalities: list[ModalitySpec]
+    ) -> timedelta | None:
+        """Infer the expected duration of one high-frequency period."""
+        duration_counts: Counter[float] = Counter()
+        duration_by_seconds: dict[float, timedelta] = {}
+        for modality in modalities:
+            sample_modality = sample.modalities.get(modality)
+            if sample_modality is None:
+                continue
+            for image in sample_modality.images:
+                duration = image.end_time - image.start_time
+                if duration.total_seconds() <= 0:
+                    continue
+                duration_seconds = duration.total_seconds()
+                duration_counts[duration_seconds] += 1
+                duration_by_seconds[duration_seconds] = duration
+
+        if not duration_counts:
+            return None
+
+        duration_seconds = duration_counts.most_common(1)[0][0]
+        return duration_by_seconds[duration_seconds]
+
+    def _high_freq_candidate_contains_observed(
+        self,
+        candidate_start: datetime,
+        period_duration: timedelta,
+        observed_timestamps: np.ndarray,
+    ) -> np.ndarray | None:
+        """Return a candidate hfreq grid if it contains all observed timestamps."""
+        candidate_timestamps = [
+            candidate_start + period_duration * timestep_idx
+            for timestep_idx in range(HIGH_FREQ_NUM_TIMESTEPS)
+        ]
+        candidate_array = self._get_timestamp_array(candidate_timestamps)
+        candidate_keys = {tuple(timestamp) for timestamp in candidate_array}
+        observed_keys = {tuple(timestamp) for timestamp in observed_timestamps}
+        if observed_keys.issubset(candidate_keys):
+            return candidate_array
+        return None
+
+    def _get_high_freq_expected_timestamps_array(
+        self,
+        sample: SampleInformation,
+        spacetime_varying_modalities: dict[ModalitySpec, np.ndarray],
+    ) -> np.ndarray | None:
+        """Build the fixed hfreq timestamp grid for a sample.
+
+        High-frequency Sentinel-2 stores only periods that produced imagery, so the
+        metadata rows are a sparse subset of the intended period grid. The H5 schema
+        needs the full grid so missing_timesteps_masks can mark absent periods.
+        """
+        modalities = list(spacetime_varying_modalities.keys())
+        period_duration = self._get_high_freq_period_duration(sample, modalities)
+        if period_duration is None:
+            return None
+
+        observed_timestamps = self._find_longest_timestamps_array(
+            spacetime_varying_modalities
+        )
+        if len(observed_timestamps) >= HIGH_FREQ_NUM_TIMESTEPS:
+            return observed_timestamps
+
+        center_times = [
+            sample.modalities[modality].center_time
+            for modality in modalities
+            if modality in sample.modalities
+        ]
+        if center_times:
+            full_duration = period_duration * HIGH_FREQ_NUM_TIMESTEPS
+            candidate_array = self._high_freq_candidate_contains_observed(
+                min(center_times) - full_duration / 2,
+                period_duration,
+                observed_timestamps,
+            )
+            if candidate_array is not None:
+                return candidate_array
+
+            # Backwards compatibility for hfreq CSVs exported before tile_time used
+            # the full window midpoint.
+            candidate_array = self._high_freq_candidate_contains_observed(
+                min(center_times) - timedelta(days=7),
+                period_duration,
+                observed_timestamps,
+            )
+            if candidate_array is not None:
+                return candidate_array
+
+        observed_datetimes: list[datetime] = []
+        for modality in modalities:
+            sample_modality = sample.modalities.get(modality)
+            if sample_modality is None:
+                continue
+            observed_datetimes.extend(
+                image.start_time for image in sample_modality.images
+            )
+        if not observed_datetimes:
+            return None
+
+        # Last-resort inference: choose the 72-slot grid containing all observed
+        # timesteps whose midpoint is closest to the metadata center time.
+        starts: list[datetime] = []
+        for observed_time in sorted(set(observed_datetimes)):
+            starts.extend(
+                observed_time - period_duration * timestep_idx
+                for timestep_idx in range(HIGH_FREQ_NUM_TIMESTEPS)
+            )
+        containing_candidates: list[tuple[float, datetime, np.ndarray]] = []
+        for candidate_start in starts:
+            candidate_array = self._high_freq_candidate_contains_observed(
+                candidate_start,
+                period_duration,
+                observed_timestamps,
+            )
+            if candidate_array is not None:
+                if center_times:
+                    candidate_center = (
+                        candidate_start + period_duration * HIGH_FREQ_NUM_TIMESTEPS / 2
+                    )
+                    distance = abs(
+                        (candidate_center - min(center_times)).total_seconds()
+                    )
+                else:
+                    distance = 0.0
+                containing_candidates.append(
+                    (distance, candidate_start, candidate_array)
+                )
+
+        if containing_candidates:
+            return min(containing_candidates, key=lambda item: item[0])[2]
+
+        return None
+
+    def _get_reference_timestamps_array(
+        self,
+        sample: SampleInformation,
+        spacetime_varying_modalities: dict[ModalitySpec, np.ndarray],
+    ) -> np.ndarray:
+        """Get the timestamp array that masks should be aligned against."""
+        if sample.time_span == TimeSpan.HIGH_FREQ:
+            expected_timestamps_array = self._get_high_freq_expected_timestamps_array(
+                sample, spacetime_varying_modalities
+            )
+            if expected_timestamps_array is not None:
+                return expected_timestamps_array
+
+        return self._find_longest_timestamps_array(spacetime_varying_modalities)
+
     def _remove_bad_modalities_from_sample(
         self, sample: SampleInformation
     ) -> SampleInformation:
@@ -419,16 +576,17 @@ class ConvertToH5py:
             for modality, timestamps in multi_temporal_timestamps_dict.items()
             if modality.is_spacetime_varying
         }
-        # Note that with the longest timestamps array, we cut all modalities to this range
-        # Anything outside of this range is considered missing
-        longest_timestamps_array = self._find_longest_timestamps_array(
-            spacetime_varying_modalities
+        # Note that with the reference timestamps array, we cut all modalities to this
+        # range. Anything outside of this range is considered missing. For hfreq, this
+        # reference is the expected 72-period grid rather than the observed timestamps.
+        reference_timestamps_array = self._get_reference_timestamps_array(
+            sample, spacetime_varying_modalities
         )
         missing_timesteps_masks_data = self._create_missing_timesteps_masks(
-            spacetime_varying_modalities, longest_timestamps_array
+            spacetime_varying_modalities, reference_timestamps_array
         )
 
-        sample_dict["timestamps"] = longest_timestamps_array
+        sample_dict["timestamps"] = reference_timestamps_array
 
         # Load image data for all modalities in the sample
         for modality in sample.modalities:

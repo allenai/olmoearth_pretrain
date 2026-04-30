@@ -31,6 +31,9 @@ SENTINEL1_NODATA = -32768
 # Number of timesteps for YEAR data.
 YEAR_NUM_TIMESTEPS = 12
 
+# Number of timesteps for high-frequency one-year stacks.
+HIGH_FREQ_NUM_TIMESTEPS = 72
+
 
 def get_resolution(resolution_factor: int) -> float | int:
     """Compute the resolution.

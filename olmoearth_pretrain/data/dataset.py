@@ -784,10 +784,10 @@ class OlmoEarthDataset(Dataset):
         # get first present timestep
         if not missing_timesteps_masks:
             first_valid_timestep = 0
-            last_valid_timestep = MAX_SEQUENCE_LENGTH
+            last_valid_timestep = len(timestamps) - 1
         else:
             # Timestep masks are the same length as the timestamps
-            first_valid_timestep = MAX_SEQUENCE_LENGTH
+            first_valid_timestep = len(timestamps)
             last_valid_timestep = 0
             for timestep_mask in missing_timesteps_masks.values():
                 valid_timesteps = np.where(timestep_mask)[0]

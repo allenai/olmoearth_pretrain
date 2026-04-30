@@ -13,7 +13,6 @@ from .constants import (
     DEFAULT_USE_GRID_REFERENCE,
     SAMPLE_ID_OPTION,
     USE_GRID_REFERENCE_OPTION,
-    WINDOW_DURATION,
     WINDOW_SIZE,
 )
 
@@ -63,7 +62,9 @@ def get_window_metadata(window: Window) -> WindowMetadata:
     use_grid_reference = parse_bool(
         window.options.get(USE_GRID_REFERENCE_OPTION), DEFAULT_USE_GRID_REFERENCE
     )
-    center_time = window.time_range[0] + WINDOW_DURATION // 2
+    center_time = (
+        window.time_range[0] + (window.time_range[1] - window.time_range[0]) / 2
+    )
     sample_id = window.options.get(SAMPLE_ID_OPTION)
     if sample_id is None and not use_grid_reference:
         sample_id = window.name
