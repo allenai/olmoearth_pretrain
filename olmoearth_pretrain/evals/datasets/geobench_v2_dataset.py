@@ -105,11 +105,7 @@ def _permute_bchw(
 
 
 def _align_s2_to_sentinel2_l2a(x: torch.Tensor, source_names: list[str]) -> torch.Tensor:
-    """Map GeoBench S2 channels to full OlmoEarth SENTINEL2_L2A order (12 bands).
-
-    GeoBench BioMassters (and similar) often omits B01/B09; the encoder still
-    `index_select`s all modality band indices, so the channel dimension must match.
-    """
+    """Map GeoBench S2 channels to full OlmoEarth SENTINEL2_L2A order (12 bands)."""
     target_names = list(Modality.SENTINEL2_L2A.band_order)
     if x.dim() == 3:
         return _permute_bchw(x.unsqueeze(0), source_names, target_names)[0]
@@ -226,7 +222,7 @@ def _sample_to_olmoearth(
         sample_dict["timestamps"] = _timestamps(t, device)
         return OlmoEarthSample(**sample_dict)
 
-    # Single-modality S2 stacks use key "image" (see GeoBench _rearrange_bands_single_modality).
+    # GeoBench single-modality S2 uses key "image" (see _rearrange_bands_single_modality).
     if slug == "cloudsen12" and "image" in sample:
         x = sample["image"].float()
         xb = x.unsqueeze(0) if x.dim() == 3 else x
