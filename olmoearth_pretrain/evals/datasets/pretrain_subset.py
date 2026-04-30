@@ -72,5 +72,6 @@ class PretrainSubsetDataset(Dataset):
         )
         _, sample = self._dataset[args]
         masked = MaskedOlmoEarthSample.from_olmoearthsample(sample)
-        dummy_label = torch.tensor(0, dtype=torch.long)
+        pixel_size = self.hw_p * self.patch_size
+        dummy_label = torch.zeros(pixel_size, pixel_size, dtype=torch.long)
         return masked, dummy_label

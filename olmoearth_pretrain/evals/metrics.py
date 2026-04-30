@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+import numpy as np
 import torch
 from sklearn.metrics import accuracy_score, f1_score
 
@@ -37,6 +38,7 @@ class EvalTaskResult:
     bootstrap_stats: dict[str, Any] = field(default_factory=dict)
     eval_time: float | None = None
     embedding_diagnostics: dict[str, float] = field(default_factory=dict)
+    pca_rgb: np.ndarray | None = None
 
 
 @dataclass

@@ -12,6 +12,8 @@ def get_eval_mode(task_type: TaskType) -> str:
     """Get the eval mode for a given task type."""
     if task_type == TaskType.CLASSIFICATION:
         return "knn"
+    elif task_type == TaskType.DIAGNOSTIC:
+        return "embedding_diagnostics"
     else:
         return "linear_probe"
 
@@ -48,18 +50,34 @@ class EvalDatasetConfig:
         return cls(**d)
 
 
+_PRETRAIN_SUBSET_MODALITIES = [
+    Modality.SENTINEL2_L2A.name,
+    Modality.SENTINEL1.name,
+    Modality.LANDSAT.name,
+]
+
 DATASET_TO_CONFIG = {
-    # Dummy config — only used for embedding diagnostics, not actual classification.
+    # Pretrain subset configs for embedding/tiling diagnostics at different spatial sizes.
+    # Uses DIAGNOSTIC so the eval wrapper preserves spatial dims [N, H, W, D].
+    **{
+        f"pretrain_subset_{px}": EvalDatasetConfig(
+            task_type=TaskType.DIAGNOSTIC,
+            imputes=[],
+            num_classes=1,
+            is_multilabel=False,
+            height_width=px,
+            supported_modalities=_PRETRAIN_SUBSET_MODALITIES,
+        )
+        for px in (64, 128)
+    },
+    # Backward-compat alias (defaults to 128px).
     "pretrain_subset": EvalDatasetConfig(
-        task_type=TaskType.CLASSIFICATION,
+        task_type=TaskType.DIAGNOSTIC,
         imputes=[],
         num_classes=1,
         is_multilabel=False,
-        supported_modalities=[
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.LANDSAT.name,
-        ],
+        height_width=128,
+        supported_modalities=_PRETRAIN_SUBSET_MODALITIES,
     ),
     "m-eurosat": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
