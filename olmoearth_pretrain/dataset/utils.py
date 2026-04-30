@@ -96,7 +96,10 @@ def get_modality_dir(path: UPath, modality: ModalitySpec, time_span: TimeSpan) -
         directory within path to store the modality.
     """
     suffix = time_span.get_suffix()
-    dir_name = f"{modality.get_tile_resolution()}_{modality.name}{suffix}"
+    modality_name = modality.name
+    if time_span == TimeSpan.HIGH_FREQ and modality.name == "era5l_day_10":
+        modality_name = "era5l_day"
+    dir_name = f"{modality.get_tile_resolution()}_{modality_name}{suffix}"
     return path / dir_name
 
 

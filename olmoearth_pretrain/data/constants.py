@@ -96,6 +96,9 @@ class TimeSpan(str, Enum):
     # Every data point in a two-week period.
     TWO_WEEK = "two_week"
 
+    # Higher-frequency one-year stacks used by candidate rslearn datasets.
+    HIGH_FREQ = "hfreq"
+
     def get_suffix(self) -> str:
         """Returns the suffix used for this timespan in raw OlmoEarth Pretrain dataset."""
         if self == TimeSpan.STATIC:
@@ -104,6 +107,8 @@ class TimeSpan(str, Enum):
             return "_monthly"
         if self == TimeSpan.TWO_WEEK:
             return "_freq"
+        if self == TimeSpan.HIGH_FREQ:
+            return "_hfreq"
         raise ValueError("invalid TimeSpan")
 
 

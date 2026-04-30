@@ -34,8 +34,8 @@ class SampleInformation:
 
     grid_tile: GridTile
 
-    # Whether this training example covers a one-year (TimeSpan.YEAR) or two-week
-    # (TimeSpan.TWO_WEEK) period.
+    # Whether this training example covers a one-year (TimeSpan.YEAR), two-week
+    # (TimeSpan.TWO_WEEK), or high-frequency (TimeSpan.HIGH_FREQ) period.
     # Note that time_span should never be TimeSpan.STATIC since a training sample is
     # always tied to a specific time range.
     time_span: TimeSpan

@@ -63,9 +63,15 @@ class ConvertToH5pyConfig(Config):
     required_modality_names: list[str] = field(
         default_factory=lambda: list()
     )  # Samples without all of these are skipped
+    time_span_names: list[str] = field(
+        default_factory=lambda: [TimeSpan.YEAR.value]
+    )  # Multitemporal time spans to parse and convert
 
     def build(self) -> "ConvertToH5py":
         """Build the ConvertToH5py object."""
+        time_spans = [
+            TimeSpan(time_span_name) for time_span_name in self.time_span_names
+        ]
         return ConvertToH5py(
             tile_path=UPath(self.tile_path),
             supported_modalities=get_modality_specs_from_names(
@@ -81,6 +87,7 @@ class ConvertToH5pyConfig(Config):
             required_modalities=get_modality_specs_from_names(
                 self.required_modality_names
             ),
+            time_spans=time_spans,
         )
 
 
@@ -107,6 +114,7 @@ class ConvertToH5py:
         tile_size: int = IMAGE_TILE_SIZE,
         reserved_cores: int = 10,
         required_modalities: list[ModalitySpec] = [],
+        time_spans: list[TimeSpan] | None = None,
     ) -> None:
         """Initialize the ConvertToH5py object.
 
@@ -127,6 +135,7 @@ class ConvertToH5py:
                 higher-resolution modalities like NAIP would be split up correspondingly.
             reserved_cores: The number of cores to reserve and not use for multiprocessing.
             required_modalities: Samples without all of these modalities will be skipped.
+            time_spans: Multitemporal time spans to parse and convert.
         """
         self.tile_path = tile_path
         self.supported_modalities = supported_modalities
@@ -145,6 +154,7 @@ class ConvertToH5py:
         self.num_subtiles_per_dim: int | None = None
         self.num_subtiles: int | None = None
         self.reserved_cores = reserved_cores
+        self.time_spans = time_spans or [TimeSpan.YEAR]
 
     def _set_raw_tile_size(self, raw_tile_size: int) -> None:
         """Set and validate the raw tile size for this dataset."""
@@ -182,9 +192,20 @@ class ConvertToH5py:
             )
         return f"_{self.tile_size}_x_{self.num_subtiles}"
 
+    @property
+    def time_span_suffix(self) -> str:
+        """String representation of non-default time-span selection."""
+        if self.time_spans == [TimeSpan.YEAR]:
+            return ""
+        return "_timespan_" + "_".join(time_span.value for time_span in self.time_spans)
+
     def _get_samples(self) -> list[SampleInformation]:
         """Get the samples from the raw dataset (image tile directory)."""
-        tiles = parse_dataset(self.tile_path, self.supported_modalities)
+        tiles = parse_dataset(
+            self.tile_path,
+            self.supported_modalities,
+            multitemporal_time_spans=self.time_spans,
+        )
         samples = image_tiles_to_samples(tiles, self.supported_modalities)
         raw_tile_sizes = {sample.grid_tile.get_tile_size() for sample in samples}
         if len(raw_tile_sizes) > 1:
@@ -570,7 +591,7 @@ class ConvertToH5py:
             )
         h5py_dir = (
             self.tile_path
-            / f"{self.h5py_folder}{self.compression_settings_suffix}{self.image_tile_size_suffix}"
+            / f"{self.h5py_folder}{self.compression_settings_suffix}{self.image_tile_size_suffix}{self.time_span_suffix}"
             / (
                 "_".join(
                     sorted([modality.name for modality in self.supported_modalities])
@@ -631,9 +652,9 @@ class ConvertToH5py:
                 )
                 continue
 
-            if sample.time_span != TimeSpan.YEAR:
+            if sample.time_span not in self.time_spans:
                 logger.debug(
-                    "Skipping sample because it is not the yearly frequency data"
+                    "Skipping sample because it is not one of the requested time spans"
                 )
                 continue
 
@@ -695,6 +716,7 @@ class ConvertToH5py:
             "raw_tile_size": self.raw_tile_size,
             "num_subtiles": self.num_subtiles,
             "num_subtiles_per_dim": self.num_subtiles_per_dim,
+            "time_spans": [time_span.value for time_span in self.time_spans],
         }
 
         settings_path = self.h5py_dir / self.compression_settings_fname

@@ -17,7 +17,7 @@ from olmoearth_pretrain.data.constants import (
     TimeSpan,
 )
 
-from .utils import WindowMetadata, get_modality_fname
+from .utils import WindowMetadata, get_modality_dir, get_modality_fname
 
 logger = logging.getLogger(__name__)
 
@@ -303,7 +303,9 @@ def parse_modality_csv(
 
 
 def parse_dataset(
-    path: UPath, supported_modalities: list[ModalitySpec] = Modality.values()
+    path: UPath,
+    supported_modalities: list[ModalitySpec] = Modality.values(),
+    multitemporal_time_spans: list[TimeSpan] | None = None,
 ) -> dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]]:
     """Parse the various per-modality tiles present in a OlmoEarth Pretrain dataset.
 
@@ -311,6 +313,8 @@ def parse_dataset(
         a mapping from modality -> time span (e.g. yearly / two-week) -> list of tiles.
     """
     tiles: dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]] = {}
+    if multitemporal_time_spans is None:
+        multitemporal_time_spans = [TimeSpan.YEAR]
 
     for modality in Modality.values():
         if modality.ignore_when_parsing:
@@ -322,8 +326,7 @@ def parse_dataset(
             continue
 
         if modality.is_multitemporal:
-            # We need to load the one-year and two-week data separately.
-            time_spans = [TimeSpan.YEAR]  # [TimeSpan.YEAR, TimeSpan.TWO_WEEK]
+            time_spans = multitemporal_time_spans
         else:
             # Just need to load the static data.
             time_spans = [TimeSpan.STATIC]
@@ -333,10 +336,8 @@ def parse_dataset(
         tiles[modality] = {}
         for time_span in time_spans:
             # Reconstruct the CSV filename from the grid resolution, modality, and time span.
-            tile_resolution = modality.get_tile_resolution()
-            csv_fname = (
-                path / f"{tile_resolution}_{modality.name}{time_span.get_suffix()}.csv"  # type: ignore
-            )
+            modality_dir = get_modality_dir(path, modality, time_span)
+            csv_fname = path / f"{modality_dir.name}.csv"
             logger.debug(f"Parsing {modality.name} {time_span} {csv_fname}")
             tiles[modality][time_span] = parse_modality_csv(  # type: ignore
                 path,

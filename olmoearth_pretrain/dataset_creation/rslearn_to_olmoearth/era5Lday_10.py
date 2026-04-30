@@ -6,36 +6,101 @@ pipeline expects), and writes a companion metadata CSV with per-timestep time ra
 """
 
 import argparse
-import csv
 import logging
 import multiprocessing
 import random
 
 import tqdm
 from rslearn.dataset import Dataset, Window
+from rslearn.utils.fsspec import open_rasterio_upath_reader
+from rslearn.utils.geometry import PixelBounds, Projection
 from rslearn.utils.mp import star_imap_unordered
 from rslearn.utils.raster_array import RasterArray
-from rslearn.utils.raster_format import GeotiffRasterFormat, NumpyRasterFormat
+from rslearn.utils.raster_format import (
+    GeotiffRasterFormat,
+    NumpyRasterFormat,
+    get_raster_projection_and_bounds,
+)
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality, TimeSpan
 from olmoearth_pretrain.dataset.utils import get_modality_fname
 
-from ..constants import METADATA_COLUMNS
-from ..util import get_modality_temp_meta_fname, get_window_metadata
-from .multitemporal_raster import get_adjusted_projection_and_bounds
+from ..util import (
+    get_metadata_row,
+    get_modality_temp_meta_fname,
+    get_window_metadata,
+    write_metadata_rows,
+)
 
 LAYER_NAME = "era5_365dhistory"
 
 logger = logging.getLogger(__name__)
 
 
-def convert_era5l_day(window: Window, olmoearth_path: UPath) -> None:
+def _decode_era5_raster(
+    raster_dir: UPath,
+    projection: Projection,
+    bounds: PixelBounds,
+) -> RasterArray:
+    """Read an ERA5 raster materialized as either NumPy or GeoTIFF."""
+    numpy_format = NumpyRasterFormat()
+    if (raster_dir / numpy_format.data_fname).exists():
+        return numpy_format.decode_raster(
+            raster_dir,
+            projection,
+            bounds,
+            expect_bounds_mismatch=True,
+        )
+
+    geotiff_format = GeotiffRasterFormat()
+    if (raster_dir / geotiff_format.fname).exists():
+        with open_rasterio_upath_reader(raster_dir / geotiff_format.fname) as src:
+            source_projection, source_bounds = get_raster_projection_and_bounds(src)
+        return geotiff_format.decode_raster(
+            raster_dir,
+            source_projection,
+            source_bounds,
+        )
+
+    raise FileNotFoundError(f"no NumPy or GeoTIFF raster found in {raster_dir}")
+
+
+def _as_era5_cthw(raster_array: RasterArray, num_bands: int) -> RasterArray:
+    """Normalize ERA5 arrays to (C, T, H, W)."""
+    if raster_array.array.shape[0] == num_bands:
+        return raster_array
+
+    if (
+        raster_array.array.shape[1] == 1
+        and raster_array.array.shape[0] % num_bands == 0
+    ):
+        num_timesteps = raster_array.array.shape[0] // num_bands
+        array = raster_array.array.reshape(
+            num_bands,
+            num_timesteps,
+            *raster_array.array.shape[2:],
+        )
+        return RasterArray(
+            array=array,
+            timestamps=raster_array.timestamps,
+            metadata=raster_array.metadata,
+        )
+
+    return raster_array
+
+
+def convert_era5l_day(
+    window: Window,
+    olmoearth_path: UPath,
+    time_span: TimeSpan = TimeSpan.HIGH_FREQ,
+) -> None:
     """Convert ERA5-Land daily data for one window to OlmoEarth Pretrain format.
 
     Args:
         window: the rslearn window to read data from.
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
+        time_span: OlmoEarth time span to write to.
     """
     modality = Modality.ERA5L_DAY_10
     assert len(modality.band_sets) == 1
@@ -47,7 +112,7 @@ def convert_era5l_day(window: Window, olmoearth_path: UPath) -> None:
     dst_fname = get_modality_fname(
         olmoearth_path,
         modality,
-        TimeSpan.YEAR,
+        time_span,
         window_metadata,
         band_set.get_resolution(),
         "tif",
@@ -77,14 +142,10 @@ def convert_era5l_day(window: Window, olmoearth_path: UPath) -> None:
         )
         return
 
-    adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
-        modality, band_set, window.projection, window.bounds
-    )
-
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands, group_idx)
-    numpy_format = NumpyRasterFormat()
-    raster_array = numpy_format.decode_raster(
-        raster_dir, adjusted_projection, adjusted_bounds
+    raster_array = _as_era5_cthw(
+        _decode_era5_raster(raster_dir, window.projection, window.bounds),
+        len(band_set.bands),
     )
     # raster_array.array shape: (C=14, T=~720, H=1, W=1)
 
@@ -122,34 +183,31 @@ def convert_era5l_day(window: Window, olmoearth_path: UPath) -> None:
     geotiff_raster = RasterArray(chw_array=flat_chw)
 
     geotiff_format = GeotiffRasterFormat()
+    output_bounds = (
+        window.bounds[0],
+        window.bounds[1],
+        window.bounds[0] + flat_chw.shape[2],
+        window.bounds[1] + flat_chw.shape[1],
+    )
     geotiff_format.encode_raster(
         path=dst_fname.parent,
-        projection=adjusted_projection,
-        bounds=adjusted_bounds,
+        projection=window.projection,
+        bounds=output_bounds,
         raster=geotiff_raster,
         fname=dst_fname.name,
     )
 
     # Write the companion metadata CSV (one row per timestep).
     metadata_fname = get_modality_temp_meta_fname(
-        olmoearth_path, modality, TimeSpan.YEAR, window.name
+        olmoearth_path, modality, time_span, window.name
     )
-    metadata_fname.parent.mkdir(parents=True, exist_ok=True)
-    with metadata_fname.open("w") as f:
-        writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
-        writer.writeheader()
-        for idx, ts in enumerate(timestamps):
-            writer.writerow(
-                dict(
-                    crs=window_metadata.crs,
-                    col=window_metadata.col,
-                    row=window_metadata.row,
-                    tile_time=window_metadata.time.isoformat(),
-                    image_idx=idx,
-                    start_time=ts[0].isoformat(),
-                    end_time=ts[1].isoformat(),
-                )
-            )
+    write_metadata_rows(
+        metadata_fname,
+        [
+            get_metadata_row(window_metadata, idx, start_time, end_time)
+            for idx, (start_time, end_time) in enumerate(timestamps)
+        ],
+    )
 
 
 if __name__ == "__main__":
@@ -176,6 +234,19 @@ if __name__ == "__main__":
         help="Number of workers to use",
         default=32,
     )
+    parser.add_argument(
+        "--group",
+        type=str,
+        nargs="+",
+        help="rslearn window group(s) to convert",
+        default=["res_10"],
+    )
+    parser.add_argument(
+        "--time_span",
+        type=str,
+        help="OlmoEarth time span to write",
+        default=TimeSpan.HIGH_FREQ.value,
+    )
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))
@@ -183,12 +254,13 @@ if __name__ == "__main__":
 
     jobs = []
     for window in dataset.load_windows(
-        workers=args.workers, show_progress=True, groups=["res_10"]
+        workers=args.workers, show_progress=True, groups=args.group
     ):
         jobs.append(
             dict(
                 window=window,
                 olmoearth_path=olmoearth_path,
+                time_span=TimeSpan(args.time_span),
             )
         )
 

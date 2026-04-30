@@ -46,11 +46,14 @@ def discover_modality_csvs(
                 f"Modality {modality.name} has resolution_factor="
                 f"{modality.tile_resolution_factor}, expected {resolution_factor}"
             )
-        for ts in [TimeSpan.STATIC, TimeSpan.YEAR, TimeSpan.TWO_WEEK]:
-            csv_path = (
-                src
-                / f"{modality.get_tile_resolution()}_{modality.name}{ts.get_suffix()}.csv"
-            )
+        for ts in [
+            TimeSpan.STATIC,
+            TimeSpan.YEAR,
+            TimeSpan.TWO_WEEK,
+            TimeSpan.HIGH_FREQ,
+        ]:
+            modality_dir = get_modality_dir(src, modality, ts)
+            csv_path = src / f"{modality_dir.name}.csv"
             if csv_path.exists():
                 available.append((modality, ts, csv_path))
     return available

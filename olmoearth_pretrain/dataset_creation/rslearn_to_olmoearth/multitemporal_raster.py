@@ -88,6 +88,8 @@ def convert_freq(
     modality: ModalitySpec,
     missing_okay: bool = False,
     unprepared_okay: bool = False,
+    time_span: TimeSpan = TimeSpan.TWO_WEEK,
+    use_group_time_ranges: bool = False,
 ) -> None:
     """Add frequent (two-week) data from this window to the OlmoEarth Pretrain dataset.
 
@@ -104,6 +106,9 @@ def convert_freq(
             during ingestion.
         unprepared_okay: whether we should ignore the case where the window hasn't been
             prepared.
+        time_span: destination OlmoEarth time span for the stacked output.
+        use_group_time_ranges: whether to use rslearn group time ranges in metadata
+            instead of the individual source item timestamp.
     """
     window_metadata = get_window_metadata(window)
     layer_datas = window.load_layer_datas()
@@ -130,15 +135,26 @@ def convert_freq(
     images: dict[BandSet, list[npt.NDArray]] = {
         band_set: [] for band_set in modality.band_sets
     }
-    timestamps = []
-    for group_idx, group in enumerate(layer_datas[layer_name].serialized_item_groups):
+    image_time_ranges = []
+    layer_data = layer_datas[layer_name]
+    for group_idx, group in enumerate(layer_data.serialized_item_groups):
         if len(group) != 1:
             raise ValueError(
                 f"expected Landsat groups to have length 1 but got {len(group)}"
             )
 
         item = Item.deserialize(group[0])
-        timestamp = item.geometry.time_range[0]
+        if item.geometry.time_range is None:
+            raise ValueError(f"item {item.name} is missing a time range")
+        if use_group_time_ranges:
+            group_time_ranges = getattr(layer_data, "group_time_ranges", None)
+            if group_time_ranges is not None and len(group_time_ranges) > group_idx:
+                image_time_range = group_time_ranges[group_idx]
+            else:
+                image_time_range = item.geometry.time_range
+        else:
+            timestamp = item.geometry.time_range[0]
+            image_time_range = (timestamp, timestamp)
         cur_images: dict[BandSet, npt.NDArray] = {}
 
         for band_set in modality.band_sets:
@@ -188,11 +204,11 @@ def convert_freq(
         if all_images_blank:
             continue
 
-        timestamps.append(timestamp.isoformat())
+        image_time_ranges.append(image_time_range)
         for band_set, image in cur_images.items():
             images[band_set].append(image)
 
-    if len(timestamps) > 0:
+    if len(image_time_ranges) > 0:
         for band_set, band_set_images in images.items():
             # Compute bounds of this raster adjusted for the resolution.
             adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
@@ -203,7 +219,7 @@ def convert_freq(
             dst_fname = get_modality_fname(
                 olmoearth_path,
                 modality,
-                TimeSpan.TWO_WEEK,
+                time_span,
                 window_metadata,
                 band_set.get_resolution(),
                 "tif",
@@ -217,13 +233,13 @@ def convert_freq(
             )
 
         metadata_fname = get_modality_temp_meta_fname(
-            olmoearth_path, modality, TimeSpan.TWO_WEEK, window.name
+            olmoearth_path, modality, time_span, window.name
         )
         write_metadata_rows(
             metadata_fname,
             [
-                get_metadata_row(window_metadata, group_idx, timestamp, timestamp)
-                for group_idx, timestamp in enumerate(timestamps)
+                get_metadata_row(window_metadata, group_idx, start_time, end_time)
+                for group_idx, (start_time, end_time) in enumerate(image_time_ranges)
             ],
         )
 

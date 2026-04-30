@@ -367,6 +367,29 @@ by this script:
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.rasterize_openstreetmap --olmoearth_path $OLMOEARTH_PATH
 ```
 
+
+## Convert high frequency data
+python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.sentinel2_l2a \
+  --ds_path  "$DSPATH" \
+  --olmoearth_path "$OEPATH" \
+  --workers 32 \
+  --group test \
+  --mode highfreq \
+  --highfreq_layer sentinel2_l2a \
+  --highfreq_time_span hfreq
+
+python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.era5Lday_10 \
+  --ds_path  "$DSPATH" \
+  --olmoearth_path "$OEPATH" \
+  --workers 32 \
+  --group test \
+  --time_span hfreq
+
+python -m olmoearth_pretrain.dataset_creation.make_meta_summary \
+  --olmoearth_path "$OEPATH" \
+  --modality era5l_day_10 \
+  --time_span hfreq
+
 ## Create H5s
 
 We can now create the H5 files used during training from the OlmoEarth dataset. The H5s
