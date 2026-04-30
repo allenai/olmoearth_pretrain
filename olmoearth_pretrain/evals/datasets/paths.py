@@ -7,7 +7,7 @@ from upath import UPath
 # Only available to internal users
 _DEFAULTS = {
     "GEOBENCH_DIR": "/weka/dfive-default/presto-geobench/dataset/geobench",
-    "GEOBENCH2_DIR": "/weka/dfive-default/presto-geobench/dataset/geobench2",
+    "GEOBENCH2_DIR": "/weka/dfive-default/rslearn-eai/datasets/geobench2",
     "BREIZHCROPS_DIR": "/weka/dfive-default/skylight/presto_eval_sets/breizhcrops",
     "MADOS_DIR": "/weka/dfive-default/presto_eval_sets/mados",
     "FLOODS_DIR": "/weka/dfive-default/presto_eval_sets/floods",

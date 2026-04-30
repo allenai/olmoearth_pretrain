@@ -104,6 +104,24 @@ def _permute_bchw(
     return out
 
 
+def _align_s2_to_sentinel2_l2a(x: torch.Tensor, source_names: list[str]) -> torch.Tensor:
+    """Map GeoBench S2 channels to full OlmoEarth SENTINEL2_L2A order (12 bands)."""
+    target_names = list(Modality.SENTINEL2_L2A.band_order)
+    if x.dim() == 3:
+        return _permute_bchw(x.unsqueeze(0), source_names, target_names)[0]
+    if x.dim() == 4:
+        c, t, h, w = x.shape
+        out = torch.zeros(
+            (len(target_names), t, h, w), dtype=x.dtype, device=x.device
+        )
+        idx = {n: i for i, n in enumerate(source_names)}
+        for j, name in enumerate(target_names):
+            if name in idx:
+                out[j] = x[idx[name]]
+        return out
+    raise ValueError(f"expected 3D or 4D S2 tensor, got {x.shape}")
+
+
 def _bchw_to_hwtc(x: torch.Tensor) -> torch.Tensor:
     if x.dim() == 3:
         c, h, w = x.shape
@@ -204,6 +222,26 @@ def _sample_to_olmoearth(
         sample_dict["timestamps"] = _timestamps(t, device)
         return OlmoEarthSample(**sample_dict)
 
+    # GeoBench single-modality S2 uses key "image" (see _rearrange_bands_single_modality).
+    if slug == "cloudsen12" and "image" in sample:
+        x = sample["image"].float()
+        xb = x.unsqueeze(0) if x.dim() == 3 else x
+        if isinstance(band_order, (list, tuple)):
+            src = [str(b) for b in band_order]
+        else:
+            src = _s2_names(band_order) or [str(i) for i in range(xb.shape[1])]
+        if len(src) != xb.shape[1]:
+            raise ValueError(
+                f"cloudsen12: band_order length {len(src)} != image channels {xb.shape[1]}"
+            )
+        s2_order = list(Modality.SENTINEL2_L2A.band_order)
+        x_perm = _permute_bchw(xb, src, s2_order)
+        hwtc = _bchw_to_hwtc(x_perm[0])
+        t = hwtc.shape[2]
+        sample_dict["sentinel2_l2a"] = hwtc
+        sample_dict["timestamps"] = _timestamps(t, device)
+        return OlmoEarthSample(**sample_dict)
+
     if slug == "spacenet8" and "image" in sample:
         x = sample["image"].float()
         if x.shape[0] == 3:
@@ -247,9 +285,41 @@ def _sample_to_olmoearth(
     if slug == "biomassters" and "image_s1" in sample and "image_s2" in sample:
         s1 = sample["image_s1"].float()
         s2 = sample["image_s2"].float()
+        s2_src = _s2_names(band_order)
+        if not s2_src:
+            raise ValueError("biomassters requires band_order with s2 bands")
+        s2 = _align_s2_to_sentinel2_l2a(s2, s2_src)
         s1_hwtc = _bchw_to_hwtc(s1)
         s2_hwtc = _bchw_to_hwtc(s2)
         t = max(s1_hwtc.shape[2], s2_hwtc.shape[2])
+        if s1_hwtc.shape[2] < t:
+            s1_hwtc = torch.cat(
+                [
+                    s1_hwtc,
+                    torch.zeros(
+                        *s1_hwtc.shape[:2],
+                        t - s1_hwtc.shape[2],
+                        s1_hwtc.shape[3],
+                        device=device,
+                        dtype=s1_hwtc.dtype,
+                    ),
+                ],
+                dim=2,
+            )
+        if s2_hwtc.shape[2] < t:
+            s2_hwtc = torch.cat(
+                [
+                    s2_hwtc,
+                    torch.zeros(
+                        *s2_hwtc.shape[:2],
+                        t - s2_hwtc.shape[2],
+                        s2_hwtc.shape[3],
+                        device=device,
+                        dtype=s2_hwtc.dtype,
+                    ),
+                ],
+                dim=2,
+            )
         sample_dict["sentinel1"] = s1_hwtc
         sample_dict["sentinel2_l2a"] = s2_hwtc
         sample_dict["timestamps"] = _timestamps(t, device)
