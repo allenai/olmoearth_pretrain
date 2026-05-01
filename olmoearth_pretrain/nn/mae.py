@@ -43,6 +43,10 @@ class MAE(nn.Module, DistributedMixins):
         self.encoder = encoder
         self.decoder = decoder
         self.reconstructor = reconstructor
+        # Band dropout is off by default so it never activates during fine-tuning;
+        # turn it on for pretraining via this MAE module.
+        if hasattr(self.encoder, "enable_band_dropout"):
+            self.encoder.enable_band_dropout()
 
     def forward(
         self, x: MaskedOlmoEarthSample, patch_size: int
