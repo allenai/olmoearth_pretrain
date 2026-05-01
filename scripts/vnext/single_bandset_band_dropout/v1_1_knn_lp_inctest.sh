@@ -13,24 +13,6 @@ CLUSTER="ai2/jupiter"
 SCRIPT="python -m olmoearth_pretrain.internal.full_eval_sweep"
 COMMON_ARGS="--cluster=${CLUSTER} --select_best_val --launch.priority=high --trainer.callbacks.wandb.project=${PROJECT}"
 
-# nano
-${SCRIPT} ${COMMON_ARGS} \
-    --module_path=scripts/official/nano.py \
-    --checkpoint_path=/weka/dfive-default/helios/checkpoints/joer/nano_lr0.001_wd0.002/step370000 \
-    --model_name=nano_lr0.001_wd0.002_step370000_inctest
-
-# tiny
-${SCRIPT} ${COMMON_ARGS} \
-    --module_path=scripts/official/tiny.py \
-    --checkpoint_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000 \
-    --model_name=tiny_lr0.0002_wd0.02_step360000_inctest
-
-# base
-${SCRIPT} ${COMMON_ARGS} \
-    --module_path=scripts/official/base.py \
-    --checkpoint_path=/weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step667200 \
-    --model_name=phase2.0_base_lr0.0001_wd0.02_step667200_inctest
-
 # single_bandset base (no s1 drop, random time)
 ${SCRIPT} ${COMMON_ARGS} \
     --module_path=scripts/vnext/single_bandset_band_dropout/base_band_dropout_no_s1_drop_random_time.py \
