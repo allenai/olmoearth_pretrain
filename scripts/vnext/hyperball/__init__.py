@@ -1,1 +1,0 @@
-"""Hyperball optimizer experiment scripts."""
