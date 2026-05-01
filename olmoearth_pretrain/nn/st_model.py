@@ -809,6 +809,9 @@ class STEncoder(STBase):
         self.fuse_layers = fuse_layers
         self.layer_attention_modes = layer_attention_modes
         self.fuse_using_cross_attn = fuse_using_cross_attn
+        # Configured rate; remains inactive until ``enable_band_dropout`` is called.
+        # Default is disabled so fine-tuning never applies band dropout unless the
+        # caller (e.g. pretraining online encoder) explicitly enables it.
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
@@ -818,7 +821,7 @@ class STEncoder(STBase):
             self.embedding_size,
             tokenization_config=self.tokenization_config,
             use_linear_patch_embed=use_linear_patch_embed,
-            band_dropout_rate=self.band_dropout_rate,
+            band_dropout_rate=0.0,
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
         )
@@ -1138,9 +1141,13 @@ class STEncoder(STBase):
 
         return x
 
-    def disable_band_dropout(self) -> None:
-        """Disable band dropout (e.g. for target/EMA encoder)."""
-        self.patch_embeddings.band_dropout_rate = 0.0
+    def enable_band_dropout(self) -> None:
+        """Enable band dropout using the configured rate.
+
+        Band dropout is disabled by default so it never activates during
+        fine-tuning. Call this only on the online encoder during pretraining.
+        """
+        self.patch_embeddings.band_dropout_rate = self.band_dropout_rate
 
     def forward(
         self,
