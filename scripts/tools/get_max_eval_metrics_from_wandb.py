@@ -167,19 +167,106 @@ def _normalize_eval_key(key: str) -> str:
     return key
 
 
+def _strip_seed_from_name(run_name: str) -> str:
+    """Remove the `_seed{N}` segment from a run name.
+
+    e.g. "..._step667200_seed1234_FT_lr0.001" -> "..._step667200_FT_lr0.001"
+    """
+    return re.sub(r"_seed\d+", "", run_name)
+
+
+class _AveragedSummary:
+    """Dict-like proxy that returns mean values across a list of wandb runs.
+
+    Only keys that are numeric in every underlying run are exposed; partial
+    coverage is dropped (with a warning) so that averages aren't silently
+    computed over a subset of seeds.
+    """
+
+    def __init__(self, runs: list[wandb.Run]):
+        key_to_values: dict[str, list[float]] = defaultdict(list)
+        for run in runs:
+            for k, v in run.summary.items():
+                if isinstance(v, bool):
+                    continue
+                if isinstance(v, int | float):
+                    key_to_values[k].append(float(v))
+        self._averaged: dict[str, float] = {}
+        for k, vs in key_to_values.items():
+            if len(vs) == len(runs):
+                self._averaged[k] = sum(vs) / len(vs)
+            elif k.startswith("eval/") or k.startswith("eval_other/"):
+                print(
+                    f"Skipping {k} from seed averaging: only {len(vs)}/{len(runs)} runs reported it"
+                )
+
+    def items(self):
+        return self._averaged.items()
+
+    def get(self, key, default=None):
+        return self._averaged.get(key, default)
+
+
+class _SeedAveragedRun:
+    """Run-like proxy for a list of wandb runs that differ only by seed.
+
+    Exposes the attributes used by `get_max_metrics_grouped` and
+    `serialize_max_settings_per_group`: `.name`, `.id`, `.config`, `.summary`.
+    `summary` returns seed-averaged values; `config` is taken from the first
+    run (seeds share config by construction).
+    """
+
+    def __init__(self, runs: list[wandb.Run], stripped_name: str):
+        self._runs = runs
+        self.name = stripped_name
+        self.id = "+".join(r.id for r in runs)
+        self.config = runs[0].config
+        self.summary = _AveragedSummary(runs)
+
+
+def _average_runs_by_seed(runs: list) -> list:
+    """Collapse runs whose names match after stripping `_seed{N}`.
+
+    collapse into a single seed-averaged virtual run. Singletons are returned unchanged.
+    """
+    seed_groups: dict[str, list] = defaultdict(list)
+    for run in runs:
+        seed_groups[_strip_seed_from_name(run.name)].append(run)
+
+    out: list = []
+    for stripped_name, group in seed_groups.items():
+        if len(group) == 1:
+            out.append(group[0])
+        else:
+            print(
+                f"Averaging {len(group)} seeds -> {stripped_name}: "
+                f"{[r.name for r in group]}"
+            )
+            out.append(_SeedAveragedRun(group, stripped_name))
+    return out
+
+
 def get_max_metrics_grouped(
     grouped_runs: dict[str, list[wandb.Run]],
     get_test_metrics: bool = False,
+    average_seeds: bool = False,
 ) -> tuple[
     dict[str, dict[str, float]],
     dict[str, dict[str, float]],
     dict[str, dict[str, wandb.Run]],
 ]:
-    """Get max metrics for each group."""
+    """Get max metrics for each group.
+
+    If `average_seeds` is set, runs within each group that share a name after
+    stripping `_seed{N}` are first averaged together (per metric); the per-group
+    max is then taken across these seed-averaged virtual runs.
+    """
     # Get max metrics for each group
     group_metrics = {}
     group_max_runs_per_metric = {}
     for group_name, runs in grouped_runs.items():
+        if average_seeds:
+            runs = _average_runs_by_seed(runs)
         print(f"\nProcessing group: {group_name} ({len(runs)} runs)")
         #  Get the run that has test metrics with the highest validation score for each metric
         metrics = {}
@@ -511,6 +598,12 @@ if __name__ == "__main__":
         help="Keep runs with different steps as separate groups instead of collapsing them by prefix before '_step'.",
     )
     parser.add_argument(
+        "--average-seeds",
+        action="store_true",
+        help="Within each group, average metrics across runs that share a name "
+        "after stripping `_seed{N}` (e.g., for averaging finetuning runs across seeds).",
+    )
+    parser.add_argument(
         "--json_filename",
         type=str,
         default=None,
@@ -577,7 +670,9 @@ if __name__ == "__main__":
             args.keep_steps_separate,
         )
         group_metrics, group_test_metrics, group_max_runs_per_metric = (
-            get_max_metrics_grouped(run_groups, args.get_test_metrics)
+            get_max_metrics_grouped(
+                run_groups, args.get_test_metrics, args.average_seeds
+            )
         )
         print(group_max_runs_per_metric)
         if args.json_filename:
