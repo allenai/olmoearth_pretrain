@@ -11,7 +11,7 @@ set -euo pipefail
 PROJECT="v1_1_knn_lp_inctest"
 CLUSTER="ai2/jupiter"
 SCRIPT="python -m olmoearth_pretrain.internal.full_eval_sweep"
-COMMON_ARGS="--cluster=${CLUSTER} --select_best_val --launch.priority=urgent --trainer.callbacks.wandb.project=${PROJECT}"
+COMMON_ARGS="--cluster=${CLUSTER} --select_best_val --launch.priority=high --trainer.callbacks.wandb.project=${PROJECT}"
 
 # nano
 ${SCRIPT} ${COMMON_ARGS} \
