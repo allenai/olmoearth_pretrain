@@ -47,9 +47,12 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
-        # Disable band dropout on target encoder so it always sees full spectral info.
-        if hasattr(self.target_encoder, "disable_band_dropout"):
-            self.target_encoder.disable_band_dropout()
+        # Band dropout is off by default so it never activates during fine-tuning;
+        # turn it on for the online encoder only during pretraining. The target
+        # encoder (deepcopy made above) keeps the disabled state and always sees
+        # full spectral info.
+        if hasattr(self.encoder, "enable_band_dropout"):
+            self.encoder.enable_band_dropout()
 
     def forward(
         self, x: MaskedOlmoEarthSample, patch_size: int
