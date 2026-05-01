@@ -201,10 +201,16 @@ def _sample_to_olmoearth(
 
     if slug == "forestnet" and "image" in sample:
         x = sample["image"].float()
-        if not isinstance(band_order, list):
-            raise TypeError("forestnet expects list band_order")
-        geo_names = [str(n) for n in band_order]
+        if x.dim() == 3:
+            x = x.unsqueeze(0)
+        if isinstance(band_order, dict):
+            geo_names = [str(n) for n in next(iter(band_order.values()))]
+        elif isinstance(band_order, (list, tuple)):
+            geo_names = [str(n) for n in band_order]
+        else:
+            raise TypeError(f"forestnet unexpected band_order type: {type(band_order)}")
         ls = _landsat_from_list(x, geo_names)
+        ls = ls.squeeze(0)
         hwtc = _bchw_to_hwtc(ls)
         t = hwtc.shape[2]
         sample_dict["landsat"] = hwtc
@@ -264,19 +270,52 @@ def _sample_to_olmoearth(
 
     if slug == "pastis" and "image_s2" in sample:
         s2 = sample["image_s2"].float()
+        s2_src = _s2_names(band_order)
+        if not s2_src:
+            s2_src = [str(i) for i in range(s2.shape[0])]
+        s2 = _align_s2_to_sentinel2_l2a(s2, s2_src)
         s2_hwtc = _bchw_to_hwtc(s2)
         asc = sample["image_s1_asc"].float()
+        # GeoBench PASTIS is C,T,H,W for num_time_steps>1. Use VV/VH (first two channels), full time.
         if asc.dim() == 4:
-            s1_bt = asc[:, -1]
+            s1_bt = asc[:2]
+        elif asc.dim() == 3:
+            s1_bt = asc[:2]
         else:
-            s1_bt = asc
-        if s1_bt.shape[0] >= 2:
-            s1_bt = s1_bt[:2]
-        else:
+            raise ValueError(f"pastis unexpected image_s1_asc shape {asc.shape}")
+        if s1_bt.shape[0] < 2:
             pad = torch.zeros(2 - s1_bt.shape[0], *s1_bt.shape[1:], device=device, dtype=s1_bt.dtype)
             s1_bt = torch.cat([s1_bt, pad], dim=0)
         s1_hwtc = _bchw_to_hwtc(s1_bt)
         t = max(s1_hwtc.shape[2], s2_hwtc.shape[2])
+        if s1_hwtc.shape[2] < t:
+            s1_hwtc = torch.cat(
+                [
+                    s1_hwtc,
+                    torch.zeros(
+                        *s1_hwtc.shape[:2],
+                        t - s1_hwtc.shape[2],
+                        s1_hwtc.shape[3],
+                        device=device,
+                        dtype=s1_hwtc.dtype,
+                    ),
+                ],
+                dim=2,
+            )
+        if s2_hwtc.shape[2] < t:
+            s2_hwtc = torch.cat(
+                [
+                    s2_hwtc,
+                    torch.zeros(
+                        *s2_hwtc.shape[:2],
+                        t - s2_hwtc.shape[2],
+                        s2_hwtc.shape[3],
+                        device=device,
+                        dtype=s2_hwtc.dtype,
+                    ),
+                ],
+                dim=2,
+            )
         sample_dict["sentinel2_l2a"] = s2_hwtc
         sample_dict["sentinel1"] = s1_hwtc
         sample_dict["timestamps"] = _timestamps(t, device)
@@ -540,6 +579,8 @@ def _extract_label(
 
     if "label" in sample:
         y = sample["label"]
+        if not torch.is_tensor(y):
+            y = torch.as_tensor(y)
         if y.dim() == 0:
             return y.long().unsqueeze(0)
         return y.long()
