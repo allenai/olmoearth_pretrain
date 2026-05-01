@@ -10,7 +10,7 @@ set -euo pipefail
 PROJECT="v1_1_finetuning_v2"
 CLUSTER="ai2/jupiter"
 SCRIPT="python -m olmoearth_pretrain.internal.full_eval_sweep_finetune"
-COMMON_ARGS="--cluster=${CLUSTER} --launch.priority=urgent --trainer.callbacks.wandb.project=${PROJECT}"
+COMMON_ARGS="--cluster=${CLUSTER} --launch.priority=urgent --project_name=${PROJECT}"
 
 SEEDS=(0 42 1234)
 
