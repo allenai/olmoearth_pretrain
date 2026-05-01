@@ -9,7 +9,7 @@ set -euo pipefail
 # resuming the old wandb run and avoids checkpoint/save_folder collisions).
 
 PROJECT="v1_1_knn_lp_inctest"
-CLUSTER="ai2/saturn-cirrascale"
+CLUSTER="ai2/jupiter"
 SCRIPT="python -m olmoearth_pretrain.internal.full_eval_sweep"
 COMMON_ARGS="--cluster=${CLUSTER} --select_best_val --launch.priority=urgent --trainer.callbacks.wandb.project=${PROJECT}"
 
