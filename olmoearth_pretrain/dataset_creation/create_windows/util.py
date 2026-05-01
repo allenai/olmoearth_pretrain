@@ -291,6 +291,8 @@ def create_windows_with_highres_time(
     lonlats: list[tuple[float, float]],
     force_lowres_prob: float = 0.0,
     workers: int = 32,
+    *,
+    custom_time: datetime | None = None,
 ) -> None:
     """Create windows using the timestamp of high-resolution (0.625 m/pixel) imagery.
 
@@ -312,6 +314,10 @@ def create_windows_with_highres_time(
             resolution even if high-resolution imagery is available.
         workers: number of worker processes for looking up high-resolution image
             availability and for creating windows.
+        custom_time: If set, use this as the window center time for every coarse tile
+            and skip NAIP-based time discovery. Sentinel-2 is still used to keep tiles
+            that have coverage near this time. The dataset config does not need a NAIP
+            layer for this path.
     """
     # A key constraint is that we want every coarse-grained tile to have one timestamp,
     # which means all the finer-grained tiles contained within that big tile need to
@@ -321,6 +327,11 @@ def create_windows_with_highres_time(
     # (2) In parallel, list the timestamps when high-res imagery is available.
     # (3) Sequentially, decide which timestamps to use for the coarse grained tiles.
     # (4) In parallel, create the resulting windows.
+    if custom_time is not None:
+        # Every tile will use Sentinel-2 fallback; build S2 index once before the pool
+        # to avoid parallel workers corrupting the same rtree cache.
+        get_sentinel2_source(ds_path)
+
     p = multiprocessing.Pool(workers)
     highres_tiles: list[Tile] = list(
         tqdm.tqdm(
@@ -334,22 +345,25 @@ def create_windows_with_highres_time(
     highres_tiles = list(set(highres_tiles))
     print(f"have {len(highres_tiles)} after de-duplication")
 
-    # List timestamps.
-    get_highres_times_jobs = []
-    for tile in highres_tiles:
-        get_highres_times_jobs.append(
-            dict(
-                ds_path=ds_path,
-                tile=tile,
+    # List NAIP acquisition timestamps per tile (skipped when using custom_time).
+    if custom_time is not None:
+        highres_timestamps = [[] for _ in highres_tiles]
+    else:
+        get_highres_times_jobs = []
+        for tile in highres_tiles:
+            get_highres_times_jobs.append(
+                dict(
+                    ds_path=ds_path,
+                    tile=tile,
+                )
+            )
+        highres_timestamps = list(
+            tqdm.tqdm(
+                star_imap(p, get_highres_times, get_highres_times_jobs),
+                desc="Get high-res timestamps",
+                total=len(get_highres_times_jobs),
             )
         )
-    highres_timestamps: list[list[datetime]] = list(
-        tqdm.tqdm(
-            star_imap(p, get_highres_times, get_highres_times_jobs),
-            desc="Get high-res timestamps",
-            total=len(get_highres_times_jobs),
-        )
-    )
 
     # Decide which timestamps to use for coarse-grained tiles.
     # We shuffle the high-res tiles/timestamps since we will be using the first
@@ -365,7 +379,9 @@ def create_windows_with_highres_time(
         # Only attempt to use high-resolution imagery if we roll high enough number.
         # So for some coarse-grained tiles, even if they are spatially covered by
         # high-res imagery, we still want to uniformly sample a timestamp.
-        if len(timestamps) == 0 or random.random() < force_lowres_prob:
+        if custom_time is not None:
+            selected_time = custom_time
+        elif len(timestamps) == 0 or random.random() < force_lowres_prob:
             selected_time = sample_timestamp(START_TIME, END_TIME)
         else:
             selected_time = random.choice(timestamps)
