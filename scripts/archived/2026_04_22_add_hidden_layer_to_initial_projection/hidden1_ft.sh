@@ -12,7 +12,7 @@ CLUSTER="ai2/jupiter"
 SCRIPT="python -m olmoearth_pretrain.internal.full_eval_sweep_finetune"
 COMMON_ARGS="--cluster=${CLUSTER} --launch.priority=urgent --project_name=${PROJECT}"
 
-SEEDS=(0 42 1234)
+SEEDS=(42 1234)
 
 for SEED in "${SEEDS[@]}"; do
     # single_bandset base (no s1 drop, random time)
