@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import wandb
 
+from olmoearth_pretrain.evals.datasets.configs import TaskType, dataset_to_config
 from olmoearth_pretrain.evals.models import (
     MODELS_WITH_MULTIPLE_SIZES,
     BaselineModelName,
@@ -18,6 +19,19 @@ from olmoearth_pretrain.internal.all_evals import EVAL_TASKS, FT_EVAL_TASKS
 from olmoearth_pretrain.train.callbacks.evaluator_callback import EvalMode
 
 WANDB_ENTITY = "eai-ai2"
+
+# Extra eval task names defined in ../olmoearth_plus_cropharvest (CROPHARVEST_EVAL_TASKS
+# and BREIZHCROPS_EVAL_TASKS in olmoearth_plus_cropharvest/run_evals.py). Hardcoded so
+# this script can surface them without importing the sibling repo.
+EXTRA_EVAL_TASKS = [
+    "cropharvest_Togo_12_sentinel2",
+    "cropharvest_Togo_12_sentinel1",
+    "cropharvest_Peoples_Republic_of_China_6",
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1",
+    "cropharvest_Togo_12_sentinel2_sentinel1",
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2",
+    "breizhcrops",
+]
 
 # Dataset partitions to consider (excluding default)
 PARTITIONS = [
@@ -167,6 +181,30 @@ def _normalize_eval_key(key: str) -> str:
     return key
 
 
+def _infer_default_primary_metric(dataset_name: str) -> str | None:
+    """Return the lowercase metric key the eval pipeline uses as primary by default.
+
+    The eval pipeline writes the primary metric to bare `eval/{task}` and only the
+    *non-primary* metrics to `eval_other/{task}/{name}`. For tasks that don't set
+    `primary_metric` explicitly (e.g. CropHarvest, breizhcrops), we have to infer
+    the default to expose the bare value under an explicit sub-metric key.
+    """
+    # cropharvest_* is registered in olmoearth_plus_cropharvest/run_evals.py at
+    # train time and not in this script's process; all cropharvest tasks are
+    # binary classification (primary defaults to accuracy).
+    if dataset_name.startswith("cropharvest"):
+        return "accuracy"
+    try:
+        cfg = dataset_to_config(dataset_name)
+    except (KeyError, ValueError):
+        return None
+    if cfg.task_type == TaskType.CLASSIFICATION:
+        return "f1" if cfg.is_multilabel else "accuracy"
+    if cfg.task_type == TaskType.SEGMENTATION:
+        return "miou"
+    return None
+
+
 def _strip_seed_from_name(run_name: str) -> str:
     """Remove the `_seed{N}` segment from a run name.
 
@@ -301,10 +339,17 @@ def get_max_metrics_grouped(
                     )
                     pm = task_config_for_primary.get("primary_metric", None)
                     if pm is not None:
-                        # Also store as eval/{task}/{primary_metric} for consistent sub-metric columns.
-                        # The config stores the enum name (e.g. "MICRO_F1") but metric
+                        # Config stores the enum name (e.g. "MICRO_F1") but metric
                         # keys use the enum value (e.g. "micro_f1"), so lowercase it.
-                        additional_key = f"{normalized_key}/{pm.lower()}"
+                        primary_metric_name = pm.lower()
+                    else:
+                        # No explicit override: infer the default for the task type
+                        # so the bare value (e.g. accuracy for binary classification)
+                        # is exposed under its explicit metric name alongside f1.
+                        dataset = task_config_for_primary.get("dataset", task_name)
+                        primary_metric_name = _infer_default_primary_metric(dataset)
+                    if primary_metric_name is not None:
+                        additional_key = f"{normalized_key}/{primary_metric_name}"
 
                 # Ensure the run has test metrics (check both namespaces).
                 # For post-PR#504 runs, the primary test metric is at eval/test/{task}
@@ -614,6 +659,7 @@ if __name__ == "__main__":
     all_metrics = (
         list(FT_EVAL_TASKS.keys()) if args.finetune else list(EVAL_TASKS.keys())
     )
+    all_metrics.extend(EXTRA_EVAL_TASKS)
 
     if args.per_partition:
         if not args.run_prefix:
