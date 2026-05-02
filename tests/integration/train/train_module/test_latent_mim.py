@@ -205,3 +205,55 @@ def test_train_batch_with_missing_modalities(
         train_module.train_batch(batch)
         logger.info(mock_trainer._metrics)
         check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc"])
+
+
+def test_band_dropout_enabled_by_train_module(
+    supported_modality_names: list[str],
+    train_module_config: LatentMIMTrainModuleConfig,
+    set_random_seeds: None,
+) -> None:
+    """Band dropout stays off after model build and turns on after train module build.
+
+    Building the LatentMIM directly (the path fine-tuning uses) must leave band
+    dropout disabled. Wrapping it in the pretraining train module must enable it
+    on the online encoder while leaving the target encoder disabled.
+    """
+    encoder_config = EncoderConfig(
+        supported_modality_names=supported_modality_names,
+        embedding_size=16,
+        max_patch_size=8,
+        num_heads=2,
+        mlp_ratio=1.0,
+        depth=2,
+        drop_path=0.1,
+        max_sequence_length=12,
+        band_dropout_rate=0.5,
+    )
+    predictor_config = PredictorConfig(
+        supported_modality_names=supported_modality_names,
+        encoder_embedding_size=16,
+        decoder_embedding_size=16,
+        depth=2,
+        mlp_ratio=1.0,
+        num_heads=2,
+        max_sequence_length=12,
+        drop_path=0.0,
+        output_embedding_size=None,
+    )
+    model = LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=predictor_config,
+    ).build()
+
+    # Configured rate is stored on the encoder, but the patch embeddings start
+    # with rate 0.0 (the fine-tuning path stops here and never enables it).
+    assert model.encoder.band_dropout_rate == 0.5
+    assert model.encoder.patch_embeddings.band_dropout_rate == 0.0
+    assert model.target_encoder.patch_embeddings.band_dropout_rate == 0.0
+
+    train_module_config.build(model, device="cpu")
+
+    # Online encoder is now enabled; target encoder (deepcopied before this
+    # point) remains off so it always sees full spectral info.
+    assert model.encoder.patch_embeddings.band_dropout_rate == 0.5
+    assert model.target_encoder.patch_embeddings.band_dropout_rate == 0.0
