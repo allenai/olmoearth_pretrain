@@ -267,6 +267,9 @@ def _get_sub_command(args: argparse.Namespace) -> str:
 
 def _get_base_run_name(args: argparse.Namespace, selected_preset: str | None) -> str:
     """Get the base run name."""
+    if args.model_name is not None:
+        logger.info("Overriding checkpoint name with %s", args.model_name)
+        return args.model_name
     if args.model is not None:
         logger.info("Overriding checkpoint name with %s", args.model)
         return args.model
@@ -447,6 +450,13 @@ def main() -> None:
         "--model",
         choices=sorted(MODEL_PRESETS.keys()),
         help="Model preset key to apply (defaults to none).",
+    )
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        required=False,
+        default=None,
+        help="If set, use this as the base run name (overrides checkpoint-derived name).",
     )
     parser.add_argument(
         "--use_dataset_normalizer",
