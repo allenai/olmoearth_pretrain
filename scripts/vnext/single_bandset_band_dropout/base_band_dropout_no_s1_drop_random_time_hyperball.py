@@ -12,8 +12,12 @@ projection on weight matrices in place of weight decay.
 - Rank microbatch size 64
 
 Hyperparameters (vs. AdamW baseline lr=1e-4 / wd=0.02):
-- Hyperball lr=5e-3 (paper recommends 2.5e-3 - 1e-2), wd=0.0
-- Embeddings (`*embed*` patterns) fall back to AdamW with wd=0.02
+- Hyperball matrix LR = 5e-3 (paper recommends 2.5e-3 - 1e-2), wd = 0.0
+- Embeddings (`*embed*` patterns) fall back to AdamW at the BASELINE LR (1e-4),
+  not the Hyperball LR. Setting them to 5e-3 caused divergence in the v1 run
+  (see experimentor logs/pretrain/2026-05-01-base-hyperball.md). Marin's own
+  AdamH config uses ~10x lower LR for the AdamW fallback than for the matrix
+  group, which is the convention we now follow.
 
 Reference: https://tinyurl.com/muonh
 """
@@ -186,7 +190,9 @@ def build_train_module_config(
                     opts={
                         "apply_hyperball": False,
                         "weight_decay": 0.02,
-                        "lr": 5e-3,
+                        # Match the AdamW baseline LR for embeddings, NOT the
+                        # Hyperball matrix LR. v1 used 5e-3 here and diverged.
+                        "lr": 1e-4,
                     },
                 ),
             ],
