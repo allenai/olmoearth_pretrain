@@ -43,7 +43,7 @@ Create a GitHub token that can clone this repo on Beaker. Generate a token [here
 
 ```bash
 beaker config set default_workspace ai2/earth-systems
-beaker workspace set-budget ai2/earth-systems ai2/es-platform
+beaker workspace set-budget ai2/earth-systems ai2/atec-olmoearth
 ```
 
 ### 3. Set Beaker Secrets
@@ -144,7 +144,7 @@ Evaluation datasets have default paths configured in [`olmoearth_pretrain/evals/
 ## Beaker Information
 
 **Quick Reference:**
-- **Budget:** `ai2/es-platform`
+- **Budget:** `ai2/atec-olmoearth`
 - **Workspace:** `ai2/earth-systems`
 - **Weka:** `weka://dfive-default`
 
