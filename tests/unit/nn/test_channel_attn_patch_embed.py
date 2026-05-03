@@ -187,6 +187,34 @@ class TestChannelAttentionPatchEmbed:
             assert param.grad is not None, f"No gradient for {name}"
             assert torch.isfinite(param.grad).all(), f"Non-finite gradient for {name}"
 
+    def test_band_mean_residual_forward(self, s2_modality: ModalitySpec) -> None:
+        """band_mean_residual runs and changes output vs baseline."""
+        embed_base = ChannelAttentionPatchEmbed(
+            modality_spec=s2_modality,
+            base_patch_size_at_16=8,
+            num_bands=4,
+            embedding_size=32,
+            attn_dim=64,
+            num_heads=4,
+        )
+        embed_res = ChannelAttentionPatchEmbed(
+            modality_spec=s2_modality,
+            base_patch_size_at_16=8,
+            num_bands=4,
+            embedding_size=32,
+            attn_dim=64,
+            num_heads=4,
+            band_mean_residual=True,
+        )
+        embed_res.load_state_dict(embed_base.state_dict())
+        p = s2_modality.image_tile_size_factor * 8
+        H = W = p * 2
+        x = torch.randn(2, H, W, 4)
+        out_base = embed_base(x)
+        out_res = embed_res(x)
+        assert torch.isfinite(out_res).all()
+        assert not torch.allclose(out_base, out_res)
+
 
 class TestMultiModalPatchEmbeddingsWithChannelAttn:
     """Tests for MultiModalPatchEmbeddings with channel attention dispatch."""
@@ -235,7 +263,7 @@ class TestMultiModalPatchEmbeddingsWithChannelAttn:
         """EncoderConfig with channel_attn_dim builds successfully."""
         config = EncoderConfig(
             supported_modality_names=["sentinel2_l2a", "worldcover"],
-            embedding_size=64,
+            embedding_size=128,
             num_heads=4,
             depth=2,
             mlp_ratio=2.0,
@@ -251,6 +279,46 @@ class TestMultiModalPatchEmbeddingsWithChannelAttn:
         ]
         assert isinstance(s2_module, ChannelAttentionPatchEmbed)
         assert s2_module.attn_dim == 128
+
+    def test_encoder_config_passes_band_mean_residual(
+        self, s2_single_bandset_config: TokenizationConfig
+    ) -> None:
+        """EncoderConfig wires channel_attn_band_mean_residual into patch embed."""
+        config = EncoderConfig(
+            supported_modality_names=["sentinel2_l2a"],
+            embedding_size=128,
+            num_heads=4,
+            depth=2,
+            mlp_ratio=2.0,
+            max_patch_size=8,
+            max_sequence_length=12,
+            tokenization_config=s2_single_bandset_config,
+            channel_attn_dim=128,
+            channel_attn_num_heads=4,
+            channel_attn_band_mean_residual=True,
+        )
+        encoder = config.build()
+        s2_module = encoder.patch_embeddings.per_modality_embeddings["sentinel2_l2a"][
+            "sentinel2_l2a__0"
+        ]
+        assert isinstance(s2_module, ChannelAttentionPatchEmbed)
+        assert s2_module.band_mean_residual is True
+
+    def test_encoder_config_warns_when_attn_dim_exceeds_embedding(self) -> None:
+        """Wide channel_attn_dim vs embedding_size emits a UserWarning."""
+        config = EncoderConfig(
+            supported_modality_names=["sentinel2_l2a"],
+            embedding_size=768,
+            num_heads=4,
+            depth=2,
+            mlp_ratio=2.0,
+            max_patch_size=8,
+            max_sequence_length=12,
+            channel_attn_dim=1536,
+            channel_attn_num_heads=8,
+        )
+        with pytest.warns(UserWarning, match="channel_attn_dim"):
+            config.validate()
 
     def test_encoder_config_validates_attn_dim_heads(self) -> None:
         """Validation catches channel_attn_dim not divisible by num_heads."""

@@ -1,13 +1,19 @@
-"""Single bandset + channel-attention patch embedding (large attn_dim) + band dropout.
+"""Single bandset + channel-attention patch embedding (large attn_dim) + curriculum band dropout.
 
 Same as channel_attn_patch_embed.py but with a larger cross-attention bottleneck
 (attn_dim=1536, 2x the encoder embedding_size) for richer per-band spatial
 representation before fusion.
 
+Band dropout follows the same 3-stage curriculum used by channel_attn_patch_embed.py
+(see `BandDropoutCurriculumCallback`); `band_dropout_rate=0.0` in EncoderConfig is
+the initial value, and the callback drives the actual rate per-step.
+
 - channel_attn_dim=1536
 """
 
 import logging
+from dataclasses import dataclass
+from typing import Any
 
 from olmo_core.config import DType
 from olmo_core.distributed.parallel.data_parallel import (
@@ -18,6 +24,7 @@ from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
     BeakerCallback,
+    Callback,
     CheckpointerCallback,
     ConfigSaverCallback,
     GarbageCollectorCallback,
@@ -67,6 +74,55 @@ MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 RANDOM_BAND_DROPOUT_MAX_RATE = 0.3
 CHANNEL_ATTN_DIM = 1536
+
+# Band dropout curriculum (driven by BandDropoutCurriculumCallback).
+BAND_DROPOUT_WARMUP_FRAC = 0.20
+BAND_DROPOUT_MID_FRAC = 0.50
+BAND_DROPOUT_MID_RATE = 0.15
+
+
+@dataclass
+class BandDropoutCurriculumCallback(Callback):
+    """Schedule the online encoder's band dropout rate over training.
+
+    Stage 1 (frac < warmup_frac):                 rate = 0
+    Stage 2 (warmup_frac <= frac < mid_frac):     ramp 0 -> mid_rate
+    Stage 3 (mid_frac <= frac <= 1):              ramp mid_rate -> max_rate
+
+    `frac = trainer.global_step / trainer.max_steps`. All ranks compute the same
+    rate deterministically, and only the online encoder is mutated. The target
+    encoder has band dropout disabled by `LatentMIM.__init__` and is not touched.
+    """
+
+    warmup_frac: float = BAND_DROPOUT_WARMUP_FRAC
+    mid_frac: float = BAND_DROPOUT_MID_FRAC
+    mid_rate: float = BAND_DROPOUT_MID_RATE
+    max_rate: float = RANDOM_BAND_DROPOUT_MAX_RATE
+    metric_name: str = "train/band_dropout_rate"
+
+    def _scheduled_rate(self, frac: float) -> float:
+        if frac < self.warmup_frac:
+            return 0.0
+        if frac < self.mid_frac:
+            t = (frac - self.warmup_frac) / max(1e-8, self.mid_frac - self.warmup_frac)
+            return self.mid_rate * t
+        t = (frac - self.mid_frac) / max(1e-8, 1.0 - self.mid_frac)
+        return self.mid_rate + (self.max_rate - self.mid_rate) * t
+
+    def pre_step(self, batch: Any) -> None:
+        """Update the online encoder's band dropout rate for the upcoming step."""
+        max_steps = getattr(self.trainer, "max_steps", None)
+        if not max_steps:
+            return
+        frac = max(0.0, min(1.0, self.trainer.global_step / max_steps))
+        rate = self._scheduled_rate(frac)
+        encoder = self.trainer.train_module.model.encoder
+        patch_embeddings = getattr(encoder, "patch_embeddings", None)
+        if patch_embeddings is None:
+            return
+        patch_embeddings.band_dropout_rate = rate
+        self.trainer.record_metric(self.metric_name, rate)
+
 
 S2_SINGLE_BANDSET = ModalityTokenization(
     band_groups=[
@@ -281,6 +337,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             checkpointer=checkpointer_config,
         )
         .with_callback("wandb", wandb_callback)
+        .with_callback("band_dropout_curriculum", BandDropoutCurriculumCallback())
         .with_callback("speed_monitor", OlmoEarthSpeedMonitorCallback())
         .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
         .with_callback("config_saver", ConfigSaverCallback())
@@ -326,7 +383,11 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         drop_path=0.1,
         max_sequence_length=12,
         tokenization_config=common.tokenization_config,
-        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        # Initial rate is 0; BandDropoutCurriculumCallback drives the actual rate
+        # per-step over training. Keep `random_band_dropout=True` so that when the
+        # callback bumps the rate above 0, each forward call samples
+        # rate ~ Uniform(0, current_rate) (preserves prior augmentation behavior).
+        band_dropout_rate=0.0,
         random_band_dropout=True,
         band_dropout_modalities=BAND_DROPOUT_MODALITIES,
         channel_attn_dim=CHANNEL_ATTN_DIM,

@@ -343,6 +343,7 @@ class ChannelAttentionPatchEmbed(nn.Module):
         num_heads: int = 8,
         interpolation: str = "bicubic",
         antialias: bool = True,
+        band_mean_residual: bool = False,
     ) -> None:
         """Initialize ChannelAttentionPatchEmbed.
 
@@ -357,6 +358,10 @@ class ChannelAttentionPatchEmbed(nn.Module):
             num_heads: Number of attention heads for cross-attention.
             interpolation: Resize interpolation type for FlexiViT.
             antialias: Whether to apply antialiasing during resize.
+            band_mean_residual: If True, add a masked mean over band tokens (before
+                k/v projection) to the attention output before out_proj. Gives a
+                residual path closer to mean-pooled fusion and can help downstream
+                probes when pure attention underfits.
         """
         super().__init__()
         self.modality_spec = modality_spec
@@ -368,6 +373,7 @@ class ChannelAttentionPatchEmbed(nn.Module):
         self.embedding_size = embedding_size
         self.interpolation = interpolation
         self.antialias = antialias
+        self.band_mean_residual = band_mean_residual
 
         p_h, p_w = self.base_patch_size
 
@@ -464,6 +470,7 @@ class ChannelAttentionPatchEmbed(nn.Module):
 
         # Cross-attention: query [BT*L, 1, attn_dim] attends over bands
         query = self.query.expand(x.shape[0], -1, -1)
+        pre_kv = x
         k = self.k_proj(x)
         v = self.v_proj(x)
 
@@ -484,6 +491,15 @@ class ChannelAttentionPatchEmbed(nn.Module):
         x = (
             x.transpose(1, 2).reshape(BL, 1, self.attn_dim).squeeze(1)
         )  # [BT*L, attn_dim]
+
+        if self.band_mean_residual:
+            if key_padding_mask is not None:
+                valid = (~key_padding_mask).to(dtype=pre_kv.dtype).unsqueeze(-1)
+                denom = valid.sum(dim=1).clamp(min=1.0)
+                band_mean = (pre_kv * valid).sum(dim=1) / denom
+            else:
+                band_mean = pre_kv.mean(dim=1)
+            x = x + band_mean
 
         # Project to embedding size
         x = self.out_proj(x)

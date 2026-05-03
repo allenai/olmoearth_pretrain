@@ -2,6 +2,7 @@
 
 import logging
 import math
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
@@ -196,6 +197,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         band_dropout_modalities: list[str] | None = None,
         channel_attn_dim: int | None = None,
         channel_attn_num_heads: int = 8,
+        channel_attn_band_mean_residual: bool = False,
     ):
         """Initialize the patch embeddings.
 
@@ -219,6 +221,7 @@ class MultiModalPatchEmbeddings(nn.Module):
             channel_attn_dim: If set, use ChannelAttentionPatchEmbed with this attention
                 dimension for bandsets with >1 band. None means use FlexiPatchEmbed.
             channel_attn_num_heads: Number of attention heads for channel cross-attention.
+            channel_attn_band_mean_residual: Passed to ChannelAttentionPatchEmbed when enabled.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -231,6 +234,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.band_dropout_modalities = band_dropout_modalities
         self.channel_attn_dim = channel_attn_dim
         self.channel_attn_num_heads = channel_attn_num_heads
+        self.channel_attn_band_mean_residual = channel_attn_band_mean_residual
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -292,6 +296,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                     embedding_size=self.embedding_size,
                     attn_dim=self.channel_attn_dim,
                     num_heads=self.channel_attn_num_heads,
+                    band_mean_residual=self.channel_attn_band_mean_residual,
                 )
             else:
                 module = FlexiPatchEmbed(
@@ -1147,6 +1152,7 @@ class Encoder(FlexiVitBase):
         band_dropout_modalities: list[str] | None = None,
         channel_attn_dim: int | None = None,
         channel_attn_num_heads: int = 8,
+        channel_attn_band_mean_residual: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1182,6 +1188,7 @@ class Encoder(FlexiVitBase):
                 modalities. If None, apply to all modalities. Default: None.
             channel_attn_dim: If set, use ChannelAttentionPatchEmbed for multi-band bandsets.
             channel_attn_num_heads: Number of heads for channel cross-attention.
+            channel_attn_band_mean_residual: See ChannelAttentionPatchEmbed.band_mean_residual.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1214,6 +1221,7 @@ class Encoder(FlexiVitBase):
         self.band_dropout_modalities = band_dropout_modalities
         self.channel_attn_dim = channel_attn_dim
         self.channel_attn_num_heads = channel_attn_num_heads
+        self.channel_attn_band_mean_residual = channel_attn_band_mean_residual
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
@@ -1225,6 +1233,7 @@ class Encoder(FlexiVitBase):
             band_dropout_modalities=self.band_dropout_modalities,
             channel_attn_dim=self.channel_attn_dim,
             channel_attn_num_heads=self.channel_attn_num_heads,
+            channel_attn_band_mean_residual=self.channel_attn_band_mean_residual,
         )
         self.output_embedding_size = output_embedding_size
         # If output_embedding_size is set, project tokens to that size after attention
@@ -2122,6 +2131,7 @@ class EncoderConfig(Config):
     band_dropout_modalities: list[str] | None = None
     channel_attn_dim: int | None = None
     channel_attn_num_heads: int = 8
+    channel_attn_band_mean_residual: bool = False
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2137,6 +2147,18 @@ class EncoderConfig(Config):
             raise ValueError(
                 f"channel_attn_dim ({self.channel_attn_dim}) must be divisible by "
                 f"channel_attn_num_heads ({self.channel_attn_num_heads})"
+            )
+        if (
+            self.channel_attn_dim is not None
+            and self.channel_attn_dim > self.embedding_size
+        ):
+            warnings.warn(
+                f"channel_attn_dim ({self.channel_attn_dim}) > embedding_size "
+                f"({self.embedding_size}): the channel patch stem is wider than the "
+                "encoder hidden size before out_proj, which often hurts optimization "
+                "and downstream probes. Prefer channel_attn_dim <= embedding_size.",
+                UserWarning,
+                stacklevel=2,
             )
         if len(self.supported_modalities) == 0:
             raise ValueError("At least one modality must be added!")
