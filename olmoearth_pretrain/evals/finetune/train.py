@@ -158,6 +158,16 @@ def run_finetune_eval(
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
 
+    if hasattr(model, "disable_band_dropout"):
+        prev_rate = getattr(
+            getattr(model, "patch_embeddings", None), "band_dropout_rate", 0.0
+        )
+        if prev_rate > 0.0:
+            logger.warning(
+                f"Overriding band_dropout_rate from {prev_rate} to 0.0 for finetuning."
+            )
+        model.disable_band_dropout()
+
     ft = BackboneWithHead(
         model=model,
         task_type=task_config.task_type,

@@ -515,6 +515,10 @@ def _get_pooling_type_str(pooling_type: str) -> str:
 
 
 LAUNCH_OVERRIDES = "--launch.priority=high --launch.num_gpus=1 --launch.task_name=eval"
+# Overwrite the max duration to enable eval of the last step of the checkpoint
+MAX_DURATION_OVERRIDE = (
+    "--trainer.max_duration.value=10000000 --trainer.max_duration.unit=steps"
+)
 
 
 def _get_env_prefix(args: argparse.Namespace, module_path: str) -> str:
@@ -989,6 +993,8 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             commands_to_run_new.append(cmd)
         commands_to_run = commands_to_run_new
 
+    commands_to_run = [f"{cmd} {MAX_DURATION_OVERRIDE}" for cmd in commands_to_run]
+
     # Filter out skipped tasks if task-skip-names is provided
     if args.task_skip_names:
         skip_names = [name.strip() for name in args.task_skip_names.split(",")]
@@ -1133,6 +1139,7 @@ def main() -> None:
     args, extra_cli = parser.parse_known_args()
 
     commands_to_run = build_commands(args, extra_cli)
+    commands_to_run = commands_to_run[11:]
 
     logger.info(f"Running {len(commands_to_run)} commands")
     for cmd in commands_to_run:
