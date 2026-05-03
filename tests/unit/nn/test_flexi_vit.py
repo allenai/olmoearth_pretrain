@@ -985,3 +985,81 @@ class TestBandDropout:
         )
         encoder.enable_band_dropout()
         assert encoder.patch_embeddings.band_dropout_rate == 0.5
+
+
+class TestSkipConnection:
+    """Unit tests for the gated skip connection in the Encoder."""
+
+    def test_skip_gate_initialized_to_zero(self) -> None:
+        """Test that skip_gate is zero-initialized."""
+        encoder = Encoder(
+            embedding_size=16,
+            max_patch_size=8,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=4.0,
+            depth=12,
+            drop_path=0.0,
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
+            max_sequence_length=12,
+            skip_from_layer=0,
+            skip_to_layer=10,
+        )
+        assert hasattr(encoder, "skip_gate")
+        assert (encoder.skip_gate == 0).all()
+        assert encoder.skip_gate.shape == (16,)
+
+    @torch.inference_mode()
+    def test_nonzero_gate_changes_output(self) -> None:
+        """Test that setting gate to nonzero produces different output."""
+        torch.manual_seed(42)
+        encoder = Encoder(
+            embedding_size=16,
+            max_patch_size=8,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=4.0,
+            depth=12,
+            drop_path=0.0,
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
+            max_sequence_length=12,
+            skip_from_layer=0,
+            skip_to_layer=10,
+        )
+
+        B, H, W, T, D = 1, 2, 2, 3, 16
+        num_band_sets = len(Modality.SENTINEL2_L2A.band_sets)
+        sentinel2_l2a_tokens = torch.randn(B, H, W, T, num_band_sets, D)
+        sentinel2_l2a_mask = torch.ones(B, H, W, T, num_band_sets, dtype=torch.long)
+        latlon_num_band_sets = len(Modality.LATLON.band_sets)
+        latlon = torch.randn(B, latlon_num_band_sets, D)
+        latlon_mask = torch.ones(B, latlon_num_band_sets, dtype=torch.long)
+
+        x = {
+            "sentinel2_l2a": sentinel2_l2a_tokens,
+            "sentinel2_l2a_mask": sentinel2_l2a_mask,
+            "latlon": latlon,
+            "latlon_mask": latlon_mask,
+        }
+        timestamps = torch.tensor(
+            [[15, 7, 2023], [15, 8, 2023], [15, 9, 2023]], dtype=torch.long
+        ).unsqueeze(0)
+
+        # Output with gate=0
+        out_zero, _ = encoder.apply_attn(
+            x=x, timestamps=timestamps, patch_size=4, input_res=10, fast_pass=True
+        )
+        out_zero_s2 = out_zero["sentinel2_l2a"].clone()
+
+        # Set gate to nonzero
+        encoder.skip_gate.fill_(1.0)
+
+        out_nonzero, _ = encoder.apply_attn(
+            x=x, timestamps=timestamps, patch_size=4, input_res=10, fast_pass=True
+        )
+
+        assert not torch.allclose(
+            out_zero_s2,
+            out_nonzero["sentinel2_l2a"],
+            atol=1e-6,
+        )

@@ -1129,6 +1129,8 @@ class Encoder(FlexiVitBase):
         band_dropout_modalities: list[str] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
+        skip_from_layer: int | None = None,
+        skip_to_layer: int | None = None,
     ):
         """Initialize the encoder.
 
@@ -1173,6 +1175,8 @@ class Encoder(FlexiVitBase):
             post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm.
+            skip_from_layer: Block index to capture output from for the skip connection.
+            skip_to_layer: Block index to inject the captured skip features into.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1208,6 +1212,11 @@ class Encoder(FlexiVitBase):
         self.band_dropout_modalities = band_dropout_modalities
         self.patch_embed_hidden_sizes = patch_embed_hidden_sizes
         self.post_proj_hidden_sizes = post_proj_hidden_sizes
+        self.skip_from_layer = skip_from_layer
+        self.skip_to_layer = skip_to_layer
+        if self.skip_from_layer is not None:
+            self.skip_gate = nn.Parameter(torch.zeros(embedding_size))
+            self.skip_gate._skip_custom_init = True
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
@@ -1559,6 +1568,7 @@ class Encoder(FlexiVitBase):
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
 
         # Apply attn with varying encoder depths
+        skip_tokens = None
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
             if (exit_ids_seq is not None) and (i_blk > 0):
@@ -1571,18 +1581,23 @@ class Encoder(FlexiVitBase):
                     input=tokens,
                     other=exited_tokens,
                 )
-            # we take the inverse of the mask because a value
-            # of True indicates the value *should* take part in
-            # attention
-            # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
+
+            if (
+                self.skip_to_layer is not None
+                and i_blk == self.skip_to_layer
+                and skip_tokens is not None
+            ):
+                tokens = tokens + self.skip_gate * skip_tokens
 
             tokens = blk(
                 x=tokens,
                 cu_seqlens=cu_seqlens,
                 max_seqlen=max_seqlen,
-                # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
             )
+
+            if self.skip_from_layer is not None and i_blk == self.skip_from_layer:
+                skip_tokens = tokens
 
         if self.has_register_tokens:
             tokens, register_tokens = self.pop_register_tokens(tokens)
@@ -2120,6 +2135,8 @@ class EncoderConfig(Config):
     band_dropout_modalities: list[str] | None = None
     patch_embed_hidden_sizes: list[int] | None = None
     post_proj_hidden_sizes: list[int] | None = None
+    skip_from_layer: int | None = None
+    skip_to_layer: int | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2142,6 +2159,17 @@ class EncoderConfig(Config):
                 raise ValueError(
                     f"band_dropout_modalities contains modalities not in "
                     f"supported_modality_names: {unknown}"
+                )
+        if (self.skip_from_layer is None) != (self.skip_to_layer is None):
+            raise ValueError(
+                "skip_from_layer and skip_to_layer must both be set or both be None"
+            )
+        if self.skip_from_layer is not None:
+            assert self.skip_to_layer is not None
+            if not (0 <= self.skip_from_layer < self.skip_to_layer < self.depth):
+                raise ValueError(
+                    f"Must have 0 <= skip_from_layer ({self.skip_from_layer}) "
+                    f"< skip_to_layer ({self.skip_to_layer}) < depth ({self.depth})"
                 )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
