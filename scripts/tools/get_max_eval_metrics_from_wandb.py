@@ -20,9 +20,9 @@ from olmoearth_pretrain.train.callbacks.evaluator_callback import EvalMode
 
 WANDB_ENTITY = "eai-ai2"
 
-# Extra eval task names defined in ../olmoearth_plus_cropharvest (CROPHARVEST_EVAL_TASKS
-# and BREIZHCROPS_EVAL_TASKS in olmoearth_plus_cropharvest/run_evals.py). Hardcoded so
-# this script can surface them without importing the sibling repo.
+# Extra eval task names defined in ../olmoearth_plus_cropharvest (CROPHARVEST_EVAL_TASKS,
+# BREIZHCROPS_EVAL_TASKS, and OLD_NANDI_AWF_EVAL_TASKS in olmoearth_plus_cropharvest/run_evals.py).
+# Hardcoded so this script can surface them without importing the sibling repo.
 EXTRA_EVAL_TASKS = [
     "cropharvest_Togo_12_sentinel2",
     "cropharvest_Togo_12_sentinel1",
@@ -31,6 +31,13 @@ EXTRA_EVAL_TASKS = [
     "cropharvest_Togo_12_sentinel2_sentinel1",
     "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2",
     "breizhcrops",
+    # Legacy per-modality nandi/awf tasks (pre-PR-506; gated by OLD_NANDI_AWF=1).
+    "nandi_sentinel2",
+    "nandi_sentinel1",
+    "nandi_landsat",
+    "awf_sentinel2",
+    "awf_sentinel1",
+    "awf_landsat",
 ]
 
 # Dataset partitions to consider (excluding default)
