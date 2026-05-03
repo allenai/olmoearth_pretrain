@@ -43,6 +43,7 @@ class FlexiPatchEmbed(nn.Module):
         antialias: bool = True,
         use_linear_patch_embed: bool = True,
         patch_embed_hidden_sizes: list[int] | None = None,
+        post_proj_hidden_sizes: list[int] | None = None,
     ) -> None:
         """2D image to patch embedding w/ flexible patch sizes.
 
@@ -70,6 +71,10 @@ class FlexiPatchEmbed(nn.Module):
                 feature map, which is then patchified and projected to
                 ``embedding_size`` with a final Linear(h[-1] * p_h * p_w, embedding_size).
                 Only supported when use_linear_patch_embed=True.
+            post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
+                applied AFTER the patch projection (``self.proj``). Each entry adds a
+                ReLU -> Linear(prev, h) layer. Applied before the norm layer.
+                Only supported when use_linear_patch_embed=True.
         """
         super().__init__()
 
@@ -84,6 +89,10 @@ class FlexiPatchEmbed(nn.Module):
         if patch_embed_hidden_sizes and not use_linear_patch_embed:
             raise ValueError(
                 "patch_embed_hidden_sizes requires use_linear_patch_embed=True"
+            )
+        if post_proj_hidden_sizes and not use_linear_patch_embed:
+            raise ValueError(
+                "post_proj_hidden_sizes requires use_linear_patch_embed=True"
             )
 
         p_h, p_w = self.base_patch_size
@@ -114,6 +123,20 @@ class FlexiPatchEmbed(nn.Module):
             # patch projection to match prior Conv2d behavior; overriding this with
             # encoder-level Xavier init correlated with a PASTIS regression.
             self.proj._skip_custom_init = True
+
+            # Post-projection MLP: ReLU -> Linear(prev, h) for each h.
+            self.post_proj: nn.Sequential | None = None
+            if post_proj_hidden_sizes:
+                post_layers: list[nn.Module] = []
+                prev_dim = embedding_size
+                for h in post_proj_hidden_sizes:
+                    post_layers.append(nn.ReLU(inplace=True))
+                    post_layers.append(nn.Linear(prev_dim, h, bias=bias))
+                    prev_dim = h
+                self.post_proj = nn.Sequential(*post_layers)
+                for m in self.post_proj:
+                    if isinstance(m, nn.Linear):
+                        m._skip_custom_init = True
         else:
             self.proj = nn.Conv2d(
                 in_chans,
@@ -164,6 +187,8 @@ class FlexiPatchEmbed(nn.Module):
         else:
             x = rearrange(x, "b c (h p1) (w p2) -> b (h w) (p1 p2 c)", p1=p_h, p2=p_w)
         x = self.proj(x)
+        if self.post_proj is not None:
+            x = self.post_proj(x)
         if has_time_dim:
             return rearrange(
                 x,
