@@ -445,6 +445,30 @@ def _sample_to_olmoearth(
         sample_dict["timestamps"] = _timestamps(t, device)
         return OlmoEarthSample(**sample_dict)
 
+    # TreeSatAI exposes aerial + S2 + S1; the generic image_aerial branch only fills naip and
+    # returns early, but gb2_treesatai uses SENTINEL2_L2A — route S2 explicitly first.
+    if slug == "treesatai" and "image_s2" in sample:
+        s2_order = list(Modality.SENTINEL2_L2A.band_order)
+        x = sample["image_s2"].float()
+        if x.dim() == 4:
+            xb = x.unsqueeze(0)
+        elif x.dim() == 3:
+            xb = x.unsqueeze(0)
+        else:
+            raise ValueError(f"treesatai image_s2 shape {x.shape}")
+        src = _s2_names(band_order)
+        if not src:
+            raise ValueError("treesatai requires band_order dict with an 's2' key")
+        c_in = xb.shape[1]
+        if len(src) != c_in:
+            raise ValueError(f"treesatai s2 band_order length {len(src)} != channels {c_in}")
+        x_perm = _permute_bchw(xb, src, s2_order)
+        hwtc = _bchw_to_hwtc(x_perm[0])
+        t = hwtc.shape[2]
+        sample_dict["sentinel2_l2a"] = hwtc
+        sample_dict["timestamps"] = _timestamps(t, device)
+        return OlmoEarthSample(**sample_dict)
+
     if "image_aerial" in sample:
         ae = sample["image_aerial"].float()
         naip_hwtc = _bchw_to_hwtc(ae)
