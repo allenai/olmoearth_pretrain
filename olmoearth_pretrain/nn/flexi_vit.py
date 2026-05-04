@@ -193,6 +193,8 @@ class MultiModalPatchEmbeddings(nn.Module):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        patch_embed_hidden_sizes: list[int] | None = None,
+        post_proj_hidden_sizes: list[int] | None = None,
     ):
         """Initialize the patch embeddings.
 
@@ -213,6 +215,19 @@ class MultiModalPatchEmbeddings(nn.Module):
                 and acts as stronger augmentation. Default: False (fixed rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            patch_embed_hidden_sizes: Optional list of hidden layer widths for a
+                per-pixel MLP applied BEFORE patchification in the spatial
+                FlexiPatchEmbed. If None or empty, the projection is a single nn.Linear
+                over the flattened patch (current behavior). Otherwise, each pixel's
+                channel vector is mapped via an MLP with ReLU activations (weights
+                shared across all pixels), producing an H x W x h[-1] feature map
+                that is then patchified and projected to embedding_size. Only applies
+                to the spatial branch (FlexiPatchEmbed); the non-spatial nn.Linear
+                branch is unaffected.
+            post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
+                applied AFTER the patch projection. Each entry adds a
+                ReLU -> Linear(prev, h) layer, applied before the norm. Only applies
+                to the spatial branch (FlexiPatchEmbed).
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -223,6 +238,8 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
+        self.patch_embed_hidden_sizes = patch_embed_hidden_sizes
+        self.post_proj_hidden_sizes = post_proj_hidden_sizes
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -286,6 +303,8 @@ class MultiModalPatchEmbeddings(nn.Module):
                         base_patch_size_at_16=self.max_patch_size,
                         modality_spec=modality_spec,
                         use_linear_patch_embed=self.use_linear_patch_embed,
+                        patch_embed_hidden_sizes=self.patch_embed_hidden_sizes,
+                        post_proj_hidden_sizes=self.post_proj_hidden_sizes,
                     )
                     for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
@@ -1108,6 +1127,8 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        patch_embed_hidden_sizes: list[int] | None = None,
+        post_proj_hidden_sizes: list[int] | None = None,
     ):
         """Initialize the encoder.
 
@@ -1141,6 +1162,17 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            patch_embed_hidden_sizes: Optional list of hidden layer widths for a
+                per-pixel MLP applied BEFORE patchification in the spatial patch
+                projection. If None or empty, the projection is a single nn.Linear
+                over the flattened patch (current behavior). Otherwise, each pixel's
+                ``in_chans`` channel vector is mapped via
+                Linear(in_chans, h[0]) -> ReLU -> ... -> Linear(h[-2], h[-1]) -> ReLU
+                (weights shared across all pixels), and the resulting H x W x h[-1]
+                feature map is patchified and projected to embedding_size.
+            post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
+                applied AFTER the patch projection. Each entry adds a
+                ReLU -> Linear(prev, h) layer, applied before the norm.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1174,6 +1206,8 @@ class Encoder(FlexiVitBase):
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
+        self.patch_embed_hidden_sizes = patch_embed_hidden_sizes
+        self.post_proj_hidden_sizes = post_proj_hidden_sizes
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
@@ -1183,6 +1217,8 @@ class Encoder(FlexiVitBase):
             band_dropout_rate=0.0,
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
+            patch_embed_hidden_sizes=self.patch_embed_hidden_sizes,
+            post_proj_hidden_sizes=self.post_proj_hidden_sizes,
         )
         self.output_embedding_size = output_embedding_size
         # If output_embedding_size is set, project tokens to that size after attention
@@ -2082,6 +2118,8 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+    patch_embed_hidden_sizes: list[int] | None = None
+    post_proj_hidden_sizes: list[int] | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
