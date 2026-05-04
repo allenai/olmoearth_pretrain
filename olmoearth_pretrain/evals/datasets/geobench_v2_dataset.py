@@ -244,6 +244,26 @@ def _sample_to_olmoearth(
         sample_dict["timestamps"] = _timestamps(t, device)
         return OlmoEarthSample(**sample_dict)
 
+    # Substation: S2 stack under "image" plus detection fields (bbox, label, mask).
+    if slug == "substation" and "image" in sample:
+        x = sample["image"].float()
+        xb = x.unsqueeze(0) if x.dim() == 3 else x
+        if isinstance(band_order, (list, tuple)):
+            src = [str(b) for b in band_order]
+        else:
+            src = _s2_names(band_order) or [str(i) for i in range(xb.shape[1])]
+        if len(src) != xb.shape[1]:
+            raise ValueError(
+                f"substation: band_order length {len(src)} != image channels {xb.shape[1]}"
+            )
+        s2_order = list(Modality.SENTINEL2_L2A.band_order)
+        x_perm = _permute_bchw(xb, src, s2_order)
+        hwtc = _bchw_to_hwtc(x_perm[0])
+        t = hwtc.shape[2]
+        sample_dict["sentinel2_l2a"] = hwtc
+        sample_dict["timestamps"] = _timestamps(t, device)
+        return OlmoEarthSample(**sample_dict)
+
     # SpaceNet7 returns a single C×H×W "image" (PlanetScope), not image_* keys. The generic
     # 3-channel "image" branch below maps to naip, which then mismatches gb2_spacenet7's
     # SENTINEL2_L2A input_modalities and yields an empty modality list in the ViT.
@@ -557,6 +577,16 @@ def _extract_label(
         m = sample["mask"].float()
         v = torch.nanmean(m)
         return v.unsqueeze(0)
+
+    # Must run before the generic "mask" segmentation branch: substation carries instance masks.
+    if slug == "substation" and "label" in sample:
+        labs = sample["label"]
+        if not torch.is_tensor(labs):
+            labs = torch.as_tensor(labs, dtype=torch.long)
+        if labs.numel() == 0:
+            return torch.zeros(1, dtype=torch.long)
+        # COCO-style category id for the single foreground class (power_station).
+        return torch.tensor(int((labs == 1).any()), dtype=torch.long).unsqueeze(0)
 
     if "mask" in sample:
         m = sample["mask"].long().squeeze()
