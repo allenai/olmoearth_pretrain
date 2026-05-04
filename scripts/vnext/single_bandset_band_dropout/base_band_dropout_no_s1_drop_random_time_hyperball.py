@@ -12,12 +12,22 @@ projection on weight matrices in place of weight decay.
 - Rank microbatch size 64
 
 Hyperparameters (vs. AdamW baseline lr=1e-4 / wd=0.02):
-- Hyperball matrix LR = 5e-3 (paper recommends 2.5e-3 - 1e-2), wd = 0.0
+- Hyperball matrix LR = 2.5e-3 (paper's lower bound; was 5e-3 in v2 — see
+  the v2 retro at experimentor/logs/pretrain/2026-05-02-base-hyperball-embed-lr-fix.md).
+  v2 reached its minimum loss faster than the AdamW baseline but couldn't sustain
+  it; one hypothesis is that fixed-displacement Hyperball updates at 5e-3
+  overshoot once the model is sharp, with a cosine schedule that barely decays
+  during the visible window. Halving the matrix LR shrinks per-step rotation 2x.
 - Embeddings (`*embed*` patterns) fall back to AdamW at the BASELINE LR (1e-4),
-  not the Hyperball LR. Setting them to 5e-3 caused divergence in the v1 run
+  not the Hyperball LR. Setting them to 5e-3 caused divergence in v1
   (see experimentor logs/pretrain/2026-05-01-base-hyperball.md). Marin's own
   AdamH config uses ~10x lower LR for the AdamW fallback than for the matrix
   group, which is the convention we now follow.
+- QK-Norm enabled in both encoder and decoder. Marin's 32B retro identified
+  attention-numerics destabilization as an unrecoverable failure mode that
+  optimizer-side fixes (gradient clipping, optimizer swaps) couldn't address;
+  QK-Norm fixed it. Adding it here as Hyperball + missing-QK-Norm + sharp
+  model is the closest analog to that failure pattern in our v2 trace.
 
 Reference: https://tinyurl.com/muonh
 """
@@ -179,7 +189,7 @@ def build_train_module_config(
     """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=HyperballConfig(
-            lr=5e-3,
+            lr=2.5e-3,  # was 5e-3 in v2; see v2 retro for why we halved it
             betas=(0.9, 0.95),
             eps=1e-8,
             weight_decay=0.0,
@@ -426,6 +436,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
         random_band_dropout=True,
         band_dropout_modalities=BAND_DROPOUT_MODALITIES,
+        qk_norm=True,  # added in v3; see header for rationale
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
@@ -436,6 +447,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
         tokenization_config=common.tokenization_config,
+        qk_norm=True,  # added in v3; see header for rationale
     )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
