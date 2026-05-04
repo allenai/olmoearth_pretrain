@@ -291,10 +291,23 @@ def _average_runs_by_seed(runs: list) -> list:
     return out
 
 
+def _filter_runs_by_seed(runs: list, seed: int) -> list:
+    """Keep only runs whose names contain `_seed{seed}` (exact match on the integer)."""
+    out: list = []
+    for run in runs:
+        m = re.search(r"_seed(\d+)", run.name)
+        if m is not None and int(m.group(1)) == seed:
+            out.append(run)
+        else:
+            print(f"Skipping {run.name}: does not match _seed{seed}")
+    return out
+
+
 def get_max_metrics_grouped(
     grouped_runs: dict[str, list[wandb.Run]],
     get_test_metrics: bool = False,
     average_seeds: bool = False,
+    seed: int | None = None,
 ) -> tuple[
     dict[str, dict[str, float]],
     dict[str, dict[str, float]],
@@ -305,11 +318,19 @@ def get_max_metrics_grouped(
     If `average_seeds` is set, runs within each group that share a name after
     stripping `_seed{N}` are first averaged together (per metric); the per-group
     max is then taken across these seed-averaged virtual runs.
+
+    If `seed` is set, runs are first filtered to only those whose names contain
+    `_seed{seed}`; runs without a matching seed segment are dropped.
     """
+    if seed is not None and average_seeds:
+        raise ValueError("--seed and --average-seeds are mutually exclusive")
+
     # Get max metrics for each group
     group_metrics = {}
     group_max_runs_per_metric = {}
     for group_name, runs in grouped_runs.items():
+        if seed is not None:
+            runs = _filter_runs_by_seed(runs, seed)
         if average_seeds:
             runs = _average_runs_by_seed(runs)
         print(f"\nProcessing group: {group_name} ({len(runs)} runs)")
@@ -440,9 +461,9 @@ def get_max_metrics_grouped(
                         f"No test metric found for run {run.name} for metric {metric}"
                     )
                     continue
-                print(
-                    f"Found test metric {test_metric_key} for run {run.name} with value {value}"
-                )
+                # print(
+                #     f"Found test metric {test_metric_key} for run {run.name} with value {value}"
+                # )
                 test_metrics[test_metric_key] = value
             grouped_test_metrics[group_name] = test_metrics
     return group_metrics, grouped_test_metrics, group_max_runs_per_metric
@@ -656,6 +677,13 @@ if __name__ == "__main__":
         "after stripping `_seed{N}` (e.g., for averaging finetuning runs across seeds).",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Only consider runs whose names contain `_seed{N}` matching this value; "
+        "runs without a matching seed segment are dropped. Mutually exclusive with --average-seeds.",
+    )
+    parser.add_argument(
         "--json_filename",
         type=str,
         default=None,
@@ -724,10 +752,13 @@ if __name__ == "__main__":
         )
         group_metrics, group_test_metrics, group_max_runs_per_metric = (
             get_max_metrics_grouped(
-                run_groups, args.get_test_metrics, args.average_seeds
+                run_groups,
+                args.get_test_metrics,
+                args.average_seeds,
+                args.seed,
             )
         )
-        print(group_max_runs_per_metric)
+        # print(group_max_runs_per_metric)
         if args.json_filename:
             serialize_max_settings_per_group(
                 args.json_filename, group_max_runs_per_metric
