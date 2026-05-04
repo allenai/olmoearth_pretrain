@@ -19,6 +19,7 @@ from ..util import (
     get_window_metadata,
     write_single_metadata_row,
 )
+from .multitemporal_raster import _encode_chw, _to_ndarray
 
 START_TIME = datetime(2021, 1, 1, tzinfo=UTC)
 END_TIME = datetime(2022, 1, 1, tzinfo=UTC)
@@ -60,8 +61,10 @@ def convert_worldcereal(window: Window, olmoearth_path: UPath) -> None:
         window_dir = window.get_raster_dir(band, [band])
 
         ndarrays.append(
-            GEOTIFF_RASTER_FORMAT.decode_raster(
-                path=window_dir, projection=window.projection, bounds=window.bounds
+            _to_ndarray(
+                GEOTIFF_RASTER_FORMAT.decode_raster(
+                    path=window_dir, projection=window.projection, bounds=window.bounds
+                )
             )
         )
 
@@ -89,7 +92,8 @@ def convert_worldcereal(window: Window, olmoearth_path: UPath) -> None:
         band_set.get_resolution(),
         "tif",
     )
-    GEOTIFF_RASTER_FORMAT.encode_raster(
+    _encode_chw(
+        GEOTIFF_RASTER_FORMAT,
         path=dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,

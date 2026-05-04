@@ -204,11 +204,14 @@ def rasterize_openstreetmap(job: OpenStreetMapRasterJob) -> None:
             raise ValueError(f"cannot handle geometry type {geometry['type']}")
 
     # Upload the rasterized data as GeoTIFF.
+    from rslearn.utils.raster_array import RasterArray
+
+    raster = RasterArray(chw_array=array)
     GEOTIFF_RASTER_FORMAT.encode_raster(
         path=job.out_fname.parent,
         projection=job.projection,
         bounds=job.bounds,
-        array=array,
+        raster=raster,
         fname=job.out_fname.name,
     )
 

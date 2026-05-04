@@ -8,7 +8,7 @@ import numpy.typing as npt
 from rslearn.data_sources import Item
 from rslearn.dataset import Window
 from rslearn.utils.geometry import PixelBounds, Projection
-from rslearn.utils.raster_format import GeotiffRasterFormat
+from rslearn.utils.raster_format import GeotiffRasterFormat, RasterArray
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import BandSet, ModalitySpec, TimeSpan
@@ -21,6 +21,38 @@ from ..util import (
     get_window_metadata,
     write_metadata_rows,
 )
+
+
+def _to_ndarray(raster: RasterArray | npt.NDArray) -> npt.NDArray:
+    """Extract a (C, H, W) ndarray from a RasterArray or pass through raw arrays.
+
+    Takes only the first timestep per group — within each period the passes are
+    already sorted by cloud cover, so index 0 is the best observation.
+    """
+    if isinstance(raster, RasterArray):
+        arr = raster.array  # (C, T, H, W)
+        if arr.ndim == 4:
+            return arr[:, 0, :, :]
+        return arr
+    return raster
+
+
+def _encode_chw(
+    fmt: GeotiffRasterFormat,
+    path: UPath,
+    projection: Projection,
+    bounds: PixelBounds,
+    array: npt.NDArray,
+    fname: str,
+) -> None:
+    """Encode a (C, H, W) ndarray via GeotiffRasterFormat."""
+    fmt.encode_raster(
+        path=path,
+        projection=projection,
+        bounds=bounds,
+        raster=RasterArray(chw_array=array),
+        fname=fname,
+    )
 
 PIXELS_PER_TILE = 256
 EPSILON = 1e-6
@@ -160,8 +192,10 @@ def convert_freq(
                 window.bounds,
                 adjusted_bounds,
             )
-            image = GEOTIFF_RASTER_FORMAT.decode_raster(
-                raster_dir, adjusted_projection, adjusted_bounds
+            image = _to_ndarray(
+                GEOTIFF_RASTER_FORMAT.decode_raster(
+                    raster_dir, adjusted_projection, adjusted_bounds
+                )
             )
             expected_image_size = band_set.get_expected_image_size(
                 window_metadata.get_resolution_factor(),
@@ -180,10 +214,6 @@ def convert_freq(
         if len(cur_images) < len(modality.band_sets):
             continue
 
-        # Sometimes the images are blank because the window actually does not intersect
-        # the raster. This is due to raster geometry information being too coarse in
-        # some data sources. Here we skip those rasters so they don't get included with
-        # this example in the OlmoEarth Pretrain dataset.
         all_images_blank = all(image.max() == 0 for image in cur_images.values())
         if all_images_blank:
             continue
@@ -194,7 +224,6 @@ def convert_freq(
 
     if len(timestamps) > 0:
         for band_set, band_set_images in images.items():
-            # Compute bounds of this raster adjusted for the resolution.
             adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
                 modality, band_set, window.projection, window.bounds
             )
@@ -208,7 +237,8 @@ def convert_freq(
                 band_set.get_resolution(),
                 "tif",
             )
-            GEOTIFF_RASTER_FORMAT.encode_raster(
+            _encode_chw(
+                GEOTIFF_RASTER_FORMAT,
                 path=dst_fname.parent,
                 projection=adjusted_projection,
                 bounds=adjusted_bounds,
@@ -283,8 +313,10 @@ def convert_monthly(
             if not raster_dir.exists():
                 break
 
-            image = GEOTIFF_RASTER_FORMAT.decode_raster(
-                raster_dir, adjusted_projection, adjusted_bounds
+            image = _to_ndarray(
+                GEOTIFF_RASTER_FORMAT.decode_raster(
+                    raster_dir, adjusted_projection, adjusted_bounds
+                )
             )
             expected_image_size = band_set.get_expected_image_size(
                 modality.tile_resolution_factor,
@@ -303,10 +335,6 @@ def convert_monthly(
         if len(cur_images) < len(modality.band_sets):
             continue
 
-        # Sometimes the images are blank because the window actually does not intersect
-        # the raster. This is due to raster geometry information being too coarse in
-        # some data sources. Here we skip those rasters so they don't get included with
-        # this example in the OlmoEarth Pretrain dataset.
         all_images_blank = all(image.max() == 0 for image in cur_images.values())
         if all_images_blank:
             continue
@@ -317,7 +345,6 @@ def convert_monthly(
 
     if len(images[modality.band_sets[0]]) > 0:
         for band_set, band_set_images in images.items():
-            # Compute bounds of this raster adjusted for the resolution.
             adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
                 modality, band_set, window.projection, window.bounds
             )
@@ -331,7 +358,8 @@ def convert_monthly(
                 band_set.get_resolution(),
                 "tif",
             )
-            GEOTIFF_RASTER_FORMAT.encode_raster(
+            _encode_chw(
+                GEOTIFF_RASTER_FORMAT,
                 path=dst_fname.parent,
                 projection=adjusted_projection,
                 bounds=adjusted_bounds,
@@ -395,11 +423,7 @@ def convert_temporal_stack(
     }
     time_ranges: list[tuple[str, str]] = []
 
-    geotiff_fmt = GeotiffRasterFormat(block_size=32, always_enable_tiling=True)
-
     for group_idx in range(num_groups):
-        # Derive time range for this group from items.json group_time_ranges,
-        # falling back to item geometry if not available.
         if layer_data.group_time_ranges and layer_data.group_time_ranges[group_idx]:
             start_time = layer_data.group_time_ranges[group_idx][0]
             end_time = layer_data.group_time_ranges[group_idx][1]
@@ -427,20 +451,17 @@ def convert_temporal_stack(
                     f"raster dir {raster_dir} missing for {layer_name} group {group_idx}"
                 )
 
-            raster_array = geotiff_fmt.decode_raster(
-                raster_dir, adjusted_projection, adjusted_bounds
+            image = _to_ndarray(
+                GEOTIFF_RASTER_FORMAT.decode_raster(
+                    raster_dir, adjusted_projection, adjusted_bounds
+                )
             )
-            # RasterArray has shape (C, T, H, W); squeeze T for per-period mosaics.
-            image = raster_array.array
-            if image.ndim == 4 and image.shape[1] == 1:
-                image = image[:, 0, :, :]  # (C, H, W)
 
             expected_size = band_set.get_expected_image_size(
                 modality.tile_resolution_factor,
                 window_metadata.get_tile_size(),
             )
-            h_idx, w_idx = (-2, -1)
-            if image.shape[h_idx] != expected_size or image.shape[w_idx] != expected_size:
+            if image.shape[-2] != expected_size or image.shape[-1] != expected_size:
                 raise ValueError(
                     f"expected image size {expected_size} but got shape {image.shape}"
                 )
@@ -475,7 +496,8 @@ def convert_temporal_stack(
             band_set.get_resolution(),
             "tif",
         )
-        GEOTIFF_RASTER_FORMAT.encode_raster(
+        _encode_chw(
+            GEOTIFF_RASTER_FORMAT,
             path=dst_fname.parent,
             projection=adjusted_projection,
             bounds=adjusted_bounds,

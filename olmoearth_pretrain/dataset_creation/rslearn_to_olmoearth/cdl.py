@@ -18,6 +18,7 @@ from ..util import (
     get_window_metadata,
     write_single_metadata_row,
 )
+from .multitemporal_raster import _encode_chw, _to_ndarray
 
 # Layer name in the input rslearn dataset.
 LAYER_NAME = "cdl"
@@ -47,11 +48,12 @@ def convert_cdl(window: Window, olmoearth_path: UPath) -> None:
     assert len(Modality.CDL.band_sets) == 1
     band_set = Modality.CDL.band_sets[0]
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
-    image = GEOTIFF_RASTER_FORMAT.decode_raster(
-        raster_dir, window.projection, window.bounds
+    image = _to_ndarray(
+        GEOTIFF_RASTER_FORMAT.decode_raster(
+            raster_dir, window.projection, window.bounds
+        )
     )
 
-    # Skip if there are any background/nodata.
     if image.min() == 0:
         return
 
@@ -63,7 +65,8 @@ def convert_cdl(window: Window, olmoearth_path: UPath) -> None:
         band_set.get_resolution(),
         "tif",
     )
-    GEOTIFF_RASTER_FORMAT.encode_raster(
+    _encode_chw(
+        GEOTIFF_RASTER_FORMAT,
         path=dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,

@@ -18,6 +18,7 @@ from ..util import (
     get_window_metadata,
     write_single_metadata_row,
 )
+from .multitemporal_raster import _encode_chw, _to_ndarray
 
 START_TIME = datetime(2021, 1, 1, tzinfo=UTC)
 END_TIME = datetime(2022, 1, 1, tzinfo=UTC)
@@ -41,8 +42,10 @@ def convert_worldcover(window: Window, olmoearth_path: UPath) -> None:
     assert len(Modality.WORLDCOVER.band_sets) == 1
     band_set = Modality.WORLDCOVER.band_sets[0]
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
-    image = GEOTIFF_RASTER_FORMAT.decode_raster(
-        raster_dir, window.projection, window.bounds
+    image = _to_ndarray(
+        GEOTIFF_RASTER_FORMAT.decode_raster(
+            raster_dir, window.projection, window.bounds
+        )
     )
     dst_fname = get_modality_fname(
         olmoearth_path,
@@ -52,7 +55,8 @@ def convert_worldcover(window: Window, olmoearth_path: UPath) -> None:
         band_set.get_resolution(),
         "tif",
     )
-    GEOTIFF_RASTER_FORMAT.encode_raster(
+    _encode_chw(
+        GEOTIFF_RASTER_FORMAT,
         path=dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,
