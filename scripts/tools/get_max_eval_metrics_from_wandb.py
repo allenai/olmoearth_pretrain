@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import wandb
 
+from olmoearth_pretrain.evals.datasets.configs import TaskType, dataset_to_config
 from olmoearth_pretrain.evals.models import (
     MODELS_WITH_MULTIPLE_SIZES,
     BaselineModelName,
@@ -18,6 +19,26 @@ from olmoearth_pretrain.internal.all_evals import EVAL_TASKS, FT_EVAL_TASKS
 from olmoearth_pretrain.train.callbacks.evaluator_callback import EvalMode
 
 WANDB_ENTITY = "eai-ai2"
+
+# Extra eval task names defined in ../olmoearth_plus_cropharvest (CROPHARVEST_EVAL_TASKS,
+# BREIZHCROPS_EVAL_TASKS, and OLD_NANDI_AWF_EVAL_TASKS in olmoearth_plus_cropharvest/run_evals.py).
+# Hardcoded so this script can surface them without importing the sibling repo.
+EXTRA_EVAL_TASKS = [
+    "cropharvest_Togo_12_sentinel2",
+    "cropharvest_Togo_12_sentinel1",
+    "cropharvest_Peoples_Republic_of_China_6",
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1",
+    "cropharvest_Togo_12_sentinel2_sentinel1",
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2",
+    "breizhcrops",
+    # Legacy per-modality nandi/awf tasks (pre-PR-506; gated by OLD_NANDI_AWF=1).
+    "nandi_sentinel2",
+    "nandi_sentinel1",
+    "nandi_landsat",
+    "awf_sentinel2",
+    "awf_sentinel1",
+    "awf_landsat",
+]
 
 # Dataset partitions to consider (excluding default)
 PARTITIONS = [
@@ -167,19 +188,151 @@ def _normalize_eval_key(key: str) -> str:
     return key
 
 
+def _infer_default_primary_metric(dataset_name: str) -> str | None:
+    """Return the lowercase metric key the eval pipeline uses as primary by default.
+
+    The eval pipeline writes the primary metric to bare `eval/{task}` and only the
+    *non-primary* metrics to `eval_other/{task}/{name}`. For tasks that don't set
+    `primary_metric` explicitly (e.g. CropHarvest, breizhcrops), we have to infer
+    the default to expose the bare value under an explicit sub-metric key.
+    """
+    # cropharvest_* is registered in olmoearth_plus_cropharvest/run_evals.py at
+    # train time and not in this script's process; all cropharvest tasks are
+    # binary classification (primary defaults to accuracy).
+    if dataset_name.startswith("cropharvest"):
+        return "accuracy"
+    try:
+        cfg = dataset_to_config(dataset_name)
+    except (KeyError, ValueError):
+        return None
+    if cfg.task_type == TaskType.CLASSIFICATION:
+        return "f1" if cfg.is_multilabel else "accuracy"
+    if cfg.task_type == TaskType.SEGMENTATION:
+        return "miou"
+    return None
+
+
+def _strip_seed_from_name(run_name: str) -> str:
+    """Remove the `_seed{N}` segment from a run name.
+
+    e.g. "..._step667200_seed1234_FT_lr0.001" -> "..._step667200_FT_lr0.001"
+    """
+    return re.sub(r"_seed\d+", "", run_name)
+
+
+class _AveragedSummary:
+    """Dict-like proxy that returns mean values across a list of wandb runs.
+
+    Only keys that are numeric in every underlying run are exposed; partial
+    coverage is dropped (with a warning) so that averages aren't silently
+    computed over a subset of seeds.
+    """
+
+    def __init__(self, runs: list[wandb.Run]):
+        key_to_values: dict[str, list[float]] = defaultdict(list)
+        for run in runs:
+            for k, v in run.summary.items():
+                if isinstance(v, bool):
+                    continue
+                if isinstance(v, int | float):
+                    key_to_values[k].append(float(v))
+        self._averaged: dict[str, float] = {}
+        for k, vs in key_to_values.items():
+            if len(vs) == len(runs):
+                self._averaged[k] = sum(vs) / len(vs)
+            elif k.startswith("eval/") or k.startswith("eval_other/"):
+                print(
+                    f"Skipping {k} from seed averaging: only {len(vs)}/{len(runs)} runs reported it"
+                )
+
+    def items(self):
+        return self._averaged.items()
+
+    def get(self, key, default=None):
+        return self._averaged.get(key, default)
+
+
+class _SeedAveragedRun:
+    """Run-like proxy for a list of wandb runs that differ only by seed.
+
+    Exposes the attributes used by `get_max_metrics_grouped` and
+    `serialize_max_settings_per_group`: `.name`, `.id`, `.config`, `.summary`.
+    `summary` returns seed-averaged values; `config` is taken from the first
+    run (seeds share config by construction).
+    """
+
+    def __init__(self, runs: list[wandb.Run], stripped_name: str):
+        self._runs = runs
+        self.name = stripped_name
+        self.id = "+".join(r.id for r in runs)
+        self.config = runs[0].config
+        self.summary = _AveragedSummary(runs)
+
+
+def _average_runs_by_seed(runs: list) -> list:
+    """Collapse runs whose names match after stripping `_seed{N}`.
+
+    collapse into a single seed-averaged virtual run. Singletons are returned unchanged.
+    """
+    seed_groups: dict[str, list] = defaultdict(list)
+    for run in runs:
+        seed_groups[_strip_seed_from_name(run.name)].append(run)
+
+    out: list = []
+    for stripped_name, group in seed_groups.items():
+        if len(group) == 1:
+            out.append(group[0])
+        else:
+            print(
+                f"Averaging {len(group)} seeds -> {stripped_name}: "
+                f"{[r.name for r in group]}"
+            )
+            out.append(_SeedAveragedRun(group, stripped_name))
+    return out
+
+
+def _filter_runs_by_seed(runs: list, seed: int) -> list:
+    """Keep only runs whose names contain `_seed{seed}` (exact match on the integer)."""
+    out: list = []
+    for run in runs:
+        m = re.search(r"_seed(\d+)", run.name)
+        if m is not None and int(m.group(1)) == seed:
+            out.append(run)
+        else:
+            print(f"Skipping {run.name}: does not match _seed{seed}")
+    return out
+
+
 def get_max_metrics_grouped(
     grouped_runs: dict[str, list[wandb.Run]],
     get_test_metrics: bool = False,
+    average_seeds: bool = False,
+    seed: int | None = None,
 ) -> tuple[
     dict[str, dict[str, float]],
     dict[str, dict[str, float]],
     dict[str, dict[str, wandb.Run]],
 ]:
-    """Get max metrics for each group."""
+    """Get max metrics for each group.
+
+    If `average_seeds` is set, runs within each group that share a name after
+    stripping `_seed{N}` are first averaged together (per metric); the per-group
+    max is then taken across these seed-averaged virtual runs.
+
+    If `seed` is set, runs are first filtered to only those whose names contain
+    `_seed{seed}`; runs without a matching seed segment are dropped.
+    """
+    if seed is not None and average_seeds:
+        raise ValueError("--seed and --average-seeds are mutually exclusive")
+
     # Get max metrics for each group
     group_metrics = {}
     group_max_runs_per_metric = {}
     for group_name, runs in grouped_runs.items():
+        if seed is not None:
+            runs = _filter_runs_by_seed(runs, seed)
+        if average_seeds:
+            runs = _average_runs_by_seed(runs)
         print(f"\nProcessing group: {group_name} ({len(runs)} runs)")
         #  Get the run that has test metrics with the highest validation score for each metric
         metrics = {}
@@ -214,10 +367,17 @@ def get_max_metrics_grouped(
                     )
                     pm = task_config_for_primary.get("primary_metric", None)
                     if pm is not None:
-                        # Also store as eval/{task}/{primary_metric} for consistent sub-metric columns.
-                        # The config stores the enum name (e.g. "MICRO_F1") but metric
+                        # Config stores the enum name (e.g. "MICRO_F1") but metric
                         # keys use the enum value (e.g. "micro_f1"), so lowercase it.
-                        additional_key = f"{normalized_key}/{pm.lower()}"
+                        primary_metric_name = pm.lower()
+                    else:
+                        # No explicit override: infer the default for the task type
+                        # so the bare value (e.g. accuracy for binary classification)
+                        # is exposed under its explicit metric name alongside f1.
+                        dataset = task_config_for_primary.get("dataset", task_name)
+                        primary_metric_name = _infer_default_primary_metric(dataset)
+                    if primary_metric_name is not None:
+                        additional_key = f"{normalized_key}/{primary_metric_name}"
 
                 # Ensure the run has test metrics (check both namespaces).
                 # For post-PR#504 runs, the primary test metric is at eval/test/{task}
@@ -301,9 +461,9 @@ def get_max_metrics_grouped(
                         f"No test metric found for run {run.name} for metric {metric}"
                     )
                     continue
-                print(
-                    f"Found test metric {test_metric_key} for run {run.name} with value {value}"
-                )
+                # print(
+                #     f"Found test metric {test_metric_key} for run {run.name} with value {value}"
+                # )
                 test_metrics[test_metric_key] = value
             grouped_test_metrics[group_name] = test_metrics
     return group_metrics, grouped_test_metrics, group_max_runs_per_metric
@@ -511,6 +671,19 @@ if __name__ == "__main__":
         help="Keep runs with different steps as separate groups instead of collapsing them by prefix before '_step'.",
     )
     parser.add_argument(
+        "--average-seeds",
+        action="store_true",
+        help="Within each group, average metrics across runs that share a name "
+        "after stripping `_seed{N}` (e.g., for averaging finetuning runs across seeds).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Only consider runs whose names contain `_seed{N}` matching this value; "
+        "runs without a matching seed segment are dropped. Mutually exclusive with --average-seeds.",
+    )
+    parser.add_argument(
         "--json_filename",
         type=str,
         default=None,
@@ -521,6 +694,7 @@ if __name__ == "__main__":
     all_metrics = (
         list(FT_EVAL_TASKS.keys()) if args.finetune else list(EVAL_TASKS.keys())
     )
+    all_metrics.extend(EXTRA_EVAL_TASKS)
 
     if args.per_partition:
         if not args.run_prefix:
@@ -577,9 +751,14 @@ if __name__ == "__main__":
             args.keep_steps_separate,
         )
         group_metrics, group_test_metrics, group_max_runs_per_metric = (
-            get_max_metrics_grouped(run_groups, args.get_test_metrics)
+            get_max_metrics_grouped(
+                run_groups,
+                args.get_test_metrics,
+                args.average_seeds,
+                args.seed,
+            )
         )
-        print(group_max_runs_per_metric)
+        # print(group_max_runs_per_metric)
         if args.json_filename:
             serialize_max_settings_per_group(
                 args.json_filename, group_max_runs_per_metric
