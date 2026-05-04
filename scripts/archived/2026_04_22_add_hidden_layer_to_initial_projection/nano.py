@@ -1,4 +1,4 @@
-"""Tiny model with hidden layer in the initial projection layer."""
+"""Nano model with hidden layer in the initial projection layer."""
 
 import logging
 
