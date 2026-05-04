@@ -24,7 +24,7 @@ from olmoearth_pretrain.internal.experiment import (
 )
 
 logger = logging.getLogger(__name__)
-BUDGET = "ai2/es-platform"
+BUDGET = "ai2/atec-olmoearth"
 WORKSPACE = "ai2/earth-systems"
 
 DEFAULT_OLMOEARTH_PRETRAIN_WEKA_BUCKET = BeakerWekaBucket(
