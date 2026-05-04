@@ -24,6 +24,7 @@ from olmoearth_pretrain.data.constants import (
 )
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,42 @@ DEFAULT_MASKING_CONFIG = {
         Modality.WORLDCEREAL.name,
     ],
 }
+
+# Single bandset tokenization configs (from single_bandset_band_dropout experiments)
+S2_SINGLE_BANDSET = ModalityTokenization(
+    band_groups=[
+        [
+            "B02",
+            "B03",
+            "B04",
+            "B08",
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12",
+            "B01",
+            "B09",
+        ],
+    ]
+)
+
+LANDSAT_SINGLE_BANDSET = ModalityTokenization(
+    band_groups=[
+        ["B8", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"],
+    ]
+)
+
+
+def build_single_bandset_tokenization_config() -> TokenizationConfig:
+    """Build a TokenizationConfig with single bandset for S2 and Landsat."""
+    return TokenizationConfig(
+        overrides={
+            "sentinel2_l2a": S2_SINGLE_BANDSET,
+            "landsat": LANDSAT_SINGLE_BANDSET,
+        }
+    )
 
 
 @dataclass
@@ -252,6 +289,7 @@ def estimate_token_ratios(
     missing_prob: float = 0.1,
     seed: int = 42,
     track_per_modality: bool = False,
+    tokenization_config: TokenizationConfig | None = None,
 ) -> list[TokenRatioResult]:
     """Estimate token encode/decode ratios by sampling many configurations.
 
@@ -266,6 +304,7 @@ def estimate_token_ratios(
         missing_prob: Probability of a modality/timestep being missing.
         seed: Random seed.
         track_per_modality: Whether to track per-modality statistics.
+        tokenization_config: tokenization_config
 
     Returns:
         List of TokenRatioResult for each sample.
@@ -279,7 +318,10 @@ def estimate_token_ratios(
 
     # Build the masking strategy
     config_copy = masking_config.copy()
-    masking_strategy = MaskingConfig(strategy_config=config_copy).build()
+    masking_strategy = MaskingConfig(
+        strategy_config=config_copy,
+        tokenization_config=tokenization_config,
+    ).build()
 
     for _ in tqdm(range(num_samples), desc="Sampling"):
         # Sample patch_size and hw_p
@@ -291,9 +333,11 @@ def estimate_token_ratios(
         # Estimate max_t based on token budget (simplified version)
         # This mimics OlmoEarthSample._get_max_t_within_token_budget
         tokens_per_timestep = estimate_tokens_per_timestep(
-            training_modalities, sampled_hw_p
+            training_modalities, sampled_hw_p, tokenization_config
         )
-        static_tokens = estimate_static_tokens(training_modalities, sampled_hw_p)
+        static_tokens = estimate_static_tokens(
+            training_modalities, sampled_hw_p, tokenization_config
+        )
         available_budget = token_budget - static_tokens
         max_t = (
             max(1, int(available_budget / tokens_per_timestep))
@@ -301,7 +345,6 @@ def estimate_token_ratios(
             else 12
         )
         max_t = min(max_t, 12)  # Cap at MAX_SEQUENCE_LENGTH
-
         # Create synthetic sample
         sample = create_synthetic_sample(
             training_modalities=training_modalities,
@@ -336,32 +379,50 @@ def estimate_token_ratios(
     return results
 
 
+def _get_num_bandsets(
+    modality_name: str,
+    modality_spec: ModalitySpec,
+    tokenization_config: TokenizationConfig | None,
+) -> int:
+    """Get number of bandsets, respecting tokenization config overrides."""
+    if tokenization_config is not None:
+        return tokenization_config.get_num_bandsets(modality_name)
+    return modality_spec.num_band_sets
+
+
 def estimate_tokens_per_timestep(
     training_modalities: list[str],
     sampled_hw_p: int,
+    tokenization_config: TokenizationConfig | None = None,
 ) -> int:
     """Estimate tokens per timestep for spatiotemporal modalities."""
     tokens = 0
     for modality_name in training_modalities:
         modality_spec = Modality.get(modality_name)
         if modality_spec.is_spacetime_varying:
-            # tokens = h_p * w_p * num_bandsets
-            tokens += sampled_hw_p * sampled_hw_p * modality_spec.num_band_sets
+            num_bandsets = _get_num_bandsets(
+                modality_name, modality_spec, tokenization_config
+            )
+            tokens += sampled_hw_p * sampled_hw_p * num_bandsets
     return tokens
 
 
 def estimate_static_tokens(
     training_modalities: list[str],
     sampled_hw_p: int,
+    tokenization_config: TokenizationConfig | None = None,
 ) -> int:
     """Estimate tokens for static/space-only modalities."""
     tokens = 0
     for modality_name in training_modalities:
         modality_spec = Modality.get(modality_name)
+        num_bandsets = _get_num_bandsets(
+            modality_name, modality_spec, tokenization_config
+        )
         if modality_spec.is_space_only_varying:
-            tokens += sampled_hw_p * sampled_hw_p * modality_spec.num_band_sets
+            tokens += sampled_hw_p * sampled_hw_p * num_bandsets
         elif modality_spec.is_static_in_space_and_time:
-            tokens += modality_spec.num_band_sets
+            tokens += num_bandsets
     return tokens
 
 
@@ -572,7 +633,7 @@ def main() -> None:
     parser.add_argument(
         "--masking_type",
         type=str,
-        default="modality_cross_random",
+        default="random_time_with_decode",
         help="Type of masking strategy",
     )
     parser.add_argument(
@@ -591,6 +652,11 @@ def main() -> None:
         "--per_modality",
         action="store_true",
         help="Show per-modality breakdown statistics",
+    )
+    parser.add_argument(
+        "--single_bandset",
+        action="store_true",
+        help="Use single bandset tokenization for S2 and Landsat",
     )
     args = parser.parse_args()
 
@@ -614,7 +680,7 @@ def main() -> None:
             Modality.CDL.name,
             Modality.WORLDCEREAL.name,
         ]
-    elif args.masking_type == "random_with_decode":
+    elif args.masking_type in ("random_with_decode", "random_time_with_decode"):
         masking_config["only_decode_modalities"] = [
             Modality.WORLDCOVER.name,
             Modality.SRTM.name,
@@ -624,8 +690,15 @@ def main() -> None:
             Modality.WORLDCEREAL.name,
         ]
 
+    # Build tokenization config
+    tokenization_config = None
+    if args.single_bandset:
+        tokenization_config = build_single_bandset_tokenization_config()
+
     print(f"Running with masking config: {masking_config}")
     print(f"Training modalities: {DEFAULT_TRAINING_MODALITIES}")
+    if tokenization_config is not None:
+        print(f"Tokenization overrides: {list(tokenization_config.overrides.keys())}")
     print(f"Sampling {args.num_samples} configurations...")
 
     results = estimate_token_ratios(
@@ -639,6 +712,7 @@ def main() -> None:
         missing_prob=args.missing_prob,
         seed=args.seed,
         track_per_modality=args.per_modality,
+        tokenization_config=tokenization_config,
     )
 
     print_statistics(results, show_per_modality=args.per_modality)
