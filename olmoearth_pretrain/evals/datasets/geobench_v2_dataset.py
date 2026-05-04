@@ -37,9 +37,7 @@ def _load_datamodule_classes() -> None:
         GeoBenchPASTISDataModule,
         GeoBenchSo2SatDataModule,
         GeoBenchSpaceNet2DataModule,
-        GeoBenchSpaceNet6DataModule,
         GeoBenchSpaceNet7DataModule,
-        GeoBenchSpaceNet8DataModule,
         GeoBenchSubstationDataModule,
         GeoBenchTreeSatAIDataModule,
     )
@@ -61,9 +59,7 @@ def _load_datamodule_classes() -> None:
             "pastis": GeoBenchPASTISDataModule,
             "so2sat": GeoBenchSo2SatDataModule,
             "spacenet2": GeoBenchSpaceNet2DataModule,
-            "spacenet6": GeoBenchSpaceNet6DataModule,
             "spacenet7": GeoBenchSpaceNet7DataModule,
-            "spacenet8": GeoBenchSpaceNet8DataModule,
             "substation": GeoBenchSubstationDataModule,
             "treesatai": GeoBenchTreeSatAIDataModule,
         }
@@ -248,23 +244,29 @@ def _sample_to_olmoearth(
         sample_dict["timestamps"] = _timestamps(t, device)
         return OlmoEarthSample(**sample_dict)
 
-    if slug == "spacenet8" and "image" in sample:
+    # SpaceNet7 returns a single C×H×W "image" (PlanetScope), not image_* keys. The generic
+    # 3-channel "image" branch below maps to naip, which then mismatches gb2_spacenet7's
+    # SENTINEL2_L2A input_modalities and yields an empty modality list in the ViT.
+    if slug == "spacenet7" and "image" in sample:
         x = sample["image"].float()
-        if x.shape[0] == 3:
-            x = torch.cat(
-                [x, torch.zeros(1, *x.shape[1:], device=x.device, dtype=x.dtype)], dim=0
+        xb = x.unsqueeze(0) if x.dim() == 3 else x
+        if xb.dim() == 3:
+            xb = xb.unsqueeze(0)
+        if isinstance(band_order, (list, tuple)):
+            src = [str(b) for b in band_order]
+        else:
+            src = [str(i) for i in range(xb.shape[1])]
+        if len(src) != xb.shape[1]:
+            raise ValueError(
+                f"spacenet7: band_order length {len(src)} != image channels {xb.shape[1]}"
             )
-        elif x.shape[0] > 4:
-            x = x[:4]
-        elif x.shape[0] < 3:
-            pad = torch.zeros(3 - x.shape[0], *x.shape[1:], device=x.device, dtype=x.dtype)
-            x = torch.cat([x, pad], dim=0)
-            x = torch.cat(
-                [x, torch.zeros(1, *x.shape[1:], device=x.device, dtype=x.dtype)], dim=0
-            )
-        hwtc = _bchw_to_hwtc(x)
+        rgbn_to_s2 = {"red": "B04", "green": "B03", "blue": "B02", "nir": "B08"}
+        src_s2 = [rgbn_to_s2.get(s, s) for s in src]
+        s2_order = list(Modality.SENTINEL2_L2A.band_order)
+        x_perm = _permute_bchw(xb, src_s2, s2_order)
+        hwtc = _bchw_to_hwtc(x_perm[0])
         t = hwtc.shape[2]
-        sample_dict["naip"] = hwtc
+        sample_dict["sentinel2_l2a"] = hwtc
         sample_dict["timestamps"] = _timestamps(t, device)
         return OlmoEarthSample(**sample_dict)
 
@@ -439,9 +441,7 @@ def _sample_to_olmoearth(
             sample_dict["srtm"] = dem_hwtc
         return OlmoEarthSample(**sample_dict)
 
-    if slug.startswith("spacenet") and slug != "spacenet8" and any(
-        k.startswith("image_") for k in sample
-    ):
+    if slug.startswith("spacenet") and any(k.startswith("image_") for k in sample):
         x = _stack_image_keys(sample).unsqueeze(0)
         s2_order = list(Modality.SENTINEL2_L2A.band_order)
         n_out = len(s2_order)

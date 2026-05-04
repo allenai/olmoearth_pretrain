@@ -312,14 +312,6 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         height_width=512,
         supported_modalities=[Modality.SENTINEL2_L2A.name],
     ),
-    "gb2-spacenet6": EvalDatasetConfig(
-        task_type=TaskType.SEGMENTATION,
-        imputes=[],
-        num_classes=3,
-        is_multilabel=False,
-        height_width=450,
-        supported_modalities=[Modality.SENTINEL2_L2A.name],
-    ),
     "gb2-spacenet7": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
         imputes=[],
@@ -327,14 +319,6 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         is_multilabel=False,
         height_width=512,
         supported_modalities=[Modality.SENTINEL2_L2A.name],
-    ),
-    "gb2-spacenet8": EvalDatasetConfig(
-        task_type=TaskType.SEGMENTATION,
-        imputes=[],
-        num_classes=5,
-        is_multilabel=False,
-        height_width=512,
-        supported_modalities=[Modality.NAIP.name],
     ),
     "gb2-substation": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
