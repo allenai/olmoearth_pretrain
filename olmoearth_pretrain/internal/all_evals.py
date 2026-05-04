@@ -818,7 +818,8 @@ FT_EVAL_TASKS = {
     ),
     "gb2_burn_scars": DownstreamTaskConfig(
         dataset="gb2-burn_scars",
-        ft_batch_size=8,
+        ft_batch_size=2,
+        ft_grad_accum_steps=4,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
