@@ -60,7 +60,6 @@
         "init_args": {
           "harmonize": true,
           "index_cache_dir": "cache/sentinel2",
-          "modality": "L1C",
           "use_rtree_index": true
         },
         "query_config": {

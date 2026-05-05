@@ -14,7 +14,7 @@ import tqdm
 from rasterio.crs import CRS
 from rslearn.config import QueryConfig, SpaceMode
 from rslearn.const import WGS84_PROJECTION
-from rslearn.data_sources import DataSource, data_source_from_config
+from rslearn.data_sources import DataSource
 from rslearn.dataset import Dataset, Window
 from rslearn.utils.geometry import Projection, STGeometry
 from rslearn.utils.get_utm_ups_crs import get_utm_ups_projection
@@ -109,6 +109,7 @@ def create_window(ds_path: UPath, metadata: WindowMetadata) -> list[Window]:
     Returns:
         the new windows.
     """
+    storage = Dataset(ds_path).storage
     windows = []
     for resolution in WINDOW_RESOLUTIONS:
         # Only create windows at resolutions equal to or coarser than the provided one.
@@ -145,7 +146,7 @@ def create_window(ds_path: UPath, metadata: WindowMetadata) -> list[Window]:
 
         # Create the window.
         window = Window(
-            path=Window.get_window_root(ds_path, group, window_name),
+            storage=storage,
             group=group,
             name=window_name,
             projection=projection,
@@ -169,7 +170,7 @@ def get_naip_source(ds_path: UPath) -> DataSource:
         the data source.
     """
     dataset = Dataset(ds_path)
-    return data_source_from_config(dataset.layers["naip"], dataset.path)
+    return dataset.layers["naip"].instantiate_data_source(dataset.path)
 
 
 @functools.cache
@@ -183,7 +184,7 @@ def get_sentinel2_source(ds_path: UPath) -> DataSource:
         the data source.
     """
     dataset = Dataset(ds_path)
-    return data_source_from_config(dataset.layers["sentinel2_freq"], dataset.path)
+    return dataset.layers["sentinel2_freq"].instantiate_data_source(dataset.path)
 
 
 def get_highres_times(ds_path: UPath, tile: Tile) -> list[datetime]:
@@ -211,8 +212,8 @@ def get_highres_times(ds_path: UPath, tile: Tile) -> list[datetime]:
 
     timestamps = []
     for group in groups:
-        assert len(group) == 1
-        timestamps.append(group[0].geometry.time_range[0])
+        for item in group.items:
+            timestamps.append(item.geometry.time_range[0])
     return timestamps
 
 
@@ -243,8 +244,8 @@ def get_sentinel2_times(
 
     timestamps = []
     for group in groups:
-        assert len(group) == 1
-        timestamps.append(group[0].geometry.time_range[0])
+        for item in group.items:
+            timestamps.append(item.geometry.time_range[0])
     return timestamps
 
 
