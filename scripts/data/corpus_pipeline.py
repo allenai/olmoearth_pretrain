@@ -60,6 +60,28 @@ def _derive_olmoearth_dir(rslearn_dir: str) -> str:
     return rslearn_dir.replace("/dataset_creation/", "/dataset/")
 
 
+CANONICAL_SOURCE_DATA = (
+    "/weka/dfive-default/helios/dataset_creation/rslearn_dataset/source_data"
+)
+
+
+def _ensure_source_data(rslearn_dir: str) -> None:
+    """Symlink source_data/ subdirs (OSM, worldcover, etc.) into rslearn dir."""
+    import os
+    from pathlib import Path
+
+    src = Path(CANONICAL_SOURCE_DATA)
+    dst = Path(rslearn_dir) / "source_data"
+    dst.mkdir(parents=True, exist_ok=True)
+
+    for child in src.iterdir():
+        link = dst / child.name
+        if link.exists() or link.is_symlink():
+            continue
+        os.symlink(str(child), str(link))
+        logger.info(f"Symlinked {link} -> {child}")
+
+
 def _progress_dir(base_dir: str, step: str) -> UPath:
     return UPath(base_dir) / "progress" / step
 
@@ -121,6 +143,9 @@ def cmd_rslearn_worker(args: argparse.Namespace) -> None:
     # Ensure config.json exists in rslearn dir
     if args.rslearn_config:
         attach_dataset_config(rslearn_dir, args.rslearn_config, force=True)
+
+    # Symlink source_data/ (OSM pbf, worldcover, etc.) if not already present
+    _ensure_source_data(rslearn_dir)
 
     _write_progress(
         rslearn_dir, "rslearn", args.shard_id, "running", "creating windows"
