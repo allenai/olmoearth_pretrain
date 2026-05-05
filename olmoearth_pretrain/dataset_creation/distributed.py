@@ -126,6 +126,14 @@ def launch_beaker_jobs(
         config.num_nodes = 1
         config.preemptible = True
         config.retries = 2
+        # Replace --all-extras (which conflicts) with only what data workers need
+        config.setup_steps = [
+            s.replace(
+                "uv sync --locked --all-extras",
+                "uv sync --locked --extra dataset-creation",
+            )
+            for s in config.setup_steps
+        ]
 
         logger.info(f"Launching shard {sid}/{num_shards}: {' '.join(cmd)}")
         experiment_id = config.launch(torchrun=False, entrypoint="python")
