@@ -2,35 +2,36 @@
 
 Three independently launchable steps, each distributable across Beaker shards.
 
+Path convention:
+    rslearn data:   /weka/.../dataset_creation/studio_corpus
+    olmoearth data: /weka/.../dataset/studio_corpus  (auto-derived)
+
 Usage:
     # Step 1: Launch rslearn ingest across N shards
     python scripts/data/corpus_pipeline.py launch-rslearn \
         --corpus /weka/.../studio_corpus_lonlats.json \
-        --rslearn-dir /weka/.../studio_corpus_full/rslearn \
-        --rslearn-config /weka/.../rslearn_corpus_30/config.json \
-        --num-shards 100 --workers 16 --cluster ai2/jupiter
+        --rslearn-dir /weka/.../dataset_creation/studio_corpus \
+        --rslearn-config /weka/.../dataset_creation/studio_corpus/config.json \
+        --num-shards 100 --cluster ai2/jupiter
 
-    # Step 2: Launch convert across N shards
+    # Step 2: Launch convert (olmoearth-dir derived automatically)
     python scripts/data/corpus_pipeline.py launch-convert \
         --corpus /weka/.../studio_corpus_lonlats.json \
-        --rslearn-dir /weka/.../studio_corpus_full/rslearn \
-        --olmoearth-dir /weka/.../studio_corpus_full/olmoearth \
-        --num-shards 100 --workers 16 --cluster ai2/jupiter
+        --rslearn-dir /weka/.../dataset_creation/studio_corpus \
+        --num-shards 100 --cluster ai2/jupiter
 
     # Step 3a: Prepare H5 metadata (single machine)
     python scripts/data/corpus_pipeline.py prepare-h5 \
-        --olmoearth-dir /weka/.../studio_corpus_full/olmoearth
+        --rslearn-dir /weka/.../dataset_creation/studio_corpus
 
     # Step 3b: Launch H5 writing across N machines
     python scripts/data/corpus_pipeline.py launch-h5 \
-        --olmoearth-dir /weka/.../studio_corpus_full/olmoearth \
+        --h5py-dir /weka/.../dataset/studio_corpus/h5py_data_.../... \
         --num-h5-shards 4 --cluster ai2/jupiter
 
     # Check progress
     python scripts/data/corpus_pipeline.py status \
-        --corpus /weka/.../studio_corpus_lonlats.json \
-        --rslearn-dir /weka/.../studio_corpus_full/rslearn \
-        --olmoearth-dir /weka/.../studio_corpus_full/olmoearth
+        --rslearn-dir /weka/.../dataset_creation/studio_corpus
 """
 
 from __future__ import annotations
@@ -48,6 +49,15 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+def _derive_olmoearth_dir(rslearn_dir: str) -> str:
+    """Derive olmoearth dataset dir from rslearn dir.
+
+    Convention: dataset_creation/X -> dataset/X
+    e.g. /weka/.../dataset_creation/studio_corpus -> /weka/.../dataset/studio_corpus
+    """
+    return rslearn_dir.replace("/dataset_creation/", "/dataset/")
 
 
 def _progress_dir(base_dir: str, step: str) -> UPath:
@@ -182,6 +192,8 @@ def cmd_convert_worker(args: argparse.Namespace) -> None:
         _convert_window,
     )
 
+    args.olmoearth_dir = args.olmoearth_dir or _derive_olmoearth_dir(args.rslearn_dir)
+
     entries = load_corpus(args.corpus)
     if args.max_samples:
         entries = entries[: args.max_samples]
@@ -252,6 +264,10 @@ def cmd_prepare_h5(args: argparse.Namespace) -> None:
     from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5pyConfig
     from olmoearth_pretrain.dataset_creation.pipeline import MODALITIES_FOR_H5
 
+    if not args.olmoearth_dir:
+        if not args.rslearn_dir:
+            raise SystemExit("Must provide --olmoearth-dir or --rslearn-dir")
+        args.olmoearth_dir = _derive_olmoearth_dir(args.rslearn_dir)
     logger.info(f"prepare-h5: scanning {args.olmoearth_dir}")
     config = ConvertToH5pyConfig(
         tile_path=args.olmoearth_dir,
@@ -414,6 +430,9 @@ def cmd_launch_convert(args: argparse.Namespace) -> None:
     """Launch convert across Beaker shards."""
     from olmoearth_pretrain.dataset_creation.distributed import launch_beaker_jobs
 
+    olmoearth_dir = args.olmoearth_dir or _derive_olmoearth_dir(args.rslearn_dir)
+    logger.info(f"olmoearth output dir: {olmoearth_dir}")
+
     cmd_template = [
         "scripts/data/corpus_pipeline.py",
         "convert-worker",
@@ -422,7 +441,7 @@ def cmd_launch_convert(args: argparse.Namespace) -> None:
         "--rslearn-dir",
         args.rslearn_dir,
         "--olmoearth-dir",
-        args.olmoearth_dir,
+        olmoearth_dir,
         "--shard-id",
         "{shard_id}",
         "--num-shards",
@@ -501,6 +520,8 @@ def _print_shard_progress(progress: list[dict], step_name: str) -> None:
 def cmd_status(args: argparse.Namespace) -> None:
     """Report progress across all pipeline steps."""
     rslearn_dir = UPath(args.rslearn_dir) if args.rslearn_dir else None
+    if not args.olmoearth_dir and args.rslearn_dir:
+        args.olmoearth_dir = _derive_olmoearth_dir(args.rslearn_dir)
     olmoearth_dir = UPath(args.olmoearth_dir) if args.olmoearth_dir else None
 
     if args.corpus:
@@ -607,7 +628,7 @@ def main() -> None:
     p = subparsers.add_parser("launch-convert", help="Launch convert on Beaker")
     p.add_argument("--corpus", required=True)
     p.add_argument("--rslearn-dir", required=True)
-    p.add_argument("--olmoearth-dir", required=True)
+    p.add_argument("--olmoearth-dir", default=None, help="Output dir (default: derived from rslearn-dir)")
     p.add_argument("--num-shards", type=int, required=True)
     p.add_argument("--workers", type=int, default=16)
     p.add_argument("--cluster", default="ai2/jupiter")
@@ -619,7 +640,7 @@ def main() -> None:
     p = subparsers.add_parser("convert-worker", help="Run convert for one shard")
     p.add_argument("--corpus", required=True)
     p.add_argument("--rslearn-dir", required=True)
-    p.add_argument("--olmoearth-dir", required=True)
+    p.add_argument("--olmoearth-dir", default=None)
     p.add_argument("--shard-id", type=int, required=True)
     p.add_argument("--num-shards", type=int, required=True)
     p.add_argument("--workers", type=int, default=16)
@@ -629,7 +650,8 @@ def main() -> None:
 
     # -- prepare-h5 --
     p = subparsers.add_parser("prepare-h5", help="Prepare H5 metadata (single machine)")
-    p.add_argument("--olmoearth-dir", required=True)
+    p.add_argument("--rslearn-dir", default=None, help="Used to derive --olmoearth-dir if not set")
+    p.add_argument("--olmoearth-dir", default=None, help="Output dir (default: derived from rslearn-dir)")
     p.set_defaults(func=cmd_prepare_h5)
 
     # -- launch-h5 --
