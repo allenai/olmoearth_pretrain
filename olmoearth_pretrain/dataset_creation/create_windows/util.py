@@ -184,7 +184,7 @@ def get_sentinel2_source(ds_path: UPath) -> DataSource:
         the data source.
     """
     dataset = Dataset(ds_path)
-    return dataset.layers["sentinel2_freq"].instantiate_data_source(dataset.path)
+    return dataset.layers["sentinel2_l2a_freq"].instantiate_data_source(dataset.path)
 
 
 def get_highres_times(ds_path: UPath, tile: Tile) -> list[datetime]:
