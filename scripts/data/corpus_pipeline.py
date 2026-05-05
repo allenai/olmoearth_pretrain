@@ -99,6 +99,8 @@ def cmd_rslearn_worker(args: argparse.Namespace) -> None:
     from olmoearth_pretrain.dataset_creation.distributed import get_shard, load_corpus
 
     entries = load_corpus(args.corpus)
+    if args.max_samples:
+        entries = entries[: args.max_samples]
     shard = get_shard(entries, args.shard_id, args.num_shards)
     rslearn_dir = args.rslearn_dir
     logger.info(
@@ -143,6 +145,8 @@ def cmd_rslearn_worker(args: argparse.Namespace) -> None:
             "--workers",
             str(args.workers),
         ]
+        for layer in getattr(args, "disabled_layers", []):
+            cmd.extend(["--disabled-layers", layer])
         if step in ("ingest", "materialize"):
             cmd.extend(["--ignore-errors", "--retry-max-attempts", "3"])
 
@@ -179,6 +183,8 @@ def cmd_convert_worker(args: argparse.Namespace) -> None:
     )
 
     entries = load_corpus(args.corpus)
+    if args.max_samples:
+        entries = entries[: args.max_samples]
     shard = get_shard(entries, args.shard_id, args.num_shards)
     shard_names = set(shard.window_names)
     logger.info(
@@ -370,6 +376,8 @@ def cmd_launch_rslearn(args: argparse.Namespace) -> None:
     )
 
     entries = load_corpus(args.corpus)
+    if args.max_samples:
+        entries = entries[: args.max_samples]
     logger.info(f"Corpus: {len(entries)} samples, {args.num_shards} shards")
 
     cmd_template = [
@@ -388,6 +396,10 @@ def cmd_launch_rslearn(args: argparse.Namespace) -> None:
         "--workers",
         str(args.workers),
     ]
+    for layer in args.disabled_layers:
+        cmd_template.extend(["--disabled-layers", layer])
+    if args.max_samples:
+        cmd_template.extend(["--max-samples", str(args.max_samples)])
     launch_beaker_jobs(
         step_name="rslearn",
         worker_cmd_template=cmd_template,
@@ -416,6 +428,10 @@ def cmd_launch_convert(args: argparse.Namespace) -> None:
         "--workers",
         str(args.workers),
     ]
+    for layer in args.disabled_layers:
+        cmd_template.extend(["--disabled-layers", layer])
+    if args.max_samples:
+        cmd_template.extend(["--max-samples", str(args.max_samples)])
     launch_beaker_jobs(
         step_name="convert",
         worker_cmd_template=cmd_template,
@@ -565,6 +581,8 @@ def main() -> None:
     p.add_argument("--num-shards", type=int, required=True)
     p.add_argument("--workers", type=int, default=16)
     p.add_argument("--cluster", default="ai2/jupiter")
+    p.add_argument("--disabled-layers", nargs="*", default=[], help="rslearn layers to skip")
+    p.add_argument("--max-samples", type=int, default=None, help="Limit corpus to first N samples")
     p.set_defaults(func=cmd_launch_rslearn)
 
     # -- rslearn-worker --
@@ -575,6 +593,8 @@ def main() -> None:
     p.add_argument("--shard-id", type=int, required=True)
     p.add_argument("--num-shards", type=int, required=True)
     p.add_argument("--workers", type=int, default=16)
+    p.add_argument("--disabled-layers", nargs="*", default=[])
+    p.add_argument("--max-samples", type=int, default=None)
     p.set_defaults(func=cmd_rslearn_worker)
 
     # -- launch-convert --
@@ -585,6 +605,8 @@ def main() -> None:
     p.add_argument("--num-shards", type=int, required=True)
     p.add_argument("--workers", type=int, default=16)
     p.add_argument("--cluster", default="ai2/jupiter")
+    p.add_argument("--disabled-layers", nargs="*", default=[])
+    p.add_argument("--max-samples", type=int, default=None)
     p.set_defaults(func=cmd_launch_convert)
 
     # -- convert-worker --
@@ -595,6 +617,8 @@ def main() -> None:
     p.add_argument("--shard-id", type=int, required=True)
     p.add_argument("--num-shards", type=int, required=True)
     p.add_argument("--workers", type=int, default=16)
+    p.add_argument("--disabled-layers", nargs="*", default=[])
+    p.add_argument("--max-samples", type=int, default=None)
     p.set_defaults(func=cmd_convert_worker)
 
     # -- prepare-h5 --
