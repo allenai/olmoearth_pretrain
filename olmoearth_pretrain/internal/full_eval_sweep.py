@@ -515,6 +515,10 @@ def _get_pooling_type_str(pooling_type: str) -> str:
 
 
 LAUNCH_OVERRIDES = "--launch.priority=high --launch.num_gpus=1 --launch.task_name=eval"
+# Overwrite the max duration to enable eval of the last step of the checkpoint
+MAX_DURATION_OVERRIDE = (
+    "--trainer.max_duration.value=10000000 --trainer.max_duration.unit=steps"
+)
 
 # Finished checkpoints still use the training max_duration; without extending it,
 # trainer.fit() exits immediately and eval_on_startup callbacks never run. Same values
@@ -995,6 +999,8 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             cmd += select_best_val_args()
             commands_to_run_new.append(cmd)
         commands_to_run = commands_to_run_new
+
+    commands_to_run = [f"{cmd} {MAX_DURATION_OVERRIDE}" for cmd in commands_to_run]
 
     # Filter out skipped tasks if task-skip-names is provided
     if args.task_skip_names:

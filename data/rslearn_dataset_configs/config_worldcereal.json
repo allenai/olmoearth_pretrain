@@ -7,9 +7,7 @@
             "tc-annual-temporarycrops-classification"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            255.0
-          ]
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
@@ -31,9 +29,7 @@
             "tc-maize-main-irrigation-classification"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            255.0
-          ]
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
@@ -55,9 +51,7 @@
             "tc-maize-main-maize-classification"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            255.0
-          ]
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
@@ -79,9 +73,7 @@
             "tc-maize-second-irrigation-classification"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            255.0
-          ]
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
@@ -103,9 +95,7 @@
             "tc-maize-second-maize-classification"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            255.0
-          ]
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
@@ -127,9 +117,7 @@
             "tc-springcereals-springcereals-classification"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            255.0
-          ]
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
@@ -151,9 +139,7 @@
             "tc-wintercereals-irrigation-classification"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            255.0
-          ]
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
@@ -175,9 +161,7 @@
             "tc-wintercereals-wintercereals-classification"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            255.0
-          ]
+          "nodata_value": 255.0
         }
       ],
       "data_source": {

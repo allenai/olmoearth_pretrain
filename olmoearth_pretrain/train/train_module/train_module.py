@@ -219,6 +219,16 @@ class OlmoEarthTrainModule(TrainModule):
 
         self.model = model
 
+        # Band dropout is disabled by default in the encoder so it never activates
+        # during fine-tuning. We enable it here since the train module is only
+        # instantiated during pre-training; note that, for LatentMIM/Galileo, this
+        # happens after the target encoder was deepcopied from the online encoder,
+        # so it stays off for the target encoder which is correct.
+        if hasattr(self.model, "encoder") and hasattr(
+            self.model.encoder, "enable_band_dropout"
+        ):
+            self.model.encoder.enable_band_dropout()
+
         self.transform = transform_config.build()
         if hasattr(self.model, "encoder"):
             logger.info(
