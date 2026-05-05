@@ -795,7 +795,7 @@ FT_EVAL_TASKS = {
     # GeoBench v2 (same ``dataset=`` strings and modalities as EVAL_TASKS gb2_*).
     "gb2_benv2": DownstreamTaskConfig(
         dataset="gb2-benv2",
-        ft_batch_size=16,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -831,7 +831,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_caffe": DownstreamTaskConfig(
         dataset="gb2-caffe",
-        ft_batch_size=8,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -843,7 +843,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_cloudsen12": DownstreamTaskConfig(
         dataset="gb2-cloudsen12",
-        ft_batch_size=8,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -855,7 +855,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_dynamic_earthnet": DownstreamTaskConfig(
         dataset="gb2-dynamic_earthnet",
-        ft_batch_size=8,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -867,7 +867,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_everwatch": DownstreamTaskConfig(
         dataset="gb2-everwatch",
-        ft_batch_size=16,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -878,7 +878,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_flair2": DownstreamTaskConfig(
         dataset="gb2-flair2",
-        ft_batch_size=8,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -890,7 +890,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_forestnet": DownstreamTaskConfig(
         dataset="gb2-forestnet",
-        ft_batch_size=16,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -901,7 +901,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_fotw": DownstreamTaskConfig(
         dataset="gb2-fotw",
-        ft_batch_size=16,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -913,7 +913,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_kuro_siwo": DownstreamTaskConfig(
         dataset="gb2-kuro_siwo",
-        ft_batch_size=16,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -925,7 +925,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_nzcattle": DownstreamTaskConfig(
         dataset="gb2-nzcattle",
-        ft_batch_size=16,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -936,7 +936,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_pastis": DownstreamTaskConfig(
         dataset="gb2-pastis",
-        ft_batch_size=8,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -948,7 +948,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_so2sat": DownstreamTaskConfig(
         dataset="gb2-so2sat",
-        ft_batch_size=16,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -959,7 +959,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_spacenet2": DownstreamTaskConfig(
         dataset="gb2-spacenet2",
-        ft_batch_size=8,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -971,7 +971,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_spacenet7": DownstreamTaskConfig(
         dataset="gb2-spacenet7",
-        ft_batch_size=8,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -983,7 +983,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_substation": DownstreamTaskConfig(
         dataset="gb2-substation",
-        ft_batch_size=16,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -994,7 +994,7 @@ FT_EVAL_TASKS = {
     ),
     "gb2_treesatai": DownstreamTaskConfig(
         dataset="gb2-treesatai",
-        ft_batch_size=16,
+        ft_batch_size=2,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
