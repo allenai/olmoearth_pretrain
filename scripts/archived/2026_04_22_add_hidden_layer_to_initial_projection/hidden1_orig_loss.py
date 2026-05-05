@@ -30,7 +30,7 @@ def build_train_module_config(
     config = build_train_module_config_base(common)
     config.loss_config = LossConfig(
         loss_config={
-            "type": "modality_patch_discrimination_new",
+            "type": "modality_patch_discrimination_vec",
             "tau": 0.1,
         }
     )
