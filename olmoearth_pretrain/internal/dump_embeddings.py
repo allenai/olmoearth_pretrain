@@ -365,8 +365,15 @@ def main() -> None:
         print(cmd)
     if args.print_only:
         return
+    failures = 0
     for cmd in cmds:
-        subprocess.run(cmd, shell=True, check=True)  # nosec
+        result = subprocess.run(cmd, shell=True, check=False)  # nosec
+        if result.returncode != 0:
+            print(f"  -> partition failed (rc={result.returncode}); continuing")
+            failures += 1
+    if failures:
+        # Surface non-zero so the outer fan-out also records this group as failed.
+        raise SystemExit(f"{failures} of {len(cmds)} partitions failed")
 
 
 if __name__ == "__main__":

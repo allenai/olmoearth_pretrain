@@ -271,8 +271,16 @@ def main() -> None:
         print()
     if args.print_only:
         return
+    failures: list[tuple[str, int]] = []
     for cmd in cmds:
-        subprocess.run(cmd, shell=True, check=True)  # nosec
+        result = subprocess.run(cmd, shell=True, check=False)  # nosec
+        if result.returncode != 0:
+            print(f"  -> launch failed (rc={result.returncode}); continuing")
+            failures.append((cmd, result.returncode))
+    if failures:
+        print(f"\n{len(failures)} of {len(cmds)} launches failed:")
+        for cmd, rc in failures:
+            print(f"  rc={rc}: {cmd[:200]}...")
 
 
 if __name__ == "__main__":
