@@ -22,3 +22,13 @@ python3 ${SCRIPT_DIR}/vicreg_ema_fiftieth.py launch vicreg_ema_fiftieth_v1 ai2/j
 python3 ${SCRIPT_DIR}/vicreg_ema_hundredth.py launch vicreg_ema_hundredth_v1 ai2/jupiter \
   --launch.num_gpus=8 \
   --trainer.callbacks.wandb.project=2026_02_08_masked_neg
+
+# 5) Pixel supervision + EMA, no VICReg
+python3 ${SCRIPT_DIR}/supervision_ema.py launch supervision_ema_v1 ai2/jupiter \
+  --launch.num_gpus=8 \
+  --trainer.callbacks.wandb.project=2026_02_08_masked_neg
+
+# 6) Pixel supervision + EMA + 0.1x VICReg + 0.1x PatchVC
+python3 ${SCRIPT_DIR}/supervision_ema_vicreg_tenth.py launch supervision_ema_vicreg_tenth_v1 ai2/jupiter \
+  --launch.num_gpus=8 \
+  --trainer.callbacks.wandb.project=2026_02_08_masked_neg

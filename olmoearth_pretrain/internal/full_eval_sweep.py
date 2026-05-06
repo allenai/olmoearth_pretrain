@@ -1142,6 +1142,9 @@ def main() -> None:
     commands_to_run = build_commands(args, extra_cli)
 
     logger.info(f"Running {len(commands_to_run)} commands")
+
+    # TODO remove
+    commands_to_run = commands_to_run[15:]
     for cmd in commands_to_run:
         logger.info(cmd)
         subprocess.run(cmd, shell=True, check=True)  # nosec
