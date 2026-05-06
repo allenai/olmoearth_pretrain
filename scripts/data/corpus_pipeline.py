@@ -12,13 +12,13 @@ Usage:
         --corpus /weka/.../studio_corpus_lonlats.json \
         --rslearn-dir /weka/.../dataset_creation/studio_corpus \
         --rslearn-config /weka/.../dataset_creation/studio_corpus/config.json \
-        --num-shards 100 --cluster ai2/jupiter
+        --num-shards 100 --clusters ai2/jupiter ai2/saturn
 
     # Step 2: Launch convert (olmoearth-dir derived automatically)
     python scripts/data/corpus_pipeline.py launch-convert \
         --corpus /weka/.../studio_corpus_lonlats.json \
         --rslearn-dir /weka/.../dataset_creation/studio_corpus \
-        --num-shards 100 --cluster ai2/jupiter
+        --num-shards 100 --clusters ai2/jupiter ai2/saturn
 
     # Step 3a: Prepare H5 metadata (single machine)
     python scripts/data/corpus_pipeline.py prepare-h5 \
@@ -27,7 +27,7 @@ Usage:
     # Step 3b: Launch H5 writing across N machines
     python scripts/data/corpus_pipeline.py launch-h5 \
         --h5py-dir /weka/.../dataset/studio_corpus/h5py_data_.../... \
-        --num-h5-shards 4 --cluster ai2/jupiter
+        --num-h5-shards 4 --clusters ai2/jupiter
 
     # Check progress
     python scripts/data/corpus_pipeline.py status \
@@ -447,7 +447,7 @@ def cmd_launch_rslearn(args: argparse.Namespace) -> None:
         step_name="rslearn",
         worker_cmd_template=cmd_template,
         num_shards=args.num_shards,
-        cluster=args.cluster,
+        clusters=args.clusters,
     )
     for eid in experiment_ids:
         print(f"  https://beaker.org/ex/{eid}")
@@ -486,7 +486,7 @@ def cmd_launch_convert(args: argparse.Namespace) -> None:
         step_name="convert",
         worker_cmd_template=cmd_template,
         num_shards=args.num_shards,
-        cluster=args.cluster,
+        clusters=args.clusters,
     )
     for eid in experiment_ids:
         print(f"  https://beaker.org/ex/{eid}")
@@ -512,7 +512,7 @@ def cmd_launch_h5(args: argparse.Namespace) -> None:
         step_name="h5",
         worker_cmd_template=cmd_template,
         num_shards=args.num_h5_shards,
-        cluster=args.cluster,
+        clusters=args.clusters,
     )
     for eid in experiment_ids:
         print(f"  https://beaker.org/ex/{eid}")
@@ -638,7 +638,7 @@ def main() -> None:
     p.add_argument("--rslearn-config", required=True, help="rslearn config.json path")
     p.add_argument("--num-shards", type=int, required=True)
     p.add_argument("--workers", type=int, default=16)
-    p.add_argument("--cluster", default="ai2/jupiter")
+    p.add_argument("--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters (e.g. ai2/jupiter ai2/saturn)")
     p.add_argument("--disabled-layers", nargs="*", default=[], help="rslearn layers to skip")
     p.add_argument("--max-samples", type=int, default=None, help="Limit corpus to first N samples")
     p.set_defaults(func=cmd_launch_rslearn)
@@ -662,7 +662,7 @@ def main() -> None:
     p.add_argument("--olmoearth-dir", default=None, help="Output dir (default: derived from rslearn-dir)")
     p.add_argument("--num-shards", type=int, required=True)
     p.add_argument("--workers", type=int, default=16)
-    p.add_argument("--cluster", default="ai2/jupiter")
+    p.add_argument("--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters")
     p.add_argument("--disabled-layers", nargs="*", default=[])
     p.add_argument("--max-samples", type=int, default=None)
     p.set_defaults(func=cmd_launch_convert)
@@ -689,7 +689,7 @@ def main() -> None:
     p = subparsers.add_parser("launch-h5", help="Launch H5 writing on Beaker")
     p.add_argument("--h5py-dir", required=True, help="H5 output dir from prepare-h5")
     p.add_argument("--num-h5-shards", type=int, required=True)
-    p.add_argument("--cluster", default="ai2/jupiter")
+    p.add_argument("--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters")
     p.set_defaults(func=cmd_launch_h5)
 
     # -- h5-worker --

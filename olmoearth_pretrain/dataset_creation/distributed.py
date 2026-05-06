@@ -90,7 +90,7 @@ def launch_beaker_jobs(
     step_name: str,
     worker_cmd_template: list[str],
     num_shards: int,
-    cluster: str,
+    clusters: list[str] | str,
     shard_ids: list[int] | None = None,
 ) -> list[str]:
     """Submit Beaker jobs for each shard.
@@ -100,7 +100,7 @@ def launch_beaker_jobs(
         step_name: human-readable name prefix (e.g. "rslearn", "convert").
         worker_cmd_template: command list with {shard_id} and {num_shards} placeholders.
         num_shards: total number of shards.
-        cluster: Beaker cluster (e.g. "ai2/jupiter").
+        clusters: Beaker cluster(s) (e.g. "ai2/jupiter" or ["ai2/jupiter", "ai2/saturn"]).
         shard_ids: if set, only launch these shard ids (for resume).
 
     Returns:
@@ -121,7 +121,7 @@ def launch_beaker_jobs(
         config = build_launch_config(
             name=f"{run_name}-{step_name}-shard{sid:05d}-{generate_uuid()[:6]}",
             cmd=cmd,
-            clusters=cluster,
+            clusters=clusters,
             task_name=f"{step_name}-worker",
         )
         config.num_gpus = 0
