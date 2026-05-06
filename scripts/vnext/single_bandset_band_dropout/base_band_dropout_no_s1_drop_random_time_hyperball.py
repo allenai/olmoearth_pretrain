@@ -12,12 +12,12 @@ projection on weight matrices in place of weight decay.
 - Rank microbatch size 64
 
 Hyperparameters (vs. AdamW baseline lr=1e-4 / wd=0.02):
-- Hyperball matrix LR = 2.5e-3 (paper's lower bound; was 5e-3 in v2 — see
-  the v2 retro at experimentor/logs/pretrain/2026-05-02-base-hyperball-embed-lr-fix.md).
-  v2 reached its minimum loss faster than the AdamW baseline but couldn't sustain
-  it; one hypothesis is that fixed-displacement Hyperball updates at 5e-3
-  overshoot once the model is sharp, with a cosine schedule that barely decays
-  during the visible window. Halving the matrix LR shrinks per-step rotation 2x.
+- Hyperball matrix LR = 3.5e-3 (v4: 2.5e-3 -> 3.5e-3). v3 at 2.5e-3 with QK-Norm
+  trained cleanly but tracked the AdamW baseline within +/-0.01 nats from step
+  60k onwards -- no speedup. v2 at 5e-3 without QK-Norm degraded. With QK-Norm
+  now stabilizing attention, 3.5e-3 tests whether the conservative LR was the
+  reason Hyperball's promised speedup didn't surface. See v3 retro at
+  experimentor/logs/pretrain/2026-05-03-base-hyperball-qknorm-lr2.5e-3.md.
 - Embeddings (`*embed*` patterns) fall back to AdamW at the BASELINE LR (1e-4),
   not the Hyperball LR. Setting them to 5e-3 caused divergence in v1
   (see experimentor logs/pretrain/2026-05-01-base-hyperball.md). Marin's own
@@ -26,8 +26,12 @@ Hyperparameters (vs. AdamW baseline lr=1e-4 / wd=0.02):
 - QK-Norm enabled in both encoder and decoder. Marin's 32B retro identified
   attention-numerics destabilization as an unrecoverable failure mode that
   optimizer-side fixes (gradient clipping, optimizer swaps) couldn't address;
-  QK-Norm fixed it. Adding it here as Hyperball + missing-QK-Norm + sharp
-  model is the closest analog to that failure pattern in our v2 trace.
+  QK-Norm fixed it. Added in v3; v3 grad norms held at median 0.18 / max 0.93
+  vs the AdamW baseline's median 0.30 / max 4.48 -- QK-Norm is doing real work.
+- Scheduler: ConstantWithWarmup (v4: was CosWithWarmup). At v3's step 77k the
+  cosine had decayed only ~10% off peak, so it was a confounder rather than a
+  contributor in the visible window. Flat post-warmup also matches Marin's
+  Tootsie recipe (warmup -> constant -> late cooldown).
 
 Reference: https://tinyurl.com/muonh
 """
@@ -40,7 +44,7 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.optim import OptimGroupOverride
-from olmo_core.optim.scheduler import CosWithWarmup
+from olmo_core.optim.scheduler import ConstantWithWarmup
 from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
@@ -189,7 +193,11 @@ def build_train_module_config(
     """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=HyperballConfig(
-            lr=2.5e-3,  # was 5e-3 in v2; see v2 retro for why we halved it
+            lr=3.5e-3,  # v4: 2.5e-3 (v3) -> 3.5e-3. v3 trained cleanly with QK-Norm
+            # but tracked the AdamW baseline within +/-0.01 nats; pushing
+            # higher to test whether the conservative LR was the reason
+            # the paper's claimed speedup didn't surface. v2 at 5e-3
+            # (without QK-Norm) degraded; 3.5e-3 splits the difference.
             betas=(0.9, 0.95),
             eps=1e-8,
             weight_decay=0.0,
@@ -225,7 +233,12 @@ def build_train_module_config(
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
-        scheduler=CosWithWarmup(warmup_steps=8000),
+        scheduler=ConstantWithWarmup(warmup_steps=8000),  # v4: was CosWithWarmup.
+        # At step 77k of v3 the cosine had only decayed ~10% off peak, so it was
+        # mostly a confounder rather than a contributor in the visible window.
+        # Flat post-warmup decouples the LR from the run-length guess (matches
+        # Marin's Tootsie recipe of warmup -> constant -> late cooldown). If we
+        # decide we want a final cooldown, that can be added near end of run.
         ema_decay=(1.0, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
