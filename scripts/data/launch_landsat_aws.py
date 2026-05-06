@@ -36,7 +36,6 @@ IAM permissions needed by the credentials:
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import logging
 import os
@@ -54,7 +53,8 @@ logger = logging.getLogger(__name__)
 
 USERDATA_TEMPLATE = r"""#!/bin/bash
 set -euo pipefail
-exec > /var/log/landsat-worker.log 2>&1
+# Log to both file and console (so get-console-output works)
+exec > >(tee -a /var/log/landsat-worker.log) 2>&1
 echo "=== Landsat worker shard {shard_id}/{num_shards} starting $(date) ==="
 
 export AWS_ACCESS_KEY_ID="{aws_access_key_id}"
@@ -67,14 +67,16 @@ SHARD_ID={shard_id}
 NUM_SHARDS={num_shards}
 WORKERS={workers}
 
-# Install system deps (GDAL, GEOS, PROJ needed for rasterio/fiona/shapely)
-if command -v yum &>/dev/null; then
-    yum install -y git gcc gcc-c++ python3.11 python3.11-devel python3.11-pip \
-        gdal gdal-devel geos geos-devel proj proj-devel \
-        libffi-devel openssl-devel wget
+# Install system deps
+if command -v dnf &>/dev/null; then
+    dnf install -y git gcc gcc-c++ python3-devel python3-pip \
+        libffi-devel openssl-devel wget tar gzip || true
+elif command -v yum &>/dev/null; then
+    yum install -y git gcc gcc-c++ python3-devel python3-pip \
+        libffi-devel openssl-devel wget || true
 elif command -v apt-get &>/dev/null; then
     apt-get update && apt-get install -y git python3-dev python3-pip \
-        libgdal-dev libgeos-dev libproj-dev libffi-dev wget
+        libffi-dev wget || true
 fi
 
 # Install uv
@@ -239,7 +241,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
             "InstanceType": args.instance_type,
             "MinCount": 1,
             "MaxCount": 1,
-            "UserData": base64.b64encode(userdata.encode()).decode(),
+            "UserData": userdata,
             "InstanceMarketOptions": {
                 "MarketType": "spot",
                 "SpotOptions": {"SpotInstanceType": "one-time"},
