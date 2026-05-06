@@ -154,10 +154,9 @@ def cmd_rslearn_worker(args: argparse.Namespace) -> None:
     # Create windows for this shard (idempotent -- skips existing)
     create_corpus_windows(UPath(rslearn_dir), shard.entries, workers=args.workers)
 
-    # Run rslearn CLI steps
-    window_args = []
-    for name in shard.window_names:
-        window_args.extend(["--window", name])
+    # Run rslearn CLI steps -- pass all window names after a single --window flag
+    # (argparse nargs="*" only keeps the last --window if repeated)
+    window_args = ["--window", *shard.window_names]
 
     rslearn_steps = ["prepare", "ingest", "materialize"]
     for i, step in enumerate(rslearn_steps):
@@ -180,8 +179,9 @@ def cmd_rslearn_worker(args: argparse.Namespace) -> None:
             "--workers",
             str(args.workers),
         ]
-        for layer in getattr(args, "disabled_layers", []):
-            cmd.extend(["--disabled-layers", layer])
+        disabled = getattr(args, "disabled_layers", [])
+        if disabled:
+            cmd.extend(["--disabled-layers", ",".join(disabled)])
         if step in ("ingest", "materialize"):
             cmd.extend(["--ignore-errors", "--retry-max-attempts", "3"])
 
