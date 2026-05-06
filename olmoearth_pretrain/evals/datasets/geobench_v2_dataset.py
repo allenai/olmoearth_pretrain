@@ -631,6 +631,15 @@ def _extract_label(
         cattle = int((labs == 1).any())
         return torch.tensor(cattle, dtype=torch.long)
 
+    if slug == "so2sat" and "label" in sample:
+        y = sample["label"]
+        if not torch.is_tensor(y):
+            y = torch.as_tensor(y)
+        # so2sat labels are one-hot encoded; convert to class index
+        if y.dim() == 1:
+            return y.argmax().long().unsqueeze(0)
+        return y.long()
+
     if "label" in sample:
         y = sample["label"]
         if not torch.is_tensor(y):
