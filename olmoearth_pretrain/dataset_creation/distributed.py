@@ -86,6 +86,7 @@ def get_shard(entries: list[CorpusEntry], shard_id: int, num_shards: int) -> Sha
 
 def launch_beaker_jobs(
     *,
+    run_name: str,
     step_name: str,
     worker_cmd_template: list[str],
     num_shards: int,
@@ -95,6 +96,7 @@ def launch_beaker_jobs(
     """Submit Beaker jobs for each shard.
 
     Args:
+        run_name: identifier for this pipeline run (used as Beaker name prefix).
         step_name: human-readable name prefix (e.g. "rslearn", "convert").
         worker_cmd_template: command list with {shard_id} and {num_shards} placeholders.
         num_shards: total number of shards.
@@ -117,7 +119,7 @@ def launch_beaker_jobs(
             c.format(shard_id=sid, num_shards=num_shards) for c in worker_cmd_template
         ]
         config = build_launch_config(
-            name=f"corpus-{step_name}-shard{sid:05d}-{generate_uuid()[:6]}",
+            name=f"{run_name}-{step_name}-shard{sid:05d}-{generate_uuid()[:6]}",
             cmd=cmd,
             clusters=cluster,
             task_name=f"{step_name}-worker",

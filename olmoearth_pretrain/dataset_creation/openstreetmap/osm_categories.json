@@ -1,0 +1,298 @@
+{
+  "aerialway_pylon": {
+    "tag_conditions": {
+      "aerialway": [
+        "pylon"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "aerodrome": {
+    "feature_types": [
+      "WAY",
+      "RELATION"
+    ],
+    "tag_conditions": {
+      "aeroway": [
+        "aerodrome"
+      ]
+    },
+    "to_geometry": "Polygon"
+  },
+  "airstrip": {
+    "feature_types": [
+      "WAY"
+    ],
+    "tag_conditions": {
+      "aeroway": [
+        "airstrip"
+      ]
+    },
+    "to_geometry": "LineString"
+  },
+  "amenity_fuel": {
+    "feature_types": [
+      "WAY",
+      "RELATION"
+    ],
+    "tag_conditions": {
+      "amenity": [
+        "fuel"
+      ]
+    },
+    "to_geometry": "Polygon"
+  },
+  "building": {
+    "feature_types": [
+      "WAY",
+      "RELATION"
+    ],
+    "tag_conditions": {
+      "building": []
+    },
+    "tag_properties": {
+      "building": "building"
+    },
+    "to_geometry": "Polygon"
+  },
+  "chimney": {
+    "tag_conditions": {
+      "man_made": [
+        "chimney"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "communications_tower": {
+    "tag_conditions": {
+      "man_made": [
+        "communications_tower"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "crane": {
+    "tag_conditions": {
+      "man_made": [
+        "crane"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "flagpole": {
+    "tag_conditions": {
+      "man_made": [
+        "flagpole"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "fountain": {
+    "tag_conditions": {
+      "amenity": [
+        "fountain"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "generator_wind": {
+    "tag_conditions": {
+      "generator:source": [
+        "wind"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "helipad": {
+    "tag_conditions": {
+      "aeroway": [
+        "helipad"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "highway": {
+    "feature_types": [
+      "WAY"
+    ],
+    "tag_conditions": {
+      "highway": []
+    },
+    "tag_properties": {
+      "highway": "highway"
+    },
+    "to_geometry": "LineString"
+  },
+  "leisure": {
+    "feature_types": [
+      "WAY",
+      "RELATION"
+    ],
+    "tag_conditions": {
+      "leisure": []
+    },
+    "tag_properties": {
+      "leisure": "leisure"
+    },
+    "to_geometry": "Polygon"
+  },
+  "lighthouse": {
+    "tag_conditions": {
+      "man_made": [
+        "lighthouse"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "obelisk": {
+    "tag_conditions": {
+      "man_made": [
+        "obelisk"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "observatory": {
+    "tag_conditions": {
+      "man_made": [
+        "observatory"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "parking": {
+    "feature_types": [
+      "WAY",
+      "RELATION"
+    ],
+    "tag_conditions": {
+      "amenity": [
+        "parking"
+      ]
+    },
+    "to_geometry": "Polygon"
+  },
+  "petroleum_well": {
+    "tag_conditions": {
+      "man_made": [
+        "petroleum_well"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "power_plant": {
+    "feature_types": [
+      "WAY",
+      "RELATION"
+    ],
+    "tag_conditions": {
+      "power": [
+        "plant"
+      ]
+    },
+    "tag_properties": {
+      "plant:source": "plant:source"
+    },
+    "to_geometry": "Polygon"
+  },
+  "power_substation": {
+    "feature_types": [
+      "WAY",
+      "RELATION"
+    ],
+    "tag_conditions": {
+      "power": [
+        "substation"
+      ]
+    },
+    "to_geometry": "Polygon"
+  },
+  "power_tower": {
+    "tag_conditions": {
+      "power": [
+        "tower"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "river": {
+    "feature_types": [
+      "WAY",
+      "RELATION"
+    ],
+    "tag_conditions": {
+      "waterway": [
+        "river"
+      ]
+    },
+    "tag_properties": {
+      "waterway": "waterway"
+    }
+  },
+  "runway": {
+    "feature_types": [
+      "WAY"
+    ],
+    "tag_conditions": {
+      "aeroway": [
+        "runway"
+      ]
+    },
+    "to_geometry": "LineString"
+  },
+  "satellite_dish": {
+    "tag_conditions": {
+      "man_made": [
+        "satellite_dish"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "silo": {
+    "tag_conditions": {
+      "man_made": [
+        "silo"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "storage_tank": {
+    "tag_conditions": {
+      "man_made": [
+        "storage_tank"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "taxiway": {
+    "feature_types": [
+      "WAY"
+    ],
+    "tag_conditions": {
+      "aeroway": [
+        "taxiway"
+      ]
+    },
+    "to_geometry": "LineString"
+  },
+  "water_tower": {
+    "tag_conditions": {
+      "man_mode": [
+        "water_tower"
+      ]
+    },
+    "to_geometry": "Point"
+  },
+  "works": {
+    "feature_types": [
+      "WAY",
+      "RELATION"
+    ],
+    "tag_conditions": {
+      "man_made": [
+        "works"
+      ]
+    },
+    "to_geometry": "Polygon"
+  }
+}

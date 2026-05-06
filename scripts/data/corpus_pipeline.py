@@ -441,7 +441,9 @@ def cmd_launch_rslearn(args: argparse.Namespace) -> None:
         cmd_template.extend(["--disabled-layers", layer])
     if args.max_samples:
         cmd_template.extend(["--max-samples", str(args.max_samples)])
+    run_name = UPath(args.rslearn_dir).name
     experiment_ids = launch_beaker_jobs(
+        run_name=run_name,
         step_name="rslearn",
         worker_cmd_template=cmd_template,
         num_shards=args.num_shards,
@@ -478,7 +480,9 @@ def cmd_launch_convert(args: argparse.Namespace) -> None:
         cmd_template.extend(["--disabled-layers", layer])
     if args.max_samples:
         cmd_template.extend(["--max-samples", str(args.max_samples)])
+    run_name = UPath(args.rslearn_dir).name
     experiment_ids = launch_beaker_jobs(
+        run_name=run_name,
         step_name="convert",
         worker_cmd_template=cmd_template,
         num_shards=args.num_shards,
@@ -502,7 +506,9 @@ def cmd_launch_h5(args: argparse.Namespace) -> None:
         "--num-h5-shards",
         str(args.num_h5_shards),
     ]
+    run_name = UPath(args.h5py_dir).parent.parent.name
     experiment_ids = launch_beaker_jobs(
+        run_name=run_name,
         step_name="h5",
         worker_cmd_template=cmd_template,
         num_shards=args.num_h5_shards,
