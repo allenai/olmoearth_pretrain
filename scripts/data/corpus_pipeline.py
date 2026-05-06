@@ -437,8 +437,8 @@ def cmd_launch_rslearn(args: argparse.Namespace) -> None:
         "--workers",
         str(args.workers),
     ]
-    for layer in args.disabled_layers:
-        cmd_template.extend(["--disabled-layers", layer])
+    if args.disabled_layers:
+        cmd_template.extend(["--disabled-layers", ",".join(args.disabled_layers)])
     if args.max_samples:
         cmd_template.extend(["--max-samples", str(args.max_samples)])
     run_name = UPath(args.rslearn_dir).name
@@ -476,8 +476,8 @@ def cmd_launch_convert(args: argparse.Namespace) -> None:
         "--workers",
         str(args.workers),
     ]
-    for layer in args.disabled_layers:
-        cmd_template.extend(["--disabled-layers", layer])
+    if args.disabled_layers:
+        cmd_template.extend(["--disabled-layers", ",".join(args.disabled_layers)])
     if args.max_samples:
         cmd_template.extend(["--max-samples", str(args.max_samples)])
     run_name = UPath(args.rslearn_dir).name
@@ -618,6 +618,128 @@ def cmd_status(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Bulk management
+# ---------------------------------------------------------------------------
+
+
+def cmd_kill_jobs(args: argparse.Namespace) -> None:
+    """Bulk cancel Beaker experiments matching a name pattern."""
+    import subprocess as sp
+
+    result = sp.run(
+        [
+            "beaker", "rpc", "call", "ListWorkloads",
+            json.dumps({
+                "options": {
+                    "authorId": _get_beaker_author_id(),
+                    "organizationId": "us_wvnghctl47k0",
+                    "workloadType": "WORKLOAD_TYPE_EXPERIMENT",
+                    "nameOrDescriptionSubstring": args.pattern,
+                    "createdAfter": args.since or "2020-01-01T00:00:00Z",
+                    "pageSize": 200,
+                },
+            }),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    data = json.loads(result.stdout)
+    workloads = data.get("workloads", [])
+    exp_ids = [w["experiment"]["id"] for w in workloads]
+    exp_names = [w["experiment"]["name"] for w in workloads]
+
+    if not exp_ids:
+        print(f"No experiments matching pattern '{args.pattern}'")
+        return
+
+    print(f"Found {len(exp_ids)} experiments matching '{args.pattern}':")
+    for name in exp_names[:5]:
+        print(f"  {name}")
+    if len(exp_names) > 5:
+        print(f"  ... and {len(exp_names) - 5} more")
+
+    if not args.yes:
+        confirm = input(f"\nCancel all {len(exp_ids)} experiments? [y/N] ")
+        if confirm.lower() != "y":
+            print("Aborted.")
+            return
+
+    cancelled = 0
+    for eid in exp_ids:
+        try:
+            sp.run(
+                ["beaker", "experiment", "stop", eid],
+                capture_output=True, text=True, check=True,
+            )
+            cancelled += 1
+        except sp.CalledProcessError:
+            print(f"  Failed to cancel {eid}")
+    print(f"Cancelled {cancelled}/{len(exp_ids)} experiments")
+
+
+def cmd_cleanup(args: argparse.Namespace) -> None:
+    """Remove incomplete window directories from rslearn dataset."""
+    import shutil
+
+    rslearn_dir = UPath(args.rslearn_dir)
+    windows_dir = rslearn_dir / "windows" / "res_10.0"
+    if not windows_dir.exists():
+        print(f"No windows directory at {windows_dir}")
+        return
+
+    window_dirs = sorted(d for d in windows_dir.iterdir() if d.is_dir())
+    print(f"Total windows: {len(window_dirs)}")
+
+    incomplete = []
+    for wd in window_dirs:
+        items_json = wd / "items.json"
+        layers_dir = wd / "layers"
+        if not items_json.exists() or not layers_dir.exists():
+            incomplete.append(wd)
+            continue
+        layer_dirs = [d for d in layers_dir.iterdir() if d.is_dir()]
+        if not layer_dirs:
+            incomplete.append(wd)
+
+    if not incomplete:
+        print("No incomplete windows found.")
+        return
+
+    print(f"Incomplete windows (no items.json, no layers, or empty layers): {len(incomplete)}")
+    for wd in incomplete[:10]:
+        print(f"  {wd.name}")
+    if len(incomplete) > 10:
+        print(f"  ... and {len(incomplete) - 10} more")
+
+    if args.dry_run:
+        print("Dry run -- no files removed.")
+        return
+
+    if not args.yes:
+        confirm = input(f"\nRemove {len(incomplete)} incomplete window directories? [y/N] ")
+        if confirm.lower() != "y":
+            print("Aborted.")
+            return
+
+    removed = 0
+    for wd in incomplete:
+        try:
+            shutil.rmtree(str(wd))
+            removed += 1
+        except OSError as e:
+            print(f"  Failed to remove {wd.name}: {e}")
+    print(f"Removed {removed}/{len(incomplete)} directories")
+
+
+def _get_beaker_author_id() -> str:
+    import subprocess as sp
+    result = sp.run(
+        ["beaker", "account", "whoami", "--format", "json"],
+        capture_output=True, text=True, check=True,
+    )
+    return json.loads(result.stdout)[0]["id"]
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -705,6 +827,20 @@ def main() -> None:
     p.add_argument("--rslearn-dir", default=None)
     p.add_argument("--olmoearth-dir", default=None)
     p.set_defaults(func=cmd_status)
+
+    # -- kill-jobs --
+    p = subparsers.add_parser("kill-jobs", help="Bulk cancel Beaker experiments by name pattern")
+    p.add_argument("--pattern", required=True, help="Substring to match experiment names")
+    p.add_argument("--since", default=None, help="Only match experiments created after this ISO timestamp")
+    p.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
+    p.set_defaults(func=cmd_kill_jobs)
+
+    # -- cleanup --
+    p = subparsers.add_parser("cleanup", help="Remove incomplete window directories")
+    p.add_argument("--rslearn-dir", required=True, help="rslearn dataset directory")
+    p.add_argument("--dry-run", action="store_true", help="Only report, don't delete")
+    p.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
+    p.set_defaults(func=cmd_cleanup)
 
     args = parser.parse_args()
     args.func(args)
