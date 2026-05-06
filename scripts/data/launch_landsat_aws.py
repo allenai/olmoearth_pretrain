@@ -67,11 +67,14 @@ SHARD_ID={shard_id}
 NUM_SHARDS={num_shards}
 WORKERS={workers}
 
-# Install system deps
+# Install system deps (GDAL, GEOS, PROJ needed for rasterio/fiona/shapely)
 if command -v yum &>/dev/null; then
-    yum install -y git
+    yum install -y git gcc gcc-c++ python3.11 python3.11-devel python3.11-pip \
+        gdal gdal-devel geos geos-devel proj proj-devel \
+        libffi-devel openssl-devel wget
 elif command -v apt-get &>/dev/null; then
-    apt-get update && apt-get install -y git
+    apt-get update && apt-get install -y git python3-dev python3-pip \
+        libgdal-dev libgeos-dev libproj-dev libffi-dev wget
 fi
 
 # Install uv
@@ -434,29 +437,41 @@ def _load_manifest(args: argparse.Namespace) -> dict:
 
 # -- Default AMI lookup --
 
-DEFAULT_AMIS = {
-    "us-west-2": "ami-0c55b159cbfafe1f0",
-    "us-east-1": "ami-0149b2da6ceec4bb0",
-}
+SSM_AMI_PATHS = [
+    # Deep Learning Base OSS (has Python, pip, system libs for GDAL/rasterio)
+    "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64",
+]
 
 
 def _resolve_ami(region: str, ami: str | None) -> str:
-    """Resolve AMI: use provided, lookup default, or query SSM for latest AL2023."""
+    """Resolve AMI: use provided or query SSM for latest Amazon Linux 2023.
+
+    Strongly recommended: pass --ami with a Deep Learning AMI that has
+    Python 3.11+, GDAL, GEOS, and PROJ pre-installed. This avoids slow
+    compilation of rasterio/fiona on a bare OS.
+
+    Find one with:
+        aws ec2 describe-images --region us-west-2 --owners amazon \\
+            --filters "Name=name,Values=*Deep Learning Base OSS*" \\
+            --query 'Images | sort_by(@, &CreationDate) | [-1].{ID:ImageId,Name:Name}'
+    """
     if ami:
         return ami
-    if region in DEFAULT_AMIS:
-        return DEFAULT_AMIS[region]
-    try:
-        import boto3
-        ssm = boto3.client("ssm", region_name=region)
-        resp = ssm.get_parameter(
-            Name="/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
-        )
-        return resp["Parameter"]["Value"]
-    except Exception:
-        raise SystemExit(
-            f"No default AMI for {region}. Pass --ami explicitly."
-        )
+    for ssm_path in SSM_AMI_PATHS:
+        try:
+            import boto3
+            ssm = boto3.client("ssm", region_name=region)
+            resp = ssm.get_parameter(Name=ssm_path)
+            return resp["Parameter"]["Value"]
+        except Exception:
+            continue
+    raise SystemExit(
+        f"Could not auto-resolve AMI for {region}. Pass --ami explicitly.\n"
+        f"Recommended: use a Deep Learning Base AMI with Python + GDAL pre-installed.\n"
+        f"  aws ec2 describe-images --region {region} --owners amazon \\\n"
+        f"    --filters 'Name=name,Values=*Deep Learning Base OSS*' \\\n"
+        f"    --query 'Images | sort_by(@, &CreationDate) | [-1].{{ID:ImageId,Name:Name}}'"
+    )
 
 
 def main() -> None:
