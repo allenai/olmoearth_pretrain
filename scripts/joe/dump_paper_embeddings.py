@@ -143,6 +143,7 @@ def _build_external_cmd(
         parts.append(f"--size={size}")
     if not args.include_pastis128:
         parts.append("--exclude_tasks=" + ",".join(DEFAULT_EXCLUDED_TASKS))
+    parts.extend(_launch_args(args))
     if args.dry_run:
         parts.append("--dry_run")
     if args.print_only:
@@ -150,6 +151,14 @@ def _build_external_cmd(
     if args.project_name:
         parts.append(f"--project_name={args.project_name}")
     return " ".join(parts)
+
+
+def _launch_args(args: argparse.Namespace) -> list[str]:
+    """Build the --priority / --launch_clusters / --num_gpus pass-through args."""
+    parts = [f"--priority={args.priority}", f"--num_gpus={args.num_gpus}"]
+    if args.launch_clusters:
+        parts.append(f"--launch_clusters={args.launch_clusters}")
+    return parts
 
 
 def _build_olmoearth_cmd(
@@ -174,6 +183,7 @@ def _build_olmoearth_cmd(
     ]
     if not args.include_pastis128:
         parts.append("--exclude_tasks=" + ",".join(DEFAULT_EXCLUDED_TASKS))
+    parts.extend(_launch_args(args))
     if args.dry_run:
         parts.append("--dry_run")
     if args.print_only:
@@ -214,6 +224,24 @@ def main() -> None:
         action="store_true",
         help="By default we drop the pastis128 variants (paper Table 2 reports 64x64). "
         "Pass this flag to keep them in.",
+    )
+    p.add_argument(
+        "--priority",
+        default="normal",
+        choices=["low", "normal", "high", "urgent"],
+        help="Beaker job priority for every launched run.",
+    )
+    p.add_argument(
+        "--num_gpus",
+        type=int,
+        default=1,
+        help="--launch.num_gpus passed to every Beaker run.",
+    )
+    p.add_argument(
+        "--launch_clusters",
+        default=None,
+        help="Comma-separated Beaker clusters (e.g. ai2/jupiter,ai2/saturn,ai2/neptune). "
+        "Becomes --launch.clusters=[...] on every launched run.",
     )
     p.add_argument("--dry_run", action="store_true")
     p.add_argument("--print_only", action="store_true")

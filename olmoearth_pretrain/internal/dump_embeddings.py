@@ -186,11 +186,21 @@ def _build_one_command(
         if args.checkpoint_path is not None
         else ""
     )
-    launch_overrides = (
-        "--launch.priority=high --launch.num_gpus=1 --launch.task_name=embed_dump"
-        if sub_command == SubCmd.launch
-        else ""
-    )
+    launch_overrides_parts: list[str] = []
+    if sub_command == SubCmd.launch:
+        launch_overrides_parts.extend(
+            [
+                f"--launch.priority={args.priority}",
+                f"--launch.num_gpus={args.num_gpus}",
+                "--launch.task_name=embed_dump",
+            ]
+        )
+        if args.launch_clusters:
+            cluster_list = [c.strip() for c in args.launch_clusters.split(",")]
+            launch_overrides_parts.append(
+                f"--launch.clusters=[{','.join(cluster_list)}]"
+            )
+    launch_overrides = " ".join(launch_overrides_parts)
 
     project = args.project_name or EVAL_WANDB_PROJECT
     return " ".join(
@@ -319,6 +329,25 @@ def main() -> None:
         default=None,
         help="Comma-separated list of task names to drop from the JSON group "
         "before launching (e.g. pastis128_sentinel1,pastis128_sentinel2).",
+    )
+    p.add_argument(
+        "--priority",
+        default="normal",
+        choices=["low", "normal", "high", "urgent"],
+        help="Beaker job priority. Ignored when --cluster=local.",
+    )
+    p.add_argument(
+        "--num_gpus",
+        type=int,
+        default=1,
+        help="--launch.num_gpus passed to Beaker.",
+    )
+    p.add_argument(
+        "--launch_clusters",
+        default=None,
+        help="Comma-separated Beaker clusters (e.g. ai2/jupiter,ai2/saturn). "
+        "If set, becomes --launch.clusters=[...]; the positional --cluster is "
+        "still required (Beaker uses the override to pick).",
     )
     p.add_argument("--dry_run", action="store_true")
     p.add_argument(
