@@ -18,6 +18,7 @@ from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
+from olmoearth_pretrain.nn.supervision_head import compute_supervision_loss
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import (
@@ -203,6 +204,14 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             self.total_loss_name = (
                 f"{self.total_loss_name}+{self.patch_varcov_loss.name}"
             )
+
+        self._supervised_modality_names: list[str] = []
+        if self.model.supervision_head is not None:
+            self._supervised_modality_names = list(
+                self.model.supervision_head.modality_configs.keys()
+            )
+            self.total_loss_name = f"{self.total_loss_name}+supervision"
+
         if reinit_targets:
             if ema_decay != (0.0, 0.0):
                 logger.warning(
@@ -444,6 +453,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 latent_projected_and_pooled,
                 reconstructed,
                 extra_metrics,
+                supervision_preds,
             ) = self.model(batch, patch_size, capture_at=self.capture_at)
             student_intermediates = getattr(
                 self.model.encoder, "_intermediate_pooled", None
@@ -465,6 +475,23 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
+
+            # --- Supervision loss ---
+            if (
+                supervision_preds is not None
+                and self.model.supervision_head is not None
+            ):
+                if extra_metrics is None:
+                    extra_metrics = {}
+                sup_loss, per_modality_losses = compute_supervision_loss(
+                    supervision_preds,
+                    batch,
+                    self.model.supervision_head,
+                )
+                loss = loss + sup_loss
+                for mod_name, mod_loss in per_modality_losses.items():
+                    extra_metrics[f"supervision/{mod_name}"] = mod_loss
+
             return (
                 loss,
                 latent,
