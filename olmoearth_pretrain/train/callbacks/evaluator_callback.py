@@ -54,6 +54,8 @@ class EvalMode(StrEnum):
     KNN = "knn"
     LINEAR_PROBE = "linear_probe"
     FINETUNE = "finetune"
+    # Extract train/val/test embeddings and write them to disk; do not run a probe.
+    EMBEDDING_DUMP = "embedding_dump"
 
 
 @dataclass
@@ -89,6 +91,13 @@ class DownstreamTaskConfig:
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
+    # When eval_mode == EMBEDDING_DUMP, write embeddings/labels to
+    # f"{save_embeddings_dir}/{evaluation_name}/{split}.pt" and skip the probe.
+    save_embeddings_dir: str | None = None
+    # Dtype for saved embeddings. "bfloat16" matches the autocast precision used at
+    # extraction time (see olmoearth_pretrain/evals/embeddings.py); "float32" is a
+    # safer default for downstream tools that don't support bf16.
+    embedding_dump_dtype: str = "bfloat16"
 
 
 class DownstreamEvaluator:
@@ -141,6 +150,8 @@ class DownstreamEvaluator:
         self.select_final_test_miou_based_on_epoch_of_max_val_miou = (
             task.select_final_test_miou_based_on_epoch_of_max_val_miou
         )
+        self.save_embeddings_dir = task.save_embeddings_dir
+        self.embedding_dump_dtype = task.embedding_dump_dtype
         self.run_on_test = run_on_test
         if self.select_final_test_miou_based_on_epoch_of_max_val_miou:
             assert self.run_on_test, (
@@ -176,6 +187,12 @@ class DownstreamEvaluator:
                     )
                 if self.config.height_width % self.patch_size != 0:
                     raise ValueError("Image height / width indivisable by patch size.")
+
+        if self.eval_mode == EvalMode.EMBEDDING_DUMP:
+            if self.save_embeddings_dir is None:
+                raise ValueError(
+                    "save_embeddings_dir must be set for EMBEDDING_DUMP eval mode."
+                )
 
         self.eval_function = (
             run_knn
@@ -402,12 +419,67 @@ class DownstreamEvaluator:
             gc.collect()
             return val_result, test_result
 
+    def _dump_embeddings(self) -> tuple[float, float]:
+        """Extract train/val/test embeddings and write them to disk; skip the probe."""
+        assert self.save_embeddings_dir is not None
+        out_dir = os.path.join(self.save_embeddings_dir, self.evaluation_name)
+        os.makedirs(out_dir, exist_ok=True)
+
+        # Idempotent: if all three splits are on disk, skip recompute.
+        expected = [
+            os.path.join(out_dir, f"{split}.pt") for split in ("train", "valid", "test")
+        ]
+        if all(os.path.exists(p) for p in expected):
+            logger.info(
+                f"Embeddings already exist in {out_dir}, skipping {self.evaluation_name}"
+            )
+            return 1.0, 1.0
+
+        dtype_map = {
+            "bfloat16": torch.bfloat16,
+            "float16": torch.float16,
+            "float32": torch.float32,
+        }
+        if self.embedding_dump_dtype not in dtype_map:
+            raise ValueError(
+                f"embedding_dump_dtype must be one of {list(dtype_map)}, "
+                f"got {self.embedding_dump_dtype}"
+            )
+        save_dtype = dtype_map[self.embedding_dump_dtype]
+
+        logger.info(
+            f"Dumping embeddings for {self.evaluation_name} to {out_dir} "
+            f"(dtype={self.embedding_dump_dtype})"
+        )
+        for split in ("train", "valid", "test"):
+            out_path = os.path.join(out_dir, f"{split}.pt")
+            if os.path.exists(out_path):
+                logger.info(f"  {split} already on disk, skipping")
+                continue
+            loader = self._get_data_loader(split, self.embedding_batch_size)
+            # is_train=False everywhere so AnySat does not subsample segmentation
+            # train embeddings -- collaborator wants the full train set.
+            embeddings, labels = self._get_embeddings(loader, is_train=False)
+            embeddings = embeddings.to(save_dtype)
+            torch.save({"embeddings": embeddings, "labels": labels}, out_path)
+            logger.info(
+                f"  wrote {split}: emb={tuple(embeddings.shape)} "
+                f"labels={tuple(labels.shape)} -> {out_path}"
+            )
+            del embeddings, labels
+            torch.cuda.empty_cache()
+            gc.collect()
+        # val(self) returns (val_result, test_result); EMBEDDING_DUMP has no metric.
+        return 1.0, 1.0
+
     def val(self) -> tuple[float, float]:
         """Validate the model on the downstream task."""
         if self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
             return self._val_embed_probe()
         elif self.eval_mode == EvalMode.FINETUNE:
             return self._val_finetune()
+        elif self.eval_mode == EvalMode.EMBEDDING_DUMP:
+            return self._dump_embeddings()
         else:
             raise ValueError(f"Unsupported eval_mode: {self.eval_mode}")
 
@@ -510,8 +582,12 @@ class DownstreamEvaluatorCallback(Callback):
                         )
 
                 val_result, test_result, eval_time = self._perform_eval(evaluator)
-                # Only logging valid results to wandb
-                if val_result > 0 and test_result > 0:
+                # Only logging valid results to wandb -- EMBEDDING_DUMP has no metric.
+                if (
+                    evaluator.eval_mode != EvalMode.EMBEDDING_DUMP
+                    and val_result > 0
+                    and test_result > 0
+                ):
                     if wandb_callback.enabled:
                         wandb_callback.wandb.log(
                             {"eval/" + evaluator.evaluation_name: val_result}
@@ -552,11 +628,13 @@ class DownstreamEvaluatorCallback(Callback):
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
         start_time = time.monotonic()
         val_result, test_result = evaluator.val()
-        self.trainer.record_metric(f"eval/{evaluator.evaluation_name}", val_result)
-        if self.run_on_test:
-            self.trainer.record_metric(
-                f"eval/test/{evaluator.evaluation_name}", test_result
-            )
+        # EMBEDDING_DUMP doesn't produce a metric -- skip metric recording.
+        if evaluator.eval_mode != EvalMode.EMBEDDING_DUMP:
+            self.trainer.record_metric(f"eval/{evaluator.evaluation_name}", val_result)
+            if self.run_on_test:
+                self.trainer.record_metric(
+                    f"eval/test/{evaluator.evaluation_name}", test_result
+                )
         eval_time = time.monotonic() - start_time
         self.trainer.record_metric(f"eval_time/{evaluator.evaluation_name}", eval_time)
         logger.info(
@@ -648,7 +726,9 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                 continue
 
             config = dataset_to_config(task.dataset)
-            if config.task_type == TaskType.SEGMENTATION:
+            if config.task_type == TaskType.SEGMENTATION and (
+                task.eval_mode != EvalMode.EMBEDDING_DUMP
+            ):
                 if task.probe_lr is None and task.ft_lr is None:
                     raise ValueError(
                         f"probe_lr and ft_lr cannot both be None for {task.dataset}"
