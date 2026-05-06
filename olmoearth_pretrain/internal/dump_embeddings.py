@@ -63,8 +63,10 @@ def _per_task_overrides(
     pooling_type = settings.get("pooling_type", "mean")
     norm_from_pretrained = settings.get("norm_stats_from_pretrained", False)
     base = f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}"
+    # olmo-core's dotlist parser validates against the enum *name*
+    # (EMBEDDING_DUMP), not the value ("embedding_dump").
     return [
-        f"{base}.eval_mode=embedding_dump",
+        f"{base}.eval_mode=EMBEDDING_DUMP",
         f"{base}.save_embeddings_dir={save_embeddings_dir}",
         f"{base}.embedding_dump_dtype={embedding_dump_dtype}",
         f"{base}.pooling_type={pooling_type}",
@@ -138,8 +140,9 @@ def _build_one_command(
                 embedding_dump_dtype=args.embedding_dump_dtype,
             )
         )
+    # Single-quote the JSON so the shell doesn't expand the brackets.
     cmd_args.append(
-        "--trainer.callbacks.downstream_evaluator.tasks_to_run=" + json.dumps(tasks)
+        f"--trainer.callbacks.downstream_evaluator.tasks_to_run='{json.dumps(tasks)}'"
     )
     cmd_args.append("--trainer.callbacks.downstream_evaluator.run_on_test=True")
 

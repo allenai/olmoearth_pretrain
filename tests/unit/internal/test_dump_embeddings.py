@@ -54,7 +54,7 @@ def test_per_task_overrides_emits_expected_keys() -> None:
         embedding_dump_dtype="bfloat16",
     )
     base = "--trainer.callbacks.downstream_evaluator.tasks.m_eurosat"
-    assert f"{base}.eval_mode=embedding_dump" in args
+    assert f"{base}.eval_mode=EMBEDDING_DUMP" in args
     assert f"{base}.save_embeddings_dir=/weka/x" in args
     assert f"{base}.embedding_dump_dtype=bfloat16" in args
     assert f"{base}.pooling_type=max" in args
