@@ -9,6 +9,7 @@ from olmoearth_pretrain.internal.dump_embeddings import (
     _load_settings_group,
     _partition_by_norm_mode,
     _per_task_overrides,
+    _task_norm_mode,
 )
 
 
@@ -61,6 +62,32 @@ def test_per_task_overrides_emits_expected_keys() -> None:
     assert f"{base}.norm_stats_from_pretrained=True" in args
     # probe_lr should NOT be set in dump mode (no probe runs).
     assert all("probe_lr" not in s for s in args)
+
+
+def test_norm_mode_prefers_explicit_field() -> None:
+    """When ``norm_mode`` is set, it overrides ``norm_stats_from_pretrained``."""
+    # Galileo case: norm_stats_from_pretrained=False but actual mode=pre_trained.
+    entry = {
+        "settings": {
+            "norm_stats_from_pretrained": False,
+            "pooling_type": "mean",
+            "norm_mode": "pre_trained",
+        }
+    }
+    assert _task_norm_mode(entry) is True
+    entry["settings"]["norm_mode"] = "dataset"
+    assert _task_norm_mode(entry) is False
+
+
+def test_norm_mode_falls_back_to_norm_stats_from_pretrained() -> None:
+    """Without ``norm_mode``, fall back to ``norm_stats_from_pretrained`` (OlmoEarth case)."""
+    entry = {
+        "settings": {
+            "norm_stats_from_pretrained": True,
+            "pooling_type": "max",
+        }
+    }
+    assert _task_norm_mode(entry) is True
 
 
 def test_load_settings_group_raises_for_missing_group(tmp_path: Path) -> None:

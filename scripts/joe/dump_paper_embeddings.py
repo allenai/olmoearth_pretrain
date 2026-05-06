@@ -27,7 +27,11 @@ logger = getLogger(__name__)
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-MERGED_JSON = "data/max_eval_settings/max_eval_settings_per_group_merged.json"
+# Use the *enriched* JSONs that carry an explicit ``norm_mode`` per task
+# (added by ``scripts/joe/enrich_eval_settings_json.py``). Without them, the
+# partition step can pick the wrong sweep arm for models like Galileo where
+# ``norm_stats_from_pretrained`` is hardcoded False regardless of mode.
+MERGED_JSON = "data/max_eval_settings/max_eval_settings_per_group_merged.enriched.json"
 
 # Paper Table 2 uses 64x64 pastis only; drop the 128x128 variants by default.
 DEFAULT_EXCLUDED_TASKS = (
@@ -67,28 +71,28 @@ EXTERNAL_FM_GROUPS: list[tuple[str, str | None]] = [
 OLMOEARTH_RUNS: list[tuple[str, str, str, str, str]] = [
     (
         "nano",
-        "data/max_eval_settings/nano_settings.json",
+        "data/max_eval_settings/nano_settings.enriched.json",
         "nano_lr0.001_wd0.002",
         "scripts/official/nano.py",
         "/weka/dfive-default/helios/checkpoints/joer/nano_lr0.001_wd0.002/step370000",
     ),
     (
         "tiny",
-        "data/max_eval_settings/tiny_settings.json",
+        "data/max_eval_settings/tiny_settings.enriched.json",
         "tiny_lr0.0002_wd0.02",
         "scripts/official/tiny.py",
         "/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000",
     ),
     (
         "base",
-        "data/max_eval_settings/base_settings.json",
+        "data/max_eval_settings/base_settings.enriched.json",
         "phase2.0_base_lr0.0001_wd0.02",
         "scripts/official/base.py",
         "/weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step667200",
     ),
     (
         "large",
-        "data/max_eval_settings/large_settings.json",
+        "data/max_eval_settings/large_settings.enriched.json",
         "phase2.0_large_lr0.0001_wd0.002",
         "scripts/official/large.py",
         "/weka/dfive-default/helios/checkpoints/joer/phase2.0_large_lr0.0001_wd0.002/step560000",

@@ -74,10 +74,26 @@ def _per_task_overrides(
     ]
 
 
+def _task_norm_mode(entry: dict) -> bool:
+    """Return True if the val-best run was the ``pre_trained`` sweep arm.
+
+    Prefer the ``norm_mode`` field (added by ``enrich_eval_settings_json.py``)
+    because for a few models (Galileo, Tessera, ...) the per-task helper
+    hardcodes ``norm_stats_from_pretrained=False`` regardless of which sweep
+    arm produced the best result. ``norm_stats_from_pretrained`` is a correct
+    proxy for OlmoEarth (whose ``get_olmoearth_args`` directly maps the mode
+    to that flag).
+    """
+    settings = entry["settings"]
+    if "norm_mode" in settings:
+        return settings["norm_mode"] == "pre_trained"
+    return bool(settings.get("norm_stats_from_pretrained", False))
+
+
 def _partition_by_norm_mode(
     group_settings: dict[str, dict],
 ) -> dict[bool, list[str]]:
-    """Group task names by their best ``norm_stats_from_pretrained`` value.
+    """Group task names by their best norm mode (pretrained vs dataset).
 
     Why split the launch: ``--model.use_pretrained_normalizer`` and the matching
     ``norm_method`` are coupled to that flag, and the model arg is global, not
@@ -86,8 +102,7 @@ def _partition_by_norm_mode(
     """
     by_mode: dict[bool, list[str]] = {True: [], False: []}
     for task, entry in group_settings.items():
-        mode = bool(entry["settings"].get("norm_stats_from_pretrained", False))
-        by_mode[mode].append(task)
+        by_mode[_task_norm_mode(entry)].append(task)
     return {k: sorted(v) for k, v in by_mode.items() if v}
 
 
