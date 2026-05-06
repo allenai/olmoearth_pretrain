@@ -4,7 +4,7 @@ A Beaker session can be used to run most of the window creation and data
 materialization steps:
 
 ```
-beaker session create --budget ai2/es-platform --workspace ai2/earth-systems --priority high --gpus 1 --shared-memory 128GiB --bare --mount src=weka,ref=dfive-default,dst=/weka/dfive-default
+beaker session create --budget ai2/atec-olmoearth --workspace ai2/earth-systems --priority high --gpus 1 --shared-memory 128GiB --bare --mount src=weka,ref=dfive-default,dst=/weka/dfive-default
 ```
 
 The only exception is for Sentinel-1 and Sentinel-2 L2A, where it may be desirable to

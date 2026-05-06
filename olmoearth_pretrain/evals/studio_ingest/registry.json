@@ -115,6 +115,115 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/awf_lulc_map",
       "window_size": 64
     },
+    "burnrisk_8d_nbac": {
+      "classes": [
+        "0",
+        "1"
+      ],
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "sentinel2_l2a"
+      ],
+      "name": "burnrisk_8d_nbac",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 19963.0,
+            "mean": 2797.991553441403,
+            "min": 0.0,
+            "std": 3462.128374048374
+          },
+          "B02": {
+            "max": 17056.0,
+            "mean": 2742.4601498804145,
+            "min": 0.0,
+            "std": 3357.983085064015
+          },
+          "B03": {
+            "max": 17152.0,
+            "mean": 2766.9766015413234,
+            "min": 0.0,
+            "std": 3191.070943297956
+          },
+          "B04": {
+            "max": 17184.0,
+            "mean": 2720.677049800691,
+            "min": 0.0,
+            "std": 3164.727976467343
+          },
+          "B05": {
+            "max": 16850.0,
+            "mean": 3030.2717098060057,
+            "min": 0.0,
+            "std": 3132.0173541691083
+          },
+          "B06": {
+            "max": 16603.0,
+            "mean": 3382.8399415360086,
+            "min": 0.0,
+            "std": 2829.0052701581553
+          },
+          "B07": {
+            "max": 16437.0,
+            "mean": 3437.354116290194,
+            "min": 0.0,
+            "std": 2689.959382813977
+          },
+          "B08": {
+            "max": 16296.0,
+            "mean": 3559.7809055540793,
+            "min": 0.0,
+            "std": 2747.156814362987
+          },
+          "B09": {
+            "max": 17383.0,
+            "mean": 4172.207622110019,
+            "min": 0.0,
+            "std": 3629.4698043631947
+          },
+          "B11": {
+            "max": 15184.0,
+            "mean": 1905.4351294180176,
+            "min": 0.0,
+            "std": 1490.2586203959572
+          },
+          "B12": {
+            "max": 15118.0,
+            "mean": 1473.891998086633,
+            "min": 0.0,
+            "std": 1316.966842986169
+          },
+          "B8A": {
+            "max": 16164.0,
+            "mean": 3479.5087070954028,
+            "min": 0.0,
+            "std": 2560.063675143769
+          }
+        }
+      },
+      "num_classes": 2,
+      "num_timesteps": 8,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_nbac",
+      "split_stats": {
+        "test": {
+          "count": 1000
+        },
+        "train": {
+          "count": 1000
+        },
+        "val": {
+          "count": 500
+        }
+      },
+      "split_tag_key": "eval_split",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/burnrisk_8d_nbac",
+      "window_size": 50
+    },
     "canada_wildfire_sat_eval_split": {
       "classes": [
         "0",
@@ -1142,6 +1251,6 @@
       "window_size": 16
     }
   },
-  "updated_at": "2026-02-24T00:15:34.513906",
+  "updated_at": "2026-04-15T23:29:08.666694",
   "version": "1.0"
 }

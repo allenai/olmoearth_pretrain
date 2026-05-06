@@ -510,6 +510,162 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         return self.weight * total_loss
 
 
+@LOSS_REGISTRY.register("modality_patch_discrimination_masked_negatives_vec")
+class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
+    """Vectorized patch discrimination with same-target negative masking.
+
+    Equivalent to ModalityPatchDiscriminationMaskedNegatives but fully batched:
+    no per-sample Python loops, no .item() syncs, no repeated torch.eye allocations.
+    """
+
+    name = "ModalityPatchDiscMaskedVec"
+
+    def __init__(
+        self,
+        tau: float = 0.1,
+        pred2unit: bool = False,
+        weight: float = 1.0,
+        modality_weights: dict[str, float] | None = None,
+        same_target_threshold: float = 0.999,
+        mask_negatives_for_modalities: list[str] | None = None,
+    ) -> None:
+        """Initialize with same params as ModalityPatchDiscriminationMaskedNegatives."""
+        self.tau = tau
+        self.pred2unit = pred2unit
+        self.weight = weight
+        self.modality_weights = modality_weights
+        self.same_target_threshold = same_target_threshold
+        self.mask_negatives_for_modalities = mask_negatives_for_modalities
+
+    def _compute_modality_loss_parallel(
+        self,
+        all_preds: Tensor,
+        all_masks: Tensor,
+        all_targets: Tensor,
+        modality: str,
+    ) -> Tensor:
+        batch_size, num_tokens, dim = all_preds.shape
+        decoder_mask = all_masks == MaskValue.DECODER.value
+        count = decoder_mask.sum(dim=-1)  # (batch,)
+
+        # Sort so decoder tokens come first per sample
+        _, sort_indices = decoder_mask.long().sort(dim=1, descending=True, stable=True)
+        sort_expanded = sort_indices.unsqueeze(-1).expand(-1, -1, dim)
+        sorted_preds = all_preds.gather(1, sort_expanded).float()
+        sorted_targets = all_targets.gather(1, sort_expanded).float()
+
+        # valid_mask[b, i] = True iff position i is a decoder token for sample b
+        range_tensor = torch.arange(num_tokens, device=count.device)
+        valid_mask = range_tensor.unsqueeze(0) < count.unsqueeze(1)  # (batch, T)
+
+        if self.pred2unit:
+            mask_float = valid_mask.unsqueeze(-1).float()
+            total_decoder = mask_float.sum().clamp(min=1)
+            pred_mu = (sorted_preds * mask_float).sum(
+                dim=(0, 1), keepdim=True
+            ) / total_decoder
+            centered = sorted_preds - pred_mu
+            pred_var = (centered**2 * mask_float).sum(dim=(0, 1), keepdim=True) / (
+                total_decoder - 1
+            ).clamp(min=1)
+            sorted_preds = (sorted_preds - pred_mu) / (pred_var.sqrt() + 1e-4)
+
+        sorted_preds = F.normalize(sorted_preds, p=2, dim=-1)
+        sorted_targets = F.normalize(sorted_targets, p=2, dim=-1)
+
+        # Score matrix: (batch, T, T) — each sample independent
+        scores = torch.bmm(sorted_preds, sorted_targets.transpose(1, 2)) / self.tau
+
+        should_mask = (
+            self.mask_negatives_for_modalities is None
+            or modality in self.mask_negatives_for_modalities
+        )
+
+        # Track which samples to skip (default: none)
+        sample_skip = torch.zeros(batch_size, dtype=torch.bool, device=scores.device)
+
+        if should_mask:
+            # Target self-similarity per sample: (batch, T, T)
+            target_sim = torch.bmm(sorted_targets, sorted_targets.transpose(1, 2))
+            same_target = target_sim > self.same_target_threshold
+
+            # Only consider valid token pairs
+            valid_2d = valid_mask.unsqueeze(1) & valid_mask.unsqueeze(
+                2
+            )  # (batch, T, T)
+
+            # Diagonal (self) is never an invalid negative
+            diag = torch.eye(num_tokens, dtype=torch.bool, device=scores.device)
+            invalid_negatives = same_target & ~diag.unsqueeze(0) & valid_2d
+
+            # The original only applies masking when c_val > 1, so restrict
+            # invalid_negatives and skip-detection to samples with count > 1.
+            multi_token = (count > 1).unsqueeze(1).unsqueeze(2)  # (batch, 1, 1)
+            invalid_negatives = invalid_negatives & multi_token
+
+            # Skip samples where any valid token has zero valid negatives
+            valid_neg_count = (~same_target & valid_2d).sum(dim=-1)  # (batch, T)
+            has_zero_neg = (
+                (valid_neg_count == 0) & valid_mask & (count > 1).unsqueeze(1)
+            )
+            sample_skip = has_zero_neg.any(dim=1)
+
+            scores = scores.masked_fill(invalid_negatives, float("-inf"))
+
+        # Mask out non-decoder columns
+        col_mask = valid_mask.unsqueeze(1).expand_as(scores)
+        scores = scores.masked_fill(~col_mask, -torch.finfo(scores.dtype).max)
+
+        # Mask rows for zero-count samples to prevent NaN
+        row_mask = valid_mask.unsqueeze(2).expand_as(scores)
+        scores = scores.masked_fill(~row_mask, 0.0)
+
+        # Labels: diagonal (token i matches target i)
+        labels = range_tensor.unsqueeze(0).expand(batch_size, -1)
+
+        loss_per_pos = F.cross_entropy(
+            scores.reshape(-1, num_tokens),
+            labels.reshape(-1),
+            reduction="none",
+        ) * (self.tau * 2)
+        loss_per_pos = loss_per_pos.reshape(batch_size, num_tokens)
+
+        # Zero out invalid positions and skipped samples
+        sample_contributes = (count > 0) & ~sample_skip
+        effective_valid = valid_mask.float() * sample_contributes.unsqueeze(1).float()
+        effective_count = count.float() * sample_contributes.float()
+        num_contributing = sample_contributes.sum()
+
+        loss_per_sample = (loss_per_pos * effective_valid).sum(
+            dim=1
+        ) / effective_count.clamp(min=1)
+        loss = loss_per_sample.sum() / num_contributing.float().clamp(min=1)
+
+        return loss
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute patch discrimination loss with masked same-target negatives (vectorized)."""
+        modality_preds, modality_masks = (
+            predictions.flatten_tokens_and_masks_per_modality()
+        )
+        modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
+
+        total_loss = 0
+        for all_preds, all_masks, all_targets, modality in zip(
+            modality_preds, modality_masks, modality_targets, targets.modalities
+        ):
+            loss = self._compute_modality_loss_parallel(
+                all_preds, all_masks, all_targets, modality
+            )
+            if self.modality_weights is not None:
+                loss = loss * self.modality_weights.get(modality, 1.0)
+            total_loss += loss
+
+        return self.weight * total_loss
+
+
 @LOSS_REGISTRY.register("modality_patch_discrimination_vec")
 class ModalityPatchDiscriminationLossVec(Loss):
     """Loss function for per-modality patch discrimination task.

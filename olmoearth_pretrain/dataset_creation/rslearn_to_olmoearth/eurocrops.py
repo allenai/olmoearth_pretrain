@@ -23,6 +23,7 @@ from rslearn.data_sources import Item
 from rslearn.dataset import Dataset, Window
 from rslearn.utils.geometry import flatten_shape
 from rslearn.utils.mp import star_imap_unordered
+from rslearn.utils.raster_array import RasterArray
 from rslearn.utils.vector_format import GeojsonVectorFormat
 from upath import UPath
 
@@ -193,7 +194,7 @@ def convert_eurocrops(
         path=out_fname.parent,
         projection=window.projection,
         bounds=window.bounds,
-        array=array,
+        raster=RasterArray(chw_array=array),
         fname=out_fname.name,
     )
 
