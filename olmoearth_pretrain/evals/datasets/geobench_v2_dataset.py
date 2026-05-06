@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 
 import olmoearth_pretrain.evals.datasets.paths as paths
-from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 from olmoearth_pretrain.train.masking import MaskValue, MaskedOlmoEarthSample
+
+logger = logging.getLogger(__name__)
 
 _SLUG_TO_DM: dict[str, type] = {}
 
@@ -651,6 +655,64 @@ def _extract_label(
     raise KeyError(f"no label/mask in sample keys={list(sample)} slug={slug}")
 
 
+# Mapping from OlmoEarthSample field names to ModalitySpec for normalization.
+_MODALITY_NORM_MAP: dict[str, ModalitySpec] = {
+    "sentinel2_l2a": Modality.SENTINEL2_L2A,
+    "sentinel1": Modality.SENTINEL1,
+    "landsat": Modality.LANDSAT,
+    "naip": Modality.NAIP,
+    "srtm": Modality.SRTM,
+}
+
+
+def _normalize_tensor_olmoearth(
+    tensor: torch.Tensor,
+    modality_spec: ModalitySpec,
+    norm_config: dict,
+    std_mult: float = 2.0,
+) -> torch.Tensor:
+    """Normalize a [H, W, T, C] tensor using OlmoEarth pretraining (NORM_NO_CLIP_2_STD) stats.
+
+    Only the first C band stats are used when C < len(modality_spec.band_order),
+    which handles datasets that expose fewer channels than the full modality (e.g.
+    aerial RGB with 3 channels in a 4-channel NAIP slot).
+    """
+    arr = tensor.numpy() if isinstance(tensor, torch.Tensor) else np.asarray(tensor)
+    n_channels = arr.shape[-1]
+    band_order = list(modality_spec.band_order)[:n_channels]
+    modality_values = norm_config.get(modality_spec.name, {})
+
+    means: list[float] = []
+    stds: list[float] = []
+    for band in band_order:
+        stats = modality_values.get(str(band))
+        if stats is None:
+            means.append(0.0)
+            stds.append(1.0)
+        else:
+            means.append(float(stats["mean"]))
+            stds.append(float(stats["std"]))
+
+    means_arr = np.array(means, dtype=np.float32)
+    stds_arr = np.array(stds, dtype=np.float32)
+    lo = means_arr - std_mult * stds_arr
+    hi = means_arr + std_mult * stds_arr
+    denom = hi - lo
+    denom[denom == 0.0] = 1.0  # avoid div-by-zero for constant bands
+    return torch.tensor((arr.astype(np.float32) - lo) / denom, dtype=torch.float32)
+
+
+def _apply_olmoearth_normalization(olmo: OlmoEarthSample, norm_config: dict) -> OlmoEarthSample:
+    """Return a new OlmoEarthSample with each present modality normalized to OlmoEarth stats."""
+    updates: dict[str, torch.Tensor] = {}
+    for field_name, modality_spec in _MODALITY_NORM_MAP.items():
+        tensor = getattr(olmo, field_name, None)
+        if tensor is None:
+            continue
+        updates[field_name] = _normalize_tensor_olmoearth(tensor, modality_spec, norm_config)
+    return olmo._replace(**updates) if updates else olmo
+
+
 class GeobenchV2Dataset(Dataset):
     def __init__(
         self,
@@ -660,7 +722,7 @@ class GeobenchV2Dataset(Dataset):
         norm_stats_from_pretrained: bool = False,
         norm_method: str = "norm_no_clip_2_std",
     ) -> None:
-        del partition, norm_stats_from_pretrained, norm_method
+        del partition  # geobench_v2 DMs have fixed splits; partition is not applicable
         _load_datamodule_classes()
         if not dataset.startswith("gb2-"):
             raise ValueError(dataset)
@@ -672,6 +734,19 @@ class GeobenchV2Dataset(Dataset):
 
         self.config = dataset_to_config(dataset)
         self._slug = slug
+        self.norm_stats_from_pretrained = norm_stats_from_pretrained
+        if not norm_stats_from_pretrained:
+            logger.warning(
+                "GeobenchV2Dataset: norm_stats_from_pretrained=False is not fully "
+                "supported; per-modality dataset stats cannot be cleanly extracted "
+                "from the geobench_v2 DM after the channel remapping in "
+                "_sample_to_olmoearth. Falling back to OlmoEarth pretraining stats."
+            )
+
+        # Load OlmoEarth pretraining normalization config once at init time.
+        from olmoearth_pretrain.data.normalize import load_computed_config
+        self._olmoearth_norm_config = load_computed_config()
+
         root = Path(paths.GEOBENCH2_DIR) / slug
         dm_cls = _SLUG_TO_DM[slug]
         extra = dict(_SLUG_EXTRA_DM_KWARGS.get(slug, {}))
@@ -694,7 +769,20 @@ class GeobenchV2Dataset(Dataset):
         for k, v in self._inner[idx].items():
             raw[k] = v.clone() if torch.is_tensor(v) else v
         device = next(v.device for v in raw.values() if torch.is_tensor(v))
+
+        # Undo geobench_v2's normalizer so _sample_to_olmoearth receives approximately
+        # raw sensor values.  Non-image keys (mask, label, …) are passed through
+        # unchanged by unnormalize(), so label extraction below is not affected.
+        if hasattr(self._dm, "data_normalizer") and hasattr(
+            self._dm.data_normalizer, "unnormalize"
+        ):
+            raw = self._dm.data_normalizer.unnormalize(raw)
+
         olmo = _sample_to_olmoearth(raw, self._band_order, self._slug)
+
+        # Re-normalize to OlmoEarth pretraining statistics (NORM_NO_CLIP_2_STD).
+        olmo = _apply_olmoearth_normalization(olmo, self._olmoearth_norm_config)
+
         masked = MaskedOlmoEarthSample.from_olmoearthsample(olmo)
         label = _extract_label(raw, self._slug, self.config.task_type, self.config.num_classes)
         if label.device != device:
