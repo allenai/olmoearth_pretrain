@@ -33,6 +33,7 @@ Example (OlmoEarth)::
 """
 
 import argparse
+import concurrent.futures as cf
 import json
 import os
 import subprocess  # nosec
@@ -383,12 +384,18 @@ def main() -> None:
         print(cmd)
     if args.print_only:
         return
-    failures = 0
-    for cmd in cmds:
+
+    def _run(cmd: str) -> int:
         result = subprocess.run(cmd, shell=True, check=False)  # nosec
-        if result.returncode != 0:
-            print(f"  -> partition failed (rc={result.returncode}); continuing")
-            failures += 1
+        return result.returncode
+
+    failures = 0
+    # Submissions are independent and I/O-bound; fire partitions in parallel.
+    with cf.ThreadPoolExecutor(max_workers=max(1, len(cmds))) as ex:
+        for rc in ex.map(_run, cmds):
+            if rc != 0:
+                print(f"  -> partition failed (rc={rc}); continuing")
+                failures += 1
     if failures:
         # Surface non-zero so the outer fan-out also records this group as failed.
         raise SystemExit(f"{failures} of {len(cmds)} partitions failed")

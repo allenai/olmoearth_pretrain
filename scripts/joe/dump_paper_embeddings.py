@@ -18,9 +18,11 @@ Example::
 """
 
 import argparse
+import concurrent.futures as cf
 import json
 import os
 import subprocess  # nosec
+import threading
 from logging import getLogger
 
 logger = getLogger(__name__)
@@ -244,6 +246,14 @@ def main() -> None:
         help="Comma-separated Beaker clusters (e.g. ai2/jupiter,ai2/saturn,ai2/neptune). "
         "Becomes --launch.clusters=[...] on every launched run.",
     )
+    p.add_argument(
+        "--parallel",
+        type=int,
+        default=8,
+        help="Number of Beaker submissions to fire in parallel. The submit "
+        "step is I/O-bound (image push), so 8 is comfortable; bump higher if "
+        "Beaker isn't rate-limiting.",
+    )
     p.add_argument("--dry_run", action="store_true")
     p.add_argument("--print_only", action="store_true")
     args = p.parse_args()
@@ -273,11 +283,20 @@ def main() -> None:
     if args.print_only:
         return
     failures: list[tuple[str, int]] = []
-    for cmd in cmds:
+    print_lock = threading.Lock()
+
+    def _run(cmd: str) -> tuple[str, int]:
         result = subprocess.run(cmd, shell=True, check=False)  # nosec
-        if result.returncode != 0:
-            print(f"  -> launch failed (rc={result.returncode}); continuing")
-            failures.append((cmd, result.returncode))
+        with print_lock:
+            tag = "ok" if result.returncode == 0 else f"FAIL rc={result.returncode}"
+            print(f"  [{tag}] {cmd[:160]}...")
+        return cmd, result.returncode
+
+    # Beaker submissions are I/O-bound (image push); thread pool is fine.
+    with cf.ThreadPoolExecutor(max_workers=args.parallel) as ex:
+        for cmd, rc in ex.map(_run, cmds):
+            if rc != 0:
+                failures.append((cmd, rc))
     if failures:
         print(f"\n{len(failures)} of {len(cmds)} launches failed:")
         for cmd, rc in failures:
