@@ -1580,7 +1580,6 @@ class Encoder(FlexiVitBase):
                 x=tokens,
                 cu_seqlens=cu_seqlens,
                 max_seqlen=max_seqlen,
-                # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
             )
 

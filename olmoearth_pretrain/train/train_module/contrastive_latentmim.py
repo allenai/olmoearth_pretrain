@@ -262,15 +262,15 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
 
-                # Skip bad batches
+                del latent_a, latent_b
+
                 if torch.isnan(loss).any() or torch.isinf(loss).any():
                     logger.warning(
-                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
+                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}. "
+                        f"Zeroing loss to keep FSDP in sync."
                     )
-                    del latent_a, latent_b
-                    break
+                    loss = loss * 0.0
 
-                del latent_a, latent_b
                 loss.backward()
 
         if dry_run:
@@ -289,6 +289,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             )
         self.log_regularization(total_batch_reg)
         self._log_per_modality_losses()
+        self._log_stability_metrics()
 
         del batch  # In case this helps with memory utilization.
         del masked_batch_a, masked_batch_b
@@ -300,6 +301,20 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             return
         for modality, value in per_mod.items():
             self.trainer.record_metric(f"train/loss/{modality}", value, ReduceType.mean)
+
+    def _log_stability_metrics(self) -> None:
+        """Log metrics to catch divergence before it becomes NaN."""
+        with torch.no_grad():
+            max_param = torch.tensor(0.0, device=next(self.model.parameters()).device)
+            for param in self.model.parameters():
+                local = get_local_tensor(param)
+                max_param = torch.max(max_param, local.abs().max())
+            self.trainer.record_metric(
+                "stability/max_param_abs",
+                max_param,
+                reduce_type=None,
+                namespace="optim",
+            )
 
     # ------------------------------------------------------------------
     # Per-parameter-group gradient norms
