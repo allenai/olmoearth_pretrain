@@ -641,16 +641,17 @@ def _extract_label(
             y = torch.as_tensor(y)
         # so2sat labels are one-hot encoded; convert to class index
         if y.dim() == 1:
-            return y.argmax().long().unsqueeze(0)
+            return y.argmax().long()  # 0D scalar — batches to (N,)
         return y.long()
 
     if "label" in sample:
         y = sample["label"]
         if not torch.is_tensor(y):
             y = torch.as_tensor(y)
-        if y.dim() == 0:
-            return y.long().unsqueeze(0)
-        return y.long()
+        y = y.long()
+        if y.numel() == 1:
+            return y.squeeze()  # 0D scalar — batches to (N,) as cross_entropy expects
+        return y
 
     raise KeyError(f"no label/mask in sample keys={list(sample)} slug={slug}")
 
