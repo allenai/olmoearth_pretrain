@@ -181,8 +181,13 @@ def _build_one_command(
     module_path = _get_module_path(args)
     run_name = _build_run_name(args) + run_name_suffix
 
+    # When loading a pretrain checkpoint we only want the model weights -- the
+    # dataloader state in the checkpoint fingerprints the pretrain dataset and
+    # will hard-error on mismatch when the eval pipeline builds a different one.
     checkpoint_args = (
-        f"--trainer.load_path={args.checkpoint_path}"
+        f"--trainer.load_path={args.checkpoint_path} "
+        "--trainer.load_trainer_state=False "
+        "--trainer.load_optim_state=False"
         if args.checkpoint_path is not None
         else ""
     )
