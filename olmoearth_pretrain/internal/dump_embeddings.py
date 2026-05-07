@@ -238,6 +238,17 @@ def _build_one_command(
 def _build_commands(args: argparse.Namespace) -> list[str]:
     """Build one command per (group, norm_stats_from_pretrained) partition."""
     group_settings = _load_settings_group(args.settings_json, args.settings_group)
+    if args.only_tasks:
+        wanted = set(t.strip() for t in args.only_tasks.split(",") if t.strip())
+        keep = {t: v for t, v in group_settings.items() if t in wanted}
+        missing = sorted(wanted - set(group_settings))
+        if missing:
+            logger.warning(
+                f"--only_tasks names not in group: {missing} (group has "
+                f"{sorted(group_settings)})"
+            )
+        logger.info(f"Restricted to {len(keep)} task(s): {sorted(keep)}")
+        group_settings = keep
     if args.exclude_tasks:
         excluded = set(t.strip() for t in args.exclude_tasks.split(",") if t.strip())
         keep = {t: v for t, v in group_settings.items() if t not in excluded}
@@ -348,6 +359,13 @@ def main() -> None:
         default=None,
         help="Comma-separated list of task names to drop from the JSON group "
         "before launching (e.g. pastis128_sentinel1,pastis128_sentinel2).",
+    )
+    p.add_argument(
+        "--only_tasks",
+        default=None,
+        help="Comma-separated allow-list. If set, drop everything else from "
+        "the group before partitioning. Useful for retrying just a couple of "
+        "OOM-prone tasks on a beefier cluster.",
     )
     p.add_argument(
         "--priority",
