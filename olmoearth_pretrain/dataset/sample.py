@@ -342,3 +342,106 @@ def load_image_for_sample(
                 band_set_images.append(image)
 
     return np.concatenate(band_set_images, axis=1)
+
+
+def load_nodata_mask_for_sample(
+    image_tile: ModalityTile, sample: SampleInformation
+) -> npt.NDArray:
+    """Load a boolean valid-pixel mask for a spatial modality.
+
+    Mirrors the spatial read logic in ``load_image_for_sample`` but returns a
+    per-pixel, per-timestep boolean mask instead of the image data.
+
+    A pixel is marked **False** (nodata) when *any* band at that (t, h, w)
+    position equals the GeoTIFF nodata value.  Masks from different band sets
+    are combined with AND (pixel must be valid in every band set).
+
+    Convention matches ``missing_timesteps_masks``: **True = valid**.
+
+    Args:
+        image_tile: the modality tile to read.
+        sample: the parent sample (used for windowing / resolution logic).
+
+    Returns:
+        boolean array of shape ``(T, H, W)`` where *H* and *W* are at the
+        full raw-tile resolution (before subtile splitting).
+    """
+    if not image_tile.modality.is_spatial:
+        raise ValueError(
+            "load_nodata_mask_for_sample is only supported for spatial modalities"
+        )
+
+    factor = max(
+        1, image_tile.grid_tile.resolution_factor // sample.grid_tile.resolution_factor
+    )
+    sample_tile_size = sample.grid_tile.get_tile_size()
+
+    band_set_masks: list[npt.NDArray] = []
+    for band_set, fname in image_tile.band_sets.items():
+        with fname.open("rb") as f:
+            with rasterio.open(f) as raster:
+                if raster.width != raster.height:
+                    raise ValueError(
+                        f"expected tile to be square but width={raster.width} != height={raster.height}"
+                    )
+
+                nodata_val = raster.nodata
+
+                if (
+                    image_tile.grid_tile.contains(sample.grid_tile)
+                    and image_tile.grid_tile.get_projected_extent()
+                    != sample.grid_tile.get_projected_extent()
+                ):
+                    col_offset, row_offset, crop_width, crop_height = (
+                        image_tile.grid_tile.get_crop_window(
+                            sample.grid_tile, raster.width, raster.height
+                        )
+                    )
+                    rasterio_window = rasterio.windows.Window(
+                        col_off=col_offset,
+                        row_off=row_offset,
+                        width=crop_width,
+                        height=crop_height,
+                    )
+                    image: npt.NDArray = raster.read(window=rasterio_window)
+                else:
+                    image = raster.read()
+
+                subtile_size = image.shape[1]
+                desired_subtile_size = int(
+                    sample_tile_size
+                    * image_tile.modality.image_tile_size_factor
+                    // factor
+                )
+
+                if nodata_val is not None:
+                    is_nodata = image == nodata_val
+                else:
+                    is_nodata = np.zeros_like(image, dtype=bool)
+
+                if desired_subtile_size < subtile_size:
+                    downscale_factor = subtile_size // desired_subtile_size
+                    is_nodata = is_nodata[:, ::downscale_factor, ::downscale_factor]
+                elif desired_subtile_size > subtile_size:
+                    upscale_factor = desired_subtile_size // subtile_size
+                    is_nodata = is_nodata.repeat(repeats=upscale_factor, axis=1).repeat(
+                        repeats=upscale_factor, axis=2
+                    )
+
+                num_bands = len(band_set.bands)
+                is_nodata = is_nodata.reshape(
+                    -1, num_bands, desired_subtile_size, desired_subtile_size
+                )
+
+                # Any band nodata -> pixel nodata; then invert to valid mask
+                valid_mask = ~np.any(is_nodata, axis=1)  # (T, H, W)
+                band_set_masks.append(valid_mask)
+
+    if not band_set_masks:
+        raise ValueError("No spatial band sets found for nodata mask computation")
+
+    combined = band_set_masks[0]
+    for mask in band_set_masks[1:]:
+        combined = combined & mask
+
+    return combined

@@ -35,6 +35,7 @@ from olmoearth_pretrain.dataset.sample import (
     SampleInformation,
     image_tiles_to_samples,
     load_image_for_sample,
+    load_nodata_mask_for_sample,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,7 @@ class ConvertToH5py:
     sample_file_pattern: str = "sample_{index}.h5"
     compression_settings_fname: str = "compression_settings.json"
     missing_timesteps_mask_group_name: str = "missing_timesteps_masks"
+    nodata_mask_name_template: str = "{modality_name}_nodata_mask"
 
     def __init__(
         self,
@@ -588,6 +590,8 @@ class ConvertToH5py:
 
         sample_dict["timestamps"] = reference_timestamps_array
 
+        nodata_mask_dict: dict[str, np.ndarray] = {}
+
         # Load image data for all modalities in the sample
         for modality in sample.modalities:
             sample_modality = sample.modalities[modality]
@@ -596,6 +600,12 @@ class ConvertToH5py:
             if modality == Modality.SENTINEL1:
                 # Convert Sentinel1 data to dB
                 image = convert_to_db(image)
+
+            # Build the spatial nodata mask for S2 before subtile cropping
+            nodata_mask: np.ndarray | None = None
+            if modality == Modality.SENTINEL2_L2A:
+                raw_mask = load_nodata_mask_for_sample(sample_modality, sample)
+                nodata_mask = rearrange(raw_mask, "t h w -> h w t")
 
             if modality.is_spatial:
                 if self.num_subtiles_per_dim is None:
@@ -616,6 +626,17 @@ class ConvertToH5py:
                 logger.info(f"Image shape: {image.shape}")
                 image = image[row : row + tile_size, col : col + tile_size, ...]
                 logger.info(f"Image shape after slicing: {image.shape}")
+
+                if nodata_mask is not None:
+                    nodata_mask = nodata_mask[
+                        row : row + tile_size, col : col + tile_size, :
+                    ]
+
+            if nodata_mask is not None:
+                mask_name = self.nodata_mask_name_template.format(
+                    modality_name=modality.name
+                )
+                nodata_mask_dict[mask_name] = nodata_mask
 
             sample_dict[modality.name] = image
 
@@ -694,6 +715,13 @@ class ConvertToH5py:
                         )
                         # Boolean masks typically don't benefit from compression/shuffle
                         masks_group.create_dataset(mod_name, data=mask_array)
+
+                # Store spatial nodata masks (True = valid pixel)
+                for mask_name, mask_array in nodata_mask_dict.items():
+                    logger.info(
+                        f"Writing nodata mask {mask_name} to h5 file path {h5_file_path}"
+                    )
+                    h5file.create_dataset(mask_name, data=mask_array)
         return sample_dict
 
     def _log_modality_distribution(self, samples: list[SampleInformation]) -> None:

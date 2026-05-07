@@ -398,4 +398,13 @@ are better optimized for reading during training. Note that here we split up eac
 
 ```
 python -m olmoearth_pretrain.internal.run_h5_conversion --tile_path=$OLMOEARTH_PATH --supported_modality_names='[cdl,era5_10,landsat,naip_10,openstreetmap_raster,sentinel1,sentinel2_l2a,srtm,worldcereal,worldcover,wri_canopy_height_map]' --compression=zstd --compression_opts=3 --tile_size=128
+
+for high frequency data:
+python -m olmoearth_pretrain.internal.run_h5_conversion \
+  --tile_path="$H5PATH" \
+  --supported_modality_names='[era5l_day_10,sentinel2_l2a]' \
+  --time_span_names='[hfreq]' \
+  --compression=zstd \
+  --compression_opts=3 \
+  --tile_size=128
 ```
