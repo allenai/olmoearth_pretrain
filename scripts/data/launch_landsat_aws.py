@@ -243,6 +243,16 @@ def cmd_launch(args: argparse.Namespace) -> None:
             "MinCount": 1,
             "MaxCount": 1,
             "UserData": userdata,
+            "BlockDeviceMappings": [
+                {
+                    "DeviceName": "/dev/xvda",
+                    "Ebs": {
+                        "VolumeSize": args.volume_size,
+                        "VolumeType": "gp3",
+                        "DeleteOnTermination": True,
+                    },
+                }
+            ],
             "InstanceMarketOptions": {
                 "MarketType": "spot",
                 "SpotOptions": {"SpotInstanceType": "one-time"},
@@ -506,6 +516,7 @@ def main() -> None:
     p.add_argument("--subnet-id", default=None)
     p.add_argument("--iam-instance-profile", default=None)
     p.add_argument("--workers", type=int, default=16, help="rslearn parallelism per instance")
+    p.add_argument("--volume-size", type=int, default=50, help="Root EBS volume size in GB")
     p.add_argument("--dry-run", action="store_true", help="Print what would be launched")
     p.set_defaults(func=cmd_launch)
 
