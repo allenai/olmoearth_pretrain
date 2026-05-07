@@ -679,13 +679,14 @@ def _normalize_tensor_olmoearth(
     """
     arr = tensor.numpy() if isinstance(tensor, torch.Tensor) else np.asarray(tensor)
     n_channels = arr.shape[-1]
-    band_order = list(modality_spec.band_order)[:n_channels]
+    band_order = list(modality_spec.band_order)
     modality_values = norm_config.get(modality_spec.name, {})
 
     means: list[float] = []
     stds: list[float] = []
-    for band in band_order:
-        stats = modality_values.get(str(band))
+    for i in range(n_channels):
+        band = band_order[i] if i < len(band_order) else None
+        stats = modality_values.get(str(band)) if band is not None else None
         if stats is None:
             means.append(0.0)
             stds.append(1.0)
