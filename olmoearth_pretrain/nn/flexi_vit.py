@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+import torch.utils.checkpoint
 from einops import rearrange, reduce, repeat
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
@@ -1129,6 +1130,7 @@ class Encoder(FlexiVitBase):
         band_dropout_modalities: list[str] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
+        activation_checkpointing: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1173,6 +1175,8 @@ class Encoder(FlexiVitBase):
             post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm.
+            activation_checkpointing: Trade compute for memory by checkpointing
+                each transformer block's activations during forward.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1192,6 +1196,7 @@ class Encoder(FlexiVitBase):
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
         self.log_token_norm_stats = log_token_norm_stats
+        self.activation_checkpointing = activation_checkpointing
         if self.has_register_tokens:
             self.register_tokens = nn.Parameter(
                 torch.zeros(num_register_tokens, embedding_size)
@@ -1576,13 +1581,27 @@ class Encoder(FlexiVitBase):
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
 
-            tokens = blk(
-                x=tokens,
-                cu_seqlens=cu_seqlens,
-                max_seqlen=max_seqlen,
-                # we will have to specify k and q lens for cross attention
-                attn_mask=attn_mask,
-            )
+            if self.activation_checkpointing and self.training:
+                tokens = torch.utils.checkpoint.checkpoint(
+                    blk,
+                    tokens,
+                    None,  # y
+                    cu_seqlens,
+                    None,  # cu_seqlens_q
+                    None,  # cu_seqlens_k
+                    max_seqlen,
+                    None,  # max_seqlen_q
+                    None,  # max_seqlen_k
+                    attn_mask,
+                    use_reentrant=False,
+                )
+            else:
+                tokens = blk(
+                    x=tokens,
+                    cu_seqlens=cu_seqlens,
+                    max_seqlen=max_seqlen,
+                    attn_mask=attn_mask,
+                )
 
         if self.has_register_tokens:
             tokens, register_tokens = self.pop_register_tokens(tokens)
@@ -2120,6 +2139,7 @@ class EncoderConfig(Config):
     band_dropout_modalities: list[str] | None = None
     patch_embed_hidden_sizes: list[int] | None = None
     post_proj_hidden_sizes: list[int] | None = None
+    activation_checkpointing: bool = False
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
