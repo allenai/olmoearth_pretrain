@@ -32,7 +32,7 @@ from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
 
 logger = logging.getLogger(__name__)
 
-LEARNING_RATE = 0.0001
+LEARNING_RATE = 0.0002
 WEIGHT_DECAY = 0.02
 
 
