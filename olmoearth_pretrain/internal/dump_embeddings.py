@@ -34,6 +34,7 @@ Example (OlmoEarth)::
 
 import argparse
 import json
+import os
 import subprocess  # nosec
 from logging import getLogger
 
@@ -145,13 +146,18 @@ def _build_one_command(
     run_name_suffix: str,
 ) -> str:
     """Build a single launch command for one (group, norm-mode) partition."""
+    # Suffix the save dir with a per-group subdir so different models don't
+    # overwrite each other's embeddings. Final layout:
+    #   {save_embeddings_dir}/{save_subdir}/{task}/{train,valid,test}.pt
+    save_subdir = args.save_subdir or args.settings_group
+    full_save_dir = os.path.join(args.save_embeddings_dir, save_subdir)
     cmd_args: list[str] = []
     for task_name in tasks:
         cmd_args.extend(
             _per_task_overrides(
                 task_name=task_name,
                 settings=group_settings[task_name]["settings"],
-                save_embeddings_dir=args.save_embeddings_dir,
+                save_embeddings_dir=full_save_dir,
                 embedding_dump_dtype=args.embedding_dump_dtype,
             )
         )
@@ -286,8 +292,15 @@ def main() -> None:
     p.add_argument(
         "--save_embeddings_dir",
         required=True,
-        help="Directory where embeddings will be written. Each task lands in "
-        "{save_embeddings_dir}/{task_name}/{train,valid,test}.pt",
+        help="Base directory where embeddings will be written. Each task lands "
+        "in {save_embeddings_dir}/{save_subdir}/{task_name}/{train,valid,test}.pt",
+    )
+    p.add_argument(
+        "--save_subdir",
+        default=None,
+        help="Per-model subdirectory under save_embeddings_dir. Defaults to "
+        "the JSON settings_group. Set this to e.g. 'olmoearth_base' for the "
+        "OlmoEarth runs (whose settings_group is the noisier checkpoint name).",
     )
     p.add_argument(
         "--embedding_dump_dtype",

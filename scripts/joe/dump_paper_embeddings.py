@@ -176,6 +176,7 @@ def _build_olmoearth_cmd(
         f"--settings_json={settings_json}",
         f"--settings_group={group_key}",
         f"--save_embeddings_dir={args.save_embeddings_dir}",
+        f"--save_subdir=olmoearth_{size}",
         f"--embedding_dump_dtype={args.embedding_dump_dtype}",
         f"--module_path={module_path}",
         f"--checkpoint_path={checkpoint_path}",
