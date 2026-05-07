@@ -145,7 +145,7 @@ def build_train_module_config(
         rank_microbatch_size=32,
         masking_config=MASKING_CONFIG,
         loss_config=LossConfig(
-            loss_config={"type": "modality_patch_discrimination_vec", "tau": 0.1}
+            loss_config={"type": "modality_patch_discrimination", "tau": 0.1}
         ),
         contrastive_config=LossConfig(loss_config={"type": "InfoNCE", "weight": 0.1}),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
@@ -163,10 +163,10 @@ def build_train_module_config(
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
     """Build dataloader config."""
     return OlmoEarthDataLoaderConfig(
-        num_workers=16,
+        num_workers=12,
         global_batch_size=512,
         token_budget=2250,
-        prefetch_factor=4,
+        prefetch_factor=2,
         sampled_hw_p_list=list(range(1, 13)),
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,

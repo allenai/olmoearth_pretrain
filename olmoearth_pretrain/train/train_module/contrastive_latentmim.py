@@ -332,14 +332,14 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
     def _log_param_group_grad_norms(self) -> None:
         """Compute and log L2 grad norms for meaningful parameter groups."""
         for group_name, prefixes in self._PARAM_GROUPS.items():
-            grads = []
+            sq_sum = torch.tensor(0.0, device=next(self.model.parameters()).device)
             for name, param in self.model.named_parameters():
                 if param.grad is None:
                     continue
                 if any(name.startswith(p) for p in prefixes):
-                    grads.append(get_local_tensor(param.grad))
-            if grads:
-                sq_sum = sum(g.float().pow(2).sum() for g in grads)
+                    g = get_local_tensor(param.grad)
+                    sq_sum += g.float().pow(2).sum()
+            if sq_sum > 0:
                 self.trainer.record_metric(
                     f"grad_norm/{group_name}",
                     sq_sum.sqrt(),
