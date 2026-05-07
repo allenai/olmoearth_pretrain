@@ -80,6 +80,7 @@ elif command -v apt-get &>/dev/null; then
 fi
 
 # Install uv
+export HOME="${HOME:-/root}"
 curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 
