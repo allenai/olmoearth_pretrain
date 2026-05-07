@@ -145,7 +145,10 @@ def build_train_module_config(
         rank_microbatch_size=32,
         masking_config=MASKING_CONFIG,
         loss_config=LossConfig(
-            loss_config={"type": "modality_patch_discrimination", "tau": 0.1}
+            loss_config={
+                "type": "modality_patch_discrimination_masked_negatives_vec",
+                "tau": 0.1,
+            }
         ),
         contrastive_config=LossConfig(loss_config={"type": "InfoNCE", "weight": 0.1}),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
