@@ -288,9 +288,64 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 ReduceType.mean,
             )
         self.log_regularization(total_batch_reg)
+        self._log_per_modality_losses()
 
         del batch  # In case this helps with memory utilization.
         del masked_batch_a, masked_batch_b
+
+    def _log_per_modality_losses(self) -> None:
+        """Log per-modality loss breakdown if the base loss tracks it."""
+        per_mod = getattr(self.base_loss, "_per_modality_losses", None)
+        if not per_mod:
+            return
+        for modality, value in per_mod.items():
+            self.trainer.record_metric(f"train/loss/{modality}", value, ReduceType.mean)
+
+    # ------------------------------------------------------------------
+    # Per-parameter-group gradient norms
+    # ------------------------------------------------------------------
+
+    _PARAM_GROUPS = {
+        "encoder_patch_embed": (
+            "encoder.patch_embeddings",
+            "encoder.composite_encodings",
+        ),
+        "encoder_blocks": ("encoder.blocks",),
+        "encoder_projection": (
+            "encoder.norm",
+            "encoder.embedding_projector",
+            "encoder.project_and_aggregate",
+        ),
+        "decoder_blocks": ("decoder.blocks",),
+        "decoder_other": (
+            "decoder.patch_embeddings",
+            "decoder.composite_encodings",
+            "decoder.norm",
+        ),
+    }
+
+    def optim_step(self) -> None:
+        """Extend base optim_step with per-parameter-group gradient norms."""
+        self._log_param_group_grad_norms()
+        super().optim_step()
+
+    def _log_param_group_grad_norms(self) -> None:
+        """Compute and log L2 grad norms for meaningful parameter groups."""
+        for group_name, prefixes in self._PARAM_GROUPS.items():
+            grads = []
+            for name, param in self.model.named_parameters():
+                if param.grad is None:
+                    continue
+                if any(name.startswith(p) for p in prefixes):
+                    grads.append(get_local_tensor(param.grad))
+            if grads:
+                sq_sum = sum(g.float().pow(2).sum() for g in grads)
+                self.trainer.record_metric(
+                    f"grad_norm/{group_name}",
+                    sq_sum.sqrt(),
+                    reduce_type=None,
+                    namespace="optim",
+                )
 
     def model_forward(
         self,

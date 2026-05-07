@@ -298,6 +298,7 @@ class ModalityPatchDiscriminationLoss(Loss):
         self.pred2unit = pred2unit
         self.weight = weight
         self.modality_weights = modality_weights
+        self._per_modality_losses: dict[str, Tensor] = {}
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
@@ -319,6 +320,7 @@ class ModalityPatchDiscriminationLoss(Loss):
 
         # Accumulate to the total loss
         total_loss = 0
+        self._per_modality_losses = {}
         for all_preds, all_masks, all_targets, modality in zip(
             modality_preds, modality_masks, modality_targets, targets.modalities
         ):
@@ -364,6 +366,7 @@ class ModalityPatchDiscriminationLoss(Loss):
                 # logger.warning("No decoded values for this modality")
                 continue
             loss = torch.stack(losses).mean()
+            self._per_modality_losses[modality] = loss.detach()
             if self.modality_weights is not None:
                 loss = loss * self.modality_weights[modality]
             total_loss += loss
@@ -408,6 +411,7 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         self.modality_weights = modality_weights
         self.same_target_threshold = same_target_threshold
         self.mask_negatives_for_modalities = mask_negatives_for_modalities
+        self._per_modality_losses: dict[str, Tensor] = {}
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
@@ -419,6 +423,7 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
 
         total_loss = 0
+        self._per_modality_losses = {}
         for all_preds, all_masks, all_targets, modality in zip(
             modality_preds, modality_masks, modality_targets, targets.modalities
         ):
@@ -502,6 +507,7 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
                 continue
 
             loss = torch.stack(losses).mean()
+            self._per_modality_losses[modality] = loss.detach()
             if self.modality_weights is not None:
                 loss = loss * self.modality_weights.get(modality, 1.0)
 
@@ -536,6 +542,7 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         self.modality_weights = modality_weights
         self.same_target_threshold = same_target_threshold
         self.mask_negatives_for_modalities = mask_negatives_for_modalities
+        self._per_modality_losses: dict[str, Tensor] = {}
 
     def _compute_modality_loss_parallel(
         self,
@@ -653,12 +660,14 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
 
         total_loss = 0
+        self._per_modality_losses = {}
         for all_preds, all_masks, all_targets, modality in zip(
             modality_preds, modality_masks, modality_targets, targets.modalities
         ):
             loss = self._compute_modality_loss_parallel(
                 all_preds, all_masks, all_targets, modality
             )
+            self._per_modality_losses[modality] = loss.detach()
             if self.modality_weights is not None:
                 loss = loss * self.modality_weights.get(modality, 1.0)
             total_loss += loss
@@ -695,6 +704,7 @@ class ModalityPatchDiscriminationLossVec(Loss):
         self.pred2unit = pred2unit
         self.weight = weight
         self.modality_weights = modality_weights
+        self._per_modality_losses: dict[str, Tensor] = {}
 
     def _compute_modality_loss_parallel(
         self,
@@ -800,12 +810,14 @@ class ModalityPatchDiscriminationLossVec(Loss):
 
         # Accumulate to the total loss
         total_loss = 0
+        self._per_modality_losses = {}
         for all_preds, all_masks, all_targets, modality in zip(
             modality_preds, modality_masks, modality_targets, targets.modalities
         ):
             loss = self._compute_modality_loss_parallel(
                 all_preds, all_masks, all_targets
             )
+            self._per_modality_losses[modality] = loss.detach()
             if self.modality_weights is not None:
                 loss = loss * self.modality_weights[modality]
             total_loss += loss
