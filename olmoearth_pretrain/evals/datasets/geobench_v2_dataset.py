@@ -656,6 +656,45 @@ def _extract_label(
     raise KeyError(f"no label/mask in sample keys={list(sample)} slug={slug}")
 
 
+def _manual_unnormalize(
+    data: dict,
+    normalizer: Any,
+) -> dict:
+    """Fallback unnormalization for when the normalizer's own unnormalize() fails.
+
+    geobench_v2's _reshape_and_expand assumes [T, C, H, W] for 4-D tensors and
+    reshapes stats to [1, C, 1, 1].  Some datasets (e.g. PASTIS) store data as
+    [C, T, H, W], causing the expand to fail when C_stats != T.  This function
+    finds the matching channel dimension by comparing len(stats) to each axis.
+    Fill values are not masked (limitation vs. the official unnormalize).
+    """
+    result = {}
+    for key, tensor in data.items():
+        if not torch.is_tensor(tensor) or key not in normalizer.means:
+            result[key] = tensor
+            continue
+
+        means = normalizer.means[key]
+        stds = normalizer.stds[key]
+        n_bands = len(means)
+
+        # Find the first dimension whose size matches n_bands.
+        channel_dim = next(
+            (d for d in range(tensor.dim()) if tensor.shape[d] == n_bands), None
+        )
+        if channel_dim is None:
+            result[key] = tensor
+            continue
+
+        view_shape = [1] * tensor.dim()
+        view_shape[channel_dim] = n_bands
+        means_r = means.view(view_shape).to(tensor.device)
+        stds_r = stds.view(view_shape).to(tensor.device)
+        result[key] = tensor * (stds_r + 1e-6) + means_r
+
+    return result
+
+
 # Mapping from OlmoEarthSample field names to ModalitySpec for normalization.
 _MODALITY_NORM_MAP: dict[str, ModalitySpec] = {
     "sentinel2_l2a": Modality.SENTINEL2_L2A,
@@ -778,7 +817,18 @@ class GeobenchV2Dataset(Dataset):
         if hasattr(self._dm, "data_normalizer") and hasattr(
             self._dm.data_normalizer, "unnormalize"
         ):
-            raw = self._dm.data_normalizer.unnormalize(raw)
+            try:
+                raw = self._dm.data_normalizer.unnormalize(raw)
+            except RuntimeError:
+                # geobench_v2's _reshape_and_expand can fail for timeseries datasets
+                # (e.g. PASTIS) whose tensors are [C, T, H, W] instead of [T, C, H, W].
+                # Fall back to a manual unnormalize that finds the channel dim by size.
+                logger.warning(
+                    "unnormalize() failed for %s (idx=%d); falling back to manual unnormalize.",
+                    self._slug,
+                    idx,
+                )
+                raw = _manual_unnormalize(raw, self._dm.data_normalizer)
 
         olmo = _sample_to_olmoearth(raw, self._band_order, self._slug)
 
