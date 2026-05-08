@@ -668,12 +668,12 @@ class CompositeEncodings(nn.Module):
         # 0.25 of the dimension
         self.embedding_dim_per_embedding_type = int(embedding_size * 0.25)
         # Position encodings for time dimension initialized to 1D sinusoidal encodings
-        self.pos_embed = nn.Parameter(
+        self.register_buffer(
+            "pos_embed",
             get_1d_sincos_pos_encoding(
                 torch.arange(max_sequence_length),
                 self.embedding_dim_per_embedding_type,
             ),
-            requires_grad=False,
         )
         # Month encodings
         month_tab = get_month_encoding_table(self.embedding_dim_per_embedding_type)
@@ -959,26 +959,34 @@ class FlexiVitBase(nn.Module):
         """
         return modality_data.shape[1:-2] if modality_data.ndim > 3 else ()
 
-    # is naming here confusing if one of these channels can be missing?
-    def collapse_and_combine_hwtc(self, x: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
-        """Collapse the tokens and masks, respectively, into two tensors."""
-        tokens, masks = [], []
+    def collapse_and_combine_hwtc(
+        self, x: dict[str, Tensor], include_masks: bool = True
+    ) -> tuple[Tensor, Tensor | None]:
+        """Collapse the tokens and masks, respectively, into two tensors.
+
+        Args:
+            x: Dict of per-modality tensors (and optionally their masks).
+            include_masks: If True, also collapse and return the mask tensors.
+        """
+        tokens: list[Tensor] = []
+        masks: list[Tensor] = []
         available_modalities = return_modalities_from_dict(x)
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
         )
         for modality in modalities_to_process:
-            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
-                modality
-            )
             x_modality = x[modality]
-            x_modality_mask = x[masked_modality_name]
             tokens.append(rearrange(x_modality, "b ... d -> b (...) d"))
-            masks.append(rearrange(x_modality_mask, "b ... -> b (...)"))
-        tokens = torch.cat(tokens, dim=1)
-        masks = torch.cat(masks, dim=1)
+            if include_masks:
+                masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                    modality
+                )
+                x_modality_mask = x[masked_modality_name]
+                masks.append(rearrange(x_modality_mask, "b ... -> b (...)"))
+        tokens_out = torch.cat(tokens, dim=1)
+        masks_out = torch.cat(masks, dim=1) if include_masks else None
 
-        return tokens, masks
+        return tokens_out, masks_out
 
     @staticmethod
     def _construct_einops_pattern(
@@ -1364,9 +1372,8 @@ class Encoder(FlexiVitBase):
     def create_exit_seqs(
         self,
         tokens_only_dict: dict[str, Tensor],
-        mask_only_dict: dict[str, Tensor],
         token_exit_cfg: dict[str, int] | None,
-    ) -> tuple[Tensor | None]:
+    ) -> Tensor | None:
         """Create the exit sequences and tokens."""
         # Check that tokens_only_dict doesn't contain any mask keys
         assert all(not key.endswith("_mask") for key in tokens_only_dict), (
@@ -1376,9 +1383,9 @@ class Encoder(FlexiVitBase):
             exit_ids_per_modality = self.create_token_exit_ids(
                 tokens_only_dict, token_exit_cfg
             )
-            exit_ids_per_modality.update(mask_only_dict)
-            # Exit ids seqs tells us which layer to exit each token
-            exit_ids_seq, _ = self.collapse_and_combine_hwtc(exit_ids_per_modality)
+            exit_ids_seq, _ = self.collapse_and_combine_hwtc(
+                exit_ids_per_modality, include_masks=False
+            )
         else:
             exit_ids_seq = None
         return exit_ids_seq
@@ -1513,11 +1520,9 @@ class Encoder(FlexiVitBase):
             self.split_tokens_masks_and_dims(x)
         )
         # already a no-op but we could remove entirely
-        exit_ids_seq = self.create_exit_seqs(
-            tokens_only_dict, original_masks_dict, token_exit_cfg
-        )
+        exit_ids_seq = self.create_exit_seqs(tokens_only_dict, token_exit_cfg)
         # exited tokens are just the linear projection
-        exited_tokens, _ = self.collapse_and_combine_hwtc(x)
+        exited_tokens, _ = self.collapse_and_combine_hwtc(x, include_masks=False)
 
         tokens_dict = self.composite_encodings.forward(
             tokens_only_dict,
