@@ -44,7 +44,7 @@ class BackboneWithHead(nn.Module):
 
     def _init_head(self, emb_dim: int, device: torch.device) -> None:
         """Initialize the head based on the embedding dimension."""
-        if self.task_type == TaskType.CLASSIFICATION:
+        if self.task_type in (TaskType.CLASSIFICATION, TaskType.REGRESSION):
             self._head = nn.Linear(emb_dim, self.num_classes, bias=True)
         else:
             logits_per_patch = int(self.num_classes * self.patch_size * self.patch_size)
