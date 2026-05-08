@@ -164,7 +164,7 @@ def build_train_module_config(
     """Vectorized patch disc loss, wd=0.02, lr=1e-4, FSDP bf16, compile OFF by default."""
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
-        rank_microbatch_size=32,
+        rank_microbatch_size=16,
         masking_config=MASKING_CONFIG,
         loss_config=LossConfig(
             loss_config={"type": "modality_patch_discrimination", "tau": 0.1}

@@ -260,19 +260,17 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 del latent_a, latent_b
 
                 if torch.isnan(loss).any() or torch.isinf(loss).any():
-                    logger.warning(
+                    raise ValueError(
                         f"NaN or Inf detected in loss at microbatch {microbatch_idx}. "
-                        f"Zeroing loss to keep FSDP in sync."
+                        f"loss={loss.item():.6f}"
                     )
-                    loss = torch.zeros_like(loss, requires_grad=True)
-                else:
-                    loss_val = get_local_tensor(loss.detach())
-                    total_batch_loss += loss_val
-                    if self.contrastive_loss is not None:
-                        total_batch_con += (
-                            get_local_tensor(contrastive_loss.detach())
-                            / num_microbatches
-                        )
+
+                loss_val = get_local_tensor(loss.detach())
+                total_batch_loss += loss_val
+                if self.contrastive_loss is not None:
+                    total_batch_con += (
+                        get_local_tensor(contrastive_loss.detach()) / num_microbatches
+                    )
 
                 loss.backward()
 
