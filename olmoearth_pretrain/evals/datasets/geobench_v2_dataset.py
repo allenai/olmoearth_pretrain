@@ -1,4 +1,4 @@
-"""GeoBench v2 datasets via official Lightning DataModules."""
+"""GeoBench v2 datasets backed by custom tortilla-based dataloaders."""
 
 from __future__ import annotations
 
@@ -14,66 +14,11 @@ import olmoearth_pretrain.evals.datasets.paths as paths
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config
+from olmoearth_pretrain.evals.datasets.geobench_v2_loaders import SLUG_TO_DATASET
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
-from olmoearth_pretrain.train.masking import MaskValue, MaskedOlmoEarthSample
+from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
-
-_SLUG_TO_DM: dict[str, type] = {}
-
-
-def _load_datamodule_classes() -> None:
-    if _SLUG_TO_DM:
-        return
-    from geobench_v2.datamodules import (
-        GeoBenchBENV2DataModule,
-        GeoBenchBioMasstersDataModule,
-        GeoBenchBurnScarsDataModule,
-        GeoBenchCaFFeDataModule,
-        GeoBenchCloudSen12DataModule,
-        GeoBenchDynamicEarthNetDataModule,
-        GeoBenchEverWatchDataModule,
-        GeoBenchFLAIR2DataModule,
-        GeoBenchFieldsOfTheWorldDataModule,
-        GeoBenchForestnetDataModule,
-        GeoBenchKuroSiwoDataModule,
-        GeoBenchNZCattleDataModule,
-        GeoBenchPASTISDataModule,
-        GeoBenchSo2SatDataModule,
-        GeoBenchSpaceNet2DataModule,
-        GeoBenchSpaceNet7DataModule,
-        GeoBenchSubstationDataModule,
-        GeoBenchTreeSatAIDataModule,
-    )
-
-    _SLUG_TO_DM.update(
-        {
-            "benv2": GeoBenchBENV2DataModule,
-            "biomassters": GeoBenchBioMasstersDataModule,
-            "burn_scars": GeoBenchBurnScarsDataModule,
-            "caffe": GeoBenchCaFFeDataModule,
-            "cloudsen12": GeoBenchCloudSen12DataModule,
-            "dynamic_earthnet": GeoBenchDynamicEarthNetDataModule,
-            "everwatch": GeoBenchEverWatchDataModule,
-            "flair2": GeoBenchFLAIR2DataModule,
-            "forestnet": GeoBenchForestnetDataModule,
-            "fotw": GeoBenchFieldsOfTheWorldDataModule,
-            "kuro_siwo": GeoBenchKuroSiwoDataModule,
-            "nzcattle": GeoBenchNZCattleDataModule,
-            "pastis": GeoBenchPASTISDataModule,
-            "so2sat": GeoBenchSo2SatDataModule,
-            "spacenet2": GeoBenchSpaceNet2DataModule,
-            "spacenet7": GeoBenchSpaceNet7DataModule,
-            "substation": GeoBenchSubstationDataModule,
-            "treesatai": GeoBenchTreeSatAIDataModule,
-        }
-    )
-
-
-_SLUG_EXTRA_DM_KWARGS: dict[str, dict[str, Any]] = {
-    "kuro_siwo": {"time_step": ["post"]},
-    "pastis": {"num_time_steps": 10},
-}
 
 
 def _s2_names(band_order: Any) -> list[str]:
@@ -184,39 +129,6 @@ def _sample_to_olmoearth(
     device = next(iter(sample.values())).device
     sample_dict: dict[str, Any] = {}
 
-    if slug == "fotw" and ("image_a" in sample or "image_b" in sample):
-        xa = sample.get("image_a")
-        xb = sample.get("image_b")
-        if xa is not None and xb is not None:
-            x = (xa.float() + xb.float()) * 0.5
-        elif xa is not None:
-            x = xa.float()
-        else:
-            x = xb.float()
-        hwtc = _bchw_to_hwtc(x)
-        t = hwtc.shape[2]
-        sample_dict["naip"] = hwtc
-        sample_dict["timestamps"] = _timestamps(t, device)
-        return OlmoEarthSample(**sample_dict)
-
-    if slug == "forestnet" and "image" in sample:
-        x = sample["image"].float()
-        if x.dim() == 3:
-            x = x.unsqueeze(0)
-        if isinstance(band_order, dict):
-            geo_names = [str(n) for n in next(iter(band_order.values()))]
-        elif isinstance(band_order, (list, tuple)):
-            geo_names = [str(n) for n in band_order]
-        else:
-            raise TypeError(f"forestnet unexpected band_order type: {type(band_order)}")
-        ls = _landsat_from_list(x, geo_names)
-        ls = ls.squeeze(0)
-        hwtc = _bchw_to_hwtc(ls)
-        t = hwtc.shape[2]
-        sample_dict["landsat"] = hwtc
-        sample_dict["timestamps"] = _timestamps(t, device)
-        return OlmoEarthSample(**sample_dict)
-
     if slug in ("burn_scars", "caffe") and "image" in sample:
         g = sample["image"].float()
         if g.dim() == 3:
@@ -291,59 +203,6 @@ def _sample_to_olmoearth(
         hwtc = _bchw_to_hwtc(x_perm[0])
         t = hwtc.shape[2]
         sample_dict["sentinel2_l2a"] = hwtc
-        sample_dict["timestamps"] = _timestamps(t, device)
-        return OlmoEarthSample(**sample_dict)
-
-    if slug == "pastis" and "image_s2" in sample:
-        s2 = sample["image_s2"].float()
-        s2_src = _s2_names(band_order)
-        if not s2_src:
-            s2_src = [str(i) for i in range(s2.shape[0])]
-        s2 = _align_s2_to_sentinel2_l2a(s2, s2_src)
-        s2_hwtc = _bchw_to_hwtc(s2)
-        asc = sample["image_s1_asc"].float()
-        # GeoBench PASTIS is C,T,H,W for num_time_steps>1. Use VV/VH (first two channels), full time.
-        if asc.dim() == 4:
-            s1_bt = asc[:2]
-        elif asc.dim() == 3:
-            s1_bt = asc[:2]
-        else:
-            raise ValueError(f"pastis unexpected image_s1_asc shape {asc.shape}")
-        if s1_bt.shape[0] < 2:
-            pad = torch.zeros(2 - s1_bt.shape[0], *s1_bt.shape[1:], device=device, dtype=s1_bt.dtype)
-            s1_bt = torch.cat([s1_bt, pad], dim=0)
-        s1_hwtc = _bchw_to_hwtc(s1_bt)
-        t = max(s1_hwtc.shape[2], s2_hwtc.shape[2])
-        if s1_hwtc.shape[2] < t:
-            s1_hwtc = torch.cat(
-                [
-                    s1_hwtc,
-                    torch.zeros(
-                        *s1_hwtc.shape[:2],
-                        t - s1_hwtc.shape[2],
-                        s1_hwtc.shape[3],
-                        device=device,
-                        dtype=s1_hwtc.dtype,
-                    ),
-                ],
-                dim=2,
-            )
-        if s2_hwtc.shape[2] < t:
-            s2_hwtc = torch.cat(
-                [
-                    s2_hwtc,
-                    torch.zeros(
-                        *s2_hwtc.shape[:2],
-                        t - s2_hwtc.shape[2],
-                        s2_hwtc.shape[3],
-                        device=device,
-                        dtype=s2_hwtc.dtype,
-                    ),
-                ],
-                dim=2,
-            )
-        sample_dict["sentinel2_l2a"] = s2_hwtc
-        sample_dict["sentinel1"] = s1_hwtc
         sample_dict["timestamps"] = _timestamps(t, device)
         return OlmoEarthSample(**sample_dict)
 
@@ -428,24 +287,6 @@ def _sample_to_olmoearth(
             )
         sample_dict["sentinel1"] = s1_hwtc
         sample_dict["srtm"] = dem_hwtc
-        sample_dict["timestamps"] = _timestamps(t, device)
-        return OlmoEarthSample(**sample_dict)
-
-    if "image_planet" in sample and "image_s2" in sample:
-        pl = sample["image_planet"].float()
-        if pl.dim() == 4:
-            pl = pl[:, 0]
-        naip_hwtc = _bchw_to_hwtc(pl)
-        s2 = sample["image_s2"].float()
-        s2b = s2.unsqueeze(0) if s2.dim() == 3 else s2
-        if s2b.dim() == 3:
-            s2b = s2b.unsqueeze(0)
-        src = _s2_names(band_order) or [str(i) for i in range(s2b.shape[1])]
-        s2_perm = _permute_bchw(s2b, src, list(Modality.SENTINEL2_L2A.band_order))
-        s2_hwtc = _bchw_to_hwtc(s2_perm[0])
-        t = max(naip_hwtc.shape[2], s2_hwtc.shape[2])
-        sample_dict["naip"] = naip_hwtc
-        sample_dict["sentinel2_l2a"] = s2_hwtc
         sample_dict["timestamps"] = _timestamps(t, device)
         return OlmoEarthSample(**sample_dict)
 
@@ -622,28 +463,6 @@ def _extract_label(
             m = torch.where(m == 2, torch.full_like(m, SEGMENTATION_IGNORE_LABEL), m)
         return m
 
-    if slug == "everwatch" and "label" in sample:
-        labs = sample["label"].long()
-        out = torch.zeros(num_classes, dtype=torch.long)
-        for c in labs.tolist():
-            if 1 <= c <= num_classes:
-                out[c - 1] = 1
-        return out
-
-    if slug == "nzcattle" and "label" in sample:
-        labs = sample["label"].long()
-        cattle = int((labs == 1).any())
-        return torch.tensor(cattle, dtype=torch.long)
-
-    if slug == "so2sat" and "label" in sample:
-        y = sample["label"]
-        if not torch.is_tensor(y):
-            y = torch.as_tensor(y)
-        # so2sat labels are one-hot encoded; convert to class index
-        if y.dim() == 1:
-            return y.argmax().long()  # 0D scalar — batches to (N,)
-        return y.long()
-
     if "label" in sample:
         y = sample["label"]
         if not torch.is_tensor(y):
@@ -654,45 +473,6 @@ def _extract_label(
         return y
 
     raise KeyError(f"no label/mask in sample keys={list(sample)} slug={slug}")
-
-
-def _manual_unnormalize(
-    data: dict,
-    normalizer: Any,
-) -> dict:
-    """Fallback unnormalization for when the normalizer's own unnormalize() fails.
-
-    geobench_v2's _reshape_and_expand assumes [T, C, H, W] for 4-D tensors and
-    reshapes stats to [1, C, 1, 1].  Some datasets (e.g. PASTIS) store data as
-    [C, T, H, W], causing the expand to fail when C_stats != T.  This function
-    finds the matching channel dimension by comparing len(stats) to each axis.
-    Fill values are not masked (limitation vs. the official unnormalize).
-    """
-    result = {}
-    for key, tensor in data.items():
-        if not torch.is_tensor(tensor) or key not in normalizer.means:
-            result[key] = tensor
-            continue
-
-        means = normalizer.means[key]
-        stds = normalizer.stds[key]
-        n_bands = len(means)
-
-        # Find the first dimension whose size matches n_bands.
-        channel_dim = next(
-            (d for d in range(tensor.dim()) if tensor.shape[d] == n_bands), None
-        )
-        if channel_dim is None:
-            result[key] = tensor
-            continue
-
-        view_shape = [1] * tensor.dim()
-        view_shape[channel_dim] = n_bands
-        means_r = means.view(view_shape).to(tensor.device)
-        stds_r = stds.view(view_shape).to(tensor.device)
-        result[key] = tensor * (stds_r + 1e-6) + means_r
-
-    return result
 
 
 # Mapping from OlmoEarthSample field names to ModalitySpec for normalization.
@@ -755,6 +535,8 @@ def _apply_olmoearth_normalization(olmo: OlmoEarthSample, norm_config: dict) -> 
 
 
 class GeobenchV2Dataset(Dataset):
+    """Wraps a GeoBench v2 tortilla dataset as an OlmoEarth eval dataset."""
+
     def __init__(
         self,
         dataset: str,
@@ -763,76 +545,35 @@ class GeobenchV2Dataset(Dataset):
         norm_stats_from_pretrained: bool = False,
         norm_method: str = "norm_no_clip_2_std",
     ) -> None:
-        del partition  # geobench_v2 DMs have fixed splits; partition is not applicable
-        _load_datamodule_classes()
+        """Initialize the dataset loader and normalization config."""
+        del partition  # splits are fixed per-dataset; partition is not applicable
         if not dataset.startswith("gb2-"):
             raise ValueError(dataset)
         slug = dataset[len("gb2-") :]
-        if slug not in _SLUG_TO_DM:
+        if slug not in SLUG_TO_DATASET:
             raise ValueError(f"unknown gb2 slug: {slug}")
         if split not in ("train", "valid", "test"):
             raise ValueError(split)
 
         self.config = dataset_to_config(dataset)
         self._slug = slug
-        self.norm_stats_from_pretrained = norm_stats_from_pretrained
-        if not norm_stats_from_pretrained:
-            logger.warning(
-                "GeobenchV2Dataset: norm_stats_from_pretrained=False is not fully "
-                "supported; per-modality dataset stats cannot be cleanly extracted "
-                "from the geobench_v2 DM after the channel remapping in "
-                "_sample_to_olmoearth. Falling back to OlmoEarth pretraining stats."
-            )
 
-        # Load OlmoEarth pretraining normalization config once at init time.
         from olmoearth_pretrain.data.normalize import load_computed_config
         self._olmoearth_norm_config = load_computed_config()
 
-        root = Path(paths.GEOBENCH2_DIR) / slug
-        dm_cls = _SLUG_TO_DM[slug]
-        extra = dict(_SLUG_EXTRA_DM_KWARGS.get(slug, {}))
-        self._dm = dm_cls(root=str(root), download=False, **extra)
-        self._dm.setup("fit")
-        self._dm.setup("test")
-        if split == "train":
-            self._inner = self._dm.train_dataset
-        elif split == "valid":
-            self._inner = self._dm.val_dataset
-        else:
-            self._inner = self._dm.test_dataset
-        self._band_order = self._dm.band_order
+        loader_cls = SLUG_TO_DATASET[slug]
+        root = str(Path(paths.GEOBENCH2_DIR) / slug)
+        self._inner = loader_cls(root=root, split=split)
+        self._band_order = loader_cls.band_order
 
-    def __len__(self) -> int:
+    def __len__(self) -> int:  # noqa: D105
         return len(self._inner)
 
-    def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
-        raw = {}
-        for k, v in self._inner[idx].items():
-            raw[k] = v.clone() if torch.is_tensor(v) else v
-        device = next(v.device for v in raw.values() if torch.is_tensor(v))
-
-        # Undo geobench_v2's normalizer so _sample_to_olmoearth receives approximately
-        # raw sensor values.  Non-image keys (mask, label, …) are passed through
-        # unchanged by unnormalize(), so label extraction below is not affected.
-        if hasattr(self._dm, "data_normalizer") and hasattr(
-            self._dm.data_normalizer, "unnormalize"
-        ):
-            try:
-                raw = self._dm.data_normalizer.unnormalize(raw)
-            except RuntimeError:
-                # geobench_v2's _reshape_and_expand can fail for timeseries datasets
-                # (e.g. PASTIS) whose tensors are [C, T, H, W] instead of [T, C, H, W].
-                # Fall back to a manual unnormalize that finds the channel dim by size.
-                logger.warning(
-                    "unnormalize() failed for %s (idx=%d); falling back to manual unnormalize.",
-                    self._slug,
-                    idx,
-                )
-                raw = _manual_unnormalize(raw, self._dm.data_normalizer)
+    def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:  # noqa: D105
+        raw = self._inner[idx]
+        device = next((v.device for v in raw.values() if torch.is_tensor(v)), torch.device("cpu"))
 
         olmo = _sample_to_olmoearth(raw, self._band_order, self._slug)
-
-        # Re-normalize to OlmoEarth pretraining statistics (NORM_NO_CLIP_2_STD).
         olmo = _apply_olmoearth_normalization(olmo, self._olmoearth_norm_config)
 
         masked = MaskedOlmoEarthSample.from_olmoearthsample(olmo)
