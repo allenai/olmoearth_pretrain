@@ -102,6 +102,7 @@ class OlmoEarthSample(NamedTuple):
     # ndvi is computed from S2 L2A bands B04 (Red) and B08 (NIR), not loaded from file.
     ndvi: ArrayTensor | None = None  # [B, H, W, T, 1]
     eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
+    olmoearth_v1_base_embedding: ArrayTensor | None = None  # [B, H, W, 1, 768]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
 
@@ -385,6 +386,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     ndvi_mask: Tensor | None = None
     eurocrops: Tensor | None = None
     eurocrops_mask: Tensor | None = None
+    olmoearth_v1_base_embedding: Tensor | None = None
+    olmoearth_v1_base_embedding_mask: Tensor | None = None
 
     def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
         """Convert to a dictionary.
@@ -523,6 +526,8 @@ class TokensAndMasks(NamedTuple):
     ndvi_mask: Tensor | None = None
     eurocrops: Tensor | None = None
     eurocrops_mask: Tensor | None = None
+    olmoearth_v1_base_embedding: Tensor | None = None
+    olmoearth_v1_base_embedding_mask: Tensor | None = None
     latlon: Tensor | None = None
     latlon_mask: Tensor | None = None
 

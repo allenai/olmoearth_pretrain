@@ -501,6 +501,14 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    OLMOEARTH_V1_BASE_EMBEDDING = ModalitySpec(
+        name="olmoearth_v1_base_embedding",
+        tile_resolution_factor=16,
+        band_sets=[BandSet([f"B{idx}" for idx in range(768)], 64)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     @classmethod
     def get(self, name: str) -> ModalitySpec:
         """Get the ModalitySpec with the specified name."""

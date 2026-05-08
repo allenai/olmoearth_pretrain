@@ -1,0 +1,52 @@
+model:
+  class_path: rslearn.train.lightning_module.RslearnLightningModule
+  init_args:
+    model:
+      class_path: rslearn.models.singletask.SingleTaskModel
+      init_args:
+        encoder:
+          - class_path: rslearn.models.olmoearth_pretrain.model.OlmoEarth
+            init_args:
+              model_id: OLMOEARTH_V1_BASE
+              patch_size: 4
+        decoder:
+          - class_path: rslearn.train.tasks.embedding.EmbeddingHead
+    optimizer:
+      class_path: rslearn.train.optimizer.AdamW
+data:
+  class_path: rslearn.train.data_module.RslearnDataModule
+  init_args:
+    path: ${DATASET_PATH}
+    inputs:
+      sentinel2_l2a:
+        data_type: "raster"
+        layers: ["sentinel2_l2a_mo01", "sentinel2_l2a_mo02", "sentinel2_l2a_mo03", "sentinel2_l2a_mo04", "sentinel2_l2a_mo05", "sentinel2_l2a_mo06", "sentinel2_l2a_mo07", "sentinel2_l2a_mo08", "sentinel2_l2a_mo09", "sentinel2_l2a_mo10", "sentinel2_l2a_mo11", "sentinel2_l2a_mo12"]
+        bands: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+        passthrough: true
+        dtype: FLOAT32
+        load_all_layers: true
+    task:
+      class_path: rslearn.train.tasks.embedding.EmbeddingTask
+    batch_size: 8
+    num_workers: 32
+    predict_config:
+      transforms:
+        - class_path: rslearn.models.olmoearth_pretrain.norm.OlmoEarthNormalize
+          init_args:
+            band_names:
+              sentinel2_l2a: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+      load_all_crops: true
+      crop_size: 64
+      overlap_pixels: 16
+trainer:
+  callbacks:
+    - class_path: rslearn.train.prediction_writer.RslearnWriter
+      init_args:
+        output_layer: olmoearth_v1_base_embedding
+        merger:
+          class_path: rslearn.train.prediction_writer.RasterMerger
+          init_args:
+            # These are 1/4 of the crop_size/overlap_pixels in predict_config due to
+            # the patch size being 4 (meaning embeddings are at 1/4 the input resolution).
+            overlap_pixels: 4
+            downsample_factor: 4

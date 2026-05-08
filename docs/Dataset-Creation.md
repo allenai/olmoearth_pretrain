@@ -236,6 +236,20 @@ python -m olmoearth_pretrain.dataset_creation.scripts.sentinel2_l1c.launch_jobs 
 python -m olmoearth_pretrain.dataset_creation.scripts.sentinel2_l1c.launch_jobs --ds_path $GCS_DATASET_PATH --image us-west1-docker.pkg.dev/GCP_PROJECT/olmoearth/olmoearth-sentinel2-l1c --project GCP_PROJECT --region us-west1 --workers 128
 ```
 
+### OlmoEarth-v1-Base Embeddings
+
+For some post-OlmoEarth-v1-Base pre-training methods, we utilize the OlmoEarth-v1-Base
+embeddings as a target.
+
+To compute embeddings, we follow the approach in https://github.com/allenai/rslearn/blob/master/docs/examples/OlmoEarthEmbeddings.md
+but adapt the input layers to just use Sentinel-2. The adapted dataset and model configs
+are included in this repository:
+
+```
+cp data/rslearn_dataset_configs/config_olmoearth_v1_base_embedding.json $DATASET_PATH/config.json
+rslearn model predict --config data/rslearn_dataset_configs/config_olmoearth_v1_base_embedding.yaml
+```
+
 ## Convert Data to OlmoEarth Format
 
 Now convert the data from the rslearn dataset to OlmoEarth format.
@@ -255,6 +269,7 @@ python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.worldcereal -
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.worldcover --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.wri_canopy_height_map --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 # The modalities below are not used in our final dataset but supported in this code.
+python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.olmoearth_v1_base_embedding --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.era5 --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.gse --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.naip --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
@@ -283,6 +298,7 @@ python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality worldcover
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality wri_canopy_height_map
 # The modalities below are not used in our final dataset but supported in this code.
+python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality olmoearth_v1_base_embedding
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality era5 --time_span two_week
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality era5 --time_span year
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality gse
