@@ -55,7 +55,7 @@ def get_eval_dataset(
             hw_p=kwargs.get("pretrain_hw_p", 8),
             seed=kwargs.get("pretrain_seed", 42),
         )
-    if eval_dataset.startswith("gb2-"):
+    elif eval_dataset.startswith("gb2-"):
         return GeobenchV2Dataset(
             dataset=eval_dataset,
             split=split,
@@ -63,7 +63,7 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
-    if eval_dataset.startswith("m-"):
+    elif eval_dataset.startswith("m-"):
         # m- == "modified for geobench"
         return GeobenchDataset(
             geobench_dir=paths.GEOBENCH_DIR,
@@ -73,7 +73,7 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
-    if eval_dataset == "mados":
+    elif eval_dataset == "mados":
         if norm_stats_from_pretrained:
             logger.warning(
                 "MADOS has very different norm stats than our pretraining dataset"
@@ -85,7 +85,7 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
-    if eval_dataset == "sen1floods11":
+    elif eval_dataset == "sen1floods11":
         return Sen1Floods11Dataset(
             path_to_splits=paths.FLOODS_DIR,
             split=split,
@@ -93,7 +93,7 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
-    if eval_dataset.startswith("pastis"):
+    elif eval_dataset.startswith("pastis"):
         pastis_kwargs: dict[str, Any] = {
             "split": split,
             "partition": partition,
@@ -107,7 +107,7 @@ def get_eval_dataset(
         else:
             pastis_kwargs["path_to_splits"] = paths.PASTIS_DIR
         return PASTISRDataset(**pastis_kwargs)  # type: ignore
-    if eval_dataset == "breizhcrops":
+    elif eval_dataset == "breizhcrops":
         return BreizhCropsDataset(
             path_to_splits=paths.BREIZHCROPS_DIR,
             split=split,
@@ -115,7 +115,8 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
-    eval_dataset_entry = get_dataset_entry(eval_dataset)
+    else:
+        eval_dataset_entry = get_dataset_entry(eval_dataset)
     return from_registry_entry(
         entry=eval_dataset_entry,
         split=split,

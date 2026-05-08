@@ -417,27 +417,6 @@ class SubstationDataset(_BaseGeobenchDataset):
         return {"image": image, "bbox_xyxy": boxes, "label": labels, "mask": masks}
 
 
-class DynamicEarthNetDataset(_BaseGeobenchDataset):
-    """DynamicEarthNet: Planet NAIP (4-band, single time step) → segmentation."""
-
-    TORTILLA = [
-        "geobench_dynamic_earthnet.0000.part.tortilla",
-        "geobench_dynamic_earthnet.0001.part.tortilla",
-        "geobench_dynamic_earthnet.0002.part.tortilla",
-    ]
-    band_order = {"planet": ["b", "g", "r", "nir"]}
-
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
-        row = self._df.read(idx)
-        # Use the first Planet image (temporal_setting="single")
-        planet_indices = row[row["modality"] == "planet"].index
-        image_planet = _raster_f32(row, planet_indices[0])  # (4, 512, 512)
-        # Mask is at the last item (modality=="label")
-        label_idx = row[row["modality"] == "label"].index[0]
-        mask = _raster_i64(row, label_idx).squeeze(0)  # (H, W)
-        return {"image_planet": image_planet, "mask": mask}
-
-
 # ─── Timeseries tasks ─────────────────────────────────────────────────────────
 
 
@@ -491,7 +470,6 @@ SLUG_TO_DATASET: dict[str, type[_BaseGeobenchDataset]] = {
     "burn_scars": BurnScarsDataset,
     "caffe": CaFFeDataset,
     "cloudsen12": CloudSen12Dataset,
-    "dynamic_earthnet": DynamicEarthNetDataset,
     "kuro_siwo": KuroSiwoDataset,
     "spacenet2": SpaceNet2Dataset,
     "spacenet7": SpaceNet7Dataset,

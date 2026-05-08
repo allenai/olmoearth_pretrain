@@ -119,11 +119,10 @@ dev = [
     "pytest-xdist>=3.8.0",
     "ruff>=0.14.1",
 ]
-eval-geobench2 = [
-    "tacoreader",
-]
+eval-geobench2 = []
 eval = [
     "albumentations>=1.4.10",
+    "tacoreader",
     "geobench",
     "geopandas>=1.1.1",
     "pydantic>=2,<3",

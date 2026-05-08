@@ -34,7 +34,6 @@ Each FT eval task's normalization is defined in all_evals.py.
 import argparse
 import json
 import os
-import shlex
 import socket
 import subprocess  # nosec
 import uuid
@@ -443,33 +442,14 @@ def build_commands(
         )
 
     if args.task_skip_names:
-        skip_raw = [
-            name.strip() for name in args.task_skip_names.split(",") if name.strip()
-        ]
-        unknown = [s for s in skip_raw if s not in FT_EVAL_TASKS]
-        if unknown:
-            logger.warning(
-                "Ignoring --task-skip-names not present in FT_EVAL_TASKS: %s",
-                ", ".join(unknown),
-            )
-        skip_names = [s for s in skip_raw if s in FT_EVAL_TASKS]
+        skip_names = [name.strip() for name in args.task_skip_names.split(",")]
         tasks_to_run = [task for task in FT_TASK_NAMES if task not in skip_names]
-        if not tasks_to_run:
-            logger.warning(
-                "--task-skip-names intersected with FT_EVAL_TASKS would remove every "
-                "finetune task (common when reusing a KNN-oriented $SKIP). Running all "
-                "FT tasks; omit --task-skip-names or shorten the list to subset FT keys."
-            )
-        else:
-            tasks_to_run_arg = (
-                " --trainer.callbacks.downstream_evaluator.tasks_to_run="
-                f"{shlex.quote(json.dumps(tasks_to_run))}"
-            )
-            commands_new: list[str] = []
-            for cmd in commands:
-                logger.info("Adding tasks_to_run filter to %s", cmd)
-                commands_new.append(cmd + tasks_to_run_arg)
-            commands = commands_new
+        tasks_to_run_arg = f" --trainer.callbacks.downstream_evaluator.tasks_to_run='{json.dumps(tasks_to_run)}'"
+        commands_new: list[str] = []
+        for cmd in commands:
+            logger.info(f"Adding tasks_to_run filter to {cmd}")
+            commands_new.append(cmd + tasks_to_run_arg)
+        commands = commands_new
 
     return commands
 
@@ -537,11 +517,7 @@ def main() -> None:
         "--task-skip-names",
         type=str,
         required=False,
-        help=(
-            "Comma-separated FT eval task keys to skip (intersected with FT_EVAL_TASKS; "
-            "other names are ignored). If no FT tasks would remain, all FT tasks are run "
-            "with a warning (e.g. when reusing a KNN $SKIP that lists every FT key)."
-        ),
+        help="Comma-separated list of task names to skip (e.g., m_eurosat,m_bigearthnet)",
     )
 
     args, extra_cli = parser.parse_known_args()
