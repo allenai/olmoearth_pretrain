@@ -1,26 +1,19 @@
-r"""ViT-H (1280-dim, 32-layer) with 2-node FSDP and full instrumentation.
+r"""ViT-L single-bandset with encoder output projected to 768 dims.
 
-Logs per-modality patch disc losses, per-parameter-group grad norms,
-and runs embedding diagnostics. Defaults to compile=False for stability
-(original crash was torch.compile + multi-node FSDP deadlock).
+Same as large_single_bandset.py but adds output_embedding_size=768 on encoder
+so the encoder projects from 1024 -> 768 before the decoder. This tests whether
+a smaller representation bottleneck helps downstream at reduced compute.
 
-Smoke test (1 node, 100 steps):
-    python scripts/vnext/vit_h_fsdp.py dry_run vit_h_smoke local
+Launch:
+    python scripts/vnext/large_single_bandset_proj768.py dry_run large_sb_proj768 local
 
-    python scripts/vnext/vit_h_fsdp.py launch vit_h_smoke ai2/jupiter \
-        --launch.num_nodes=1 \
+    python scripts/vnext/large_single_bandset_proj768.py launch large_sb_proj768 ai2/jupiter \
         --launch.num_gpus=8 \
-        --trainer.max_duration=100steps \
-        --trainer.callbacks.wandb.project=2026_05_07_scaling_investigation
-
-Full run (2 nodes):
-    python scripts/vnext/vit_h_fsdp.py launch vit_h_instrumented ai2/jupiter \
-        --launch.num_nodes=2 \
-        --launch.num_gpus=8 \
-        --launch.clusters=[ai2/jupiter,ai2/ceres] \
-        --trainer.callbacks.wandb.project=2026_05_07_scaling_investigation
+        --launch.priority=urgent \
+        --trainer.callbacks.wandb.project=2026_05_08_vith_single_bandset_sweep
 """
 
+import copy
 import logging
 
 from olmo_core.config import DType
@@ -56,9 +49,11 @@ from olmoearth_pretrain.internal.experiment import (
     SubCmd,
     main,
 )
+from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
 from olmoearth_pretrain.nn.flexi_vit import PoolingType
 from olmoearth_pretrain.nn.flexihelios import EncoderConfig, PredictorConfig
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
+from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     OlmoEarthSpeedMonitorCallback,
@@ -78,35 +73,8 @@ logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
-
-VIT_H_SIZE = {
-    "encoder_embedding_size": 1280,
-    "decoder_embedding_size": 1280,
-    "encoder_depth": 32,
-    "decoder_depth": 4,
-    "encoder_num_heads": 16,
-    "decoder_num_heads": 16,
-    "mlp_ratio": 4.0,
-}
-
-ONLY_DECODE_MODALITIES = [
-    Modality.WORLDCOVER.name,
-    Modality.SRTM.name,
-    Modality.OPENSTREETMAP_RASTER.name,
-    Modality.WRI_CANOPY_HEIGHT_MAP.name,
-    Modality.CDL.name,
-    Modality.WORLDCEREAL.name,
-]
-
-MASKING_CONFIG = MaskingConfig(
-    strategy_config={
-        "type": "modality_cross_random",
-        "encode_ratio": 0.5,
-        "decode_ratio": 0.5,
-        "allow_encoding_decoding_same_bandset": True,
-        "only_decode_modalities": ONLY_DECODE_MODALITIES,
-    }
-)
+RANDOM_BAND_DROPOUT_MAX_RATE = 0.3
+PATCH_EMBED_HIDDEN_SIZES: list[int] = [64]
 
 TRAINING_MODALITIES = [
     Modality.SENTINEL2_L2A.name,
@@ -120,41 +88,103 @@ TRAINING_MODALITIES = [
     Modality.WORLDCEREAL.name,
 ]
 
+ONLY_DECODE_MODALITIES = [
+    Modality.WORLDCOVER.name,
+    Modality.SRTM.name,
+    Modality.OPENSTREETMAP_RASTER.name,
+    Modality.WRI_CANOPY_HEIGHT_MAP.name,
+    Modality.CDL.name,
+    Modality.WORLDCEREAL.name,
+]
+
+S2_SINGLE_BANDSET = ModalityTokenization(
+    band_groups=[
+        [
+            "B02",
+            "B03",
+            "B04",
+            "B08",
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12",
+            "B01",
+            "B09",
+        ],
+    ]
+)
+
+LANDSAT_SINGLE_BANDSET = ModalityTokenization(
+    band_groups=[
+        ["B8", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"],
+    ]
+)
+
+TOKENIZATION_CONFIG = TokenizationConfig(
+    overrides={
+        "sentinel2_l2a": S2_SINGLE_BANDSET,
+        "landsat": LANDSAT_SINGLE_BANDSET,
+    }
+)
+
+_LOSS_CONFIG_DICT = {
+    "type": "modality_patch_discrimination_masked_negatives_vec",
+    "tau": 0.1,
+    "same_target_threshold": 0.999,
+    "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
+}
+
+MASKING_CONFIG = MaskingConfig(
+    strategy_config={
+        "type": "modality_cross_random",
+        "encode_ratio": 0.5,
+        "decode_ratio": 0.5,
+        "allow_encoding_decoding_same_bandset": True,
+        "only_decode_modalities": ONLY_DECODE_MODALITIES,
+    },
+    tokenization_config=TOKENIZATION_CONFIG,
+)
+
 
 def build_common_components(
     script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
 ) -> CommonComponents:
-    """Build common components, default 2-node launch."""
+    """Build common components with single-bandset tokenization."""
     config = build_common_components_default(script, cmd, run_name, cluster, overrides)
     config.training_modalities = TRAINING_MODALITIES
-    if config.launch is not None:
-        config.launch.num_nodes = 2
-        config.launch.num_gpus = 8
+    config.tokenization_config = TOKENIZATION_CONFIG
     return config
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """ViT-H encoder (1280d, 32 layers) + shallow decoder, activation checkpointing on."""
+    """ViT-L encoder with output projected to 768, single bandset, band dropout."""
+    model_size = MODEL_SIZE_ARGS["large_shallow_decoder"]
     encoder_config = EncoderConfig(
-        embedding_size=VIT_H_SIZE["encoder_embedding_size"],
-        num_heads=VIT_H_SIZE["encoder_num_heads"],
-        depth=VIT_H_SIZE["encoder_depth"],
-        mlp_ratio=VIT_H_SIZE["mlp_ratio"],
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
         supported_modality_names=common.training_modalities,
         max_patch_size=MAX_PATCH_SIZE,
         drop_path=0.1,
         max_sequence_length=12,
-        use_flash_attn=True,
+        tokenization_config=TOKENIZATION_CONFIG,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+        patch_embed_hidden_sizes=PATCH_EMBED_HIDDEN_SIZES,
+        output_embedding_size=768,
     )
     decoder_config = PredictorConfig(
-        encoder_embedding_size=VIT_H_SIZE["encoder_embedding_size"],
-        decoder_embedding_size=VIT_H_SIZE["decoder_embedding_size"],
-        depth=VIT_H_SIZE["decoder_depth"],
-        mlp_ratio=VIT_H_SIZE["mlp_ratio"],
-        num_heads=VIT_H_SIZE["decoder_num_heads"],
+        encoder_embedding_size=768,
+        decoder_embedding_size=768,
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
-        use_flash_attn=True,
+        tokenization_config=TOKENIZATION_CONFIG,
     )
     return LatentMIMConfig(
         encoder_config=encoder_config,
@@ -165,20 +195,17 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 def build_train_module_config(
     common: CommonComponents,
 ) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Vectorized patch disc loss, wd=0.02, lr=1e-4, FSDP bf16, compile OFF by default."""
+    """Masked-negatives-vec loss, wd=0.02, lr=1e-4, FSDP bf16."""
     return ContrastiveLatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
         rank_microbatch_size=16,
         masking_config=MASKING_CONFIG,
-        loss_config=LossConfig(
-            loss_config={"type": "modality_patch_discrimination", "tau": 0.1}
-        ),
+        loss_config=LossConfig(loss_config=copy.deepcopy(_LOSS_CONFIG_DICT)),
         contrastive_config=LossConfig(loss_config={"type": "InfoNCE", "weight": 0.1}),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(warmup_steps=8000),
         ema_decay=(1.0, 1.0),
-        compile_model=False,
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
             param_dtype=DType.bfloat16,
@@ -188,11 +215,11 @@ def build_train_module_config(
 
 
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """Dataloader with reduced token budget (1800) vs large (2250) for memory headroom."""
+    """Build dataloader config."""
     return OlmoEarthDataLoaderConfig(
         num_workers=16,
         global_batch_size=512,
-        token_budget=1800,
+        token_budget=2250,
         prefetch_factor=4,
         sampled_hw_p_list=list(range(1, 13)),
         min_patch_size=MIN_PATCH_SIZE,
@@ -316,7 +343,6 @@ EVAL_TASKS = {
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Trainer with kNN/probe evals + embedding diagnostics."""
-    MAX_DURATION = Duration.epochs(300)
     WANDB_PROJECT = "2026_05_07_scaling_investigation"
 
     return (
@@ -326,7 +352,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             save_folder=common.save_folder,
             cancel_check_interval=25,
             metrics_collect_interval=10,
-            max_duration=MAX_DURATION,
+            max_duration=Duration.epochs(300),
             checkpointer=CheckpointerConfig(work_dir=common.save_folder),
         )
         .with_callback(

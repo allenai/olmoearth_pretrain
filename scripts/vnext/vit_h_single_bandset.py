@@ -1,26 +1,22 @@
-r"""ViT-H (1280-dim, 32-layer) with 2-node FSDP and full instrumentation.
+r"""ViT-H (1280-dim, 32-layer) single-bandset with masked-negatives-vec loss.
 
-Logs per-modality patch disc losses, per-parameter-group grad norms,
-and runs embedding diagnostics. Defaults to compile=False for stability
-(original crash was torch.compile + multi-node FSDP deadlock).
+Single S2 bandset (all 12 bands) + Landsat single bandset,
+random band dropout ~Uniform(0, 0.3), modality_cross_random masking,
+modality_patch_discrimination_masked_negatives_vec loss.
+2-node FSDP, bf16, compile off for stability.
 
-Smoke test (1 node, 100 steps):
-    python scripts/vnext/vit_h_fsdp.py dry_run vit_h_smoke local
+Smoke test:
+    python scripts/vnext/vit_h_single_bandset.py dry_run vit_h_sb_smoke local
 
-    python scripts/vnext/vit_h_fsdp.py launch vit_h_smoke ai2/jupiter \
-        --launch.num_nodes=1 \
-        --launch.num_gpus=8 \
-        --trainer.max_duration=100steps \
-        --trainer.callbacks.wandb.project=2026_05_07_scaling_investigation
-
-Full run (2 nodes):
-    python scripts/vnext/vit_h_fsdp.py launch vit_h_instrumented ai2/jupiter \
+Full run:
+    python scripts/vnext/vit_h_single_bandset.py launch vit_h_single_bandset ai2/jupiter \
         --launch.num_nodes=2 \
         --launch.num_gpus=8 \
-        --launch.clusters=[ai2/jupiter,ai2/ceres] \
-        --trainer.callbacks.wandb.project=2026_05_07_scaling_investigation
+        --launch.priority=urgent \
+        --trainer.callbacks.wandb.project=2026_05_08_vith_single_bandset_sweep
 """
 
+import copy
 import logging
 
 from olmo_core.config import DType
@@ -59,6 +55,7 @@ from olmoearth_pretrain.internal.experiment import (
 from olmoearth_pretrain.nn.flexi_vit import PoolingType
 from olmoearth_pretrain.nn.flexihelios import EncoderConfig, PredictorConfig
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
+from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     OlmoEarthSpeedMonitorCallback,
@@ -78,6 +75,8 @@ logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
+RANDOM_BAND_DROPOUT_MAX_RATE = 0.3
+PATCH_EMBED_HIDDEN_SIZES: list[int] = [64]
 
 VIT_H_SIZE = {
     "encoder_embedding_size": 1280,
@@ -88,25 +87,6 @@ VIT_H_SIZE = {
     "decoder_num_heads": 16,
     "mlp_ratio": 4.0,
 }
-
-ONLY_DECODE_MODALITIES = [
-    Modality.WORLDCOVER.name,
-    Modality.SRTM.name,
-    Modality.OPENSTREETMAP_RASTER.name,
-    Modality.WRI_CANOPY_HEIGHT_MAP.name,
-    Modality.CDL.name,
-    Modality.WORLDCEREAL.name,
-]
-
-MASKING_CONFIG = MaskingConfig(
-    strategy_config={
-        "type": "modality_cross_random",
-        "encode_ratio": 0.5,
-        "decode_ratio": 0.5,
-        "allow_encoding_decoding_same_bandset": True,
-        "only_decode_modalities": ONLY_DECODE_MODALITIES,
-    }
-)
 
 TRAINING_MODALITIES = [
     Modality.SENTINEL2_L2A.name,
@@ -120,13 +100,73 @@ TRAINING_MODALITIES = [
     Modality.WORLDCEREAL.name,
 ]
 
+ONLY_DECODE_MODALITIES = [
+    Modality.WORLDCOVER.name,
+    Modality.SRTM.name,
+    Modality.OPENSTREETMAP_RASTER.name,
+    Modality.WRI_CANOPY_HEIGHT_MAP.name,
+    Modality.CDL.name,
+    Modality.WORLDCEREAL.name,
+]
+
+S2_SINGLE_BANDSET = ModalityTokenization(
+    band_groups=[
+        [
+            "B02",
+            "B03",
+            "B04",
+            "B08",
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12",
+            "B01",
+            "B09",
+        ],
+    ]
+)
+
+LANDSAT_SINGLE_BANDSET = ModalityTokenization(
+    band_groups=[
+        ["B8", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"],
+    ]
+)
+
+TOKENIZATION_CONFIG = TokenizationConfig(
+    overrides={
+        "sentinel2_l2a": S2_SINGLE_BANDSET,
+        "landsat": LANDSAT_SINGLE_BANDSET,
+    }
+)
+
+_LOSS_CONFIG_DICT = {
+    "type": "modality_patch_discrimination_masked_negatives_vec",
+    "tau": 0.1,
+    "same_target_threshold": 0.999,
+    "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
+}
+
+MASKING_CONFIG = MaskingConfig(
+    strategy_config={
+        "type": "modality_cross_random",
+        "encode_ratio": 0.5,
+        "decode_ratio": 0.5,
+        "allow_encoding_decoding_same_bandset": True,
+        "only_decode_modalities": ONLY_DECODE_MODALITIES,
+    },
+    tokenization_config=TOKENIZATION_CONFIG,
+)
+
 
 def build_common_components(
     script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
 ) -> CommonComponents:
-    """Build common components, default 2-node launch."""
+    """Build common components with single-bandset tokenization, 2-node default."""
     config = build_common_components_default(script, cmd, run_name, cluster, overrides)
     config.training_modalities = TRAINING_MODALITIES
+    config.tokenization_config = TOKENIZATION_CONFIG
     if config.launch is not None:
         config.launch.num_nodes = 2
         config.launch.num_gpus = 8
@@ -134,7 +174,7 @@ def build_common_components(
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """ViT-H encoder (1280d, 32 layers) + shallow decoder, activation checkpointing on."""
+    """ViT-H encoder (1280d, 32 layers) + shallow decoder, single bandset, band dropout."""
     encoder_config = EncoderConfig(
         embedding_size=VIT_H_SIZE["encoder_embedding_size"],
         num_heads=VIT_H_SIZE["encoder_num_heads"],
@@ -145,6 +185,10 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         drop_path=0.1,
         max_sequence_length=12,
         use_flash_attn=True,
+        tokenization_config=TOKENIZATION_CONFIG,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+        patch_embed_hidden_sizes=PATCH_EMBED_HIDDEN_SIZES,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=VIT_H_SIZE["encoder_embedding_size"],
@@ -155,6 +199,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
         use_flash_attn=True,
+        tokenization_config=TOKENIZATION_CONFIG,
     )
     return LatentMIMConfig(
         encoder_config=encoder_config,
@@ -165,14 +210,12 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 def build_train_module_config(
     common: CommonComponents,
 ) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Vectorized patch disc loss, wd=0.02, lr=1e-4, FSDP bf16, compile OFF by default."""
+    """Masked-negatives-vec loss, wd=0.02, lr=1e-4, FSDP bf16, compile OFF."""
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
         rank_microbatch_size=16,
         masking_config=MASKING_CONFIG,
-        loss_config=LossConfig(
-            loss_config={"type": "modality_patch_discrimination", "tau": 0.1}
-        ),
+        loss_config=LossConfig(loss_config=copy.deepcopy(_LOSS_CONFIG_DICT)),
         contrastive_config=LossConfig(loss_config={"type": "InfoNCE", "weight": 0.1}),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
@@ -188,7 +231,7 @@ def build_train_module_config(
 
 
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """Dataloader with reduced token budget (1800) vs large (2250) for memory headroom."""
+    """Dataloader with token_budget=1800 for ViT-H memory headroom."""
     return OlmoEarthDataLoaderConfig(
         num_workers=16,
         global_batch_size=512,
@@ -316,7 +359,6 @@ EVAL_TASKS = {
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Trainer with kNN/probe evals + embedding diagnostics."""
-    MAX_DURATION = Duration.epochs(300)
     WANDB_PROJECT = "2026_05_07_scaling_investigation"
 
     return (
@@ -326,7 +368,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             save_folder=common.save_folder,
             cancel_check_interval=25,
             metrics_collect_interval=10,
-            max_duration=MAX_DURATION,
+            max_duration=Duration.steps(150000),
             checkpointer=CheckpointerConfig(work_dir=common.save_folder),
         )
         .with_callback(
