@@ -119,9 +119,9 @@ dev = [
     "pytest-xdist>=3.8.0",
     "ruff>=0.14.1",
 ]
-eval-geobench2 = []
 eval = [
     "albumentations>=1.4.10",
+    "claymodel",
     "tacoreader",
     "geobench",
     "geopandas>=1.1.1",

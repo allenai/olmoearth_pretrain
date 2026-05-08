@@ -526,6 +526,28 @@ wheels = [
 ]
 
 [[package]]
+name = "claymodel"
+version = "1.5.0"
+source = { git = "https://github.com/Clay-foundation/model.git#f14e698f3c237cabf8d28dec669a362d66625381" }
+dependencies = [
+    { name = "einops" },
+    { name = "geopandas" },
+    { name = "jsonargparse", extra = ["signatures"] },
+    { name = "lightning" },
+    { name = "matplotlib" },
+    { name = "python-box" },
+    { name = "scikit-image" },
+    { name = "scikit-learn" },
+    { name = "timm" },
+    { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
+    { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin' and sys_platform != 'linux'" },
+    { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform == 'linux'" },
+    { name = "torchvision" },
+    { name = "vit-pytorch" },
+    { name = "wandb" },
+]
+
+[[package]]
 name = "click"
 version = "8.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2280,6 +2302,7 @@ all-no-flash = [
     { name = "beaker-py" },
     { name = "cartopy" },
     { name = "class-registry" },
+    { name = "claymodel" },
     { name = "docker" },
     { name = "einops" },
     { name = "gcsfs" },
@@ -2364,6 +2387,7 @@ dev = [
 ]
 eval = [
     { name = "albumentations" },
+    { name = "claymodel" },
     { name = "geobench" },
     { name = "geopandas" },
     { name = "lightning" },
@@ -2409,6 +2433,7 @@ requires-dist = [
     { name = "cartopy", marker = "extra == 'training'", specifier = ">=0.25.0" },
     { name = "class-registry", marker = "extra == 'dataset-creation'", specifier = ">=2.1.2" },
     { name = "class-registry", marker = "extra == 'training'", specifier = ">=2.1.2" },
+    { name = "claymodel", marker = "extra == 'eval'", git = "https://github.com/Clay-foundation/model.git" },
     { name = "docker", marker = "extra == 'beaker'", specifier = ">=5.0,<8.0" },
     { name = "einops", specifier = ">=0.7.0" },
     { name = "einops", marker = "extra == 'dataset-creation'", specifier = "==0.7.0" },
@@ -2472,7 +2497,7 @@ requires-dist = [
     { name = "wandb", marker = "extra == 'training'", specifier = ">=0.19.0" },
     { name = "xarray", marker = "extra == 'eval'", specifier = ">=2025.10.1" },
 ]
-provides-extras = ["training", "beaker", "dataset-creation", "dev", "eval-geobench2", "eval", "flash-attn", "all-no-flash"]
+provides-extras = ["training", "beaker", "dataset-creation", "dev", "eval", "flash-attn", "all-no-flash"]
 
 [[package]]
 name = "omegaconf"
@@ -4477,6 +4502,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a4/d5/b0ccd381d55c8f45d46f77df6ae59fbc23d19e901e2d523395598e5f4c93/virtualenv-20.35.3.tar.gz", hash = "sha256:4f1a845d131133bdff10590489610c98c168ff99dc75d6c96853801f7f67af44", size = 6002907, upload-time = "2025-10-10T21:23:33.178Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/27/73/d9a94da0e9d470a543c1b9d3ccbceb0f59455983088e727b8a1824ed90fb/virtualenv-20.35.3-py3-none-any.whl", hash = "sha256:63d106565078d8c8d0b206d48080f938a8b25361e19432d2c9db40d2899c810a", size = 5981061, upload-time = "2025-10-10T21:23:30.433Z" },
+]
+
+[[package]]
+name = "vit-pytorch"
+version = "1.17.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "einops" },
+    { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
+    { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin' and sys_platform != 'linux'" },
+    { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform == 'linux'" },
+    { name = "torchvision" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d2/b6/80607fc5238283161d306bcaece5ad92beac6ad9d4ef8d3d3f42cc770ddb/vit_pytorch-1.17.8.tar.gz", hash = "sha256:7f3aa2bb591d5aee2df4e81bff4a68238e52ad0ec535919f9f61dbcb6ef66507", size = 133438, upload-time = "2026-02-11T19:50:35.526Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/86/09/d46e40830cd5ee593a14eac682b8c61731e10123d723cd824cba30f0437f/vit_pytorch-1.17.8-py3-none-any.whl", hash = "sha256:a9df0c68d8828791196df66af37b9d8c5684c22f26b76c884ab70ebff9488708", size = 172499, upload-time = "2026-02-11T19:50:34.124Z" },
 ]
 
 [[package]]
