@@ -254,13 +254,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 if self.contrastive_loss is not None:
                     contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
                     loss += contrastive_loss
-                    total_batch_con += (
-                        get_local_tensor(contrastive_loss.detach()) / num_microbatches
-                    )
 
                 loss = loss / num_microbatches
-                loss_val = get_local_tensor(loss.detach())
-                total_batch_loss += loss_val
 
                 del latent_a, latent_b
 
@@ -269,12 +264,24 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                         f"NaN or Inf detected in loss at microbatch {microbatch_idx}. "
                         f"Zeroing loss to keep FSDP in sync."
                     )
-                    loss = loss * 0.0
+                    loss = torch.zeros_like(loss, requires_grad=True)
+                else:
+                    loss_val = get_local_tensor(loss.detach())
+                    total_batch_loss += loss_val
+                    if self.contrastive_loss is not None:
+                        total_batch_con += (
+                            get_local_tensor(contrastive_loss.detach())
+                            / num_microbatches
+                        )
 
                 loss.backward()
 
         if dry_run:
             return
+
+        total_batch_loss = torch.nan_to_num(total_batch_loss, nan=float("inf"))
+        total_batch_reg = torch.nan_to_num(total_batch_reg, nan=float("inf"))
+        total_batch_con = torch.nan_to_num(total_batch_con, nan=float("inf"))
 
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
