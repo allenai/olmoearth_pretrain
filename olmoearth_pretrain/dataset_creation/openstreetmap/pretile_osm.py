@@ -153,6 +153,24 @@ def pretile_one_pbf(
     """
     t0 = time.time()
     pbf_name = pbf_path.name
+
+    # Skip tiles that already exist on disk
+    remaining = [(lon, lat) for lon, lat in tiles if not _tile_path(output_dir, lon, lat).exists()]
+    if not remaining:
+        logger.info(f"Skipping {pbf_name} -- all {len(tiles)} tiles already on disk")
+        return {
+            "pbf": pbf_name,
+            "tiles_assigned": len(tiles),
+            "tiles_written": 0,
+            "tiles_empty": 0,
+            "tiles_skipped": len(tiles),
+            "features_total": 0,
+            "elapsed_seconds": 0,
+        }
+    if len(remaining) < len(tiles):
+        logger.info(f"{pbf_name}: {len(tiles) - len(remaining)} tiles already on disk, {len(remaining)} remaining")
+    tiles = remaining
+
     logger.info(f"Processing {pbf_name} ({len(tiles)} tiles)...")
 
     # Build geometries for all assigned tiles

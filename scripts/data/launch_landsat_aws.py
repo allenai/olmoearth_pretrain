@@ -57,9 +57,7 @@ set -euo pipefail
 exec > >(tee -a /var/log/landsat-worker.log) 2>&1
 echo "=== Landsat worker shard {shard_id}/{num_shards} starting $(date) ==="
 
-export AWS_ACCESS_KEY_ID="{aws_access_key_id}"
-export AWS_SECRET_ACCESS_KEY="{aws_secret_access_key}"
-export AWS_DEFAULT_REGION="{region}"
+{aws_creds_block}export AWS_DEFAULT_REGION="{region}"
 
 S3_INPUT="s3://{bucket}/{prefix}/inputs"
 S3_OUTPUT="s3://{bucket}/{prefix}/windows"
@@ -150,16 +148,20 @@ def _get_git_ref() -> str:
     return result.stdout.strip()
 
 
-def _get_aws_creds() -> tuple[str, str]:
-    """Read AWS credentials from environment."""
+def _get_aws_creds(require: bool = True) -> tuple[str, str, str]:
+    """Read AWS credentials from environment (key, secret, optional session token).
+
+    If require=False (instance profile mode), returns empty strings without error.
+    """
     key_id = os.environ.get("AWS_ACCESS_KEY_ID", "")
     secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
-    if not key_id or not secret:
+    token = os.environ.get("AWS_SESSION_TOKEN", "")
+    if require and (not key_id or not secret):
         raise SystemExit(
             "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set.\n"
-            "Export them before running launch."
+            "Export them before running launch, or use --iam-instance-profile."
         )
-    return key_id, secret
+    return key_id, secret, token
 
 
 def _make_landsat_only_config(rslearn_config_path: str) -> dict:
@@ -189,8 +191,14 @@ def cmd_launch(args: argparse.Namespace) -> None:
     """Launch EC2 spot instances for Landsat processing."""
     import boto3
 
-    aws_key_id, aws_secret = _get_aws_creds()
+    use_instance_profile = bool(args.iam_instance_profile)
+    aws_key_id, aws_secret, aws_session_token = _get_aws_creds(require=not use_instance_profile)
     git_ref = _get_git_ref()
+
+    if use_instance_profile:
+        logger.info(f"Using IAM instance profile: {args.iam_instance_profile} (no baked-in credentials)")
+    else:
+        logger.warning("Baking AWS credentials into user-data (prefer --iam-instance-profile for production)")
 
     logger.info(f"Git ref: {git_ref}")
     logger.info(f"Instances: {args.num_instances} x {args.instance_type}")
@@ -225,6 +233,17 @@ def cmd_launch(args: argparse.Namespace) -> None:
     run_id = f"landsat-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
     for shard_id in range(args.num_instances):
+        if use_instance_profile:
+            aws_creds_block = "# Credentials provided by IAM instance profile\n"
+        else:
+            lines = [
+                f'export AWS_ACCESS_KEY_ID="{aws_key_id}"',
+                f'export AWS_SECRET_ACCESS_KEY="{aws_secret}"',
+            ]
+            if aws_session_token:
+                lines.append(f'export AWS_SESSION_TOKEN="{aws_session_token}"')
+            aws_creds_block = "\n".join(lines) + "\n"
+
         userdata = USERDATA_TEMPLATE.format(
             shard_id=shard_id,
             num_shards=args.num_instances,
@@ -233,8 +252,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
             region=args.region,
             git_ref=git_ref,
             workers=args.workers,
-            aws_access_key_id=aws_key_id,
-            aws_secret_access_key=aws_secret,
+            aws_creds_block=aws_creds_block,
         )
 
         launch_kwargs: dict = {
