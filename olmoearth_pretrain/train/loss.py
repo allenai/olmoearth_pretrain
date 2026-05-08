@@ -146,7 +146,7 @@ class ModalityAllDiscriminationLoss(Loss):
         )
         modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
 
-        total_loss = 0
+        total_loss = torch.zeros(1, device=modality_preds[0].device)
         for all_preds, all_masks, all_targets in zip(
             modality_preds, modality_masks, modality_targets
         ):
@@ -318,8 +318,7 @@ class ModalityPatchDiscriminationLoss(Loss):
         )
         modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
 
-        # Accumulate to the total loss
-        total_loss = 0
+        total_loss = torch.zeros(1, device=modality_preds[0].device)
         self._per_modality_losses = {}
         for all_preds, all_masks, all_targets, modality in zip(
             modality_preds, modality_masks, modality_targets, targets.modalities
@@ -422,7 +421,7 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         )
         modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
 
-        total_loss = 0
+        total_loss = torch.zeros(1, device=modality_preds[0].device)
         self._per_modality_losses = {}
         for all_preds, all_masks, all_targets, modality in zip(
             modality_preds, modality_masks, modality_targets, targets.modalities
