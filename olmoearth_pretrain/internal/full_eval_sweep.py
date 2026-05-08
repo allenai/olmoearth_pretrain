@@ -410,10 +410,10 @@ def _get_base_run_name(
     return run_name
 
 
-def _get_checkpoint_args(checkpoint_path: str) -> str:
-    """Generate checkpoint arguments string."""
+def _get_checkpoint_args(checkpoint_path: str | None) -> str:
+    """Generate trainer args for checkpoint-resumed evaluation."""
     if checkpoint_path is not None:
-        return f"--trainer.load_path={checkpoint_path}"
+        return f"--trainer.load_path={checkpoint_path}{_EVAL_RESUME_MAX_DURATION}"
     return ""
 
 
@@ -515,6 +515,17 @@ def _get_pooling_type_str(pooling_type: str) -> str:
 
 
 LAUNCH_OVERRIDES = "--launch.priority=high --launch.num_gpus=1 --launch.task_name=eval"
+# Overwrite the max duration to enable eval of the last step of the checkpoint
+MAX_DURATION_OVERRIDE = (
+    "--trainer.max_duration.value=10000000 --trainer.max_duration.unit=steps"
+)
+
+# Finished checkpoints still use the training max_duration; without extending it,
+# trainer.fit() exits immediately and eval_on_startup callbacks never run. Same values
+# as full_eval_sweep_finetune.py.
+_EVAL_RESUME_MAX_DURATION = (
+    " --trainer.max_duration.value=10000000 --trainer.max_duration.unit=steps"
+)
 
 
 def _get_env_prefix(args: argparse.Namespace, module_path: str) -> str:
@@ -988,6 +999,8 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             cmd += select_best_val_args()
             commands_to_run_new.append(cmd)
         commands_to_run = commands_to_run_new
+
+    commands_to_run = [f"{cmd} {MAX_DURATION_OVERRIDE}" for cmd in commands_to_run]
 
     # Filter out skipped tasks if task-skip-names is provided
     if args.task_skip_names:

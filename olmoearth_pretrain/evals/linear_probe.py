@@ -184,7 +184,9 @@ def train_and_eval_probe(
     elif config.task_type == TaskType.REGRESSION:
         if probe_type != ProbeType.LINEAR:
             raise ValueError(f"Probe type {probe_type} not supported for regression.")
-        probe = LinearProbe(in_dim=in_features, out_dim=1, use_batchnorm=True).to(device)
+        probe = LinearProbe(in_dim=in_features, out_dim=1, use_batchnorm=True).to(
+            device
+        )
     else:
         if probe_type == ProbeType.LINEAR:
             probe = LinearProbe(

@@ -18,8 +18,9 @@ Usage examples:
        --cluster ai2/jupiter \
        --defaults_only
 
-3. To run a subset of tasks, add:
+3. To run a subset of tasks, add either explicit tasks_to_run or the same skip list as full_eval_sweep:
      --trainer.callbacks.downstream_evaluator.tasks_to_run='["m_eurosat","m_so2sat","mados"]'
+     --task-skip-names=m_eurosat,m_bigearthnet
    You can also launch multiple jobs with different tasks_to_run values to speed up the finetuning.
 
 Flags:
@@ -31,7 +32,10 @@ Each FT eval task's normalization is defined in all_evals.py.
 """
 
 import argparse
+import json
 import os
+import shlex
+import socket
 import subprocess  # nosec
 import uuid
 from collections.abc import Iterable
@@ -48,6 +52,20 @@ logger = getLogger(__name__)
 
 # Learning rates to sweep over.
 FT_LRS = [1e-4, 5e-4, 1e-3]
+
+
+def _pick_free_listen_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def _local_torchrun_master_port() -> int:
+    env_mp = os.environ.get("MASTER_PORT")
+    if env_mp and env_mp.strip():
+        return int(env_mp.strip())
+    return _pick_free_listen_port()
+
 
 TASK_ARG_PREFIX = "--trainer.callbacks.downstream_evaluator.tasks"
 FT_TASK_NAMES = list(FT_EVAL_TASKS.keys())
@@ -267,6 +285,9 @@ def _get_sub_command(args: argparse.Namespace) -> str:
 
 def _get_base_run_name(args: argparse.Namespace, selected_preset: str | None) -> str:
     """Get the base run name."""
+    if args.model_name is not None:
+        logger.info("Overriding checkpoint name with %s", args.model_name)
+        return args.model_name
     if args.model is not None:
         logger.info("Overriding checkpoint name with %s", args.model)
         return args.model
@@ -301,8 +322,13 @@ def _format_launch_command(
     model_args: list[str],
     lr: float,
     seed_args: Iterable[str],
+    torchrun_master_port: int | None = None,
 ) -> str:
     """Format the launch command."""
+    if torchrun_master_port is not None:
+        if launch_command != "torchrun":
+            raise ValueError("torchrun_master_port is only valid with torchrun")
+        launch_command = f"torchrun --master-port={torchrun_master_port}"
     parts = [
         f"TRAIN_SCRIPT_PATH={module_path}",
         launch_command,
@@ -344,6 +370,14 @@ def build_commands(
     selected_preset = args.model
     base_run_name = _get_base_run_name(args, selected_preset)
     launch_command = "python3" if not sub_command == SubCmd.evaluate else "torchrun"
+    torchrun_master_port: int | None = None
+    if args.cluster == "local" and launch_command == "torchrun":
+        torchrun_master_port = _local_torchrun_master_port()
+        logger.info(
+            "Local eval: torchrun will use --master-port=%s "
+            "(export MASTER_PORT to pin the rendezvous port).",
+            torchrun_master_port,
+        )
 
     module_path = _resolve_module_path(args, selected_preset)
     checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
@@ -404,8 +438,39 @@ def build_commands(
                 model_args=model_args,
                 lr=lr,
                 seed_args=seed_args,
+                torchrun_master_port=torchrun_master_port,
             )
         )
+
+    if args.task_skip_names:
+        skip_raw = [
+            name.strip() for name in args.task_skip_names.split(",") if name.strip()
+        ]
+        unknown = [s for s in skip_raw if s not in FT_EVAL_TASKS]
+        if unknown:
+            logger.warning(
+                "Ignoring --task-skip-names not present in FT_EVAL_TASKS: %s",
+                ", ".join(unknown),
+            )
+        skip_names = [s for s in skip_raw if s in FT_EVAL_TASKS]
+        tasks_to_run = [task for task in FT_TASK_NAMES if task not in skip_names]
+        if not tasks_to_run:
+            logger.warning(
+                "--task-skip-names intersected with FT_EVAL_TASKS would remove every "
+                "finetune task (common when reusing a KNN-oriented $SKIP). Running all "
+                "FT tasks; omit --task-skip-names or shorten the list to subset FT keys."
+            )
+        else:
+            tasks_to_run_arg = (
+                " --trainer.callbacks.downstream_evaluator.tasks_to_run="
+                f"{shlex.quote(json.dumps(tasks_to_run))}"
+            )
+            commands_new: list[str] = []
+            for cmd in commands:
+                logger.info("Adding tasks_to_run filter to %s", cmd)
+                commands_new.append(cmd + tasks_to_run_arg)
+            commands = commands_new
+
     return commands
 
 
@@ -449,6 +514,13 @@ def main() -> None:
         help="Model preset key to apply (defaults to none).",
     )
     parser.add_argument(
+        "--model_name",
+        type=str,
+        required=False,
+        default=None,
+        help="If set, use this as the base run name (overrides checkpoint-derived name).",
+    )
+    parser.add_argument(
         "--use_dataset_normalizer",
         action="store_true",
         help=(
@@ -460,6 +532,16 @@ def main() -> None:
         type=int,
         default=None,
         help="Base random seed applied to every finetune task (optional).",
+    )
+    parser.add_argument(
+        "--task-skip-names",
+        type=str,
+        required=False,
+        help=(
+            "Comma-separated FT eval task keys to skip (intersected with FT_EVAL_TASKS; "
+            "other names are ignored). If no FT tasks would remain, all FT tasks are run "
+            "with a warning (e.g. when reusing a KNN $SKIP that lists every FT key)."
+        ),
     )
 
     args, extra_cli = parser.parse_known_args()

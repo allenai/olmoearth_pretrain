@@ -352,7 +352,10 @@ def _run_knn_for_k(
     """
     train_embeddings = train_embeddings.to(device)
     test_embeddings = test_embeddings.to(device)
-    train_labels = train_labels.to(device)
+    # (N, 1) labels (common from dataloaders) make train_labels[idx] shape (..., 1),
+    # then one_hot is (..., 1, C) and breaks broadcasting against weights (..., 1).
+    # PIPER TODO: is this really necessary?
+    train_labels = train_labels.to(device).reshape(-1)
 
     eps = 1e-8
     train_embeddings_norm = torch.nn.functional.normalize(

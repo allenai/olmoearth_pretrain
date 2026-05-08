@@ -8,7 +8,13 @@ from typing import Any
 
 import numpy as np
 import torch
-from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_squared_error, r2_score
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+)
 
 
 class EvalMetric(StrEnum):
@@ -204,7 +210,9 @@ def regression_metrics(
     rmse = float(np.sqrt(mean_squared_error(y, p)))
     mae = float(mean_absolute_error(y, p))
     r2 = float(r2_score(y, p))
-    return EvalResult.from_regression(rmse=rmse, mae=mae, r2=r2, primary_metric=primary_metric)
+    return EvalResult.from_regression(
+        rmse=rmse, mae=mae, r2=r2, primary_metric=primary_metric
+    )
 
 
 def _build_confusion_matrix(

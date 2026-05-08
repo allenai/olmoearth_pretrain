@@ -88,6 +88,7 @@ class DownstreamTaskConfig:
     # FT
     ft_lr: float | None = None
     ft_batch_size: int = 32
+    ft_grad_accum_steps: int = 1
     finetune_seed: int = 42
     # LP / FT
     epochs: int = 50
@@ -163,6 +164,7 @@ class DownstreamEvaluator:
         self.probe_batch_size = task.probe_batch_size
         self.ft_lr = task.ft_lr
         self.ft_batch_size = task.ft_batch_size
+        self.ft_grad_accum_steps = task.ft_grad_accum_steps
         self.finetune_seed = task.finetune_seed
         self.epochs = task.epochs
         self.linear_probe_eval_interval = task.linear_probe_eval_interval
@@ -213,6 +215,10 @@ class DownstreamEvaluator:
         if self.eval_mode == EvalMode.FINETUNE:
             if self.ft_lr is None:
                 raise ValueError("ft_lr cannot be none for finetune tasks.")
+            if self.ft_grad_accum_steps < 1:
+                raise ValueError(
+                    f"ft_grad_accum_steps must be >= 1, got {self.ft_grad_accum_steps}"
+                )
             if self.config.task_type == TaskType.SEGMENTATION:
                 if self.config.height_width is None:
                     raise ValueError(
@@ -531,6 +537,7 @@ class DownstreamEvaluator:
             resume_checkpoint_path=resume_checkpoint_path,
             primary_metric=self.primary_metric,
             primary_metric_class=self.primary_metric_class,
+            ft_grad_accum_steps=self.ft_grad_accum_steps,
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
