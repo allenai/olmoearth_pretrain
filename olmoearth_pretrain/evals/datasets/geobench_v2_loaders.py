@@ -43,7 +43,9 @@ def _raster_i64(row: Any, idx: int) -> torch.Tensor:
         return torch.from_numpy(src.read().astype(np.int64))
 
 
-def _polygon_to_mask(vertices: list[float], width: int = 228, height: int = 228) -> np.ndarray:
+def _polygon_to_mask(
+    vertices: list[float], width: int = 228, height: int = 228
+) -> np.ndarray:
     """Convert flat polygon vertex list to binary uint8 mask."""
     from PIL import Image, ImageDraw
 
@@ -102,7 +104,9 @@ class _BaseGeobenchDataset(Dataset):
     band_order: Any  # consumed by _sample_to_olmoearth
 
     def __init__(self, root: str, split: str) -> None:
-        names = [self.TORTILLA] if isinstance(self.TORTILLA, str) else list(self.TORTILLA)
+        names = (
+            [self.TORTILLA] if isinstance(self.TORTILLA, str) else list(self.TORTILLA)
+        )
         paths = [os.path.join(root, n) for n in names]
         df = tacoreader.load(paths)
         if split == "val":
@@ -147,7 +151,20 @@ class CloudSen12Dataset(_BaseGeobenchDataset):
     """CloudSen12: 12-band S2 → cloud segmentation (4 classes)."""
 
     TORTILLA = "geobench_cloudsen12.tortilla"
-    band_order = ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B09", "B11", "B12"]
+    band_order = [
+        "B01",
+        "B02",
+        "B03",
+        "B04",
+        "B05",
+        "B06",
+        "B07",
+        "B08",
+        "B8A",
+        "B09",
+        "B11",
+        "B12",
+    ]
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
         row = self._df.read(idx)
@@ -174,7 +191,19 @@ class SpaceNet2Dataset(_BaseGeobenchDataset):
     """SpaceNet2: WorldView-2 (8-band) + panchromatic (1-band) → building seg."""
 
     TORTILLA = "geobench_spacenet2.tortilla"
-    band_order = {"worldview": ["coastal", "blue", "green", "yellow", "red", "red_edge", "nir1", "nir2"], "pan": ["pan"]}
+    band_order = {
+        "worldview": [
+            "coastal",
+            "blue",
+            "green",
+            "yellow",
+            "red",
+            "red_edge",
+            "nir1",
+            "nir2",
+        ],
+        "pan": ["pan"],
+    }
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
         row = self._df.read(idx)
@@ -182,26 +211,54 @@ class SpaceNet2Dataset(_BaseGeobenchDataset):
         image_pan = _raster_f32(row, 1)  # (1, H, W)
         mask = _raster_i64(row, 2).squeeze(0)  # (H, W)
         mask = mask + 1  # shift for background class
-        return {"image_worldview": image_worldview, "image_pan": image_pan, "mask": mask}
+        return {
+            "image_worldview": image_worldview,
+            "image_pan": image_pan,
+            "mask": mask,
+        }
 
 
 # ─── multi-label classification ───────────────────────────────────────────────
 
 _BENV2_LABELS = [
-    "Urban fabric", "Industrial or commercial units", "Arable land", "Permanent crops",
-    "Pastures", "Complex cultivation patterns",
+    "Urban fabric",
+    "Industrial or commercial units",
+    "Arable land",
+    "Permanent crops",
+    "Pastures",
+    "Complex cultivation patterns",
     "Land principally occupied by agriculture, with significant areas of natural vegetation",
-    "Agro-forestry areas", "Broad-leaved forest", "Coniferous forest", "Mixed forest",
+    "Agro-forestry areas",
+    "Broad-leaved forest",
+    "Coniferous forest",
+    "Mixed forest",
     "Natural grassland and sparsely vegetated areas",
-    "Moors, heathland and sclerophyllous vegetation", "Transitional woodland, shrub",
-    "Beaches, dunes, sands", "Inland wetlands", "Coastal wetlands",
-    "Inland waters", "Marine waters",
+    "Moors, heathland and sclerophyllous vegetation",
+    "Transitional woodland, shrub",
+    "Beaches, dunes, sands",
+    "Inland wetlands",
+    "Coastal wetlands",
+    "Inland waters",
+    "Marine waters",
 ]
 _BENV2_L2I = {c: i for i, c in enumerate(_BENV2_LABELS)}
 
 _TREESATAI_CLASSES = [
-    "Abies", "Acer", "Alnus", "Betula", "Cleared", "Fagus", "Fraxinus",
-    "Larix", "Picea", "Pinus", "Populus", "Prunus", "Pseudotsuga", "Quercus", "Tilia",
+    "Abies",
+    "Acer",
+    "Alnus",
+    "Betula",
+    "Cleared",
+    "Fagus",
+    "Fraxinus",
+    "Larix",
+    "Picea",
+    "Pinus",
+    "Populus",
+    "Prunus",
+    "Pseudotsuga",
+    "Quercus",
+    "Tilia",
 ]
 _TREESATAI_L2I = {c: i for i, c in enumerate(_TREESATAI_CLASSES)}
 
@@ -211,7 +268,23 @@ class BENV2Dataset(_BaseGeobenchDataset):
 
     TORTILLA = "geobench_benv2.tortilla"
     # item[0]=S1(VV,VH) float32, item[1]=S2(12-band) uint16
-    band_order = {"s1": ["VV", "VH"], "s2": ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B09", "B11", "B12"]}
+    band_order = {
+        "s1": ["VV", "VH"],
+        "s2": [
+            "B01",
+            "B02",
+            "B03",
+            "B04",
+            "B05",
+            "B06",
+            "B07",
+            "B08",
+            "B8A",
+            "B09",
+            "B11",
+            "B12",
+        ],
+    }
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
         row_df = self._df.iloc[idx]
@@ -233,26 +306,49 @@ class TreeSatAIDataset(_BaseGeobenchDataset):
     band_order = {
         "aerial": ["red", "green", "blue", "nir"],
         "s1": ["vv", "vh", "vv/vh"],
-        "s2": ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"],
+        "s2": [
+            "B02",
+            "B03",
+            "B04",
+            "B08",
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12",
+            "B01",
+            "B09",
+        ],
     }
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
         row_df = self._df.iloc[idx]
         row = self._df.read(idx)
         image_aerial = _raster_f32(row, 0)  # (4, H, W)
-        image_s1 = _raster_f32(row, 1)     # (3, H, W)
-        image_s2 = _raster_f32(row, 2)     # (12, H, W)
+        image_s1 = _raster_f32(row, 1)  # (3, H, W)
+        image_s2 = _raster_f32(row, 2)  # (12, H, W)
         label_names: list[str] = row_df["species_labels"]
         label = torch.zeros(len(_TREESATAI_CLASSES), dtype=torch.long)
         for name in label_names:
             if name in _TREESATAI_L2I:
                 label[_TREESATAI_L2I[name]] = 1
-        return {"image_aerial": image_aerial, "image_s1": image_s1, "image_s2": image_s2, "label": label}
+        return {
+            "image_aerial": image_aerial,
+            "image_s1": image_s1,
+            "image_s2": image_s2,
+            "label": label,
+        }
 
 
 # ─── KuroSiwo ─────────────────────────────────────────────────────────────────
 
-_KURO_SIWO_CLASS_MAP = {0: 1, 1: 2, 2: 3, 3: 0}  # No Water→1, Perm Water→2, Flood→3, No Data→0
+_KURO_SIWO_CLASS_MAP = {
+    0: 1,
+    1: 2,
+    2: 3,
+    3: 0,
+}  # No Water→1, Perm Water→2, Flood→3, No Data→0
 
 
 class KuroSiwoDataset(_BaseGeobenchDataset):
@@ -264,11 +360,11 @@ class KuroSiwoDataset(_BaseGeobenchDataset):
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
         row = self._df.read(idx)
         # items: [0]=pre_1 SAR, [1]=pre_2 SAR, [2]=post SAR, [3]=DEM, [4]=mask, [5]=invalid
-        image_pre_1 = _raster_f32(row, 0)   # (2, 224, 224)
-        image_pre_2 = _raster_f32(row, 1)   # (2, 224, 224)
-        image_post = _raster_f32(row, 2)    # (2, 224, 224)
-        image_dem = _raster_f32(row, 3)     # (1, 224, 224)
-        invalid = _raster_i64(row, 5)       # (1, 224, 224)
+        image_pre_1 = _raster_f32(row, 0)  # (2, 224, 224)
+        image_pre_2 = _raster_f32(row, 1)  # (2, 224, 224)
+        image_post = _raster_f32(row, 2)  # (2, 224, 224)
+        image_dem = _raster_f32(row, 3)  # (1, 224, 224)
+        invalid = _raster_i64(row, 5)  # (1, 224, 224)
 
         with rasterio.open(row.read(4)) as src:
             raw_mask = torch.from_numpy(src.read().squeeze(0).astype(np.int64))
@@ -297,7 +393,21 @@ class SubstationDataset(_BaseGeobenchDataset):
     """Substation: 13-band S2 → binary presence classification (via bbox)."""
 
     TORTILLA = "geobench_substation.tortilla"
-    band_order = ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B09", "B10", "B11", "B12"]
+    band_order = [
+        "B01",
+        "B02",
+        "B03",
+        "B04",
+        "B05",
+        "B06",
+        "B07",
+        "B08",
+        "B8A",
+        "B09",
+        "B10",
+        "B11",
+        "B12",
+    ]
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
         row = self._df.read(idx)

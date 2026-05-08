@@ -443,7 +443,9 @@ def build_commands(
         )
 
     if args.task_skip_names:
-        skip_raw = [name.strip() for name in args.task_skip_names.split(",") if name.strip()]
+        skip_raw = [
+            name.strip() for name in args.task_skip_names.split(",") if name.strip()
+        ]
         unknown = [s for s in skip_raw if s not in FT_EVAL_TASKS]
         if unknown:
             logger.warning(

@@ -1,6 +1,10 @@
 """Test configs are properly constructed."""
 
-from olmoearth_pretrain.evals.datasets.configs import DATASET_TO_CONFIG, TaskType, dataset_to_config
+from olmoearth_pretrain.evals.datasets.configs import (
+    DATASET_TO_CONFIG,
+    TaskType,
+    dataset_to_config,
+)
 from olmoearth_pretrain.evals.studio_ingest.schema import EvalDatasetEntry
 
 

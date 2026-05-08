@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 def _s2_names(band_order: Any) -> list[str]:
     if isinstance(band_order, dict) and "s2" in band_order:
         return [str(b) for b in band_order["s2"]]
-    if isinstance(band_order, (list, tuple)):
+    if isinstance(band_order, list | tuple):
         return [str(b) for b in band_order]
     return []
 
@@ -49,16 +49,16 @@ def _permute_bchw(
     return out
 
 
-def _align_s2_to_sentinel2_l2a(x: torch.Tensor, source_names: list[str]) -> torch.Tensor:
+def _align_s2_to_sentinel2_l2a(
+    x: torch.Tensor, source_names: list[str]
+) -> torch.Tensor:
     """Map GeoBench S2 channels to full OlmoEarth SENTINEL2_L2A order (12 bands)."""
     target_names = list(Modality.SENTINEL2_L2A.band_order)
     if x.dim() == 3:
         return _permute_bchw(x.unsqueeze(0), source_names, target_names)[0]
     if x.dim() == 4:
         c, t, h, w = x.shape
-        out = torch.zeros(
-            (len(target_names), t, h, w), dtype=x.dtype, device=x.device
-        )
+        out = torch.zeros((len(target_names), t, h, w), dtype=x.dtype, device=x.device)
         idx = {n: i for i, n in enumerate(source_names)}
         for j, name in enumerate(target_names):
             if name in idx:
@@ -77,7 +77,9 @@ def _bchw_to_hwtc(x: torch.Tensor) -> torch.Tensor:
     raise ValueError(f"expected 3D or 4D image tensor, got {x.shape}")
 
 
-def _timestamps(t: int, device: torch.device, dtype: torch.dtype = torch.long) -> torch.Tensor:
+def _timestamps(
+    t: int, device: torch.device, dtype: torch.dtype = torch.long
+) -> torch.Tensor:
     day = torch.full((t,), 15, device=device, dtype=dtype)
     month = torch.full((t,), 6, device=device, dtype=dtype)
     year = torch.full((t,), 2020, device=device, dtype=dtype)
@@ -106,8 +108,12 @@ def _landsat_from_list(x: torch.Tensor, geo_names: list[str]) -> torch.Tensor:
     return torch.cat(chans, dim=1)
 
 
-def _stack_image_keys(sample: dict[str, torch.Tensor], prefix: str = "image_") -> torch.Tensor:
-    keys = sorted(k for k in sample if k.startswith(prefix) and torch.is_tensor(sample[k]))
+def _stack_image_keys(
+    sample: dict[str, torch.Tensor], prefix: str = "image_"
+) -> torch.Tensor:
+    keys = sorted(
+        k for k in sample if k.startswith(prefix) and torch.is_tensor(sample[k])
+    )
     parts = []
     for k in keys:
         t = sample[k]
@@ -144,7 +150,7 @@ def _sample_to_olmoearth(
     if slug == "cloudsen12" and "image" in sample:
         x = sample["image"].float()
         xb = x.unsqueeze(0) if x.dim() == 3 else x
-        if isinstance(band_order, (list, tuple)):
+        if isinstance(band_order, list | tuple):
             src = [str(b) for b in band_order]
         else:
             src = _s2_names(band_order) or [str(i) for i in range(xb.shape[1])]
@@ -164,7 +170,7 @@ def _sample_to_olmoearth(
     if slug == "substation" and "image" in sample:
         x = sample["image"].float()
         xb = x.unsqueeze(0) if x.dim() == 3 else x
-        if isinstance(band_order, (list, tuple)):
+        if isinstance(band_order, list | tuple):
             src = [str(b) for b in band_order]
         else:
             src = _s2_names(band_order) or [str(i) for i in range(xb.shape[1])]
@@ -188,7 +194,7 @@ def _sample_to_olmoearth(
         xb = x.unsqueeze(0) if x.dim() == 3 else x
         if xb.dim() == 3:
             xb = xb.unsqueeze(0)
-        if isinstance(band_order, (list, tuple)):
+        if isinstance(band_order, list | tuple):
             src = [str(b) for b in band_order]
         else:
             src = [str(i) for i in range(xb.shape[1])]
@@ -306,7 +312,9 @@ def _sample_to_olmoearth(
             raise ValueError("treesatai requires band_order dict with an 's2' key")
         c_in = xb.shape[1]
         if len(src) != c_in:
-            raise ValueError(f"treesatai s2 band_order length {len(src)} != channels {c_in}")
+            raise ValueError(
+                f"treesatai s2 band_order length {len(src)} != channels {c_in}"
+            )
         x_perm = _permute_bchw(xb, src, s2_order)
         hwtc = _bchw_to_hwtc(x_perm[0])
         t = hwtc.shape[2]
@@ -337,7 +345,14 @@ def _sample_to_olmoearth(
         if x.shape[1] > n_out:
             x = x[:, :n_out]
         else:
-            pad = torch.zeros(1, n_out - x.shape[1], x.shape[2], x.shape[3], device=x.device, dtype=x.dtype)
+            pad = torch.zeros(
+                1,
+                n_out - x.shape[1],
+                x.shape[2],
+                x.shape[3],
+                device=x.device,
+                dtype=x.dtype,
+            )
             x = torch.cat([x, pad], dim=1)
         hwtc = _bchw_to_hwtc(x[0])
         t = hwtc.shape[2]
@@ -345,10 +360,15 @@ def _sample_to_olmoearth(
         sample_dict["timestamps"] = _timestamps(t, device)
         return OlmoEarthSample(**sample_dict)
 
-    if "image" in sample and torch.is_tensor(sample["image"]) and sample["image"].shape[0] == 3:
+    if (
+        "image" in sample
+        and torch.is_tensor(sample["image"])
+        and sample["image"].shape[0] == 3
+    ):
         x = sample["image"].float()
         x = torch.cat(
-            [x, torch.zeros(1, x.shape[1], x.shape[2], device=x.device, dtype=x.dtype)], dim=0
+            [x, torch.zeros(1, x.shape[1], x.shape[2], device=x.device, dtype=x.dtype)],
+            dim=0,
         )
         hwtc = _bchw_to_hwtc(x)
         t = hwtc.shape[2]
@@ -370,7 +390,12 @@ def _sample_to_olmoearth(
             x = x[:, : len(s2_order)]
         else:
             pad = torch.zeros(
-                1, len(s2_order) - x.shape[1], x.shape[2], x.shape[3], device=x.device, dtype=x.dtype
+                1,
+                len(s2_order) - x.shape[1],
+                x.shape[2],
+                x.shape[3],
+                device=x.device,
+                dtype=x.dtype,
             )
             x = torch.cat([x, pad], dim=1)
         hwtc = _bchw_to_hwtc(x[0])
@@ -408,7 +433,10 @@ def _sample_to_olmoearth(
             if not s1_src:
                 s1_src = [str(i) for i in range(x1b.shape[1])]
             vv_i = next((s1_src.index(n) for n in s1_src if "VV" in n.upper()), 0)
-            vh_i = next((s1_src.index(n) for n in s1_src if "VH" in n.upper()), min(1, len(s1_src) - 1))
+            vh_i = next(
+                (s1_src.index(n) for n in s1_src if "VH" in n.upper()),
+                min(1, len(s1_src) - 1),
+            )
             x1p = torch.stack([x1b[0, vv_i], x1b[0, vh_i]], dim=0).unsqueeze(0)
             s1_hwtc = _bchw_to_hwtc(x1p[0])
             sample_dict["sentinel1"] = s1_hwtc
@@ -422,7 +450,12 @@ def _sample_to_olmoearth(
             x = x[:, : len(s2_order)]
         else:
             pad = torch.zeros(
-                1, len(s2_order) - x.shape[1], x.shape[2], x.shape[3], device=x.device, dtype=x.dtype
+                1,
+                len(s2_order) - x.shape[1],
+                x.shape[2],
+                x.shape[3],
+                device=x.device,
+                dtype=x.dtype,
             )
             x = torch.cat([x, pad], dim=1)
         hwtc = _bchw_to_hwtc(x[0])
@@ -523,14 +556,18 @@ def _normalize_tensor_olmoearth(
     return torch.tensor((arr.astype(np.float32) - lo) / denom, dtype=torch.float32)
 
 
-def _apply_olmoearth_normalization(olmo: OlmoEarthSample, norm_config: dict) -> OlmoEarthSample:
+def _apply_olmoearth_normalization(
+    olmo: OlmoEarthSample, norm_config: dict
+) -> OlmoEarthSample:
     """Return a new OlmoEarthSample with each present modality normalized to OlmoEarth stats."""
     updates: dict[str, torch.Tensor] = {}
     for field_name, modality_spec in _MODALITY_NORM_MAP.items():
         tensor = getattr(olmo, field_name, None)
         if tensor is None:
             continue
-        updates[field_name] = _normalize_tensor_olmoearth(tensor, modality_spec, norm_config)
+        updates[field_name] = _normalize_tensor_olmoearth(
+            tensor, modality_spec, norm_config
+        )
     return olmo._replace(**updates) if updates else olmo
 
 
@@ -559,6 +596,7 @@ class GeobenchV2Dataset(Dataset):
         self._slug = slug
 
         from olmoearth_pretrain.data.normalize import load_computed_config
+
         self._olmoearth_norm_config = load_computed_config()
 
         loader_cls = SLUG_TO_DATASET[slug]
@@ -571,13 +609,17 @@ class GeobenchV2Dataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:  # noqa: D105
         raw = self._inner[idx]
-        device = next((v.device for v in raw.values() if torch.is_tensor(v)), torch.device("cpu"))
+        device = next(
+            (v.device for v in raw.values() if torch.is_tensor(v)), torch.device("cpu")
+        )
 
         olmo = _sample_to_olmoearth(raw, self._band_order, self._slug)
         olmo = _apply_olmoearth_normalization(olmo, self._olmoearth_norm_config)
 
         masked = MaskedOlmoEarthSample.from_olmoearthsample(olmo)
-        label = _extract_label(raw, self._slug, self.config.task_type, self.config.num_classes)
+        label = _extract_label(
+            raw, self._slug, self.config.task_type, self.config.num_classes
+        )
         if label.device != device:
             label = label.to(device)
         return masked, label
