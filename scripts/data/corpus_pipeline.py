@@ -140,6 +140,72 @@ def _resolve_disabled_layers(args: argparse.Namespace) -> list[str]:
 ALL_RSLEARN_STEPS = ["prepare", "ingest", "materialize"]
 
 
+def _run_rslearn_steps(
+    *,
+    rslearn_dir: str,
+    window_names: list[str],
+    steps: list[str],
+    disabled_layers: list[str],
+    workers: int,
+    shard_id: int,
+) -> None:
+    """Run rslearn prepare/ingest/materialize in-process.
+
+    We call rslearn's Python API directly rather than shelling out to the CLI because
+    with large shards (300K+ windows), passing window names as CLI args exceeds
+    Linux's ARG_MAX (~2MB). The handlers here are the same ones the rslearn CLI uses.
+    """
+    from datetime import timedelta
+
+    from rslearn.dataset import Dataset
+    from rslearn.main import (
+        IngestHandler,
+        MaterializeHandler,
+        PrepareHandler,
+        apply_on_windows,
+    )
+
+    dataset = Dataset(UPath(rslearn_dir), disabled_layers=disabled_layers or [])
+
+    for i, step in enumerate(steps):
+        _write_progress(
+            rslearn_dir,
+            "rslearn",
+            shard_id,
+            "running",
+            f"{step} ({i + 1}/{len(steps)})",
+        )
+        logger.info(f"Running: rslearn dataset {step}")
+
+        if step == "prepare":
+            handler = PrepareHandler(
+                force=False,
+                ignore_errors=True,
+                retry_max_attempts=3,
+                retry_backoff=timedelta(seconds=60),
+            )
+        elif step == "ingest":
+            handler = IngestHandler(
+                ignore_errors=True,
+                retry_max_attempts=3,
+                retry_backoff=timedelta(seconds=60),
+            )
+        elif step == "materialize":
+            handler = MaterializeHandler(ignore_errors=True)
+        else:
+            raise ValueError(f"Unknown step: {step}")
+
+        for summary in apply_on_windows(
+            f=handler,
+            dataset=dataset,
+            names=window_names,
+            workers=workers,
+        ):
+            pass  # consume generator; summaries logged internally
+
+        logger.info(f"Completed: rslearn dataset {step}")
+
+
 def cmd_rslearn_worker(args: argparse.Namespace) -> None:
     """Run rslearn prepare/ingest/materialize for one shard."""
     from olmoearth_pretrain.dataset_creation.create_windows.from_corpus import (
@@ -172,44 +238,17 @@ def cmd_rslearn_worker(args: argparse.Namespace) -> None:
     # Create windows for this shard (idempotent -- skips existing)
     create_corpus_windows(UPath(rslearn_dir), shard.entries, workers=args.workers)
 
-    # Run rslearn CLI steps -- pass all window names after a single --window flag
-    # (argparse nargs="*" only keeps the last --window if repeated)
-    window_args = ["--window", *shard.window_names]
-
     steps = getattr(args, "steps", None) or ALL_RSLEARN_STEPS
     disabled = _resolve_disabled_layers(args)
 
-    for i, step in enumerate(steps):
-        _write_progress(
-            rslearn_dir,
-            "rslearn",
-            args.shard_id,
-            "running",
-            f"{step} ({i + 1}/{len(steps)})",
-        )
-        cmd = [
-            sys.executable,
-            "-m",
-            "rslearn.main",
-            "dataset",
-            step,
-            "--root",
-            rslearn_dir,
-            *window_args,
-            "--workers",
-            str(args.workers),
-        ]
-        if disabled:
-            cmd.extend(["--disabled-layers", ",".join(disabled)])
-        if step in ("ingest", "materialize"):
-            cmd.extend(["--ignore-errors", "--retry-max-attempts", "3"])
-
-        logger.info(f"Running: rslearn dataset {step}")
-        result = subprocess.run(cmd, check=False)
-        if result.returncode != 0:
-            _write_progress(rslearn_dir, "rslearn", args.shard_id, "failed", step)
-            logger.error(f"rslearn {step} failed with code {result.returncode}")
-            sys.exit(result.returncode)
+    _run_rslearn_steps(
+        rslearn_dir=rslearn_dir,
+        window_names=shard.window_names,
+        steps=steps,
+        disabled_layers=disabled,
+        workers=args.workers,
+        shard_id=args.shard_id,
+    )
 
     _write_progress(rslearn_dir, "rslearn", args.shard_id, "done")
     logger.info(f"rslearn-worker shard {args.shard_id} complete")
