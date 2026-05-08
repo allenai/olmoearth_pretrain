@@ -137,6 +137,9 @@ def _resolve_disabled_layers(args: argparse.Namespace) -> list[str]:
     return disabled
 
 
+ALL_RSLEARN_STEPS = ["prepare", "ingest", "materialize"]
+
+
 def cmd_rslearn_worker(args: argparse.Namespace) -> None:
     """Run rslearn prepare/ingest/materialize for one shard."""
     from olmoearth_pretrain.dataset_creation.create_windows.from_corpus import (
@@ -173,14 +176,16 @@ def cmd_rslearn_worker(args: argparse.Namespace) -> None:
     # (argparse nargs="*" only keeps the last --window if repeated)
     window_args = ["--window", *shard.window_names]
 
-    rslearn_steps = ["prepare", "ingest", "materialize"]
-    for i, step in enumerate(rslearn_steps):
+    steps = getattr(args, "steps", None) or ALL_RSLEARN_STEPS
+    disabled = _resolve_disabled_layers(args)
+
+    for i, step in enumerate(steps):
         _write_progress(
             rslearn_dir,
             "rslearn",
             args.shard_id,
             "running",
-            f"{step} ({i + 1}/{len(rslearn_steps)})",
+            f"{step} ({i + 1}/{len(steps)})",
         )
         cmd = [
             sys.executable,
@@ -194,7 +199,6 @@ def cmd_rslearn_worker(args: argparse.Namespace) -> None:
             "--workers",
             str(args.workers),
         ]
-        disabled = _resolve_disabled_layers(args)
         if disabled:
             cmd.extend(["--disabled-layers", ",".join(disabled)])
         if step in ("ingest", "materialize"):
@@ -455,12 +459,16 @@ def cmd_launch_rslearn(args: argparse.Namespace) -> None:
     disabled = _resolve_disabled_layers(args)
     if disabled:
         cmd_template.extend(["--disabled-layers", *disabled])
+    steps = getattr(args, "steps", None)
+    if steps:
+        cmd_template.extend(["--steps", *steps])
     if args.max_samples:
         cmd_template.extend(["--max-samples", str(args.max_samples)])
     run_name = UPath(args.rslearn_dir).name
+    step_label = "-".join(steps) if steps else "rslearn"
     experiment_ids = launch_beaker_jobs(
         run_name=run_name,
-        step_name="rslearn",
+        step_name=step_label,
         worker_cmd_template=cmd_template,
         num_shards=args.num_shards,
         clusters=args.clusters,
@@ -779,6 +787,7 @@ def main() -> None:
     p.add_argument("--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters (e.g. ai2/jupiter ai2/saturn)")
     p.add_argument("--disabled-layers", nargs="*", default=[], help="rslearn layers to skip")
     p.add_argument("--only-layers", nargs="*", default=None, help="Only process these layers (disables all others)")
+    p.add_argument("--steps", nargs="*", default=None, choices=["prepare", "ingest", "materialize"], help="Only run these rslearn steps (default: all three)")
     p.add_argument("--max-samples", type=int, default=None, help="Limit corpus to first N samples")
     p.set_defaults(func=cmd_launch_rslearn)
 
@@ -792,6 +801,7 @@ def main() -> None:
     p.add_argument("--workers", type=int, default=16)
     p.add_argument("--disabled-layers", nargs="*", default=[])
     p.add_argument("--only-layers", nargs="*", default=None)
+    p.add_argument("--steps", nargs="*", default=None, choices=["prepare", "ingest", "materialize"])
     p.add_argument("--max-samples", type=int, default=None)
     p.set_defaults(func=cmd_rslearn_worker)
 
