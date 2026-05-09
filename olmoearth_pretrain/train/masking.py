@@ -2027,7 +2027,94 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                             MaskValue.DECODER.value,
                         )
 
+        # Defensive guarantee: every sample must contribute at least one
+        # ONLINE_ENCODER token. Otherwise the encoder produces zero tokens for
+        # the sample and the downstream instance-wise pooling divides by zero
+        # (see olmoearth_pretrain/nn/pooling.py:127).
+        #
+        # The loss path is supposed to enforce this implicitly via the
+        # encode/decode_ratio split, and for the common case (S2/S1/Landsat
+        # all present) it does. But edge cases slip through:
+        #   * A sample with all encode-eligible modalities fully missing
+        #     leaves encode_decode_bandsets empty; the loop body is skipped
+        #     and the only_decode_modalities never get ONLINE_ENCODER.
+        #   * (Hypothetical) integer-rounding edges where every encode-side
+        #     ratio resolves to zero tokens for a particular sample shape.
+        # Fix: scan every sample at the end; if any has zero ONLINE_ENCODER
+        # tokens, flip the first available non-missing token (preferring an
+        # encode_decode modality, falling back to any modality) to
+        # ONLINE_ENCODER. The flipped token still has data, so the encoder
+        # learns something from it; without this, the whole batch is lost.
+        self._ensure_each_sample_has_encoder_token(
+            output_dict,
+            batch_modalities=list(batch.modalities),
+            none_modalities=none_modalites,
+            encode_decode_modalities=encode_decode_modalities,
+            batch_size=batch.batch_size,
+        )
         return MaskedOlmoEarthSample(**output_dict)
+
+    @staticmethod
+    def _ensure_each_sample_has_encoder_token(
+        output_dict: dict[str, "ArrayTensor | None"],
+        batch_modalities: list[str],
+        none_modalities: list[str],
+        encode_decode_modalities: list[str],
+        batch_size: int,
+    ) -> None:
+        """Force at least one ONLINE_ENCODER token per sample (in-place).
+
+        Iterates each sample; if no modality mask already contains
+        ONLINE_ENCODER, flips the first non-missing token to ONLINE_ENCODER.
+        Encode-eligible modalities are preferred so the flip respects the
+        only_decode_modalities contract when possible.
+        """
+        encode_eligible = [
+            m
+            for m in batch_modalities
+            if m not in none_modalities + ["timestamps"]
+            and m in encode_decode_modalities
+        ]
+        decode_only_fallback = [
+            m
+            for m in batch_modalities
+            if m not in none_modalities + ["timestamps"]
+            and m not in encode_decode_modalities
+        ]
+        for i in range(batch_size):
+            has_encoder = False
+            for modality_name in encode_eligible + decode_only_fallback:
+                masked_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                    modality_name
+                )
+                mask = output_dict.get(masked_name)
+                if mask is None:
+                    continue
+                if (mask[i] == MaskValue.ONLINE_ENCODER.value).any().item():
+                    has_encoder = True
+                    break
+            if has_encoder:
+                continue
+            # No ONLINE_ENCODER anywhere for this sample -- flip one token.
+            for modality_name in encode_eligible + decode_only_fallback:
+                masked_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                    modality_name
+                )
+                mask = output_dict.get(masked_name)
+                if mask is None:
+                    continue
+                sample_mask = mask[i]
+                non_missing = sample_mask != MaskValue.MISSING.value
+                if not non_missing.any().item():
+                    continue
+                # Pick the first non-missing position and flip it.
+                flat = sample_mask.reshape(-1)
+                flat_non_missing = flat != MaskValue.MISSING.value
+                first_idx = int(torch.argmax(flat_non_missing.long()).item())
+                flat[first_idx] = MaskValue.ONLINE_ENCODER.value
+                # flat is a view of sample_mask which is a view of mask[i],
+                # so the in-place write propagates back to output_dict.
+                break
 
     @staticmethod
     def time_masking_with_missing(
