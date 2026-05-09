@@ -26,7 +26,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 import boto3
-from botocore.exceptions import ClientError
 from tqdm import tqdm
 
 _thread_local = threading.local()
@@ -40,6 +39,7 @@ def _get_s3_client() -> Any:
 
 
 LANDSAT_LAYERS = [f"landsat_mo{i:02d}" for i in range(1, 13)]
+_LANDSAT_LAYER_SET = set(LANDSAT_LAYERS)
 
 
 def parse_s3_uri(uri: str) -> tuple[str, str]:
@@ -91,21 +91,23 @@ def check_window_completion(
 ) -> dict[str, bool]:
     """Check which landsat layers have a completed marker for a window.
 
-    Uses head_object on the specific completed key for each layer, which is
-    faster than listing all objects under layers/.
+    Uses a single list-objects-v2 call scoped to the layers/ prefix and filters
+    for completed markers. One API call beats 12 sequential head_object calls.
     """
-    result = {}
-    for layer in LANDSAT_LAYERS:
-        key = f"{window_prefix}layers/{layer}/completed"
-        try:
-            s3.head_object(Bucket=bucket, Key=key)
-            result[layer] = True
-        except ClientError as e:
-            if e.response["Error"]["Code"] == "404":
-                result[layer] = False
-            else:
-                raise
-    return result
+    layers_prefix = f"{window_prefix}layers/"
+    paginator = s3.get_paginator("list_objects_v2")
+    completed_layers: set[str] = set()
+
+    for page in paginator.paginate(Bucket=bucket, Prefix=layers_prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if not key.endswith("/completed"):
+                continue
+            parts = key[len(layers_prefix) :].split("/")
+            if len(parts) == 2 and parts[0] in _LANDSAT_LAYER_SET:
+                completed_layers.add(parts[0])
+
+    return {layer: (layer in completed_layers) for layer in LANDSAT_LAYERS}
 
 
 def main() -> None:
