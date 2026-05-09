@@ -457,9 +457,14 @@ class DownstreamEvaluator:
                 logger.info(f"  {split} already on disk, skipping")
                 continue
             loader = self._get_data_loader(split, self.embedding_batch_size)
-            # is_train=False everywhere so AnySat does not subsample segmentation
-            # train embeddings -- collaborator wants the full train set.
-            embeddings, labels = self._get_embeddings(loader, is_train=False)
+            # Match the paper LP protocol: train embeddings get is_train=True,
+            # val/test get is_train=False. Most wrappers ignore the flag, but
+            # AnySat's segmentation path subsamples 1/16 of pixels per image
+            # when is_train=True, which is what the paper LP probe trained on
+            # (and is also what keeps memory tractable for AnySat seg tasks).
+            embeddings, labels = self._get_embeddings(
+                loader, is_train=(split == "train")
+            )
             embeddings = embeddings.to(save_dtype)
             torch.save({"embeddings": embeddings, "labels": labels}, out_path)
             logger.info(
