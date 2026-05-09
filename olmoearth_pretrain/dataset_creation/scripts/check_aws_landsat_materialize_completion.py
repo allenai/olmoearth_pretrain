@@ -3,12 +3,12 @@
 
 Usage:
     # Random sample of 10000 windows from a specific group:
-    python scripts/check_materialize_completion.py \
+    python olmoearth_pretrain/dataset_creation/scripts/check_aws_landsat_materialize_completion.py \
         --root s3://rslearn-data-acquisition-368613568044-us-west-2-an/landsat_job/candidates/ \
-        --k 1 --group res_10_s50ix24
+        --k 10 --group res_10_s50ix24
 
     # Quick check: first 10000 windows found (skips full listing):
-    python scripts/check_materialize_completion.py \
+    python olmoearth_pretrain/dataset_creation/scripts/check_aws_landsat_materialize_completion.py \
         --root s3://rslearn-data-acquisition-368613568044-us-west-2-an/landsat_job/candidates/ \
         --k 1 --group res_10_s50ix24 --first
 
