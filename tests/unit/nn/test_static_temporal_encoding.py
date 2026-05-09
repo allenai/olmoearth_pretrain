@@ -96,9 +96,10 @@ def test_static_temporal_same_date_same_encoding() -> None:
     out = ce.forward({"sentinel2_l2a": tokens}, ts, patch_size=4)
     result = out["sentinel2_l2a"]
     n = ce.embedding_dim_per_embedding_type
+    # static_temporal occupies the [n:2n] slot only.
     assert torch.allclose(
-        result[0, 0, 0, 0, 0, n : 3 * n],
-        result[0, 0, 0, 1, 0, n : 3 * n],
+        result[0, 0, 0, 0, 0, n : 2 * n],
+        result[0, 0, 0, 1, 0, n : 2 * n],
     )
 
 
@@ -112,7 +113,9 @@ def test_static_temporal_differs_from_legacy() -> None:
     out_st = ce_st.forward({"sentinel2_l2a": tokens}, ts, patch_size=4)
     out_lg = ce_lg.forward({"sentinel2_l2a": tokens}, ts, patch_size=4)
     n = ce_st.embedding_dim_per_embedding_type
+    # Compare on the static_temporal slot [n:2n]; legacy writes time-index here
+    # and month into [2n:3n], so the two should differ in the [n:2n] slot alone.
     assert not torch.allclose(
-        out_st["sentinel2_l2a"][..., n : 3 * n],
-        out_lg["sentinel2_l2a"][..., n : 3 * n],
+        out_st["sentinel2_l2a"][..., n : 2 * n],
+        out_lg["sentinel2_l2a"][..., n : 2 * n],
     )

@@ -24,10 +24,13 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
+    SpatialEncodingMode,
     TimestampEncodingMode,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
+    get_static_global_latlon_encoding,
+    get_static_local_2d_encoding,
     get_static_temporal_encoding,
 )
 from olmoearth_pretrain.nn.flexi_patch_embed import (
@@ -568,12 +571,13 @@ class Reconstructor(nn.Module):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        latlon: Tensor | None = None,
     ) -> TokensAndMasks:
         """Return flexibly patchified reconstruction for each modality of the input data.
 
         Given a [B, H, W, (T), b_s, D] inputs, returns a [B, H, W, (T), C] output.
         """
-        input_data = self.decoder(x, timestamps, patch_size, input_res)
+        input_data = self.decoder(x, timestamps, patch_size, input_res, latlon=latlon)
         output_dict = {}
         modalities_to_process = get_modalities_to_process(
             input_data.modalities, [m.name for m in self.supported_modalities]
@@ -642,6 +646,7 @@ class CompositeEncodings(nn.Module):
         random_channel_embeddings: bool = False,
         tokenization_config: TokenizationConfig | None = None,
         timestamp_encoding_mode: str = "legacy",
+        spatial_encoding_mode: str = "legacy",
     ):
         """Initialize the composite encodings.
 
@@ -654,10 +659,19 @@ class CompositeEncodings(nn.Module):
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             tokenization_config: Optional config for custom band groupings
             timestamp_encoding_mode: "legacy" for time-index + month embeddings,
-                "static_temporal" for multi-frequency sinusoidal encoding
+                "static_temporal" for multi-frequency sinusoidal encoding (single
+                slot at [n:2n], leaving [2n:3n] free for the local spatial slot
+                used by static_split spatial mode).
+            spatial_encoding_mode: "legacy" for resolution-aware 2D sincos in
+                slot [3n:4n] only; "static_split" for two static signals --
+                local 2D position (resolution-aware, in [2n:3n]) and global
+                sphere-mapped lat/lon (in [3n:4n]). The static_split mode
+                requires a per-batch lat/lon to be provided at forward time;
+                if absent, the global slot is left zero.
         """
         super().__init__()
         self.timestamp_encoding_mode = TimestampEncodingMode(timestamp_encoding_mode)
+        self.spatial_encoding_mode = SpatialEncodingMode(spatial_encoding_mode)
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [
@@ -733,6 +747,7 @@ class CompositeEncodings(nn.Module):
         input_res: int | None = None,
         use_modality_encodings: bool = True,
         use_temporal_encodings: bool = True,
+        latlon: Tensor | None = None,
     ) -> Tensor:
         """Apply the encodings to the patchified data based on modality type.
 
@@ -744,6 +759,9 @@ class CompositeEncodings(nn.Module):
             input_res: Optional input resolution for spatial encodings
             use_modality_encodings: Whether to use modality encodings
             use_temporal_encodings: Whether to use temporal encodings
+            latlon: Optional per-sample tile-center lat/lon (B, 2) in degrees,
+                consumed by the static_split spatial encoding mode. Ignored
+                when spatial_encoding_mode == "legacy".
 
         Returns:
             Tensor with encodings applied based on modality type
@@ -814,14 +832,17 @@ class CompositeEncodings(nn.Module):
 
         if modality.is_multitemporal and use_temporal_encodings:
             if self.timestamp_encoding_mode == TimestampEncodingMode.STATIC_TEMPORAL:
+                # Single-slot variant: static_temporal occupies [n:2n] only,
+                # leaving [2n:3n] free for the local-2D spatial encoding and
+                # [3n:4n] for the global-latlon encoding (see Phase 3 below).
                 assert timestamps is not None
                 ts_embed = get_static_temporal_encoding(
-                    timestamps, 2 * self.embedding_dim_per_embedding_type
+                    timestamps, self.embedding_dim_per_embedding_type
                 )
                 ts_view = repeat(ts_embed, f"b t d -> {ein_string}", **ein_dict).to(
                     device
                 )
-                modality_embed[..., n : n * 3] += ts_view
+                modality_embed[..., n : n * 2] += ts_view
             else:
                 # Legacy: time-index position + month embeddings
                 assert self.pos_embed is not None
@@ -837,21 +858,52 @@ class CompositeEncodings(nn.Module):
                 month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
                 modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
         if modality.is_spatial:
-            # Spatial encodings
             assert input_res is not None
             assert patch_size is not None
-            gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
-            spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
-                grid_size=(h, w),
-                res=torch.ones(b, device=device) * gsd_ratio,
-                encoding_dim=self.embedding_dim_per_embedding_type,
-                device=device,
-            )
-            spatial_embed = rearrange(spatial_embed, "b (h w) d -> b h w d", h=h, w=w)
-            spatial_embed = repeat(
-                spatial_embed, f"b h w d -> {ein_string}", **ein_dict
-            )
-            modality_embed[..., n * 3 : n * 4] += spatial_embed
+            if self.spatial_encoding_mode == SpatialEncodingMode.STATIC_SPLIT:
+                # Local 2D physical position (per token, resolution-aware) ->
+                # slot [2n:3n]. Global lat/lon (per sample, broadcast over
+                # tokens) -> slot [3n:4n].
+                meters_per_token = float(input_res) * float(patch_size)
+                local_embed = get_static_local_2d_encoding(
+                    grid_h=h,
+                    grid_w=w,
+                    meters_per_token=meters_per_token,
+                    encoding_dim=n,
+                    device=device,
+                    dtype=modality_embed.dtype,
+                )  # (h, w, n)
+                local_embed = repeat(local_embed, f"h w d -> {ein_string}", **ein_dict)
+                modality_embed[..., n * 2 : n * 3] += local_embed
+            else:
+                # Legacy: 2D sincos with GSD-ratio scaling lives in [3n:4n].
+                gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
+                spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
+                    grid_size=(h, w),
+                    res=torch.ones(b, device=device) * gsd_ratio,
+                    encoding_dim=self.embedding_dim_per_embedding_type,
+                    device=device,
+                )
+                spatial_embed = rearrange(
+                    spatial_embed, "b (h w) d -> b h w d", h=h, w=w
+                )
+                spatial_embed = repeat(
+                    spatial_embed, f"b h w d -> {ein_string}", **ein_dict
+                )
+                modality_embed[..., n * 3 : n * 4] += spatial_embed
+
+        # Global lat/lon: applied for ALL modalities (spatial or not) under
+        # static_split, so non-spatial modalities also pick up the global slot.
+        if self.spatial_encoding_mode == SpatialEncodingMode.STATIC_SPLIT:
+            if latlon is not None:
+                global_embed = get_static_global_latlon_encoding(
+                    latlon.to(device=device, dtype=modality_embed.dtype), n
+                )  # (b, n)
+                # Broadcast (b, n) across the middle (token) dims of
+                # modality_embed via the existing ein_dict.
+                num_middle_dims = modality_embed.ndim - 2
+                view_shape = (b, *([1] * num_middle_dims), n)
+                modality_embed[..., n * 3 : n * 4] += global_embed.view(*view_shape)
         return modality_tokens + modality_embed
 
     def forward(
@@ -860,6 +912,7 @@ class CompositeEncodings(nn.Module):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        latlon: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply the encodings to the patchified data.
 
@@ -868,6 +921,8 @@ class CompositeEncodings(nn.Module):
             timestamps: Timestamps of the data
             patch_size: Size of patches
             input_res: Resolution of the input data
+            latlon: Optional per-sample tile-center (B, 2) in degrees,
+                used only by the static_split spatial encoding mode.
 
         Returns:
             Tokens only for each modality
@@ -884,6 +939,7 @@ class CompositeEncodings(nn.Module):
                 timestamps=timestamps,
                 patch_size=patch_size,
                 input_res=input_res,
+                latlon=latlon,
             )
         return output_dict
 
@@ -908,6 +964,7 @@ class FlexiVitBase(nn.Module):
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
         timestamp_encoding_mode: str = "legacy",
+        spatial_encoding_mode: str = "legacy",
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -948,6 +1005,7 @@ class FlexiVitBase(nn.Module):
             random_channel_embeddings,
             tokenization_config=self._base_tokenization_config,
             timestamp_encoding_mode=timestamp_encoding_mode,
+            spatial_encoding_mode=spatial_encoding_mode,
         )
         self.apply(self._init_weights)
 
@@ -1148,6 +1206,7 @@ class Encoder(FlexiVitBase):
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
         timestamp_encoding_mode: str = "legacy",
+        spatial_encoding_mode: str = "legacy",
     ):
         """Initialize the encoder.
 
@@ -1193,6 +1252,9 @@ class Encoder(FlexiVitBase):
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm.
             timestamp_encoding_mode: "legacy" or "static_temporal"
+            spatial_encoding_mode: "legacy" (resolution-aware 2D sincos in
+                the spatial slot) or "static_split" (local 2D position +
+                global lat/lon, both static, occupying [2n:3n] and [3n:4n]).
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1209,6 +1271,7 @@ class Encoder(FlexiVitBase):
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
             timestamp_encoding_mode=timestamp_encoding_mode,
+            spatial_encoding_mode=spatial_encoding_mode,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1528,6 +1591,7 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        latlon: Tensor | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1545,6 +1609,7 @@ class Encoder(FlexiVitBase):
             timestamps,
             patch_size,
             input_res,
+            latlon=latlon,
         )
         tokens_dict.update(original_masks_dict)
 
@@ -1678,6 +1743,7 @@ class Encoder(FlexiVitBase):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 fast_pass=fast_pass,
+                latlon=getattr(x, "latlon", None),
             )
         else:
             token_norm_stats = {}
@@ -1741,6 +1807,7 @@ class PredictorBase(FlexiVitBase):
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
         timestamp_encoding_mode: str = "legacy",
+        spatial_encoding_mode: str = "legacy",
     ):
         """Initialize the predictor.
 
@@ -1760,6 +1827,7 @@ class PredictorBase(FlexiVitBase):
             qk_norm: Whether to apply normalization to Q and K in attention
             tokenization_config: Optional config for custom band groupings
             timestamp_encoding_mode: "legacy" or "static_temporal"
+            spatial_encoding_mode: "legacy" or "static_split"
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1776,6 +1844,7 @@ class PredictorBase(FlexiVitBase):
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
             timestamp_encoding_mode=timestamp_encoding_mode,
+            spatial_encoding_mode=spatial_encoding_mode,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -1967,13 +2036,14 @@ class Predictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int,
+        latlon: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply attention to the tokens."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
         tokens_dict = self.composite_encodings(
-            tokens_only_dict, timestamps, patch_size, input_res
+            tokens_only_dict, timestamps, patch_size, input_res, latlon=latlon
         )
         tokens_dict.update(original_masks_dict)
         all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -2053,6 +2123,7 @@ class Predictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        latlon: Tensor | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -2061,6 +2132,8 @@ class Predictor(PredictorBase):
             timestamps: Timestamps of the tokens
             patch_size: Patch size of the tokens
             input_res: Input resolution of the tokens
+            latlon: Optional per-sample tile-center (B, 2) in degrees, used by
+                static_split spatial encoding mode.
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
@@ -2085,7 +2158,7 @@ class Predictor(PredictorBase):
         tokens_only_dict = self.add_masks(decoder_emedded_dict)
         decoder_emedded_dict.update(tokens_only_dict)
         tokens_and_masks = self.apply_attn(
-            decoder_emedded_dict, timestamps, patch_size, input_res
+            decoder_emedded_dict, timestamps, patch_size, input_res, latlon=latlon
         )
         # TODO: Factor this out into a more readable function
         output_dict = {}
@@ -2145,6 +2218,7 @@ class EncoderConfig(Config):
     patch_embed_hidden_sizes: list[int] | None = None
     post_proj_hidden_sizes: list[int] | None = None
     timestamp_encoding_mode: str = "legacy"
+    spatial_encoding_mode: str = "legacy"
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2177,6 +2251,14 @@ class EncoderConfig(Config):
             raise ValueError(
                 f"timestamp_encoding_mode must be one of {valid}, "
                 f"got '{self.timestamp_encoding_mode}'"
+            )
+        try:
+            SpatialEncodingMode(self.spatial_encoding_mode)
+        except ValueError:
+            valid = [m.value for m in SpatialEncodingMode]
+            raise ValueError(
+                f"spatial_encoding_mode must be one of {valid}, "
+                f"got '{self.spatial_encoding_mode}'"
             )
 
     @property
@@ -2214,6 +2296,7 @@ class PredictorConfig(Config):
     qk_norm: bool = False
     tokenization_config: TokenizationConfig | None = None
     timestamp_encoding_mode: str = "legacy"
+    spatial_encoding_mode: str = "legacy"
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2230,6 +2313,14 @@ class PredictorConfig(Config):
                     raise ValueError(f"Modality {modality} is not supported")
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
+        try:
+            SpatialEncodingMode(self.spatial_encoding_mode)
+        except ValueError:
+            valid = [m.value for m in SpatialEncodingMode]
+            raise ValueError(
+                f"spatial_encoding_mode must be one of {valid}, "
+                f"got '{self.spatial_encoding_mode}'"
+            )
         try:
             TimestampEncodingMode(self.timestamp_encoding_mode)
         except ValueError:

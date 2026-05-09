@@ -502,6 +502,7 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        latlon: Tensor | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, pre_pooled_modality_to_dims_dict = (
@@ -518,6 +519,7 @@ class EncodeEarlyAttnPool(Encoder):
             timestamps,
             patch_size,
             input_res,
+            latlon=latlon,
         )
         tokens_dict.update(original_masks_dict)
 
@@ -656,6 +658,7 @@ class EncodeEarlyAttnPool(Encoder):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 fast_pass=fast_pass,
+                latlon=getattr(x, "latlon", None),
             )
         else:
             pooled_tokens_and_masks = {}
@@ -740,6 +743,7 @@ class PooledModalityPredictor(PredictorBase):
         patch_size: int,
         input_res: int,
         pooled_tokens_and_masks: dict[str, Tensor],
+        latlon: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply attention to the tokens."""
         logger.warning("Calling apply_attn for PooledModalityPredictor")
@@ -747,7 +751,7 @@ class PooledModalityPredictor(PredictorBase):
             self.split_tokens_masks_and_dims(x)
         )
         tokens_dict = self.composite_encodings(
-            tokens_only_dict, timestamps, patch_size, input_res
+            tokens_only_dict, timestamps, patch_size, input_res, latlon=latlon
         )
         tokens_dict.update(original_masks_dict)
 
@@ -761,6 +765,7 @@ class PooledModalityPredictor(PredictorBase):
                 timestamps,
                 patch_size,
                 input_res,
+                latlon=latlon,
                 **encoding_kwargs,
             )
         pooled_tokens = rearrange(pooled_tokens, "b ... d -> b (...) d")
@@ -831,6 +836,7 @@ class PooledModalityPredictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        latlon: Tensor | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -841,6 +847,9 @@ class PooledModalityPredictor(PredictorBase):
             timestamps: Timestamps of the tokens
             patch_size: Patch size of the tokens
             input_res: Input resolution of the tokens
+            latlon: Optional per-sample tile-center (B, 2) in degrees, used by
+                static_split spatial encoding mode.
+
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
         """
@@ -866,6 +875,7 @@ class PooledModalityPredictor(PredictorBase):
             patch_size,
             input_res,
             pooled_tokens_and_masks=pooled_tokens_and_masks,
+            latlon=latlon,
         )
 
         # Project and Normalize Output Tokens
