@@ -403,6 +403,7 @@ for high frequency data:
 python -m olmoearth_pretrain.internal.run_h5_conversion \
   --tile_path="$H5PATH" \
   --supported_modality_names='[era5l_day_10,sentinel2_l2a]' \
+  --required_modality_names='[era5l_day_10]' \
   --time_span_names='[hfreq]' \
   --compression=zstd \
   --compression_opts=3 \
