@@ -451,6 +451,23 @@ class DownstreamEvaluator:
             f"Dumping embeddings for {self.evaluation_name} to {out_dir} "
             f"(dtype={self.embedding_dump_dtype})"
         )
+        # AnySat returns per-pixel features for segmentation; full-resolution
+        # val/test embeddings on 256x256 seg tasks (m_cashew_plant,
+        # m_sa_crop_type) accumulate ~50GB each in CPU RAM and OOM. The paper
+        # LP probe consumed them streaming, never accumulating. Closest we
+        # can get for the saved dump is to also subsample val/test for
+        # AnySat seg by passing is_train=True for every split. Other wrappers
+        # ignore is_train so this is a no-op for them.
+        encoder_name = type(
+            getattr(
+                self.trainer.train_module.model,
+                "encoder",
+                self.trainer.train_module.model,
+            )
+        ).__name__
+        anysat_seg = (
+            encoder_name == "AnySat" and self.config.task_type == TaskType.SEGMENTATION
+        )
         for split in ("train", "valid", "test"):
             out_path = os.path.join(out_dir, f"{split}.pt")
             if os.path.exists(out_path):
@@ -458,13 +475,10 @@ class DownstreamEvaluator:
                 continue
             loader = self._get_data_loader(split, self.embedding_batch_size)
             # Match the paper LP protocol: train embeddings get is_train=True,
-            # val/test get is_train=False. Most wrappers ignore the flag, but
-            # AnySat's segmentation path subsamples 1/16 of pixels per image
-            # when is_train=True, which is what the paper LP probe trained on
-            # (and is also what keeps memory tractable for AnySat seg tasks).
-            embeddings, labels = self._get_embeddings(
-                loader, is_train=(split == "train")
-            )
+            # val/test get is_train=False. AnySat seg additionally needs
+            # is_train=True for val/test to avoid OOM (see comment above).
+            is_train = split == "train" or anysat_seg
+            embeddings, labels = self._get_embeddings(loader, is_train=is_train)
             embeddings = embeddings.to(save_dtype)
             torch.save({"embeddings": embeddings, "labels": labels}, out_path)
             logger.info(
