@@ -366,11 +366,11 @@ class KuroSiwoDataset(_BaseGeobenchDataset):
         image_dem = _raster_f32(row, 3)  # (1, 224, 224)
         invalid = _raster_i64(row, 5)  # (1, 224, 224)
 
-        with rasterio.open(row.read(4)) as src:
-            raw_mask = torch.from_numpy(src.read().squeeze(0).astype(np.int64))
-        remapped = torch.zeros_like(raw_mask)
-        for orig, new in _KURO_SIWO_CLASS_MAP.items():
-            remapped[raw_mask == orig] = new
+        raw_mask = _raster_i64(row, 4).squeeze(0)
+        lookup = torch.tensor(
+            [_KURO_SIWO_CLASS_MAP[i] for i in range(len(_KURO_SIWO_CLASS_MAP))]
+        )
+        remapped = lookup[raw_mask]
 
         # NaN handling for SAR
         for img in (image_pre_1, image_pre_2, image_post):
@@ -446,18 +446,13 @@ class BioMasstersDataset(_BaseGeobenchDataset):
         agbm_idx = row[row["modality"] == "AGBM"].index[0]
 
         # Use first available time step for each modality (num_time_steps=1)
-        with rasterio.open(row.read(s1_idx[0])) as src:
-            image_s1 = torch.from_numpy(src.read().astype(np.float32))  # (4, H, W)
+        image_s1 = _raster_f32(row, s1_idx[0])  # (4, H, W)
         image_s1[image_s1 == -9999] = 0.0
 
-        with rasterio.open(row.read(s2_idx[0])) as src:
-            s2_raw = src.read().astype(np.float32)
         # Clip to first _NUM_S2_BANDS channels in case the file has extras
-        image_s2 = torch.from_numpy(s2_raw[: self._NUM_S2_BANDS])  # (10, H, W)
+        image_s2 = _raster_f32(row, s2_idx[0])[: self._NUM_S2_BANDS]  # (10, H, W)
 
-        with rasterio.open(row.read(agbm_idx)) as src:
-            agb = src.read().astype(np.float32)
-        mask = torch.from_numpy(agb).squeeze(0)  # (H, W)
+        mask = _raster_f32(row, agbm_idx).squeeze(0)  # (H, W)
 
         return {"image_s1": image_s1, "image_s2": image_s2, "mask": mask}
 

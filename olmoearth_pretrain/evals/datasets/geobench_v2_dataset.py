@@ -6,16 +6,18 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
+from einops import rearrange
 from torch.utils.data import Dataset
 
 import olmoearth_pretrain.evals.datasets.paths as paths
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
+from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config
 from olmoearth_pretrain.evals.datasets.geobench_v2_loaders import SLUG_TO_DATASET
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
+from olmoearth_pretrain.evals.task_types import TaskType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
@@ -69,11 +71,9 @@ def _align_s2_to_sentinel2_l2a(
 
 def _bchw_to_hwtc(x: torch.Tensor) -> torch.Tensor:
     if x.dim() == 3:
-        c, h, w = x.shape
-        return x.permute(1, 2, 0).unsqueeze(2).contiguous()
+        return rearrange(x, "c h w -> h w 1 c")
     if x.dim() == 4:
-        c, t, h, w = x.shape
-        return x.permute(2, 3, 1, 0).contiguous()
+        return rearrange(x, "c t h w -> h w t c")
     raise ValueError(f"expected 3D or 4D image tensor, got {x.shape}")
 
 
@@ -473,8 +473,6 @@ def _extract_label(
     task_type: Any,
     num_classes: int,
 ) -> torch.Tensor:
-    from olmoearth_pretrain.evals.task_types import TaskType
-
     if task_type == TaskType.REGRESSION and "mask" in sample:
         m = sample["mask"].float()
         v = torch.nanmean(m)
@@ -508,7 +506,6 @@ def _extract_label(
     raise KeyError(f"no label/mask in sample keys={list(sample)} slug={slug}")
 
 
-# Mapping from OlmoEarthSample field names to ModalitySpec for normalization.
 _MODALITY_NORM_MAP: dict[str, ModalitySpec] = {
     "sentinel2_l2a": Modality.SENTINEL2_L2A,
     "sentinel1": Modality.SENTINEL1,
@@ -518,46 +515,8 @@ _MODALITY_NORM_MAP: dict[str, ModalitySpec] = {
 }
 
 
-def _normalize_tensor_olmoearth(
-    tensor: torch.Tensor,
-    modality_spec: ModalitySpec,
-    norm_config: dict,
-    std_mult: float = 2.0,
-) -> torch.Tensor:
-    """Normalize a [H, W, T, C] tensor using OlmoEarth pretraining (NORM_NO_CLIP_2_STD) stats.
-
-    Only the first C band stats are used when C < len(modality_spec.band_order),
-    which handles datasets that expose fewer channels than the full modality (e.g.
-    aerial RGB with 3 channels in a 4-channel NAIP slot).
-    """
-    arr = tensor.numpy() if isinstance(tensor, torch.Tensor) else np.asarray(tensor)
-    n_channels = arr.shape[-1]
-    band_order = list(modality_spec.band_order)
-    modality_values = norm_config.get(modality_spec.name, {})
-
-    means: list[float] = []
-    stds: list[float] = []
-    for i in range(n_channels):
-        band = band_order[i] if i < len(band_order) else None
-        stats = modality_values.get(str(band)) if band is not None else None
-        if stats is None:
-            means.append(0.0)
-            stds.append(1.0)
-        else:
-            means.append(float(stats["mean"]))
-            stds.append(float(stats["std"]))
-
-    means_arr = np.array(means, dtype=np.float32)
-    stds_arr = np.array(stds, dtype=np.float32)
-    lo = means_arr - std_mult * stds_arr
-    hi = means_arr + std_mult * stds_arr
-    denom = hi - lo
-    denom[denom == 0.0] = 1.0  # avoid div-by-zero for constant bands
-    return torch.tensor((arr.astype(np.float32) - lo) / denom, dtype=torch.float32)
-
-
 def _apply_olmoearth_normalization(
-    olmo: OlmoEarthSample, norm_config: dict
+    olmo: OlmoEarthSample, normalizer: Normalizer
 ) -> OlmoEarthSample:
     """Return a new OlmoEarthSample with each present modality normalized to OlmoEarth stats."""
     updates: dict[str, torch.Tensor] = {}
@@ -565,9 +524,8 @@ def _apply_olmoearth_normalization(
         tensor = getattr(olmo, field_name, None)
         if tensor is None:
             continue
-        updates[field_name] = _normalize_tensor_olmoearth(
-            tensor, modality_spec, norm_config
-        )
+        arr = normalizer.normalize(modality_spec, tensor.numpy())
+        updates[field_name] = torch.tensor(arr, dtype=torch.float32)
     return olmo._replace(**updates) if updates else olmo
 
 
@@ -595,9 +553,7 @@ class GeobenchV2Dataset(Dataset):
         self.config = dataset_to_config(dataset)
         self._slug = slug
 
-        from olmoearth_pretrain.data.normalize import load_computed_config
-
-        self._olmoearth_norm_config = load_computed_config()
+        self._normalizer = Normalizer(Strategy.COMPUTED)
 
         loader_cls = SLUG_TO_DATASET[slug]
         root = str(Path(paths.GEOBENCH2_DIR) / slug)
@@ -614,7 +570,7 @@ class GeobenchV2Dataset(Dataset):
         )
 
         olmo = _sample_to_olmoearth(raw, self._band_order, self._slug)
-        olmo = _apply_olmoearth_normalization(olmo, self._olmoearth_norm_config)
+        olmo = _apply_olmoearth_normalization(olmo, self._normalizer)
 
         masked = MaskedOlmoEarthSample.from_olmoearthsample(olmo)
         label = _extract_label(
