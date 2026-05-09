@@ -123,10 +123,28 @@ def pool_instance_wise(
     elif pooling_type == PoolingType.MEAN:
         num_encoded_tokens = torch.sum(mask, -1, keepdim=True)
         logger.debug(f"num_encoded_tokens: {num_encoded_tokens}")
-        if (num_encoded_tokens == 0).any():
-            raise ValueError(
-                f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
+        zero_count = (num_encoded_tokens == 0).any()
+        if zero_count:
+            # Defensive fallback: a sample with zero ONLINE_ENCODER tokens
+            # produces a zero pooled vector instead of NaN. This guards
+            # against degenerate batches (e.g. a sample whose every modality
+            # is fully missing) without killing the whole training step.
+            # Upstream contributors:
+            #   * RandomTimeWithDecodeMaskingStrategy guarantees >=1 encoder
+            #     token when at least one position is non-missing; that
+            #     guarantee is in olmoearth_pretrain/train/masking.py.
+            #   * MaskedOlmoEarthSample.unmask() preserves at least one
+            #     ONLINE_ENCODER for the target-encoder path.
+            # If we still reach here, the sample really has no data anywhere
+            # -- treat its pooled feature as zero rather than divide-by-zero.
+            logger.warning(
+                "pool_instance_wise: %d sample(s) have zero ONLINE_ENCODER "
+                "tokens; returning zero pooled vector for those samples. "
+                "If this happens repeatedly, investigate the masking and "
+                "data pipeline.",
+                int((num_encoded_tokens == 0).sum().item()),
             )
+            num_encoded_tokens = num_encoded_tokens.clamp(min=1)
         return x_for_pooling.sum(dim=1) / num_encoded_tokens
     else:
         raise ValueError(f"Invalid pooling type: {pooling_type}")

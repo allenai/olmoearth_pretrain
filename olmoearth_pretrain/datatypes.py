@@ -431,12 +431,47 @@ class MaskedOlmoEarthSample(NamedTuple):
 
         All mask values are MaskValue.ONLINE_ENCODER except for MaskValue.MISSING,
         which remain MISSING.
+
+        Defensive guarantee: every sample ends up with at least one
+        ONLINE_ENCODER token across the union of modality masks. Without
+        this, a sample whose every modality position is MISSING would feed
+        the target encoder zero visible tokens and crash the downstream
+        instance-wise pooling (see olmoearth_pretrain/nn/pooling.py).
         """
-        updates = {}
+        updates: dict[str, Any] = {}
         for name in _MASKED_SAMPLE_MASK_FIELDS:
             val = getattr(self, name)
             if val is not None:
+                # ONLINE_ENCODER.value == 0 and MISSING.value == 3, so this
+                # multiply zeroes out everything except MISSING positions.
                 updates[name] = val * (val == MaskValue.MISSING.value)
+        if not updates:
+            return self._replace(**updates)
+        # Identify any samples that ended up with zero ONLINE_ENCODER (i.e.
+        # every position is MISSING across all modality masks).
+        # Take the first available updated mask to determine batch size.
+        sample_first_mask_name = next(iter(updates))
+        batch_size = updates[sample_first_mask_name].shape[0]
+        for sample_idx in range(batch_size):
+            has_encoder = False
+            for mask_name in updates:
+                m = updates[mask_name]
+                if (m[sample_idx] == MaskValue.ONLINE_ENCODER.value).any().item():
+                    has_encoder = True
+                    break
+            if has_encoder:
+                continue
+            # Force-flip the first position of the first available mask to
+            # ONLINE_ENCODER. The corresponding token's data is whatever the
+            # data tensor holds (likely a sentinel/zero, since it was
+            # MISSING) -- the model gets one degenerate token rather than
+            # crashing the whole batch.
+            for mask_name in updates:
+                m = updates[mask_name]
+                sample_mask = m[sample_idx]
+                flat = sample_mask.reshape(-1)
+                flat[0] = MaskValue.ONLINE_ENCODER.value
+                break
         return self._replace(**updates)
 
     @classmethod
