@@ -2095,7 +2095,13 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     break
             if has_encoder:
                 continue
-            # No ONLINE_ENCODER anywhere for this sample -- flip one token.
+            # No ONLINE_ENCODER anywhere for this sample -- flip the first
+            # non-missing position to ONLINE_ENCODER. Encode-eligible
+            # modalities are tried first so the flip respects the
+            # only_decode_modalities contract whenever possible. The
+            # downstream pool_instance_wise has its own zero-fallback in
+            # case even this can't find a non-missing token (sample
+            # entirely empty).
             for modality_name in encode_eligible + decode_only_fallback:
                 masked_name = MaskedOlmoEarthSample.get_masked_modality_name(
                     modality_name
@@ -2107,13 +2113,12 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                 non_missing = sample_mask != MaskValue.MISSING.value
                 if not non_missing.any().item():
                     continue
-                # Pick the first non-missing position and flip it.
-                flat = sample_mask.reshape(-1)
-                flat_non_missing = flat != MaskValue.MISSING.value
-                first_idx = int(torch.argmax(flat_non_missing.long()).item())
-                flat[first_idx] = MaskValue.ONLINE_ENCODER.value
-                # flat is a view of sample_mask which is a view of mask[i],
-                # so the in-place write propagates back to output_dict.
+                # Index back into mask[i] via multi-dim indexing so the
+                # write definitely propagates (avoids reshape-returning-a-
+                # copy edge cases on non-contiguous slices).
+                non_missing_idxs = torch.nonzero(non_missing, as_tuple=False)
+                first_idx = tuple(non_missing_idxs[0].tolist())
+                sample_mask[first_idx] = MaskValue.ONLINE_ENCODER.value
                 break
 
     @staticmethod
