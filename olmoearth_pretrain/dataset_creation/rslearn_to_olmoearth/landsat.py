@@ -79,6 +79,7 @@ def convert_landsat(
             LAYER_FREQ,
             Modality.LANDSAT,
             missing_okay=True,
+            unprepared_okay=True,
         )
     if convert_monthly_data:
         convert_monthly(window, olmoearth_path, LAYER_MONTHLY, Modality.LANDSAT)
