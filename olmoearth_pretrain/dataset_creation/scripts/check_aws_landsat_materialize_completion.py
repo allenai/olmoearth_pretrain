@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Sample windows from an rslearn S3 dataset and report landsat materialization completion.
+f"""Sample windows from an rslearn S3 dataset and report landsat materialization completion.
 
 Usage:
-    # Random sample of 10000 windows from a specific group:
+    # Random sample of 100,000 windows (k=10) from a specific group:
     python olmoearth_pretrain/dataset_creation/scripts/check_aws_landsat_materialize_completion.py \
-        --root s3://rslearn-data-acquisition-368613568044-us-west-2-an/landsat_job/candidates/ \
+        --root s3path \
         --k 10 --group res_10_s50ix24
 
-    # Quick check: first 10000 windows found (skips full listing):
+    # Quick check: first 10,000 windows (k=1) found (skips full listing):
     python olmoearth_pretrain/dataset_creation/scripts/check_aws_landsat_materialize_completion.py \
-        --root s3://rslearn-data-acquisition-368613568044-us-west-2-an/landsat_job/candidates/ \
+        --root s3path \
         --k 1 --group res_10_s50ix24 --first
 
 Checks K*10000 windows for which landsat_moXX layers (01-12) have a `completed`
 marker in S3. Reports per-layer, at-least-one, and all-layers completion rates.
+
+~100 windows per sec with 64 workers
 """
 
 import argparse
