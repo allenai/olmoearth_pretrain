@@ -90,8 +90,8 @@ uv sync --locked --extra dataset-creation --python 3.13
 source .venv/bin/activate
 
 # Upgrade rslearn to git master for OLI-only scene filtering fix (PR #646)
-python -m pip install --no-deps 'rslearn[extra] @ git+https://github.com/allenai/rslearn.git@master'
-echo "rslearn version: $(python -m pip show rslearn | grep Version)"
+uv pip install --no-deps 'rslearn[extra] @ git+https://github.com/allenai/rslearn.git@master'
+echo "rslearn version: $(uv pip show rslearn | grep Version)"
 
 # Fetch inputs from S3
 aws s3 cp "$S3_INPUT/corpus.json" /tmp/corpus.json
