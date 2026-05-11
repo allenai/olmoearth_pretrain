@@ -1129,6 +1129,7 @@ class Encoder(FlexiVitBase):
         band_dropout_modalities: list[str] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
+        patch_embed_base_size: int | None = None,
     ):
         """Initialize the encoder.
 
@@ -1173,6 +1174,10 @@ class Encoder(FlexiVitBase):
             post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm.
+            patch_embed_base_size: If set, use this as the stored weight size
+                for patch embeddings instead of max_patch_size. Allows smaller
+                weights while still training with patch sizes up to
+                max_patch_size via FlexiViT interpolation.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1208,9 +1213,11 @@ class Encoder(FlexiVitBase):
         self.band_dropout_modalities = band_dropout_modalities
         self.patch_embed_hidden_sizes = patch_embed_hidden_sizes
         self.post_proj_hidden_sizes = post_proj_hidden_sizes
+        self.patch_embed_base_size = patch_embed_base_size
+        effective_base = self.patch_embed_base_size or self.max_patch_size
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
-            self.max_patch_size,
+            effective_base,
             self.embedding_size,
             tokenization_config=self.tokenization_config,
             use_linear_patch_embed=self.use_linear_patch_embed,
@@ -2098,6 +2105,10 @@ class EncoderConfig(Config):
     # This is the base patch size for the patch embedder
     max_patch_size: int = 8
     min_patch_size: int = 1
+    # If set, use this as the stored weight size for patch embeddings instead of
+    # max_patch_size.  Allows smaller weights (e.g. 4) while still training with
+    # patch sizes up to max_patch_size (e.g. 8).
+    patch_embed_base_size: int | None = None
     num_heads: int = 2
     mlp_ratio: float = 1.0
     depth: int = 2
