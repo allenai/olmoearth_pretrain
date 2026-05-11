@@ -985,3 +985,54 @@ class TestBandDropout:
         )
         encoder.enable_band_dropout()
         assert encoder.patch_embeddings.band_dropout_rate == 0.5
+
+    def test_count_mode_drops_exact_count(self) -> None:
+        """Test that _apply_band_dropout_count drops at most floor(rate*num_bands) bands."""
+        torch.manual_seed(42)
+        B, H, W, num_bands = 32, 2, 2, 12
+        rate = 0.5
+        max_drop = int(rate * num_bands)  # 6
+        data = torch.ones(B, H, W, num_bands)
+        result = MultiModalPatchEmbeddings._apply_band_dropout_count(data, rate)
+        # Count dropped bands per sample (check any spatial position, dropout is uniform)
+        dropped_per_sample = (result[:, 0, 0, :] == 0).sum(dim=-1)
+        assert (dropped_per_sample <= max_drop).all(), (
+            f"No sample should drop more than {max_drop} bands, got {dropped_per_sample}"
+        )
+        assert (dropped_per_sample >= 0).all()
+        # With 32 samples, we expect at least some drops and some keeps
+        assert dropped_per_sample.sum() > 0, "Expected some bands to be dropped"
+        assert (dropped_per_sample < num_bands).all(), "At least 1 band must survive"
+
+    def test_count_mode_rate_zero_no_change(self) -> None:
+        """Test that rate=0.0 in count mode keeps all bands (max_drop=0)."""
+        B, num_bands = 4, 10
+        data = torch.randn(B, num_bands)
+        result = MultiModalPatchEmbeddings._apply_band_dropout_count(data, rate=0.0)
+        assert torch.equal(result, data), "rate=0.0 should not modify data"
+
+    def test_count_mode_uniform_across_spatial_dims(self) -> None:
+        """Test that count-mode dropout zeros the same bands across all pixels."""
+        torch.manual_seed(7)
+        B, H, W, num_bands = 4, 3, 3, 12
+        data = torch.ones(B, H, W, num_bands)
+        result = MultiModalPatchEmbeddings._apply_band_dropout_count(data, rate=0.5)
+        for b in range(B):
+            band_mask = result[b, 0, 0, :]  # reference pixel
+            for h in range(H):
+                for w in range(W):
+                    assert torch.equal(result[b, h, w, :], band_mask), (
+                        f"Dropout mask should be uniform across spatial dims "
+                        f"(sample {b}, pixel ({h},{w}))"
+                    )
+
+    def test_count_mode_mutually_exclusive_with_random(self) -> None:
+        """Test that EncoderConfig rejects both count_mode and random_band_dropout."""
+        from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
+
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            EncoderConfig(
+                supported_modality_names=["sentinel2_l2a"],
+                band_dropout_count_mode=True,
+                random_band_dropout=True,
+            ).validate()

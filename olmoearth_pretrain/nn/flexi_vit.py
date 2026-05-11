@@ -192,6 +192,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         use_linear_patch_embed: bool = True,
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
+        band_dropout_count_mode: bool = False,
         band_dropout_modalities: list[str] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
@@ -213,6 +214,10 @@ class MultiModalPatchEmbeddings(nn.Module):
             random_band_dropout: If True, sample the dropout rate per forward call from
                 Uniform(0, band_dropout_rate). This reduces train-inference mismatch
                 and acts as stronger augmentation. Default: False (fixed rate).
+            band_dropout_count_mode: If True, use count-based band dropout instead of
+                per-band independent dropout. Drops exactly N bands where
+                N ~ Uniform{0, ..., floor(rate * num_bands)}. Mutually exclusive
+                with random_band_dropout. Default: False.
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
             patch_embed_hidden_sizes: Optional list of hidden layer widths for a
@@ -237,6 +242,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.use_linear_patch_embed = use_linear_patch_embed
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
+        self.band_dropout_count_mode = band_dropout_count_mode
         self.band_dropout_modalities = band_dropout_modalities
         self.patch_embed_hidden_sizes = patch_embed_hidden_sizes
         self.post_proj_hidden_sizes = post_proj_hidden_sizes
@@ -353,14 +359,19 @@ class MultiModalPatchEmbeddings(nn.Module):
                 num_bands = inp_data.shape[-1]
                 # Only apply band dropout if there are more than 1 band
                 if num_bands > 1:
-                    if self.random_band_dropout:
-                        rate = (
-                            torch.rand(1, device=inp_data.device).item()
-                            * self.band_dropout_rate
+                    if self.band_dropout_count_mode:
+                        inp_data = self._apply_band_dropout_count(
+                            inp_data, self.band_dropout_rate
                         )
                     else:
-                        rate = self.band_dropout_rate
-                    inp_data = self._apply_band_dropout(inp_data, rate)
+                        if self.random_band_dropout:
+                            rate = (
+                                torch.rand(1, device=inp_data.device).item()
+                                * self.band_dropout_rate
+                            )
+                        else:
+                            rate = self.band_dropout_rate
+                        inp_data = self._apply_band_dropout(inp_data, rate)
 
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
@@ -397,6 +408,37 @@ class MultiModalPatchEmbeddings(nn.Module):
         # Broadcast: [B, 1, 1, ..., num_bands]
         view_shape = [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
         return patchified_data * keep_mask.view(*view_shape).to(patchified_data.dtype)
+
+    @staticmethod
+    def _apply_band_dropout_count(data: Tensor, rate: float) -> Tensor:
+        """Drop an exact number of bands per sample (count-based dropout).
+
+        Instead of dropping each band independently with probability `rate`,
+        this samples a count N ~ Uniform{0, ..., floor(rate * num_bands)} and
+        zeroes exactly N randomly chosen bands per sample.  This caps the
+        maximum number of bands that can be dropped, avoiding rare events
+        where nearly all bands are zeroed.
+
+        Args:
+            data: Input tensor with bands in the last dimension.
+            rate: Controls max fraction of bands to drop.
+
+        Returns:
+            Tensor with exactly N bands zeroed per sample (at least 1 kept).
+        """
+        num_bands = data.shape[-1]
+        batch_size = data.shape[0]
+        max_drop = int(rate * num_bands)
+        num_drop = torch.randint(0, max_drop + 1, (batch_size,), device=data.device)
+        keep_mask = torch.ones(
+            batch_size, num_bands, dtype=torch.bool, device=data.device
+        )
+        for b in range(batch_size):
+            if num_drop[b] > 0:
+                drop_idx = torch.randperm(num_bands, device=data.device)[: num_drop[b]]
+                keep_mask[b, drop_idx] = False
+        view_shape = [batch_size] + [1] * (data.dim() - 2) + [num_bands]
+        return data * keep_mask.view(*view_shape).to(data.dtype)
 
     @staticmethod
     def is_any_data_seen_by_encoder(modality_mask: Tensor) -> bool:
@@ -1126,6 +1168,7 @@ class Encoder(FlexiVitBase):
         use_linear_patch_embed: bool = True,
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
+        band_dropout_count_mode: bool = False,
         band_dropout_modalities: list[str] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
@@ -1161,6 +1204,9 @@ class Encoder(FlexiVitBase):
                 Set False to load checkpoints trained before this flag existed (Conv2d weights).
             band_dropout_rate: Probability of dropping each band channel during training.
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
+            band_dropout_count_mode: If True, use count-based band dropout that drops
+                exactly N bands where N ~ Uniform{0, ..., floor(rate * num_bands)}.
+                Mutually exclusive with random_band_dropout.
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
             patch_embed_hidden_sizes: Optional list of hidden layer widths for a
@@ -1210,6 +1256,7 @@ class Encoder(FlexiVitBase):
         # caller (e.g. pretraining online encoder) explicitly enables it.
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
+        self.band_dropout_count_mode = band_dropout_count_mode
         self.band_dropout_modalities = band_dropout_modalities
         self.patch_embed_hidden_sizes = patch_embed_hidden_sizes
         self.post_proj_hidden_sizes = post_proj_hidden_sizes
@@ -1223,6 +1270,7 @@ class Encoder(FlexiVitBase):
             use_linear_patch_embed=self.use_linear_patch_embed,
             band_dropout_rate=0.0,
             random_band_dropout=self.random_band_dropout,
+            band_dropout_count_mode=self.band_dropout_count_mode,
             band_dropout_modalities=self.band_dropout_modalities,
             patch_embed_hidden_sizes=self.patch_embed_hidden_sizes,
             post_proj_hidden_sizes=self.post_proj_hidden_sizes,
@@ -2128,6 +2176,7 @@ class EncoderConfig(Config):
     use_linear_patch_embed: bool = True
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
+    band_dropout_count_mode: bool = False
     band_dropout_modalities: list[str] | None = None
     patch_embed_hidden_sizes: list[int] | None = None
     post_proj_hidden_sizes: list[int] | None = None
@@ -2154,6 +2203,10 @@ class EncoderConfig(Config):
                     f"band_dropout_modalities contains modalities not in "
                     f"supported_modality_names: {unknown}"
                 )
+        if self.band_dropout_count_mode and self.random_band_dropout:
+            raise ValueError(
+                "band_dropout_count_mode and random_band_dropout are mutually exclusive"
+            )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
 
