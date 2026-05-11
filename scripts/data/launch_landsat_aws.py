@@ -85,7 +85,8 @@ export PATH="$HOME/.local/bin:$PATH"
 git clone https://github.com/allenai/olmoearth_pretrain.git /opt/work
 cd /opt/work
 git checkout "{git_ref}"
-uv sync --locked --extra dataset-creation
+uv python install 3.13
+uv sync --locked --extra dataset-creation --python 3.13
 source .venv/bin/activate
 
 # Upgrade rslearn to git master for OLI-only scene filtering fix (PR #646)
