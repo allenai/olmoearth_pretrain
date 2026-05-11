@@ -117,7 +117,7 @@ def visualize_sample(
         sample_dict.items(), start=1
     ):
         assert modality_data is not None
-        if modality_name == "timestamps" or modality_name == Modality.LATLON.name:
+        if modality_name in ("timestamps", "h5_indices", Modality.LATLON.name):
             continue
         logger.info(f"Plotting modality: {modality_name}")
         modality_spec = Modality.get(modality_name)

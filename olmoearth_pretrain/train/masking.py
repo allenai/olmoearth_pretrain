@@ -13,6 +13,7 @@ from einops import rearrange, repeat
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality, ModalitySpec
 from olmoearth_pretrain.datatypes import (
+    H5_INDICES_FIELD,
     MaskedOlmoEarthSample,
     MaskValue,
     OlmoEarthSample,
@@ -56,6 +57,15 @@ class MaskingStrategy:
         if not hasattr(self, "_decode_ratio"):
             raise AttributeError("Decode ratio not set")
         return self._decode_ratio
+
+    @staticmethod
+    def _init_output_dict(batch: OlmoEarthSample) -> dict[str, ArrayTensor | None]:
+        """Build the initial output dict with metadata fields (timestamps, h5_indices)."""
+        d: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
+        h5_indices = getattr(batch, H5_INDICES_FIELD, None)
+        if h5_indices is not None:
+            d[H5_INDICES_FIELD] = h5_indices
+        return d
 
     def _get_num_bandsets(self, modality_name: str) -> int:
         """Get the number of bandsets for a modality, using tokenization config if available."""
@@ -314,7 +324,7 @@ class TimeMaskingStrategy(MaskingStrategy):
         """
         if patch_size is None:
             raise ValueError("patch_size must be provided for time masking")
-        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
+        output_dict: dict[str, ArrayTensor | None] = self._init_output_dict(batch)
         temporal_mask = None
         timesteps_with_at_least_one_modality = (
             batch.timesteps_with_at_least_one_modality
@@ -473,7 +483,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
         """
         if patch_size is None:
             raise ValueError("patch_size must be provided for space masking")
-        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
+        output_dict: dict[str, ArrayTensor | None] = self._init_output_dict(batch)
         patch_spatial_mask = None
         # Same spatial mask for all modalities
         for modality_name in batch.modalities:
@@ -1168,7 +1178,7 @@ class RandomMaskingStrategy(MaskingStrategy):
         """
         if patch_size is None:
             raise ValueError("patch_size must be provided for random masking")
-        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
+        output_dict: dict[str, ArrayTensor | None] = self._init_output_dict(batch)
         for modality_name in batch.modalities:
             instance = getattr(batch, modality_name)
             if instance is None:
@@ -1327,7 +1337,7 @@ class RandomRangeMaskingStrategy(MaskingStrategy):
         """
         if patch_size is None:
             raise ValueError("patch_size must be provided for random masking")
-        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
+        output_dict: dict[str, ArrayTensor | None] = self._init_output_dict(batch)
         for modality_name in batch.modalities:
             instance = getattr(batch, modality_name)
             if instance is None:
@@ -1652,7 +1662,7 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
         """
         if patch_size is None:
             raise ValueError("patch_size must be provided for random masking")
-        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
+        output_dict: dict[str, ArrayTensor | None] = self._init_output_dict(batch)
         none_modalites: list[str] = []
         for modality_name in batch.modalities:
             instance = getattr(batch, modality_name)
@@ -1845,7 +1855,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         """
         if patch_size is None:
             raise ValueError("patch_size must be provided for random masking")
-        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
+        output_dict: dict[str, ArrayTensor | None] = self._init_output_dict(batch)
         none_modalites: list[str] = []
         for modality_name in batch.modalities:
             instance = getattr(batch, modality_name)

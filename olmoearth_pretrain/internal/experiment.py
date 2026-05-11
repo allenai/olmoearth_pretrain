@@ -29,6 +29,10 @@ from olmoearth_pretrain.data.visualize import visualize_sample
 from olmoearth_pretrain.inference_benchmarking.run_throughput_benchmark import (
     ThroughputBenchmarkRunnerConfig,
 )
+from olmoearth_pretrain.internal.loss_noise_diagnosis import (
+    LossNoiseDiagnoseConfig,
+    run_loss_diagnose,
+)
 from olmoearth_pretrain.internal.utils import (
     MockLatentMIMTrainModule,
     MockOlmoEarthDataLoader,
@@ -135,6 +139,7 @@ class OlmoEarthExperimentConfig(Config):
     trainer: TrainerConfig
     launch: OlmoEarthBeakerLaunchConfig | None = None
     visualize: OlmoEarthVisualizeConfig | None = None
+    loss_diagnose: LossNoiseDiagnoseConfig | None = None
     init_seed: int = 12536
 
 
@@ -192,6 +197,9 @@ def build_config(
     visualize_config_builder: (
         Callable[[CommonComponents], OlmoEarthVisualizeConfig] | None
     ) = None,
+    loss_diagnose_config_builder: (
+        Callable[[CommonComponents], LossNoiseDiagnoseConfig] | None
+    ) = None,
 ) -> OlmoEarthExperimentConfig:
     """Build a OlmoEarth Pretrain experiment configuration."""
     # Overide common components
@@ -207,6 +215,11 @@ def build_config(
     visualize_config = (
         visualize_config_builder(common) if visualize_config_builder else None
     )
+    loss_diagnose_config = (
+        loss_diagnose_config_builder(common)
+        if loss_diagnose_config_builder
+        else LossNoiseDiagnoseConfig()
+    )
     config = OlmoEarthExperimentConfig(
         run_name=common.run_name,
         model=model_config,
@@ -215,6 +228,7 @@ def build_config(
         train_module=train_module_config,
         trainer=trainer_config,
         visualize=visualize_config,
+        loss_diagnose=loss_diagnose_config,
         launch=common.launch,
     )
     logger.info("Overrides: %s", overrides)
@@ -347,6 +361,11 @@ def evaluate(config: OlmoEarthEvaluateConfig) -> None:
     trainer.fit()
 
 
+def loss_diagnose(config: OlmoEarthExperimentConfig) -> None:
+    """Run loss noise diagnosis on a checkpoint (Mode A: record per-sample loss)."""
+    run_loss_diagnose(config)
+
+
 def visualize(config: OlmoEarthExperimentConfig) -> None:
     """Visualize the dataset for an experiment."""
     logger.info("Visualizing the dataset")
@@ -416,6 +435,9 @@ class SubCmd(StrEnum):
     visualize = "visualize"
     benchmark = "benchmark"
     launch_benchmark = "launch_benchmark"
+    loss_diagnose = "loss_diagnose"
+    launch_loss_diagnose = "launch_loss_diagnose"
+    dry_run_loss_diagnose = "dry_run_loss_diagnose"
 
     def prepare_environment(self) -> None:
         """Prepare the environment for the given subcommand."""
@@ -423,15 +445,17 @@ class SubCmd(StrEnum):
             SubCmd.launch,
             SubCmd.dry_run,
             SubCmd.dry_run_evaluate,
+            SubCmd.dry_run_loss_diagnose,
             SubCmd.prep,
             SubCmd.launch_prep,
             SubCmd.visualize,
             SubCmd.benchmark,
             SubCmd.launch_benchmark,
             SubCmd.launch_evaluate,
+            SubCmd.launch_loss_diagnose,
         ):
             prepare_cli_environment()
-        elif self == SubCmd.train or self == SubCmd.evaluate:
+        elif self in (SubCmd.train, SubCmd.evaluate, SubCmd.loss_diagnose):
             prepare_training_environment()
         elif self == SubCmd.train_single:
             prepare_training_environment(backend=None)
@@ -452,10 +476,23 @@ class SubCmd(StrEnum):
             #     f"[b blue]Non-embedding parameters:[/]        {config.model.num_non_embedding_params:,d}"
             # )
 
-        if self == SubCmd.launch or self == SubCmd.launch_evaluate:
+        if self in (
+            SubCmd.launch,
+            SubCmd.launch_evaluate,
+            SubCmd.launch_loss_diagnose,
+        ):
             launch(config)
-        elif self == SubCmd.dry_run or self == SubCmd.dry_run_evaluate:
+        elif self in (
+            SubCmd.dry_run,
+            SubCmd.dry_run_evaluate,
+            SubCmd.dry_run_loss_diagnose,
+        ):
             logger.info(config)
+        elif self == SubCmd.loss_diagnose:
+            try:
+                loss_diagnose(config)
+            finally:
+                teardown_training_environment()
         elif self == SubCmd.visualize:
             seed_all(config.init_seed)
             visualize(config)
@@ -511,6 +548,9 @@ def main(
         Callable[[CommonComponents], ThroughputBenchmarkRunnerConfig] | None
     ) = None,
     benchmark_model_config_builder: Callable[[CommonComponents], Config] | None = None,
+    loss_diagnose_config_builder: (
+        Callable[[CommonComponents], LossNoiseDiagnoseConfig] | None
+    ) = None,
 ) -> None:
     """Main entry point for OlmoEarth Pretrain experiments.
 
@@ -574,7 +614,7 @@ If running command on a local machine ie from a session, you can use the [b]loca
             train_module_config_builder=train_module_config_builder,
         )
     else:
-        # Training mode
+        # Training mode (also used for loss_diagnose since we need the same builders)
         assert model_config_builder is not None
         assert dataset_config_builder is not None
         assert dataloader_config_builder is not None
@@ -588,6 +628,7 @@ If running command on a local machine ie from a session, you can use the [b]loca
             trainer_config_builder=trainer_config_builder,
             train_module_config_builder=train_module_config_builder,
             visualize_config_builder=visualize_config_builder,
+            loss_diagnose_config_builder=loss_diagnose_config_builder,
             overrides=overrides,
         )
 

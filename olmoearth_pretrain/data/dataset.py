@@ -852,6 +852,8 @@ class OlmoEarthDataset(Dataset):
                     missing_mask, modality_data, normalized_data
                 ).astype(self.dtype)
 
+        sample_dict["h5_indices"] = np.array(index, dtype=np.int64)
+
         return args.patch_size, OlmoEarthSample(**sample_dict)
 
 

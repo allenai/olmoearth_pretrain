@@ -38,6 +38,12 @@ class MaskValue(Enum):
 # timestamps is never considered a "modality" - it's metadata about when samples were captured
 TIMESTAMPS_FIELD = "timestamps"
 
+# h5_indices carries the global H5 sample index through the pipeline for diagnostics
+H5_INDICES_FIELD = "h5_indices"
+
+# Fields that are metadata, not modalities
+_METADATA_FIELDS = frozenset({TIMESTAMPS_FIELD, H5_INDICES_FIELD})
+
 
 # =============================================================================
 # Shared standalone helpers (called by NamedTuple methods to avoid duplication)
@@ -55,12 +61,12 @@ def _as_dict(obj: NamedTuple, include_nones: bool = False) -> dict[str, Any]:
 
 
 def _modalities(obj: NamedTuple) -> list[str]:
-    """Get present modalities (excludes masks and timestamps)."""
+    """Get present modalities (excludes masks, timestamps, and other metadata)."""
     return [
         name
         for name in obj._fields
         if not name.endswith("_mask")
-        and name != TIMESTAMPS_FIELD
+        and name not in _METADATA_FIELDS
         and getattr(obj, name) is not None
     ]
 
@@ -104,6 +110,9 @@ class OlmoEarthSample(NamedTuple):
     eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
+    h5_indices: ArrayTensor | None = (
+        None  # [B] global H5 sample indices for diagnostics
+    )
 
     def as_dict(self, include_nones: bool = False) -> dict[str, ArrayTensor | None]:
         """Convert to a dictionary.
@@ -120,7 +129,7 @@ class OlmoEarthSample(NamedTuple):
 
     @property
     def modalities_with_timestamps(self) -> list[str]:
-        """Get all modalities including timestamps if present (excludes masks)."""
+        """Get all modalities including timestamps and other metadata if present (excludes masks)."""
         result = []
         for name in self._fields:
             if not name.endswith("_mask") and getattr(self, name) is not None:
@@ -156,6 +165,8 @@ class OlmoEarthSample(NamedTuple):
         """Get the number of channels for a given attribute."""
         if attribute == "timestamps":
             return len(TIMESTAMPS)
+        elif attribute in _METADATA_FIELDS:
+            return 1
         else:
             return Modality.get(attribute).num_bands
 
@@ -385,6 +396,7 @@ class MaskedOlmoEarthSample(NamedTuple):
     ndvi_mask: Tensor | None = None
     eurocrops: Tensor | None = None
     eurocrops_mask: Tensor | None = None
+    h5_indices: Tensor | None = None  # [B] global H5 sample indices for diagnostics
 
     def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
         """Convert to a dictionary.
@@ -450,7 +462,7 @@ class MaskedOlmoEarthSample(NamedTuple):
         """
         masked_sample_dict: dict[str, Any] = {}
         for key, t in sample.as_dict(include_nones=True).items():
-            if key == "timestamps":
+            if key in _METADATA_FIELDS:
                 masked_sample_dict[key] = t
             else:
                 if t is None:
