@@ -91,17 +91,19 @@ def eval_seg(
         label = label.to(device=device)
         masked = to_device(masked, device)
         with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-            logits, _ = module(masked, label, is_train=False)  # (B, H, W, C*p*p)
-            H, W = logits.shape[1], logits.shape[2]
-            logits = rearrange(
-                logits,
-                "b h w (c i j) -> b c (h i) (w j)",
-                h=H,
-                w=W,
-                c=num_classes,
-                i=patch_size,
-                j=patch_size,
-            )
+            logits, _ = module(masked, label, is_train=False)
+            if not module.pixel_space_output:
+                # Linear head: (B, H_p, W_p, C*p*p) → pixel-shuffle to (B, C, H, W)
+                H, W = logits.shape[1], logits.shape[2]
+                logits = rearrange(
+                    logits,
+                    "b h w (c i j) -> b c (h i) (w j)",
+                    h=H,
+                    w=W,
+                    c=num_classes,
+                    i=patch_size,
+                    j=patch_size,
+                )
             if logits.shape[-2:] != label.shape[-2:]:
                 logits = F.interpolate(
                     logits.float(),

@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Literal, cast
 
 import torch
 import torch.nn as nn
 
 from olmoearth_pretrain.evals.datasets.configs import TaskType
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
+from olmoearth_pretrain.evals.finetune.unet_head import UNetDecoder
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
+
+HeadType = Literal["linear", "unet"]
 
 
 class BackboneWithHead(nn.Module):
@@ -23,8 +26,13 @@ class BackboneWithHead(nn.Module):
         pooling_type: str,
         num_classes: int,
         use_pooled_tokens: bool = False,
+        head_type: HeadType = "linear",
     ) -> None:
         """Initialize the backbone with head."""
+        if head_type == "unet" and task_type != TaskType.SEGMENTATION:
+            raise ValueError(
+                f"head_type='unet' is only supported for SEGMENTATION tasks, got {task_type}"
+            )
         super().__init__()
         self.backbone = model
         self.wrapper = get_eval_wrapper(
@@ -38,14 +46,23 @@ class BackboneWithHead(nn.Module):
         self.task_type = task_type
         self.patch_size = patch_size
         self.num_classes = num_classes
+        self.head_type: HeadType = head_type
+        # True when the head already outputs (B, num_classes, H, W) pixel-space logits.
+        self.pixel_space_output: bool = head_type == "unet"
         # placeholder head; real in_dim discovered on first forward
-        self._head = nn.Linear(1, 1, bias=True)
+        self._head: nn.Module = nn.Linear(1, 1, bias=True)
         self._inited = False
 
     def _init_head(self, emb_dim: int, device: torch.device) -> None:
         """Initialize the head based on the embedding dimension."""
         if self.task_type in (TaskType.CLASSIFICATION, TaskType.REGRESSION):
             self._head = nn.Linear(emb_dim, self.num_classes, bias=True)
+        elif self.head_type == "unet":
+            self._head = UNetDecoder(
+                in_dim=emb_dim,
+                num_classes=self.num_classes,
+                patch_size=self.patch_size,
+            )
         else:
             logits_per_patch = int(self.num_classes * self.patch_size * self.patch_size)
             self._head = nn.Linear(emb_dim, logits_per_patch, bias=True)
