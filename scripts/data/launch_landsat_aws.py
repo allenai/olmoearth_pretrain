@@ -53,7 +53,6 @@ logger = logging.getLogger(__name__)
 
 USERDATA_TEMPLATE = r"""#!/bin/bash
 set -euo pipefail
-# Log to both file and console (so get-console-output works)
 exec > >(tee -a /var/log/landsat-worker.log) 2>&1
 echo "=== Landsat worker shard {shard_id}/{num_shards} starting $(date) ==="
 
@@ -89,11 +88,15 @@ git checkout "{git_ref}"
 uv sync --locked --extra dataset-creation
 source .venv/bin/activate
 
+# Upgrade rslearn to git master for OLI-only scene filtering fix (PR #646)
+pip install --no-deps 'rslearn[extra] @ git+https://github.com/allenai/rslearn.git@master'
+echo "rslearn version: $(pip show rslearn | grep Version)"
+
 # Fetch inputs from S3
 aws s3 cp "$S3_INPUT/corpus.json" /tmp/corpus.json
 aws s3 cp "$S3_INPUT/landsat_config.json" /tmp/landsat_config.json
 
-# Local rslearn dataset dir
+# Local rslearn dataset dir on EBS
 RSLEARN_DIR=/tmp/rslearn_landsat
 mkdir -p "$RSLEARN_DIR"
 
@@ -104,7 +107,7 @@ python scripts/data/corpus_pipeline.py rslearn-worker \
     --rslearn-config /tmp/landsat_config.json \
     --shard-id "$SHARD_ID" \
     --num-shards "$NUM_SHARDS" \
-    --workers "$WORKERS"
+    --workers "$WORKERS" {max_samples_flag}
 
 echo "=== rslearn worker done, uploading to S3 ==="
 
@@ -129,14 +132,8 @@ done
 echo '{{"shard_id": '$SHARD_ID', "status": "done", "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}}' \
     | aws s3 cp - "$S3_OUTPUT/_COMPLETE_shard_$(printf '%05d' $SHARD_ID)"
 
-echo "=== Upload complete, self-terminating ==="
-
-# Self-terminate (IMDSv2)
-TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
-    -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
-    http://169.254.169.254/latest/meta-data/instance-id)
-aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region "{region}"
+echo "=== Upload complete ==="
+{self_terminate_block}
 """
 
 
@@ -244,6 +241,22 @@ def cmd_launch(args: argparse.Namespace) -> None:
                 lines.append(f'export AWS_SESSION_TOKEN="{aws_session_token}"')
             aws_creds_block = "\n".join(lines) + "\n"
 
+        max_samples_flag = (
+            f"--max-samples {args.max_samples}" if args.max_samples else ""
+        )
+
+        if args.no_self_terminate:
+            self_terminate_block = "echo 'Instance kept alive for debugging (--no-self-terminate)'"
+        else:
+            self_terminate_block = (
+                "# Self-terminate (IMDSv2)\n"
+                'TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \\\n'
+                '    -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")\n'
+                'INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \\\n'
+                "    http://169.254.169.254/latest/meta-data/instance-id)\n"
+                f'aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region "{args.region}"'
+            )
+
         userdata = USERDATA_TEMPLATE.format(
             shard_id=shard_id,
             num_shards=args.num_instances,
@@ -253,6 +266,8 @@ def cmd_launch(args: argparse.Namespace) -> None:
             git_ref=git_ref,
             workers=args.workers,
             aws_creds_block=aws_creds_block,
+            max_samples_flag=max_samples_flag,
+            self_terminate_block=self_terminate_block,
         )
 
         launch_kwargs: dict = {
@@ -319,6 +334,8 @@ def cmd_launch(args: argparse.Namespace) -> None:
         "corpus": args.corpus,
         "rslearn_config": args.rslearn_config,
         "workers": args.workers,
+        "max_samples": args.max_samples,
+        "no_self_terminate": args.no_self_terminate,
         "launched_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -534,7 +551,9 @@ def main() -> None:
     p.add_argument("--subnet-id", default=None)
     p.add_argument("--iam-instance-profile", default=None)
     p.add_argument("--workers", type=int, default=16, help="rslearn parallelism per instance")
-    p.add_argument("--volume-size", type=int, default=50, help="Root EBS volume size in GB")
+    p.add_argument("--volume-size", type=int, default=200, help="Root EBS volume size in GB")
+    p.add_argument("--max-samples", type=int, default=None, help="Limit corpus to first N samples (for testing)")
+    p.add_argument("--no-self-terminate", action="store_true", help="Keep instances alive after completion (for SSH debugging)")
     p.add_argument("--dry-run", action="store_true", help="Print what would be launched")
     p.set_defaults(func=cmd_launch)
 
