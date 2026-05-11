@@ -511,6 +511,7 @@ def cmd_launch_rslearn(args: argparse.Namespace) -> None:
         worker_cmd_template=cmd_template,
         num_shards=args.num_shards,
         clusters=args.clusters,
+        shard_ids=args.shard_ids,
     )
     for eid in experiment_ids:
         print(f"  https://beaker.org/ex/{eid}")
@@ -828,6 +829,7 @@ def main() -> None:
     p.add_argument("--only-layers", nargs="*", default=None, help="Only process these layers (disables all others)")
     p.add_argument("--steps", nargs="*", default=None, choices=["prepare", "ingest", "materialize"], help="Only run these rslearn steps (default: all three)")
     p.add_argument("--max-samples", type=int, default=None, help="Limit corpus to first N samples")
+    p.add_argument("--shard-ids", nargs="*", type=int, default=None, help="Only launch these shard IDs (for resuming failed/missing shards)")
     p.set_defaults(func=cmd_launch_rslearn)
 
     # -- rslearn-worker --
