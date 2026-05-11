@@ -135,12 +135,27 @@ def _sample_to_olmoearth(
     device = next(iter(sample.values())).device
     sample_dict: dict[str, Any] = {}
 
-    if slug in ("burn_scars", "caffe") and "image" in sample:
+    if slug == "caffe" and "image" in sample:
+        # CaFFe is grayscale; fill all S2 channels with the same intensity.
         g = sample["image"].float()
         if g.dim() == 3:
             g = g.unsqueeze(0)
-        g13 = g[0, :1].repeat(13, 1, 1)
-        hwtc = _bchw_to_hwtc(g13)
+        n_s2 = len(Modality.SENTINEL2_L2A.band_order)
+        g_filled = g[0, :1].repeat(n_s2, 1, 1)  # (12, H, W)
+        hwtc = _bchw_to_hwtc(g_filled)
+        t = hwtc.shape[2]
+        sample_dict["sentinel2_l2a"] = hwtc
+        sample_dict["timestamps"] = _timestamps(t, device)
+        return OlmoEarthSample(**sample_dict)
+
+    if slug == "burn_scars" and "image" in sample:
+        # BurnScars has 6 real S2 bands; map them to the canonical 12-band order.
+        g = sample["image"].float()
+        if g.dim() == 3:
+            g = g.unsqueeze(0)
+        src_names = [str(b) for b in band_order]
+        g_aligned = _align_s2_to_sentinel2_l2a(g[0], src_names)  # (12, H, W)
+        hwtc = _bchw_to_hwtc(g_aligned)
         t = hwtc.shape[2]
         sample_dict["sentinel2_l2a"] = hwtc
         sample_dict["timestamps"] = _timestamps(t, device)

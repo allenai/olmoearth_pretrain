@@ -109,7 +109,7 @@ class _BaseGeobenchDataset(Dataset):
         )
         paths = [os.path.join(root, n) for n in names]
         df = tacoreader.load(paths)
-        if split == "val":
+        if split in ("val", "valid"):
             split = "validation"
         self._df = df[df["tortilla:data_split"] == split].reset_index(drop=True)
 
@@ -174,10 +174,10 @@ class CloudSen12Dataset(_BaseGeobenchDataset):
 
 
 class SpaceNet7Dataset(_BaseGeobenchDataset):
-    """SpaceNet7: 3-band PlanetScope → building segmentation (+1 class offset)."""
+    """SpaceNet7: 4-band PlanetScope (RGBN) → building segmentation (+1 class offset)."""
 
     TORTILLA = "geobench_spacenet7.tortilla"
-    band_order = ["red", "green", "blue"]
+    band_order = ["red", "green", "blue", "nir"]
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
         row = self._df.read(idx)
@@ -205,12 +205,40 @@ class SpaceNet2Dataset(_BaseGeobenchDataset):
         "pan": ["pan"],
     }
 
+    TARGET_SIZE = 512  # raw tiles are 650×650; resize to match config height_width
+
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
+        import torch.nn.functional as F
+
         row = self._df.read(idx)
         image_worldview = _raster_f32(row, 0)  # (8, H, W)
         image_pan = _raster_f32(row, 1)  # (1, H, W)
         mask = _raster_i64(row, 2).squeeze(0)  # (H, W)
         mask = mask + 1  # shift for background class
+
+        if image_worldview.shape[-1] != self.TARGET_SIZE:
+            image_worldview = F.interpolate(
+                image_worldview.unsqueeze(0),
+                size=(self.TARGET_SIZE, self.TARGET_SIZE),
+                mode="bilinear",
+                align_corners=False,
+            ).squeeze(0)
+            image_pan = F.interpolate(
+                image_pan.unsqueeze(0),
+                size=(self.TARGET_SIZE, self.TARGET_SIZE),
+                mode="bilinear",
+                align_corners=False,
+            ).squeeze(0)
+            mask = (
+                F.interpolate(
+                    mask.unsqueeze(0).unsqueeze(0).float(),
+                    size=(self.TARGET_SIZE, self.TARGET_SIZE),
+                    mode="nearest",
+                )
+                .squeeze()
+                .long()
+            )
+
         return {
             "image_worldview": image_worldview,
             "image_pan": image_pan,
