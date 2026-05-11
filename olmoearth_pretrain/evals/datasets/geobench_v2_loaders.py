@@ -168,7 +168,9 @@ class CloudSen12Dataset(_BaseGeobenchDataset):
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
         row = self._df.read(idx)
-        image = _raster_f32(row, 0)  # (12, H, W)
+        image = _raster_f32(
+            row, 0
+        )  # (14, H, W) — 12 S2 bands + B10 cirrus + cloud prob
         mask = _raster_i64(row, 1).squeeze(0)  # (H, W)
         return {"image": image, "mask": mask}
 

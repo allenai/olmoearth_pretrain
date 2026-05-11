@@ -169,10 +169,10 @@ def _sample_to_olmoearth(
             src = [str(b) for b in band_order]
         else:
             src = _s2_names(band_order) or [str(i) for i in range(xb.shape[1])]
-        if len(src) != xb.shape[1]:
-            raise ValueError(
-                f"cloudsen12: band_order length {len(src)} != image channels {xb.shape[1]}"
-            )
+        # L2A tortilla appends extra layers (SCL, cloud probability) after the 12 reflectance
+        # bands — truncate to just the named bands.
+
+        xb = xb[:, : len(src)]
         s2_order = list(Modality.SENTINEL2_L2A.band_order)
         x_perm = _permute_bchw(xb, src, s2_order)
         hwtc = _bchw_to_hwtc(x_perm[0])
