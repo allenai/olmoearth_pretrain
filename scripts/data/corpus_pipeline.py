@@ -66,11 +66,20 @@ CANONICAL_SOURCE_DATA = (
 
 
 def _ensure_source_data(rslearn_dir: str) -> None:
-    """Symlink source_data/ subdirs (OSM, worldcover, etc.) into rslearn dir."""
+    """Symlink source_data/ subdirs (OSM, worldcover, etc.) into rslearn dir.
+
+    Only needed for layers that use local source data (OSM pbf, worldcover tifs, etc.).
+    Skipped when the canonical path doesn't exist — e.g. on EC2 where we only
+    run Landsat (which streams directly from USGS S3, no local source_data needed).
+    """
     import os
     from pathlib import Path
 
     src = Path(CANONICAL_SOURCE_DATA)
+    if not src.exists():
+        logger.info(f"source_data not available at {src}, skipping (expected on EC2)")
+        return
+
     dst = Path(rslearn_dir) / "source_data"
     dst.mkdir(parents=True, exist_ok=True)
 
