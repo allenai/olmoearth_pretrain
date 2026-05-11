@@ -6,6 +6,10 @@ Three subcommands:
     status  -- check how many shards have completed (reads S3 sentinels)
     sync    -- pull completed landsat layer data from S3 into a Weka rslearn dir
 
+Defaults to on-demand instances (no reclaims). Pass --spot for cheaper runs at the risk
+of losing progress if AWS reclaims the instance mid-job (EBS volumes are deleted on
+termination, so there's no resume -- a reclaimed shard must be re-run from scratch).
+
 The launch step bakes AWS credentials into EC2 user-data as env vars. No IAM instance
 profiles or secrets managers needed -- just pass your key at launch time (or export
 AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY before running).
@@ -112,6 +116,11 @@ python scripts/data/corpus_pipeline.py rslearn-worker \
 
 echo "=== rslearn worker done, uploading to S3 ==="
 
+# Trap SIGTERM/SIGINT during upload so spot reclaims or cloud-init timeouts
+# don't kill us mid-transfer. We defer the signal until upload finishes.
+CAUGHT_SIGNAL=0
+trap 'echo "SIGTERM caught, finishing upload before exit..."; CAUGHT_SIGNAL=1' TERM INT
+
 # Upload landsat layer directories only
 cd "$RSLEARN_DIR"
 for window_dir in windows/res_10.0/*/; do
@@ -134,6 +143,9 @@ echo '{{"shard_id": '$SHARD_ID', "status": "done", "timestamp": "'$(date -u +%Y-
     | aws s3 cp - "$S3_OUTPUT/_COMPLETE_shard_$(printf '%05d' $SHARD_ID)"
 
 echo "=== Upload complete ==="
+if [ "$CAUGHT_SIGNAL" -eq 1 ]; then
+    echo "Upload finished despite signal, exiting gracefully"
+fi
 {self_terminate_block}
 """
 
@@ -199,7 +211,8 @@ def cmd_launch(args: argparse.Namespace) -> None:
         logger.warning("Baking AWS credentials into user-data (prefer --iam-instance-profile for production)")
 
     logger.info(f"Git ref: {git_ref}")
-    logger.info(f"Instances: {args.num_instances} x {args.instance_type}")
+    pricing = "spot" if args.spot else "on-demand"
+    logger.info(f"Instances: {args.num_instances} x {args.instance_type} ({pricing})")
     logger.info(f"S3 staging: s3://{args.s3_bucket}/{args.s3_prefix}")
 
     landsat_config = _make_landsat_only_config(args.rslearn_config)
@@ -287,10 +300,6 @@ def cmd_launch(args: argparse.Namespace) -> None:
                     },
                 }
             ],
-            "InstanceMarketOptions": {
-                "MarketType": "spot",
-                "SpotOptions": {"SpotInstanceType": "one-time"},
-            },
             "TagSpecifications": [
                 {
                     "ResourceType": "instance",
@@ -302,6 +311,12 @@ def cmd_launch(args: argparse.Namespace) -> None:
                 }
             ],
         }
+
+        if args.spot:
+            launch_kwargs["InstanceMarketOptions"] = {
+                "MarketType": "spot",
+                "SpotOptions": {"SpotInstanceType": "one-time"},
+            }
 
         if args.key_name:
             launch_kwargs["KeyName"] = args.key_name
@@ -337,6 +352,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
         "workers": args.workers,
         "max_samples": args.max_samples,
         "no_self_terminate": args.no_self_terminate,
+        "spot": args.spot,
         "launched_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -544,17 +560,18 @@ def main() -> None:
         help="S3 key prefix (default: auto-generated from timestamp)",
     )
     p.add_argument("--num-instances", type=int, default=20, help="Number of EC2 instances")
-    p.add_argument("--instance-type", default="c5.4xlarge")
+    p.add_argument("--instance-type", default="c5.9xlarge")
     p.add_argument("--region", default="us-west-2")
     p.add_argument("--ami", default=None, help="EC2 AMI ID (default: latest Amazon Linux 2023)")
     p.add_argument("--key-name", default=None, help="EC2 key pair name for SSH access")
     p.add_argument("--security-group-id", default=None)
     p.add_argument("--subnet-id", default=None)
     p.add_argument("--iam-instance-profile", default=None)
-    p.add_argument("--workers", type=int, default=16, help="rslearn parallelism per instance")
+    p.add_argument("--workers", type=int, default=32, help="rslearn parallelism per instance")
     p.add_argument("--volume-size", type=int, default=200, help="Root EBS volume size in GB")
     p.add_argument("--max-samples", type=int, default=None, help="Limit corpus to first N samples (for testing)")
     p.add_argument("--no-self-terminate", action="store_true", help="Keep instances alive after completion (for SSH debugging)")
+    p.add_argument("--spot", action="store_true", help="Use spot instances (~3-5x cheaper but can be reclaimed mid-job, losing all progress)")
     p.add_argument("--dry-run", action="store_true", help="Print what would be launched")
     p.set_defaults(func=cmd_launch)
 
