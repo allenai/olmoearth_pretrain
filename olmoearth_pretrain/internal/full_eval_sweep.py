@@ -1139,7 +1139,6 @@ def main() -> None:
     args, extra_cli = parser.parse_known_args()
 
     commands_to_run = build_commands(args, extra_cli)
-    commands_to_run = commands_to_run[11:]
 
     logger.info(f"Running {len(commands_to_run)} commands")
     for cmd in commands_to_run:

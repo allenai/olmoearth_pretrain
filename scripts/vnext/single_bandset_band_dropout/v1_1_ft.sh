@@ -28,6 +28,13 @@ for SEED in "${SEEDS[@]}"; do
         --checkpoint_path=/weka/dfive-default/helios/checkpoints/gabrielt/nano_1.1_lr0.0002_wd0.02/step667200 \
         --model_name=nano_1.1_lr0.0002_wd0.02_step667200_nobanddropout \
         --finetune_seed=${SEED}
+
+    # tiny 1.1
+    ${SCRIPT} ${COMMON_ARGS} \
+        --module_path=scripts/vnext/single_bandset_band_dropout/tiny.py \
+        --checkpoint_path=/weka/dfive-default/helios/checkpoints/gabrielt/tiny_1.1_lr0.0002_wd0.02_b20.95/step667200 \
+        --model_name=tiny_1.1_lr0.0002_wd0.02_b20.95_step667200_nobanddropout \
+        --finetune_seed=${SEED}
 done
 
 echo "All eval jobs submitted to wandb project: ${PROJECT}"
