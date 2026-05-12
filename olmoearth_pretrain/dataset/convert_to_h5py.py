@@ -243,6 +243,7 @@ class ConvertToH5py:
         # Create a DataFrame to store the metadata
         metadata_dict: dict = {
             "sample_index": [],
+            "sample_id": [],
         }
 
         # Add columns for each supported modality
@@ -252,6 +253,7 @@ class ConvertToH5py:
         # Populate the DataFrame with metadata from each sample
         for i, (_, sample) in enumerate(samples):
             metadata_dict["sample_index"].append(i)
+            metadata_dict["sample_id"].append(sample.grid_tile.sample_id or "")
 
             # Set modality presence (1 if present, 0 if not)
             for modality in self.supported_modalities:
@@ -497,6 +499,10 @@ class ConvertToH5py:
                         f"Creating dataset for {item_name} with kwargs: {create_kwargs}"
                     )
                     h5file.create_dataset(item_name, data=data_item, **create_kwargs)
+
+                # Store sample_id as an attribute for traceability
+                if sample.grid_tile.sample_id:
+                    h5file.attrs["sample_id"] = sample.grid_tile.sample_id
 
                 # Store missing timesteps masks in a dedicated group
                 if missing_timesteps_masks_data:

@@ -38,7 +38,7 @@ from beaker.data_model.experiment_spec import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_WORKSPACE = "ai2/earth-systems"
-DEFAULT_BUDGET = "ai2/es-platform"
+DEFAULT_BUDGET = "ai2/atec-olmoearth"
 WEKA_BUCKET = "dfive-default"
 
 DEFAULT_BASE_IMAGE = (
