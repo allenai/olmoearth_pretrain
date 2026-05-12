@@ -32,8 +32,8 @@ from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
 logger = logging.getLogger(__name__)
 
 PATCH_EMBED_BASE_SIZE = 4
-LEARNING_RATE = 0.0001
-WEIGHT_DECAY = 0.02
+LEARNING_RATE = 0.0002
+WEIGHT_DECAY = 0.002
 
 
 def build_train_module_config(
