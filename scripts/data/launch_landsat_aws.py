@@ -232,7 +232,15 @@ def cmd_launch(args: argparse.Namespace) -> None:
     instance_ids = []
     run_id = f"landsat-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
-    for shard_id in range(args.num_instances):
+    if args.shard_range:
+        start, end = args.shard_range.split("-")
+        shard_ids = list(range(int(start), int(end) + 1))
+    else:
+        shard_ids = list(range(args.num_instances))
+
+    logger.info(f"Launching shards: {shard_ids[0]}-{shard_ids[-1]} ({len(shard_ids)} instances, {args.num_instances} total shards)")
+
+    for shard_id in shard_ids:
         if use_instance_profile:
             aws_creds_block = "# Credentials provided by IAM instance profile\n"
         else:
@@ -548,7 +556,8 @@ def main() -> None:
         "--s3-prefix", default=None,
         help="S3 key prefix (default: auto-generated from timestamp)",
     )
-    p.add_argument("--num-instances", type=int, default=20, help="Number of EC2 instances")
+    p.add_argument("--num-instances", type=int, default=20, help="Total number of shards (determines how corpus is split)")
+    p.add_argument("--shard-range", default=None, help="Launch only a subset of shards, e.g. '0-19' for first 20. Default: all shards.")
     p.add_argument("--instance-type", default="c5.9xlarge")
     p.add_argument("--region", default="us-west-2")
     p.add_argument("--ami", default=None, help="EC2 AMI ID (default: latest Amazon Linux 2023)")
