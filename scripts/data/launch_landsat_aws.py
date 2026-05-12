@@ -121,22 +121,11 @@ echo "=== rslearn worker done, uploading to S3 ==="
 CAUGHT_SIGNAL=0
 trap 'echo "SIGTERM caught, finishing upload before exit..."; CAUGHT_SIGNAL=1' TERM INT
 
-# Upload landsat layer directories only
+# Upload all landsat layers in one parallel sync (much faster than per-layer loop)
 cd "$RSLEARN_DIR"
-for window_dir in windows/res_10.0/*/; do
-    window_name=$(basename "$window_dir")
-    layers_dir="$window_dir/layers"
-    if [ -d "$layers_dir" ]; then
-        for landsat_layer in "$layers_dir"/landsat*/; do
-            if [ -d "$landsat_layer" ]; then
-                layer_name=$(basename "$landsat_layer")
-                aws s3 sync "$landsat_layer" \
-                    "$S3_OUTPUT/res_10.0/$window_name/layers/$layer_name/" \
-                    --only-show-errors
-            fi
-        done
-    fi
-done
+aws s3 sync windows/ "$S3_OUTPUT/" \
+    --exclude "*" --include "*/layers/landsat*/*" \
+    --only-show-errors
 
 # Signal completion
 echo '{{"shard_id": '$SHARD_ID', "status": "done", "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}}' \
