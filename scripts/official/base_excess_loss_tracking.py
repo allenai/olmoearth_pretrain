@@ -71,7 +71,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:  # noqa: D1
 
 def build_trainer_config_excess(common: CommonComponents) -> TrainerConfig:  # noqa: D103
     """Trainer: resume from step 100k, run to 200k, eurosat only."""
-    LOAD_PATH = "/weka/dfive-default/helios/checkpoints/henryh/base_v6.1_add_chm_cdl_worldcereal"
+    LOAD_PATH = "/weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step100000"
     MAX_DURATION = Duration.steps(200_000)
 
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
