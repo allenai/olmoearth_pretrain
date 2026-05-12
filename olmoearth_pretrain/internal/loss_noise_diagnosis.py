@@ -71,6 +71,14 @@ class LossNoiseDiagnoseConfig(Config):
     flush_every_steps: int = 100
     log_every: int = 50
 
+    # Repeated-sample mode: evaluate specific samples many times with different
+    # random masks/modality selections to measure per-sample loss distributions.
+    # Set num_diagnosis_samples > 0 to randomly pick samples from the dataset,
+    # or provide sample_indices_file for specific indices.
+    num_diagnosis_samples: int = 0
+    sample_indices_file: str = ""
+    num_repeats_per_sample: int = 100
+
     def check_required(self) -> None:
         """Verify required fields are set. Called by the runner, not Config.apply()."""
         if not self.checkpoint_path:
@@ -79,6 +87,14 @@ class LossNoiseDiagnoseConfig(Config):
             raise ValueError("loss_diagnose.output_dir must be set")
         if self.max_steps <= 0:
             raise ValueError("loss_diagnose.max_steps must be > 0")
+        if self.sample_indices_file:
+            p = Path(self.sample_indices_file)
+            if not p.exists():
+                raise ValueError(f"sample_indices_file not found: {p}")
+        if (
+            self.num_diagnosis_samples > 0 or self.sample_indices_file
+        ) and self.num_repeats_per_sample < 1:
+            raise ValueError("num_repeats_per_sample must be >= 1")
 
 
 # =============================================================================
@@ -338,6 +354,46 @@ def run_loss_diagnose(config: OlmoEarthExperimentConfig) -> None:
     dataset = config.dataset.build()
     data_loader = config.data_loader.build(dataset)
     data_loader.reshuffle(epoch=1, in_memory=True)
+
+    # Repeated-sample mode: override global indices with repeated specific samples
+    repeated_mode = diag.num_diagnosis_samples > 0 or diag.sample_indices_file
+    if repeated_mode:
+        if diag.sample_indices_file:
+            sample_indices_path = Path(diag.sample_indices_file)
+            if sample_indices_path.suffix == ".npy":
+                target_indices = np.load(sample_indices_path).astype(np.uint32).ravel()
+            else:
+                target_indices = np.loadtxt(
+                    sample_indices_path, dtype=np.uint32
+                ).ravel()
+        else:
+            rng = np.random.default_rng(config.init_seed)
+            all_indices = np.arange(len(dataset), dtype=np.uint32)
+            target_indices = rng.choice(
+                all_indices, size=diag.num_diagnosis_samples, replace=False
+            )
+            # Save chosen indices for reproducibility
+            idx_path = Path(diag.output_dir) / "sampled_indices.npy"
+            idx_path.parent.mkdir(parents=True, exist_ok=True)
+            np.save(idx_path, target_indices)
+            if is_rank0:
+                logger.info(f"Saved sampled indices to {idx_path}")
+
+        n_samples = len(target_indices)
+        repeated = np.repeat(target_indices, diag.num_repeats_per_sample)
+        total = (
+            len(repeated) // data_loader.global_batch_size
+        ) * data_loader.global_batch_size
+        repeated = repeated[:total]
+        data_loader._global_indices = repeated
+        n_batches = total // data_loader.global_batch_size
+        if is_rank0:
+            logger.info(
+                f"Repeated-sample mode: {n_samples} samples x "
+                f"{diag.num_repeats_per_sample} repeats = {len(repeated)} instances "
+                f"({n_batches} batches)"
+            )
+        diag.max_steps = max(diag.max_steps, n_batches)
 
     # Extract loss params from train_module config
     loss_cfg = config.train_module.loss_config.loss_config
