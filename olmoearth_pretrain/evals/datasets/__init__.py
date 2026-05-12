@@ -45,7 +45,7 @@ def get_eval_dataset(
     **kwargs: Any,
 ) -> Dataset:
     """Retrieve an eval dataset from the dataset name."""
-    if eval_dataset == "pretrain_subset":
+    if eval_dataset.startswith("pretrain_subset"):
         return PretrainSubsetDataset(
             h5py_dir=kwargs["h5py_dir"],
             training_modalities=kwargs.get("training_modalities", input_modalities),
@@ -53,6 +53,12 @@ def get_eval_dataset(
             patch_size=kwargs.get("pretrain_patch_size", 4),
             hw_p=kwargs.get("pretrain_hw_p", 8),
             seed=kwargs.get("pretrain_seed", 42),
+            split=kwargs.get("pretrain_split", split),
+            target_modality=kwargs.get("target_modality"),
+            label_seed=kwargs.get("pretrain_label_seed", 42),
+            train_samples=kwargs.get("pretrain_train_samples", 512),
+            valid_samples=kwargs.get("pretrain_valid_samples", 512),
+            test_samples=kwargs.get("pretrain_test_samples", 512),
         )
     elif eval_dataset.startswith("m-"):
         # m- == "modified for geobench"

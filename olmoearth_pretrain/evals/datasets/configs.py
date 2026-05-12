@@ -12,8 +12,9 @@ def get_eval_mode(task_type: TaskType) -> str:
     """Get the eval mode for a given task type."""
     if task_type == TaskType.CLASSIFICATION:
         return "knn"
-    else:
+    if task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION):
         return "linear_probe"
+    raise ValueError(f"Unsupported task type: {task_type}")
 
 
 __all__ = ["TaskType", "get_eval_mode", "EvalDatasetConfig"]
@@ -55,6 +56,42 @@ DATASET_TO_CONFIG = {
         imputes=[],
         num_classes=1,
         is_multilabel=False,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
+    "pretrain_subset_worldcover": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=11,
+        is_multilabel=False,
+        height_width=32,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
+    "pretrain_subset_osm": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=29,
+        is_multilabel=False,
+        height_width=32,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
+    "pretrain_subset_srtm": EvalDatasetConfig(
+        task_type=TaskType.REGRESSION,
+        imputes=[],
+        num_classes=1,
+        is_multilabel=False,
+        height_width=32,
         supported_modalities=[
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,

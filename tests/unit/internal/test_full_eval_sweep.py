@@ -41,8 +41,13 @@ def base_args() -> argparse.Namespace:
         task_skip_names=None,
         size=None,
         load_eval_settings_from_json=False,
+        quantize_embeddings=False,
+        embedding_dim=None,
+        embedding_diagnostics_only=False,
         checkpoint_dir=None,
         steps=None,
+        label_percentages=None,
+        label_percentage=None,
     )
 
 
@@ -65,8 +70,13 @@ def minimal_args() -> argparse.Namespace:
         task_skip_names=None,
         size=None,
         load_eval_settings_from_json=False,
+        quantize_embeddings=False,
+        embedding_dim=None,
+        embedding_diagnostics_only=False,
         checkpoint_dir=None,
         steps=None,
+        label_percentages=None,
+        label_percentage=None,
     )
 
 
@@ -398,6 +408,55 @@ class TestBuildCommandsExecution:
         command: str = commands[0]
         assert "--custom_arg=value" in command
         assert "--another_flag" in command
+
+    def test_checkpoint_sweep_embedding_diagnostics_only(
+        self, base_args: argparse.Namespace
+    ) -> None:
+        """Checkpoint sweep diagnostics-only mode propagates env vars."""
+        base_args.checkpoint_dir = "/path/to/checkpoints/run"
+        base_args.checkpoint_path = None
+        base_args.embedding_diagnostics_only = True
+        base_args.defaults_only = True
+
+        commands: list[str] = build_commands(base_args, [])
+
+        assert len(commands) == 1
+        command = commands[0]
+        assert "CHECKPOINT_DIR=/path/to/checkpoints/run" in command
+        assert "EMBEDDING_DIAGNOSTICS_ONLY=1" in command
+        assert "checkpoint_sweep_evals.py" in command
+
+    def test_checkpoint_sweep_with_steps_and_size(
+        self, base_args: argparse.Namespace
+    ) -> None:
+        """Checkpoint sweep includes selected steps and size override."""
+        base_args.checkpoint_dir = "/path/to/checkpoints/run"
+        base_args.checkpoint_path = None
+        base_args.steps = "50000,100000"
+        base_args.model = BaselineModelName.GALILEO
+        base_args.size = "large"
+        base_args.model_name = "official_large"
+
+        commands: list[str] = build_commands(base_args, [])
+
+        assert len(commands) == 1
+        command = commands[0]
+        assert "CHECKPOINT_STEPS=50000,100000" in command
+        assert "official_large" in command
+        assert "--model.size=large" in command
+
+    def test_label_percentages_fan_out(self, base_args: argparse.Namespace) -> None:
+        """Label percentages create one command per requested train partition."""
+        base_args.defaults_only = True
+        base_args.label_percentages = "0.01,0.1"
+
+        commands: list[str] = build_commands(base_args, [])
+
+        assert len(commands) == 2
+        assert "_label0.01x" in commands[0]
+        assert "partition=0.01x_train" in commands[0]
+        assert "_label0.1x" in commands[1]
+        assert "partition=0.10x_train" in commands[1]
 
 
 class TestParametrizedTests:

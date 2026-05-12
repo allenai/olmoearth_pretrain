@@ -403,6 +403,82 @@ EVAL_TASKS = {
     # ),
 }
 
+PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"
+
+EVAL_TASKS.update(
+    {
+        "pretrain_worldcover_probe": DownstreamTaskConfig(
+            dataset="pretrain_subset_worldcover",
+            embedding_batch_size=4,
+            probe_batch_size=4,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            eval_interval=Duration.epochs(10),
+            input_modalities=[
+                Modality.SENTINEL2_L2A.name,
+                Modality.SENTINEL1.name,
+                Modality.LANDSAT.name,
+            ],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            probe_lr=0.01,
+            primary_metric=EvalMetric.MIOU,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            pretrain_target_modality=Modality.WORLDCOVER.name,
+            pretrain_train_samples=512,
+            pretrain_valid_samples=512,
+            pretrain_test_samples=512,
+        ),
+        "pretrain_osm_probe": DownstreamTaskConfig(
+            dataset="pretrain_subset_osm",
+            embedding_batch_size=4,
+            probe_batch_size=4,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            eval_interval=Duration.epochs(10),
+            input_modalities=[
+                Modality.SENTINEL2_L2A.name,
+                Modality.SENTINEL1.name,
+                Modality.LANDSAT.name,
+            ],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            probe_lr=0.01,
+            primary_metric=EvalMetric.MIOU,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            pretrain_target_modality=Modality.OPENSTREETMAP_RASTER.name,
+            pretrain_train_samples=512,
+            pretrain_valid_samples=512,
+            pretrain_test_samples=512,
+        ),
+        "pretrain_srtm_regression": DownstreamTaskConfig(
+            dataset="pretrain_subset_srtm",
+            embedding_batch_size=4,
+            probe_batch_size=4,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            eval_interval=Duration.epochs(10),
+            input_modalities=[
+                Modality.SENTINEL2_L2A.name,
+                Modality.SENTINEL1.name,
+                Modality.LANDSAT.name,
+            ],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            probe_lr=0.01,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            pretrain_target_modality=Modality.SRTM.name,
+            pretrain_train_samples=512,
+            pretrain_valid_samples=512,
+            pretrain_test_samples=512,
+        ),
+    }
+)
+
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
         dataset="pretrain_subset",
@@ -417,7 +493,7 @@ EMBED_DIAG_TASKS = {
             Modality.LANDSAT.name,
         ],
         eval_mode=EvalMode.EMBEDDING_DIAGNOSTICS,
-        h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828",
+        h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
         pretrain_max_samples=256,
     ),
 }

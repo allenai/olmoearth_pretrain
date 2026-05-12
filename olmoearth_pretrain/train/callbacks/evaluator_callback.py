@@ -121,6 +121,12 @@ class DownstreamTaskConfig:
     h5py_dir: str | None = None
     # For pretrain_subset: max samples to load
     pretrain_max_samples: int = 512
+    # For pretrain subset auxiliary probes: target modality to predict.
+    pretrain_target_modality: str | None = None
+    pretrain_label_seed: int = 42
+    pretrain_train_samples: int = 512
+    pretrain_valid_samples: int = 512
+    pretrain_test_samples: int = 512
 
 
 class DownstreamEvaluator:
@@ -182,6 +188,11 @@ class DownstreamEvaluator:
         self.primary_metric_class = task.primary_metric_class
         self.h5py_dir = task.h5py_dir
         self.pretrain_max_samples = task.pretrain_max_samples
+        self.pretrain_target_modality = task.pretrain_target_modality
+        self.pretrain_label_seed = task.pretrain_label_seed
+        self.pretrain_train_samples = task.pretrain_train_samples
+        self.pretrain_valid_samples = task.pretrain_valid_samples
+        self.pretrain_test_samples = task.pretrain_test_samples
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -200,7 +211,7 @@ class DownstreamEvaluator:
         if self.eval_mode == EvalMode.LINEAR_PROBE:
             if self.probe_lr is None:
                 raise ValueError("probe_lr cannot be none for segmentation tasks.")
-            if self.config.task_type == TaskType.SEGMENTATION:
+            if self.config.task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION):
                 if self.config.height_width is None:
                     raise ValueError(
                         "config.height_width cannot be none for segmentation tasks."
@@ -264,10 +275,16 @@ class DownstreamEvaluator:
             worker_init_fn = partial(_seed_worker, base_seed=split_seed)
 
         extra_kwargs: dict[str, Any] = {}
-        if self.dataset == "pretrain_subset" and self.h5py_dir is not None:
+        if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities
             extra_kwargs["max_samples"] = self.pretrain_max_samples
+            extra_kwargs["target_modality"] = self.pretrain_target_modality
+            extra_kwargs["pretrain_split"] = split
+            extra_kwargs["pretrain_label_seed"] = self.pretrain_label_seed
+            extra_kwargs["pretrain_train_samples"] = self.pretrain_train_samples
+            extra_kwargs["pretrain_valid_samples"] = self.pretrain_valid_samples
+            extra_kwargs["pretrain_test_samples"] = self.pretrain_test_samples
         eval_ds = get_eval_dataset(
             eval_dataset=self.dataset,
             split=split,

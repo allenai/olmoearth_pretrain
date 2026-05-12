@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_PATCH_SIZE = 4
 DEFAULT_HW_P = 8
 DEFAULT_MAX_SAMPLES = 512
+WORLDCOVER_CLASSES = torch.tensor([10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100])
+OSM_TARGET_MODALITY = "openstreetmap_raster"
+SRTM_TARGET_MODALITY = "srtm"
+WORLDCOVER_TARGET_MODALITY = "worldcover"
 
 
 class PretrainSubsetDataset(Dataset):
@@ -39,11 +43,18 @@ class PretrainSubsetDataset(Dataset):
         patch_size: int = DEFAULT_PATCH_SIZE,
         hw_p: int = DEFAULT_HW_P,
         seed: int = 42,
+        split: str = "train",
+        target_modality: str | None = None,
+        label_seed: int = 42,
+        train_samples: int = DEFAULT_MAX_SAMPLES,
+        valid_samples: int = DEFAULT_MAX_SAMPLES,
+        test_samples: int = DEFAULT_MAX_SAMPLES,
     ) -> None:
         """Initialize with a fixed reproducible subset of training indices."""
         self.patch_size = patch_size
         self.hw_p = hw_p
         self.max_samples = max_samples
+        self.target_modality = target_modality
 
         self._dataset = OlmoEarthDataset(
             h5py_dir=UPath(h5py_dir),
@@ -52,11 +63,134 @@ class PretrainSubsetDataset(Dataset):
             normalize=True,
         )
         self._dataset.prepare()
+        self._label_dataset = None
+        if target_modality is not None:
+            self._label_dataset = OlmoEarthDataset(
+                h5py_dir=UPath(h5py_dir),
+                training_modalities=[target_modality],
+                dtype=np.float32,
+                normalize=False,
+            )
+            self._label_dataset.prepare()
 
         total = len(self._dataset)
-        n = min(max_samples, total)
+        if target_modality is None:
+            n = min(max_samples, total)
+            rng = np.random.RandomState(seed)
+            self._indices = rng.choice(total, size=n, replace=False).tolist()
+        else:
+            self._indices = self._select_split_indices(
+                total=total,
+                split=split,
+                seed=label_seed,
+                train_samples=train_samples,
+                valid_samples=valid_samples,
+                test_samples=test_samples,
+            )
+
+    @staticmethod
+    def _select_split_indices(
+        total: int,
+        split: str,
+        seed: int,
+        train_samples: int,
+        valid_samples: int,
+        test_samples: int,
+    ) -> list[int]:
+        """Select deterministic disjoint index subsets for held-out target probes."""
+        split_sizes = {
+            "train": train_samples,
+            "valid": valid_samples,
+            "val": valid_samples,
+            "test": test_samples,
+        }
+        if split not in split_sizes:
+            raise ValueError(f"Unsupported pretrain subset split: {split}")
+
         rng = np.random.RandomState(seed)
-        self._indices = rng.choice(total, size=n, replace=False).tolist()
+        indices = rng.permutation(total)
+        train_end = min(train_samples, total)
+        valid_end = min(train_end + valid_samples, total)
+        test_end = min(valid_end + test_samples, total)
+        split_to_slice = {
+            "train": slice(0, train_end),
+            "valid": slice(train_end, valid_end),
+            "val": slice(train_end, valid_end),
+            "test": slice(valid_end, test_end),
+        }
+        selected = indices[split_to_slice[split]]
+        if selected.size == 0:
+            raise ValueError(
+                f"No samples selected for split {split}; total={total}, "
+                f"train={train_samples}, valid={valid_samples}, test={test_samples}"
+            )
+        return selected.tolist()
+
+    @staticmethod
+    def _squeeze_label(label: torch.Tensor) -> torch.Tensor:
+        """Remove singleton batch/time/channel axes from pretrain target arrays."""
+        label = label.squeeze()
+        if label.ndim == 3 and label.shape[-1] == 1:
+            label = label.squeeze(-1)
+        return label
+
+    @staticmethod
+    def _worldcover_label(label: torch.Tensor) -> torch.Tensor:
+        """Map raw ESA WorldCover class codes to contiguous class ids."""
+        label = PretrainSubsetDataset._squeeze_label(label).long()
+        if (
+            label.numel() > 0
+            and label.min() >= 0
+            and label.max() < len(WORLDCOVER_CLASSES)
+        ):
+            return label
+        mapped = torch.full_like(label, fill_value=-1)
+        classes = WORLDCOVER_CLASSES.to(label.device)
+        for class_idx, class_code in enumerate(classes):
+            mapped[label == class_code] = class_idx
+        return mapped
+
+    @staticmethod
+    def _osm_label(label: torch.Tensor) -> torch.Tensor:
+        """Convert multi-channel OSM raster labels to a single class id per pixel."""
+        label = label.float().squeeze()
+        if label.ndim != 3:
+            raise ValueError(
+                f"Expected OSM label with 3 dims [H, W, C], got {label.shape}"
+            )
+        if label.shape[0] in (29, 30) and label.shape[-1] not in (29, 30):
+            channels_last = label.movedim(0, -1)
+        else:
+            channels_last = label
+        valid = channels_last.sum(dim=-1) > 0
+        classes = channels_last.argmax(dim=-1).long()
+        return classes.masked_fill(~valid, -1)
+
+    @staticmethod
+    def _srtm_label(label: torch.Tensor) -> torch.Tensor:
+        """Return continuous SRTM elevation labels."""
+        return PretrainSubsetDataset._squeeze_label(label).float()
+
+    def _get_label(self, args: GetItemArgs) -> torch.Tensor:
+        """Load the unnormalized target label for a selected pretrain sample."""
+        if self.target_modality is None:
+            return torch.tensor(0, dtype=torch.long)
+        if self._label_dataset is None:
+            raise RuntimeError("Label dataset is not initialized")
+        _, label_sample = self._label_dataset[args]
+        label = getattr(label_sample, self.target_modality)
+        if label is None:
+            raise ValueError(f"Target modality {self.target_modality} is missing")
+        label = torch.as_tensor(label)
+        if self.target_modality == WORLDCOVER_TARGET_MODALITY:
+            return self._worldcover_label(label)
+        if self.target_modality == OSM_TARGET_MODALITY:
+            return self._osm_label(label)
+        if self.target_modality == SRTM_TARGET_MODALITY:
+            return self._srtm_label(label)
+        raise ValueError(
+            f"Unsupported pretrain target modality: {self.target_modality}"
+        )
 
     def __len__(self) -> int:
         """Return number of samples in the subset."""
@@ -72,5 +206,4 @@ class PretrainSubsetDataset(Dataset):
         )
         _, sample = self._dataset[args]
         masked = MaskedOlmoEarthSample.from_olmoearthsample(sample)
-        dummy_label = torch.tensor(0, dtype=torch.long)
-        return masked, dummy_label
+        return masked, self._get_label(args)

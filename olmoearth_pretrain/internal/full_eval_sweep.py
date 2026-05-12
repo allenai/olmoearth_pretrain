@@ -4,6 +4,7 @@ e.g. python -m olmoearth_pretrain.internal.full_eval_sweep --cluster=ai2/saturn-
 """
 
 import argparse
+import copy
 import json
 import os
 import subprocess  # nosec
@@ -30,6 +31,15 @@ from olmoearth_pretrain.nn.pooling import PoolingType
 LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 Normalization_MODES = ["pre_trained", "dataset"]
 pooling_types = [PoolingType.MEAN, PoolingType.MAX]
+LABEL_PERCENTAGE_TO_PARTITION = {
+    0.01: "0.01x_train",
+    0.02: "0.02x_train",
+    0.05: "0.05x_train",
+    0.10: "0.10x_train",
+    0.20: "0.20x_train",
+    0.50: "0.50x_train",
+    1.00: "default",
+}
 
 logger = getLogger(__name__)
 
@@ -514,6 +524,49 @@ def _get_pooling_type_str(pooling_type: str) -> str:
     return pooling_type_str
 
 
+def parse_label_percentages(label_percentages: str | None) -> list[float]:
+    """Parse comma-separated label percentages as fractions."""
+    if label_percentages is None:
+        return []
+    return [
+        float(value.strip()) for value in label_percentages.split(",") if value.strip()
+    ]
+
+
+def _get_label_percentage(args: argparse.Namespace) -> float | None:
+    """Get the active label percentage for recursive command building."""
+    return getattr(args, "label_percentage", None)
+
+
+def _get_label_percentage_run_suffix(args: argparse.Namespace) -> str:
+    """Build a run-name suffix for active low-label evaluation."""
+    label_percentage = _get_label_percentage(args)
+    if label_percentage is None:
+        return ""
+    return f"_label{label_percentage:g}x"
+
+
+def _get_label_percentage_args(args: argparse.Namespace) -> str:
+    """Build per-task partition overrides for the active low-label setting."""
+    label_percentage = _get_label_percentage(args)
+    if label_percentage is None:
+        return ""
+    try:
+        partition = LABEL_PERCENTAGE_TO_PARTITION[label_percentage]
+    except KeyError:
+        valid = ", ".join(str(k) for k in sorted(LABEL_PERCENTAGE_TO_PARTITION))
+        raise ValueError(
+            f"Unsupported label percentage {label_percentage}. "
+            f"Supported values are: {valid}"
+        )
+    return " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.partition={partition}"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+
+
 LAUNCH_OVERRIDES = "--launch.priority=high --launch.num_gpus=1 --launch.task_name=eval"
 # Overwrite the max duration to enable eval of the last step of the checkpoint
 MAX_DURATION_OVERRIDE = (
@@ -546,7 +599,7 @@ def _build_default_command(
     logger.info(
         f"Running defaults: {norm_mode} normalization, lr={lr}, pooling={pooling_type}"
     )
-    run_name = f"{base_run_name}_df"
+    run_name = f"{base_run_name}_df{_get_label_percentage_run_suffix(args)}"
     cmd_args = ""
 
     module_path = (
@@ -573,6 +626,7 @@ def _build_default_command(
             run_name += f"_dim{embedding_dim}"
     else:
         cmd_args += _get_load_checkpoints_args(args.model)
+    cmd_args += _get_label_percentage_args(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     env_prefix = _get_env_prefix(args, module_path)
@@ -606,7 +660,10 @@ def _build_hyperparameter_command(
     # map default to df
     norm_mode_str = _get_norm_mode_str(norm_mode)
     pooling_type_str = _get_pooling_type_str(pooling_type)
-    run_name = f"{base_run_name}_{norm_mode_str}_lr{lr}_pt{pooling_type_str}"
+    run_name = (
+        f"{base_run_name}_{norm_mode_str}_lr{lr}_pt{pooling_type_str}"
+        f"{_get_label_percentage_run_suffix(args)}"
+    )
     cmd_args = lr_args.format(arg=lr)
 
     if pooling_type != "default":
@@ -635,6 +692,7 @@ def _build_hyperparameter_command(
     if embedding_dim is not None:
         cmd_args += get_embedding_dim_args(embedding_dim)
         run_name += f"_dim{embedding_dim}"
+    cmd_args += _get_label_percentage_args(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
@@ -733,7 +791,10 @@ def _build_command_from_eval_settings(
         else _get_norm_mode_str(list(norm_modes_used)[0])
     )
 
-    run_name = f"{base_run_name}_{norm_str}_{lr_str}_pt{pooling_str}"
+    run_name = (
+        f"{base_run_name}_{norm_str}_{lr_str}_pt{pooling_str}"
+        f"{_get_label_percentage_run_suffix(args)}"
+    )
 
     # Check if quantization is enabled (either from args or from JSON settings)
     quantize_enabled = getattr(args, "quantize_embeddings", False) or any(
@@ -779,6 +840,7 @@ def _build_command_from_eval_settings(
     if embedding_dim is not None:
         cmd_args += get_embedding_dim_args(embedding_dim)
         run_name += f"_dim{embedding_dim}"
+    cmd_args += _get_label_percentage_args(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
@@ -811,6 +873,7 @@ def _build_checkpoint_sweep_command(
     base_run_name = os.path.basename(checkpoint_dir) + "_sweep"
     if args.model_name:
         base_run_name = args.model_name
+    base_run_name += _get_label_percentage_run_suffix(args)
 
     module_path = (
         args.module_path
@@ -825,6 +888,7 @@ def _build_checkpoint_sweep_command(
         if args.size:
             cmd_args += _get_model_size_args(args.model, args.size)
     cmd_args += _get_load_checkpoints_args(args.model)
+    cmd_args += _get_label_percentage_args(args)
 
     env_prefix = (
         _get_env_prefix(args, module_path) + f" CHECKPOINT_DIR={checkpoint_dir}"
@@ -843,6 +907,18 @@ def _build_checkpoint_sweep_command(
 
 def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     """Build the commands for the sweep."""
+    label_percentages = parse_label_percentages(
+        getattr(args, "label_percentages", None)
+    )
+    if label_percentages:
+        commands: list[str] = []
+        for label_percentage in label_percentages:
+            label_args = copy.copy(args)
+            label_args.label_percentages = None
+            label_args.label_percentage = label_percentage
+            commands.extend(build_commands(label_args, extra_cli))
+        return commands
+
     project_name = args.project_name or EVAL_WANDB_PROJECT
     extra = " " + " ".join(extra_cli) if extra_cli else ""
 
@@ -1134,6 +1210,13 @@ def main() -> None:
         default=None,
         help="Comma-separated list of step numbers to evaluate "
         "(e.g. '5000,10000,15000'). Only used with --checkpoint_dir.",
+    )
+    parser.add_argument(
+        "--label_percentages",
+        type=str,
+        default=None,
+        help="Comma-separated train-label fractions to evaluate "
+        "(supported: 0.01,0.02,0.05,0.10,0.20,0.50,1.0).",
     )
 
     args, extra_cli = parser.parse_known_args()
