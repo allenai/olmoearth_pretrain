@@ -7,9 +7,7 @@
             "B1"
           ],
           "dtype": "uint8",
-          "nodata_vals": [
-            255
-          ]
+          "nodata_value": 255
         }
       ],
       "data_source": {

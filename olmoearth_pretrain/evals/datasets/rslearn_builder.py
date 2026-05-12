@@ -78,7 +78,13 @@ def _strip_normalize_transforms(data_config: dict[str, Any]) -> None:
     rslearn's Normalize in, the data would be double-normalized.
     """
     init_args = data_config.get("init_args", {})
-    for config_key in ["default_config", "train_config", "val_config", "test_config"]:
+    for config_key in [
+        "default_config",
+        "train_config",
+        "val_config",
+        "test_config",
+        "predict_config",
+    ]:
         cfg = init_args.get(config_key, {})
         if "transforms" not in cfg:
             continue
