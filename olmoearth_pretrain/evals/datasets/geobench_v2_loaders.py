@@ -374,11 +374,11 @@ class TreeSatAIDataset(_BaseGeobenchDataset):
 # ─── KuroSiwo ─────────────────────────────────────────────────────────────────
 
 _KURO_SIWO_CLASS_MAP = {
-    0: 1,
-    1: 2,
-    2: 3,
-    3: 0,
-}  # No Water→1, Perm Water→2, Flood→3, No Data→0
+    0: 0,
+    1: 1,
+    2: 2,
+    3: -1,
+}  # No Water→0, Perm Water→1, Flood→2, No Data→-1 (ignored)
 
 
 class KuroSiwoDataset(_BaseGeobenchDataset):

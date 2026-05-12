@@ -271,8 +271,16 @@ def _sample_to_olmoearth(
         return OlmoEarthSample(**sample_dict)
 
     if slug == "kuro_siwo" and "image_post" in sample:
-        x1 = sample["image_post"].float().unsqueeze(0)
-        s1_hwtc = _bchw_to_hwtc(x1[0])
+        # Stack pre_1, pre_2, post as 3 sentinel1 timesteps: (2, H, W) × 3 → (2, 3, H, W)
+        # Kuro_siwo SAR is stored in linear power scale; convert to dB to match OlmoEarth stats.
+        def _to_db(x: torch.Tensor) -> torch.Tensor:
+            return 10.0 * torch.log10(x.clamp(min=1e-10))
+
+        pre1 = _to_db(sample["image_pre_1"].float())
+        pre2 = _to_db(sample["image_pre_2"].float())
+        post = _to_db(sample["image_post"].float())
+        s1 = torch.stack([pre1, pre2, post], dim=1)  # (C=2, T=3, H, W)
+        s1_hwtc = _bchw_to_hwtc(s1)
         dem = sample["image_dem"].float()
         if dem.dim() == 3:
             dem = dem.unsqueeze(1)
