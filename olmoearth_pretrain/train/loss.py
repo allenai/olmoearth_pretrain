@@ -298,6 +298,7 @@ class ModalityPatchDiscriminationLoss(Loss):
         self.pred2unit = pred2unit
         self.weight = weight
         self.modality_weights = modality_weights
+        self.last_excess_loss: float | None = None
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
@@ -319,6 +320,8 @@ class ModalityPatchDiscriminationLoss(Loss):
 
         # Accumulate to the total loss
         total_loss = 0
+        excess_sum = 0.0
+        excess_count = 0
         for all_preds, all_masks, all_targets, modality in zip(
             modality_preds, modality_masks, modality_targets, targets.modalities
         ):
@@ -356,8 +359,12 @@ class ModalityPatchDiscriminationLoss(Loss):
                     labels.flatten(0, 1),
                     reduction="none",
                 ) * (self.tau * 2)
-                loss = loss.mean()
-                losses.append(loss)
+                sample_loss = loss.mean()
+                losses.append(sample_loss)
+                excess_sum += float(sample_loss.detach().item()) - math.log(
+                    int(c.item())
+                )
+                excess_count += 1
                 start = end
             if len(losses) == 0:
                 # If no losses were computed, skip this modality
@@ -368,6 +375,7 @@ class ModalityPatchDiscriminationLoss(Loss):
                 loss = loss * self.modality_weights[modality]
             total_loss += loss
 
+        self.last_excess_loss = excess_sum / max(excess_count, 1)
         return self.weight * total_loss
 
 

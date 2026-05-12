@@ -281,6 +281,15 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             total_batch_loss,
             ReduceType.mean,
         )
+        if (
+            hasattr(self.base_loss, "last_excess_loss")
+            and self.base_loss.last_excess_loss is not None
+        ):
+            self.trainer.record_metric(
+                "train/excess_loss",
+                torch.tensor(self.base_loss.last_excess_loss, device=self.device),
+                ReduceType.mean,
+            )
         if self.contrastive_loss is not None:
             self.trainer.record_metric(
                 f"train/{self.contrastive_loss.name}",
