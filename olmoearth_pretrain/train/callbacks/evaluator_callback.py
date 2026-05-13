@@ -543,6 +543,7 @@ class DownstreamEvaluator:
             primary_metric_class=self.primary_metric_class,
             ft_grad_accum_steps=self.ft_grad_accum_steps,
             head_type=self.ft_head_type,  # type: ignore[arg-type]
+            use_dice_loss=self.use_dice_loss,
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"

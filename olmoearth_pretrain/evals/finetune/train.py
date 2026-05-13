@@ -41,6 +41,39 @@ from olmoearth_pretrain.evals.finetune.model import (
 from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
 
 
+def _dice_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    ignore_index: int = -1,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Soft multi-class dice loss with ignore_index masking.
+
+    Args:
+        logits: (B, C, H, W) raw logits.
+        targets: (B, H, W) integer class labels.
+        ignore_index: label value to exclude from loss.
+        eps: smoothing constant for numerical stability.
+    """
+    valid_mask = targets != ignore_index  # (B, H, W)
+    targets_clamped = targets.clone()
+    targets_clamped[~valid_mask] = 0
+
+    probs = torch.softmax(logits.float(), dim=1)  # (B, C, H, W)
+
+    targets_one_hot = torch.zeros_like(probs)
+    targets_one_hot.scatter_(1, targets_clamped.unsqueeze(1), 1.0)
+
+    mask = valid_mask.unsqueeze(1).float()
+    probs = probs * mask
+    targets_one_hot = targets_one_hot * mask
+
+    intersection = (probs * targets_one_hot).sum(dim=(0, 2, 3))
+    cardinality = (probs + targets_one_hot).sum(dim=(0, 2, 3))
+    dice_per_class = (2.0 * intersection + eps) / (cardinality + eps)
+    return 1.0 - dice_per_class.mean()
+
+
 def _primary_metric_higher_is_better(
     task_type: TaskType, primary_metric: EvalMetric | None
 ) -> bool:
@@ -175,6 +208,7 @@ def run_finetune_eval(
     primary_metric_class: int | None = None,
     ft_grad_accum_steps: int = 1,
     head_type: HeadType = "linear",
+    use_dice_loss: bool = False,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
     accum_steps = max(1, ft_grad_accum_steps)
@@ -247,6 +281,16 @@ def run_finetune_eval(
         )
     elif task_config.task_type == TaskType.REGRESSION:
         loss_fn = nn.MSELoss()
+    elif use_dice_loss:
+        ce_fn = nn.CrossEntropyLoss(ignore_index=-1)
+
+        class _CombinedLoss(nn.Module):
+            def forward(
+                self, logits: torch.Tensor, targets: torch.Tensor
+            ) -> torch.Tensor:
+                return ce_fn(logits, targets) + _dice_loss(logits, targets)
+
+        loss_fn = _CombinedLoss()
     else:
         loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
 
