@@ -407,79 +407,132 @@ PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py
 
 # Auxiliary probe eval set: drawn from the osmbig corpus, which is disjoint
 # from the osm_sampling pretraining corpus used in scripts/official/*. Using
-# osmbig keeps WorldCover/OSM/SRTM probes out-of-sample.
+# osmbig keeps WorldCover/OSM/SRTM probes out-of-sample. The other map
+# modalities (CDL, WORLDCEREAL, WRI canopy) aren't present in osmbig, so their
+# probes fall back to PRETRAIN_SUBSET_H5PY_DIR (in-distribution).
 PRETRAIN_AUX_EVAL_H5PY_DIR = "/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928"
+
+MAP_MODALITY_PROBE_INPUTS = [
+    Modality.SENTINEL2_L2A.name,
+    Modality.SENTINEL1.name,
+    Modality.LANDSAT.name,
+]
+
+
+def _map_modality_probe(
+    *,
+    dataset: str,
+    target_modality: str,
+    primary_metric: EvalMetric,
+    h5py_dir: str,
+    split_strategy: str = "random",
+) -> DownstreamTaskConfig:
+    """Build a uniform DownstreamTaskConfig for a decode-only map modality probe."""
+    return DownstreamTaskConfig(
+        dataset=dataset,
+        embedding_batch_size=16,
+        probe_batch_size=4,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        eval_interval=Duration.epochs(10),
+        input_modalities=MAP_MODALITY_PROBE_INPUTS,
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        probe_lr=0.01,
+        primary_metric=primary_metric,
+        h5py_dir=h5py_dir,
+        pretrain_target_modality=target_modality,
+        pretrain_train_samples=6144,
+        pretrain_valid_samples=3072,
+        pretrain_test_samples=3072,
+        pretrain_split_strategy=split_strategy,
+    )
+
 
 EVAL_TASKS.update(
     {
-        "pretrain_worldcover_probe": DownstreamTaskConfig(
+        # Out-of-sample probes (osmbig).
+        "pretrain_worldcover_probe": _map_modality_probe(
             dataset="pretrain_subset_worldcover",
-            embedding_batch_size=16,
-            probe_batch_size=4,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False,
-            eval_interval=Duration.epochs(10),
-            input_modalities=[
-                Modality.SENTINEL2_L2A.name,
-                Modality.SENTINEL1.name,
-                Modality.LANDSAT.name,
-            ],
-            epochs=50,
-            eval_mode=EvalMode.LINEAR_PROBE,
-            probe_lr=0.01,
+            target_modality=Modality.WORLDCOVER.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
-            pretrain_target_modality=Modality.WORLDCOVER.name,
-            pretrain_train_samples=6144,
-            pretrain_valid_samples=3072,
-            pretrain_test_samples=3072,
         ),
-        "pretrain_osm_probe": DownstreamTaskConfig(
+        "pretrain_osm_probe": _map_modality_probe(
             dataset="pretrain_subset_osm",
-            embedding_batch_size=16,
-            probe_batch_size=4,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False,
-            eval_interval=Duration.epochs(10),
-            input_modalities=[
-                Modality.SENTINEL2_L2A.name,
-                Modality.SENTINEL1.name,
-                Modality.LANDSAT.name,
-            ],
-            epochs=50,
-            eval_mode=EvalMode.LINEAR_PROBE,
-            probe_lr=0.01,
+            target_modality=Modality.OPENSTREETMAP_RASTER.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
-            pretrain_target_modality=Modality.OPENSTREETMAP_RASTER.name,
-            pretrain_train_samples=6144,
-            pretrain_valid_samples=3072,
-            pretrain_test_samples=3072,
         ),
-        "pretrain_srtm_regression": DownstreamTaskConfig(
+        "pretrain_srtm_regression": _map_modality_probe(
             dataset="pretrain_subset_srtm",
-            embedding_batch_size=16,
-            probe_batch_size=4,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False,
-            eval_interval=Duration.epochs(10),
-            input_modalities=[
-                Modality.SENTINEL2_L2A.name,
-                Modality.SENTINEL1.name,
-                Modality.LANDSAT.name,
-            ],
-            epochs=50,
-            eval_mode=EvalMode.LINEAR_PROBE,
-            probe_lr=0.01,
+            target_modality=Modality.SRTM.name,
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
-            pretrain_target_modality=Modality.SRTM.name,
-            pretrain_train_samples=6144,
-            pretrain_valid_samples=3072,
-            pretrain_test_samples=3072,
+        ),
+        # In-distribution probes (osm_sampling) for map modalities absent from osmbig.
+        "pretrain_canopy_regression": _map_modality_probe(
+            dataset="pretrain_subset_canopy",
+            target_modality=Modality.WRI_CANOPY_HEIGHT_MAP.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+        ),
+        "pretrain_cdl_probe": _map_modality_probe(
+            dataset="pretrain_subset_cdl",
+            target_modality=Modality.CDL.name,
+            primary_metric=EvalMetric.MIOU,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+        ),
+        "pretrain_worldcereal_probe": _map_modality_probe(
+            dataset="pretrain_subset_worldcereal",
+            target_modality=Modality.WORLDCEREAL.name,
+            primary_metric=EvalMetric.MIOU,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+        ),
+        # Geographic-holdout variants: train/val/test split by spatial bins
+        # so the test set is geographically disjoint from train.
+        "pretrain_worldcover_probe_geo": _map_modality_probe(
+            dataset="pretrain_subset_worldcover",
+            target_modality=Modality.WORLDCOVER.name,
+            primary_metric=EvalMetric.MIOU,
+            h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
+            split_strategy="geographic",
+        ),
+        "pretrain_osm_probe_geo": _map_modality_probe(
+            dataset="pretrain_subset_osm",
+            target_modality=Modality.OPENSTREETMAP_RASTER.name,
+            primary_metric=EvalMetric.MIOU,
+            h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
+            split_strategy="geographic",
+        ),
+        "pretrain_srtm_regression_geo": _map_modality_probe(
+            dataset="pretrain_subset_srtm",
+            target_modality=Modality.SRTM.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
+            split_strategy="geographic",
+        ),
+        "pretrain_canopy_regression_geo": _map_modality_probe(
+            dataset="pretrain_subset_canopy",
+            target_modality=Modality.WRI_CANOPY_HEIGHT_MAP.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            split_strategy="geographic",
+        ),
+        "pretrain_cdl_probe_geo": _map_modality_probe(
+            dataset="pretrain_subset_cdl",
+            target_modality=Modality.CDL.name,
+            primary_metric=EvalMetric.MIOU,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            split_strategy="geographic",
+        ),
+        "pretrain_worldcereal_probe_geo": _map_modality_probe(
+            dataset="pretrain_subset_worldcereal",
+            target_modality=Modality.WORLDCEREAL.name,
+            primary_metric=EvalMetric.MIOU,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            split_strategy="geographic",
         ),
     }
 )

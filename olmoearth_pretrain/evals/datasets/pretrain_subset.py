@@ -17,6 +17,7 @@ from upath import UPath
 
 from olmoearth_pretrain.data.dataset import GetItemArgs, OlmoEarthDataset
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,13 @@ WORLDCOVER_CLASSES = torch.tensor([10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100])
 OSM_TARGET_MODALITY = "openstreetmap_raster"
 SRTM_TARGET_MODALITY = "srtm"
 WORLDCOVER_TARGET_MODALITY = "worldcover"
+CDL_TARGET_MODALITY = "cdl"
+WORLDCEREAL_TARGET_MODALITY = "worldcereal"
+WRI_CANOPY_TARGET_MODALITY = "wri_canopy_height_map"
+# WorldCereal channel used for the binary "is annual temporary crops" probe.
+WORLDCEREAL_PRIMARY_CHANNEL = 0
+# CDL uses 0 to mark no-data / background.
+CDL_IGNORE_CODE = 0
 
 
 class PretrainSubsetDataset(Dataset):
@@ -50,6 +58,8 @@ class PretrainSubsetDataset(Dataset):
         train_samples: int = DEFAULT_MAX_SAMPLES,
         valid_samples: int = DEFAULT_MAX_SAMPLES,
         test_samples: int = DEFAULT_MAX_SAMPLES,
+        split_strategy: str = "random",
+        geographic_bin_size_deg: float = 5.0,
     ) -> None:
         """Initialize with a fixed reproducible subset of training indices."""
         self.patch_size = patch_size
@@ -89,15 +99,32 @@ class PretrainSubsetDataset(Dataset):
             eligible_positions = self._positions_with_target_present(
                 self._dataset, target_modality
             )
-            selected = self._select_split_indices(
-                total=len(eligible_positions),
-                split=split,
-                seed=label_seed,
-                train_samples=train_samples,
-                valid_samples=valid_samples,
-                test_samples=test_samples,
-            )
-            self._indices = eligible_positions[selected].tolist()
+            if split_strategy == "random":
+                selected = self._select_split_indices(
+                    total=len(eligible_positions),
+                    split=split,
+                    seed=label_seed,
+                    train_samples=train_samples,
+                    valid_samples=valid_samples,
+                    test_samples=test_samples,
+                )
+                self._indices = eligible_positions[selected].tolist()
+            elif split_strategy == "geographic":
+                self._indices = self._geographic_split_positions(
+                    latlons=self._dataset.latlon_distribution,
+                    candidate_positions=eligible_positions,
+                    split=split,
+                    seed=label_seed,
+                    train_samples=train_samples,
+                    valid_samples=valid_samples,
+                    test_samples=test_samples,
+                    bin_size_deg=geographic_bin_size_deg,
+                ).tolist()
+            else:
+                raise ValueError(
+                    f"Unsupported split_strategy '{split_strategy}'. "
+                    f"Expected 'random' or 'geographic'."
+                )
 
     @staticmethod
     def _positions_with_target_present(
@@ -119,6 +146,75 @@ class PretrainSubsetDataset(Dataset):
                 f"after input-modality filtering."
             )
         return eligible_positions
+
+    @staticmethod
+    def _geographic_split_positions(
+        latlons: np.ndarray,
+        candidate_positions: np.ndarray,
+        split: str,
+        seed: int,
+        train_samples: int,
+        valid_samples: int,
+        test_samples: int,
+        bin_size_deg: float = 5.0,
+        train_frac: float = 0.70,
+        valid_frac: float = 0.15,
+    ) -> np.ndarray:
+        """Pick positions for `split` using a deterministic latlon-bin holdout.
+
+        Bins each candidate sample's lat/lon into `bin_size_deg`-degree cells and
+        deterministically assigns whole bins to one of train/valid/test using a
+        seeded RNG. This guarantees the test set is geographically disjoint from
+        train, exercising spatial generalization.
+        """
+        if latlons is None:
+            raise ValueError(
+                "Dataset has no latlon_distribution; geographic split is unavailable."
+            )
+        split_sizes = {
+            "train": train_samples,
+            "valid": valid_samples,
+            "val": valid_samples,
+            "test": test_samples,
+        }
+        if split not in split_sizes:
+            raise ValueError(f"Unsupported split for geographic strategy: {split}")
+        if not (0.0 < train_frac < 1.0 and 0.0 < valid_frac < 1.0 - train_frac):
+            raise ValueError(
+                f"Invalid bucket fractions train={train_frac}, valid={valid_frac}"
+            )
+
+        sample_latlons = latlons[candidate_positions]
+        lat_bin = np.floor(sample_latlons[:, 0] / bin_size_deg).astype(np.int64)
+        lon_bin = np.floor(sample_latlons[:, 1] / bin_size_deg).astype(np.int64)
+
+        unique_bins, inverse = np.unique(
+            np.stack([lat_bin, lon_bin], axis=1), axis=0, return_inverse=True
+        )
+        bin_rng = np.random.RandomState(seed)
+        rolls = bin_rng.random(len(unique_bins))
+        bucket_for_bin = np.where(
+            rolls < train_frac,
+            "train",
+            np.where(rolls < train_frac + valid_frac, "valid", "test"),
+        )
+        normalized_split = "valid" if split == "val" else split
+        in_split_mask = bucket_for_bin[inverse] == normalized_split
+
+        split_positions = candidate_positions[in_split_mask]
+        if split_positions.size == 0:
+            raise ValueError(
+                f"Geographic split '{split}' produced no samples; try a smaller "
+                f"bin_size_deg or check latlon coverage."
+            )
+
+        n_target = split_sizes[split]
+        if split_positions.size > n_target:
+            sample_rng = np.random.RandomState(seed + hash(normalized_split) % 1000)
+            split_positions = sample_rng.choice(
+                split_positions, size=n_target, replace=False
+            )
+        return np.asarray(split_positions, dtype=np.int64)
 
     @staticmethod
     def _select_split_indices(
@@ -203,6 +299,38 @@ class PretrainSubsetDataset(Dataset):
         """Return continuous SRTM elevation labels."""
         return PretrainSubsetDataset._squeeze_label(label).float()
 
+    @staticmethod
+    def _canopy_label(label: torch.Tensor) -> torch.Tensor:
+        """Return continuous WRI canopy height labels (meters)."""
+        return PretrainSubsetDataset._squeeze_label(label).float()
+
+    @staticmethod
+    def _cdl_label(label: torch.Tensor) -> torch.Tensor:
+        """Return CDL class-code labels with no-data pixels marked as ignore."""
+        label = PretrainSubsetDataset._squeeze_label(label).long()
+        return label.masked_fill(label == CDL_IGNORE_CODE, SEGMENTATION_IGNORE_LABEL)
+
+    @staticmethod
+    def _worldcereal_label(label: torch.Tensor) -> torch.Tensor:
+        """Binary segmentation label from a single WorldCereal classification channel.
+
+        WorldCereal stores 8 binary channels. The probe currently targets the
+        primary annual-temporary-crops channel; pixels with no positive label in
+        any channel are treated as no-data.
+        """
+        label = label.float().squeeze()
+        if label.ndim != 3:
+            raise ValueError(
+                f"Expected WorldCereal label with 3 dims [H, W, C], got {label.shape}"
+            )
+        if label.shape[0] in (8,) and label.shape[-1] != 8:
+            channels_last = label.movedim(0, -1)
+        else:
+            channels_last = label
+        valid = channels_last.sum(dim=-1) > 0
+        positive = channels_last[..., WORLDCEREAL_PRIMARY_CHANNEL] > 0
+        return positive.long().masked_fill(~valid, SEGMENTATION_IGNORE_LABEL)
+
     def _get_label(self, args: GetItemArgs) -> torch.Tensor:
         """Load the unnormalized target label for a selected pretrain sample."""
         if self.target_modality is None:
@@ -220,6 +348,12 @@ class PretrainSubsetDataset(Dataset):
             return self._osm_label(label)
         if self.target_modality == SRTM_TARGET_MODALITY:
             return self._srtm_label(label)
+        if self.target_modality == WRI_CANOPY_TARGET_MODALITY:
+            return self._canopy_label(label)
+        if self.target_modality == CDL_TARGET_MODALITY:
+            return self._cdl_label(label)
+        if self.target_modality == WORLDCEREAL_TARGET_MODALITY:
+            return self._worldcereal_label(label)
         raise ValueError(
             f"Unsupported pretrain target modality: {self.target_modality}"
         )
