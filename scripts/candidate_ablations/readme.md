@@ -51,7 +51,9 @@ python3 scripts/candidate_ablations/run_candidate_ablation.py launch base_solo_n
 ```
 
 
-    --train_module.contrastive_config=null \
-    --train_module.sigreg_config.loss_config.type=SIGReg \
-    --train_module.sigreg_config.loss_config.weight=0.05 \
-    --train_module.sigreg_config.loss_config.num_slices=256
+# Run ablations (v1.1)
+
+python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py launch <run_name> <cluster> \
+    --candidate_columns in_top_solo_novelty \
+    --candidate_parquet /path/to/scored_candidates.parquet \
+    --trainer.load_path=...

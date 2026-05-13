@@ -1,7 +1,11 @@
-"""Candidate subset ablation: base osm_sampling + filtered candidates.
+"""Candidate subset ablation using single-bandset + hidden-layer recipe.
+
+Same candidate filtering as run_candidate_ablation.py, but uses the
+single-bandset model with band dropout and patch_embed_hidden_sizes=[64].
 
 Usage:
-    python scripts/candidate_ablations/run_candidate_ablation.py train <run_name> <cluster> \
+    python scripts/candidate_ablations/run_candidate_ablation_single_bandset.py \
+        train <run_name> <cluster> \
         --candidate_columns in_top_combined in_top_solo_novelty \
         --candidate_parquet /path/to/scored_candidates.parquet
 
@@ -19,18 +23,16 @@ import sys
 from pathlib import Path
 
 from candidate_utils import SCORE_COLUMNS, save_candidate_sample_ids_file
-from script_config import (
+from script_config_single_bandset import (
     BASE_H5PY_DIR,
     CANDIDATE_H5PY_DIR,
     DEFAULT_PARQUET_PATH,
+    build_common_components,
     build_dataloader_config,
     build_model_config,
     build_train_module_config,
     build_trainer_config,
     build_visualize_config,
-)
-from script_config import (
-    build_common_components as _build_common_components,
 )
 
 from olmoearth_pretrain.data.concat import OlmoEarthConcatDatasetConfig
@@ -58,29 +60,6 @@ sys.argv = [sys.argv[0]] + _remaining
 
 CANDIDATE_COLUMNS: list[str] = _known.candidate_columns
 CANDIDATE_PARQUET: str = _known.candidate_parquet
-
-
-def build_common_components(
-    script: str, cmd: str, run_name: str, cluster: str, overrides: list[str]
-) -> CommonComponents:
-    """Wrap the default builder to forward candidate args to the Beaker job.
-
-    The module-level argparse strips --candidate_parquet and --candidate_columns
-    from sys.argv so they don't pollute the dotfield overrides that config.merge()
-    expects.  But BeakerLaunchConfig.cmd is built from those same overrides, so
-    the remote job would never see them.  We patch launch.cmd here to re-inject
-    the candidate flags.
-    """
-    common = _build_common_components(script, cmd, run_name, cluster, overrides)
-    if common.launch is not None:
-        extra = (
-            ["--candidate_columns"]
-            + CANDIDATE_COLUMNS
-            + ["--candidate_parquet", CANDIDATE_PARQUET]
-        )
-        # Insert after the 4 positional args (script, cmd, run_name, cluster)
-        common.launch.cmd = common.launch.cmd[:4] + extra + common.launch.cmd[4:]
-    return common
 
 
 def _get_sample_ids_file(parquet_path: str, columns: list[str]) -> str:
