@@ -25,6 +25,8 @@ from olmo_core.train.config import TrainerConfig
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
+from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.common import (
     build_common_components as build_common_components_default,
 )
@@ -42,7 +44,10 @@ from olmoearth_pretrain.train.callbacks import (
     OlmoEarthSpeedMonitorCallback,
     OlmoEarthWandBCallback,
 )
-from olmoearth_pretrain.train.callbacks.evaluator_callback import DownstreamTaskConfig
+from olmoearth_pretrain.train.callbacks.evaluator_callback import (
+    DownstreamTaskConfig,
+    EvalMode,
+)
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
 from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
@@ -78,6 +83,7 @@ DEFAULT_PARQUET_PATH = (
 # ---------------------------------------------------------------------------
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
+LOOP_EVAL_INTERVAL = Duration.steps(5000)
 
 
 def build_common_components(
@@ -301,6 +307,17 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             use_dice_loss=True,
             primary_metric=EvalMetric.CLASS_F1,
             primary_metric_class=1,
+        ),
+        "m_bigearthnet": DownstreamTaskConfig(
+            dataset="m-bigearthnet",
+            embedding_batch_size=64,
+            num_workers=4,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(5),
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            eval_mode=EvalMode.KNN,
+            primary_metric=EvalMetric.MACRO_F1,
         ),
     }
     trainer_config = (
