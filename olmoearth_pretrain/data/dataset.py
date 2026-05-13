@@ -303,6 +303,7 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        filter_sample_ids: list[str] | None = None,
     ):
         """Initialize the dataset.
 
@@ -328,6 +329,8 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            filter_sample_ids: If not None, only include samples whose sample_id
+                (from sample_metadata.csv) is in this list.
 
         Returns:
             None
@@ -368,6 +371,7 @@ class OlmoEarthDataset(Dataset):
             )
         else:
             self.indices_to_filter = None
+        self.filter_sample_ids = filter_sample_ids
 
     def _load_tile_size(self) -> int:
         """Infer the H5 sample tile size for this dataset."""
@@ -427,12 +431,18 @@ class OlmoEarthDataset(Dataset):
         else:
             filter_file_string = ""
 
+        if self.filter_sample_ids is not None:
+            filter_ids_string = f",filter_sample_ids={sorted(self.filter_sample_ids)}"
+        else:
+            filter_ids_string = ""
+
         sha256_hash.update(
             f"tile_path={tile_path},"
             f"supported_modalities={sorted(supported_modalities)},"
             f"sample_size={num_samples},"
             f"dtype={self.dtype}"
-            f"{filter_file_string}".encode()
+            f"{filter_file_string}"
+            f"{filter_ids_string}".encode()
         )
         return sha256_hash.hexdigest()
 
@@ -497,6 +507,25 @@ class OlmoEarthDataset(Dataset):
 
             logger.info(
                 f"Intersected {len(self.indices_to_filter)} samples to yield {self.sample_indices.shape} samples"
+            )
+
+        if self.filter_sample_ids is not None:
+            sample_id_set = set(self.filter_sample_ids)
+            meta_sample_ids = set(metadata_df["sample_id"].astype(str))
+            found_ids = sample_id_set & meta_sample_ids
+            skipped_ids = sample_id_set - meta_sample_ids
+            if skipped_ids:
+                logger.warning(
+                    f"Skipping {len(skipped_ids)}/{len(sample_id_set)} "
+                    f"filter_sample_ids not found in sample_metadata.csv"
+                )
+            matching_indices = metadata_df[
+                metadata_df["sample_id"].astype(str).isin(found_ids)
+            ]["sample_index"].values
+            self.sample_indices = np.intersect1d(self.sample_indices, matching_indices)
+            logger.info(
+                f"Filtered by sample_ids ({len(found_ids)} matched, "
+                f"{len(skipped_ids)} skipped) to {len(self.sample_indices)} samples"
             )
 
     def _filter_sample_indices_by_dataset_percentage(self) -> None:
@@ -891,6 +920,7 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    filter_sample_ids: list[str] | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
