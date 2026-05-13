@@ -117,6 +117,10 @@ class DownstreamTaskConfig:
     primary_metric: EvalMetric | None = None
     # Class index for CLASS_F1 primary metric. Required when primary_metric is CLASS_F1.
     primary_metric_class: int | None = None
+    # Layer-wise LR decay (alternative to freeze+unfreeze). When set, all
+    # backbone params are trainable from epoch 0 with per-layer LR scaling.
+    layer_decay_rate: float | None = None
+    num_encoder_layers: int = 12
     # For pretrain_subset dataset: path to training h5py data
     h5py_dir: str | None = None
     # For pretrain_subset: max samples to load
@@ -180,6 +184,8 @@ class DownstreamEvaluator:
         self.use_dice_loss = task.use_dice_loss
         self.primary_metric = task.primary_metric
         self.primary_metric_class = task.primary_metric_class
+        self.layer_decay_rate = task.layer_decay_rate
+        self.num_encoder_layers = task.num_encoder_layers
         self.h5py_dir = task.h5py_dir
         self.pretrain_max_samples = task.pretrain_max_samples
         self.run_on_test = run_on_test
@@ -531,6 +537,8 @@ class DownstreamEvaluator:
             resume_checkpoint_path=resume_checkpoint_path,
             primary_metric=self.primary_metric,
             primary_metric_class=self.primary_metric_class,
+            layer_decay_rate=self.layer_decay_rate,
+            num_encoder_layers=self.num_encoder_layers,
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"

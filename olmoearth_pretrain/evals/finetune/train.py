@@ -31,6 +31,7 @@ from olmoearth_pretrain.evals.finetune.constants import (
     UNFREEZE_LR_FACTOR,
 )
 from olmoearth_pretrain.evals.finetune.evaluate import eval_cls, eval_seg
+from olmoearth_pretrain.evals.finetune.layer_decay import build_layer_decay_optimizer
 from olmoearth_pretrain.evals.finetune.model import (
     BackboneWithHead,
     set_backbone_trainable,
@@ -148,6 +149,8 @@ def run_finetune_eval(
     resume_checkpoint_path: str | None = None,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    layer_decay_rate: float | None = None,
+    num_encoder_layers: int = 12,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
     if seed is not None:
@@ -188,17 +191,27 @@ def run_finetune_eval(
             primary_metric_class=primary_metric_class,
         )
 
-    # Freeze the backbone for the first portion of epochs
-    freeze_epochs = math.ceil(FREEZE_EPOCH_FRACTION * epochs) if epochs > 0 else 0
-    backbone_unfrozen = freeze_epochs == 0
-    if not backbone_unfrozen:
-        set_backbone_trainable(ft.backbone, False)
-        logger.info(
-            f"Freezing backbone for the first {freeze_epochs} epoch(s) before unfreezing."
+    if layer_decay_rate is not None:
+        # Layer-wise LR decay: all params trainable from epoch 0, no freezing.
+        backbone_unfrozen = True
+        freeze_epochs = 0
+        opt = build_layer_decay_optimizer(
+            ft, lr=lr, layer_decay_rate=layer_decay_rate, num_layers=num_encoder_layers
         )
-
-    current_lr = lr
-    opt = torch.optim.AdamW(ft.parameters(), lr=current_lr)
+        logger.info(
+            f"Using layer-wise LR decay: rate={layer_decay_rate}, "
+            f"num_layers={num_encoder_layers}"
+        )
+    else:
+        # Legacy: freeze backbone then unfreeze with reduced LR.
+        freeze_epochs = math.ceil(FREEZE_EPOCH_FRACTION * epochs) if epochs > 0 else 0
+        backbone_unfrozen = freeze_epochs == 0
+        if not backbone_unfrozen:
+            set_backbone_trainable(ft.backbone, False)
+            logger.info(
+                f"Freezing backbone for the first {freeze_epochs} epoch(s) before unfreezing."
+            )
+        opt = torch.optim.AdamW(ft.parameters(), lr=lr)
     scheduler = ReduceLROnPlateau(
         opt,
         mode="max",
