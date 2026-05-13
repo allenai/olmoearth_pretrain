@@ -19,6 +19,7 @@ python3 scripts/candidate_ablations/run_candidate_ablation.py launch base_solo_n
     --train_module.scheduler.t_max=200000 \
     --trainer.max_duration.value=200000 \
     --trainer.max_duration.unit=steps \
+    --launch.priority=urgent \
     --launch.num_gpus=8 \
     --launch.num_nodes=1 \
     --trainer.callbacks.wandb.project=20260513_candidate_datasets \

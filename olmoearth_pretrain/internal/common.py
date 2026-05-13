@@ -216,7 +216,7 @@ def build_launch_config(
             "pip install uv",
             # so that we can use uv tools
             'export PATH="/root/.local/bin:$PATH" ',
-            "uv sync --locked --all-extras",
+            "uv sync --locked --extra all-no-flash",
             # activate the uv venv
             "venv_path=$(uv run python -c 'import sys; print(sys.executable)')",
             'source "$(dirname "$venv_path")/activate"',
