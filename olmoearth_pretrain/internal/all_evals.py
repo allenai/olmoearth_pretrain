@@ -405,11 +405,16 @@ EVAL_TASKS = {
 
 PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"
 
+# Auxiliary probe eval set: drawn from the osmbig corpus, which is disjoint
+# from the osm_sampling pretraining corpus used in scripts/official/*. Using
+# osmbig keeps WorldCover/OSM/SRTM probes out-of-sample.
+PRETRAIN_AUX_EVAL_H5PY_DIR = "/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928"
+
 EVAL_TASKS.update(
     {
         "pretrain_worldcover_probe": DownstreamTaskConfig(
             dataset="pretrain_subset_worldcover",
-            embedding_batch_size=4,
+            embedding_batch_size=16,
             probe_batch_size=4,
             num_workers=2,
             pooling_type=PoolingType.MEAN,
@@ -424,15 +429,15 @@ EVAL_TASKS.update(
             eval_mode=EvalMode.LINEAR_PROBE,
             probe_lr=0.01,
             primary_metric=EvalMetric.MIOU,
-            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
             pretrain_target_modality=Modality.WORLDCOVER.name,
-            pretrain_train_samples=512,
-            pretrain_valid_samples=512,
-            pretrain_test_samples=512,
+            pretrain_train_samples=6144,
+            pretrain_valid_samples=3072,
+            pretrain_test_samples=3072,
         ),
         "pretrain_osm_probe": DownstreamTaskConfig(
             dataset="pretrain_subset_osm",
-            embedding_batch_size=4,
+            embedding_batch_size=16,
             probe_batch_size=4,
             num_workers=2,
             pooling_type=PoolingType.MEAN,
@@ -447,15 +452,15 @@ EVAL_TASKS.update(
             eval_mode=EvalMode.LINEAR_PROBE,
             probe_lr=0.01,
             primary_metric=EvalMetric.MIOU,
-            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
             pretrain_target_modality=Modality.OPENSTREETMAP_RASTER.name,
-            pretrain_train_samples=512,
-            pretrain_valid_samples=512,
-            pretrain_test_samples=512,
+            pretrain_train_samples=6144,
+            pretrain_valid_samples=3072,
+            pretrain_test_samples=3072,
         ),
         "pretrain_srtm_regression": DownstreamTaskConfig(
             dataset="pretrain_subset_srtm",
-            embedding_batch_size=4,
+            embedding_batch_size=16,
             probe_batch_size=4,
             num_workers=2,
             pooling_type=PoolingType.MEAN,
@@ -470,11 +475,11 @@ EVAL_TASKS.update(
             eval_mode=EvalMode.LINEAR_PROBE,
             probe_lr=0.01,
             primary_metric=EvalMetric.NEG_RMSE,
-            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
             pretrain_target_modality=Modality.SRTM.name,
-            pretrain_train_samples=512,
-            pretrain_valid_samples=512,
-            pretrain_test_samples=512,
+            pretrain_train_samples=6144,
+            pretrain_valid_samples=3072,
+            pretrain_test_samples=3072,
         ),
     }
 )

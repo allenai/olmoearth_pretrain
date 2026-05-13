@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import Dataset
 from upath import UPath
@@ -65,28 +66,59 @@ class PretrainSubsetDataset(Dataset):
         self._dataset.prepare()
         self._label_dataset = None
         if target_modality is not None:
+            # Include the input modalities so extract_hwt_from_sample_dict has a
+            # spatially-present modality to read H/W/T from even when the
+            # (often non-multitemporal) target is missing for a given sample.
             self._label_dataset = OlmoEarthDataset(
                 h5py_dir=UPath(h5py_dir),
-                training_modalities=[target_modality],
+                training_modalities=list(training_modalities) + [target_modality],
                 dtype=np.float32,
                 normalize=False,
             )
             self._label_dataset.prepare()
+            # Align positional indexing with the input dataset so the same
+            # GetItemArgs.idx resolves to the same H5 sample for both.
+            self._label_dataset.sample_indices = self._dataset.sample_indices.copy()
 
-        total = len(self._dataset)
         if target_modality is None:
+            total = len(self._dataset)
             n = min(max_samples, total)
             rng = np.random.RandomState(seed)
             self._indices = rng.choice(total, size=n, replace=False).tolist()
         else:
-            self._indices = self._select_split_indices(
-                total=total,
+            eligible_positions = self._positions_with_target_present(
+                self._dataset, target_modality
+            )
+            selected = self._select_split_indices(
+                total=len(eligible_positions),
                 split=split,
                 seed=label_seed,
                 train_samples=train_samples,
                 valid_samples=valid_samples,
                 test_samples=test_samples,
             )
+            self._indices = eligible_positions[selected].tolist()
+
+    @staticmethod
+    def _positions_with_target_present(
+        dataset: OlmoEarthDataset, target_modality: str
+    ) -> np.ndarray:
+        """Positions into dataset.sample_indices whose H5 sample has the target."""
+        metadata_df = pd.read_csv(str(dataset.sample_metadata_path))
+        if target_modality not in metadata_df.columns:
+            raise ValueError(
+                f"Target modality '{target_modality}' has no presence column in "
+                f"{dataset.sample_metadata_path}"
+            )
+        present_by_h5_idx = metadata_df[target_modality].to_numpy() > 0
+        eligible_mask = present_by_h5_idx[dataset.sample_indices]
+        eligible_positions = np.where(eligible_mask)[0]
+        if eligible_positions.size == 0:
+            raise ValueError(
+                f"No samples with target modality '{target_modality}' present "
+                f"after input-modality filtering."
+            )
+        return eligible_positions
 
     @staticmethod
     def _select_split_indices(

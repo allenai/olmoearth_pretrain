@@ -106,6 +106,9 @@ class DownstreamTaskConfig:
     select_best_by_primary_metric: bool = False
     # Subsample train embeddings for faster probe training (None = use all)
     max_train_samples: int | None = None
+    # Seed for the max_train_samples subsample so the subset is reproducible
+    # across checkpoints in a sweep.
+    max_train_samples_seed: int = 42
     # Quantize embeddings to int8 for storage efficiency evaluation
     quantize_embeddings: bool = False
     # Reduce embedding dimensionality via PCA (None = no reduction)
@@ -174,6 +177,7 @@ class DownstreamEvaluator:
         self.linear_probe_eval_interval = task.linear_probe_eval_interval
         self.patch_size = task.patch_size
         self.max_train_samples = task.max_train_samples
+        self.max_train_samples_seed = task.max_train_samples_seed
         self.eval_interval = task.eval_interval
         self.eval_mode = task.eval_mode
         self.probe_type = task.probe_type
@@ -368,9 +372,11 @@ class DownstreamEvaluator:
             and train_embeddings.shape[0] > self.max_train_samples
         ):
             logger.info(
-                f"Subsampling train embeddings from {train_embeddings.shape[0]} to {self.max_train_samples}"
+                f"Subsampling train embeddings from {train_embeddings.shape[0]} "
+                f"to {self.max_train_samples} (seed={self.max_train_samples_seed})"
             )
-            indices = torch.randperm(train_embeddings.shape[0])[
+            generator = torch.Generator().manual_seed(self.max_train_samples_seed)
+            indices = torch.randperm(train_embeddings.shape[0], generator=generator)[
                 : self.max_train_samples
             ]
             train_embeddings = train_embeddings[indices]

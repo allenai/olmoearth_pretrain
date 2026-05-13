@@ -77,7 +77,7 @@ DATASET_TO_CONFIG = {
     "pretrain_subset_osm": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
         imputes=[],
-        num_classes=29,
+        num_classes=30,
         is_multilabel=False,
         height_width=32,
         supported_modalities=[
