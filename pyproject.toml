@@ -13,6 +13,7 @@ dependencies = [
     "einops>=0.7.0",
     "huggingface_hub",
     "numpy>=1.26.4",
+    "setuptools<81",
     "torch>=2.7,<2.8",
     "universal-pathlib>=0.2.5",
 ]

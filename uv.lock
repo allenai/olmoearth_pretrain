@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11, <3.14"
 resolution-markers = [
     "python_full_version >= '3.13' and platform_machine == 'ARM64' and sys_platform == 'win32' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra != 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval'",
@@ -245,7 +245,7 @@ version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "frozenlist" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/62/06741b579156360248d1ec624842ad0edf697050bbaf7c3e46394e106ad1/aiosignal-1.4.0.tar.gz", hash = "sha256:f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7", size = 25007, upload-time = "2025-07-03T22:54:43.528Z" }
 wheels = [
@@ -329,7 +329,7 @@ version = "4.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "idna" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/19/14/2c5dd9f512b66549ae92767a9c7b330ae88e1932ca57876909410251fe13/anyio-4.13.0.tar.gz", hash = "sha256:334b70e641fd2221c1505b3890c69882fe4a2df910cba14d97019b90b24439dc", size = 231622, upload-time = "2026-03-24T12:59:09.671Z" }
 wheels = [
@@ -756,7 +756,7 @@ name = "cffi"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "pycparser", marker = "implementation_name != 'PyPy'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/eb/56/b1ba7935a17738ae8453301356628e8147c79dbb825bcbc73dc7401f9846/cffi-2.0.0.tar.gz", hash = "sha256:44d1b5909021139fe36001ae048dbdde8214afa20200eda0f64c068cac5d5529", size = 523588, upload-time = "2025-09-08T23:24:04.541Z" }
 wheels = [
@@ -936,7 +936,7 @@ name = "click"
 version = "8.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/bb/63/f9e1ea081ce35720d8b92acde70daaedace594dc93b693c869e0d5910718/click-8.3.3.tar.gz", hash = "sha256:398329ad4837b2ff7cbe1dd166a4c0f8900c3ca3a218de04466f38f6497f18a2", size = 328061, upload-time = "2026-04-22T15:11:27.506Z" }
 wheels = [
@@ -1050,7 +1050,7 @@ name = "cryptography"
 version = "46.0.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/47/93/ac8f3d5ff04d54bc814e961a43ae5b0b146154c89c61b47bb07557679b18/cryptography-46.0.7.tar.gz", hash = "sha256:e4cfd68c5f3e0bfdad0d38e023239b96a2fe84146481852dffbcca442c245aa5", size = 750652, upload-time = "2026-04-08T01:57:54.692Z" }
 wheels = [
@@ -1145,7 +1145,7 @@ name = "docker"
 version = "7.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "requests" },
     { name = "urllib3" },
 ]
@@ -2025,7 +2025,7 @@ name = "gunicorn"
 version = "25.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "packaging", marker = "(python_full_version < '3.13' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (python_full_version < '3.13' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'win32' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform != 'win32' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra != 'extra-18-olmoearth-pretrain-eval') or (extra != 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "packaging", marker = "(python_full_version < '3.13' and platform_machine != 'ARM64') or sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c4/f4/e78fa054248fab913e2eab0332c6c2cb07421fca1ce56d8fe43b6aef57a4/gunicorn-25.3.0.tar.gz", hash = "sha256:f74e1b2f9f76f6cd1ca01198968bd2dd65830edc24b6e8e4d78de8320e2fe889", size = 634883, upload-time = "2026-03-27T00:00:26.092Z" }
 wheels = [
@@ -2185,7 +2185,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
-    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'" },
     { name = "httpx" },
     { name = "packaging" },
     { name = "pyyaml" },
@@ -3259,7 +3259,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.7.1.26"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "nvidia-cublas-cu12", marker = "platform_machine != 'aarch64' and sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/2e/ec5dda717eeb1de3afbbbb611ca556f9d6d057470759c6abd36d72f0063b/nvidia_cudnn_cu12-9.7.1.26-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:848a61d40ef3b32bd4e1fadb599f0cf04a4b942fbe5fb3be572ad75f9b8c53ef", size = 725862213, upload-time = "2025-02-06T22:14:57.169Z" },
@@ -3272,7 +3272,7 @@ name = "nvidia-cufft-cu12"
 version = "11.3.3.41"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine != 'aarch64' and sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/72/95/6157cb45a49f5090a470de42353a22a0ed5b13077886dca891b4b0e350fe/nvidia_cufft_cu12-11.3.3.41-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:68509dcd7e3306e69d0e2d8a6d21c8b25ed62e6df8aac192ce752f17677398b5", size = 193108626, upload-time = "2025-01-23T17:55:49.192Z" },
@@ -3304,9 +3304,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.7.2.55"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-cusparse-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "nvidia-cublas-cu12", marker = "platform_machine != 'aarch64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusparse-cu12", marker = "platform_machine != 'aarch64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine != 'aarch64' and sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8c/ce/4214a892e804b20bf66d04f04a473006fc2d3dac158160ef85f1bc906639/nvidia_cusolver_cu12-11.7.2.55-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:0fd9e98246f43c15bee5561147ad235dfdf2d037f5d07c9d41af3f7f72feb7cc", size = 260094827, upload-time = "2025-01-23T17:58:17.586Z" },
@@ -3319,7 +3319,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.5.7.53"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine != 'aarch64' and sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2e/a2/313db0453087f5324a5900380ca2e57e050c8de76f407b5e11383dc762ae/nvidia_cusparse_cu12-12.5.7.53-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:d869c6146ca80f4305b62e02d924b4aaced936f8173e3cef536a67eed2a91af1", size = 291963692, upload-time = "2025-01-23T17:59:40.325Z" },
@@ -3384,6 +3384,7 @@ dependencies = [
     { name = "einops", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-18-olmoearth-pretrain-dataset-creation' or (extra != 'extra-18-olmoearth-pretrain-all-no-flash' and extra != 'extra-18-olmoearth-pretrain-eval')" },
     { name = "huggingface-hub" },
     { name = "numpy" },
+    { name = "setuptools" },
     { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
     { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
     { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
@@ -3568,6 +3569,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.1" },
     { name = "satlaspretrain-models", marker = "extra == 'eval'", specifier = ">=0.3.1" },
     { name = "scikit-learn", marker = "extra == 'eval'", specifier = ">=1.7.2" },
+    { name = "setuptools", specifier = "<81" },
     { name = "shapely", marker = "extra == 'training'", specifier = ">=2" },
     { name = "terratorch", marker = "extra == 'eval'", specifier = "==1.1" },
     { name = "timm", marker = "extra == 'eval'", specifier = "==1.0.20" },
@@ -4539,7 +4541,7 @@ name = "pytest"
 version = "9.0.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
     { name = "iniconfig" },
     { name = "packaging" },
     { name = "pluggy" },
@@ -5463,11 +5465,11 @@ wheels = [
 
 [[package]]
 name = "setuptools"
-version = "82.0.1"
+version = "80.10.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/4f/db/cfac1baf10650ab4d1c111714410d2fbb77ac5a616db26775db562c8fab2/setuptools-82.0.1.tar.gz", hash = "sha256:7d872682c5d01cfde07da7bccc7b65469d3dca203318515ada1de5eda35efbf9", size = 1152316, upload-time = "2026-03-09T12:47:17.221Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/76/95/faf61eb8363f26aa7e1d762267a8d602a1b26d4f3a1e758e92cb3cb8b054/setuptools-80.10.2.tar.gz", hash = "sha256:8b0e9d10c784bf7d262c4e5ec5d4ec94127ce206e8738f29a437945fbc219b70", size = 1200343, upload-time = "2026-01-25T22:38:17.252Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9d/76/f789f7a86709c6b087c5a2f52f911838cad707cc613162401badc665acfe/setuptools-82.0.1-py3-none-any.whl", hash = "sha256:a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb", size = 1006223, upload-time = "2026-03-09T12:47:15.026Z" },
+    { url = "https://files.pythonhosted.org/packages/94/b8/f1f62a5e3c0ad2ff1d189590bfa4c46b4f3b6e49cef6f26c6ee4e575394d/setuptools-80.10.2-py3-none-any.whl", hash = "sha256:95b30ddfb717250edb492926c92b5221f7ef3fbcc2b07579bcd4a27da21d0173", size = 1064234, upload-time = "2026-01-25T22:38:15.216Z" },
 ]
 
 [[package]]
@@ -5958,13 +5960,13 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "filelock", marker = "sys_platform == 'darwin' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "fsspec", marker = "sys_platform == 'darwin' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "jinja2", marker = "sys_platform == 'darwin' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "networkx", marker = "sys_platform == 'darwin' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "setuptools", marker = "(python_full_version >= '3.12' and sys_platform == 'darwin') or (python_full_version < '3.12' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (python_full_version < '3.12' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "sympy", marker = "sys_platform == 'darwin' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "typing-extensions", marker = "sys_platform == 'darwin' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "filelock", marker = "sys_platform == 'darwin'" },
+    { name = "fsspec", marker = "sys_platform == 'darwin'" },
+    { name = "jinja2", marker = "sys_platform == 'darwin'" },
+    { name = "networkx", marker = "sys_platform == 'darwin'" },
+    { name = "setuptools", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
+    { name = "sympy", marker = "sys_platform == 'darwin'" },
+    { name = "typing-extensions", marker = "sys_platform == 'darwin'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.7.1-cp311-none-macosx_11_0_arm64.whl", hash = "sha256:68a352c7f435abb5cb47e2c032dcd1012772ae2bacb6fc8b83b0c1b11874ab3a", upload-time = "2025-06-03T18:28:05Z" },
@@ -6009,13 +6011,13 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform != 'darwin' and sys_platform != 'linux' and extra != 'extra-18-olmoearth-pretrain-all-no-flash' and extra != 'extra-18-olmoearth-pretrain-dataset-creation' and extra != 'extra-18-olmoearth-pretrain-eval'",
 ]
 dependencies = [
-    { name = "filelock", marker = "(sys_platform != 'darwin' and sys_platform != 'linux') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "fsspec", marker = "(sys_platform != 'darwin' and sys_platform != 'linux') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "jinja2", marker = "(sys_platform != 'darwin' and sys_platform != 'linux') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "networkx", marker = "(sys_platform != 'darwin' and sys_platform != 'linux') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "setuptools", marker = "(python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'linux') or (python_full_version < '3.12' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (python_full_version < '3.12' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "sympy", marker = "(sys_platform != 'darwin' and sys_platform != 'linux') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "typing-extensions", marker = "(sys_platform != 'darwin' and sys_platform != 'linux') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "filelock", marker = "sys_platform != 'darwin' and sys_platform != 'linux'" },
+    { name = "fsspec", marker = "sys_platform != 'darwin' and sys_platform != 'linux'" },
+    { name = "jinja2", marker = "sys_platform != 'darwin' and sys_platform != 'linux'" },
+    { name = "networkx", marker = "sys_platform != 'darwin' and sys_platform != 'linux'" },
+    { name = "setuptools", marker = "python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'linux'" },
+    { name = "sympy", marker = "sys_platform != 'darwin' and sys_platform != 'linux'" },
+    { name = "typing-extensions", marker = "sys_platform != 'darwin' and sys_platform != 'linux'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.7.1%2Bcpu-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:5fe6045b8f426bf2d0426e4fe009f1667a954ec2aeb82f1bd0bf60c6d7a85445", upload-time = "2025-06-03T18:27:52Z" },
@@ -6046,28 +6048,28 @@ resolution-markers = [
     "python_full_version < '3.12' and platform_machine != 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "filelock", marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "fsspec", marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "jinja2", marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "networkx", marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-cuda-cupti-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-cuda-nvrtc-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-cuda-runtime-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-cudnn-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-cufft-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-cufile-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-curand-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-cusolver-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-cusparse-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-cusparselt-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-nccl-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "nvidia-nvtx-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (platform_machine != 'x86_64' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "setuptools", marker = "(python_full_version >= '3.12' and sys_platform == 'linux') or (python_full_version < '3.12' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (python_full_version < '3.12' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "sympy", marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "triton", marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "typing-extensions", marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "filelock", marker = "sys_platform == 'linux'" },
+    { name = "fsspec", marker = "sys_platform == 'linux'" },
+    { name = "jinja2", marker = "sys_platform == 'linux'" },
+    { name = "networkx", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-cupti-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-nvrtc-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-runtime-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cudnn-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cufft-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cufile-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-curand-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusolver-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusparse-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusparselt-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nccl-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvtx-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "setuptools", marker = "python_full_version >= '3.12' and sys_platform == 'linux'" },
+    { name = "sympy", marker = "sys_platform == 'linux'" },
+    { name = "triton", marker = "sys_platform == 'linux'" },
+    { name = "typing-extensions", marker = "sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.7.1%2Bcu128-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:3a0954c54fd7cb9f45beab1272dece2a05b0e77023c1da33ba32a7919661260f", upload-time = "2025-06-03T18:31:04Z" },
@@ -6170,7 +6172,7 @@ name = "tqdm"
 version = "4.67.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/09/a9/6ba95a270c6f1fbcd8dac228323f2777d886cb206987444e4bce66338dd4/tqdm-4.67.3.tar.gz", hash = "sha256:7d825f03f89244ef73f1d4ce193cb1774a8179fd96f31d7e1dcde62092b960bb", size = 169598, upload-time = "2026-02-03T17:35:53.048Z" }
 wheels = [
@@ -6202,7 +6204,7 @@ name = "triton"
 version = "3.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "setuptools", marker = "sys_platform == 'linux' or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "setuptools", marker = "sys_platform == 'linux'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/21/2f/3e56ea7b58f80ff68899b1dbe810ff257c9d177d288c6b0f55bf2fe4eb50/triton-3.3.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b31e3aa26f8cb3cc5bf4e187bf737cbacf17311e1112b781d4a059353dfd731b", size = 155689937, upload-time = "2025-05-29T23:39:44.182Z" },
