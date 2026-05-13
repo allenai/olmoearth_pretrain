@@ -21,9 +21,10 @@
 
 set -euo pipefail
 
-CLUSTER="ai2/saturn-cirrascale"
+CLUSTER="ai2/saturn"
 WANDB_PROJECT="2026_05_phase2_eval_curves"
 STEPS="50000,100000,150000,200000,250000,300000,350000,400000,450000,500000,550000,600000,650000"
+LAUNCH_PRIORITY="urgent"
 
 BASE_CKPT="/weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/"
 BASE_MODULE="scripts/official/base.py"
@@ -51,6 +52,7 @@ launch_sweep() {
     --project_name="$WANDB_PROJECT" \
     --model_name="$model_name" \
     --task-skip-names="$skip" \
+    --launch.priority="$LAUNCH_PRIORITY" \
     "$@"
 }
 
