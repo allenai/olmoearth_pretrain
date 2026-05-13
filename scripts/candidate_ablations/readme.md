@@ -9,7 +9,7 @@ in_top_drop_xlocal_bridge, in_top_drop_prototypes
 
 
 ```shell
-python3 scripts/candidate_ablations/run_candidate_ablation.py launch base_solo_novelty jupiter \
+python3 scripts/candidate_ablations/run_candidate_ablation.py launch base_solo_novelty ai2/jupiter-cirrascale-2 \
     --candidate_columns in_top_solo_novelty \
     --candidate_parquet /weka/dfive-default/rslearn-eai/datasets/globe_land_grid/s50ix24_embeddings/_scores/selection_top250000.parquet \
     --trainer.load_path=/weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02 \
