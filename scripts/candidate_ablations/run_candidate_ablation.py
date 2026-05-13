@@ -3,7 +3,8 @@
 Usage:
     python scripts/candidate_ablations/run_candidate_ablation.py train <run_name> <cluster> \
         --candidate_columns in_top_combined in_top_solo_novelty \
-        --candidate_parquet /path/to/scored_candidates.parquet
+        --candidate_parquet /path/to/scored_candidates.parquet \
+        --candidate_h5py_dir /path/to/candidate/h5py/dir
 
 Score columns (pick any combination):
     in_top_combined, in_top_solo_novelty, in_top_solo_xglobal_bridge,
@@ -53,11 +54,17 @@ _parser.add_argument(
     default=DEFAULT_PARQUET_PATH,
     help="Path to the scored candidates parquet file.",
 )
+_parser.add_argument(
+    "--candidate_h5py_dir",
+    default=CANDIDATE_H5PY_DIR,
+    help="Path to the candidate h5py data directory.",
+)
 _known, _remaining = _parser.parse_known_args()
 sys.argv = [sys.argv[0]] + _remaining
 
 CANDIDATE_COLUMNS: list[str] = _known.candidate_columns
 CANDIDATE_PARQUET: str = _known.candidate_parquet
+CANDIDATE_H5PY_DIR_RESOLVED: str = _known.candidate_h5py_dir
 
 
 def build_common_components(
@@ -77,6 +84,7 @@ def build_common_components(
             ["--candidate_columns"]
             + CANDIDATE_COLUMNS
             + ["--candidate_parquet", CANDIDATE_PARQUET]
+            + ["--candidate_h5py_dir", CANDIDATE_H5PY_DIR_RESOLVED]
         )
         # Insert after the 4 positional args (script, cmd, run_name, cluster)
         common.launch.cmd = common.launch.cmd[:4] + extra + common.launch.cmd[4:]
@@ -106,7 +114,7 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConf
         training_modalities=common.training_modalities,
     )
     candidate_config = OlmoEarthDatasetConfig(
-        h5py_dir=CANDIDATE_H5PY_DIR,
+        h5py_dir=CANDIDATE_H5PY_DIR_RESOLVED,
         training_modalities=common.training_modalities,
         filter_sample_ids_file=ids_file,
     )

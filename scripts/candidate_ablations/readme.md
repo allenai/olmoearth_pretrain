@@ -12,6 +12,7 @@ in_top_drop_xlocal_bridge, in_top_drop_prototypes
 python3 scripts/candidate_ablations/run_candidate_ablation.py launch base_solo_novelty ai2/jupiter-cirrascale-2 \
     --candidate_columns in_top_solo_novelty \
     --candidate_parquet /weka/dfive-default/rslearn-eai/datasets/globe_land_grid/s50ix24_embeddings/_scores/selection_top250000.parquet \
+    --candidate_h5py_dir /weka/dfive-default/helios/dataset/candidates/h5py_data_w_missing_timesteps_zstd_3_128_x_1/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/693942 \
     --trainer.load_path=/weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02 \
     --train_module.optim_config.lr=0.00008 \
     --train_module.scheduler.warmup_steps=0 \
