@@ -82,7 +82,7 @@ def convert_naip(window: Window, olmoearth_path: UPath) -> None:
         path=dst_fname.parent,
         projection=adjusted_projection,
         bounds=adjusted_bounds,
-        array=image,
+        raster=image,
         fname=dst_fname.name,
     )
     metadata_fname = get_modality_temp_meta_fname(
