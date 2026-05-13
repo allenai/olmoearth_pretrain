@@ -16,8 +16,8 @@
             },
             "aerodrome": {
               "feature_types": [
-                "way",
-                "relation"
+                "WAY",
+                "RELATION"
               ],
               "tag_conditions": {
                 "aeroway": [
@@ -28,7 +28,7 @@
             },
             "airstrip": {
               "feature_types": [
-                "way"
+                "WAY"
               ],
               "tag_conditions": {
                 "aeroway": [
@@ -39,8 +39,8 @@
             },
             "amenity_fuel": {
               "feature_types": [
-                "way",
-                "relation"
+                "WAY",
+                "RELATION"
               ],
               "tag_conditions": {
                 "amenity": [
@@ -51,8 +51,8 @@
             },
             "building": {
               "feature_types": [
-                "way",
-                "relation"
+                "WAY",
+                "RELATION"
               ],
               "tag_conditions": {
                 "building": []
@@ -120,7 +120,7 @@
             },
             "highway": {
               "feature_types": [
-                "way"
+                "WAY"
               ],
               "tag_conditions": {
                 "highway": []
@@ -132,8 +132,8 @@
             },
             "leisure": {
               "feature_types": [
-                "way",
-                "relation"
+                "WAY",
+                "RELATION"
               ],
               "tag_conditions": {
                 "leisure": []
@@ -169,8 +169,8 @@
             },
             "parking": {
               "feature_types": [
-                "way",
-                "relation"
+                "WAY",
+                "RELATION"
               ],
               "tag_conditions": {
                 "amenity": [
@@ -189,8 +189,8 @@
             },
             "power_plant": {
               "feature_types": [
-                "way",
-                "relation"
+                "WAY",
+                "RELATION"
               ],
               "tag_conditions": {
                 "power": [
@@ -204,8 +204,8 @@
             },
             "power_substation": {
               "feature_types": [
-                "way",
-                "relation"
+                "WAY",
+                "RELATION"
               ],
               "tag_conditions": {
                 "power": [
@@ -224,8 +224,8 @@
             },
             "river": {
               "feature_types": [
-                "way",
-                "relation"
+                "WAY",
+                "RELATION"
               ],
               "tag_conditions": {
                 "waterway": [
@@ -238,7 +238,7 @@
             },
             "runway": {
               "feature_types": [
-                "way"
+                "WAY"
               ],
               "tag_conditions": {
                 "aeroway": [
@@ -273,7 +273,7 @@
             },
             "taxiway": {
               "feature_types": [
-                "way"
+                "WAY"
               ],
               "tag_conditions": {
                 "aeroway": [
@@ -292,8 +292,8 @@
             },
             "works": {
               "feature_types": [
-                "way",
-                "relation"
+                "WAY",
+                "RELATION"
               ],
               "tag_conditions": {
                 "man_made": [
