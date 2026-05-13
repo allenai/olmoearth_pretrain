@@ -44,7 +44,9 @@ def load_candidate_sample_ids(
     if isinstance(columns, str):
         columns = [columns]
 
-    df = pd.read_parquet(parquet_path)
+    logger.info(f"Loading parquet file: {parquet_path}")
+    df = pd.read_parquet(parquet_path, columns=["window_name"] + columns)
+    logger.info(f"Loaded parquet with {len(df)} rows.")
 
     missing = [c for c in columns if c not in df.columns]
     if missing:
@@ -61,3 +63,28 @@ def load_candidate_sample_ids(
         f"Selected {len(selected)} unique candidate sample_ids from columns {columns}"
     )
     return selected
+
+
+def save_candidate_sample_ids_file(
+    parquet_path: str | Path,
+    columns: str | list[str],
+    output_path: str | Path,
+) -> Path:
+    """Filter the parquet and write matching sample IDs to a text file.
+
+    If the output file already exists it is reused without re-reading the parquet.
+
+    Returns:
+        Path to the written file.
+    """
+    output_path = Path(output_path)
+    if output_path.exists():
+        n_lines = sum(1 for _ in output_path.open())
+        logger.info(f"Reusing existing sample IDs file {output_path} ({n_lines} IDs)")
+        return output_path
+
+    sample_ids = load_candidate_sample_ids(parquet_path, columns)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(sample_ids) + "\n")
+    logger.info(f"Wrote {len(sample_ids)} sample IDs to {output_path}")
+    return output_path

@@ -13,10 +13,12 @@ Score columns (pick any combination):
 """
 
 import argparse
+import hashlib
 import logging
 import sys
+from pathlib import Path
 
-from candidate_utils import SCORE_COLUMNS, load_candidate_sample_ids
+from candidate_utils import SCORE_COLUMNS, save_candidate_sample_ids_file
 from script_config import (
     BASE_H5PY_DIR,
     CANDIDATE_H5PY_DIR,
@@ -56,15 +58,23 @@ CANDIDATE_COLUMNS: list[str] = _known.candidate_columns
 CANDIDATE_PARQUET: str = _known.candidate_parquet
 
 
+def _get_sample_ids_file(parquet_path: str, columns: list[str]) -> str:
+    """Get a deterministic path for the cached sample IDs file.
+
+    Written next to the parquet with a hash-based name so different
+    column selections produce different files.
+    """
+    key = f"{parquet_path}:{','.join(sorted(columns))}"
+    digest = hashlib.sha256(key.encode()).hexdigest()[:12]
+    return str(Path(parquet_path).parent / f"_sample_ids_{digest}.txt")
+
+
 def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConfig:
     """Build a concat dataset: base osm_sampling + filtered candidate subset."""
-    candidate_sample_ids = load_candidate_sample_ids(
-        CANDIDATE_PARQUET, CANDIDATE_COLUMNS
-    )
-    logger.info(
-        f"Candidate ablation: columns={CANDIDATE_COLUMNS}, "
-        f"num_candidate_samples={len(candidate_sample_ids)}"
-    )
+    ids_file = _get_sample_ids_file(CANDIDATE_PARQUET, CANDIDATE_COLUMNS)
+    print(f"Preparing candidate sample IDs -> {ids_file}", flush=True)
+    save_candidate_sample_ids_file(CANDIDATE_PARQUET, CANDIDATE_COLUMNS, ids_file)
+    logger.info(f"Candidate ablation: columns={CANDIDATE_COLUMNS}, ids_file={ids_file}")
 
     base_config = OlmoEarthDatasetConfig(
         h5py_dir=BASE_H5PY_DIR,
@@ -73,7 +83,7 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConf
     candidate_config = OlmoEarthDatasetConfig(
         h5py_dir=CANDIDATE_H5PY_DIR,
         training_modalities=common.training_modalities,
-        filter_sample_ids=candidate_sample_ids,
+        filter_sample_ids_file=ids_file,
     )
     return OlmoEarthConcatDatasetConfig(
         dataset_configs=[base_config, candidate_config],

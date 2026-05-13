@@ -304,6 +304,7 @@ class OlmoEarthDataset(Dataset):
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
         filter_sample_ids: list[str] | None = None,
+        filter_sample_ids_file: str | None = None,
     ):
         """Initialize the dataset.
 
@@ -331,6 +332,10 @@ class OlmoEarthDataset(Dataset):
             filter_idx_file: If not None, filters indices by the values in this numpy array
             filter_sample_ids: If not None, only include samples whose sample_id
                 (from sample_metadata.csv) is in this list.
+            filter_sample_ids_file: If not None, path to a text file with one sample_id
+                per line. Loaded at init and used like filter_sample_ids. Prefer this
+                over filter_sample_ids for large ID lists to avoid slow config
+                serialization.
 
         Returns:
             None
@@ -371,6 +376,16 @@ class OlmoEarthDataset(Dataset):
             )
         else:
             self.indices_to_filter = None
+        self.filter_sample_ids_file = filter_sample_ids_file
+        if filter_sample_ids_file is not None:
+            if filter_sample_ids is not None:
+                raise ValueError(
+                    "Cannot specify both filter_sample_ids and filter_sample_ids_file"
+                )
+            logger.info(f"Loading sample IDs from {filter_sample_ids_file}")
+            with open(filter_sample_ids_file) as f:
+                filter_sample_ids = [line.strip() for line in f if line.strip()]
+            logger.info(f"Loaded {len(filter_sample_ids)} sample IDs from file")
         self.filter_sample_ids = filter_sample_ids
 
     def _load_tile_size(self) -> int:
@@ -921,6 +936,7 @@ class OlmoEarthDatasetConfig(Config):
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
     filter_sample_ids: list[str] | None = None
+    filter_sample_ids_file: str | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
@@ -940,9 +956,15 @@ class OlmoEarthDatasetConfig(Config):
         Raises:
             ValueError: If any arguments are invalid
         """
-        # Validate supported_modalities
         if not isinstance(self.training_modalities, list):
             raise ValueError("training_modalities must be a list")
+        if (
+            self.filter_sample_ids is not None
+            and self.filter_sample_ids_file is not None
+        ):
+            raise ValueError(
+                "Cannot specify both filter_sample_ids and filter_sample_ids_file"
+            )
 
     @property
     def h5py_dir_upath(self) -> UPath:
