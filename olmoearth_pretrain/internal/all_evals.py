@@ -534,6 +534,30 @@ EVAL_TASKS.update(
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
             split_strategy="geographic",
         ),
+        # Embedding diagnostics on standard downstream datasets, so we can track
+        # representation quality (effective rank / norm / cosine stats) on real
+        # eval distributions alongside the probe metrics.
+        "m_eurosat_embed_diag": DownstreamTaskConfig(
+            dataset="m-eurosat",
+            embedding_batch_size=128,
+            num_workers=0,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+            eval_interval=Duration.epochs(5),
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            eval_mode=EvalMode.EMBEDDING_DIAGNOSTICS,
+        ),
+        "pastis_sentinel2_embed_diag": DownstreamTaskConfig(
+            dataset="pastis",
+            embedding_batch_size=32,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(50),
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            eval_mode=EvalMode.EMBEDDING_DIAGNOSTICS,
+        ),
     }
 )
 
