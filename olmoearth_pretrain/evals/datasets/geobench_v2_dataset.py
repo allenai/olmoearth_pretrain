@@ -168,8 +168,7 @@ def _sample_to_olmoearth(
         hwtc = _bchw_to_hwtc(x)
         return OlmoEarthSample(sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device))
 
-    if "image_s2" in sample:
-        # Generic S2 (+ optional S1) handler — used by benv2.
+    if slug == "benv2":
         s2 = _bchw_to_hwtc(_align_s2_to_sentinel2_l2a(sample["image_s2"].float(), _s2_names(band_order)))
         sample_dict: dict[str, Any] = {"sentinel2_l2a": s2, "timestamps": _timestamps(s2.shape[2], device)}
         if "image_s1" in sample:
