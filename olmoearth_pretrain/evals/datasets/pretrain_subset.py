@@ -246,31 +246,26 @@ class PretrainSubsetDataset(Dataset):
     ) -> list[int]:
         """Select deterministic disjoint target-probe indices.
 
-        The full eligible population is shuffled once, sliced 80/10/10 into
-        train/valid/test, and then capped by the requested per-split sample
-        counts. This avoids overlap between splits while allowing low-label
-        train caps.
+        Shuffles the eligible population once with ``seed`` and slices off
+        exactly ``train_samples`` / ``valid_samples`` / ``test_samples`` items
+        in order. Splits are disjoint by construction; if the eligible pool is
+        smaller than the requested totals the trailing splits shrink first.
         """
-        split_sizes = {
-            "train": train_samples,
-            "valid": valid_samples,
-            "val": valid_samples,
-            "test": test_samples,
-        }
-        if split not in split_sizes:
+        if split not in {"train", "valid", "val", "test"}:
             raise ValueError(f"Unsupported pretrain subset split: {split}")
 
         rng = np.random.RandomState(seed)
         indices = rng.permutation(total)
-        train_end = int(total * 0.80)
-        valid_end = train_end + int(total * 0.10)
+        train_end = min(train_samples, total)
+        valid_end = min(train_end + valid_samples, total)
+        test_end = min(valid_end + test_samples, total)
         split_to_slice = {
             "train": slice(0, train_end),
             "valid": slice(train_end, valid_end),
             "val": slice(train_end, valid_end),
-            "test": slice(valid_end, total),
+            "test": slice(valid_end, test_end),
         }
-        selected = indices[split_to_slice[split]][: split_sizes[split]]
+        selected = indices[split_to_slice[split]]
         if selected.size == 0:
             raise ValueError(
                 f"No samples selected for split {split}; total={total}, "

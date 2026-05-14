@@ -189,6 +189,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         groups_override: list[str] | None = None,
         tags_override: dict[str, str] | None = None,
         label_fraction: float = 1.0,
+        label_fraction_seed: int = 42,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -213,6 +214,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             tags_override: Optional dict of tags to filter windows.
             label_fraction: Fraction of train labels to use for map-style train
                 datasets. Non-train splits always use the full split.
+            label_fraction_seed: Seed for the deterministic label_fraction
+                subsample so the same low-label subset is used across runs.
         """
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
@@ -237,7 +240,7 @@ class RslearnToOlmoEarthDataset(Dataset):
                     "label_fraction is only supported for map-style rslearn train datasets."
                 )
             num_samples = max(1, int(len(model_dataset) * label_fraction))
-            generator = torch.Generator().manual_seed(42)
+            generator = torch.Generator().manual_seed(label_fraction_seed)
             indices = torch.randperm(len(model_dataset), generator=generator)[
                 :num_samples
             ].tolist()
@@ -472,6 +475,7 @@ def from_registry_entry(
     groups_override: list[str] | None = None,
     tags_override: dict[str, str] | None = None,
     label_fraction: float = 1.0,
+    label_fraction_seed: int = 42,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -493,6 +497,8 @@ def from_registry_entry(
             appropriate split value (e.g., {"eval_split": "val"}).
         label_fraction: Fraction of train labels to use for map-style train
             datasets. Non-train splits always use the full split.
+        label_fraction_seed: Seed for the deterministic label_fraction
+            subsample so the same low-label subset is used across runs.
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -573,4 +579,5 @@ def from_registry_entry(
         groups_override=groups_override,
         tags_override=effective_tags,
         label_fraction=label_fraction,
+        label_fraction_seed=label_fraction_seed,
     )

@@ -7,7 +7,7 @@ from olmoearth_pretrain.evals.datasets.pretrain_subset import PretrainSubsetData
 
 
 def test_split_indices_are_disjoint_and_deterministic() -> None:
-    """A single shuffled population is sliced 80/10/10 into disjoint splits."""
+    """A single shuffled population is sliced by configured per-split counts."""
     train = PretrainSubsetDataset._select_split_indices(
         total=100,
         split="train",
@@ -50,9 +50,9 @@ def test_split_indices_are_disjoint_and_deterministic() -> None:
     assert not (set(valid) & set(test))
 
     shuffled = np.random.RandomState(7).permutation(100).tolist()
-    assert set(train).issubset(set(shuffled[:80]))
-    assert set(valid).issubset(set(shuffled[80:90]))
-    assert set(test).issubset(set(shuffled[90:]))
+    assert train == shuffled[:10]
+    assert valid == shuffled[10:18]
+    assert test == shuffled[18:24]
 
 
 def test_worldcover_label_maps_class_codes() -> None:
