@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import math
 import os
 import random
@@ -242,7 +243,7 @@ def run_finetune_eval(
         cooldown=SCHEDULER_COOLDOWN,
     )
     if task_config.task_type == TaskType.CLASSIFICATION:
-        loss_fn: nn.Module = (
+        loss_fn: Any = (
             nn.MultiLabelSoftMarginLoss()
             if task_config.is_multilabel
             else nn.CrossEntropyLoss()
@@ -250,18 +251,8 @@ def run_finetune_eval(
     elif task_config.task_type == TaskType.REGRESSION:
         loss_fn = nn.MSELoss()
     elif use_dice_loss:
-        ce_fn = nn.CrossEntropyLoss(ignore_index=-1)
         num_classes = task_config.num_classes
-
-        class _CombinedLoss(nn.Module):
-            def forward(
-                self, logits: torch.Tensor, targets: torch.Tensor
-            ) -> torch.Tensor:
-                return ce_fn(logits, targets) + weighted_dice_loss(
-                    logits, targets, num_classes
-                )
-
-        loss_fn = _CombinedLoss()
+        loss_fn = functools.partial(weighted_dice_loss, num_classes=num_classes)
     else:
         loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
 
