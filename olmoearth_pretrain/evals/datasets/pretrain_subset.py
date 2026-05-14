@@ -1,8 +1,8 @@
-"""Eval dataset adapter that loads a subset of pretraining data.
+"""Eval dataset adapter for pretraining samples and auxiliary map probes.
 
-Wraps OlmoEarthDataset to expose the eval dataset interface
-(returns MaskedOlmoEarthSample, dummy_label) so it can be used
-with the downstream evaluator callback for embedding diagnostics.
+The dataset returns ``MaskedOlmoEarthSample`` inputs plus either a dummy label
+for embedding diagnostics or a spatial target label for pretrain-derived probe
+tasks such as WorldCover, OSM, SRTM, CDL, canopy height, and WorldCereal.
 """
 
 from __future__ import annotations
@@ -39,10 +39,13 @@ CDL_IGNORE_CODE = 0
 
 
 class PretrainSubsetDataset(Dataset):
-    """Wraps OlmoEarthDataset for use as an eval dataset.
+    """Wrap ``OlmoEarthDataset`` for downstream evaluation.
 
-    Returns (MaskedOlmoEarthSample, dummy_label) to match the eval
-    dataset interface. Uses a fixed subset of indices for reproducibility.
+    When ``target_modality`` is unset, this exposes a deterministic random
+    subset with dummy labels for embedding diagnostics. When ``target_modality``
+    is set, it selects samples where that target is present, creates disjoint
+    train/valid/test splits, and returns normalized inputs with unnormalized
+    target labels.
     """
 
     def __init__(
@@ -62,7 +65,26 @@ class PretrainSubsetDataset(Dataset):
         split_strategy: str = "random",
         geographic_bin_size_deg: float = 5.0,
     ) -> None:
-        """Initialize with a fixed reproducible subset of training indices."""
+        """Initialize a deterministic pretrain eval subset.
+
+        Args:
+            h5py_dir: Path to the pretraining HDF5 dataset directory.
+            training_modalities: Modalities used as model inputs.
+            max_samples: Maximum diagnostic samples when no target modality is set.
+            patch_size: Patch size passed through to ``OlmoEarthDataset``.
+            hw_p: Spatial patch count passed through to ``OlmoEarthDataset``.
+            seed: Random seed for diagnostic subset selection.
+            split: Split name for target probes: ``train``, ``valid``/``val``, or
+                ``test``.
+            target_modality: Optional modality to load as the probe target.
+            label_seed: Random seed for target-probe split assignment.
+            train_samples: Maximum train samples after split assignment.
+            valid_samples: Maximum validation samples after split assignment.
+            test_samples: Maximum test samples after split assignment.
+            split_strategy: ``random`` for shuffled 80/10/10 sample splits or
+                ``geographic`` for shuffled 80/10/10 lat/lon-bin splits.
+            geographic_bin_size_deg: Geographic bin size for spatial holdouts.
+        """
         self.patch_size = patch_size
         self.hw_p = hw_p
         self.max_samples = max_samples
@@ -158,15 +180,14 @@ class PretrainSubsetDataset(Dataset):
         valid_samples: int,
         test_samples: int,
         bin_size_deg: float = 5.0,
-        train_frac: float = 0.70,
-        valid_frac: float = 0.15,
+        train_frac: float = 0.80,
+        valid_frac: float = 0.10,
     ) -> np.ndarray:
         """Pick positions for `split` using a deterministic latlon-bin holdout.
 
         Bins each candidate sample's lat/lon into `bin_size_deg`-degree cells and
-        deterministically assigns whole bins to one of train/valid/test using a
-        seeded RNG. This guarantees the test set is geographically disjoint from
-        train, exercising spatial generalization.
+        shuffles the bins once before slicing them 80/10/10 into train/valid/test.
+        This guarantees split disjointness while preserving geographic holdouts.
         """
         if latlons is None:
             raise ValueError(
@@ -193,12 +214,12 @@ class PretrainSubsetDataset(Dataset):
             np.stack([lat_bin, lon_bin], axis=1), axis=0, return_inverse=True
         )
         bin_rng = np.random.RandomState(seed)
-        rolls = bin_rng.random(len(unique_bins))
-        bucket_for_bin = np.where(
-            rolls < train_frac,
-            "train",
-            np.where(rolls < train_frac + valid_frac, "valid", "test"),
-        )
+        bin_order = bin_rng.permutation(len(unique_bins))
+        train_end = int(len(unique_bins) * train_frac)
+        valid_end = train_end + int(len(unique_bins) * valid_frac)
+        bucket_for_bin = np.full(len(unique_bins), "test", dtype=object)
+        bucket_for_bin[bin_order[:train_end]] = "train"
+        bucket_for_bin[bin_order[train_end:valid_end]] = "valid"
         normalized_split = "valid" if split == "val" else split
         in_split_mask = bucket_for_bin[inverse] == normalized_split
 
@@ -211,10 +232,7 @@ class PretrainSubsetDataset(Dataset):
 
         n_target = split_sizes[split]
         if split_positions.size > n_target:
-            sample_rng = np.random.RandomState(seed + hash(normalized_split) % 1000)
-            split_positions = sample_rng.choice(
-                split_positions, size=n_target, replace=False
-            )
+            split_positions = bin_rng.permutation(split_positions)[:n_target]
         return np.asarray(split_positions, dtype=np.int64)
 
     @staticmethod
@@ -226,7 +244,13 @@ class PretrainSubsetDataset(Dataset):
         valid_samples: int,
         test_samples: int,
     ) -> list[int]:
-        """Select deterministic disjoint index subsets for held-out target probes."""
+        """Select deterministic disjoint target-probe indices.
+
+        The full eligible population is shuffled once, sliced 80/10/10 into
+        train/valid/test, and then capped by the requested per-split sample
+        counts. This avoids overlap between splits while allowing low-label
+        train caps.
+        """
         split_sizes = {
             "train": train_samples,
             "valid": valid_samples,
@@ -238,16 +262,15 @@ class PretrainSubsetDataset(Dataset):
 
         rng = np.random.RandomState(seed)
         indices = rng.permutation(total)
-        train_end = min(train_samples, total)
-        valid_end = min(train_end + valid_samples, total)
-        test_end = min(valid_end + test_samples, total)
+        train_end = int(total * 0.80)
+        valid_end = train_end + int(total * 0.10)
         split_to_slice = {
             "train": slice(0, train_end),
             "valid": slice(train_end, valid_end),
             "val": slice(train_end, valid_end),
-            "test": slice(valid_end, test_end),
+            "test": slice(valid_end, total),
         }
-        selected = indices[split_to_slice[split]]
+        selected = indices[split_to_slice[split]][: split_sizes[split]]
         if selected.size == 0:
             raise ValueError(
                 f"No samples selected for split {split}; total={total}, "
@@ -399,7 +422,7 @@ class PretrainSubsetDataset(Dataset):
         return len(self._indices)
 
     def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
-        """Return (MaskedOlmoEarthSample, dummy_label) for the given index."""
+        """Return a masked input sample and its evaluation label."""
         real_idx = self._indices[idx]
         args = GetItemArgs(
             idx=real_idx,

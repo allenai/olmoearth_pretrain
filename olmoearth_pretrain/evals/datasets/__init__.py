@@ -45,7 +45,12 @@ LABEL_FRACTION_TO_PARTITION = {
 
 
 def fraction_to_partition(label_fraction: float) -> EvalDatasetPartition:
-    """Map a supported train-label fraction to the existing partition name."""
+    """Map a supported train-label fraction to an existing partition name.
+
+    Standard eval datasets use precomputed partition files or GeoBench
+    partition names. Unsupported fractions fail fast so low-label sweeps do not
+    silently fall back to full data.
+    """
     try:
         return LABEL_FRACTION_TO_PARTITION[label_fraction]
     except KeyError:
@@ -56,7 +61,7 @@ def fraction_to_partition(label_fraction: float) -> EvalDatasetPartition:
 
 
 def scale_train_samples(train_samples: int, label_fraction: float) -> int:
-    """Scale a train sample count while keeping non-zero fractions usable."""
+    """Scale pretrain-probe train samples for low-label runs."""
     if not 0 < label_fraction <= 1:
         raise ValueError("label_fraction must be in (0, 1].")
     return max(1, int(train_samples * label_fraction))
@@ -73,7 +78,21 @@ def get_eval_dataset(
     norm_method: str = NormMethod.NORM_NO_CLIP_2_STD,
     **kwargs: Any,
 ) -> Dataset:
-    """Retrieve an eval dataset from the dataset name."""
+    """Build the dataset wrapper for a downstream evaluation task.
+
+    Args:
+        eval_dataset: Registry name or built-in dataset key.
+        split: Split to load: ``train``, ``valid``/``val``, or ``test``.
+        norm_stats_from_pretrained: Whether to use pretraining normalization stats.
+        input_modalities: Optional modality override for multimodal datasets.
+        label_fraction: Fraction of training labels to use for low-label evals.
+        norm_method: Dataset normalization strategy when not using pretrain stats.
+        **kwargs: Dataset-family specific options, including pretrain probe target
+            modality and split sizing.
+
+    Returns:
+        A PyTorch dataset that yields eval samples and labels.
+    """
     if eval_dataset.startswith("pretrain_subset"):
         return PretrainSubsetDataset(
             h5py_dir=kwargs["h5py_dir"],

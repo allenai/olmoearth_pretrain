@@ -95,7 +95,12 @@ def evaluate_checkpoints(
     checkpoint_dir: str,
     steps: list[int] | None = None,
 ) -> None:
-    """Evaluate all checkpoints in checkpoint_dir, logging to one wandb run."""
+    """Evaluate selected checkpoints and stream metrics to one wandb run.
+
+    Each evaluator result is logged as soon as it finishes, with
+    ``checkpoint_step`` included so W&B plots use the training checkpoint step as
+    the x-axis instead of wall-clock eval order.
+    """
     seed_all(config.init_seed)
 
     checkpoints = discover_checkpoints(checkpoint_dir, steps=steps)
@@ -152,9 +157,6 @@ def evaluate_checkpoints(
         load_model_and_optim_state(train_module_dir, model)
         model.to(device)
 
-        # Run all evaluators and collect metrics for this checkpoint
-        metrics: dict[str, float | int] = {"checkpoint_step": step_num}
-
         for evaluator in eval_callback.evaluators:
             if not eval_callback._check_supported_modalities(evaluator):
                 logger.info(
@@ -173,6 +175,7 @@ def evaluate_checkpoints(
 
             val_result = result.val_result
             test_result = result.test_result
+            metrics: dict[str, float | int] = {"checkpoint_step": step_num}
 
             if val_result is not None:
                 metrics[f"eval/{evaluator.evaluation_name}"] = val_result.primary
@@ -199,10 +202,12 @@ def evaluate_checkpoints(
                 f"({eval_time:.1f}s)"
             )
 
-        # Log all metrics for this checkpoint in one call
-        if wandb_callback.enabled and get_rank() == 0:
-            wandb_callback.wandb.log(metrics)
-            logger.info(f"Logged {len(metrics)} metrics for step {step_num}")
+            if wandb_callback.enabled and get_rank() == 0:
+                wandb_callback.wandb.log(metrics)
+                logger.info(
+                    f"Logged {len(metrics)} metrics for "
+                    f"{evaluator.evaluation_name} at step {step_num}"
+                )
 
         gc.collect()
         torch.cuda.empty_cache()

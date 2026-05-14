@@ -211,7 +211,8 @@ class RslearnToOlmoEarthDataset(Dataset):
                 timesteps are derived from data).
             groups_override: Optional list of groups to use instead of model.yaml groups.
             tags_override: Optional dict of tags to filter windows.
-            label_fraction: Fraction of train labels to use.
+            label_fraction: Fraction of train labels to use for map-style train
+                datasets. Non-train splits always use the full split.
         """
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
@@ -490,7 +491,8 @@ def from_registry_entry(
         groups_override: Override groups. If None, no group filtering is applied.
         tags_override: Override tags. If None, uses entry.split_tag_key with the
             appropriate split value (e.g., {"eval_split": "val"}).
-        label_fraction: Fraction of train labels to use.
+        label_fraction: Fraction of train labels to use for map-style train
+            datasets. Non-train splits always use the full split.
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.

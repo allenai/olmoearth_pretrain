@@ -1,12 +1,13 @@
 """Tests for pretrain-subset eval labels."""
 
+import numpy as np
 import torch
 
 from olmoearth_pretrain.evals.datasets.pretrain_subset import PretrainSubsetDataset
 
 
 def test_split_indices_are_disjoint_and_deterministic() -> None:
-    """Train/valid/test subsets should be reproducible and non-overlapping."""
+    """A single shuffled population is sliced 80/10/10 into disjoint splits."""
     train = PretrainSubsetDataset._select_split_indices(
         total=100,
         split="train",
@@ -48,6 +49,11 @@ def test_split_indices_are_disjoint_and_deterministic() -> None:
     assert not (set(train) & set(test))
     assert not (set(valid) & set(test))
 
+    shuffled = np.random.RandomState(7).permutation(100).tolist()
+    assert set(train).issubset(set(shuffled[:80]))
+    assert set(valid).issubset(set(shuffled[80:90]))
+    assert set(test).issubset(set(shuffled[90:]))
+
 
 def test_worldcover_label_maps_class_codes() -> None:
     """WorldCover raw class codes map to contiguous labels."""
@@ -78,3 +84,64 @@ def test_srtm_label_is_continuous() -> None:
 
     assert label.dtype == torch.float32
     assert torch.equal(label, torch.tensor([[1.5, 2.0], [3.25, 4.0]]))
+
+
+def test_geographic_split_is_deterministic() -> None:
+    """Geographic splits should not depend on Python's randomized hash seed."""
+    latlons = torch.stack(
+        [
+            torch.linspace(-40, 40, 100),
+            torch.linspace(-120, 120, 100),
+        ],
+        dim=1,
+    ).numpy()
+    candidate_positions = torch.arange(100).numpy()
+
+    split = PretrainSubsetDataset._geographic_split_positions(
+        latlons=latlons,
+        candidate_positions=candidate_positions,
+        split="train",
+        seed=7,
+        train_samples=10,
+        valid_samples=8,
+        test_samples=6,
+    )
+    split_again = PretrainSubsetDataset._geographic_split_positions(
+        latlons=latlons,
+        candidate_positions=candidate_positions,
+        split="train",
+        seed=7,
+        train_samples=10,
+        valid_samples=8,
+        test_samples=6,
+    )
+
+    assert split.tolist() == split_again.tolist()
+
+
+def test_geographic_splits_are_disjoint() -> None:
+    """Geographic train/valid/test splits should assign bins once, without overlap."""
+    latlons = torch.stack(
+        [
+            torch.linspace(-40, 40, 100),
+            torch.linspace(-120, 120, 100),
+        ],
+        dim=1,
+    ).numpy()
+    candidate_positions = torch.arange(100).numpy()
+
+    kwargs = dict(
+        latlons=latlons,
+        candidate_positions=candidate_positions,
+        seed=7,
+        train_samples=40,
+        valid_samples=10,
+        test_samples=10,
+    )
+    train = PretrainSubsetDataset._geographic_split_positions(split="train", **kwargs)
+    valid = PretrainSubsetDataset._geographic_split_positions(split="valid", **kwargs)
+    test = PretrainSubsetDataset._geographic_split_positions(split="test", **kwargs)
+
+    assert not (set(train.tolist()) & set(valid.tolist()))
+    assert not (set(train.tolist()) & set(test.tolist()))
+    assert not (set(valid.tolist()) & set(test.tolist()))
