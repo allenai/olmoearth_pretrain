@@ -9,11 +9,11 @@ in_top_drop_xlocal_bridge, in_top_drop_prototypes
 
 
 ```shell
-python3 scripts/candidate_ablations/run_candidate_ablation.py launch base_solo_novelty ai2/jupiter-cirrascale-2 \
+python3 scripts/candidate_ablations/run_candidate_ablation.py launch base200k_solo_novelty ai2/jupiter-cirrascale-2 \
     --candidate_columns in_top_solo_novelty \
     --candidate_parquet /weka/dfive-default/rslearn-eai/datasets/globe_land_grid/s50ix24_embeddings/_scores/selection_top250000.parquet \
     --candidate_h5py_dir /weka/dfive-default/helios/dataset/candidates/h5py_data_w_missing_timesteps_zstd_3_128_x_1/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/693942 \
-    --trainer.load_path=/weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02 \
+    --trainer.load_path=/weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step200000 \
     --train_module.optim_config.lr=0.00008 \
     --train_module.scheduler.warmup_steps=0 \
     --train_module.scheduler.alpha_f=0.125 \
@@ -24,16 +24,16 @@ python3 scripts/candidate_ablations/run_candidate_ablation.py launch base_solo_n
     --launch.num_gpus=8 \
     --launch.num_nodes=1 \
     --trainer.callbacks.wandb.project=20260513_candidate_datasets \
-    --trainer.callbacks.wandb.name=base_solo_novelty
+    --trainer.callbacks.wandb.name=base200k_solo_novelty
 ```
 
 
 # BASE Annealing (v1)
 
 ```shell
-    python3 scripts/official/base.py launch base_v1 ai2/jupiter-cirrascale-2 \
+    python3 scripts/official/base.py launch base200k_v1 ai2/jupiter-cirrascale-2 \
     --data_loader.global_batch_size=512 \
-    --trainer.load_path=/weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02 \
+    --trainer.load_path=/weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step200000 \
     --train_module.optim_config.lr=0.00008 \
     --train_module.scheduler.warmup_steps=0 \
     --train_module.scheduler.alpha_f=0.125 \
@@ -44,7 +44,7 @@ python3 scripts/candidate_ablations/run_candidate_ablation.py launch base_solo_n
     --launch.num_nodes=1 \
     --launch.priority=urgent \
     --trainer.callbacks.wandb.project=20260513_candidate_datasets \
-    --trainer.callbacks.wandb.name=base_v1
+    --trainer.callbacks.wandb.name=base200k_v1
 ```
 
 
