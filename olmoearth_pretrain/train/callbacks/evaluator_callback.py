@@ -611,20 +611,28 @@ def _make_other_prefix(prefix: str) -> str:
     return "/".join(parts)
 
 
-def _log_eval_result_to_wandb(
-    wandb_callback: Any, prefix: str, name: str, result: EvalResult
-) -> None:
-    """Log an EvalResult to wandb.
+def eval_result_log_dict(
+    prefix: str, name: str, result: EvalResult
+) -> dict[str, float]:
+    """Build the wandb log dict for an EvalResult.
 
-    Primary metric goes to {prefix}/{name} (e.g. eval/m_eurosat).
-    Non-primary metrics go to eval_other/.../{name}/{metric_name}.
+    Primary metric goes to ``{prefix}/{name}`` (e.g. ``eval/m_eurosat``).
+    Non-primary metrics go to ``{prefix}_other/.../{name}/{metric_name}``.
     """
     other_prefix = _make_other_prefix(prefix)
-    wandb_callback.wandb.log({f"{prefix}/{name}": result.primary})
+    log_dict: dict[str, float] = {f"{prefix}/{name}": result.primary}
     for metric_name, metric_value in result.metrics.items():
         if metric_name == result.primary_metric_key:
             continue
-        wandb_callback.wandb.log({f"{other_prefix}/{name}/{metric_name}": metric_value})
+        log_dict[f"{other_prefix}/{name}/{metric_name}"] = metric_value
+    return log_dict
+
+
+def _log_eval_result_to_wandb(
+    wandb_callback: Any, prefix: str, name: str, result: EvalResult
+) -> None:
+    """Log an EvalResult to wandb using the shared key layout."""
+    wandb_callback.wandb.log(eval_result_log_dict(prefix, name, result))
 
 
 def _record_eval_result(

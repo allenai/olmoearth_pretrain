@@ -68,6 +68,7 @@ from olmoearth_pretrain.train.callbacks import (
 )
 from olmoearth_pretrain.train.callbacks.evaluator_callback import (
     DownstreamEvaluatorCallback,
+    eval_result_log_dict,
 )
 
 logger = logging.getLogger(__name__)
@@ -137,12 +138,17 @@ def evaluate_checkpoints(
     # Tell wandb to use checkpoint_step as the x-axis for eval metrics
     if wandb_callback.enabled and get_rank() == 0:
         wandb_callback.wandb.define_metric("checkpoint_step")
-        wandb_callback.wandb.define_metric("eval/*", step_metric="checkpoint_step")
-        wandb_callback.wandb.define_metric("eval/test/*", step_metric="checkpoint_step")
-        wandb_callback.wandb.define_metric("eval_time/*", step_metric="checkpoint_step")
-        wandb_callback.wandb.define_metric(
-            "eval_embed_diagnostics/*", step_metric="checkpoint_step"
-        )
+        for metric_prefix in (
+            "eval/*",
+            "eval/test/*",
+            "eval_other/*",
+            "eval_other/test/*",
+            "eval_time/*",
+            "eval_embed_diagnostics/*",
+        ):
+            wandb_callback.wandb.define_metric(
+                metric_prefix, step_metric="checkpoint_step"
+            )
 
     # Get the evaluator callback (contains the built evaluator objects)
     eval_callback = trainer.callbacks.get("downstream_evaluator")
@@ -178,14 +184,18 @@ def evaluate_checkpoints(
             metrics: dict[str, float | int] = {"checkpoint_step": step_num}
 
             if val_result is not None:
-                metrics[f"eval/{evaluator.evaluation_name}"] = val_result.primary
-                for k, v in val_result.metrics.items():
-                    metrics[f"eval/{evaluator.evaluation_name}/{k}"] = v
+                metrics.update(
+                    eval_result_log_dict(
+                        "eval", evaluator.evaluation_name, val_result
+                    )
+                )
 
             if eval_callback.run_on_test and test_result is not None:
-                metrics[f"eval/test/{evaluator.evaluation_name}"] = test_result.primary
-                for k, v in test_result.metrics.items():
-                    metrics[f"eval/test/{evaluator.evaluation_name}/{k}"] = v
+                metrics.update(
+                    eval_result_log_dict(
+                        "eval/test", evaluator.evaluation_name, test_result
+                    )
+                )
 
             if result.embedding_diagnostics:
                 for k, v in result.embedding_diagnostics.items():
