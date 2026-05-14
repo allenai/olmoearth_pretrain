@@ -42,7 +42,10 @@ from olmoearth_pretrain.internal.experiment import CommonComponents, main
 
 logger = logging.getLogger(__name__)
 
-# Parse candidate-specific args before olmo-core sees them
+# Parse candidate-specific args before olmo-core sees them.
+# All args are optional at parse time so that eval workers (which re-import
+# this module without the candidate flags) don't crash.  Actual validation
+# happens in build_dataset_config() where the values are needed.
 _parser = argparse.ArgumentParser(add_help=False)
 _parser.add_argument(
     "--candidate_columns",
@@ -53,20 +56,20 @@ _parser.add_argument(
 )
 _parser.add_argument(
     "--candidate_parquet",
-    required=True,
+    default=None,
     help="Path to the scored candidates parquet file.",
 )
 _parser.add_argument(
     "--candidate_h5py_dir",
-    required=True,
+    default=None,
     help="Path to the candidate h5py data directory.",
 )
 _known, _remaining = _parser.parse_known_args()
 sys.argv = [sys.argv[0]] + _remaining
 
 CANDIDATE_COLUMNS: list[str] = _known.candidate_columns
-CANDIDATE_PARQUET: str = _known.candidate_parquet
-CANDIDATE_H5PY_DIR_RESOLVED: str = _known.candidate_h5py_dir
+CANDIDATE_PARQUET: str | None = _known.candidate_parquet
+CANDIDATE_H5PY_DIR_RESOLVED: str | None = _known.candidate_h5py_dir
 
 
 def build_common_components(
@@ -74,7 +77,11 @@ def build_common_components(
 ) -> CommonComponents:
     """Wrap the default builder to forward candidate args to the Beaker job."""
     common = _build_common_components(script, cmd, run_name, cluster, overrides)
-    if common.launch is not None:
+    if (
+        common.launch is not None
+        and CANDIDATE_PARQUET is not None
+        and CANDIDATE_H5PY_DIR_RESOLVED is not None
+    ):
         extra = (
             ["--candidate_columns"]
             + CANDIDATE_COLUMNS
@@ -98,6 +105,11 @@ def _get_sample_ids_file(parquet_path: str, columns: list[str]) -> str:
 
 def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConfig:
     """Build a concat dataset: base osm_sampling + filtered candidate subset."""
+    if CANDIDATE_PARQUET is None or CANDIDATE_H5PY_DIR_RESOLVED is None:
+        raise RuntimeError(
+            "Both --candidate_parquet and --candidate_h5py_dir are required "
+            "for training. Re-run with these flags."
+        )
     ids_file = _get_sample_ids_file(CANDIDATE_PARQUET, CANDIDATE_COLUMNS)
     print(f"Preparing candidate sample IDs -> {ids_file}", flush=True)
     save_candidate_sample_ids_file(CANDIDATE_PARQUET, CANDIDATE_COLUMNS, ids_file)
