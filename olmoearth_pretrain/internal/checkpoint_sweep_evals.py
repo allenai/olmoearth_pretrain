@@ -185,9 +185,7 @@ def evaluate_checkpoints(
 
             if val_result is not None:
                 metrics.update(
-                    eval_result_log_dict(
-                        "eval", evaluator.evaluation_name, val_result
-                    )
+                    eval_result_log_dict("eval", evaluator.evaluation_name, val_result)
                 )
 
             if eval_callback.run_on_test and test_result is not None:
