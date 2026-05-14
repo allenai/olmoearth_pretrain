@@ -31,10 +31,10 @@ python3 scripts/candidate_ablations/run_candidate_ablation.py launch base_solo_n
 # BASE Annealing (v1)
 
 ```shell
-    python3 scripts/official/base.py launch base_masked_all ai2/jupiter-cirrascale-2 \
+    python3 scripts/official/base.py launch base_v1 ai2/jupiter-cirrascale-2 \
     --data_loader.global_batch_size=512 \
-    --trainer.load_path=/weka/.../checkpoint/step_XXXXX \
-    --train_module.optim_config.lr=0.0008 \
+    --trainer.load_path=/weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02 \
+    --train_module.optim_config.lr=0.00008 \
     --train_module.scheduler.warmup_steps=0 \
     --train_module.scheduler.alpha_f=0.125 \
     --train_module.scheduler.t_max=200000 \
@@ -44,11 +44,7 @@ python3 scripts/candidate_ablations/run_candidate_ablation.py launch base_solo_n
     --launch.num_nodes=1 \
     --launch.priority=urgent \
     --trainer.callbacks.wandb.project=20260513_candidate_datasets \
-    --trainer.callbacks.wandb.name=base_sigreg_w005_s256_cont0_masked_all \
-    --train_module.loss_config.loss_config.type=modality_patch_discrimination_masked_negatives \
-    --train_module.loss_config.loss_config.tau=0.1 \
-    --train_module.loss_config.loss_config.mask_negatives_for_modalities='["WORLDCOVER","SRTM","OPENSTREETMAP_RASTER","WRI_CANOPY_HEIGHT_MAP","CDL","WORLDCEREAL"]' \
-    --train_module.loss_config.loss_config.same_target_threshold=0.999
+    --trainer.callbacks.wandb.name=base_v1
 ```
 
 
