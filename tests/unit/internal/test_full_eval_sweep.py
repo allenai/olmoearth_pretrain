@@ -47,8 +47,7 @@ def base_args() -> argparse.Namespace:
         embedding_diagnostics_only=False,
         checkpoint_dir=None,
         steps=None,
-        label_percentages=None,
-        label_percentage=None,
+        label_fraction=1.0,
     )
 
 
@@ -77,8 +76,7 @@ def minimal_args() -> argparse.Namespace:
         embedding_diagnostics_only=False,
         checkpoint_dir=None,
         steps=None,
-        label_percentages=None,
-        label_percentage=None,
+        label_fraction=1.0,
     )
 
 
@@ -465,18 +463,17 @@ class TestBuildCommandsExecution:
             "'[\"m_eurosat\", \"m_bigearthnet\"]'"
         ) in command
 
-    def test_label_percentages_fan_out(self, base_args: argparse.Namespace) -> None:
-        """Label percentages create one command per requested train partition."""
+    def test_label_fraction_overrides(self, base_args: argparse.Namespace) -> None:
+        """Label fraction emits one simple per-task low-label override."""
         base_args.defaults_only = True
-        base_args.label_percentages = "0.01,0.1"
+        base_args.label_fraction = 0.1
 
         commands: list[str] = build_commands(base_args, [])
 
-        assert len(commands) == 2
-        assert "_label0.01x" in commands[0]
-        assert "partition=0.01x_train" in commands[0]
-        assert "_label0.1x" in commands[1]
-        assert "partition=0.10x_train" in commands[1]
+        assert len(commands) == 1
+        assert "_label0.1x" in commands[0]
+        assert "label_fraction=0.1" in commands[0]
+        assert "partition=" not in commands[0]
 
 
 class TestParametrizedTests:

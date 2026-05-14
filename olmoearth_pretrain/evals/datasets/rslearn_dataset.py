@@ -17,7 +17,7 @@ from dateutil.relativedelta import relativedelta
 from einops import rearrange
 from rslearn.train.dataset import ModelDataset as RsModelDataset
 from rslearn.train.model_context import RasterImage
-from torch.utils.data import Dataset, IterableDataset
+from torch.utils.data import Dataset, IterableDataset, Subset
 
 from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS, Modality
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
@@ -188,6 +188,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         num_timesteps: int = 12,
         groups_override: list[str] | None = None,
         tags_override: dict[str, str] | None = None,
+        label_fraction: float = 1.0,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -210,7 +211,15 @@ class RslearnToOlmoEarthDataset(Dataset):
                 timesteps are derived from data).
             groups_override: Optional list of groups to use instead of model.yaml groups.
             tags_override: Optional dict of tags to filter windows.
+            label_fraction: Fraction of train labels to use.
         """
+        if not 0 < label_fraction <= 1:
+            raise ValueError("label_fraction must be in (0, 1].")
+        if label_fraction != 1.0 and split != "train":
+            label_fraction = 1.0
+        if label_fraction != 1.0 and max_samples is not None:
+            raise ValueError("Use either max_samples or label_fraction, not both.")
+
         model_dataset = build_model_dataset(
             model_config=model_config,
             source_path=source_path,
@@ -219,6 +228,19 @@ class RslearnToOlmoEarthDataset(Dataset):
             groups_override=groups_override,
             tags_override=tags_override,
         )
+        if label_fraction != 1.0:
+            if isinstance(model_dataset, IterableDataset) or not hasattr(
+                model_dataset, "__len__"
+            ):
+                raise ValueError(
+                    "label_fraction is only supported for map-style rslearn train datasets."
+                )
+            num_samples = max(1, int(len(model_dataset) * label_fraction))
+            generator = torch.Generator().manual_seed(42)
+            indices = torch.randperm(len(model_dataset), generator=generator)[
+                :num_samples
+            ].tolist()
+            model_dataset = Subset(model_dataset, indices)
 
         if input_modalities is None:
             layers = get_modality_layers(model_config)
@@ -448,6 +470,7 @@ def from_registry_entry(
     input_modalities_override: list[str] | None = None,
     groups_override: list[str] | None = None,
     tags_override: dict[str, str] | None = None,
+    label_fraction: float = 1.0,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -467,6 +490,7 @@ def from_registry_entry(
         groups_override: Override groups. If None, no group filtering is applied.
         tags_override: Override tags. If None, uses entry.split_tag_key with the
             appropriate split value (e.g., {"eval_split": "val"}).
+        label_fraction: Fraction of train labels to use.
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -546,4 +570,5 @@ def from_registry_entry(
         max_samples=max_samples,
         groups_override=groups_override,
         tags_override=effective_tags,
+        label_fraction=label_fraction,
     )

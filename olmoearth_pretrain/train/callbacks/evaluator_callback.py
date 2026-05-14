@@ -18,10 +18,7 @@ from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader, IterableDataset
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.evals.datasets import (
-    EvalDatasetPartition,
-    get_eval_dataset,
-)
+from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
     EvalDatasetConfig,
     TaskType,
@@ -97,7 +94,9 @@ class DownstreamTaskConfig:
     eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
-    partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
+    # Fraction of training labels to use for low-label evals. Dataset-specific
+    # code translates this into fixed partitions or deterministic subsamples.
+    label_fraction: float = 1.0
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: NormMethod = field(
@@ -186,7 +185,7 @@ class DownstreamEvaluator:
         self.eval_interval = task.eval_interval
         self.eval_mode = task.eval_mode
         self.probe_type = task.probe_type
-        self.partition = task.partition
+        self.label_fraction = task.label_fraction
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
@@ -303,7 +302,7 @@ class DownstreamEvaluator:
         eval_ds = get_eval_dataset(
             eval_dataset=self.dataset,
             split=split,
-            partition=self.partition,
+            label_fraction=self.label_fraction,
             norm_stats_from_pretrained=self.norm_stats_from_pretrained,
             input_modalities=self.input_modalities,
             norm_method=self.norm_method,

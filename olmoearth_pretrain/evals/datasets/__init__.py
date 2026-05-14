@@ -33,12 +33,41 @@ class EvalDatasetPartition(StrEnum):
     TRAIN_050X = "0.50x_train"
 
 
+LABEL_FRACTION_TO_PARTITION = {
+    0.01: EvalDatasetPartition.TRAIN_001X,
+    0.02: EvalDatasetPartition.TRAIN_002X,
+    0.05: EvalDatasetPartition.TRAIN_005X,
+    0.10: EvalDatasetPartition.TRAIN_010X,
+    0.20: EvalDatasetPartition.TRAIN_020X,
+    0.50: EvalDatasetPartition.TRAIN_050X,
+    1.00: EvalDatasetPartition.TRAIN1X,
+}
+
+
+def fraction_to_partition(label_fraction: float) -> EvalDatasetPartition:
+    """Map a supported train-label fraction to the existing partition name."""
+    try:
+        return LABEL_FRACTION_TO_PARTITION[label_fraction]
+    except KeyError:
+        valid = ", ".join(f"{value:g}" for value in sorted(LABEL_FRACTION_TO_PARTITION))
+        raise ValueError(
+            f"Unsupported label_fraction {label_fraction}. Supported values are: {valid}"
+        )
+
+
+def scale_train_samples(train_samples: int, label_fraction: float) -> int:
+    """Scale a train sample count while keeping non-zero fractions usable."""
+    if not 0 < label_fraction <= 1:
+        raise ValueError("label_fraction must be in (0, 1].")
+    return max(1, int(train_samples * label_fraction))
+
+
 def get_eval_dataset(
     eval_dataset: str,
     split: str,
     norm_stats_from_pretrained: bool = False,
     input_modalities: list[str] = [],
-    partition: str = EvalDatasetPartition.TRAIN1X,
+    label_fraction: float = 1.0,
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: str = NormMethod.NORM_NO_CLIP_2_STD,
@@ -56,7 +85,9 @@ def get_eval_dataset(
             split=kwargs.get("pretrain_split", split),
             target_modality=kwargs.get("target_modality"),
             label_seed=kwargs.get("pretrain_label_seed", 42),
-            train_samples=kwargs.get("pretrain_train_samples", 512),
+            train_samples=scale_train_samples(
+                kwargs.get("pretrain_train_samples", 512), label_fraction
+            ),
             valid_samples=kwargs.get("pretrain_valid_samples", 512),
             test_samples=kwargs.get("pretrain_test_samples", 512),
             split_strategy=kwargs.get("pretrain_split_strategy", "random"),
@@ -64,6 +95,7 @@ def get_eval_dataset(
         )
     elif eval_dataset.startswith("m-"):
         # m- == "modified for geobench"
+        partition = fraction_to_partition(label_fraction)
         return GeobenchDataset(
             geobench_dir=paths.GEOBENCH_DIR,
             dataset=eval_dataset,
@@ -73,6 +105,7 @@ def get_eval_dataset(
             norm_method=norm_method,
         )
     elif eval_dataset == "mados":
+        partition = fraction_to_partition(label_fraction)
         if norm_stats_from_pretrained:
             logger.warning(
                 "MADOS has very different norm stats than our pretraining dataset"
@@ -85,6 +118,7 @@ def get_eval_dataset(
             norm_method=norm_method,
         )
     elif eval_dataset == "sen1floods11":
+        partition = fraction_to_partition(label_fraction)
         return Sen1Floods11Dataset(
             path_to_splits=paths.FLOODS_DIR,
             split=split,
@@ -93,6 +127,7 @@ def get_eval_dataset(
             norm_method=norm_method,
         )
     elif eval_dataset.startswith("pastis"):
+        partition = fraction_to_partition(label_fraction)
         kwargs = {
             "split": split,
             "partition": partition,
@@ -108,6 +143,7 @@ def get_eval_dataset(
             kwargs["path_to_splits"] = paths.PASTIS_DIR
         return PASTISRDataset(**kwargs)  # type: ignore
     elif eval_dataset == "breizhcrops":
+        partition = fraction_to_partition(label_fraction)
         return BreizhCropsDataset(
             path_to_splits=paths.BREIZHCROPS_DIR,
             split=split,
@@ -123,4 +159,5 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
             input_modalities_override=input_modalities if input_modalities else None,
+            label_fraction=label_fraction,
         )
