@@ -17,7 +17,11 @@ from upath import UPath
 
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 from olmoearth_pretrain.data.dataset import GetItemArgs, OlmoEarthDataset
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue, OlmoEarthSample
+from olmoearth_pretrain.datatypes import (
+    MaskedOlmoEarthSample,
+    MaskValue,
+    OlmoEarthSample,
+)
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 
 logger = logging.getLogger(__name__)
@@ -111,6 +115,9 @@ class PretrainSubsetDataset(Dataset):
             self._label_dataset.prepare()
             # Align positional indexing with the input dataset so the same
             # GetItemArgs.idx resolves to the same H5 sample for both.
+            assert self._dataset.sample_indices is not None, (
+                "OlmoEarthDataset.prepare() must populate sample_indices."
+            )
             self._label_dataset.sample_indices = self._dataset.sample_indices.copy()
 
         if target_modality is None:

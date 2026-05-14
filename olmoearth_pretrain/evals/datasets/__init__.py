@@ -33,7 +33,7 @@ class EvalDatasetPartition(StrEnum):
     TRAIN_050X = "0.50x_train"
 
 
-LABEL_FRACTION_TO_PARTITION = {
+LABEL_FRACTION_TO_PARTITION: dict[float, str] = {
     0.01: EvalDatasetPartition.TRAIN_001X,
     0.02: EvalDatasetPartition.TRAIN_002X,
     0.05: EvalDatasetPartition.TRAIN_005X,
@@ -44,7 +44,7 @@ LABEL_FRACTION_TO_PARTITION = {
 }
 
 
-def fraction_to_partition(label_fraction: float) -> EvalDatasetPartition:
+def fraction_to_partition(label_fraction: float) -> str:
     """Map a supported train-label fraction to an existing partition name.
 
     Standard eval datasets use precomputed partition files or GeoBench
