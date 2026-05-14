@@ -39,6 +39,7 @@ def base_args() -> argparse.Namespace:
         select_best_val=False,
         model_skip_names=None,
         task_skip_names=None,
+        task_names=None,
         size=None,
         load_eval_settings_from_json=False,
         quantize_embeddings=False,
@@ -68,6 +69,7 @@ def minimal_args() -> argparse.Namespace:
         select_best_val=False,
         model_skip_names=None,
         task_skip_names=None,
+        task_names=None,
         size=None,
         load_eval_settings_from_json=False,
         quantize_embeddings=False,
@@ -444,6 +446,24 @@ class TestBuildCommandsExecution:
         assert "CHECKPOINT_STEPS=50000,100000" in command
         assert "official_large" in command
         assert "--model.size=large" in command
+
+    def test_checkpoint_sweep_with_task_names(
+        self, base_args: argparse.Namespace
+    ) -> None:
+        """Checkpoint sweep applies task include filters."""
+        base_args.checkpoint_dir = "/path/to/checkpoints/run"
+        base_args.checkpoint_path = None
+        base_args.task_names = "m_eurosat,m_bigearthnet"
+
+        commands: list[str] = build_commands(base_args, [])
+
+        assert len(commands) == 1
+        command = commands[0]
+        assert "checkpoint_sweep_evals.py" in command
+        assert (
+            "--trainer.callbacks.downstream_evaluator.tasks_to_run="
+            "'[\"m_eurosat\", \"m_bigearthnet\"]'"
+        ) in command
 
     def test_label_percentages_fan_out(self, base_args: argparse.Namespace) -> None:
         """Label percentages create one command per requested train partition."""

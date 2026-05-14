@@ -414,9 +414,8 @@ PRETRAIN_AUX_EVAL_H5PY_DIR = "/weka/dfive-default/helios/dataset/osmbig/h5py_dat
 
 MAP_MODALITY_PROBE_INPUTS = [
     Modality.SENTINEL2_L2A.name,
-    Modality.SENTINEL1.name,
-    Modality.LANDSAT.name,
 ]
+MAP_MODALITY_PROBE_INPUT_SUFFIX = "s2"
 
 
 def _map_modality_probe(
@@ -453,38 +452,38 @@ def _map_modality_probe(
 EVAL_TASKS.update(
     {
         # Out-of-sample probes (osmbig).
-        "pretrain_worldcover_probe": _map_modality_probe(
+        f"pretrain_worldcover_probe_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_worldcover",
             target_modality=Modality.WORLDCOVER.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
         ),
-        "pretrain_osm_probe": _map_modality_probe(
+        f"pretrain_osm_probe_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_osm",
             target_modality=Modality.OPENSTREETMAP_RASTER.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
         ),
-        "pretrain_srtm_regression": _map_modality_probe(
+        f"pretrain_srtm_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_srtm",
             target_modality=Modality.SRTM.name,
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
         ),
         # In-distribution probes (osm_sampling) for map modalities absent from osmbig.
-        "pretrain_canopy_regression": _map_modality_probe(
+        f"pretrain_canopy_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_canopy",
             target_modality=Modality.WRI_CANOPY_HEIGHT_MAP.name,
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
         ),
-        "pretrain_cdl_probe": _map_modality_probe(
+        f"pretrain_cdl_probe_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_cdl",
             target_modality=Modality.CDL.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
         ),
-        "pretrain_worldcereal_probe": _map_modality_probe(
+        f"pretrain_worldcereal_probe_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_worldcereal",
             target_modality=Modality.WORLDCEREAL.name,
             primary_metric=EvalMetric.MIOU,
@@ -492,42 +491,42 @@ EVAL_TASKS.update(
         ),
         # Geographic-holdout variants: train/val/test split by spatial bins
         # so the test set is geographically disjoint from train.
-        "pretrain_worldcover_probe_geo": _map_modality_probe(
+        f"pretrain_worldcover_probe_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_worldcover",
             target_modality=Modality.WORLDCOVER.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
             split_strategy="geographic",
         ),
-        "pretrain_osm_probe_geo": _map_modality_probe(
+        f"pretrain_osm_probe_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_osm",
             target_modality=Modality.OPENSTREETMAP_RASTER.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
             split_strategy="geographic",
         ),
-        "pretrain_srtm_regression_geo": _map_modality_probe(
+        f"pretrain_srtm_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_srtm",
             target_modality=Modality.SRTM.name,
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
             split_strategy="geographic",
         ),
-        "pretrain_canopy_regression_geo": _map_modality_probe(
+        f"pretrain_canopy_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_canopy",
             target_modality=Modality.WRI_CANOPY_HEIGHT_MAP.name,
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
             split_strategy="geographic",
         ),
-        "pretrain_cdl_probe_geo": _map_modality_probe(
+        f"pretrain_cdl_probe_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_cdl",
             target_modality=Modality.CDL.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
             split_strategy="geographic",
         ),
-        "pretrain_worldcereal_probe_geo": _map_modality_probe(
+        f"pretrain_worldcereal_probe_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_worldcereal",
             target_modality=Modality.WORLDCEREAL.name,
             primary_metric=EvalMetric.MIOU,

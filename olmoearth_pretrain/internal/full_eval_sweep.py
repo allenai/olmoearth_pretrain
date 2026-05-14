@@ -533,6 +533,13 @@ def parse_label_percentages(label_percentages: str | None) -> list[float]:
     ]
 
 
+def parse_task_names(task_names: str | None) -> list[str]:
+    """Parse comma-separated eval task names."""
+    if task_names is None:
+        return []
+    return [name.strip() for name in task_names.split(",") if name.strip()]
+
+
 def _get_label_percentage(args: argparse.Namespace) -> float | None:
     """Get the active label percentage for recursive command building."""
     return getattr(args, "label_percentage", None)
@@ -564,6 +571,31 @@ def _get_label_percentage_args(args: argparse.Namespace) -> str:
             f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.partition={partition}"
             for task_name in EVAL_TASKS.keys()
         ]
+    )
+
+
+def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
+    """Build a downstream evaluator include-list override."""
+    if getattr(args, "embedding_diagnostics_only", False):
+        return ""
+
+    selected_tasks = parse_task_names(getattr(args, "task_names", None))
+    skip_tasks = parse_task_names(getattr(args, "task_skip_names", None))
+
+    unknown_tasks = sorted((set(selected_tasks) | set(skip_tasks)) - set(EVAL_TASKS))
+    if unknown_tasks:
+        raise ValueError(f"Unknown eval task names: {', '.join(unknown_tasks)}")
+
+    tasks_to_run = selected_tasks or list(EVAL_TASKS.keys())
+    if skip_tasks:
+        skip_task_set = set(skip_tasks)
+        tasks_to_run = [task for task in tasks_to_run if task not in skip_task_set]
+
+    if len(tasks_to_run) == len(EVAL_TASKS):
+        return ""
+    return (
+        " --trainer.callbacks.downstream_evaluator.tasks_to_run="
+        f"'{json.dumps(tasks_to_run)}'"
     )
 
 
@@ -930,7 +962,12 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         cmd = _build_checkpoint_sweep_command(
             args, sub_command, launch_command, project_name, extra
         )
-        return [cmd]
+        commands_to_run = [cmd]
+        commands_to_run = [f"{cmd} {MAX_DURATION_OVERRIDE}" for cmd in commands_to_run]
+        tasks_to_run_arg = _get_tasks_to_run_arg(args)
+        if tasks_to_run_arg:
+            commands_to_run = [f"{cmd}{tasks_to_run_arg}" for cmd in commands_to_run]
+        return commands_to_run
 
     checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
 
@@ -1071,11 +1108,8 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
 
     commands_to_run = [f"{cmd} {MAX_DURATION_OVERRIDE}" for cmd in commands_to_run]
 
-    # Filter out skipped tasks if task-skip-names is provided
-    if args.task_skip_names:
-        skip_names = [name.strip() for name in args.task_skip_names.split(",")]
-        tasks_to_run = [task for task in EVAL_TASKS.keys() if task not in skip_names]
-        tasks_to_run_arg = f" --trainer.callbacks.downstream_evaluator.tasks_to_run='{json.dumps(tasks_to_run)}'"
+    tasks_to_run_arg = _get_tasks_to_run_arg(args)
+    if tasks_to_run_arg:
         commands_to_run_new = []
         for cmd in commands_to_run:
             logger.info(f"Adding tasks_to_run filter to {cmd}")
@@ -1168,6 +1202,12 @@ def main() -> None:
         type=str,
         required=False,
         help="Comma-separated list of task names to skip (e.g., pastis128_sentinel2,pastis128_sentinel1)",
+    )
+    parser.add_argument(
+        "--task-names",
+        type=str,
+        required=False,
+        help="Comma-separated list of task names to run. If omitted, all tasks run.",
     )
     parser.add_argument(
         "--size",

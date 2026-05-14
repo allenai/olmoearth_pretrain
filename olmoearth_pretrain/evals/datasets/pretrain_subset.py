@@ -15,8 +15,9 @@ import torch
 from torch.utils.data import Dataset
 from upath import UPath
 
+from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 from olmoearth_pretrain.data.dataset import GetItemArgs, OlmoEarthDataset
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue, OlmoEarthSample
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 
 logger = logging.getLogger(__name__)
@@ -358,6 +359,41 @@ class PretrainSubsetDataset(Dataset):
             f"Unsupported pretrain target modality: {self.target_modality}"
         )
 
+    @staticmethod
+    def _missing_aware_masked_sample(sample: OlmoEarthSample) -> MaskedOlmoEarthSample:
+        """Create ONLINE masks while preserving tokens filled from missing timesteps."""
+        masked_sample_dict = {}
+        for modality_name, data in sample.as_dict(include_nones=True).items():
+            if modality_name == "timestamps":
+                masked_sample_dict[modality_name] = data
+                continue
+
+            mask_name = MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+            if data is None:
+                masked_sample_dict[modality_name] = None
+                masked_sample_dict[mask_name] = None
+                continue
+
+            tensor = torch.as_tensor(data)
+            modality = Modality.get(modality_name)
+            mask = torch.full(
+                sample.shape(modality_name, mask=True),
+                MaskValue.ONLINE_ENCODER.value,
+                dtype=torch.long,
+            )
+            for bandset_idx, band_indices in enumerate(modality.bandsets_as_indices()):
+                bandset = tensor[..., band_indices]
+                missing = (bandset == MISSING_VALUE).any(dim=-1)
+                mask[..., bandset_idx] = torch.where(
+                    missing,
+                    MaskValue.MISSING.value,
+                    mask[..., bandset_idx],
+                )
+
+            masked_sample_dict[modality_name] = data
+            masked_sample_dict[mask_name] = mask
+        return MaskedOlmoEarthSample(**masked_sample_dict)
+
     def __len__(self) -> int:
         """Return number of samples in the subset."""
         return len(self._indices)
@@ -371,5 +407,5 @@ class PretrainSubsetDataset(Dataset):
             sampled_hw_p=self.hw_p,
         )
         _, sample = self._dataset[args]
-        masked = MaskedOlmoEarthSample.from_olmoearthsample(sample)
+        masked = self._missing_aware_masked_sample(sample)
         return masked, self._get_label(args)
