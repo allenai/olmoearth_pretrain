@@ -57,6 +57,12 @@ def get_run_group_name(run_name: str, keep_steps_separate: bool = False) -> str:
     Default: 'exp_step300000_dataset_lr0.001_ptmean' -> 'exp'
     keep_steps_separate: 'exp_step300000_dataset_lr0.001_ptmean' -> 'exp_step300000'
     """
+    if "base" in run_name:
+        return "base"
+    if "tiny" in run_name:
+        return "tiny"
+    if "nano" in run_name:
+        return "nano"
     if keep_steps_separate:
         # Greedy match up to and including _step{N}: "exp_step300000_lr..." -> "exp_step300000"
         pattern = r"(.+_step\d+)"
