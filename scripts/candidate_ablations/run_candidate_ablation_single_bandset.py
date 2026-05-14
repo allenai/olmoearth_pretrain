@@ -7,7 +7,8 @@ Usage:
     python scripts/candidate_ablations/run_candidate_ablation_single_bandset.py \
         train <run_name> <cluster> \
         --candidate_columns in_top_combined in_top_solo_novelty \
-        --candidate_parquet /path/to/scored_candidates.parquet
+        --candidate_parquet /path/to/scored_candidates.parquet \
+        --candidate_h5py_dir /path/to/candidate/h5py/dir
 
 Score columns (pick any combination):
     in_top_combined, in_top_solo_novelty, in_top_solo_xglobal_bridge,
@@ -25,14 +26,14 @@ from pathlib import Path
 from candidate_utils import SCORE_COLUMNS, save_candidate_sample_ids_file
 from script_config_single_bandset import (
     BASE_H5PY_DIR,
-    CANDIDATE_H5PY_DIR,
-    DEFAULT_PARQUET_PATH,
-    build_common_components,
     build_dataloader_config,
     build_model_config,
     build_train_module_config,
     build_trainer_config,
     build_visualize_config,
+)
+from script_config_single_bandset import (
+    build_common_components as _build_common_components,
 )
 
 from olmoearth_pretrain.data.concat import OlmoEarthConcatDatasetConfig
@@ -52,14 +53,36 @@ _parser.add_argument(
 )
 _parser.add_argument(
     "--candidate_parquet",
-    default=DEFAULT_PARQUET_PATH,
+    required=True,
     help="Path to the scored candidates parquet file.",
+)
+_parser.add_argument(
+    "--candidate_h5py_dir",
+    required=True,
+    help="Path to the candidate h5py data directory.",
 )
 _known, _remaining = _parser.parse_known_args()
 sys.argv = [sys.argv[0]] + _remaining
 
 CANDIDATE_COLUMNS: list[str] = _known.candidate_columns
 CANDIDATE_PARQUET: str = _known.candidate_parquet
+CANDIDATE_H5PY_DIR_RESOLVED: str = _known.candidate_h5py_dir
+
+
+def build_common_components(
+    script: str, cmd: str, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Wrap the default builder to forward candidate args to the Beaker job."""
+    common = _build_common_components(script, cmd, run_name, cluster, overrides)
+    if common.launch is not None:
+        extra = (
+            ["--candidate_columns"]
+            + CANDIDATE_COLUMNS
+            + ["--candidate_parquet", CANDIDATE_PARQUET]
+            + ["--candidate_h5py_dir", CANDIDATE_H5PY_DIR_RESOLVED]
+        )
+        common.launch.cmd = common.launch.cmd[:4] + extra + common.launch.cmd[4:]
+    return common
 
 
 def _get_sample_ids_file(parquet_path: str, columns: list[str]) -> str:
@@ -85,7 +108,7 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConf
         training_modalities=common.training_modalities,
     )
     candidate_config = OlmoEarthDatasetConfig(
-        h5py_dir=CANDIDATE_H5PY_DIR,
+        h5py_dir=CANDIDATE_H5PY_DIR_RESOLVED,
         training_modalities=common.training_modalities,
         filter_sample_ids_file=ids_file,
     )

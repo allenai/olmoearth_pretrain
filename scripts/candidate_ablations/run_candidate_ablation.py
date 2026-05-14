@@ -22,8 +22,6 @@ from pathlib import Path
 from candidate_utils import SCORE_COLUMNS, save_candidate_sample_ids_file
 from script_config import (
     BASE_H5PY_DIR,
-    CANDIDATE_H5PY_DIR,
-    DEFAULT_PARQUET_PATH,
     build_dataloader_config,
     build_model_config,
     build_train_module_config,
@@ -51,12 +49,12 @@ _parser.add_argument(
 )
 _parser.add_argument(
     "--candidate_parquet",
-    default=DEFAULT_PARQUET_PATH,
+    required=True,
     help="Path to the scored candidates parquet file.",
 )
 _parser.add_argument(
     "--candidate_h5py_dir",
-    default=CANDIDATE_H5PY_DIR,
+    required=True,
     help="Path to the candidate h5py data directory.",
 )
 _known, _remaining = _parser.parse_known_args()
