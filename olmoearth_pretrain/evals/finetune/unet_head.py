@@ -21,7 +21,6 @@ class _ConvBnRelu(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass."""
         return self.block(x)
 
 
@@ -42,16 +41,7 @@ class UNetDecoder(nn.Module):
         patch_size: int,
         decoder_dims: tuple[int, ...] = (256, 128, 64),
     ) -> None:
-        """Initialize the UNetDecoder.
-
-        Args:
-            in_dim: ViT embedding dimension (input channel count).
-            num_classes: Number of segmentation classes.
-            patch_size: Encoder patch size; determines the number of 2x upsample
-                stages (must be a power of two).
-            decoder_dims: Channel widths at each decoder stage. Padded or truncated
-                to match the number of stages derived from patch_size.
-        """
+        """Initialize UNetDecoder."""
         if patch_size < 1 or (patch_size & (patch_size - 1)) != 0:
             raise ValueError(f"patch_size must be a power of two, got {patch_size}")
         super().__init__()
@@ -79,14 +69,7 @@ class UNetDecoder(nn.Module):
         self.head = nn.Conv2d(dims[n_stages], num_classes, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass from patch tokens to per-pixel logits.
-
-        Args:
-            x: Spatial patch embeddings of shape (B, H_p, W_p, D).
-
-        Returns:
-            Per-pixel logits of shape (B, num_classes, H, W).
-        """
+        """Forward pass from patch tokens (B, H_p, W_p, D) to per-pixel logits (B, C, H, W)."""
         x = x.permute(0, 3, 1, 2).contiguous()  # (B, D, H_p, W_p)
         x = self.input_proj(x)
         for block in self.up_blocks:

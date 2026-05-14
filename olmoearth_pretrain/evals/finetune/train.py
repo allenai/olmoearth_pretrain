@@ -11,8 +11,6 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from einops import rearrange
 from olmo_core.train.trainer import Trainer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
@@ -30,7 +28,12 @@ from olmoearth_pretrain.evals.finetune.constants import (
     SCHEDULER_PATIENCE,
     UNFREEZE_LR_FACTOR,
 )
-from olmoearth_pretrain.evals.finetune.evaluate import eval_cls, eval_reg, eval_seg
+from olmoearth_pretrain.evals.finetune.evaluate import (
+    _seg_logits_to_pixel,
+    eval_cls,
+    eval_reg,
+    eval_seg,
+)
 from olmoearth_pretrain.evals.finetune.model import (
     BackboneWithHead,
     HeadType,
@@ -326,24 +329,13 @@ def run_finetune_eval(
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 logits, label = ft(masked, label)
                 if task_config.task_type == TaskType.SEGMENTATION:
-                    if not ft.pixel_space_output:
-                        H, W = logits.shape[1], logits.shape[2]
-                        logits = rearrange(
-                            logits,
-                            "b h w (c i j) -> b c (h i) (w j)",
-                            h=H,
-                            w=W,
-                            c=task_config.num_classes,
-                            i=patch_size,
-                            j=patch_size,
-                        )
-                    if logits.shape[-2:] != label.shape[-2:]:
-                        logits = F.interpolate(
-                            logits.float(),
-                            size=label.shape[-2:],
-                            mode="bilinear",
-                            align_corners=True,
-                        )
+                    logits = _seg_logits_to_pixel(
+                        logits,
+                        label,
+                        ft.pixel_space_output,
+                        task_config.num_classes,
+                        patch_size,
+                    )
                 if task_config.task_type == TaskType.REGRESSION:
                     raw_loss = loss_fn(logits, label.float())
                 else:
