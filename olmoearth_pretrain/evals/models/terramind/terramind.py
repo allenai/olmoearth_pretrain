@@ -176,6 +176,11 @@ class Terramind(nn.Module):
             if modality == "sentinel2_l2a":
                 data_i = data_i[:, HELIOS_TO_TERRAMIND_SENTINEL2_BANDORDER, :, :]
 
+            # Clip to the number of channels the model was pretrained with.
+            n_pretrained = len(self.stats[modality]["means"])
+            if data_i.shape[1] > n_pretrained:
+                data_i = data_i[:, :n_pretrained, :, :]
+
             if self.use_pretrained_normalizer:
                 # Normalize
                 for j in range(data_i.shape[1]):
