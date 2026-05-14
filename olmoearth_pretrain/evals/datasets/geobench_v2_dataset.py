@@ -45,7 +45,11 @@ def _permute_bchw(
     x: torch.Tensor, source_names: list[str], target_names: list[str]
 ) -> torch.Tensor:
     idx = {n: i for i, n in enumerate(source_names)}
-    out = torch.zeros((x.shape[0], len(target_names), x.shape[2], x.shape[3]), dtype=x.dtype, device=x.device)
+    out = torch.zeros(
+        (x.shape[0], len(target_names), x.shape[2], x.shape[3]),
+        dtype=x.dtype,
+        device=x.device,
+    )
     for j, name in enumerate(target_names):
         if name in idx:
             out[:, j] = x[:, idx[name]]
@@ -59,7 +63,11 @@ def _align_s2_to_sentinel2_l2a(
     if x.dim() == 3:
         return _permute_bchw(x.unsqueeze(0), source_names, _S2_ORDER)[0]
     if x.dim() == 4:
-        out = torch.zeros((len(_S2_ORDER), x.shape[1], x.shape[2], x.shape[3]), dtype=x.dtype, device=x.device)
+        out = torch.zeros(
+            (len(_S2_ORDER), x.shape[1], x.shape[2], x.shape[3]),
+            dtype=x.dtype,
+            device=x.device,
+        )
         idx = {n: i for i, n in enumerate(source_names)}
         for j, name in enumerate(_S2_ORDER):
             if name in idx:
@@ -90,7 +98,9 @@ def _pad_to_t(hwtc: torch.Tensor, t: int) -> torch.Tensor:
     gap = t - hwtc.shape[2]
     if gap <= 0:
         return hwtc
-    pad = torch.zeros(*hwtc.shape[:2], gap, hwtc.shape[3], device=hwtc.device, dtype=hwtc.dtype)
+    pad = torch.zeros(
+        *hwtc.shape[:2], gap, hwtc.shape[3], device=hwtc.device, dtype=hwtc.dtype
+    )
     return torch.cat([hwtc, pad], dim=2)
 
 
@@ -99,10 +109,14 @@ def _to_db(x: torch.Tensor) -> torch.Tensor:
     return 10.0 * torch.log10(x.clamp(min=1e-10))
 
 
-def _s2_sample(image: torch.Tensor, src_names: list[str], device: torch.device) -> OlmoEarthSample:
+def _s2_sample(
+    image: torch.Tensor, src_names: list[str], device: torch.device
+) -> OlmoEarthSample:
     """Build a single-modality S2 OlmoEarthSample from an arbitrary-band image."""
     hwtc = _bchw_to_hwtc(_align_s2_to_sentinel2_l2a(image.float(), src_names))
-    return OlmoEarthSample(sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device))
+    return OlmoEarthSample(
+        sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device)
+    )
 
 
 def _sample_to_olmoearth(
@@ -116,7 +130,9 @@ def _sample_to_olmoearth(
         # Grayscale; broadcast to all 12 S2 channels.
         filled = sample["image"].float()[:1].repeat(len(_S2_ORDER), 1, 1)
         hwtc = _bchw_to_hwtc(filled)
-        return OlmoEarthSample(sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device))
+        return OlmoEarthSample(
+            sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device)
+        )
 
     if slug in ("burn_scars", "cloudsen12", "substation", "spacenet7"):
         image = sample["image"].float()
@@ -133,7 +149,11 @@ def _sample_to_olmoearth(
 
     if slug == "biomassters":
         s1 = _bchw_to_hwtc(sample["image_s1"].float())
-        s2 = _bchw_to_hwtc(_align_s2_to_sentinel2_l2a(sample["image_s2"].float(), _s2_names(band_order)))
+        s2 = _bchw_to_hwtc(
+            _align_s2_to_sentinel2_l2a(
+                sample["image_s2"].float(), _s2_names(band_order)
+            )
+        )
         t = max(s1.shape[2], s2.shape[2])
         return OlmoEarthSample(
             sentinel1=_pad_to_t(s1, t),
@@ -143,11 +163,16 @@ def _sample_to_olmoearth(
 
     if slug == "kuro_siwo":
         # Stack pre_1, pre_2, post as 3 SAR timesteps; convert linear power → dB.
-        s1 = _bchw_to_hwtc(torch.stack([
-            _to_db(sample["image_pre_1"].float()),
-            _to_db(sample["image_pre_2"].float()),
-            _to_db(sample["image_post"].float()),
-        ], dim=1))  # (C=2, T=3, H, W) → (H, W, 3, C)
+        s1 = _bchw_to_hwtc(
+            torch.stack(
+                [
+                    _to_db(sample["image_pre_1"].float()),
+                    _to_db(sample["image_pre_2"].float()),
+                    _to_db(sample["image_post"].float()),
+                ],
+                dim=1,
+            )
+        )  # (C=2, T=3, H, W) → (H, W, 3, C)
         dem = _bchw_to_hwtc(sample["image_dem"].float())
         t = max(s1.shape[2], dem.shape[2])
         return OlmoEarthSample(
@@ -162,21 +187,42 @@ def _sample_to_olmoearth(
         x = torch.cat(parts, dim=0)
         n = len(_S2_ORDER)
         if x.shape[0] < n:
-            x = torch.cat([x, torch.zeros(n - x.shape[0], *x.shape[1:], device=x.device, dtype=x.dtype)])
+            x = torch.cat(
+                [
+                    x,
+                    torch.zeros(
+                        n - x.shape[0], *x.shape[1:], device=x.device, dtype=x.dtype
+                    ),
+                ]
+            )
         else:
             x = x[:n]
         hwtc = _bchw_to_hwtc(x)
-        return OlmoEarthSample(sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device))
+        return OlmoEarthSample(
+            sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device)
+        )
 
     if slug == "benv2":
-        s2 = _bchw_to_hwtc(_align_s2_to_sentinel2_l2a(sample["image_s2"].float(), _s2_names(band_order)))
-        sample_dict: dict[str, Any] = {"sentinel2_l2a": s2, "timestamps": _timestamps(s2.shape[2], device)}
+        s2 = _bchw_to_hwtc(
+            _align_s2_to_sentinel2_l2a(
+                sample["image_s2"].float(), _s2_names(band_order)
+            )
+        )
+        sample_dict: dict[str, Any] = {
+            "sentinel2_l2a": s2,
+            "timestamps": _timestamps(s2.shape[2], device),
+        }
         if "image_s1" in sample:
             s1_src = _s1_names(band_order)
             x1 = sample["image_s1"].float()
             vv_i = next((i for i, n in enumerate(s1_src) if "VV" in n.upper()), 0)
-            vh_i = next((i for i, n in enumerate(s1_src) if "VH" in n.upper()), min(1, len(s1_src) - 1))
-            sample_dict["sentinel1"] = _bchw_to_hwtc(torch.stack([x1[vv_i], x1[vh_i]], dim=0))
+            vh_i = next(
+                (i for i, n in enumerate(s1_src) if "VH" in n.upper()),
+                min(1, len(s1_src) - 1),
+            )
+            sample_dict["sentinel1"] = _bchw_to_hwtc(
+                torch.stack([x1[vv_i], x1[vh_i]], dim=0)
+            )
         return OlmoEarthSample(**sample_dict)
 
     raise KeyError(f"cannot map GeoBench v2 sample keys={list(sample)} slug={slug}")
@@ -249,10 +295,11 @@ class GeobenchV2Dataset(Dataset):
         norm_stats_from_pretrained: bool = False,
         norm_method: str = "norm_no_clip_2_std",
     ) -> None:
+        """Initialize dataset for the given gb2 slug and split."""
         del partition  # splits are fixed per-dataset; partition is not applicable
         if not dataset.startswith("gb2-"):
             raise ValueError(dataset)
-        slug = dataset[len("gb2-"):]
+        slug = dataset[len("gb2-") :]
         if slug not in SLUG_TO_DATASET:
             raise ValueError(f"unknown gb2 slug: {slug}")
         if split not in ("train", "valid", "test"):
@@ -268,9 +315,11 @@ class GeobenchV2Dataset(Dataset):
         self._band_order = loader_cls.band_order
 
     def __len__(self) -> int:
+        """Return number of samples in the split."""
         return len(self._inner)
 
     def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
+        """Load, normalize, and mask sample at idx, returning (masked_sample, label)."""
         raw = self._inner[idx]
         device = next(
             (v.device for v in raw.values() if torch.is_tensor(v)), torch.device("cpu")
@@ -278,7 +327,9 @@ class GeobenchV2Dataset(Dataset):
         olmo = _sample_to_olmoearth(raw, self._band_order, self._slug)
         olmo = _apply_olmoearth_normalization(olmo, self._normalizer)
         masked = MaskedOlmoEarthSample.from_olmoearthsample(olmo)
-        label = _extract_label(raw, self._slug, self.config.task_type, self.config.num_classes)
+        label = _extract_label(
+            raw, self._slug, self.config.task_type, self.config.num_classes
+        )
         if label.device != device:
             label = label.to(device)
         return masked, label

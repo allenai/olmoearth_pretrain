@@ -109,6 +109,7 @@ class _BaseGeobenchDataset(Dataset):
     band_order: Any  # consumed by _sample_to_olmoearth
 
     def __init__(self, root: str, split: str) -> None:
+        """Load tortilla file(s) and filter rows to the requested split."""
         names = (
             [self.TORTILLA] if isinstance(self.TORTILLA, str) else list(self.TORTILLA)
         )
@@ -119,6 +120,7 @@ class _BaseGeobenchDataset(Dataset):
         self._df = df[df["tortilla:data_split"] == split].reset_index(drop=True)
 
     def __len__(self) -> int:
+        """Return number of samples in the split."""
         return len(self._df)
 
 
@@ -129,6 +131,7 @@ class BurnScarsDataset(_BaseGeobenchDataset):
     band_order = ["B02", "B03", "B04", "B8A", "B11", "B12"]
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
         image = _raster_f32(row, 0)
         mask = _raster_i64(row, 1).squeeze(0)
@@ -143,6 +146,7 @@ class CaFFeDataset(_BaseGeobenchDataset):
     band_order = ["gray"]
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
         image = _raster_f32(row, 0)
         mask = _raster_i64(row, 1).squeeze(0)
@@ -154,9 +158,23 @@ class CloudSen12Dataset(_BaseGeobenchDataset):
 
     TORTILLA = "geobench_cloudsen12.tortilla"
     # tortilla has 14 bands (12 S2 + B10 cirrus + cloud prob); truncation to 12 happens in _sample_to_olmoearth
-    band_order = ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B09", "B11", "B12"]
+    band_order = [
+        "B01",
+        "B02",
+        "B03",
+        "B04",
+        "B05",
+        "B06",
+        "B07",
+        "B08",
+        "B8A",
+        "B09",
+        "B11",
+        "B12",
+    ]
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
         image = _raster_f32(row, 0)  # (14, H, W)
         mask = _raster_i64(row, 1).squeeze(0)
@@ -170,6 +188,7 @@ class SpaceNet7Dataset(_BaseGeobenchDataset):
     band_order = ["red", "green", "blue", "nir"]
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
         image = _raster_f32(row, 0)
         mask = _raster_i64(row, 1).squeeze(0) + 1  # shift: background → class 1
@@ -181,12 +200,22 @@ class SpaceNet2Dataset(_BaseGeobenchDataset):
 
     TORTILLA = "geobench_spacenet2.tortilla"
     band_order = {
-        "worldview": ["coastal", "blue", "green", "yellow", "red", "red_edge", "nir1", "nir2"],
+        "worldview": [
+            "coastal",
+            "blue",
+            "green",
+            "yellow",
+            "red",
+            "red_edge",
+            "nir1",
+            "nir2",
+        ],
         "pan": ["pan"],
     }
     TARGET_SIZE = 512  # raw tiles are 650×650; resize to match config height_width
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
         image_worldview = _raster_f32(row, 0)
         image_pan = _raster_f32(row, 1)
@@ -195,9 +224,17 @@ class SpaceNet2Dataset(_BaseGeobenchDataset):
         if image_worldview.shape[-1] != self.TARGET_SIZE:
             image_worldview = _resize(image_worldview, self.TARGET_SIZE)
             image_pan = _resize(image_pan, self.TARGET_SIZE)
-            mask = _resize(mask.unsqueeze(0).float(), self.TARGET_SIZE, mode="nearest").squeeze(0).long()
+            mask = (
+                _resize(mask.unsqueeze(0).float(), self.TARGET_SIZE, mode="nearest")
+                .squeeze(0)
+                .long()
+            )
 
-        return {"image_worldview": image_worldview, "image_pan": image_pan, "mask": mask}
+        return {
+            "image_worldview": image_worldview,
+            "image_pan": image_pan,
+            "mask": mask,
+        }
 
 
 _BENV2_LABELS = [
@@ -224,8 +261,21 @@ _BENV2_LABELS = [
 _BENV2_L2I = {c: i for i, c in enumerate(_BENV2_LABELS)}
 
 _TREESATAI_CLASSES = [
-    "Abies", "Acer", "Alnus", "Betula", "Cleared", "Fagus", "Fraxinus",
-    "Larix", "Picea", "Pinus", "Populus", "Prunus", "Pseudotsuga", "Quercus", "Tilia",
+    "Abies",
+    "Acer",
+    "Alnus",
+    "Betula",
+    "Cleared",
+    "Fagus",
+    "Fraxinus",
+    "Larix",
+    "Picea",
+    "Pinus",
+    "Populus",
+    "Prunus",
+    "Pseudotsuga",
+    "Quercus",
+    "Tilia",
 ]
 _TREESATAI_L2I = {c: i for i, c in enumerate(_TREESATAI_CLASSES)}
 
@@ -236,10 +286,24 @@ class BENV2Dataset(_BaseGeobenchDataset):
     TORTILLA = "geobench_benv2.tortilla"
     band_order = {
         "s1": ["VV", "VH"],
-        "s2": ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B09", "B11", "B12"],
+        "s2": [
+            "B01",
+            "B02",
+            "B03",
+            "B04",
+            "B05",
+            "B06",
+            "B07",
+            "B08",
+            "B8A",
+            "B09",
+            "B11",
+            "B12",
+        ],
     }
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row_df = self._df.iloc[idx]
         row = self._df.read(idx)
         image_s1 = _raster_f32(row, 0)
@@ -257,10 +321,24 @@ class TreeSatAIDataset(_BaseGeobenchDataset):
     band_order = {
         "aerial": ["red", "green", "blue", "nir"],
         "s1": ["vv", "vh", "vv/vh"],
-        "s2": ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"],
+        "s2": [
+            "B02",
+            "B03",
+            "B04",
+            "B08",
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12",
+            "B01",
+            "B09",
+        ],
     }
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row_df = self._df.iloc[idx]
         row = self._df.read(idx)
         image_aerial = _raster_f32(row, 0)
@@ -270,7 +348,12 @@ class TreeSatAIDataset(_BaseGeobenchDataset):
         for name in row_df["species_labels"]:
             if name in _TREESATAI_L2I:
                 label[_TREESATAI_L2I[name]] = 1
-        return {"image_aerial": image_aerial, "image_s1": image_s1, "image_s2": image_s2, "label": label}
+        return {
+            "image_aerial": image_aerial,
+            "image_s1": image_s1,
+            "image_s2": image_s2,
+            "label": label,
+        }
 
 
 # No Water→0, Permanent Water→1, Flood→2, No Data→-1 (ignored)
@@ -284,6 +367,7 @@ class KuroSiwoDataset(_BaseGeobenchDataset):
     band_order = {"sar": ["vv", "vh"], "dem": ["dem"]}
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
         # items: [0]=pre_1 SAR, [1]=pre_2 SAR, [2]=post SAR, [3]=DEM, [4]=mask
         image_pre_1 = _raster_f32(row, 0).nan_to_num(0.0)
@@ -304,9 +388,24 @@ class SubstationDataset(_BaseGeobenchDataset):
     """Substation: 13-band S2 → binary presence classification (via bbox)."""
 
     TORTILLA = "geobench_substation.tortilla"
-    band_order = ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B09", "B10", "B11", "B12"]
+    band_order = [
+        "B01",
+        "B02",
+        "B03",
+        "B04",
+        "B05",
+        "B06",
+        "B07",
+        "B08",
+        "B8A",
+        "B09",
+        "B10",
+        "B11",
+        "B12",
+    ]
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
         image = _raster_f32(row, 0)
         _, h, w = image.shape
@@ -332,6 +431,7 @@ class BioMasstersDataset(_BaseGeobenchDataset):
     }
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
         s1_idx = row[row["modality"] == "S1"].index
         s2_idx = row[row["modality"] == "S2"].index
