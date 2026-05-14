@@ -355,7 +355,10 @@ def _format_launch_command(
     parts.extend(FT_MODE_ARGS)
     parts.extend(_format_ft_lr_args(lr))
     parts.extend(seed_args)
-    parts.append("--train_module.dp_config=null")
+    if checkpoint_args:
+        parts.append("--train_module.dp_config=null")
+    else:
+        parts.append("--train_module=null")
     return " ".join(parts)
 
 
