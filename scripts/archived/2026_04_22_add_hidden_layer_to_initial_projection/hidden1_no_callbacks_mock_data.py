@@ -136,6 +136,8 @@ class RepeatingMockDataLoader(DataLoaderBase):
         *,
         work_dir: str,
         global_batch_size: int,
+        min_patch_size: int = MIN_PATCH_SIZE,
+        max_patch_size: int = MAX_PATCH_SIZE,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -152,6 +154,8 @@ class RepeatingMockDataLoader(DataLoaderBase):
         self._batches_per_epoch = batches_per_epoch
         self._seed = 42
         self.token_budget: int | None = None
+        self.min_patch_size = min_patch_size
+        self.max_patch_size = max_patch_size
 
     def _iter_batches(self) -> Iterable[Any]:
         for _ in range(self._batches_per_epoch):
