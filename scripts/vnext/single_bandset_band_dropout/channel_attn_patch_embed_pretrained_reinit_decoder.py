@@ -1,12 +1,13 @@
-"""Channel-attention patch embed initialised from a pretrained checkpoint (keep decoder).
+"""Channel-attention patch embed initialised from a pretrained checkpoint (reinit decoder).
 
 Same model architecture as channel_attn_patch_embed.py, but loads all weights
 from a pretrained checkpoint.  If the checkpoint architecture differs (e.g.
 old linear patch embed), mismatched keys are left at their random init while
-all matching weights are loaded.  Decoder weights are kept from the checkpoint.
+all matching weights are loaded.  Decoder weights are reinitialised after
+loading so only the encoder backbone is pretrained.
 
-See channel_attn_pretrained_reinit_decoder.py for the variant that
-reinitialises the decoder after loading.
+See channel_attn_patch_embed_pretrained_keep_decoder.py for the variant that keeps the
+decoder weights from the checkpoint.
 
 Pass the checkpoint via --trainer.load_path=<path>.  For resumed (preempted)
 runs the trainer loads from save_folder first, so load_path is only used on
@@ -89,9 +90,8 @@ BAND_DROPOUT_MID_RATE = 0.15
 # ---------------------------------------------------------------------------
 # Partial-load train module
 # ---------------------------------------------------------------------------
-# The pretrained checkpoint used a flat linear patch projection, but this
-# script uses ChannelAttentionPatchEmbed.  The two have entirely different
-# parameter names, so we need to:
+# The pretrained checkpoint may have used a different patch projection.  The
+# overrides below:
 #   1. Skip the base-class architecture compatibility check in _get_state_dict.
 #   2. Prune the load template so dist_cp only reads keys present in the
 #      checkpoint (new patch-embed keys are left at their random init).
@@ -228,6 +228,41 @@ class BandDropoutCurriculumCallback(Callback):
             return
         patch_embeddings.band_dropout_rate = rate
         self.trainer.record_metric(self.metric_name, rate)
+
+
+@dataclass
+class ReinitPatchEmbedCallback(Callback):
+    """Reinitialise patch embedding weights after a checkpoint is loaded.
+
+    The online encoder's patch embeddings are reinitialised, then the weights
+    are copied to the target encoder so both start from identical random state
+    (matching the deepcopy behaviour at model init).
+    """
+
+    def post_checkpoint_loaded(self, path: Any) -> None:
+        """Reinitialise encoder patch embeddings and copy to target encoder."""
+        model = self.trainer.train_module.model
+        encoder = model.encoder
+        encoder.patch_embeddings.apply(encoder._init_weights)
+        logger.info("Reinitialised encoder.patch_embeddings (loaded from %s)", path)
+        target = model.target_encoder
+        target_pe = target.patch_embeddings
+        encoder_pe = encoder.patch_embeddings
+        target_pe.load_state_dict(encoder_pe.state_dict())
+        logger.info(
+            "Copied encoder.patch_embeddings weights to target_encoder.patch_embeddings"
+        )
+
+
+@dataclass
+class ReinitDecoderCallback(Callback):
+    """Reinitialise decoder weights after a checkpoint is loaded."""
+
+    def post_checkpoint_loaded(self, path: Any) -> None:
+        """Reinitialise decoder weights after a checkpoint is loaded."""
+        model = self.trainer.train_module.model
+        logger.info("Reinitialising decoder weights (loaded from %s)", path)
+        model.decoder.apply(model.decoder._init_weights)
 
 
 # ---------------------------------------------------------------------------
@@ -389,7 +424,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "2026_05_15_channel_attn_pretrained_backbone"
+    WANDB_PROJECT = "2026_04_15_channel_attn_patch_embed"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
@@ -457,6 +492,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             load_optim_state=False,
         )
         .with_callback("wandb", wandb_callback)
+        .with_callback("reinit_patch_embed", ReinitPatchEmbedCallback())
+        .with_callback("reinit_decoder", ReinitDecoderCallback())
         .with_callback("band_dropout_curriculum", BandDropoutCurriculumCallback())
         .with_callback("speed_monitor", OlmoEarthSpeedMonitorCallback())
         .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
