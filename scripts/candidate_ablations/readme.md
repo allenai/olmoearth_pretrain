@@ -118,3 +118,22 @@ python3 scripts/candidate_ablations/run_candidate_ablation.py launch base200k_al
     --trainer.callbacks.wandb.project=20260513_candidate_datasets \
     --trainer.callbacks.wandb.name=base200k_v1
 ```
+
+# BASE Annealing (v1.1)
+
+```shell
+python3 scripts/archived/2026_04_22_add_hidden_layer_to_initial_projection/hidden1.py launch base200k_v11 ai2/jupiter-cirrascale-2 \
+    --data_loader.global_batch_size=512 \
+    --trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/hidden1/step200000 \
+    --train_module.optim_config.lr=0.0001 \
+    --train_module.scheduler.warmup_steps=0 \
+    --train_module.scheduler.alpha_f=0.1 \
+    --train_module.scheduler.t_max=400000 \
+    --trainer.max_duration.value=400000 \
+    --trainer.max_duration.unit=steps \
+    --launch.num_gpus=8 \
+    --launch.num_nodes=1 \
+    --launch.priority=urgent \
+    --trainer.callbacks.wandb.project=20260513_candidate_datasets \
+    --trainer.callbacks.wandb.name=base200k_v11
+```
