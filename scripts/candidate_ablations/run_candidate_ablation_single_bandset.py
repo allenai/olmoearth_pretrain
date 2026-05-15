@@ -6,15 +6,13 @@ single-bandset model with band dropout and patch_embed_hidden_sizes=[64].
 Usage:
     python scripts/candidate_ablations/run_candidate_ablation_single_bandset.py \
         train <run_name> <cluster> \
-        --candidate_columns in_top_combined in_top_solo_novelty \
-        --candidate_parquet /path/to/scored_candidates.parquet \
+        --candidate_columns novelty xglobal_bridge sparse_infill \
+        --select_top 50000 \
+        --candidate_parquet /path/to/combined_acquisition_scores.parquet \
         --candidate_h5py_dir /path/to/candidate/h5py/dir
 
-Score columns (pick any combination):
-    in_top_combined, in_top_solo_novelty, in_top_solo_xglobal_bridge,
-    in_top_solo_sparse_infill, in_top_solo_xlocal_bridge, in_top_solo_prototypes,
-    in_top_drop_novelty, in_top_drop_xglobal_bridge, in_top_drop_sparse_infill,
-    in_top_drop_xlocal_bridge, in_top_drop_prototypes
+Strategies (pick any combination):
+    novelty, xglobal_bridge, sparse_infill, xlocal_bridge, prototypes
 """
 
 import argparse
@@ -23,7 +21,7 @@ import logging
 import sys
 from pathlib import Path
 
-from candidate_utils import SCORE_COLUMNS, save_candidate_sample_ids_file
+from candidate_utils import STRATEGY_NAMES, save_candidate_sample_ids_file
 from script_config_single_bandset import (
     BASE_H5PY_DIR,
     build_dataloader_config,
@@ -50,14 +48,27 @@ _parser = argparse.ArgumentParser(add_help=False)
 _parser.add_argument(
     "--candidate_columns",
     nargs="+",
-    default=SCORE_COLUMNS,
-    help="Which parquet score columns to filter on (default: all). "
-    "A candidate is included if any of these columns is 1.",
+    default=STRATEGY_NAMES,
+    help="Strategy names to select candidates from (default: all). "
+    "Top --select_top samples per strategy are unioned.",
+)
+_parser.add_argument(
+    "--select_top",
+    type=int,
+    default=None,
+    help="Number of top-scoring candidates to select per strategy.",
+)
+_parser.add_argument(
+    "--total_budget",
+    type=int,
+    default=None,
+    help="Total candidate budget, distributed evenly across strategies. "
+    "Overrides --select_top (computes select_top = total_budget // num_strategies).",
 )
 _parser.add_argument(
     "--candidate_parquet",
     default=None,
-    help="Path to the scored candidates parquet file.",
+    help="Path to the combined_acquisition_scores parquet file.",
 )
 _parser.add_argument(
     "--candidate_h5py_dir",
@@ -71,6 +82,17 @@ CANDIDATE_COLUMNS: list[str] = _known.candidate_columns
 CANDIDATE_PARQUET: str | None = _known.candidate_parquet
 CANDIDATE_H5PY_DIR_RESOLVED: str | None = _known.candidate_h5py_dir
 
+if _known.total_budget is not None:
+    SELECT_TOP: int | None = _known.total_budget // len(CANDIDATE_COLUMNS)
+    logger.info(
+        f"--total_budget={_known.total_budget} with {len(CANDIDATE_COLUMNS)} strategies "
+        f"-> select_top={SELECT_TOP}"
+    )
+elif _known.select_top is not None:
+    SELECT_TOP = _known.select_top
+else:
+    SELECT_TOP = None
+
 
 def build_common_components(
     script: str, cmd: str, run_name: str, cluster: str, overrides: list[str]
@@ -81,10 +103,12 @@ def build_common_components(
         common.launch is not None
         and CANDIDATE_PARQUET is not None
         and CANDIDATE_H5PY_DIR_RESOLVED is not None
+        and SELECT_TOP is not None
     ):
         extra = (
             ["--candidate_columns"]
             + CANDIDATE_COLUMNS
+            + ["--select_top", str(SELECT_TOP)]
             + ["--candidate_parquet", CANDIDATE_PARQUET]
             + ["--candidate_h5py_dir", CANDIDATE_H5PY_DIR_RESOLVED]
         )
@@ -92,13 +116,15 @@ def build_common_components(
     return common
 
 
-def _get_sample_ids_file(parquet_path: str, columns: list[str]) -> str:
+def _get_sample_ids_file(
+    parquet_path: str, strategies: list[str], select_top: int
+) -> str:
     """Get a deterministic path for the cached sample IDs file.
 
     Written next to the parquet with a hash-based name so different
-    column selections produce different files.
+    strategy/top-N selections produce different files.
     """
-    key = f"{parquet_path}:{','.join(sorted(columns))}"
+    key = f"{parquet_path}:{','.join(sorted(strategies))}:{select_top}"
     digest = hashlib.sha256(key.encode()).hexdigest()[:12]
     return str(Path(parquet_path).parent / f"_sample_ids_{digest}.txt")
 
@@ -110,10 +136,21 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConf
             "Both --candidate_parquet and --candidate_h5py_dir are required "
             "for training. Re-run with these flags."
         )
-    ids_file = _get_sample_ids_file(CANDIDATE_PARQUET, CANDIDATE_COLUMNS)
+    if SELECT_TOP is None:
+        raise RuntimeError("--select_top (or --total_budget) is required for training.")
+    ids_file = _get_sample_ids_file(CANDIDATE_PARQUET, CANDIDATE_COLUMNS, SELECT_TOP)
     print(f"Preparing candidate sample IDs -> {ids_file}", flush=True)
-    save_candidate_sample_ids_file(CANDIDATE_PARQUET, CANDIDATE_COLUMNS, ids_file)
-    logger.info(f"Candidate ablation: columns={CANDIDATE_COLUMNS}, ids_file={ids_file}")
+    save_candidate_sample_ids_file(
+        CANDIDATE_PARQUET,
+        CANDIDATE_COLUMNS,
+        SELECT_TOP,
+        CANDIDATE_H5PY_DIR_RESOLVED,
+        ids_file,
+    )
+    logger.info(
+        f"Candidate ablation: strategies={CANDIDATE_COLUMNS}, "
+        f"select_top={SELECT_TOP}, ids_file={ids_file}"
+    )
 
     base_config = OlmoEarthDatasetConfig(
         h5py_dir=BASE_H5PY_DIR,
