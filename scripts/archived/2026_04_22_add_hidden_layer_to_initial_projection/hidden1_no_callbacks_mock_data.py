@@ -25,12 +25,11 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.distributed.utils import (
-    get_default_device,
     get_fs_local_rank,
     get_rank,
     get_world_size,
 )
-from olmo_core.init_fn import seed_all
+from olmo_core.utils import get_default_device, seed_all
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
