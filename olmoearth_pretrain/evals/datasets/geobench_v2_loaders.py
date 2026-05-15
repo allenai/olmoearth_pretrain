@@ -17,18 +17,8 @@ import numpy as np
 import rasterio
 import tacoreader
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
-
-# ─── helpers ──────────────────────────────────────────────────────────────────
-
-
-def _read_subfile_bytes(path: str) -> bytes:
-    """Extract raw bytes from a /vsisubfile/offset_length,file path."""
-    vsi, fpath = path.split(",", 1)
-    offset, length = (int(x) for x in vsi.replace("/vsisubfile/", "").split("_"))
-    with open(fpath, "rb") as f:
-        f.seek(offset)
-        return f.read(length)
 
 
 def _raster_f32(row: Any, idx: int) -> torch.Tensor:
@@ -41,6 +31,25 @@ def _raster_i64(row: Any, idx: int) -> torch.Tensor:
     """Read rasterio subfile → int64 (C, H, W)."""
     with rasterio.open(row.read(idx)) as src:
         return torch.from_numpy(src.read().astype(np.int64))
+
+
+def _resize(x: torch.Tensor, size: int, mode: str = "bilinear") -> torch.Tensor:
+    """Resize a (C, H, W) tensor to (size, size)."""
+    return F.interpolate(
+        x.unsqueeze(0),
+        size=(size, size),
+        mode=mode,
+        align_corners=False if mode == "bilinear" else None,
+    ).squeeze(0)
+
+
+def _read_subfile_bytes(path: str) -> bytes:
+    """Extract raw bytes from a /vsisubfile/offset_length,file path."""
+    vsi, fpath = path.split(",", 1)
+    offset, length = (int(x) for x in vsi.replace("/vsisubfile/", "").split("_"))
+    with open(fpath, "rb") as f:
+        f.seek(offset)
+        return f.read(length)
 
 
 def _polygon_to_mask(
@@ -59,7 +68,7 @@ def _polygon_to_mask(
 def _load_json_annotations(
     row: Any, idx: int, img_w: int, img_h: int
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Parse h5py JSON annotation (substation/nzcattle style).
+    """Parse h5py JSON annotation (substation style).
 
     Returns (boxes (N,4) float32 xyxy, labels (N,) int64, masks (N,H,W) int64).
     """
@@ -86,15 +95,11 @@ def _load_json_annotations(
             torch.tensor(labels, dtype=torch.int64),
             torch.from_numpy(np.stack(masks)).long(),
         )
-    # empty: no instances
     return (
         torch.zeros((0, 4), dtype=torch.float32),
         torch.zeros((0,), dtype=torch.int64),
         torch.zeros((0, img_h, img_w), dtype=torch.int64),
     )
-
-
-# ─── base class ───────────────────────────────────────────────────────────────
 
 
 class _BaseGeobenchDataset(Dataset):
@@ -104,6 +109,7 @@ class _BaseGeobenchDataset(Dataset):
     band_order: Any  # consumed by _sample_to_olmoearth
 
     def __init__(self, root: str, split: str) -> None:
+        """Load tortilla file(s) and filter rows to the requested split."""
         names = (
             [self.TORTILLA] if isinstance(self.TORTILLA, str) else list(self.TORTILLA)
         )
@@ -114,10 +120,8 @@ class _BaseGeobenchDataset(Dataset):
         self._df = df[df["tortilla:data_split"] == split].reset_index(drop=True)
 
     def __len__(self) -> int:
+        """Return number of samples in the split."""
         return len(self._df)
-
-
-# ─── S2 segmentation ──────────────────────────────────────────────────────────
 
 
 class BurnScarsDataset(_BaseGeobenchDataset):
@@ -126,10 +130,11 @@ class BurnScarsDataset(_BaseGeobenchDataset):
     TORTILLA = "geobench_burn_scars.tortilla"
     band_order = ["B02", "B03", "B04", "B8A", "B11", "B12"]
 
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
-        image = _raster_f32(row, 0)  # (6, H, W)
-        mask = _raster_i64(row, 1).squeeze(0)  # (H, W)
+        image = _raster_f32(row, 0)
+        mask = _raster_i64(row, 1).squeeze(0)
         mask = mask.masked_fill(mask == -1, 2)
         return {"image": image, "mask": mask}
 
@@ -140,10 +145,11 @@ class CaFFeDataset(_BaseGeobenchDataset):
     TORTILLA = "geobench_caffe.tortilla"
     band_order = ["gray"]
 
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
-        image = _raster_f32(row, 0)  # (1, H, W)
-        mask = _raster_i64(row, 1).squeeze(0)  # (H, W)
+        image = _raster_f32(row, 0)
+        mask = _raster_i64(row, 1).squeeze(0)
         return {"image": image, "mask": mask}
 
 
@@ -151,6 +157,7 @@ class CloudSen12Dataset(_BaseGeobenchDataset):
     """CloudSen12: 12-band S2 → cloud segmentation (4 classes)."""
 
     TORTILLA = "geobench_cloudsen12.tortilla"
+    # tortilla has 14 bands (12 S2 + B10 cirrus + cloud prob); truncation to 12 happens in _sample_to_olmoearth
     band_order = [
         "B01",
         "B02",
@@ -166,26 +173,25 @@ class CloudSen12Dataset(_BaseGeobenchDataset):
         "B12",
     ]
 
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
-        image = _raster_f32(
-            row, 0
-        )  # (14, H, W) — 12 S2 bands + B10 cirrus + cloud prob
-        mask = _raster_i64(row, 1).squeeze(0)  # (H, W)
+        image = _raster_f32(row, 0)  # (14, H, W)
+        mask = _raster_i64(row, 1).squeeze(0)
         return {"image": image, "mask": mask}
 
 
 class SpaceNet7Dataset(_BaseGeobenchDataset):
-    """SpaceNet7: 4-band PlanetScope (RGBN) → building segmentation (+1 class offset)."""
+    """SpaceNet7: 4-band PlanetScope (RGBN) → building segmentation."""
 
     TORTILLA = "geobench_spacenet7.tortilla"
     band_order = ["red", "green", "blue", "nir"]
 
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
-        image = _raster_f32(row, 0)  # (3, H, W)
-        mask = _raster_i64(row, 1).squeeze(0)  # (H, W)
-        mask = mask + 1  # shift: 0 → background becomes class 1
+        image = _raster_f32(row, 0)
+        mask = _raster_i64(row, 1).squeeze(0) + 1  # shift: background → class 1
         return {"image": image, "mask": mask}
 
 
@@ -206,38 +212,21 @@ class SpaceNet2Dataset(_BaseGeobenchDataset):
         ],
         "pan": ["pan"],
     }
-
     TARGET_SIZE = 512  # raw tiles are 650×650; resize to match config height_width
 
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
-        import torch.nn.functional as F
-
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
-        image_worldview = _raster_f32(row, 0)  # (8, H, W)
-        image_pan = _raster_f32(row, 1)  # (1, H, W)
-        mask = _raster_i64(row, 2).squeeze(0)  # (H, W)
-        mask = mask + 1  # shift for background class
+        image_worldview = _raster_f32(row, 0)
+        image_pan = _raster_f32(row, 1)
+        mask = _raster_i64(row, 2).squeeze(0) + 1  # shift: background → class 1
 
         if image_worldview.shape[-1] != self.TARGET_SIZE:
-            image_worldview = F.interpolate(
-                image_worldview.unsqueeze(0),
-                size=(self.TARGET_SIZE, self.TARGET_SIZE),
-                mode="bilinear",
-                align_corners=False,
-            ).squeeze(0)
-            image_pan = F.interpolate(
-                image_pan.unsqueeze(0),
-                size=(self.TARGET_SIZE, self.TARGET_SIZE),
-                mode="bilinear",
-                align_corners=False,
-            ).squeeze(0)
+            image_worldview = _resize(image_worldview, self.TARGET_SIZE)
+            image_pan = _resize(image_pan, self.TARGET_SIZE)
             mask = (
-                F.interpolate(
-                    mask.unsqueeze(0).unsqueeze(0).float(),
-                    size=(self.TARGET_SIZE, self.TARGET_SIZE),
-                    mode="nearest",
-                )
-                .squeeze()
+                _resize(mask.unsqueeze(0).float(), self.TARGET_SIZE, mode="nearest")
+                .squeeze(0)
                 .long()
             )
 
@@ -247,8 +236,6 @@ class SpaceNet2Dataset(_BaseGeobenchDataset):
             "mask": mask,
         }
 
-
-# ─── multi-label classification ───────────────────────────────────────────────
 
 _BENV2_LABELS = [
     "Urban fabric",
@@ -297,7 +284,6 @@ class BENV2Dataset(_BaseGeobenchDataset):
     """BigEarthNet V2: S1 (2-band) + S2 (12-band) → 19-class multi-label."""
 
     TORTILLA = "geobench_benv2.tortilla"
-    # item[0]=S1(VV,VH) float32, item[1]=S2(12-band) uint16
     band_order = {
         "s1": ["VV", "VH"],
         "s2": [
@@ -316,14 +302,14 @@ class BENV2Dataset(_BaseGeobenchDataset):
         ],
     }
 
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row_df = self._df.iloc[idx]
         row = self._df.read(idx)
-        image_s1 = _raster_f32(row, 0)  # (2, 120, 120)
-        image_s2 = _raster_f32(row, 1)  # (12, 120, 120) cast from uint16
-        label_names: list[str] = row_df["labels"]
+        image_s1 = _raster_f32(row, 0)
+        image_s2 = _raster_f32(row, 1)
         label = torch.zeros(len(_BENV2_LABELS), dtype=torch.long)
-        for name in label_names:
+        for name in row_df["labels"]:
             label[_BENV2_L2I[name]] = 1
         return {"image_s1": image_s1, "image_s2": image_s2, "label": label}
 
@@ -332,7 +318,6 @@ class TreeSatAIDataset(_BaseGeobenchDataset):
     """TreeSatAI: aerial (4-band) + S1 (3-band) + S2 (12-band) → 15-class multi-label."""
 
     TORTILLA = "geobench_treesatai.tortilla"
-    # item[0]=aerial(4), item[1]=s1(3), item[2]=s2(12)
     band_order = {
         "aerial": ["red", "green", "blue", "nir"],
         "s1": ["vv", "vh", "vv/vh"],
@@ -352,15 +337,15 @@ class TreeSatAIDataset(_BaseGeobenchDataset):
         ],
     }
 
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row_df = self._df.iloc[idx]
         row = self._df.read(idx)
-        image_aerial = _raster_f32(row, 0)  # (4, H, W)
-        image_s1 = _raster_f32(row, 1)  # (3, H, W)
-        image_s2 = _raster_f32(row, 2)  # (12, H, W)
-        label_names: list[str] = row_df["species_labels"]
+        image_aerial = _raster_f32(row, 0)
+        image_s1 = _raster_f32(row, 1)
+        image_s2 = _raster_f32(row, 2)
         label = torch.zeros(len(_TREESATAI_CLASSES), dtype=torch.long)
-        for name in label_names:
+        for name in row_df["species_labels"]:
             if name in _TREESATAI_L2I:
                 label[_TREESATAI_L2I[name]] = 1
         return {
@@ -371,52 +356,32 @@ class TreeSatAIDataset(_BaseGeobenchDataset):
         }
 
 
-# ─── KuroSiwo ─────────────────────────────────────────────────────────────────
-
-_KURO_SIWO_CLASS_MAP = {
-    0: 0,
-    1: 1,
-    2: 2,
-    3: -1,
-}  # No Water→0, Perm Water→1, Flood→2, No Data→-1 (ignored)
+# No Water→0, Permanent Water→1, Flood→2, No Data→-1 (ignored)
+_KURO_SIWO_CLASS_MAP = torch.tensor([0, 1, 2, -1])
 
 
 class KuroSiwoDataset(_BaseGeobenchDataset):
-    """KuroSiwo: SAR (pre/post) + DEM → 4-class flood segmentation."""
+    """KuroSiwo: SAR (pre/post) + DEM → flood segmentation (3 classes + ignore)."""
 
     TORTILLA = "geobench_kuro_siwo.tortilla"
     band_order = {"sar": ["vv", "vh"], "dem": ["dem"]}
 
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
-        # items: [0]=pre_1 SAR, [1]=pre_2 SAR, [2]=post SAR, [3]=DEM, [4]=mask, [5]=invalid
-        image_pre_1 = _raster_f32(row, 0)  # (2, 224, 224)
-        image_pre_2 = _raster_f32(row, 1)  # (2, 224, 224)
-        image_post = _raster_f32(row, 2)  # (2, 224, 224)
-        image_dem = _raster_f32(row, 3)  # (1, 224, 224)
-        invalid = _raster_i64(row, 5)  # (1, 224, 224)
-
-        raw_mask = _raster_i64(row, 4).squeeze(0)
-        lookup = torch.tensor(
-            [_KURO_SIWO_CLASS_MAP[i] for i in range(len(_KURO_SIWO_CLASS_MAP))]
-        )
-        remapped = lookup[raw_mask]
-
-        # NaN handling for SAR
-        for img in (image_pre_1, image_pre_2, image_post):
-            img[torch.isnan(img)] = 0.0
-
+        # items: [0]=pre_1 SAR, [1]=pre_2 SAR, [2]=post SAR, [3]=DEM, [4]=mask
+        image_pre_1 = _raster_f32(row, 0).nan_to_num(0.0)
+        image_pre_2 = _raster_f32(row, 1).nan_to_num(0.0)
+        image_post = _raster_f32(row, 2).nan_to_num(0.0)
+        image_dem = _raster_f32(row, 3)
+        mask = _KURO_SIWO_CLASS_MAP[_raster_i64(row, 4).squeeze(0)]
         return {
             "image_pre_1": image_pre_1,
             "image_pre_2": image_pre_2,
             "image_post": image_post,
             "image_dem": image_dem,
-            "mask": remapped,
-            "invalid_data": invalid,
+            "mask": mask,
         }
-
-
-# ─── Substation ───────────────────────────────────────────────────────────────
 
 
 class SubstationDataset(_BaseGeobenchDataset):
@@ -439,15 +404,13 @@ class SubstationDataset(_BaseGeobenchDataset):
         "B12",
     ]
 
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
-        image = _raster_f32(row, 0)  # (13, 228, 228)
+        image = _raster_f32(row, 0)
         _, h, w = image.shape
         boxes, labels, masks = _load_json_annotations(row, 1, w, h)
         return {"image": image, "bbox_xyxy": boxes, "label": labels, "mask": masks}
-
-
-# ─── Timeseries tasks ─────────────────────────────────────────────────────────
 
 
 class BioMasstersDataset(_BaseGeobenchDataset):
@@ -462,32 +425,23 @@ class BioMasstersDataset(_BaseGeobenchDataset):
         "geobench_biomassters.0005.part.tortilla",
         "geobench_biomassters.0006.part.tortilla",
     ]
-    # File channel order per DatasetBandRegistry
     band_order = {
         "s1": ["VV_asc", "VH_asc", "VV_desc", "VH_desc"],
         "s2": ["B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A", "B11", "B12"],
     }
-    _NUM_S2_BANDS = 10  # registry has 10 S2 bands; file may have 11
 
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:  # noqa: D105
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
         row = self._df.read(idx)
         s1_idx = row[row["modality"] == "S1"].index
         s2_idx = row[row["modality"] == "S2"].index
         agbm_idx = row[row["modality"] == "AGBM"].index[0]
-
-        # Use first available time step for each modality (num_time_steps=1)
-        image_s1 = _raster_f32(row, s1_idx[0])  # (4, H, W)
+        image_s1 = _raster_f32(row, s1_idx[0]).nan_to_num(0.0)
         image_s1[image_s1 == -9999] = 0.0
-
-        # Clip to first _NUM_S2_BANDS channels in case the file has extras
-        image_s2 = _raster_f32(row, s2_idx[0])[: self._NUM_S2_BANDS]  # (10, H, W)
-
-        mask = _raster_f32(row, agbm_idx).squeeze(0)  # (H, W)
-
+        image_s2 = _raster_f32(row, s2_idx[0])[:10]  # file may have 11 bands; keep 10
+        mask = _raster_f32(row, agbm_idx).squeeze(0)
         return {"image_s1": image_s1, "image_s2": image_s2, "mask": mask}
 
-
-# ─── registry ─────────────────────────────────────────────────────────────────
 
 SLUG_TO_DATASET: dict[str, type[_BaseGeobenchDataset]] = {
     "benv2": BENV2Dataset,
