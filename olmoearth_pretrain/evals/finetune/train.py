@@ -11,8 +11,6 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from einops import rearrange
 from olmo_core.train.trainer import Trainer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
@@ -31,6 +29,7 @@ from olmoearth_pretrain.evals.finetune.constants import (
     UNFREEZE_LR_FACTOR,
 )
 from olmoearth_pretrain.evals.finetune.evaluate import eval_cls, eval_seg
+from olmoearth_pretrain.evals.finetune.heads import HeadType
 from olmoearth_pretrain.evals.finetune.layer_decay import build_layer_decay_optimizer
 from olmoearth_pretrain.evals.finetune.model import (
     BackboneWithHead,
@@ -78,7 +77,6 @@ def compute_eval_metrics(
     val_loader: DataLoader,
     test_loader: DataLoader | None,
     device: torch.device,
-    patch_size: int,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
 ) -> EvalTaskResult:
@@ -100,7 +98,6 @@ def compute_eval_metrics(
             val_loader,
             device,
             task_config.num_classes,
-            patch_size,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
         )
@@ -122,7 +119,6 @@ def compute_eval_metrics(
                 test_loader,
                 device,
                 task_config.num_classes,
-                patch_size,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
             )
@@ -151,6 +147,7 @@ def run_finetune_eval(
     primary_metric_class: int | None = None,
     layer_decay_rate: float | None = None,
     num_encoder_layers: int = 12,
+    head_type: HeadType = HeadType.LINEAR,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
     if seed is not None:
@@ -168,6 +165,7 @@ def run_finetune_eval(
         pooling_type=pooling_type,
         num_classes=task_config.num_classes,
         use_pooled_tokens=use_pooled_tokens,
+        head_type=head_type,
     ).to(device)
 
     # Trigger _init_head once with a tiny dry pass which initializes the head with the correct dimension.
@@ -186,7 +184,6 @@ def run_finetune_eval(
             val_loader,
             test_loader,
             device,
-            patch_size,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
         )
@@ -266,7 +263,6 @@ def run_finetune_eval(
                 val_loader,
                 test_loader,
                 device,
-                patch_size,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
             )
@@ -296,24 +292,6 @@ def run_finetune_eval(
             masked = to_device(masked, device)
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 logits, label = ft(masked, label)
-                if task_config.task_type == TaskType.SEGMENTATION:
-                    H, W = logits.shape[1], logits.shape[2]
-                    logits = rearrange(
-                        logits,
-                        "b h w (c i j) -> b c (h i) (w j)",
-                        h=H,
-                        w=W,
-                        c=task_config.num_classes,
-                        i=patch_size,
-                        j=patch_size,
-                    )
-                    if logits.shape[-2:] != label.shape[-2:]:
-                        logits = F.interpolate(
-                            logits.float(),
-                            size=label.shape[-2:],
-                            mode="bilinear",
-                            align_corners=True,
-                        )
                 loss = loss_fn(logits, label)
                 if wandb_logger is not None:
                     wandb_logger.log(
@@ -344,7 +322,6 @@ def run_finetune_eval(
                 val_loader,
                 device,
                 task_config.num_classes,
-                patch_size,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
             )
@@ -392,7 +369,6 @@ def run_finetune_eval(
         val_loader,
         test_loader,
         device,
-        patch_size,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
     )

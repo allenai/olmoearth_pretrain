@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import torch
-import torch.nn.functional as F
-from einops import rearrange
 from torch.utils.data import DataLoader
 
 from olmoearth_pretrain.evals.finetune.model import BackboneWithHead, to_device
@@ -56,7 +54,6 @@ def eval_seg(
     loader: DataLoader,
     device: torch.device,
     num_classes: int,
-    patch_size: int,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
 ) -> EvalResult:
@@ -67,24 +64,7 @@ def eval_seg(
         label = label.to(device=device)
         masked = to_device(masked, device)
         with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-            logits, _ = module(masked, label, is_train=False)  # (B, H, W, C*p*p)
-            H, W = logits.shape[1], logits.shape[2]
-            logits = rearrange(
-                logits,
-                "b h w (c i j) -> b c (h i) (w j)",
-                h=H,
-                w=W,
-                c=num_classes,
-                i=patch_size,
-                j=patch_size,
-            )
-            if logits.shape[-2:] != label.shape[-2:]:
-                logits = F.interpolate(
-                    logits.float(),
-                    size=label.shape[-2:],
-                    mode="bilinear",
-                    align_corners=True,
-                )
+            logits, _ = module(masked, label, is_train=False)  # (B, C, H, W)
         preds_all.append(torch.argmax(logits, dim=1).cpu())
         labels_all.append(label.cpu())
     preds = torch.cat(preds_all, 0)

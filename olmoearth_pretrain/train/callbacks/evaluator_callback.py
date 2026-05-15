@@ -41,6 +41,7 @@ from olmoearth_pretrain.evals.embedding_transforms import (
 from olmoearth_pretrain.evals.embeddings import get_embeddings
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
+from olmoearth_pretrain.evals.finetune.heads import HeadType
 from olmoearth_pretrain.evals.knn import run_knn
 from olmoearth_pretrain.evals.linear_probe import ProbeType, train_and_eval_probe
 from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
@@ -121,6 +122,9 @@ class DownstreamTaskConfig:
     # backbone params are trainable from epoch 0 with per-layer LR scaling.
     layer_decay_rate: float | None = None
     num_encoder_layers: int = 12
+    # Head type for finetuning: LINEAR (single layer, default) or
+    # MULTI_LAYER (conv/fc stack matching rslearn decoders).
+    head_type: HeadType = HeadType.LINEAR
     # For pretrain_subset dataset: path to training h5py data
     h5py_dir: str | None = None
     # For pretrain_subset: max samples to load
@@ -186,6 +190,7 @@ class DownstreamEvaluator:
         self.primary_metric_class = task.primary_metric_class
         self.layer_decay_rate = task.layer_decay_rate
         self.num_encoder_layers = task.num_encoder_layers
+        self.head_type = task.head_type
         self.h5py_dir = task.h5py_dir
         self.pretrain_max_samples = task.pretrain_max_samples
         self.run_on_test = run_on_test
@@ -539,6 +544,7 @@ class DownstreamEvaluator:
             primary_metric_class=self.primary_metric_class,
             layer_decay_rate=self.layer_decay_rate,
             num_encoder_layers=self.num_encoder_layers,
+            head_type=self.head_type,
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
