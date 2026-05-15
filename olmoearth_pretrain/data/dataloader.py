@@ -74,6 +74,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         persistent_workers: bool = True,
         multiprocessing_context: str = "spawn",
         num_dataset_repeats_per_epoch: int = 1,
+        reuse_dataloader: bool = False,
         # Dataloader-side masking
         transform: Transform | None = None,
         masking_strategy: MaskingStrategy | None = None,
@@ -136,6 +137,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.persistent_workers = persistent_workers
         self.multiprocessing_context = multiprocessing_context
         self.num_dataset_repeats_per_epoch = num_dataset_repeats_per_epoch
+        self.reuse_dataloader = reuse_dataloader
+        self._cached_dataloader: torch.utils.data.DataLoader | None = None
 
         # Dataloader-side masking configuration
         self.transform = transform
@@ -260,7 +263,10 @@ class OlmoEarthDataLoader(DataLoaderBase):
 
     def _iter_batches(self) -> Iterable[OlmoEarthSample]:
         """Iterate over the dataset in batches."""
-        return torch.utils.data.DataLoader(
+        if self.reuse_dataloader and self._cached_dataloader is not None:
+            return self._cached_dataloader
+
+        dl = torch.utils.data.DataLoader(
             _IterableDatasetWrapper(self),
             batch_size=None,
             num_workers=self.num_workers,
@@ -274,6 +280,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
             ),
             timeout=0,
         )
+        if self.reuse_dataloader:
+            self._cached_dataloader = dl
+        return dl
 
     @property
     def worker_info(self):  # type: ignore
@@ -529,13 +538,8 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
     def __init__(self, data_loader: OlmoEarthDataLoader):
         """Initialize the IterableDatasetWrapper."""
         self.data_loader = data_loader
-        workers = data_loader.num_workers or 1
-        self.rngs = [
-            get_rng(
-                data_loader.seed + data_loader.epoch + data_loader.dp_rank * workers + i
-            )
-            for i in range(workers)
-        ]
+        self._num_workers = data_loader.num_workers or 1
+        self.rngs: list[np.random.Generator] = []
         # Dataloader-side masking configuration
         self.transform = data_loader.transform
         self.masking_strategy = data_loader.masking_strategy
@@ -594,6 +598,17 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
 
         Transform and masking are applied in the batched collator for better vectorization.
         """
+        # Reseed RNGs each epoch so patch_size/hw_p sampling varies across epochs
+        self.rngs = [
+            get_rng(
+                self.data_loader.seed
+                + self.data_loader.epoch
+                + self.data_loader.dp_rank * self._num_workers
+                + i
+            )
+            for i in range(self._num_workers)
+        ]
+
         global_indices = self.data_loader.get_global_indices()
         indices = self.data_loader._get_local_instance_indices(global_indices)
 
@@ -636,6 +651,7 @@ class OlmoEarthDataLoaderConfig(Config):
     drop_last: bool = True
     persistent_workers: bool = True
     num_dataset_repeats_per_epoch: int = 1
+    reuse_dataloader: bool = False
     # New fields for dataloader-side masking
     transform_config: TransformConfig | None = None
     masking_config: MaskingConfig | None = None
@@ -654,6 +670,11 @@ class OlmoEarthDataLoaderConfig(Config):
         if self.num_masked_views not in (1, 2):
             raise ValueError(
                 f"num_masked_views must be 1 or 2, got {self.num_masked_views}"
+            )
+        if self.reuse_dataloader and not self.persistent_workers:
+            logger.warning(
+                "reuse_dataloader=True without persistent_workers=True: "
+                "workers will be respawned each epoch, which may still leak torch_shm_manager processes."
             )
 
     @property
@@ -719,6 +740,7 @@ class OlmoEarthDataLoaderConfig(Config):
             token_budget=self.token_budget,
             persistent_workers=self.persistent_workers,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
+            reuse_dataloader=self.reuse_dataloader,
             transform=transform,
             masking_strategy=masking_strategy,
             masking_strategy_b=masking_strategy_b,
