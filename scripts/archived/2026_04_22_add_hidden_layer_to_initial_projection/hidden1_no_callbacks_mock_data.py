@@ -29,7 +29,6 @@ from olmo_core.distributed.utils import (
     get_rank,
     get_world_size,
 )
-from olmo_core.utils import get_default_device, seed_all
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
@@ -41,6 +40,7 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
+from olmo_core.utils import get_default_device, seed_all
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
@@ -171,6 +171,9 @@ class RepeatingMockDataLoader(DataLoaderBase):
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         self._seed = state_dict.get("seed", self._seed)
         self._epoch = state_dict.get("epoch", self._epoch)
+
+    def get_mock_batch(self) -> dict[str, Any]:
+        return self._mock_batch
 
 
 # ---------------------------------------------------------------------------
