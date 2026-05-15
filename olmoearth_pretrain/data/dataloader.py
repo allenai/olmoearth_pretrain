@@ -634,6 +634,7 @@ class OlmoEarthDataLoaderConfig(Config):
     prefetch_factor: int | None = None
     target_device_type: str | None = None
     drop_last: bool = True
+    persistent_workers: bool = True
     num_dataset_repeats_per_epoch: int = 1
     # New fields for dataloader-side masking
     transform_config: TransformConfig | None = None
@@ -716,6 +717,7 @@ class OlmoEarthDataLoaderConfig(Config):
             max_patch_size=self.max_patch_size,
             sampled_hw_p_list=self.sampled_hw_p_list,
             token_budget=self.token_budget,
+            persistent_workers=self.persistent_workers,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
             masking_strategy=masking_strategy,
