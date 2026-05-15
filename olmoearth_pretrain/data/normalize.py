@@ -111,6 +111,13 @@ class Normalizer:
             std_vals.append(std_val)
         min_vals = np.array(mean_vals) - self.std_multiplier * np.array(std_vals)
         max_vals = np.array(mean_vals) + self.std_multiplier * np.array(std_vals)
+        # Some datasets (e.g. biomassters S1) have more channels than the modality's
+        # band_order (e.g. 4 channels = ascending + descending VV/VH). Tile stats to match.
+        n_channels = data.shape[-1]
+        if n_channels > len(min_vals) and n_channels % len(min_vals) == 0:
+            repeats = n_channels // len(min_vals)
+            min_vals = np.tile(min_vals, repeats)
+            max_vals = np.tile(max_vals, repeats)
         return (data - min_vals) / (max_vals - min_vals)  # type: ignore
 
     def normalize(self, modality: ModalitySpec, data: np.ndarray) -> np.ndarray:
