@@ -146,16 +146,32 @@ class PartialLoadTrainModule(ContrastiveLatentMIMTrainModule):
         )
 
         checkpoint_keys = set(metadata.state_dict_metadata.keys())
-        missing_keys = [
-            k for k in model_state_dict if f"model.{k}" not in checkpoint_keys
-        ]
-        for key in missing_keys:
-            del model_state_dict[key]
-            logger.info(
-                "Key model.%s absent from checkpoint – will keep random init", key
-            )
+        skip_keys: list[str] = []
+        for k in list(model_state_dict.keys()):
+            ckpt_key = f"model.{k}"
+            if ckpt_key not in checkpoint_keys:
+                skip_keys.append(k)
+                logger.info(
+                    "Key model.%s absent from checkpoint – will keep random init", k
+                )
+                continue
+            ckpt_meta = metadata.state_dict_metadata[ckpt_key]
+            if hasattr(ckpt_meta, "size"):
+                current_shape = model_state_dict[k].shape
+                if tuple(ckpt_meta.size) != tuple(current_shape):
+                    skip_keys.append(k)
+                    logger.info(
+                        "Key model.%s shape mismatch: checkpoint %s vs current %s"
+                        " – will keep random init",
+                        k,
+                        tuple(ckpt_meta.size),
+                        tuple(current_shape),
+                    )
 
-        if missing_keys:
+        for key in skip_keys:
+            del model_state_dict[key]
+
+        if skip_keys:
             # Architecture mismatch → partial load, skip optimizer state.
             return {"model": model_state_dict}
 
