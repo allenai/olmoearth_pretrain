@@ -1,46 +1,36 @@
-"""Memory leak bisect: drop callbacks + replace dataset with mock dataloader.
+"""Memory leak bisect: single-GPU run, no FSDP/distributed, no callbacks.
 
-Same callback changes as hidden1_no_callbacks.py (W&B disabled, Beaker and
-Checkpointer removed), but also replaces the h5py-backed dataloader with a
-synthetic one that generates one mock batch and repeats it every step.
+Same callback config as hidden1_no_callbacks.py (W&B disabled, Beaker and
+Checkpointer removed, GC callback disabled), plus:
 
-This eliminates h5py reads, DataLoader worker processes, and worker→main
-shared-memory IPC from the equation. If the leak persists, it's in the
-model/FSDP/trainer/Gloo path. If it disappears, it's in the
-dataset/worker/IPC path.
+- dp_config=None — disables FSDP. With train_single this is also enforced
+  automatically by experiment.py, but we set it here explicitly so dry_run
+  and other paths see the same config.
+- global_batch_size = rank_microbatch_size = 64 (1 microbatch per step on 1 GPU).
 
-NOTE: The real dataset is briefly constructed to generate a properly-shaped
-mock batch through the existing collator/masking pipeline, then discarded.
-The h5py directory must exist at build time (fine on Beaker).
+If the leak (worker count or shm_manager count growing, or system memory
+draining) DISAPPEARS here but reappears with FSDP, the source is in the
+distributed/NCCL/Gloo path. If it persists, it's in the dataloader workers
+or the per-step training loop.
+
+Run with::
+
+    python scripts/.../hidden1_no_callbacks_single_gpu.py train_single RUN_NAME local
 """
 
 import logging
-from collections.abc import Iterable
-from typing import Any, cast
 
 from olmo_core.config import DType
-from olmo_core.data.data_loader import DataLoaderBase
-from olmo_core.distributed.parallel.data_parallel import (
-    DataParallelConfig,
-    DataParallelType,
-)
-from olmo_core.distributed.utils import (
-    get_fs_local_rank,
-    get_rank,
-    get_world_size,
-)
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
     ConfigSaverCallback,
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
-    WandBCallback,
 )
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
-from olmo_core.utils import get_default_device, seed_all
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
@@ -50,7 +40,6 @@ from olmoearth_pretrain.internal.common import (
 )
 from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
-    OlmoEarthExperimentConfig,
     OlmoEarthVisualizeConfig,
     SubCmd,
     main,
@@ -117,116 +106,6 @@ BAND_DROPOUT_MODALITIES = [
     Modality.SENTINEL2_L2A.name,
     Modality.LANDSAT.name,
 ]
-
-
-# ---------------------------------------------------------------------------
-# Repeating mock dataloader — yields one pre-computed batch in a loop.
-# No worker processes, no shared memory, no h5py reads during training.
-# ---------------------------------------------------------------------------
-
-MOCK_BATCHES_PER_EPOCH = 200
-
-
-class RepeatingMockDataLoader(DataLoaderBase):
-    """DataLoader that endlessly replays a single pre-generated batch."""
-
-    def __init__(
-        self,
-        mock_batch: Any,
-        *,
-        work_dir: str,
-        global_batch_size: int,
-        token_budget: int | None,
-        min_patch_size: int = MIN_PATCH_SIZE,
-        max_patch_size: int = MAX_PATCH_SIZE,
-        dp_world_size: int = 1,
-        dp_rank: int = 0,
-        fs_local_rank: int = 0,
-        batches_per_epoch: int = MOCK_BATCHES_PER_EPOCH,
-    ) -> None:
-        super().__init__(
-            work_dir=work_dir,
-            global_batch_size=global_batch_size,
-            dp_world_size=dp_world_size,
-            dp_rank=dp_rank,
-            fs_local_rank=fs_local_rank,
-        )
-        self._mock_batch = mock_batch
-        self._batches_per_epoch = batches_per_epoch
-        self._seed = 42
-        # Speed monitor reads this; must be a number, not None.
-        self.token_budget = token_budget
-        self.min_patch_size = min_patch_size
-        self.max_patch_size = max_patch_size
-
-    def _iter_batches(self) -> Iterable[Any]:
-        for _ in range(self._batches_per_epoch):
-            yield self._mock_batch
-
-    @property
-    def total_batches(self) -> int:
-        return self._batches_per_epoch
-
-    def reshuffle(self, epoch: int | None = None, **_: Any) -> None:
-        if epoch is not None:
-            self._epoch = epoch
-
-    def state_dict(self) -> dict[str, Any]:
-        return {"seed": self._seed, "epoch": self._epoch}
-
-    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
-        self._seed = state_dict.get("seed", self._seed)
-        self._epoch = state_dict.get("epoch", self._epoch)
-
-    def get_mock_batch(self) -> dict[str, Any]:
-        return self._mock_batch
-
-
-# ---------------------------------------------------------------------------
-# Custom train function — replaces experiment.train via monkey-patch.
-# ---------------------------------------------------------------------------
-
-
-def train_with_mock_data(config: OlmoEarthExperimentConfig) -> None:
-    """Train with a synthetic repeating dataloader instead of real h5py data."""
-    seed_all(config.init_seed)
-
-    model = config.model.build()
-    device = get_default_device()
-    model = model.to(device)
-    train_module = config.train_module.build(model)
-
-    # Build the real dataloader once to generate a properly-shaped mock batch
-    # through the existing collator + masking pipeline.
-    dataset = config.dataset.build()
-    real_loader = config.data_loader.build(
-        dataset, dp_process_group=train_module.dp_process_group
-    )
-    mock_batch = real_loader.get_mock_batch()
-    del real_loader, dataset
-
-    dp_pg = train_module.dp_process_group
-    mock_loader = RepeatingMockDataLoader(
-        mock_batch,
-        work_dir=config.data_loader.work_dir,
-        global_batch_size=config.data_loader.global_batch_size,
-        token_budget=config.data_loader.token_budget,
-        dp_world_size=get_world_size(dp_pg),
-        dp_rank=get_rank(dp_pg),
-        fs_local_rank=get_fs_local_rank(),
-    )
-
-    trainer = config.trainer.build(train_module, mock_loader)
-
-    config_dict = config.as_config_dict()
-    cast(WandBCallback, trainer.callbacks["wandb"]).config = config_dict
-    cast(ConfigSaverCallback, trainer.callbacks["config_saver"]).config = config_dict
-    trainer.fit()
-
-
-# ---------------------------------------------------------------------------
-# Standard config builders (identical to hidden1_no_callbacks.py)
-# ---------------------------------------------------------------------------
 
 
 def _tokenization_config() -> TokenizationConfig:
@@ -299,11 +178,9 @@ def build_train_module_config(
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(warmup_steps=8000),
         ema_decay=(1.0, 1.0),
-        dp_config=DataParallelConfig(
-            name=DataParallelType.fsdp,
-            param_dtype=DType.bfloat16,
-            reduce_dtype=DType.float32,
-        ),
+        # No FSDP — single device. Use AMP for bf16 instead of FSDP mixed precision.
+        dp_config=None,
+        autocast_precision=DType.bfloat16,
     )
 
 
@@ -311,7 +188,8 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     """Build the dataloader config for an experiment."""
     return OlmoEarthDataLoaderConfig(
         num_workers=16,
-        global_batch_size=512,
+        # Single rank → global batch == rank batch == one microbatch.
+        global_batch_size=64,
         token_budget=2250,
         prefetch_factor=4,
         sampled_hw_p_list=list(range(1, 13)),
@@ -339,10 +217,11 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
+    # W&B disabled but kept in dict so experiment.py train() doesn't KeyError.
     wandb_callback = OlmoEarthWandBCallback(
         name=common.run_name,
         project="2026_05_14_hidden1_no_evals_memleak_test",
-        entity="eai-ai2",
+        entity="eai-ai2",  # nosec
         enabled=False,
     )
     garbage_collector_callback = GarbageCollectorCallback(enabled=False)
@@ -361,6 +240,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
         .with_callback("config_saver", ConfigSaverCallback())
         .with_callback("garbage_collector", garbage_collector_callback)
+        # No beaker callback
+        # No checkpointer callback
     )
     return trainer_config
 
@@ -411,11 +292,6 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 
 
 if __name__ == "__main__":
-    # Monkey-patch experiment.train so main() dispatches to our mock version.
-    import olmoearth_pretrain.internal.experiment as _experiment_module
-
-    _experiment_module.train = train_with_mock_data  # type: ignore[assignment]
-
     main(
         common_components_builder=build_common_components,
         model_config_builder=build_model_config,

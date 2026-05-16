@@ -7,7 +7,6 @@ from pathlib import Path
 import einops
 import numpy as np
 import torch
-import torch.multiprocessing
 from torch.utils.data import Dataset
 
 from olmoearth_pretrain.data.constants import Modality
@@ -23,9 +22,6 @@ from olmoearth_pretrain.evals.datasets.utils import load_min_max_stats
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
-
-# TODO: Move this into a worker init function and see if this has to do with the eval memory leak on long runs
-torch.multiprocessing.set_sharing_strategy("file_system")
 
 
 S2_BAND_STATS = {
