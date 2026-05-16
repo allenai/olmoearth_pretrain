@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.multiprocessing
 import torch.nn.functional as F
 from einops import repeat
 from PIL import Image
@@ -19,9 +18,6 @@ from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 from .constants import EVAL_S2_BAND_NAMES, EVAL_TO_OLMOEARTH_S2_BANDS
 from .normalize import normalize_bands
 from .utils import load_min_max_stats
-
-torch.multiprocessing.set_sharing_strategy("file_system")
-
 
 BAND_STATS = {
     "01 - Coastal aerosol": {
