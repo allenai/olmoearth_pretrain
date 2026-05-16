@@ -257,6 +257,10 @@ class ReinitPatchEmbedCallback(Callback):
 
     def post_checkpoint_loaded(self, path: Any) -> None:
         """Reinitialise encoder patch embeddings and copy to target encoder."""
+        save_folder = str(self.trainer.save_folder)
+        if str(path).startswith(save_folder):
+            logger.info("Resuming from save_folder – skipping patch embed reinit")
+            return
         model = self.trainer.train_module.model
         encoder = model.encoder
         encoder.patch_embeddings.apply(encoder._init_weights)
