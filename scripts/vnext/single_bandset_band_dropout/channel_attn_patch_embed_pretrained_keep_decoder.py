@@ -470,7 +470,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
-            embedding_batch_size=32,
+            embedding_batch_size=4,
             probe_batch_size=8,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
