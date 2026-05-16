@@ -32,6 +32,23 @@ class TestGetLayerId:
             == 0
         )
 
+    def test_composite_encodings_map_to_layer_0(self) -> None:
+        """Composite encodings should map to layer 0 (low LR)."""
+        assert (
+            get_layer_id(
+                "backbone.composite_encodings.per_modality_channel_embeddings.sentinel2_l2a",
+                num_layers=12,
+            )
+            == 0
+        )
+        assert (
+            get_layer_id(
+                "backbone.composite_encodings.pos_embed",
+                num_layers=12,
+            )
+            == 0
+        )
+
     def test_blocks_map_to_their_index(self) -> None:
         """Encoder blocks should map to their block index."""
         assert get_layer_id("backbone.blocks.0.attn.qkv.weight", num_layers=12) == 0

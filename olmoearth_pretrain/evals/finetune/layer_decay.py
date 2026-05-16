@@ -24,7 +24,9 @@ def get_layer_id(name: str, num_layers: int) -> int:
     relative = name[len(BACKBONE_PREFIX) + 1 :]
     if relative.startswith("blocks."):
         return int(relative.split(".")[1])
-    if relative.startswith("patch_embeddings"):
+    if relative.startswith("patch_embeddings") or relative.startswith(
+        "composite_encodings"
+    ):
         return 0
     return num_layers
 
