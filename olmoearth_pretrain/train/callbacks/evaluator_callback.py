@@ -778,7 +778,13 @@ class DownstreamEvaluatorCallback(Callback):
                     continue
                 result = self._perform_eval(evaluator)
                 self._log_eval_results_to_logger_pretrain(evaluator, result)
-                self._log_eval_results_to_wandb_pretrain(evaluator, result)
+                try:
+                    self._log_eval_results_to_wandb_pretrain(evaluator, result)
+                except Exception:
+                    logger.warning(
+                        f"Failed to log {evaluator.evaluation_name} results to wandb during pre_train "
+                        "(wandb may not be initialized on this rank). Results were logged to stdout."
+                    )
 
         if self.cancel_after_first_eval:
             self.trainer.cancel_run(
