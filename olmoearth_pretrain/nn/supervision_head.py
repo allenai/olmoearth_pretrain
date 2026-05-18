@@ -52,12 +52,16 @@ class SupervisionModalityConfig(Config):
         class_values: For classification only: list of normalized pixel values
             that map to class indices 0..N-1. Used to convert normalized targets
             to integer class labels.
+        norm_pix_loss: For regression only. If True, apply MAE-style per-patch
+            normalization to the target before computing MSE (mean/var pooled
+            over the (max_patch_size*max_patch_size*C) values in each patch).
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
     num_output_channels: int
     weight: float = 1.0
     class_values: list[float] | None = None
+    norm_pix_loss: bool = False
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -281,7 +285,13 @@ def _compute_per_modality_losses(
         elif cfg.task_type == SupervisionTaskType.BINARY_CLASSIFICATION:
             loss = _binary_classification_loss(pred, raw_target, valid_mask)
         elif cfg.task_type == SupervisionTaskType.REGRESSION:
-            loss = _regression_loss(pred, raw_target, valid_mask)
+            loss = _regression_loss(
+                pred,
+                raw_target,
+                valid_mask,
+                norm_pix_loss=cfg.norm_pix_loss,
+                max_patch_size=supervision_head.max_patch_size,
+            )
         else:
             raise ValueError(f"Unknown task type: {cfg.task_type}")
 
@@ -366,9 +376,48 @@ def _regression_loss(
     pred: Tensor,
     raw_target: Tensor,
     valid_mask: Tensor,
+    norm_pix_loss: bool = False,
+    max_patch_size: int = 1,
 ) -> Tensor:
-    """MSE loss for continuous modalities."""
-    valid_expanded = valid_mask.unsqueeze(-1).expand_as(pred)
-    pred_flat = pred[valid_expanded]
-    target_flat = raw_target[valid_expanded]
-    return F.mse_loss(pred_flat.float(), target_flat.float()).to(pred.dtype)
+    """MSE loss for continuous modalities.
+
+    If norm_pix_loss is True, apply MAE-style per-patch normalization to the
+    target before computing MSE. The image is grouped into
+    max_patch_size x max_patch_size patches at target resolution; for each
+    patch, mean and variance are pooled over the (max_patch_size^2 * C) values
+    (across valid pixels only) and used to normalize that patch's target.
+    """
+    if not norm_pix_loss:
+        valid_expanded = valid_mask.unsqueeze(-1).expand_as(pred)
+        pred_flat = pred[valid_expanded]
+        target_flat = raw_target[valid_expanded]
+        return F.mse_loss(pred_flat.float(), target_flat.float()).to(pred.dtype)
+
+    b, h, w, t, c = pred.shape
+    mps = max_patch_size
+    if h % mps != 0 or w % mps != 0:
+        raise ValueError(
+            f"norm_pix_loss requires target H, W ({h}, {w}) divisible by "
+            f"max_patch_size ({mps})"
+        )
+
+    pred_p = rearrange(pred, "b (ph i) (pw j) t c -> b ph pw t (i j c)", i=mps, j=mps)
+    target_p = rearrange(
+        raw_target, "b (ph i) (pw j) t c -> b ph pw t (i j c)", i=mps, j=mps
+    )
+    # Lift the spatial valid mask to per-(pixel, channel) and broadcast over T.
+    valid_p = rearrange(valid_mask, "b (ph i) (pw j) -> b ph pw (i j)", i=mps, j=mps)
+    valid_p_c = valid_p.unsqueeze(-1).expand(-1, -1, -1, -1, c)
+    valid_p_c = rearrange(valid_p_c, "b ph pw n c -> b ph pw (n c)").unsqueeze(3)
+
+    target_p_f = target_p.float()
+    n_valid = valid_p_c.sum(dim=-1, keepdim=True).clamp(min=1).to(target_p_f.dtype)
+    target_p_zeroed = target_p_f.masked_fill(~valid_p_c, 0.0)
+    mean = target_p_zeroed.sum(dim=-1, keepdim=True) / n_valid
+    diff = (target_p_f - mean).masked_fill(~valid_p_c, 0.0)
+    var = (diff * diff).sum(dim=-1, keepdim=True) / n_valid
+    target_normalized = (target_p_f - mean) / (var + 1e-6).sqrt()
+
+    valid_full = valid_p_c.expand_as(pred_p)
+    diff_sq = (pred_p.float() - target_normalized) ** 2
+    return diff_sq[valid_full].mean().to(pred.dtype)
