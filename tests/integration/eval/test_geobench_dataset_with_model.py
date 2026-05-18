@@ -24,7 +24,7 @@ def test_geobench_dataset(geobench_dir: Path) -> None:
         dataset="m-eurosat",
         geobench_dir=geobench_dir,
         split="train",
-        partition="0.01x_train",
+        label_fraction=0.01,
     )
     d = DataLoader(
         dataset=ds,

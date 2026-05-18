@@ -3,7 +3,6 @@
 import logging
 from typing import Any
 
-from olmo_core.config import StrEnum
 from torch.utils.data import Dataset
 
 import olmoearth_pretrain.evals.datasets.paths as paths
@@ -19,45 +18,6 @@ from .pretrain_subset import PretrainSubsetDataset
 from .rslearn_dataset import from_registry_entry
 
 logger = logging.getLogger(__name__)
-
-
-class EvalDatasetPartition(StrEnum):
-    """Enum for different dataset partitions."""
-
-    TRAIN1X = "default"
-    TRAIN_001X = "0.01x_train"  # Not valid for non train split
-    TRAIN_002X = "0.02x_train"
-    TRAIN_005X = "0.05x_train"
-    TRAIN_010X = "0.10x_train"
-    TRAIN_020X = "0.20x_train"
-    TRAIN_050X = "0.50x_train"
-
-
-LABEL_FRACTION_TO_PARTITION: dict[float, str] = {
-    0.01: EvalDatasetPartition.TRAIN_001X,
-    0.02: EvalDatasetPartition.TRAIN_002X,
-    0.05: EvalDatasetPartition.TRAIN_005X,
-    0.10: EvalDatasetPartition.TRAIN_010X,
-    0.20: EvalDatasetPartition.TRAIN_020X,
-    0.50: EvalDatasetPartition.TRAIN_050X,
-    1.00: EvalDatasetPartition.TRAIN1X,
-}
-
-
-def fraction_to_partition(label_fraction: float) -> str:
-    """Map a supported train-label fraction to an existing partition name.
-
-    Standard eval datasets use precomputed partition files or GeoBench
-    partition names. Unsupported fractions fail fast so low-label sweeps do not
-    silently fall back to full data.
-    """
-    try:
-        return LABEL_FRACTION_TO_PARTITION[label_fraction]
-    except KeyError:
-        valid = ", ".join(f"{value:g}" for value in sorted(LABEL_FRACTION_TO_PARTITION))
-        raise ValueError(
-            f"Unsupported label_fraction {label_fraction}. Supported values are: {valid}"
-        )
 
 
 def scale_train_samples(train_samples: int, label_fraction: float) -> int:
@@ -114,17 +74,15 @@ def get_eval_dataset(
         )
     elif eval_dataset.startswith("m-"):
         # m- == "modified for geobench"
-        partition = fraction_to_partition(label_fraction)
         return GeobenchDataset(
             geobench_dir=paths.GEOBENCH_DIR,
             dataset=eval_dataset,
             split=split,
-            partition=partition,
+            label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
     elif eval_dataset == "mados":
-        partition = fraction_to_partition(label_fraction)
         if norm_stats_from_pretrained:
             logger.warning(
                 "MADOS has very different norm stats than our pretraining dataset"
@@ -132,24 +90,22 @@ def get_eval_dataset(
         return MADOSDataset(
             path_to_splits=paths.MADOS_DIR,
             split=split,
-            partition=partition,
+            label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
     elif eval_dataset == "sen1floods11":
-        partition = fraction_to_partition(label_fraction)
         return Sen1Floods11Dataset(
             path_to_splits=paths.FLOODS_DIR,
             split=split,
-            partition=partition,
+            label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
     elif eval_dataset.startswith("pastis"):
-        partition = fraction_to_partition(label_fraction)
         kwargs = {
             "split": split,
-            "partition": partition,
+            "label_fraction": label_fraction,
             "norm_stats_from_pretrained": norm_stats_from_pretrained,
             "input_modalities": input_modalities,
             "norm_method": norm_method,
@@ -162,11 +118,10 @@ def get_eval_dataset(
             kwargs["path_to_splits"] = paths.PASTIS_DIR
         return PASTISRDataset(**kwargs)  # type: ignore
     elif eval_dataset == "breizhcrops":
-        partition = fraction_to_partition(label_fraction)
         return BreizhCropsDataset(
             path_to_splits=paths.BREIZHCROPS_DIR,
             split=split,
-            partition=partition,
+            label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )

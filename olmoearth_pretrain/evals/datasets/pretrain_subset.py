@@ -8,6 +8,7 @@ tasks such as WorldCover, OSM, SRTM, CDL, canopy height, and WorldCereal.
 from __future__ import annotations
 
 import logging
+from functools import cache
 
 import numpy as np
 import pandas as pd
@@ -40,6 +41,17 @@ WRI_CANOPY_TARGET_MODALITY = "wri_canopy_height_map"
 WORLDCEREAL_PRIMARY_CHANNEL = 0
 # CDL uses 0 to mark no-data / background.
 CDL_IGNORE_CODE = 0
+
+
+@cache
+def _read_sample_metadata(path: str) -> pd.DataFrame:
+    """Cached read of the immutable per-dataset sample-metadata CSV.
+
+    Each probe builds train/valid/test datasets that all reference the same
+    metadata file; without this cache the CSV is parsed three times per probe
+    on every eval cycle. Callers must not mutate the returned frame.
+    """
+    return pd.read_csv(path)
 
 
 class PretrainSubsetDataset(Dataset):
@@ -161,7 +173,7 @@ class PretrainSubsetDataset(Dataset):
         dataset: OlmoEarthDataset, target_modality: str
     ) -> np.ndarray:
         """Positions into dataset.sample_indices whose H5 sample has the target."""
-        metadata_df = pd.read_csv(str(dataset.sample_metadata_path))
+        metadata_df = _read_sample_metadata(str(dataset.sample_metadata_path))
         if target_modality not in metadata_df.columns:
             raise ValueError(
                 f"Target modality '{target_modality}' has no presence column in "

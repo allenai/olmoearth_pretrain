@@ -56,7 +56,7 @@ class BreizhCropsDataset(Dataset):
         self,
         path_to_splits: Path,
         split: str,
-        partition: str,
+        label_fraction: float = 1.0,
         norm_stats_from_pretrained: bool = False,
         # Default to 2std no clip - this matches what our model sees in pretraining,
         # so when using dataset stats (e.g. for MADOS) consistency is important.
@@ -77,7 +77,7 @@ class BreizhCropsDataset(Dataset):
         Args:
             path_to_splits: Path where .pt objects returned by process_mados have been saved
             split: Split to use
-            partition: Partition to use
+            label_fraction: Fraction of train labels to use; only 1.0 is currently supported
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
             monthly_average: Whether to compute a monthly average of the timesteps
@@ -140,8 +140,10 @@ class BreizhCropsDataset(Dataset):
         self.means, self.stds, self.mins, self.maxs = self._get_norm_stats(
             merged_band_stats
         )
-        if partition != "default":
-            raise NotImplementedError(f"partition {partition} not implemented yet")
+        if label_fraction != 1.0:
+            raise NotImplementedError(
+                f"label_fraction {label_fraction} not implemented yet for BreizhCrops"
+            )
 
         self.norm_stats_from_pretrained = norm_stats_from_pretrained
         self.norm_method = norm_method
