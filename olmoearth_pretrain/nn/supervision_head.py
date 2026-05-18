@@ -55,6 +55,11 @@ class SupervisionModalityConfig(Config):
         norm_pix_loss: For regression only. If True, apply MAE-style per-patch
             normalization to the target before computing MSE (mean/var pooled
             over the (max_patch_size*max_patch_size*C) values in each patch).
+        pos_weight: For binary_classification only. If True, compute per-channel
+            positive frequency from the batch's valid pixels and pass
+            pos_weight = (1 - p) / p to BCE. Shifts the loss-minimizing constant
+            solution off the class prior so the model has to learn spatial
+            structure rather than predict-prior.
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
@@ -62,6 +67,7 @@ class SupervisionModalityConfig(Config):
     weight: float = 1.0
     class_values: list[float] | None = None
     norm_pix_loss: bool = False
+    pos_weight: bool = False
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -283,7 +289,9 @@ def _compute_per_modality_losses(
             class_values = supervision_head.get_class_values(name)
             loss = _classification_loss(pred, raw_target, valid_mask, class_values)
         elif cfg.task_type == SupervisionTaskType.BINARY_CLASSIFICATION:
-            loss = _binary_classification_loss(pred, raw_target, valid_mask)
+            loss = _binary_classification_loss(
+                pred, raw_target, valid_mask, pos_weight=cfg.pos_weight
+            )
         elif cfg.task_type == SupervisionTaskType.REGRESSION:
             loss = _regression_loss(
                 pred,
@@ -362,14 +370,40 @@ def _binary_classification_loss(
     pred: Tensor,
     raw_target: Tensor,
     valid_mask: Tensor,
+    pos_weight: bool = False,
 ) -> Tensor:
-    """BCE loss for multi-band binary modalities (e.g., OSM raster, WorldCereal)."""
+    """BCE loss for multi-band binary modalities (e.g., OSM raster, WorldCereal).
+
+    If pos_weight is True, computes per-channel positive frequency over this
+    batch's valid pixels and applies pos_weight = (1 - p) / p in BCE. The
+    loss-minimizing constant solution moves from sigmoid(z) = p (loss = entropy
+    of prior) to sigmoid(z) = 0.5 (loss = log(2)), so the model can't get away
+    with predict-prior collapse.
+    """
+    # pred, raw_target: [B, H, W, T, C]; valid_mask: [B, H, W, T]
     valid_expanded = valid_mask.unsqueeze(-1).expand_as(pred)
-    pred_flat = pred[valid_expanded]
-    target_flat = raw_target[valid_expanded]
-    return F.binary_cross_entropy_with_logits(
-        pred_flat.float(), target_flat.float()
-    ).to(pred.dtype)
+
+    if not pos_weight:
+        pred_flat = pred[valid_expanded]
+        target_flat = raw_target[valid_expanded]
+        return F.binary_cross_entropy_with_logits(
+            pred_flat.float(), target_flat.float()
+        ).to(pred.dtype)
+
+    # Per-channel positive rate from the batch's valid pixels.
+    valid_mask_f = valid_mask.float().unsqueeze(-1)  # [B, H, W, T, 1]
+    valid_count = valid_mask_f.sum().clamp(min=1.0)
+    pos_count_per_ch = (raw_target.float() * valid_mask_f).sum(dim=(0, 1, 2, 3))  # [C]
+    p_pos = (pos_count_per_ch / valid_count).clamp(min=1e-3, max=1.0 - 1e-3)
+    pos_weight_tensor = (1.0 - p_pos) / p_pos  # [C], broadcasts on last dim
+
+    elementwise_loss = F.binary_cross_entropy_with_logits(
+        pred.float(),
+        raw_target.float(),
+        pos_weight=pos_weight_tensor,
+        reduction="none",
+    )  # [B, H, W, T, C]
+    return elementwise_loss[valid_expanded].mean().to(pred.dtype)
 
 
 def _regression_loss(

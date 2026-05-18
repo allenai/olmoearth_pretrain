@@ -197,6 +197,7 @@ SUPERVISION_MODALITY_CONFIGS = {
         num_output_channels=30,
         weight=SUPERVISION_WEIGHT
         * TASK_TYPE_WEIGHTS[SupervisionTaskType.BINARY_CLASSIFICATION],
+        pos_weight=True,
     ),
     "wri_canopy_height_map": SupervisionModalityConfig(
         task_type=SupervisionTaskType.REGRESSION,
@@ -216,6 +217,7 @@ SUPERVISION_MODALITY_CONFIGS = {
         num_output_channels=8,
         weight=SUPERVISION_WEIGHT
         * TASK_TYPE_WEIGHTS[SupervisionTaskType.BINARY_CLASSIFICATION],
+        pos_weight=True,
     ),
 }
 
