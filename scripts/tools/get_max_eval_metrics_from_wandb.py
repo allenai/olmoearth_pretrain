@@ -8,8 +8,8 @@ from collections import defaultdict
 
 import numpy as np
 import pandas as pd
-import wandb
 
+import wandb
 from olmoearth_pretrain.evals.datasets.configs import TaskType, dataset_to_config
 from olmoearth_pretrain.evals.models import (
     MODELS_WITH_MULTIPLE_SIZES,
@@ -209,6 +209,8 @@ def _infer_default_primary_metric(dataset_name: str) -> str | None:
         return "f1" if cfg.is_multilabel else "accuracy"
     if cfg.task_type == TaskType.SEGMENTATION:
         return "miou"
+    if cfg.task_type == TaskType.REGRESSION:
+        return "neg_rmse"
     return None
 
 
@@ -723,6 +725,12 @@ if __name__ == "__main__":
                     # also try the segmentation suffixes
                     if val is None:
                         metric_alt = f"{metric}/miou"
+                        key_alt = f"eval/{metric_alt}"
+                        val = partition_metrics[partition].get(key_alt)
+                        name_for_print = metric_alt if val is not None else metric
+                    # also try the regression suffix (pretrain_subset_* probes)
+                    if val is None:
+                        metric_alt = f"{metric}/neg_rmse"
                         key_alt = f"eval/{metric_alt}"
                         val = partition_metrics[partition].get(key_alt)
                         name_for_print = metric_alt if val is not None else metric
