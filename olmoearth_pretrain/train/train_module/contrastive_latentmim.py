@@ -319,8 +319,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 extra_metrics,
                 supervision_preds,
             ) = self.model(batch, patch_size)
-            if extra_metrics is not None:
-                self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
                 output_dict = self.model.target_encoder.forward(
@@ -348,5 +346,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 loss = loss + sup_loss
                 for mod_name, mod_loss in per_modality_losses.items():
                     extra_metrics[f"supervision/{mod_name}"] = mod_loss
+
+            if extra_metrics is not None:
+                self.log_extra_metrics(extra_metrics)
 
             return loss, latent, decoded, target_output, latent_projected_and_pooled

@@ -991,6 +991,32 @@ class L1Loss(Loss):
         return F.l1_loss(pred, target)
 
 
+@LOSS_REGISTRY.register("cosine_similarity")
+class CosineSimilarityLoss(Loss):
+    """Negative mean cosine similarity between predicted and target decoder tokens."""
+
+    name = "CosineSim"
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute negative cosine similarity loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value (negative mean cosine similarity).
+        """
+        all_preds, all_masks = predictions.flatten_all_tokens_and_masks()
+        all_targets = targets.flatten_all_tokens_and_masks()[0]
+        pred = all_preds[all_masks == MaskValue.DECODER.value]
+        target = all_targets[all_masks == MaskValue.DECODER.value]
+        return -F.cosine_similarity(pred, target, dim=-1).mean()
+
+
 @LOSS_REGISTRY.register("l2")
 class L2Loss(Loss):
     """Loss function for L2 (mean squared error)."""
