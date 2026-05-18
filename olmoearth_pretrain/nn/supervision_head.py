@@ -60,6 +60,11 @@ class SupervisionModalityConfig(Config):
             pos_weight = (1 - p) / p to BCE. Shifts the loss-minimizing constant
             solution off the class prior so the model has to learn spatial
             structure rather than predict-prior.
+        regression_loss_type: For regression only. "mse" (default) uses
+            F.mse_loss; "l1" uses F.l1_loss. L1 is more robust to long-tail
+            targets like SRTM/canopy where MSE overweights extreme outliers.
+            Matches AlphaEarth's choice (Table S2 of arXiv:2507.22291) of L1
+            across all continuous reconstruction targets.
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
@@ -68,6 +73,7 @@ class SupervisionModalityConfig(Config):
     class_values: list[float] | None = None
     norm_pix_loss: bool = False
     pos_weight: bool = False
+    regression_loss_type: str = "mse"
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -78,6 +84,11 @@ class SupervisionModalityConfig(Config):
             and self.class_values is None
         ):
             raise ValueError("class_values must be provided for classification tasks")
+        if self.regression_loss_type not in ("mse", "l1"):
+            raise ValueError(
+                f"regression_loss_type must be 'mse' or 'l1', got "
+                f"{self.regression_loss_type!r}"
+            )
 
 
 @dataclass
@@ -299,6 +310,7 @@ def _compute_per_modality_losses(
                 valid_mask,
                 norm_pix_loss=cfg.norm_pix_loss,
                 max_patch_size=supervision_head.max_patch_size,
+                regression_loss_type=cfg.regression_loss_type,
             )
         else:
             raise ValueError(f"Unknown task type: {cfg.task_type}")
@@ -412,11 +424,16 @@ def _regression_loss(
     valid_mask: Tensor,
     norm_pix_loss: bool = False,
     max_patch_size: int = 1,
+    regression_loss_type: str = "mse",
 ) -> Tensor:
-    """MSE loss for continuous modalities.
+    """Regression loss for continuous modalities.
+
+    regression_loss_type selects MSE (default) or L1. L1 is more robust to
+    long-tail targets — matches AlphaEarth's choice across all continuous
+    reconstruction targets in arXiv:2507.22291 Table S2.
 
     If norm_pix_loss is True, apply MAE-style per-patch normalization to the
-    target before computing MSE. The image is grouped into
+    target before computing the loss. The image is grouped into
     max_patch_size x max_patch_size patches at target resolution; for each
     patch, mean and variance are pooled over the (max_patch_size^2 * C) values
     (across valid pixels only) and used to normalize that patch's target.
@@ -425,7 +442,8 @@ def _regression_loss(
         valid_expanded = valid_mask.unsqueeze(-1).expand_as(pred)
         pred_flat = pred[valid_expanded]
         target_flat = raw_target[valid_expanded]
-        return F.mse_loss(pred_flat.float(), target_flat.float()).to(pred.dtype)
+        loss_fn = F.l1_loss if regression_loss_type == "l1" else F.mse_loss
+        return loss_fn(pred_flat.float(), target_flat.float()).to(pred.dtype)
 
     b, h, w, t, c = pred.shape
     mps = max_patch_size
@@ -453,5 +471,6 @@ def _regression_loss(
     target_normalized = (target_p_f - mean) / (var + 1e-6).sqrt()
 
     valid_full = valid_p_c.expand_as(pred_p)
-    diff_sq = (pred_p.float() - target_normalized) ** 2
-    return diff_sq[valid_full].mean().to(pred.dtype)
+    diff = pred_p.float() - target_normalized
+    elementwise = diff.abs() if regression_loss_type == "l1" else diff * diff
+    return elementwise[valid_full].mean().to(pred.dtype)

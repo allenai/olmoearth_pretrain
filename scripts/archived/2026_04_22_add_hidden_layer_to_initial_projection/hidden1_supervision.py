@@ -191,6 +191,7 @@ SUPERVISION_MODALITY_CONFIGS = {
         num_output_channels=1,
         weight=SUPERVISION_WEIGHT * TASK_TYPE_WEIGHTS[SupervisionTaskType.REGRESSION],
         norm_pix_loss=False,
+        regression_loss_type="l1",
     ),
     "openstreetmap_raster": SupervisionModalityConfig(
         task_type=SupervisionTaskType.BINARY_CLASSIFICATION,
@@ -204,6 +205,7 @@ SUPERVISION_MODALITY_CONFIGS = {
         num_output_channels=1,
         weight=SUPERVISION_WEIGHT * TASK_TYPE_WEIGHTS[SupervisionTaskType.REGRESSION],
         norm_pix_loss=False,
+        regression_loss_type="l1",
     ),
     "cdl": SupervisionModalityConfig(
         task_type=SupervisionTaskType.CLASSIFICATION,
