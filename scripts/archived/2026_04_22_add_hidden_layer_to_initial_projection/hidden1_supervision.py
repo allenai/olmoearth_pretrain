@@ -1,6 +1,7 @@
 """hidden1 + pixel supervision head on decode-only modalities."""
 
 import logging
+from dataclasses import replace
 
 from hidden1 import (
     BAND_DROPOUT_MODALITIES,
@@ -219,8 +220,13 @@ SUPERVISION_MODALITY_CONFIGS = {
 }
 
 
-def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """Build the model config for an experiment."""
+def build_model_config(
+    common: CommonComponents, weight_multiplier: float = 1.0
+) -> LatentMIMConfig:
+    """Build the model config for an experiment.
+
+    weight_multiplier scales every supervision modality's loss weight uniformly.
+    """
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
     encoder_config = EncoderConfig(
@@ -248,8 +254,15 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_sequence_length=12,
         tokenization_config=common.tokenization_config,
     )
+    if weight_multiplier == 1.0:
+        modality_configs = SUPERVISION_MODALITY_CONFIGS
+    else:
+        modality_configs = {
+            name: replace(cfg, weight=cfg.weight * weight_multiplier)
+            for name, cfg in SUPERVISION_MODALITY_CONFIGS.items()
+        }
     supervision_head_config = SupervisionHeadConfig(
-        modality_configs=SUPERVISION_MODALITY_CONFIGS,
+        modality_configs=modality_configs,
     )
     return LatentMIMConfig(
         encoder_config=encoder_config,
