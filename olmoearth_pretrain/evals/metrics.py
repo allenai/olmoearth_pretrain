@@ -36,6 +36,7 @@ class EvalTaskResult:
     test_result: EvalResult | None
     bootstrap_stats: dict[str, Any] = field(default_factory=dict)
     eval_time: float | None = None
+    embedding_diagnostics: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass

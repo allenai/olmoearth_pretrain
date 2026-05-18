@@ -23,7 +23,40 @@ from olmoearth_pretrain.evals.models import (
 from olmoearth_pretrain.evals.models.dinov3.dinov3 import DINOv3, DinoV3Models
 from olmoearth_pretrain.nn.flexi_vit import Encoder
 from olmoearth_pretrain.nn.pooling import PoolingType
+from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
+
+S2_SINGLE_BANDSET = ModalityTokenization(
+    band_groups=[
+        [
+            "B02",
+            "B03",
+            "B04",
+            "B08",
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12",
+            "B01",
+            "B09",
+        ],
+    ]
+)
+
+LANDSAT_SINGLE_BANDSET = ModalityTokenization(
+    band_groups=[
+        ["B8", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"],
+    ]
+)
+
+SINGLE_BANDSET_CONFIG = TokenizationConfig(
+    overrides={
+        "sentinel2_l2a": S2_SINGLE_BANDSET,
+        "landsat": LANDSAT_SINGLE_BANDSET,
+    }
+)
 
 
 def count_params(model: torch.nn.Module, trainable_only: bool = True):
@@ -164,6 +197,93 @@ if __name__ == "__main__":
             drop_path=0.1,
             supported_modalities=modalities,
             max_sequence_length=24,
+        ),
+        Encoder(  # large encoder, single bandset
+            embedding_size=1024,
+            min_patch_size=1,
+            max_patch_size=8,
+            num_heads=16,
+            mlp_ratio=4,
+            depth=24,
+            drop_path=0.1,
+            supported_modalities=modalities,
+            max_sequence_length=24,
+            tokenization_config=SINGLE_BANDSET_CONFIG,
+        ),
+        Encoder(  # base encoder, single bandset, hidden1
+            embedding_size=768,
+            min_patch_size=1,
+            max_patch_size=8,
+            num_heads=12,
+            mlp_ratio=4,
+            depth=12,
+            drop_path=0.1,
+            supported_modalities=modalities,
+            max_sequence_length=24,
+            tokenization_config=SINGLE_BANDSET_CONFIG,
+            patch_embed_hidden_sizes=[64],
+        ),
+        Encoder(  # tiny encoder, single bandset, hidden1
+            embedding_size=192,
+            min_patch_size=1,
+            max_patch_size=8,
+            num_heads=3,
+            mlp_ratio=4,
+            depth=12,
+            drop_path=0.1,
+            supported_modalities=modalities,
+            max_sequence_length=24,
+            tokenization_config=SINGLE_BANDSET_CONFIG,
+            patch_embed_hidden_sizes=[64],
+        ),
+        Encoder(  # nano encoder, single bandset, hidden1
+            embedding_size=128,
+            min_patch_size=1,
+            max_patch_size=8,
+            num_heads=8,
+            mlp_ratio=4,
+            depth=4,
+            drop_path=0.1,
+            supported_modalities=modalities,
+            max_sequence_length=24,
+            tokenization_config=SINGLE_BANDSET_CONFIG,
+            patch_embed_hidden_sizes=[64],
+        ),
+        Encoder(  # base encoder, single bandset
+            embedding_size=768,
+            min_patch_size=1,
+            max_patch_size=8,
+            num_heads=12,
+            mlp_ratio=4,
+            depth=12,
+            drop_path=0.1,
+            supported_modalities=modalities,
+            max_sequence_length=24,
+            tokenization_config=SINGLE_BANDSET_CONFIG,
+        ),
+        Encoder(  # tiny encoder, single bandset
+            embedding_size=192,
+            min_patch_size=1,
+            max_patch_size=8,
+            num_heads=3,
+            mlp_ratio=4,
+            depth=12,
+            drop_path=0.1,
+            supported_modalities=modalities,
+            max_sequence_length=24,
+            tokenization_config=SINGLE_BANDSET_CONFIG,
+        ),
+        Encoder(  # nano encoder, single bandset
+            embedding_size=128,
+            min_patch_size=1,
+            max_patch_size=8,
+            num_heads=8,
+            mlp_ratio=4,
+            depth=4,
+            drop_path=0.1,
+            supported_modalities=modalities,
+            max_sequence_length=24,
+            tokenization_config=SINGLE_BANDSET_CONFIG,
         ),
         Terramind("base"),
         Terramind("large"),

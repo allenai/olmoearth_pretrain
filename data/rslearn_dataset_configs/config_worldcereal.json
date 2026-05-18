@@ -6,13 +6,17 @@
           "bands": [
             "tc-annual-temporarycrops-classification"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
         "class_path": "rslearn.data_sources.worldcereal.WorldCereal",
         "init_args": {
           "worldcereal_dir": "source_data/worldcereal/"
+        },
+        "query_config": {
+          "space_mode": "SINGLE_COMPOSITE"
         }
       },
       "resampling_method": "nearest",
@@ -24,13 +28,17 @@
           "bands": [
             "tc-maize-main-irrigation-classification"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
         "class_path": "rslearn.data_sources.worldcereal.WorldCereal",
         "init_args": {
           "worldcereal_dir": "source_data/worldcereal/"
+        },
+        "query_config": {
+          "space_mode": "SINGLE_COMPOSITE"
         }
       },
       "resampling_method": "nearest",
@@ -42,13 +50,17 @@
           "bands": [
             "tc-maize-main-maize-classification"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
         "class_path": "rslearn.data_sources.worldcereal.WorldCereal",
         "init_args": {
           "worldcereal_dir": "source_data/worldcereal/"
+        },
+        "query_config": {
+          "space_mode": "SINGLE_COMPOSITE"
         }
       },
       "resampling_method": "nearest",
@@ -60,13 +72,17 @@
           "bands": [
             "tc-maize-second-irrigation-classification"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
         "class_path": "rslearn.data_sources.worldcereal.WorldCereal",
         "init_args": {
           "worldcereal_dir": "source_data/worldcereal/"
+        },
+        "query_config": {
+          "space_mode": "SINGLE_COMPOSITE"
         }
       },
       "resampling_method": "nearest",
@@ -78,13 +94,17 @@
           "bands": [
             "tc-maize-second-maize-classification"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
         "class_path": "rslearn.data_sources.worldcereal.WorldCereal",
         "init_args": {
           "worldcereal_dir": "source_data/worldcereal/"
+        },
+        "query_config": {
+          "space_mode": "SINGLE_COMPOSITE"
         }
       },
       "resampling_method": "nearest",
@@ -96,13 +116,17 @@
           "bands": [
             "tc-springcereals-springcereals-classification"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
         "class_path": "rslearn.data_sources.worldcereal.WorldCereal",
         "init_args": {
           "worldcereal_dir": "source_data/worldcereal/"
+        },
+        "query_config": {
+          "space_mode": "SINGLE_COMPOSITE"
         }
       },
       "resampling_method": "nearest",
@@ -114,13 +138,17 @@
           "bands": [
             "tc-wintercereals-irrigation-classification"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
         "class_path": "rslearn.data_sources.worldcereal.WorldCereal",
         "init_args": {
           "worldcereal_dir": "source_data/worldcereal/"
+        },
+        "query_config": {
+          "space_mode": "SINGLE_COMPOSITE"
         }
       },
       "resampling_method": "nearest",
@@ -132,13 +160,17 @@
           "bands": [
             "tc-wintercereals-wintercereals-classification"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_value": 255.0
         }
       ],
       "data_source": {
         "class_path": "rslearn.data_sources.worldcereal.WorldCereal",
         "init_args": {
           "worldcereal_dir": "source_data/worldcereal/"
+        },
+        "query_config": {
+          "space_mode": "SINGLE_COMPOSITE"
         }
       },
       "resampling_method": "nearest",

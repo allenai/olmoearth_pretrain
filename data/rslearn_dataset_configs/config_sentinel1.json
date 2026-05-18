@@ -9,10 +9,7 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
@@ -48,10 +45,7 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
@@ -85,10 +79,7 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
@@ -122,10 +113,7 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
@@ -159,10 +147,7 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
@@ -196,10 +181,7 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
@@ -233,10 +215,7 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
@@ -270,10 +249,7 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
@@ -307,10 +283,7 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
@@ -344,10 +317,7 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
@@ -381,10 +351,7 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
@@ -418,10 +385,7 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
@@ -455,10 +419,7 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {

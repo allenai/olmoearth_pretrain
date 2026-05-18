@@ -49,6 +49,18 @@ class EvalDatasetConfig:
 
 
 DATASET_TO_CONFIG = {
+    # Dummy config — only used for embedding diagnostics, not actual classification.
+    "pretrain_subset": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[],
+        num_classes=1,
+        is_multilabel=False,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
     "m-eurosat": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
         imputes=[],
