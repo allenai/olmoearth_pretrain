@@ -19,8 +19,9 @@ import os
 from collections import defaultdict
 
 import requests
-import wandb
 from tqdm import tqdm
+
+import wandb
 
 API_TIMEOUT = 120
 GRAPHQL_URL = "https://api.wandb.ai/graphql"
