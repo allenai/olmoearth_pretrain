@@ -381,19 +381,23 @@ def get_max_metrics_grouped(
                     if primary_metric_name is not None:
                         additional_key = f"{normalized_key}/{primary_metric_name}"
 
-                # Ensure the run has test metrics (check both namespaces).
-                # For post-PR#504 runs, the primary test metric is at eval/test/{task}
-                # while sub-metrics are at eval_other/test/{task}/{metric}.
-                test_key_primary = f"eval/test/{task_name}"
-                test_key = _get_corresponding_test_key(normalized_key)
-                has_test = (
-                    run.summary.get(test_key) is not None
-                    or run.summary.get(test_key.replace("eval/", "eval_other/", 1))
-                    is not None
-                    or run.summary.get(test_key_primary) is not None
-                )
-                if not has_test:
-                    continue
+                # When reporting test metrics, require the run to have logged a
+                # test value (so we can later look up the corresponding test
+                # result for the best-val run). When only collecting val
+                # metrics, runs without a test value (e.g. neg_rmse tasks where
+                # the evaluator's `>= 0` gate suppresses test logging) should
+                # still surface their val numbers.
+                if get_test_metrics:
+                    test_key_primary = f"eval/test/{task_name}"
+                    test_key = _get_corresponding_test_key(normalized_key)
+                    has_test = (
+                        run.summary.get(test_key) is not None
+                        or run.summary.get(test_key.replace("eval/", "eval_other/", 1))
+                        is not None
+                        or run.summary.get(test_key_primary) is not None
+                    )
+                    if not has_test:
+                        continue
 
                 # If for the given metric, it is a linear probe task skip if it was not done with early stop linear probing
                 task_config = run.config["trainer"]["callbacks"][
