@@ -415,14 +415,7 @@ PRETRAIN_AUX_EVAL_H5PY_DIR = "/weka/dfive-default/helios/dataset/osmbig/h5py_dat
 MAP_MODALITY_PROBE_INPUTS = [
     Modality.SENTINEL2_L2A.name,
 ]
-_MODALITY_SHORT_CODES = {
-    Modality.SENTINEL2_L2A.name: "s2",
-    Modality.SENTINEL1.name: "s1",
-    Modality.LANDSAT.name: "ls",
-}
-MAP_MODALITY_PROBE_INPUT_SUFFIX = "_".join(
-    _MODALITY_SHORT_CODES[name] for name in MAP_MODALITY_PROBE_INPUTS
-)
+MAP_MODALITY_PROBE_INPUT_SUFFIX = "_".join(MAP_MODALITY_PROBE_INPUTS)
 
 
 def _map_modality_probe(
