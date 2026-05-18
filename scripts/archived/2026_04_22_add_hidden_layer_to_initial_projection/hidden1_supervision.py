@@ -41,6 +41,11 @@ WORLDCOVER_CLASS_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.
 # they get normalized as raw/200 by the placeholder computed norm config for CDL
 # (mean=100, std=50, std_multiplier=2 → min=0, max=200). If the CDL norm config
 # is updated, this divisor must change to match.
+# TODO: codes 81 (Clouds/No Data) and 88 (Nonag/Undefined) are sentinel values
+# for CDL pipeline failures, not biophysical classes — they shouldn't be
+# supervised on. Can't remove them without changing the supervision head's
+# output dimension, which would break loading existing checkpoints. Drop them
+# next time we retrain from scratch.
 _CDL_CODES = [
     1,
     2,
