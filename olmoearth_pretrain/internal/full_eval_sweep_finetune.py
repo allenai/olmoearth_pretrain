@@ -322,6 +322,7 @@ def _format_launch_command(
     lr: float,
     seed_args: Iterable[str],
     torchrun_master_port: int | None = None,
+    is_external_model: bool = False,
 ) -> str:
     """Format the launch command."""
     if torchrun_master_port is not None:
@@ -355,7 +356,9 @@ def _format_launch_command(
     parts.extend(FT_MODE_ARGS)
     parts.extend(_format_ft_lr_args(lr))
     parts.extend(seed_args)
-    parts.append("--train_module.dp_config=null")
+    parts.append(
+        "--train_module=null" if is_external_model else "--train_module.dp_config=null"
+    )
     return " ".join(parts)
 
 
@@ -424,6 +427,9 @@ def build_commands(
         run_name = f"{base_run_name}{seed_suffix}_{run_suffix}"
         model_args = _build_model_args(selected_preset, normalizer_value)
 
+        _preset_for_check = (
+            MODEL_PRESETS.get(selected_preset) if selected_preset else None
+        )
         commands.append(
             _format_launch_command(
                 module_path=module_path,
@@ -438,6 +444,8 @@ def build_commands(
                 lr=lr,
                 seed_args=seed_args,
                 torchrun_master_port=torchrun_master_port,
+                is_external_model=_preset_for_check is not None
+                and _preset_for_check.launch_script_key is not None,
             )
         )
 

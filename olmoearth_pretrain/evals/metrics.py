@@ -185,7 +185,7 @@ class EvalResult:
             EvalMetric.R2.value: r2,
         }
         if primary_metric is None:
-            primary_metric = EvalMetric.RMSE
+            primary_metric = EvalMetric.R2
         key = cls._resolve_metric_key(primary_metric)
         if key not in metrics:
             raise ValueError(
