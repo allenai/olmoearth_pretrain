@@ -387,12 +387,14 @@ def run_finetune_eval(
             torch.cuda.empty_cache()
 
         if wandb_logger is not None:
-            wandb_logger.log(
-                {
-                    f"{task_name}_step": (epoch + 1) * num_batches,
-                    f"{task_name}/val_metric": val_result.primary,
-                }
-            )
+            log_dict: dict[str, float] = {
+                f"{task_name}_step": (epoch + 1) * num_batches,
+                f"{task_name}/val_metric": val_result.primary,
+            }
+            for metric_key, metric_val in val_result.metrics.items():
+                if metric_key != val_result.primary_metric_key:
+                    log_dict[f"{task_name}/val_{metric_key}"] = metric_val
+            wandb_logger.log(log_dict)
         logger.info(
             f"Finetune Epoch [{epoch + 1}/{epochs}] Validation Metric: {val_result.primary:.4f}"
         )
