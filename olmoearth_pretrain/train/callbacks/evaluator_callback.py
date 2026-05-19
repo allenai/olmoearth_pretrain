@@ -18,10 +18,7 @@ from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader, IterableDataset
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.evals.datasets import (
-    EvalDatasetPartition,
-    get_eval_dataset,
-)
+from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
     EvalDatasetConfig,
     TaskType,
@@ -98,7 +95,9 @@ class DownstreamTaskConfig:
     eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
-    partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
+    # Fraction of training labels to use for low-label evals. Dataset-specific
+    # code translates this into fixed partitions or deterministic subsamples.
+    label_fraction: float = 1.0
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: NormMethod = field(
@@ -107,6 +106,9 @@ class DownstreamTaskConfig:
     select_best_by_primary_metric: bool = False
     # Subsample train embeddings for faster probe training (None = use all)
     max_train_samples: int | None = None
+    # Seed for the max_train_samples subsample so the subset is reproducible
+    # across checkpoints in a sweep.
+    max_train_samples_seed: int = 42
     # Quantize embeddings to int8 for storage efficiency evaluation
     quantize_embeddings: bool = False
     # Reduce embedding dimensionality via PCA (None = no reduction)
@@ -122,6 +124,17 @@ class DownstreamTaskConfig:
     h5py_dir: str | None = None
     # For pretrain_subset: max samples to load
     pretrain_max_samples: int = 512
+    # For pretrain subset auxiliary probes: target modality to predict.
+    pretrain_target_modality: str | None = None
+    pretrain_label_seed: int = 42
+    pretrain_train_samples: int = 512
+    pretrain_valid_samples: int = 512
+    pretrain_test_samples: int = 512
+    # Geographic vs random index selection for pretrain subset auxiliary probes.
+    # "random" picks indices uniformly; "geographic" buckets samples into
+    # latlon-bin holdouts so train/val/test are spatially disjoint.
+    pretrain_split_strategy: str = "random"
+    pretrain_geographic_bin_size_deg: float = 5.0
 
 
 class DownstreamEvaluator:
@@ -170,10 +183,11 @@ class DownstreamEvaluator:
         self.linear_probe_eval_interval = task.linear_probe_eval_interval
         self.patch_size = task.patch_size
         self.max_train_samples = task.max_train_samples
+        self.max_train_samples_seed = task.max_train_samples_seed
         self.eval_interval = task.eval_interval
         self.eval_mode = task.eval_mode
         self.probe_type = task.probe_type
-        self.partition = task.partition
+        self.label_fraction = task.label_fraction
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
@@ -184,6 +198,13 @@ class DownstreamEvaluator:
         self.primary_metric_class = task.primary_metric_class
         self.h5py_dir = task.h5py_dir
         self.pretrain_max_samples = task.pretrain_max_samples
+        self.pretrain_target_modality = task.pretrain_target_modality
+        self.pretrain_label_seed = task.pretrain_label_seed
+        self.pretrain_train_samples = task.pretrain_train_samples
+        self.pretrain_valid_samples = task.pretrain_valid_samples
+        self.pretrain_test_samples = task.pretrain_test_samples
+        self.pretrain_split_strategy = task.pretrain_split_strategy
+        self.pretrain_geographic_bin_size_deg = task.pretrain_geographic_bin_size_deg
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -202,7 +223,7 @@ class DownstreamEvaluator:
         if self.eval_mode == EvalMode.LINEAR_PROBE:
             if self.probe_lr is None:
                 raise ValueError("probe_lr cannot be none for segmentation tasks.")
-            if self.config.task_type == TaskType.SEGMENTATION:
+            if self.config.task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION):
                 if self.config.height_width is None:
                     raise ValueError(
                         "config.height_width cannot be none for segmentation tasks."
@@ -270,14 +291,24 @@ class DownstreamEvaluator:
             worker_init_fn = partial(_seed_worker, base_seed=split_seed)
 
         extra_kwargs: dict[str, Any] = {}
-        if self.dataset == "pretrain_subset" and self.h5py_dir is not None:
+        if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities
             extra_kwargs["max_samples"] = self.pretrain_max_samples
+            extra_kwargs["target_modality"] = self.pretrain_target_modality
+            extra_kwargs["pretrain_split"] = split
+            extra_kwargs["pretrain_label_seed"] = self.pretrain_label_seed
+            extra_kwargs["pretrain_train_samples"] = self.pretrain_train_samples
+            extra_kwargs["pretrain_valid_samples"] = self.pretrain_valid_samples
+            extra_kwargs["pretrain_test_samples"] = self.pretrain_test_samples
+            extra_kwargs["pretrain_split_strategy"] = self.pretrain_split_strategy
+            extra_kwargs["pretrain_geographic_bin_size_deg"] = (
+                self.pretrain_geographic_bin_size_deg
+            )
         eval_ds = get_eval_dataset(
             eval_dataset=self.dataset,
             split=split,
-            partition=self.partition,
+            label_fraction=self.label_fraction,
             norm_stats_from_pretrained=self.norm_stats_from_pretrained,
             input_modalities=self.input_modalities,
             norm_method=self.norm_method,
@@ -357,9 +388,11 @@ class DownstreamEvaluator:
             and train_embeddings.shape[0] > self.max_train_samples
         ):
             logger.info(
-                f"Subsampling train embeddings from {train_embeddings.shape[0]} to {self.max_train_samples}"
+                f"Subsampling train embeddings from {train_embeddings.shape[0]} "
+                f"to {self.max_train_samples} (seed={self.max_train_samples_seed})"
             )
-            indices = torch.randperm(train_embeddings.shape[0])[
+            generator = torch.Generator().manual_seed(self.max_train_samples_seed)
+            indices = torch.randperm(train_embeddings.shape[0], generator=generator)[
                 : self.max_train_samples
             ]
             train_embeddings = train_embeddings[indices]
@@ -585,20 +618,28 @@ def _make_other_prefix(prefix: str) -> str:
     return "/".join(parts)
 
 
-def _log_eval_result_to_wandb(
-    wandb_callback: Any, prefix: str, name: str, result: EvalResult
-) -> None:
-    """Log an EvalResult to wandb.
+def eval_result_log_dict(
+    prefix: str, name: str, result: EvalResult
+) -> dict[str, float]:
+    """Build the wandb log dict for an EvalResult.
 
-    Primary metric goes to {prefix}/{name} (e.g. eval/m_eurosat).
-    Non-primary metrics go to eval_other/.../{name}/{metric_name}.
+    Primary metric goes to ``{prefix}/{name}`` (e.g. ``eval/m_eurosat``).
+    Non-primary metrics go to ``{prefix}_other/.../{name}/{metric_name}``.
     """
     other_prefix = _make_other_prefix(prefix)
-    wandb_callback.wandb.log({f"{prefix}/{name}": result.primary})
+    log_dict: dict[str, float] = {f"{prefix}/{name}": result.primary}
     for metric_name, metric_value in result.metrics.items():
         if metric_name == result.primary_metric_key:
             continue
-        wandb_callback.wandb.log({f"{other_prefix}/{name}/{metric_name}": metric_value})
+        log_dict[f"{other_prefix}/{name}/{metric_name}"] = metric_value
+    return log_dict
+
+
+def _log_eval_result_to_wandb(
+    wandb_callback: Any, prefix: str, name: str, result: EvalResult
+) -> None:
+    """Log an EvalResult to wandb using the shared key layout."""
+    wandb_callback.wandb.log(eval_result_log_dict(prefix, name, result))
 
 
 def _record_eval_result(

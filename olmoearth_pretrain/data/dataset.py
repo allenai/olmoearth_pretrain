@@ -451,9 +451,15 @@ class OlmoEarthDataset(Dataset):
             and not Modality.get(modality).ignore_when_parsing
         ]
         if len(spacetime_varying_training_modalities) == 0:
-            raise ValueError(
-                "no spacetime varying modalities are specified for training"
+            # Allowed for label-only reads (e.g. PretrainSubsetDataset reading
+            # a static raster like worldcover/srtm/openstreetmap_raster). Without
+            # any spacetime-varying modality there is nothing to filter against,
+            # so keep all sample indices.
+            logger.warning(
+                "no spacetime varying modalities are specified for training; "
+                "skipping spacetime-varying sample filter"
             )
+            return
         no_spacetime_varying_indices = metadata_df[
             metadata_df[spacetime_varying_training_modalities].sum(axis=1) == 0
         ].index

@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.multiprocessing
 import torch.nn.functional as F
 from einops import repeat
 from PIL import Image
@@ -20,7 +19,18 @@ from .constants import EVAL_S2_BAND_NAMES, EVAL_TO_OLMOEARTH_S2_BANDS
 from .normalize import normalize_bands
 from .utils import load_min_max_stats
 
-torch.multiprocessing.set_sharing_strategy("file_system")
+# Map low-label fractions to the precomputed partition-file basename shipped
+# alongside the train tensors (e.g. ``0.01x_train_partition.json``). 1.0 means
+# "use everything", i.e. no partition file.
+_LABEL_FRACTION_TO_PARTITION = {
+    0.01: "0.01x_train",
+    0.02: "0.02x_train",
+    0.05: "0.05x_train",
+    0.10: "0.10x_train",
+    0.20: "0.20x_train",
+    0.50: "0.50x_train",
+    1.00: None,
+}
 
 
 BAND_STATS = {
@@ -206,7 +216,7 @@ class MADOSDataset(Dataset):
         self,
         path_to_splits: Path,
         split: str,
-        partition: str,
+        label_fraction: float = 1.0,
         norm_stats_from_pretrained: bool = False,
         # Default to 2std no clip - this matches what our model sees in pretraining,
         # so when using dataset stats (e.g. for MADOS) consistency is important.
@@ -217,7 +227,7 @@ class MADOSDataset(Dataset):
         Args:
             path_to_splits: Path where .pt objects returned by process_mados have been saved
             split: Split to use
-            partition: Partition to use
+            label_fraction: Fraction of train labels to use; must match a precomputed partition file
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
         """
@@ -261,7 +271,16 @@ class MADOSDataset(Dataset):
         self.images = torch_obj["images"]
         self.labels = torch_obj["labels"]
 
-        if (partition != "default") and (split == "train"):
+        if label_fraction not in _LABEL_FRACTION_TO_PARTITION:
+            valid = ", ".join(
+                f"{value:g}" for value in sorted(_LABEL_FRACTION_TO_PARTITION)
+            )
+            raise ValueError(
+                f"Unsupported label_fraction {label_fraction}. Supported values "
+                f"are: {valid}"
+            )
+        partition = _LABEL_FRACTION_TO_PARTITION[label_fraction]
+        if partition is not None and split == "train":
             with open(path_to_splits / f"{partition}_partition.json") as json_file:
                 subset_indices = json.load(json_file)
 

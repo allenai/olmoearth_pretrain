@@ -22,7 +22,7 @@ def test_geobench_dataset(geobench_dir: Path) -> None:
         dataset="m-eurosat",
         geobench_dir=geobench_dir,
         split="train",
-        partition="0.01x_train",
+        label_fraction=0.01,
     )
     sample, _ = d[0]
     assert isinstance(sample.sentinel2_l2a, torch.Tensor)
@@ -36,7 +36,7 @@ def test_geobench_dataset_and_dataloader(geobench_dir: Path) -> None:
             dataset="m-eurosat",
             geobench_dir=geobench_dir,
             split="train",
-            partition="0.01x_train",
+            label_fraction=0.01,
         ),
         collate_fn=eval_collate_fn,
         batch_size=1,
