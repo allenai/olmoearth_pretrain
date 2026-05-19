@@ -512,6 +512,20 @@ EVAL_TASKS = {
         primary_metric=EvalMetric.MIOU,
         patch_size=4,
     ),
+    "gb2_treesatai": DownstreamTaskConfig(
+        dataset="gb2-treesatai",
+        embedding_batch_size=16,
+        probe_batch_size=16,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.KNN,
+        primary_metric=EvalMetric.MACRO_F1,
+        epochs=50,
+    ),
     # this eval is very large and can lead to
     # OOM errors. Skipping for now.
     # "oil_spill_detection": DownstreamTaskConfig(
@@ -933,6 +947,17 @@ FT_EVAL_TASKS = {
         epochs=50,
         patch_size=4,
         primary_metric=EvalMetric.MIOU,
+    ),
+    "gb2_treesatai": DownstreamTaskConfig(
+        dataset="gb2-treesatai",
+        ft_batch_size=2,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        primary_metric=EvalMetric.MACRO_F1,
     ),
 }
 

@@ -336,6 +336,13 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         height_width=512,
         supported_modalities=[Modality.SENTINEL2_L2A.name],
     ),
+    "gb2-treesatai": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[],
+        num_classes=15,
+        is_multilabel=True,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+    ),
 }
 DATASET_TO_CONFIG.update(_GB2_DATASET_TO_CONFIG)
 

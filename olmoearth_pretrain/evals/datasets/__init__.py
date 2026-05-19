@@ -77,7 +77,7 @@ def get_eval_dataset(
         return GeobenchV2Dataset(
             dataset=eval_dataset,
             split=split,
-            partition=partition,
+            partition=kwargs.get("partition", ""),
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
