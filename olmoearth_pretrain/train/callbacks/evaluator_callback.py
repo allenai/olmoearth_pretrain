@@ -776,8 +776,10 @@ class DownstreamEvaluatorCallback(Callback):
                 )
                 wandb_callback.wandb.log({f"{evaluator.evaluation_name}_step": 0})
 
-        # Log test results and bootstrap stats independently of val validity
-        test_valid = test_result is not None and test_result.primary >= 0
+        # Log test results and bootstrap stats independently of val validity.
+        # Don't gate on `test_result.primary >= 0` — for regression tasks with
+        # neg-RMSE primary, valid test values are always negative.
+        test_valid = test_result is not None
         if wandb_callback.enabled and test_valid:
             if bootstrap_stats:
                 wandb_callback.wandb.log(
