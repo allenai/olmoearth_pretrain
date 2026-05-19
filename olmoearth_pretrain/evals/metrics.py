@@ -6,14 +6,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-import numpy as np
 import torch
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
-    mean_absolute_error,
-    mean_squared_error,
-    r2_score,
 )
 
 
@@ -28,8 +24,9 @@ class EvalMetric(StrEnum):
     OVERALL_ACC = "overall_acc"
     MACRO_ACC = "macro_acc"
     MACRO_F1 = "macro_f1"
-    RMSE = "rmse"
     MAE = "mae"
+    RMSE = "rmse"
+    NEG_RMSE = "neg_rmse"
     R2 = "r2"
 
 
@@ -173,46 +170,32 @@ class EvalResult:
     @classmethod
     def from_regression(
         cls,
-        rmse: float,
         mae: float,
+        rmse: float,
         r2: float,
         primary_metric: EvalMetric | None = None,
     ) -> EvalResult:
-        """Create EvalResult from regression metrics."""
+        """Create EvalResult from regression metrics. Primary defaults to RMSE."""
         metrics = {
-            EvalMetric.RMSE.value: rmse,
             EvalMetric.MAE.value: mae,
+            EvalMetric.RMSE.value: rmse,
+            EvalMetric.NEG_RMSE.value: -rmse,
             EvalMetric.R2.value: r2,
         }
         if primary_metric is None:
-            primary_metric = EvalMetric.R2
-        key = cls._resolve_metric_key(primary_metric)
-        if key not in metrics:
+            primary_metric = EvalMetric.NEG_RMSE
+        resolved_key = cls._resolve_metric_key(primary_metric)
+        if resolved_key not in metrics:
             raise ValueError(
-                f"primary_metric '{key}' not found in computed metrics: {list(metrics.keys())}"
+                f"primary_metric '{resolved_key}' not found in computed metrics: "
+                f"{list(metrics.keys())}"
             )
         return cls(
-            primary=metrics[key],
+            primary=metrics[resolved_key],
             primary_metric=primary_metric,
-            primary_metric_key=key,
+            primary_metric_key=resolved_key,
             metrics=metrics,
         )
-
-
-def regression_metrics(
-    predictions: torch.Tensor,
-    labels: torch.Tensor,
-    primary_metric: EvalMetric | None = None,
-) -> EvalResult:
-    """Compute RMSE, MAE, and R² for scalar regression."""
-    p = predictions.detach().cpu().numpy().reshape(-1)
-    y = labels.detach().cpu().numpy().reshape(-1)
-    rmse = float(np.sqrt(mean_squared_error(y, p)))
-    mae = float(mean_absolute_error(y, p))
-    r2 = float(r2_score(y, p))
-    return EvalResult.from_regression(
-        rmse=rmse, mae=mae, r2=r2, primary_metric=primary_metric
-    )
 
 
 def _build_confusion_matrix(
@@ -372,4 +355,31 @@ def classification_metrics(
         per_class_f1=per_class_f1,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
+    )
+
+
+def regression_metrics(
+    predictions: torch.Tensor,
+    labels: torch.Tensor,
+    primary_metric: EvalMetric | None = None,
+) -> EvalResult:
+    """Compute regression metrics from continuous predictions and labels."""
+    predictions = predictions.float()
+    labels = labels.float().to(predictions.device)
+    valid_mask = torch.isfinite(labels)
+    predictions = predictions[valid_mask]
+    labels = labels[valid_mask]
+    if labels.numel() == 0:
+        raise ValueError("No finite labels available for regression metrics")
+    errors = predictions - labels
+    mae = errors.abs().mean().item()
+    rmse = torch.sqrt(errors.pow(2).mean()).item()
+    total = (labels - labels.mean()).pow(2).sum()
+    residual = errors.pow(2).sum()
+    r2 = (1.0 - residual / (total + 1e-8)).item()
+    return EvalResult.from_regression(
+        mae=mae,
+        rmse=rmse,
+        r2=r2,
+        primary_metric=primary_metric,
     )

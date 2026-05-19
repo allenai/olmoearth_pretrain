@@ -175,6 +175,26 @@ class SpaceNet2Dataset(_BaseGeobenchDataset):
         }
 
 
+_TREESATAI_CLASSES = [
+    "Abies",
+    "Acer",
+    "Alnus",
+    "Betula",
+    "Cleared",
+    "Fagus",
+    "Fraxinus",
+    "Larix",
+    "Picea",
+    "Pinus",
+    "Populus",
+    "Prunus",
+    "Pseudotsuga",
+    "Quercus",
+    "Tilia",
+]
+_TREESATAI_L2I = {c: i for i, c in enumerate(_TREESATAI_CLASSES)}
+
+
 _BENV2_LABELS = [
     "Urban fabric",
     "Industrial or commercial units",
@@ -197,59 +217,6 @@ _BENV2_LABELS = [
     "Marine waters",
 ]
 _BENV2_L2I = {c: i for i, c in enumerate(_BENV2_LABELS)}
-
-_TREESATAI_CLASSES = [
-    "Abies",
-    "Acer",
-    "Alnus",
-    "Betula",
-    "Cleared",
-    "Fagus",
-    "Fraxinus",
-    "Larix",
-    "Picea",
-    "Pinus",
-    "Populus",
-    "Prunus",
-    "Pseudotsuga",
-    "Quercus",
-    "Tilia",
-]
-_TREESATAI_L2I = {c: i for i, c in enumerate(_TREESATAI_CLASSES)}
-
-
-class BENV2Dataset(_BaseGeobenchDataset):
-    """BigEarthNet V2: S1 (2-band) + S2 (12-band) → 19-class multi-label."""
-
-    TORTILLA = ["geobench_benv2.tortilla"]
-    band_order = {
-        "s1": ["VV", "VH"],
-        "s2": [
-            "B01",
-            "B02",
-            "B03",
-            "B04",
-            "B05",
-            "B06",
-            "B07",
-            "B08",
-            "B8A",
-            "B09",
-            "B11",
-            "B12",
-        ],
-    }
-
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        """Load sample at idx."""
-        row_df = self._df.iloc[idx]
-        row = self._df.read(idx)
-        image_s1 = _raster_f32(row, 0)
-        image_s2 = _raster_f32(row, 1)
-        label = torch.zeros(len(_BENV2_LABELS), dtype=torch.long)
-        for name in row_df["labels"]:
-            label[_BENV2_L2I[name]] = 1
-        return {"image_s1": image_s1, "image_s2": image_s2, "label": label}
 
 
 class TreeSatAIDataset(_BaseGeobenchDataset):
@@ -292,6 +259,40 @@ class TreeSatAIDataset(_BaseGeobenchDataset):
             "image_s2": image_s2,
             "label": label,
         }
+
+
+class BENV2Dataset(_BaseGeobenchDataset):
+    """BigEarthNet V2: S1 (2-band) + S2 (12-band) → 19-class multi-label."""
+
+    TORTILLA = ["geobench_benv2.tortilla"]
+    band_order = {
+        "s1": ["VV", "VH"],
+        "s2": [
+            "B01",
+            "B02",
+            "B03",
+            "B04",
+            "B05",
+            "B06",
+            "B07",
+            "B08",
+            "B8A",
+            "B09",
+            "B11",
+            "B12",
+        ],
+    }
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
+        row_df = self._df.iloc[idx]
+        row = self._df.read(idx)
+        image_s1 = _raster_f32(row, 0)
+        image_s2 = _raster_f32(row, 1)
+        label = torch.zeros(len(_BENV2_LABELS), dtype=torch.long)
+        for name in row_df["labels"]:
+            label[_BENV2_L2I[name]] = 1
+        return {"image_s1": image_s1, "image_s2": image_s2, "label": label}
 
 
 # No Water→0, Permanent Water→1, Flood→2, No Data→-1 (ignored)
