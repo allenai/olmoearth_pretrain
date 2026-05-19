@@ -18,8 +18,9 @@ Usage examples:
        --cluster ai2/jupiter \
        --defaults_only
 
-3. To run a subset of tasks, add:
+3. To run a subset of tasks, add either explicit tasks_to_run or the same skip list as full_eval_sweep:
      --trainer.callbacks.downstream_evaluator.tasks_to_run='["m_eurosat","m_so2sat","mados"]'
+     --task-skip-names=m_eurosat,m_bigearthnet
    You can also launch multiple jobs with different tasks_to_run values to speed up the finetuning.
 
 Flags:
@@ -31,7 +32,9 @@ Each FT eval task's normalization is defined in all_evals.py.
 """
 
 import argparse
+import json
 import os
+import socket
 import subprocess  # nosec
 import uuid
 from collections.abc import Iterable
@@ -48,6 +51,20 @@ logger = getLogger(__name__)
 
 # Learning rates to sweep over.
 FT_LRS = [1e-4, 5e-4, 1e-3]
+
+
+def _pick_free_listen_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def _local_torchrun_master_port() -> int:
+    env_mp = os.environ.get("MASTER_PORT")
+    if env_mp and env_mp.strip():
+        return int(env_mp.strip())
+    return _pick_free_listen_port()
+
 
 TASK_ARG_PREFIX = "--trainer.callbacks.downstream_evaluator.tasks"
 FT_TASK_NAMES = list(FT_EVAL_TASKS.keys())
@@ -304,8 +321,14 @@ def _format_launch_command(
     model_args: list[str],
     lr: float,
     seed_args: Iterable[str],
+    torchrun_master_port: int | None = None,
+    is_external_model: bool = False,
 ) -> str:
     """Format the launch command."""
+    if torchrun_master_port is not None:
+        if launch_command != "torchrun":
+            raise ValueError("torchrun_master_port is only valid with torchrun")
+        launch_command = f"torchrun --master-port={torchrun_master_port}"
     parts = [
         f"TRAIN_SCRIPT_PATH={module_path}",
         launch_command,
@@ -333,7 +356,9 @@ def _format_launch_command(
     parts.extend(FT_MODE_ARGS)
     parts.extend(_format_ft_lr_args(lr))
     parts.extend(seed_args)
-    parts.append("--train_module.dp_config=null")
+    parts.append(
+        "--train_module=null" if is_external_model else "--train_module.dp_config=null"
+    )
     return " ".join(parts)
 
 
@@ -347,6 +372,14 @@ def build_commands(
     selected_preset = args.model
     base_run_name = _get_base_run_name(args, selected_preset)
     launch_command = "python3" if not sub_command == SubCmd.evaluate else "torchrun"
+    torchrun_master_port: int | None = None
+    if args.cluster == "local" and launch_command == "torchrun":
+        torchrun_master_port = _local_torchrun_master_port()
+        logger.info(
+            "Local eval: torchrun will use --master-port=%s "
+            "(export MASTER_PORT to pin the rendezvous port).",
+            torchrun_master_port,
+        )
 
     module_path = _resolve_module_path(args, selected_preset)
     checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
@@ -394,6 +427,9 @@ def build_commands(
         run_name = f"{base_run_name}{seed_suffix}_{run_suffix}"
         model_args = _build_model_args(selected_preset, normalizer_value)
 
+        _preset_for_check = (
+            MODEL_PRESETS.get(selected_preset) if selected_preset else None
+        )
         commands.append(
             _format_launch_command(
                 module_path=module_path,
@@ -407,8 +443,22 @@ def build_commands(
                 model_args=model_args,
                 lr=lr,
                 seed_args=seed_args,
+                torchrun_master_port=torchrun_master_port,
+                is_external_model=_preset_for_check is not None
+                and _preset_for_check.launch_script_key is not None,
             )
         )
+
+    if args.task_skip_names:
+        skip_names = [name.strip() for name in args.task_skip_names.split(",")]
+        tasks_to_run = [task for task in FT_TASK_NAMES if task not in skip_names]
+        tasks_to_run_arg = f" --trainer.callbacks.downstream_evaluator.tasks_to_run='{json.dumps(tasks_to_run)}'"
+        commands_new: list[str] = []
+        for cmd in commands:
+            logger.info(f"Adding tasks_to_run filter to {cmd}")
+            commands_new.append(cmd + tasks_to_run_arg)
+        commands = commands_new
+
     return commands
 
 
@@ -470,6 +520,12 @@ def main() -> None:
         type=int,
         default=None,
         help="Base random seed applied to every finetune task (optional).",
+    )
+    parser.add_argument(
+        "--task-skip-names",
+        type=str,
+        required=False,
+        help="Comma-separated list of task names to skip (e.g., m_eurosat,m_bigearthnet)",
     )
 
     args, extra_cli = parser.parse_known_args()

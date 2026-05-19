@@ -12,6 +12,7 @@ from olmoearth_pretrain.evals.metrics import (
     EvalMetric,
     EvalResult,
     classification_metrics,
+    regression_metrics,
     segmentation_metrics,
 )
 
@@ -48,6 +49,29 @@ def eval_cls(
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
     )
+
+
+@torch.no_grad()
+def eval_reg(
+    module: BackboneWithHead,
+    loader: DataLoader,
+    device: torch.device,
+    primary_metric: EvalMetric | None = None,
+) -> EvalResult:
+    """Evaluate regression metrics (scalar targets per sample)."""
+    module.eval()
+    preds_all, labels_all = [], []
+    for masked, label in loader:
+        label = label.to(device=device)
+        masked = to_device(masked, device)
+        with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
+            logits, _ = module(masked, label, is_train=False)
+            preds = logits.squeeze(-1).float()
+        preds_all.append(preds.cpu())
+        labels_all.append(label.float().cpu())
+    preds = torch.cat(preds_all, 0)
+    labels = torch.cat(labels_all, 0)
+    return regression_metrics(preds, labels, primary_metric=primary_metric)
 
 
 @torch.no_grad()

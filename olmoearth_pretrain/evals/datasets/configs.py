@@ -271,6 +271,81 @@ DATASET_TO_CONFIG = {
     ),
 }
 
+# "gb2-" prefix denotes geobench v2 datasets
+_GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
+    "gb2-benv2": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[],
+        num_classes=19,
+        is_multilabel=True,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+    ),
+    "gb2-biomassters": EvalDatasetConfig(
+        task_type=TaskType.REGRESSION,
+        imputes=[],
+        num_classes=1,
+        is_multilabel=False,
+        supported_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        timeseries=True,
+    ),
+    "gb2-burn_scars": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=2,
+        is_multilabel=False,
+        height_width=512,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+    ),
+    "gb2-caffe": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=4,
+        is_multilabel=False,
+        height_width=512,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+    ),
+    "gb2-cloudsen12": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=4,
+        is_multilabel=False,
+        height_width=512,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+    ),
+    "gb2-kuro_siwo": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=3,
+        is_multilabel=False,
+        height_width=224,
+        supported_modalities=[Modality.SENTINEL1.name, Modality.SRTM.name],
+    ),
+    "gb2-spacenet2": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=3,
+        is_multilabel=False,
+        height_width=512,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+    ),
+    "gb2-spacenet7": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=3,
+        is_multilabel=False,
+        height_width=512,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+    ),
+    "gb2-treesatai": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[],
+        num_classes=15,
+        is_multilabel=True,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+    ),
+}
+DATASET_TO_CONFIG.update(_GB2_DATASET_TO_CONFIG)
+
 
 def dataset_to_config(dataset: str) -> EvalDatasetConfig:
     """Get EvalDatasetConfig by name, checking both hardcoded and registry.

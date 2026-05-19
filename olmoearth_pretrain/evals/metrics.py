@@ -7,7 +7,10 @@ from enum import StrEnum
 from typing import Any
 
 import torch
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+)
 
 
 class EvalMetric(StrEnum):
