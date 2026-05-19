@@ -21,6 +21,10 @@ class EvalMetric(StrEnum):
     OVERALL_ACC = "overall_acc"
     MACRO_ACC = "macro_acc"
     MACRO_F1 = "macro_f1"
+    MAE = "mae"
+    RMSE = "rmse"
+    NEG_RMSE = "neg_rmse"
+    R2 = "r2"
 
 
 # Label value used to mark invalid/ignored pixels in segmentation targets.
@@ -148,6 +152,36 @@ class EvalResult:
         if primary_metric is None:
             primary_metric = EvalMetric.MIOU
         resolved_key = cls._resolve_metric_key(primary_metric, primary_metric_class)
+        if resolved_key not in metrics:
+            raise ValueError(
+                f"primary_metric '{resolved_key}' not found in computed metrics: "
+                f"{list(metrics.keys())}"
+            )
+        return cls(
+            primary=metrics[resolved_key],
+            primary_metric=primary_metric,
+            primary_metric_key=resolved_key,
+            metrics=metrics,
+        )
+
+    @classmethod
+    def from_regression(
+        cls,
+        mae: float,
+        rmse: float,
+        r2: float,
+        primary_metric: EvalMetric | None = None,
+    ) -> EvalResult:
+        """Create EvalResult from regression metrics. Primary defaults to RMSE."""
+        metrics = {
+            EvalMetric.MAE.value: mae,
+            EvalMetric.RMSE.value: rmse,
+            EvalMetric.NEG_RMSE.value: -rmse,
+            EvalMetric.R2.value: r2,
+        }
+        if primary_metric is None:
+            primary_metric = EvalMetric.NEG_RMSE
+        resolved_key = cls._resolve_metric_key(primary_metric)
         if resolved_key not in metrics:
             raise ValueError(
                 f"primary_metric '{resolved_key}' not found in computed metrics: "
@@ -318,4 +352,31 @@ def classification_metrics(
         per_class_f1=per_class_f1,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
+    )
+
+
+def regression_metrics(
+    predictions: torch.Tensor,
+    labels: torch.Tensor,
+    primary_metric: EvalMetric | None = None,
+) -> EvalResult:
+    """Compute regression metrics from continuous predictions and labels."""
+    predictions = predictions.float()
+    labels = labels.float().to(predictions.device)
+    valid_mask = torch.isfinite(labels)
+    predictions = predictions[valid_mask]
+    labels = labels[valid_mask]
+    if labels.numel() == 0:
+        raise ValueError("No finite labels available for regression metrics")
+    errors = predictions - labels
+    mae = errors.abs().mean().item()
+    rmse = torch.sqrt(errors.pow(2).mean()).item()
+    total = (labels - labels.mean()).pow(2).sum()
+    residual = errors.pow(2).sum()
+    r2 = (1.0 - residual / (total + 1e-8)).item()
+    return EvalResult.from_regression(
+        mae=mae,
+        rmse=rmse,
+        r2=r2,
+        primary_metric=primary_metric,
     )
