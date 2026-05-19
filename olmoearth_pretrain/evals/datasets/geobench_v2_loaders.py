@@ -7,12 +7,9 @@ _sample_to_olmoearth / _extract_label in geobench_v2_dataset.py.
 
 from __future__ import annotations
 
-import io
-import json
 import os
 from typing import Any
 
-import h5py
 import numpy as np
 import rasterio
 import tacoreader
@@ -43,76 +40,15 @@ def _resize(x: torch.Tensor, size: int, mode: str = "bilinear") -> torch.Tensor:
     ).squeeze(0)
 
 
-def _read_subfile_bytes(path: str) -> bytes:
-    """Extract raw bytes from a /vsisubfile/offset_length,file path."""
-    vsi, fpath = path.split(",", 1)
-    offset, length = (int(x) for x in vsi.replace("/vsisubfile/", "").split("_"))
-    with open(fpath, "rb") as f:
-        f.seek(offset)
-        return f.read(length)
-
-
-def _polygon_to_mask(
-    vertices: list[float], width: int = 228, height: int = 228
-) -> np.ndarray:
-    """Convert flat polygon vertex list to binary uint8 mask."""
-    from PIL import Image, ImageDraw
-
-    img = Image.new("L", (width, height), 0)
-    points = [(vertices[i], vertices[i + 1]) for i in range(0, len(vertices), 2)]
-    if len(points) >= 3:
-        ImageDraw.Draw(img).polygon(points, outline=1, fill=1)
-    return np.array(img, dtype=np.uint8)
-
-
-def _load_json_annotations(
-    row: Any, idx: int, img_w: int, img_h: int
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Parse h5py JSON annotation (substation style).
-
-    Returns (boxes (N,4) float32 xyxy, labels (N,) int64, masks (N,H,W) int64).
-    """
-    data = _read_subfile_bytes(row.read(idx))
-    with h5py.File(io.BytesIO(data)) as hf:
-        annotations = json.loads(hf.attrs["annotation"])
-    items = annotations.get("sample_annotations", annotations.get("boxes", []))
-    boxes, labels, masks = [], [], []
-    for anno in items:
-        cat = anno.get("category_id", 1)
-        if "bbox" in anno:
-            x, y, w, h = anno["bbox"]
-            boxes.append([x, y, x + w, y + h])
-        else:
-            boxes.append([0.0, 0.0, float(img_w), float(img_h)])
-        labels.append(cat)
-        if "mask" in anno:
-            masks.append(_polygon_to_mask(anno["mask"][0], img_w, img_h))
-        else:
-            masks.append(np.zeros((img_h, img_w), dtype=np.uint8))
-    if boxes:
-        return (
-            torch.tensor(boxes, dtype=torch.float32),
-            torch.tensor(labels, dtype=torch.int64),
-            torch.from_numpy(np.stack(masks)).long(),
-        )
-    return (
-        torch.zeros((0, 4), dtype=torch.float32),
-        torch.zeros((0,), dtype=torch.int64),
-        torch.zeros((0, img_h, img_w), dtype=torch.int64),
-    )
-
-
 class _BaseGeobenchDataset(Dataset):
     """Loads a .tortilla index, filters by split, provides helpers."""
 
-    TORTILLA: str | list[str]
+    TORTILLA: list[str]
     band_order: Any  # consumed by _sample_to_olmoearth
 
     def __init__(self, root: str, split: str) -> None:
         """Load tortilla file(s) and filter rows to the requested split."""
-        names = (
-            [self.TORTILLA] if isinstance(self.TORTILLA, str) else list(self.TORTILLA)
-        )
+        names = list(self.TORTILLA)
         paths = [os.path.join(root, n) for n in names]
         df = tacoreader.load(paths)
         if split in ("val", "valid"):
@@ -127,8 +63,8 @@ class _BaseGeobenchDataset(Dataset):
 class BurnScarsDataset(_BaseGeobenchDataset):
     """HLS Burn Scars: 6-band S2 → segmentation (0=bg, 1=burn, 2=no-data)."""
 
-    TORTILLA = "geobench_burn_scars.tortilla"
-    band_order = ["B02", "B03", "B04", "B8A", "B11", "B12"]
+    TORTILLA = ["geobench_burn_scars.tortilla"]
+    band_order = {"s2": ["B02", "B03", "B04", "B8A", "B11", "B12"]}
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         """Load sample at idx."""
@@ -142,7 +78,7 @@ class BurnScarsDataset(_BaseGeobenchDataset):
 class CaFFeDataset(_BaseGeobenchDataset):
     """Calving Front: grayscale → segmentation (4 classes)."""
 
-    TORTILLA = "geobench_caffe.tortilla"
+    TORTILLA = ["geobench_caffe.tortilla"]
     band_order = ["gray"]
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
@@ -156,22 +92,24 @@ class CaFFeDataset(_BaseGeobenchDataset):
 class CloudSen12Dataset(_BaseGeobenchDataset):
     """CloudSen12: 12-band S2 → cloud segmentation (4 classes)."""
 
-    TORTILLA = "geobench_cloudsen12.tortilla"
+    TORTILLA = ["geobench_cloudsen12.tortilla"]
     # tortilla has 14 bands (12 S2 + B10 cirrus + cloud prob); truncation to 12 happens in _sample_to_olmoearth
-    band_order = [
-        "B01",
-        "B02",
-        "B03",
-        "B04",
-        "B05",
-        "B06",
-        "B07",
-        "B08",
-        "B8A",
-        "B09",
-        "B11",
-        "B12",
-    ]
+    band_order = {
+        "s2": [
+            "B01",
+            "B02",
+            "B03",
+            "B04",
+            "B05",
+            "B06",
+            "B07",
+            "B08",
+            "B8A",
+            "B09",
+            "B11",
+            "B12",
+        ]
+    }
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         """Load sample at idx."""
@@ -184,8 +122,8 @@ class CloudSen12Dataset(_BaseGeobenchDataset):
 class SpaceNet7Dataset(_BaseGeobenchDataset):
     """SpaceNet7: 4-band PlanetScope (RGBN) → building segmentation."""
 
-    TORTILLA = "geobench_spacenet7.tortilla"
-    band_order = ["red", "green", "blue", "nir"]
+    TORTILLA = ["geobench_spacenet7.tortilla"]
+    band_order = {"s2": ["red", "green", "blue", "nir"]}
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         """Load sample at idx."""
@@ -198,7 +136,7 @@ class SpaceNet7Dataset(_BaseGeobenchDataset):
 class SpaceNet2Dataset(_BaseGeobenchDataset):
     """SpaceNet2: WorldView-2 (8-band) + panchromatic (1-band) → building seg."""
 
-    TORTILLA = "geobench_spacenet2.tortilla"
+    TORTILLA = ["geobench_spacenet2.tortilla"]
     band_order = {
         "worldview": [
             "coastal",
@@ -283,7 +221,7 @@ _TREESATAI_L2I = {c: i for i, c in enumerate(_TREESATAI_CLASSES)}
 class BENV2Dataset(_BaseGeobenchDataset):
     """BigEarthNet V2: S1 (2-band) + S2 (12-band) → 19-class multi-label."""
 
-    TORTILLA = "geobench_benv2.tortilla"
+    TORTILLA = ["geobench_benv2.tortilla"]
     band_order = {
         "s1": ["VV", "VH"],
         "s2": [
@@ -317,7 +255,7 @@ class BENV2Dataset(_BaseGeobenchDataset):
 class TreeSatAIDataset(_BaseGeobenchDataset):
     """TreeSatAI: aerial (4-band) + S1 (3-band) + S2 (12-band) → 15-class multi-label."""
 
-    TORTILLA = "geobench_treesatai.tortilla"
+    TORTILLA = ["geobench_treesatai.tortilla"]
     band_order = {
         "aerial": ["red", "green", "blue", "nir"],
         "s1": ["vv", "vh", "vv/vh"],
@@ -363,7 +301,7 @@ _KURO_SIWO_CLASS_MAP = torch.tensor([0, 1, 2, -1])
 class KuroSiwoDataset(_BaseGeobenchDataset):
     """KuroSiwo: SAR (pre/post) + DEM → flood segmentation (3 classes + ignore)."""
 
-    TORTILLA = "geobench_kuro_siwo.tortilla"
+    TORTILLA = ["geobench_kuro_siwo.tortilla"]
     band_order = {"sar": ["vv", "vh"], "dem": ["dem"]}
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
@@ -382,35 +320,6 @@ class KuroSiwoDataset(_BaseGeobenchDataset):
             "image_dem": image_dem,
             "mask": mask,
         }
-
-
-class SubstationDataset(_BaseGeobenchDataset):
-    """Substation: 13-band S2 → binary presence classification (via bbox)."""
-
-    TORTILLA = "geobench_substation.tortilla"
-    band_order = [
-        "B01",
-        "B02",
-        "B03",
-        "B04",
-        "B05",
-        "B06",
-        "B07",
-        "B08",
-        "B8A",
-        "B09",
-        "B10",
-        "B11",
-        "B12",
-    ]
-
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        """Load sample at idx."""
-        row = self._df.read(idx)
-        image = _raster_f32(row, 0)
-        _, h, w = image.shape
-        boxes, labels, masks = _load_json_annotations(row, 1, w, h)
-        return {"image": image, "bbox_xyxy": boxes, "label": labels, "mask": masks}
 
 
 class BioMasstersDataset(_BaseGeobenchDataset):
@@ -452,6 +361,5 @@ SLUG_TO_DATASET: dict[str, type[_BaseGeobenchDataset]] = {
     "kuro_siwo": KuroSiwoDataset,
     "spacenet2": SpaceNet2Dataset,
     "spacenet7": SpaceNet7Dataset,
-    "substation": SubstationDataset,
     "treesatai": TreeSatAIDataset,
 }

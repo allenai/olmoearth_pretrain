@@ -352,9 +352,7 @@ def _run_knn_for_k(
     """
     train_embeddings = train_embeddings.to(device)
     test_embeddings = test_embeddings.to(device)
-    # Flatten to (N,): (N, 1) labels would make train_labels[top_k_indices] shape
-    # (..., 1), causing one_hot to produce (..., 1, C) and break the weight broadcast.
-    train_labels = train_labels.to(device).reshape(-1)
+    train_labels = train_labels.to(device)
 
     eps = 1e-8
     train_embeddings_norm = torch.nn.functional.normalize(
