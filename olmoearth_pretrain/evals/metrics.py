@@ -6,14 +6,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-import numpy as np
 import torch
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
-    mean_absolute_error,
-    mean_squared_error,
-    r2_score,
 )
 
 
