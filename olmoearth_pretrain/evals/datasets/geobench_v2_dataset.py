@@ -142,9 +142,6 @@ def _sample_to_olmoearth(
             src = [rgbn_to_s2.get(s, s) for s in src]
         return _s2_sample(image, src, device)
 
-    if slug == "treesatai":
-        return _s2_sample(sample["image_s2"].float(), _s2_names(band_order), device)
-
     if slug == "biomassters":
         x1 = sample["image_s1"].float()
         s1_src = _s1_names(band_order)

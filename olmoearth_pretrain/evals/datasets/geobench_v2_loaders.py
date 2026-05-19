@@ -198,25 +198,6 @@ _BENV2_LABELS = [
 ]
 _BENV2_L2I = {c: i for i, c in enumerate(_BENV2_LABELS)}
 
-_TREESATAI_CLASSES = [
-    "Abies",
-    "Acer",
-    "Alnus",
-    "Betula",
-    "Cleared",
-    "Fagus",
-    "Fraxinus",
-    "Larix",
-    "Picea",
-    "Pinus",
-    "Populus",
-    "Prunus",
-    "Pseudotsuga",
-    "Quercus",
-    "Tilia",
-]
-_TREESATAI_L2I = {c: i for i, c in enumerate(_TREESATAI_CLASSES)}
-
 
 class BENV2Dataset(_BaseGeobenchDataset):
     """BigEarthNet V2: S1 (2-band) + S2 (12-band) → 19-class multi-label."""
@@ -250,48 +231,6 @@ class BENV2Dataset(_BaseGeobenchDataset):
         for name in row_df["labels"]:
             label[_BENV2_L2I[name]] = 1
         return {"image_s1": image_s1, "image_s2": image_s2, "label": label}
-
-
-class TreeSatAIDataset(_BaseGeobenchDataset):
-    """TreeSatAI: aerial (4-band) + S1 (3-band) + S2 (12-band) → 15-class multi-label."""
-
-    TORTILLA = ["geobench_treesatai.tortilla"]
-    band_order = {
-        "aerial": ["red", "green", "blue", "nir"],
-        "s1": ["vv", "vh", "vv/vh"],
-        "s2": [
-            "B02",
-            "B03",
-            "B04",
-            "B08",
-            "B05",
-            "B06",
-            "B07",
-            "B8A",
-            "B11",
-            "B12",
-            "B01",
-            "B09",
-        ],
-    }
-
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        """Load sample at idx."""
-        row_df = self._df.iloc[idx]
-        row = self._df.read(idx)
-        image_aerial = _raster_f32(row, 0)
-        image_s1 = _raster_f32(row, 1)
-        image_s2 = _raster_f32(row, 2)
-        label = torch.zeros(len(_TREESATAI_CLASSES), dtype=torch.long)
-        for name in row_df["species_labels"]:
-            if name in _TREESATAI_L2I:
-                label[_TREESATAI_L2I[name]] = 1
-        return {
-            "image_aerial": image_aerial,
-            "image_s1": image_s1,
-            "image_s2": image_s2,
-            "label": label,
-        }
 
 
 # No Water→0, Permanent Water→1, Flood→2, No Data→-1 (ignored)
@@ -361,5 +300,4 @@ SLUG_TO_DATASET: dict[str, type[_BaseGeobenchDataset]] = {
     "kuro_siwo": KuroSiwoDataset,
     "spacenet2": SpaceNet2Dataset,
     "spacenet7": SpaceNet7Dataset,
-    "treesatai": TreeSatAIDataset,
 }
