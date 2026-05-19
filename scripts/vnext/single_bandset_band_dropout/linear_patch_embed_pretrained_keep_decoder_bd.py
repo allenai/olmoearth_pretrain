@@ -461,7 +461,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
                 tasks=EVAL_TASKS,
-                eval_on_startup=True,
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
