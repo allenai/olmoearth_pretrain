@@ -87,6 +87,9 @@ class DownstreamTaskConfig:
     ft_batch_size: int = 32
     ft_grad_accum_steps: int = 1
     finetune_seed: int = 42
+    ft_head_type: str = (
+        "linear"  # "linear" or "unet" (unet only valid for segmentation)
+    )
     # LP / FT
     epochs: int = 50
     # LP / KNN / FT
@@ -179,6 +182,7 @@ class DownstreamEvaluator:
         self.ft_batch_size = task.ft_batch_size
         self.ft_grad_accum_steps = task.ft_grad_accum_steps
         self.finetune_seed = task.finetune_seed
+        self.ft_head_type = task.ft_head_type
         self.epochs = task.epochs
         self.linear_probe_eval_interval = task.linear_probe_eval_interval
         self.patch_size = task.patch_size
@@ -571,6 +575,7 @@ class DownstreamEvaluator:
             primary_metric=self.primary_metric,
             primary_metric_class=self.primary_metric_class,
             ft_grad_accum_steps=self.ft_grad_accum_steps,
+            head_type=self.ft_head_type,  # type: ignore[arg-type]
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
