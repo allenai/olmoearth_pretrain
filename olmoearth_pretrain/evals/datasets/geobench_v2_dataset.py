@@ -28,8 +28,6 @@ _S2_ORDER = list(Modality.SENTINEL2_L2A.band_order)
 def _s2_names(band_order: Any) -> list[str]:
     if isinstance(band_order, dict) and "s2" in band_order:
         return [str(b) for b in band_order["s2"]]
-    if isinstance(band_order, list | tuple):
-        return [str(b) for b in band_order]
     return []
 
 
@@ -134,7 +132,7 @@ def _sample_to_olmoearth(
             sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device)
         )
 
-    if slug in ("burn_scars", "cloudsen12", "substation", "spacenet7"):
+    if slug in ("burn_scars", "cloudsen12", "spacenet7"):
         image = sample["image"].float()
         src = _s2_names(band_order)
         if slug == "cloudsen12":
@@ -148,7 +146,14 @@ def _sample_to_olmoearth(
         return _s2_sample(sample["image_s2"].float(), _s2_names(band_order), device)
 
     if slug == "biomassters":
-        s1 = _bchw_to_hwtc(sample["image_s1"].float())
+        x1 = sample["image_s1"].float()
+        s1_src = _s1_names(band_order)
+        # Average ascending and descending passes to get standard 2-channel (VV, VH).
+        vv_idx = [i for i, n in enumerate(s1_src) if "VV" in n.upper()]
+        vh_idx = [i for i, n in enumerate(s1_src) if "VH" in n.upper()]
+        vv = x1[vv_idx].mean(dim=0)
+        vh = x1[vh_idx].mean(dim=0)
+        s1 = _bchw_to_hwtc(torch.stack([vv, vh], dim=0))
         s2 = _bchw_to_hwtc(
             _align_s2_to_sentinel2_l2a(
                 sample["image_s2"].float(), _s2_names(band_order)
@@ -236,14 +241,6 @@ def _extract_label(
 ) -> torch.Tensor:
     if task_type == TaskType.REGRESSION and "mask" in sample:
         return torch.nanmean(sample["mask"].float()).unsqueeze(0)
-
-    if slug == "substation" and "label" in sample:
-        labs = sample["label"]
-        if not torch.is_tensor(labs):
-            labs = torch.as_tensor(labs, dtype=torch.long)
-        if labs.numel() == 0:
-            return torch.zeros(1, dtype=torch.long)
-        return torch.tensor(int((labs == 1).any()), dtype=torch.long).unsqueeze(0)
 
     if "mask" in sample:
         m = sample["mask"].long().squeeze()

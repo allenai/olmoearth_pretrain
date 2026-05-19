@@ -7,7 +7,7 @@ from types import MethodType
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch.multiprocessing
+import torch
 from einops import repeat
 from geobench.dataset import Stats
 from geobench.task import load_task_specs
@@ -25,8 +25,6 @@ from .constants import (
     EVAL_TO_OLMOEARTH_S2_BANDS,
 )
 from .normalize import impute_normalization_stats, normalize_bands
-
-torch.multiprocessing.set_sharing_strategy("file_system")
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +57,19 @@ GEOBENCH_L8_BAND_NAMES = [
 ]
 
 
+# Map low-label fractions to GeoBench's upstream ``partition_name`` strings.
+# ``"default"`` is the full-data partition used by GeoBench for 1.0.
+_LABEL_FRACTION_TO_PARTITION = {
+    0.01: "0.01x_train",
+    0.02: "0.02x_train",
+    0.05: "0.05x_train",
+    0.10: "0.10x_train",
+    0.20: "0.20x_train",
+    0.50: "0.50x_train",
+    1.00: "default",
+}
+
+
 class GeobenchDataset(Dataset):
     """GeoBench dataset, returning data in the OlmoEarth Pretrain format."""
 
@@ -69,7 +80,7 @@ class GeobenchDataset(Dataset):
         geobench_dir: Path,
         dataset: str,
         split: str,
-        partition: str,
+        label_fraction: float = 1.0,
         norm_stats_from_pretrained: bool = False,
         # Default to 2std no clip - this matches what our model sees in pretraining,
         # so when using dataset stats (e.g. for MADOS) consistency is important.
@@ -82,11 +93,20 @@ class GeobenchDataset(Dataset):
             geobench_dir: Path to the GeoBench directory
             dataset: Dataset name
             split: Split to use
-            partition: Partition to use
+            label_fraction: Fraction of train labels to use; must match a GeoBench partition
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
             visualize_samples: Whether to visualize samples
         """
+        if label_fraction not in _LABEL_FRACTION_TO_PARTITION:
+            valid = ", ".join(
+                f"{value:g}" for value in sorted(_LABEL_FRACTION_TO_PARTITION)
+            )
+            raise ValueError(
+                f"Unsupported label_fraction {label_fraction}. Supported values "
+                f"are: {valid}"
+            )
+        partition = _LABEL_FRACTION_TO_PARTITION[label_fraction]
         config = dataset_to_config(dataset)
         self.config = config
         self.num_classes = config.num_classes

@@ -8,6 +8,7 @@ from olmoearth_pretrain.evals.metrics import (
     EvalResult,
     _build_confusion_matrix,
     classification_metrics,
+    regression_metrics,
     segmentation_metrics,
 )
 
@@ -48,6 +49,13 @@ class TestEvalResult:
             "macro_f1": 0.82,
             "micro_f1": 0.87,
         }
+
+    def test_from_regression(self) -> None:
+        """Test creating EvalResult from regression metrics."""
+        result = EvalResult.from_regression(mae=1.0, rmse=2.0, r2=0.5)
+        assert result.primary == -2.0
+        assert result.primary_metric == EvalMetric.NEG_RMSE
+        assert result.metrics == {"mae": 1.0, "rmse": 2.0, "neg_rmse": -2.0, "r2": 0.5}
 
     def test_metrics_contains_primary(self) -> None:
         """Primary metric should be in the metrics dict."""
@@ -302,3 +310,27 @@ class TestClassificationMetrics:
         assert "f1" in result.metrics
         assert "macro_f1" in result.metrics
         assert "f1_class_0" in result.metrics
+
+
+class TestRegressionMetrics:
+    """Tests for regression metrics."""
+
+    def test_perfect_prediction(self) -> None:
+        """Perfect predictions have zero error and R2 of 1."""
+        labels = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+        result = regression_metrics(labels, labels)
+
+        assert result.primary == pytest.approx(0.0)
+        assert result.metrics["mae"] == pytest.approx(0.0)
+        assert result.metrics["rmse"] == pytest.approx(0.0)
+        assert result.metrics["neg_rmse"] == pytest.approx(0.0)
+        assert result.metrics["r2"] == pytest.approx(1.0)
+
+    def test_nonzero_error(self) -> None:
+        """Regression metrics reflect prediction errors."""
+        preds = torch.tensor([1.0, 3.0])
+        labels = torch.tensor([1.0, 1.0])
+        result = regression_metrics(preds, labels)
+
+        assert result.metrics["mae"] == pytest.approx(1.0)
+        assert result.metrics["rmse"] == pytest.approx(2**0.5)

@@ -39,10 +39,15 @@ def base_args() -> argparse.Namespace:
         select_best_val=False,
         model_skip_names=None,
         task_skip_names=None,
+        task_names=None,
         size=None,
         load_eval_settings_from_json=False,
+        quantize_embeddings=False,
+        embedding_dim=None,
+        embedding_diagnostics_only=False,
         checkpoint_dir=None,
         steps=None,
+        label_fraction=1.0,
     )
 
 
@@ -63,10 +68,15 @@ def minimal_args() -> argparse.Namespace:
         select_best_val=False,
         model_skip_names=None,
         task_skip_names=None,
+        task_names=None,
         size=None,
         load_eval_settings_from_json=False,
+        quantize_embeddings=False,
+        embedding_dim=None,
+        embedding_diagnostics_only=False,
         checkpoint_dir=None,
         steps=None,
+        label_fraction=1.0,
     )
 
 
@@ -398,6 +408,72 @@ class TestBuildCommandsExecution:
         command: str = commands[0]
         assert "--custom_arg=value" in command
         assert "--another_flag" in command
+
+    def test_checkpoint_sweep_embedding_diagnostics_only(
+        self, base_args: argparse.Namespace
+    ) -> None:
+        """Checkpoint sweep diagnostics-only mode propagates env vars."""
+        base_args.checkpoint_dir = "/path/to/checkpoints/run"
+        base_args.checkpoint_path = None
+        base_args.embedding_diagnostics_only = True
+        base_args.defaults_only = True
+
+        commands: list[str] = build_commands(base_args, [])
+
+        assert len(commands) == 1
+        command = commands[0]
+        assert "CHECKPOINT_DIR=/path/to/checkpoints/run" in command
+        assert "EMBEDDING_DIAGNOSTICS_ONLY=1" in command
+        assert "checkpoint_sweep_evals.py" in command
+
+    def test_checkpoint_sweep_with_steps_and_size(
+        self, base_args: argparse.Namespace
+    ) -> None:
+        """Checkpoint sweep includes selected steps and size override."""
+        base_args.checkpoint_dir = "/path/to/checkpoints/run"
+        base_args.checkpoint_path = None
+        base_args.steps = "50000,100000"
+        base_args.model = BaselineModelName.GALILEO
+        base_args.size = "large"
+        base_args.model_name = "official_large"
+
+        commands: list[str] = build_commands(base_args, [])
+
+        assert len(commands) == 1
+        command = commands[0]
+        assert "CHECKPOINT_STEPS=50000,100000" in command
+        assert "official_large" in command
+        assert "--model.size=large" in command
+
+    def test_checkpoint_sweep_with_task_names(
+        self, base_args: argparse.Namespace
+    ) -> None:
+        """Checkpoint sweep applies task include filters."""
+        base_args.checkpoint_dir = "/path/to/checkpoints/run"
+        base_args.checkpoint_path = None
+        base_args.task_names = "m_eurosat,m_bigearthnet"
+
+        commands: list[str] = build_commands(base_args, [])
+
+        assert len(commands) == 1
+        command = commands[0]
+        assert "checkpoint_sweep_evals.py" in command
+        assert (
+            "--trainer.callbacks.downstream_evaluator.tasks_to_run="
+            '\'["m_eurosat", "m_bigearthnet"]\''
+        ) in command
+
+    def test_label_fraction_overrides(self, base_args: argparse.Namespace) -> None:
+        """Label fraction emits one simple per-task low-label override."""
+        base_args.defaults_only = True
+        base_args.label_fraction = 0.1
+
+        commands: list[str] = build_commands(base_args, [])
+
+        assert len(commands) == 1
+        assert "_label0.1x" in commands[0]
+        assert "label_fraction=0.1" in commands[0]
+        assert "partition=" not in commands[0]
 
 
 class TestParametrizedTests:
