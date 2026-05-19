@@ -7,7 +7,7 @@ from types import MethodType
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch.multiprocessing
+import torch
 from einops import repeat
 from geobench.dataset import Stats
 from geobench.task import load_task_specs
@@ -25,8 +25,6 @@ from .constants import (
     EVAL_TO_OLMOEARTH_S2_BANDS,
 )
 from .normalize import impute_normalization_stats, normalize_bands
-
-torch.multiprocessing.set_sharing_strategy("file_system")
 
 logger = logging.getLogger(__name__)
 
