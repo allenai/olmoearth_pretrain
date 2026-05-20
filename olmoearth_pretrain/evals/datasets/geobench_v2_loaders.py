@@ -295,8 +295,8 @@ class BENV2Dataset(_BaseGeobenchDataset):
         return {"image_s1": image_s1, "image_s2": image_s2, "label": label}
 
 
-# No Water→0, Permanent Water→1, Flood→2, No Data→-1 (ignored)
-_KURO_SIWO_CLASS_MAP = torch.tensor([0, 1, 2, -1])
+# No Water→0, Permanent Water→1, Flood→2, No Data/Invalid→3
+_KURO_SIWO_CLASS_MAP = torch.tensor([0, 1, 2, 3])
 
 
 class KuroSiwoDataset(_BaseGeobenchDataset):
