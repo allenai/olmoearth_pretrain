@@ -487,3 +487,81 @@ Columns in the parquet:
 Each row appears exactly once (duplicates across selections are merged); a
 sample that satisfies several criteria simply has `1` in several indicator
 columns. No scores are carried over -- only metadata plus the 0/1 indicators.
+
+<br/>
+
+---
+---
+
+# SECTION F: Greedy max-score with similarity exclusion (per-strategy diversification)
+
+---
+---
+<br/>
+Use this when a strategy's raw top-K is dominated by near-duplicate candidates
+that all live in the same tight neighbourhood. The script re-ranks each
+strategy's normalized score greedily: walking down the sorted candidates and
+rejecting any whose cosine similarity to a previously kept candidate (in the
+same parent cluster) exceeds a per-parent threshold calibrated from the
+reference set.
+
+How it works:
+1. for each reference parent cluster `c`, the script computes every reference
+   point's nearest-neighbor cosine similarity to other reference points in
+   the same parent (frozen PCA space). That distribution captures the
+   "natural local redundancy" of the reference geometry inside `c`.
+2. it picks one threshold per parent: `tau_parent[c] = percentile(nnsim_c, p)`.
+3. for each of the 5 acquisition strategies it sorts candidates descending by
+   `<strategy>_normalized_score`. A candidate is accepted only if its cosine
+   similarity to every already-accepted candidate **inside the same parent**
+   is strictly below `tau_parent[c]`. Otherwise it gets the sentinel value
+   `-999.0` so it falls to the bottom of any downstream top-K.
+4. the new columns are added in place to `combined_acquisition_scores.parquet`
+   with the name `<strategy>_diverse_score_p<percentile>`.
+
+Threshold interpretation (the only knob):
+1. `--percentile 90` -- stronger diversity filter (reject anything more
+   similar than 90% of natural reference NN pairs)
+2. `--percentile 95` -- moderate diversity filter
+3. `--percentile 98` -- light duplicate filter
+
+```shell
+export OPENBLAS_NUM_THREADS=16
+export OMP_NUM_THREADS=16
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/diversify_acquisition.py \
+  --input-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings" \
+  --reference-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_scores \
+  --combined-parquet "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings/_scores/combined_acquisition_scores.parquet" \
+  --percentile 95 \
+  --report-marks 50000 100000
+```
+
+Outputs:
+1. 5 new columns inside `combined_acquisition_scores.parquet` named
+   `novelty_diverse_score_p95`, `xglobal_bridge_diverse_score_p95`,
+   `sparse_infill_diverse_score_p95`, `xlocal_bridge_diverse_score_p95`,
+   `prototypes_diverse_score_p95` (one set of columns per percentile run; the
+   tag changes if you re-run with `--percentile 90` etc.)
+2. `reference_parent_nnsim.npz` cached under `--reference-dir` so subsequent
+   runs at different percentiles reuse the NN-sim distribution
+3. `diverse_acquisition_summary_p<percentile>.json` next to the combined
+   parquet, listing per-parent `tau`, per-strategy accepted / rejected
+   counts, and for each `--report-marks` value the original sorted-order
+   rank at which that many candidates had been accepted
+
+Reading the report:
+1. `report_marks_original_rank["50000"]` is the position in the original
+   per-strategy ranking where the 50,000th diversified pick was made
+2. if 50000 maps to e.g. 80,000 you rejected 30,000 redundant candidates
+   before hitting 50,000 unique ones -- a sign the percentile may be too
+   strict for your budget
+3. if it maps to ~50,001 essentially nothing was filtered -- the percentile
+   is probably too permissive
+
+Common follow-ups:
+1. re-run with several percentiles in sequence (90 / 95 / 98). All resulting
+   columns coexist in the parquet because the percentile tag is in the
+   column name.
+2. point `select_top_samples.py` or any custom top-K selector at the new
+   `<strategy>_diverse_score_p<percentile>` column instead of the raw
+   `<strategy>_normalized_score`.
