@@ -74,21 +74,14 @@ from typing import TypedDict
 
 import numpy as np
 import pandas as pd
+from _schema import STRATEGIES
 from reference_model import (
     EPS,
     load_reference_artifacts,
     normalize_rows,
     save_summary_json,
 )
-from score_acquisition import load_candidate_state
-
-STRATEGIES = (
-    "novelty",
-    "xglobal_bridge",
-    "sparse_infill",
-    "xlocal_bridge",
-    "prototypes",
-)
+from score_candidates import load_candidate_state
 
 NORMALIZED_SCORE_TEMPLATE = "{strategy}_normalized_score"
 DIVERSE_SCORE_TEMPLATE = "{strategy}_diverse_score_{percentile_tag}"

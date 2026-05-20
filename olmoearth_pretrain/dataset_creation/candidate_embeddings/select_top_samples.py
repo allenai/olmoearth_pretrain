@@ -25,16 +25,7 @@ import sys
 
 import numpy as np
 import pandas as pd
-
-METADATA_COLUMNS = ["sample_idx", "window_name", "lat", "lon", "parent_label"]
-
-STRATEGIES = [
-    "novelty",
-    "xglobal_bridge",
-    "sparse_infill",
-    "xlocal_bridge",
-    "prototypes",
-]
+from _schema import METADATA_COLUMNS, STRATEGIES
 
 
 def top_row_indices(scores: np.ndarray, k: int) -> np.ndarray:

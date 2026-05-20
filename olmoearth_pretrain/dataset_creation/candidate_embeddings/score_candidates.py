@@ -1,9 +1,10 @@
-"""Score candidate embeddings with multiple acquisition strategies.
+"""Score candidate embeddings with five acquisition strategies.
 
 This CLI reuses the frozen reference artifacts produced by
-``reference_model.py`` and exposes additional acquisition signals beyond
-novelty:
+``reference_model.py`` and exposes five complementary acquisition signals
+as subcommands:
 
+- novelty
 - xglobal_bridge
 - sparse-infill
 - xlocal_bridge
@@ -27,7 +28,9 @@ from reference_model import (
     load_embeddings,
     load_reference_artifacts,
     save_summary_json,
+    scores_to_accept_mask,
     transform_with_pca,
+    write_scores_parquet,
 )
 
 
@@ -176,6 +179,78 @@ def save_strategy_outputs(
     save_summary_json(summary_path, summary)
 
 
+def run_novelty(args: argparse.Namespace) -> None:
+    """Score candidates by mean kNN distance to per-parent reference residuals.
+
+    Novelty keeps its historical output layout (parquet column ``novelty_score``
+    plus ``threshold`` / ``accepted``, and three accept-mask npy side files).
+    The per-parent threshold is read from the frozen reference model.
+    """
+    state = load_candidate_state(args.input_dir, args.reference_dir, args.seed)
+    output_dir = args.output_dir or os.path.join(args.input_dir, "_scores")
+    os.makedirs(output_dir, exist_ok=True)
+
+    model = state["model"]
+    parent_labels = state["parent_labels"]
+    index_rows = state["index_rows"]
+    knn_k = int(model["knn_k"].item())
+    distance_metric = str(model["distance_metric"].item())
+
+    payload = strat.compute_novelty_scores(
+        state["residuals"],
+        parent_labels,
+        state["residuals_by_parent"],
+        knn_k=knn_k,
+        metric=distance_metric,
+    )
+    scores = payload["score"]
+    k_used = payload["k_used"]
+
+    thresholds_by_parent = model["thresholds"].astype(np.float32)
+    thresholds = thresholds_by_parent[parent_labels]
+    accepted = scores_to_accept_mask(scores, thresholds)
+
+    mask_path = os.path.join(output_dir, "novelty_accepted_mask.npy")
+    accepted_idx_path = os.path.join(output_dir, "novelty_accepted_sample_idx.npy")
+    parent_path = os.path.join(output_dir, "novelty_parent_assignments.npy")
+
+    np.save(mask_path, accepted.astype(bool))
+    np.save(
+        accepted_idx_path,
+        np.array([int(row["sample_idx"]) for row in index_rows], dtype=np.int64)[
+            accepted
+        ],
+    )
+    np.save(parent_path, parent_labels.astype(np.int32))
+    print(f"[save] Accepted mask -> {mask_path}")
+    print(f"[save] Accepted sample indices -> {accepted_idx_path}")
+    print(f"[save] Parent assignments -> {parent_path}")
+
+    scores_path = os.path.join(output_dir, "novelty_scores.parquet")
+    write_scores_parquet(
+        scores_path,
+        index_rows=index_rows,
+        parent_labels=parent_labels,
+        scores=scores,
+        thresholds=thresholds,
+        accepted=accepted,
+        source_name="candidate",
+        k_used=k_used,
+    )
+
+    summary = {
+        "input_dir": args.input_dir,
+        "reference_dir": args.reference_dir,
+        "output_dir": output_dir,
+        "candidate_size": int(state["pca_data"].shape[0]),
+        "accepted_count": int(accepted.sum()),
+        "accepted_fraction": float(accepted.mean()) if accepted.size else 0.0,
+        "knn_k": knn_k,
+        "distance_metric": distance_metric,
+    }
+    save_summary_json(os.path.join(output_dir, "novelty_summary.json"), summary)
+
+
 def run_xglobal_bridge(args: argparse.Namespace) -> None:
     """Score candidates that bridge two frozen parent clusters."""
     state = load_candidate_state(args.input_dir, args.reference_dir, args.seed)
@@ -281,9 +356,9 @@ def run_prototypes(args: argparse.Namespace) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse command-line arguments for acquisition scoring."""
+    """Parse command-line arguments for candidate scoring."""
     parser = argparse.ArgumentParser(
-        description="Score candidate embeddings with multiple acquisition strategies.",
+        description="Score candidate embeddings with five acquisition strategies.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     sub = parser.add_subparsers(dest="strategy", required=True)
@@ -303,6 +378,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             help="Where to write outputs. Defaults to {input_dir}/_scores",
         )
         p.add_argument("--seed", type=int, default=42, help="Random seed")
+
+    novelty = sub.add_parser(
+        "novelty",
+        help="Score candidates by mean kNN distance to per-parent reference residuals.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    add_common_args(novelty)
+    novelty.set_defaults(func=run_novelty)
 
     xglobal_bridge = sub.add_parser(
         "xglobal_bridge",
@@ -393,7 +476,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Dispatch the requested acquisition strategy subcommand."""
+    """Dispatch the requested candidate-scoring strategy subcommand."""
     args = parse_args(argv)
     args.func(args)
 

@@ -6,6 +6,7 @@ These strategies operate on candidate embeddings that have already been:
 3. converted into parent-relative residual vectors
 
 The goal is to expose several complementary acquisition scores:
+- novelty: mean kNN distance to per-parent reference residuals
 - xglobal bridge: ambiguity between top parent assignments
 - sparse cluster infill: sparse but still supported regions within a parent
 - xlocal bridge: points supported by two nearby local modes
@@ -251,6 +252,40 @@ def _compute_reference_self_knn_stats(
         distances[:, 1].astype(np.float32),
         effective_k,
     )
+
+
+def compute_novelty_scores(
+    residuals: np.ndarray,
+    parent_labels: np.ndarray,
+    residuals_by_parent: dict[int, np.ndarray],
+    knn_k: int,
+    metric: str,
+) -> dict[str, np.ndarray]:
+    """Score candidates by mean kNN distance to per-parent reference residuals."""
+    from sklearn.neighbors import NearestNeighbors
+
+    scores = np.zeros(residuals.shape[0], dtype=np.float32)
+    k_used = np.zeros(residuals.shape[0], dtype=np.int32)
+
+    for parent_idx, reference_residuals in residuals_by_parent.items():
+        mask = parent_labels == parent_idx
+        if not np.any(mask):
+            continue
+
+        parent_queries = residuals[mask]
+        if reference_residuals.shape[0] == 0:
+            scores[mask] = 0.0
+            k_used[mask] = 0
+            continue
+
+        effective_k = min(knn_k, reference_residuals.shape[0])
+        nn = NearestNeighbors(n_neighbors=effective_k, metric=metric)
+        nn.fit(reference_residuals)
+        distances, _ = nn.kneighbors(parent_queries)
+        scores[mask] = distances.mean(axis=1).astype(np.float32)
+        k_used[mask] = effective_k
+
+    return {"score": scores, "k_used": k_used}
 
 
 def compute_xglobal_bridge_scores(

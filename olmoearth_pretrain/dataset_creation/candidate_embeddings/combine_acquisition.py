@@ -29,15 +29,8 @@ import sys
 
 import numpy as np
 import pandas as pd
+from _schema import METADATA_COLUMNS, STRATEGY_FILE_STEMS
 from reference_model import save_summary_json
-
-STRATEGY_FILE_STEMS = {
-    "novelty": "novelty_scores",
-    "xglobal_bridge": "xglobal_bridge_scores",
-    "sparse_infill": "sparse_infill_scores",
-    "xlocal_bridge": "xlocal_bridge_scores",
-    "prototypes": "prototypes_scores",
-}
 
 SCORE_COLUMNS = {
     "novelty": "novelty_score",
@@ -46,8 +39,6 @@ SCORE_COLUMNS = {
     "xlocal_bridge": "score",
     "prototypes": "score",
 }
-
-METADATA_COLUMNS = ["sample_idx", "window_name", "lat", "lon", "parent_label"]
 
 
 def _resolve_strategy_path(scores_dir: str, strategy: str) -> str:

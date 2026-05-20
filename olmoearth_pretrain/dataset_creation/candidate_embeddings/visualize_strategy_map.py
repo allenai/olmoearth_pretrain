@@ -17,14 +17,11 @@ import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from _schema import STRATEGIES as _BASE_STRATEGIES
 
 STRATEGIES = [
     "in_top_combined",
-    "in_top_solo_novelty",
-    "in_top_solo_xglobal_bridge",
-    "in_top_solo_sparse_infill",
-    "in_top_solo_xlocal_bridge",
-    "in_top_solo_prototypes",
+    *[f"in_top_solo_{s}" for s in _BASE_STRATEGIES],
 ]
 
 NICE_NAMES = {

@@ -248,7 +248,8 @@ Each candidate is:
 ```shell
 export OPENBLAS_NUM_THREADS=16
 export OMP_NUM_THREADS=16
-python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_novelty.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_candidates.py \
+  novelty \
   --input-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings" \
   --reference-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_scores \
   --output-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings/_scores"
@@ -289,7 +290,7 @@ Best when you want candidates that sit between two parent clusters rather than
 deep inside one of them.
 
 ```shell
-python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_acquisition.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_candidates.py \
   xglobal_bridge \
   --input-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings" \
   --reference-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_scores \
@@ -320,7 +321,7 @@ Best when you want points in sparse-but-still-supported regions of an existing
 parent manifold, not just extreme outliers.
 
 ```shell
-python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_acquisition.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_candidates.py \
   sparse-infill \
   --input-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings" \
   --reference-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_scores \
@@ -351,7 +352,7 @@ Best when you want candidates that connect two nearby local modes inside the
 same parent cluster.
 
 ```shell
-python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_acquisition.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_candidates.py \
   xlocal_bridge \
   --input-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings" \
   --reference-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_scores \
@@ -377,7 +378,7 @@ Interpretation:
 Best when you want clean, representative points from dense local neighborhoods.
 
 ```shell
-python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_acquisition.py \
+python olmoearth_pretrain/dataset_creation/candidate_embeddings/score_candidates.py \
   prototypes \
   --input-dir "${RSLEARN_EAI_ROOT}/datasets/globe_land_grid/s50ix24_embeddings" \
   --reference-dir /weka/dfive-default/hadriens/oe_inst_embeddings_ps8_shwp12_4s_s2_ixes/_scores \
