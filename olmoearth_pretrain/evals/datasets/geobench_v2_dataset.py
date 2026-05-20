@@ -16,7 +16,6 @@ from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config
 from olmoearth_pretrain.evals.datasets.geobench_v2_loaders import SLUG_TO_DATASET
-from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 from olmoearth_pretrain.evals.task_types import TaskType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
@@ -125,8 +124,10 @@ def _sample_to_olmoearth(
     device = next(iter(sample.values())).device
 
     if slug == "caffe":
-        # Grayscale; broadcast to all 12 S2 channels.
+        # Grayscale aerial [0–255]; broadcast to all 12 S2 channels and rescale
+        # to S2 DN range so the OlmoEarth normalizer (mean ~1188) sees valid signal.
         filled = sample["image"].float()[:1].repeat(len(_S2_ORDER), 1, 1)
+        filled = filled * (10000.0 / 255.0)
         hwtc = _bchw_to_hwtc(filled)
         return OlmoEarthSample(
             sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device)
@@ -135,9 +136,15 @@ def _sample_to_olmoearth(
     if slug in ("burn_scars", "cloudsen12", "spacenet7"):
         image = sample["image"].float()
         src = _s2_names(band_order)
+        if slug == "burn_scars":
+            # GeoBench2 stores HLS reflectance in [0, 1]; OlmoEarth pretraining
+            # stats are in DN scale (~0–10000), so rescale to match.
+            image = image * 10000.0
         if slug == "cloudsen12":
             image = image[: len(src)]  # tortilla has 14 bands; truncate to 12
         if slug == "spacenet7":
+            # PlanetScope uint8 [0–255]; rescale to S2 DN range.
+            image = image * (10000.0 / 255.0)
             rgbn_to_s2 = {"red": "B04", "green": "B03", "blue": "B02", "nir": "B08"}
             src = [rgbn_to_s2.get(s, s) for s in src]
         return _s2_sample(image, src, device)
@@ -167,17 +174,9 @@ def _sample_to_olmoearth(
         )
 
     if slug == "kuro_siwo":
-        # Stack pre_1, pre_2, post as 3 SAR timesteps; convert linear power → dB.
-        s1 = _bchw_to_hwtc(
-            torch.stack(
-                [
-                    _to_db(sample["image_pre_1"].float()),
-                    _to_db(sample["image_pre_2"].float()),
-                    _to_db(sample["image_post"].float()),
-                ],
-                dim=1,
-            )
-        )  # (C=2, T=3, H, W) → (H, W, 3, C)
+        # Use only post-event SAR (matching GeoBench2 reference evaluation);
+        # convert linear power → dB to match OlmoEarth pretraining scale.
+        s1 = _bchw_to_hwtc(_to_db(sample["image_post"].float()))  # (H, W, 1, C)
         dem = _bchw_to_hwtc(sample["image_dem"].float())
         t = max(s1.shape[2], dem.shape[2])
         return OlmoEarthSample(
@@ -243,10 +242,7 @@ def _extract_label(
         return torch.nanmean(sample["mask"].float()).unsqueeze(0)
 
     if "mask" in sample:
-        m = sample["mask"].long().squeeze()
-        if slug == "burn_scars":
-            m = torch.where(m == 2, torch.full_like(m, SEGMENTATION_IGNORE_LABEL), m)
-        return m
+        return sample["mask"].long().squeeze()
 
     if "label" in sample:
         y = sample["label"]
