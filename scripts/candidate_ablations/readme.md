@@ -4,11 +4,22 @@
 novelty, xglobal_bridge, sparse_infill, xlocal_bridge, prototypes
 
 Candidates are selected by taking the top `--select_top` samples per strategy
-(ranked by `{strategy}_normalized_score` in the raw parquet), then unioning
+(ranked by `{strategy}_{score_suffix}` in the parquet), then unioning
 across strategies. Only samples present in the h5py directory are considered.
 
 Use `--total_budget` instead of `--select_top` to keep the total candidate
 pool size constant across ablations (budget is divided evenly across strategies).
+
+## Score suffix (`--score_suffix`, required)
+Controls which column is used to rank candidates. The resolved column name is
+`{strategy}_{score_suffix}` — e.g. `--score_suffix diverse_score_p95` looks up
+`novelty_diverse_score_p95`, `xglobal_bridge_diverse_score_p95`, etc.
+
+Available suffixes:
+- `normalized_score` — original min-max normalized strategy scores
+- `diverse_score_p95` — greedy max-score with cosine-similarity exclusion (p95 threshold)
+
+Future thresholds (e.g. `diverse_score_p90`) will follow the same naming pattern.
 
 
 # Run ablations -- single-bandset recipe
@@ -17,6 +28,7 @@ pool size constant across ablations (budget is divided evenly across strategies)
 ```shell
 python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py launch basev11_200k_all5_top50k ai2/jupiter-cirrascale-2 \
     --candidate_columns novelty xglobal_bridge sparse_infill xlocal_bridge prototypes \
+    --score_suffix normalized_score \
     --select_top 50000 \
     --candidate_parquet /weka/dfive-default/rslearn-eai/datasets/globe_land_grid/s50ix24_embeddings/_scores/combined_acquisition_scores.parquet \
     --candidate_h5py_dir /weka/dfive-default/helios/dataset/candidates/h5py_data_w_missing_timesteps_zstd_3_128_x_1/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/693942 \
@@ -38,6 +50,7 @@ python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py lau
 ```shell
 python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py launch basev11_200k_drop_novelty ai2/jupiter-cirrascale-2 \
     --candidate_columns xglobal_bridge sparse_infill xlocal_bridge prototypes \
+    --score_suffix normalized_score \
     --total_budget 250000 \
     --candidate_parquet /weka/dfive-default/rslearn-eai/datasets/globe_land_grid/s50ix24_embeddings/_scores/combined_acquisition_scores.parquet \
     --candidate_h5py_dir /weka/dfive-default/helios/dataset/candidates/h5py_data_w_missing_timesteps_zstd_3_128_x_1/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/693942 \
@@ -59,6 +72,7 @@ python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py lau
 ```shell
 python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py launch basev11_200k_solo_novelty ai2/jupiter-cirrascale-2 \
     --candidate_columns novelty \
+    --score_suffix normalized_score \
     --select_top 50000 \
     --candidate_parquet /weka/dfive-default/rslearn-eai/datasets/globe_land_grid/s50ix24_embeddings/_scores/combined_acquisition_scores.parquet \
     --candidate_h5py_dir /weka/dfive-default/helios/dataset/candidates/h5py_data_w_missing_timesteps_zstd_3_128_x_1/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/693942 \
@@ -76,12 +90,35 @@ python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py lau
     --trainer.callbacks.wandb.name=basev11_200k_solo_novelty
 ```
 
+## Diverse scoring (p95 threshold): all 5 strategies, top 50k each
+```shell
+python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py launch basev11_200k_all5_diverse_p95_top50k ai2/jupiter-cirrascale-2 \
+    --candidate_columns novelty xglobal_bridge sparse_infill xlocal_bridge prototypes \
+    --score_suffix diverse_score_p95 \
+    --select_top 50000 \
+    --candidate_parquet /weka/dfive-default/rslearn-eai/datasets/globe_land_grid/s50ix24_embeddings/_scores/combined_acquisition_scores.parquet \
+    --candidate_h5py_dir /weka/dfive-default/helios/dataset/candidates/h5py_data_w_missing_timesteps_zstd_3_128_x_1/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/693942 \
+    --trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/hidden1/step200000 \
+    --train_module.optim_config.lr=0.0001 \
+    --train_module.scheduler.warmup_steps=0 \
+    --train_module.scheduler.alpha_f=0.1 \
+    --train_module.scheduler.t_max=400000 \
+    --trainer.max_duration.value=400000 \
+    --trainer.max_duration.unit=steps \
+    --launch.priority=urgent \
+    --launch.num_gpus=8 \
+    --launch.num_nodes=1 \
+    --trainer.callbacks.wandb.project=20260513_candidate_datasets \
+    --trainer.callbacks.wandb.name=basev11_200k_all5_diverse_p95_top50k
+```
+
 
 # Run ablations (v1) -- original multi-bandset recipe
 
 ```shell
 python3 scripts/candidate_ablations/run_candidate_ablation.py launch base200k_all5 ai2/jupiter-cirrascale-2 \
     --candidate_columns novelty xglobal_bridge sparse_infill xlocal_bridge prototypes \
+    --score_suffix normalized_score \
     --select_top 50000 \
     --candidate_parquet /weka/dfive-default/rslearn-eai/datasets/globe_land_grid/s50ix24_embeddings/_scores/combined_acquisition_scores.parquet \
     --candidate_h5py_dir /weka/dfive-default/helios/dataset/candidates/h5py_data_w_missing_timesteps_zstd_3_128_x_1/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/693942 \

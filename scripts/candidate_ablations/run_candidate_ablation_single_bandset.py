@@ -75,12 +75,19 @@ _parser.add_argument(
     default=None,
     help="Path to the candidate h5py data directory.",
 )
+_parser.add_argument(
+    "--score_suffix",
+    default=None,
+    help="Score column suffix (REQUIRED, e.g. 'normalized_score', 'diverse_score_p95'). "
+    "The column looked up for each strategy is '{strategy}_{suffix}'.",
+)
 _known, _remaining = _parser.parse_known_args()
 sys.argv = [sys.argv[0]] + _remaining
 
 CANDIDATE_COLUMNS: list[str] = _known.candidate_columns
 CANDIDATE_PARQUET: str | None = _known.candidate_parquet
 CANDIDATE_H5PY_DIR_RESOLVED: str | None = _known.candidate_h5py_dir
+SCORE_SUFFIX: str | None = _known.score_suffix
 
 if _known.total_budget is not None:
     SELECT_TOP: int | None = _known.total_budget // len(CANDIDATE_COLUMNS)
@@ -104,10 +111,12 @@ def build_common_components(
         and CANDIDATE_PARQUET is not None
         and CANDIDATE_H5PY_DIR_RESOLVED is not None
         and SELECT_TOP is not None
+        and SCORE_SUFFIX is not None
     ):
         extra = (
             ["--candidate_columns"]
             + CANDIDATE_COLUMNS
+            + ["--score_suffix", SCORE_SUFFIX]
             + ["--select_top", str(SELECT_TOP)]
             + ["--candidate_parquet", CANDIDATE_PARQUET]
             + ["--candidate_h5py_dir", CANDIDATE_H5PY_DIR_RESOLVED]
@@ -117,14 +126,14 @@ def build_common_components(
 
 
 def _get_sample_ids_file(
-    parquet_path: str, strategies: list[str], select_top: int
+    parquet_path: str, strategies: list[str], select_top: int, score_suffix: str
 ) -> str:
     """Get a deterministic path for the cached sample IDs file.
 
     Written next to the parquet with a hash-based name so different
-    strategy/top-N selections produce different files.
+    strategy/top-N/suffix selections produce different files.
     """
-    key = f"{parquet_path}:{','.join(sorted(strategies))}:{select_top}"
+    key = f"{parquet_path}:{','.join(sorted(strategies))}:{select_top}:{score_suffix}"
     digest = hashlib.sha256(key.encode()).hexdigest()[:12]
     return str(Path(parquet_path).parent / f"_sample_ids_{digest}.txt")
 
@@ -138,7 +147,11 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConf
         )
     if SELECT_TOP is None:
         raise RuntimeError("--select_top (or --total_budget) is required for training.")
-    ids_file = _get_sample_ids_file(CANDIDATE_PARQUET, CANDIDATE_COLUMNS, SELECT_TOP)
+    if SCORE_SUFFIX is None:
+        raise RuntimeError("--score_suffix is required for training.")
+    ids_file = _get_sample_ids_file(
+        CANDIDATE_PARQUET, CANDIDATE_COLUMNS, SELECT_TOP, SCORE_SUFFIX
+    )
     print(f"Preparing candidate sample IDs -> {ids_file}", flush=True)
     save_candidate_sample_ids_file(
         CANDIDATE_PARQUET,
@@ -146,10 +159,11 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConf
         SELECT_TOP,
         CANDIDATE_H5PY_DIR_RESOLVED,
         ids_file,
+        score_suffix=SCORE_SUFFIX,
     )
     logger.info(
         f"Candidate ablation: strategies={CANDIDATE_COLUMNS}, "
-        f"select_top={SELECT_TOP}, ids_file={ids_file}"
+        f"select_top={SELECT_TOP}, score_suffix={SCORE_SUFFIX}, ids_file={ids_file}"
     )
 
     base_config = OlmoEarthDatasetConfig(

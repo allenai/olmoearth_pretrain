@@ -1,6 +1,6 @@
 """Utilities for selecting candidate samples from a scored parquet file.
 
-Selects the top-N candidates per strategy from raw normalized scores,
+Selects the top-N candidates per strategy from score columns,
 validated against h5 sample availability.
 """
 
@@ -23,9 +23,14 @@ STRATEGY_NAMES: list[str] = [
 ]
 
 
-def strategy_to_score_column(strategy: str) -> str:
-    """Map a short strategy name to its normalized score column in the parquet."""
-    return f"{strategy}_normalized_score"
+def strategy_to_score_column(strategy: str, suffix: str) -> str:
+    """Map a short strategy name to its score column in the parquet.
+
+    Args:
+        strategy: Short strategy name (e.g. "novelty").
+        suffix: Column suffix (e.g. "normalized_score", "diverse_score_p95").
+    """
+    return f"{strategy}_{suffix}"
 
 
 def _load_h5_sample_ids(h5py_dir: str | Path) -> set[str]:
@@ -47,10 +52,11 @@ def load_candidate_sample_ids(
     strategies: list[str],
     select_top: int,
     h5py_dir: str | Path,
+    score_suffix: str,
 ) -> list[str]:
     """Select top-N candidates per strategy, validated against h5 availability.
 
-    For each strategy, the parquet is sorted by its normalized score in
+    For each strategy, the parquet is sorted by its score column in
     descending order and the top ``select_top`` samples are taken.  Results
     are unioned across strategies and deduplicated.
 
@@ -63,13 +69,15 @@ def load_candidate_sample_ids(
         select_top: Number of top-scoring samples to select per strategy.
         h5py_dir: Path to the candidate h5py directory (must contain
             ``sample_metadata.csv``).
+        score_suffix: Column suffix for scores (e.g. "normalized_score",
+            "diverse_score_p95").
 
     Returns:
         Deduplicated list of sample_id strings.
     """
     h5_ids = _load_h5_sample_ids(h5py_dir)
 
-    score_cols = [strategy_to_score_column(s) for s in strategies]
+    score_cols = [strategy_to_score_column(s, score_suffix) for s in strategies]
     logger.info(f"Loading parquet: {parquet_path}")
     df = pd.read_parquet(parquet_path, columns=["window_name"] + score_cols)
     logger.info(f"Loaded parquet with {len(df)} rows.")
@@ -152,6 +160,7 @@ def save_candidate_sample_ids_file(
     select_top: int,
     h5py_dir: str | Path,
     output_path: str | Path,
+    score_suffix: str,
 ) -> Path:
     """Select top-N candidates and write their sample IDs to a text file.
 
@@ -168,7 +177,7 @@ def save_candidate_sample_ids_file(
         return output_path
 
     sample_ids = load_candidate_sample_ids(
-        parquet_path, strategies, select_top, h5py_dir
+        parquet_path, strategies, select_top, h5py_dir, score_suffix=score_suffix
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(sample_ids) + "\n")
