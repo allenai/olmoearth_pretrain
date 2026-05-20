@@ -278,7 +278,7 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         imputes=[],
         num_classes=19,
         is_multilabel=True,
-        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
     ),
     "gb2-biomassters": EvalDatasetConfig(
         task_type=TaskType.REGRESSION,
@@ -291,7 +291,7 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
     "gb2-burn_scars": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
         imputes=[],
-        num_classes=2,
+        num_classes=3,
         is_multilabel=False,
         height_width=512,
         supported_modalities=[Modality.SENTINEL2_L2A.name],
@@ -315,7 +315,7 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
     "gb2-kuro_siwo": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
         imputes=[],
-        num_classes=3,
+        num_classes=4,
         is_multilabel=False,
         height_width=224,
         supported_modalities=[Modality.SENTINEL1.name, Modality.SRTM.name],
