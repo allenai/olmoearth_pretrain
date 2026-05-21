@@ -257,8 +257,8 @@ def get_static_local_2d_encoding(
     encoding_dim: int,
     device: torch.device,
     dtype: torch.dtype = torch.float32,
-    min_period_m: float = 1.0,
-    max_period_m: float = 100_000.0,
+    min_period_m: float = 20.0,
+    max_period_m: float = 1_000.0,
 ) -> torch.Tensor:
     """Static multi-frequency 2D sinusoidal encoding of position within an image patch.
 
@@ -282,11 +282,14 @@ def get_static_local_2d_encoding(
         encoding_dim: Output dim (must be divisible by 4).
         device: Output device.
         dtype: Output dtype.
-        min_period_m: Smallest period in the freq band, in meters. Default 1m
-            (highest spatial resolution captured).
-        max_period_m: Largest period, in meters. Default 100km (well above any
-            patch extent we expect, so the lowest-frequency channel acts as a
-            slow-varying ramp across the patch).
+        min_period_m: Smallest period in the freq band, in meters. Default 20m
+            (Nyquist at the smallest meters_per_token we use, BASE_GSD=10m with
+            patch_size=1; finer periods alias and contribute no per-token
+            discrimination).
+        max_period_m: Largest period, in meters. Default 1km (roughly 2x our
+            largest patch extent, so the lowest-frequency channel acts as a
+            slow-varying ramp across the patch without wasting channels on
+            effectively-constant periods).
 
     Returns:
         Tensor of shape (grid_h, grid_w, encoding_dim). Same for every batch
