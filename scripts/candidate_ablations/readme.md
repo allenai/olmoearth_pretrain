@@ -22,6 +22,37 @@ Available suffixes:
 Future thresholds (e.g. `diverse_score_p90`) will follow the same naming pattern.
 
 
+## Random baseline (`--random_seed`)
+
+Instead of selecting top scorers by strategy, randomly sample from all available
+h5 samples. Use `--random_seed` to activate this mode:
+- `--random_seed <int>` — seed for reproducibility (activates random mode)
+- `--total_budget <int>` — how many samples to select (required with `--random_seed`)
+- `--candidate_h5py_dir` — source of available samples (required)
+- `--candidate_columns`, `--score_suffix`, `--candidate_parquet` are ignored
+
+If `--total_budget` exceeds the number of available samples, all samples are used.
+
+```shell
+python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py launch basev11_200k_random_50k ai2/jupiter-cirrascale-2 \
+    --random_seed 42 \
+    --total_budget 50000 \
+    --candidate_h5py_dir /weka/dfive-default/helios/dataset/candidates/h5py_data_w_missing_timesteps_zstd_3_128_x_1/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/693942 \
+    --trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/hidden1/step200000 \
+    --train_module.optim_config.lr=0.0001 \
+    --train_module.scheduler.warmup_steps=0 \
+    --train_module.scheduler.alpha_f=0.1 \
+    --train_module.scheduler.t_max=400000 \
+    --trainer.max_duration.value=400000 \
+    --trainer.max_duration.unit=steps \
+    --launch.priority=urgent \
+    --launch.num_gpus=8 \
+    --launch.num_nodes=1 \
+    --trainer.callbacks.wandb.project=20260513_candidate_datasets \
+    --trainer.callbacks.wandb.name=basev11_200k_random_50k
+```
+
+
 # Run ablations -- single-bandset recipe
 
 ## Baseline: all 5 strategies, top 50k each (~250k candidates)

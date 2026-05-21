@@ -17,7 +17,12 @@ import logging
 import sys
 from pathlib import Path
 
-from candidate_utils import STRATEGY_NAMES, save_candidate_sample_ids_file
+from candidate_utils import (
+    STRATEGY_NAMES,
+    get_random_sample_ids_path,
+    save_candidate_sample_ids_file,
+    save_random_sample_ids_file,
+)
 from script_config import (
     BASE_H5PY_DIR,
     build_dataloader_config,
@@ -84,6 +89,13 @@ _parser.add_argument(
     help="Train on candidate data only (no base dataset). "
     "Use for from-scratch runs on candidate subsets.",
 )
+_parser.add_argument(
+    "--random_seed",
+    type=int,
+    default=None,
+    help="Activate random sampling mode: randomly select --total_budget samples "
+    "from all available h5 data using this seed. Ignores strategy/score flags.",
+)
 _known, _remaining = _parser.parse_known_args()
 sys.argv = [sys.argv[0]] + _remaining
 
@@ -92,8 +104,10 @@ CANDIDATE_PARQUET: str | None = _known.candidate_parquet
 CANDIDATE_H5PY_DIR_RESOLVED: str | None = _known.candidate_h5py_dir
 SCORE_SUFFIX: str | None = _known.score_suffix
 CANDIDATE_ONLY: bool = _known.candidate_only
+RANDOM_SEED: int | None = _known.random_seed
+TOTAL_BUDGET: int | None = _known.total_budget
 
-if _known.total_budget is not None:
+if _known.total_budget is not None and RANDOM_SEED is None:
     SELECT_TOP: int | None = _known.total_budget // len(CANDIDATE_COLUMNS)
     logger.info(
         f"--total_budget={_known.total_budget} with {len(CANDIDATE_COLUMNS)} strategies "
@@ -116,10 +130,18 @@ def build_common_components(
     job would never see them.  We patch launch.cmd here to re-inject them.
     """
     common = _build_common_components(script, cmd, run_name, cluster, overrides)
-    if (
-        common.launch is not None
-        and CANDIDATE_PARQUET is not None
-        and CANDIDATE_H5PY_DIR_RESOLVED is not None
+    if common.launch is None or CANDIDATE_H5PY_DIR_RESOLVED is None:
+        return common
+
+    if RANDOM_SEED is not None and TOTAL_BUDGET is not None:
+        extra = (
+            ["--random_seed", str(RANDOM_SEED)]
+            + ["--total_budget", str(TOTAL_BUDGET)]
+            + ["--candidate_h5py_dir", CANDIDATE_H5PY_DIR_RESOLVED]
+            + (["--candidate_only"] if CANDIDATE_ONLY else [])
+        )
+    elif (
+        CANDIDATE_PARQUET is not None
         and SELECT_TOP is not None
         and SCORE_SUFFIX is not None
     ):
@@ -132,8 +154,11 @@ def build_common_components(
             + ["--candidate_h5py_dir", CANDIDATE_H5PY_DIR_RESOLVED]
             + (["--candidate_only"] if CANDIDATE_ONLY else [])
         )
-        # Insert after the 4 positional args (script, cmd, run_name, cluster)
-        common.launch.cmd = common.launch.cmd[:4] + extra + common.launch.cmd[4:]
+    else:
+        return common
+
+    # Insert after the 4 positional args (script, cmd, run_name, cluster)
+    common.launch.cmd = common.launch.cmd[:4] + extra + common.launch.cmd[4:]
     return common
 
 
@@ -152,31 +177,55 @@ def _get_sample_ids_file(
 
 def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConfig:
     """Build a concat dataset: base osm_sampling + filtered candidate subset."""
-    if CANDIDATE_PARQUET is None or CANDIDATE_H5PY_DIR_RESOLVED is None:
+    if CANDIDATE_H5PY_DIR_RESOLVED is None:
         raise RuntimeError(
-            "Both --candidate_parquet and --candidate_h5py_dir are required "
-            "for training. Re-run with these flags."
+            "--candidate_h5py_dir is required for training. Re-run with this flag."
         )
-    if SELECT_TOP is None:
-        raise RuntimeError("--select_top (or --total_budget) is required for training.")
-    if SCORE_SUFFIX is None:
-        raise RuntimeError("--score_suffix is required for training.")
-    ids_file = _get_sample_ids_file(
-        CANDIDATE_PARQUET, CANDIDATE_COLUMNS, SELECT_TOP, SCORE_SUFFIX
-    )
-    print(f"Preparing candidate sample IDs -> {ids_file}", flush=True)
-    save_candidate_sample_ids_file(
-        CANDIDATE_PARQUET,
-        CANDIDATE_COLUMNS,
-        SELECT_TOP,
-        CANDIDATE_H5PY_DIR_RESOLVED,
-        ids_file,
-        score_suffix=SCORE_SUFFIX,
-    )
-    logger.info(
-        f"Candidate ablation: strategies={CANDIDATE_COLUMNS}, "
-        f"select_top={SELECT_TOP}, score_suffix={SCORE_SUFFIX}, ids_file={ids_file}"
-    )
+
+    if RANDOM_SEED is not None:
+        if TOTAL_BUDGET is None:
+            raise RuntimeError(
+                "--total_budget is required when using --random_seed."
+            )
+        ids_file = get_random_sample_ids_path(
+            CANDIDATE_H5PY_DIR_RESOLVED, TOTAL_BUDGET, RANDOM_SEED
+        )
+        print(f"Preparing random sample IDs -> {ids_file}", flush=True)
+        save_random_sample_ids_file(
+            CANDIDATE_H5PY_DIR_RESOLVED, TOTAL_BUDGET, RANDOM_SEED, ids_file
+        )
+        logger.info(
+            f"Random candidate ablation: total_budget={TOTAL_BUDGET}, "
+            f"seed={RANDOM_SEED}, ids_file={ids_file}"
+        )
+    else:
+        if CANDIDATE_PARQUET is None:
+            raise RuntimeError(
+                "--candidate_parquet is required for strategy-based training. "
+                "Re-run with this flag or use --random_seed for random sampling."
+            )
+        if SELECT_TOP is None:
+            raise RuntimeError(
+                "--select_top (or --total_budget) is required for training."
+            )
+        if SCORE_SUFFIX is None:
+            raise RuntimeError("--score_suffix is required for training.")
+        ids_file = _get_sample_ids_file(
+            CANDIDATE_PARQUET, CANDIDATE_COLUMNS, SELECT_TOP, SCORE_SUFFIX
+        )
+        print(f"Preparing candidate sample IDs -> {ids_file}", flush=True)
+        save_candidate_sample_ids_file(
+            CANDIDATE_PARQUET,
+            CANDIDATE_COLUMNS,
+            SELECT_TOP,
+            CANDIDATE_H5PY_DIR_RESOLVED,
+            ids_file,
+            score_suffix=SCORE_SUFFIX,
+        )
+        logger.info(
+            f"Candidate ablation: strategies={CANDIDATE_COLUMNS}, "
+            f"select_top={SELECT_TOP}, score_suffix={SCORE_SUFFIX}, ids_file={ids_file}"
+        )
 
     candidate_config = OlmoEarthDatasetConfig(
         h5py_dir=CANDIDATE_H5PY_DIR_RESOLVED,

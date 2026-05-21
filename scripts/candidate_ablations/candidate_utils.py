@@ -6,8 +6,10 @@ validated against h5 sample availability.
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import logging
+import random
 from pathlib import Path
 
 import pandas as pd
@@ -183,3 +185,79 @@ def save_candidate_sample_ids_file(
     output_path.write_text("\n".join(sample_ids) + "\n")
     logger.info(f"Wrote {len(sample_ids)} sample IDs to {output_path}")
     return output_path
+
+
+def load_random_sample_ids(
+    h5py_dir: str | Path,
+    total_budget: int,
+    seed: int,
+) -> list[str]:
+    """Randomly sample from all available h5 samples.
+
+    Args:
+        h5py_dir: Path to the candidate h5py directory (must contain
+            ``sample_metadata.csv``).
+        total_budget: Maximum number of samples to select.  If this exceeds
+            the number of available samples, all samples are returned.
+        seed: Random seed for reproducibility.
+
+    Returns:
+        Sorted list of sample_id strings.
+    """
+    all_ids = sorted(_load_h5_sample_ids(h5py_dir))
+
+    if total_budget >= len(all_ids):
+        logger.warning(
+            f"total_budget={total_budget} >= available samples ({len(all_ids)}). "
+            "Using all available samples."
+        )
+        return all_ids
+
+    rng = random.Random(seed)
+    selected = rng.sample(all_ids, total_budget)
+    logger.info(
+        f"Randomly selected {len(selected)} samples from {len(all_ids)} available "
+        f"(seed={seed})"
+    )
+    return sorted(selected)
+
+
+def save_random_sample_ids_file(
+    h5py_dir: str | Path,
+    total_budget: int,
+    seed: int,
+    output_path: str | Path,
+) -> Path:
+    """Randomly sample IDs and write them to a text file.
+
+    If the output file already exists it is reused.
+
+    Returns:
+        Path to the written file.
+    """
+    output_path = Path(output_path)
+    if output_path.exists():
+        n_lines = sum(1 for _ in output_path.open())
+        logger.info(f"Reusing existing sample IDs file {output_path} ({n_lines} IDs)")
+        return output_path
+
+    sample_ids = load_random_sample_ids(h5py_dir, total_budget, seed)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(sample_ids) + "\n")
+    logger.info(f"Wrote {len(sample_ids)} random sample IDs to {output_path}")
+    return output_path
+
+
+def get_random_sample_ids_path(
+    h5py_dir: str | Path,
+    total_budget: int,
+    seed: int,
+) -> str:
+    """Get a deterministic cache path for random sample IDs.
+
+    Written next to sample_metadata.csv with a hash-based name so different
+    budget/seed combinations produce different files.
+    """
+    key = f"{h5py_dir}:random:{total_budget}:{seed}"
+    digest = hashlib.sha256(key.encode()).hexdigest()[:12]
+    return str(Path(h5py_dir) / f"_random_sample_ids_{digest}.txt")
