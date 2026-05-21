@@ -157,6 +157,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         if self.target_task_type not in {
             TaskType.SEGMENTATION,
             TaskType.CLASSIFICATION,
+            TaskType.REGRESSION,
         }:
             raise ValueError(
                 f"Unsupported target task type: {self.target_task_type.value}"
@@ -429,6 +430,15 @@ class RslearnToOlmoEarthDataset(Dataset):
         elif self.target_task_type == TaskType.CLASSIFICATION:
             classes = data_dict["class"]
             valid = data_dict["valid"]
+        elif self.target_task_type == TaskType.REGRESSION:
+            values = torch.as_tensor(
+                data_dict["values"].image, dtype=torch.float32
+            ).squeeze()
+            valid = torch.as_tensor(
+                data_dict["valid"].image, dtype=torch.float32
+            ).squeeze()
+            values[valid == 0] = 0.0
+            return masked_sample, values
         else:
             raise ValueError(
                 f"Unsupported target task type: {self.target_task_type.value}"

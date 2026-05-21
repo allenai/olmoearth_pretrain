@@ -68,7 +68,7 @@ from olmoearth_pretrain.evals.studio_ingest.schema import (
     rslearn_task_type_to_olmoearth_task_type,
     rslearn_to_olmoearth,
 )
-from olmoearth_pretrain.evals.task_types import SplitName
+from olmoearth_pretrain.evals.task_types import SplitName, TaskType
 
 logger = logging.getLogger(__name__)
 
@@ -1166,11 +1166,15 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         num_classes = len(task_init_args["classes"])
 
     if num_classes is None:
-        raise ValueError(
-            f"Could not determine num_classes from task config '{task_name}' "
-            f"(class_path: {task_class_path}). "
-            "Expected 'num_classes' or 'classes' in init_args."
-        )
+        task_type = rslearn_task_type_to_olmoearth_task_type(rslearn_task)
+        if task_type == TaskType.REGRESSION:
+            num_classes = 1
+        else:
+            raise ValueError(
+                f"Could not determine num_classes from task config '{task_name}' "
+                f"(class_path: {task_class_path}). "
+                "Expected 'num_classes' or 'classes' in init_args."
+            )
 
     # Assume 0-indexed consecutive labels (0 to num_classes-1)
     label_values = [str(i) for i in range(num_classes)]
