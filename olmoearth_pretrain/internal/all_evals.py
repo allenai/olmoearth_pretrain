@@ -418,6 +418,13 @@ MAP_MODALITY_PROBE_INPUTS = [
 ]
 MAP_MODALITY_PROBE_INPUT_SUFFIX = "_".join(MAP_MODALITY_PROBE_INPUTS)
 
+# Additional input-modality combinations used only for the SRTM probe so we can
+# compare elevation regression quality from S1, S2, and S1+S2 inputs.
+SRTM_PROBE_INPUT_VARIANTS: list[list[str]] = [
+    [Modality.SENTINEL1.name],
+    [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+]
+
 
 def _map_modality_probe(
     *,
@@ -426,6 +433,7 @@ def _map_modality_probe(
     primary_metric: EvalMetric,
     h5py_dir: str,
     split_strategy: str = "random",
+    input_modalities: list[str] | None = None,
 ) -> DownstreamTaskConfig:
     """Build a uniform DownstreamTaskConfig for a decode-only map modality probe."""
     return DownstreamTaskConfig(
@@ -436,7 +444,9 @@ def _map_modality_probe(
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
         eval_interval=Duration.epochs(10),
-        input_modalities=MAP_MODALITY_PROBE_INPUTS,
+        input_modalities=input_modalities
+        if input_modalities is not None
+        else MAP_MODALITY_PROBE_INPUTS,
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         probe_lr=0.01,
@@ -534,6 +544,29 @@ EVAL_TASKS.update(
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
             split_strategy="geographic",
         ),
+        # SRTM elevation regression from S1-only and S2+S1 inputs, so we can
+        # compare elevation signal across modality combinations.
+        **{
+            f"pretrain_srtm_regression_{'_'.join(inputs)}": _map_modality_probe(
+                dataset="pretrain_subset_srtm",
+                target_modality=Modality.SRTM.name,
+                primary_metric=EvalMetric.NEG_RMSE,
+                h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
+                input_modalities=inputs,
+            )
+            for inputs in SRTM_PROBE_INPUT_VARIANTS
+        },
+        **{
+            f"pretrain_srtm_regression_geo_{'_'.join(inputs)}": _map_modality_probe(
+                dataset="pretrain_subset_srtm",
+                target_modality=Modality.SRTM.name,
+                primary_metric=EvalMetric.NEG_RMSE,
+                h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
+                split_strategy="geographic",
+                input_modalities=inputs,
+            )
+            for inputs in SRTM_PROBE_INPUT_VARIANTS
+        },
         # Embedding diagnostics on standard downstream datasets, so we can track
         # representation quality (effective rank / norm / cosine stats) on real
         # eval distributions alongside the probe metrics.
