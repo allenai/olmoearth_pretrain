@@ -267,19 +267,19 @@ python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py lau
     --trainer.callbacks.wandb.name=v0b_basev11_xglobal_bridge100k
 
 ### v1a  -  all candidate samples (random with 700k budget > total available, uses all)
-python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py launch basev11_200k_random_all ai2/jupiter-cirrascale-2 \
+python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py launch v1a_basev11_allcand ai2/jupiter-cirrascale-2 \
     --random_seed 42 \
     --total_budget 700000 \
     --candidate_h5py_dir /weka/dfive-default/helios/dataset/candidates/h5py_data_w_missing_timesteps_zstd_3_128_x_1/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/693942 \
     --trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/hidden1/step200000 \
     --train_module.optim_config.lr=0.0001 \
-    --train_module.scheduler.warmup_steps=0 \
+    --train_module.scheduler.warmup_steps=8000 \
     --train_module.scheduler.alpha_f=0.1 \
-    --train_module.scheduler.t_max=400000 \
-    --trainer.max_duration.value=400000 \
+    --train_module.scheduler.t_max=500000 \
+    --trainer.max_duration.value=500000 \
     --trainer.max_duration.unit=steps \
     --launch.priority=urgent \
     --launch.num_gpus=8 \
     --launch.num_nodes=1 \
     --trainer.callbacks.wandb.project=20260513_candidate_datasets \
-    --trainer.callbacks.wandb.name=basev11_200k_random_all
+    --trainer.callbacks.wandb.name=v1a_basev11_allcand
