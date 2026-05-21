@@ -647,6 +647,7 @@ class CompositeEncodings(nn.Module):
         tokenization_config: TokenizationConfig | None = None,
         timestamp_encoding_mode: str = "legacy",
         spatial_encoding_mode: str = "legacy",
+        latlon_dropout_rate: float = 0.0,
     ):
         """Initialize the composite encodings.
 
@@ -668,10 +669,15 @@ class CompositeEncodings(nn.Module):
                 sphere-mapped lat/lon (in [3n:4n]). The static_split mode
                 requires a per-batch lat/lon to be provided at forward time;
                 if absent, the global slot is left zero.
+            latlon_dropout_rate: With this probability per sample, zero out the
+                global lat/lon slot during training so the model also sees the
+                eval-time-with-no-latlon distribution. Requires
+                spatial_encoding_mode='static_split'. Default 0.0 (no dropout).
         """
         super().__init__()
         self.timestamp_encoding_mode = TimestampEncodingMode(timestamp_encoding_mode)
         self.spatial_encoding_mode = SpatialEncodingMode(spatial_encoding_mode)
+        self.latlon_dropout_rate = float(latlon_dropout_rate)
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [
@@ -899,6 +905,16 @@ class CompositeEncodings(nn.Module):
                 global_embed = get_static_global_latlon_encoding(
                     latlon.to(device=device, dtype=modality_embed.dtype), n
                 )  # (b, n)
+                # Training-time dropout: per-sample bernoulli zeroing of the
+                # global slot, so the model also sees the eval-time-with-no-
+                # latlon distribution where this slot is all zeros. Local 2D
+                # slot is independent of latlon and remains untouched.
+                if self.training and self.latlon_dropout_rate > 0.0:
+                    keep_prob = 1.0 - self.latlon_dropout_rate
+                    keep = torch.bernoulli(
+                        torch.full((b,), keep_prob, device=global_embed.device)
+                    ).to(global_embed.dtype)
+                    global_embed = global_embed * keep.view(b, 1)
                 # Broadcast (b, n) across the middle (token) dims of
                 # modality_embed via the existing ein_dict.
                 num_middle_dims = modality_embed.ndim - 2
@@ -965,6 +981,7 @@ class FlexiVitBase(nn.Module):
         tokenization_config: TokenizationConfig | None = None,
         timestamp_encoding_mode: str = "legacy",
         spatial_encoding_mode: str = "legacy",
+        latlon_dropout_rate: float = 0.0,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -1006,6 +1023,7 @@ class FlexiVitBase(nn.Module):
             tokenization_config=self._base_tokenization_config,
             timestamp_encoding_mode=timestamp_encoding_mode,
             spatial_encoding_mode=spatial_encoding_mode,
+            latlon_dropout_rate=latlon_dropout_rate,
         )
         self.apply(self._init_weights)
 
@@ -1207,6 +1225,7 @@ class Encoder(FlexiVitBase):
         post_proj_hidden_sizes: list[int] | None = None,
         timestamp_encoding_mode: str = "legacy",
         spatial_encoding_mode: str = "legacy",
+        latlon_dropout_rate: float = 0.0,
     ):
         """Initialize the encoder.
 
@@ -1255,6 +1274,9 @@ class Encoder(FlexiVitBase):
             spatial_encoding_mode: "legacy" (resolution-aware 2D sincos in
                 the spatial slot) or "static_split" (local 2D position +
                 global lat/lon, both static, occupying [2n:3n] and [3n:4n]).
+            latlon_dropout_rate: Per-sample probability of zeroing the
+                broadcast global-latlon slot during training. Requires
+                spatial_encoding_mode="static_split". Default 0.0.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1272,6 +1294,7 @@ class Encoder(FlexiVitBase):
             tokenization_config=self.tokenization_config,
             timestamp_encoding_mode=timestamp_encoding_mode,
             spatial_encoding_mode=spatial_encoding_mode,
+            latlon_dropout_rate=latlon_dropout_rate,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1808,6 +1831,7 @@ class PredictorBase(FlexiVitBase):
         tokenization_config: TokenizationConfig | None = None,
         timestamp_encoding_mode: str = "legacy",
         spatial_encoding_mode: str = "legacy",
+        latlon_dropout_rate: float = 0.0,
     ):
         """Initialize the predictor.
 
@@ -1828,6 +1852,9 @@ class PredictorBase(FlexiVitBase):
             tokenization_config: Optional config for custom band groupings
             timestamp_encoding_mode: "legacy" or "static_temporal"
             spatial_encoding_mode: "legacy" or "static_split"
+            latlon_dropout_rate: Per-sample probability of zeroing the
+                broadcast global-latlon slot during training. Requires
+                spatial_encoding_mode="static_split". Default 0.0.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1845,6 +1872,7 @@ class PredictorBase(FlexiVitBase):
             tokenization_config=self.tokenization_config,
             timestamp_encoding_mode=timestamp_encoding_mode,
             spatial_encoding_mode=spatial_encoding_mode,
+            latlon_dropout_rate=latlon_dropout_rate,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -2219,6 +2247,7 @@ class EncoderConfig(Config):
     post_proj_hidden_sizes: list[int] | None = None
     timestamp_encoding_mode: str = "legacy"
     spatial_encoding_mode: str = "legacy"
+    latlon_dropout_rate: float = 0.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2260,6 +2289,17 @@ class EncoderConfig(Config):
                 f"spatial_encoding_mode must be one of {valid}, "
                 f"got '{self.spatial_encoding_mode}'"
             )
+        if not 0.0 <= self.latlon_dropout_rate <= 1.0:
+            raise ValueError(
+                f"latlon_dropout_rate must be in [0, 1], got {self.latlon_dropout_rate}"
+            )
+        if (
+            self.latlon_dropout_rate > 0.0
+            and self.spatial_encoding_mode != SpatialEncodingMode.STATIC_SPLIT.value
+        ):
+            raise ValueError(
+                "latlon_dropout_rate > 0 requires spatial_encoding_mode='static_split'"
+            )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -2297,6 +2337,7 @@ class PredictorConfig(Config):
     tokenization_config: TokenizationConfig | None = None
     timestamp_encoding_mode: str = "legacy"
     spatial_encoding_mode: str = "legacy"
+    latlon_dropout_rate: float = 0.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2328,6 +2369,17 @@ class PredictorConfig(Config):
             raise ValueError(
                 f"timestamp_encoding_mode must be one of {valid}, "
                 f"got '{self.timestamp_encoding_mode}'"
+            )
+        if not 0.0 <= self.latlon_dropout_rate <= 1.0:
+            raise ValueError(
+                f"latlon_dropout_rate must be in [0, 1], got {self.latlon_dropout_rate}"
+            )
+        if (
+            self.latlon_dropout_rate > 0.0
+            and self.spatial_encoding_mode != SpatialEncodingMode.STATIC_SPLIT.value
+        ):
+            raise ValueError(
+                "latlon_dropout_rate > 0 requires spatial_encoding_mode='static_split'"
             )
 
     @property

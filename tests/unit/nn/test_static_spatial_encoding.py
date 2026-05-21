@@ -289,3 +289,153 @@ def test_invalid_spatial_encoding_mode_raises() -> None:
             max_sequence_length=12,
             spatial_encoding_mode="bogus_mode",
         )
+
+
+# ---- latlon dropout ------------------------------------------------------
+
+
+def _make_ce_with_dropout(
+    dropout_rate: float, embedding_size: int = 384
+) -> CompositeEncodings:
+    return CompositeEncodings(
+        embedding_size=embedding_size,
+        supported_modalities=[Modality.SENTINEL2_L2A],
+        max_sequence_length=12,
+        timestamp_encoding_mode="static_temporal",
+        spatial_encoding_mode="static_split",
+        latlon_dropout_rate=dropout_rate,
+    )
+
+
+def test_latlon_dropout_zero_rate_unchanged() -> None:
+    """With rate=0.0, the global slot matches the no-dropout path exactly."""
+    ce = _make_ce_with_dropout(0.0)
+    ce.train()  # enable training mode
+    n = ce.embedding_dim_per_embedding_type
+    B, H, W, T = 4, 2, 2, 1
+    tokens = torch.zeros(B, H, W, T, 3, 384)
+    timestamps = _make_timestamps(B, T)
+    latlon = torch.tensor([[37.0, -122.0]] * B)
+    out = ce.forward(
+        {"sentinel2_l2a": tokens}, timestamps, patch_size=4, latlon=latlon
+    )["sentinel2_l2a"]
+    expected = get_static_global_latlon_encoding(latlon, n)
+    for b in range(B):
+        assert torch.allclose(out[b, 0, 0, 0, 0, 3 * n : 4 * n], expected[b], atol=1e-5)
+
+
+def test_latlon_dropout_eval_mode_no_dropout() -> None:
+    """In eval mode, dropout is disabled even with rate=1.0 — full encoding applied."""
+    ce = _make_ce_with_dropout(1.0)
+    ce.eval()
+    n = ce.embedding_dim_per_embedding_type
+    B = 4
+    tokens = torch.zeros(B, 2, 2, 1, 3, 384)
+    timestamps = _make_timestamps(B, 1)
+    latlon = torch.tensor([[37.0, -122.0]] * B)
+    out = ce.forward(
+        {"sentinel2_l2a": tokens}, timestamps, patch_size=4, latlon=latlon
+    )["sentinel2_l2a"]
+    expected = get_static_global_latlon_encoding(latlon, n)
+    for b in range(B):
+        assert torch.allclose(out[b, 0, 0, 0, 0, 3 * n : 4 * n], expected[b], atol=1e-5)
+
+
+def test_latlon_dropout_rate_one_zeros_global_slot_in_training() -> None:
+    """With rate=1.0 in training mode, every sample's global slot is zeroed."""
+    ce = _make_ce_with_dropout(1.0)
+    ce.train()
+    n = ce.embedding_dim_per_embedding_type
+    B = 4
+    tokens = torch.zeros(B, 2, 2, 1, 3, 384)
+    timestamps = _make_timestamps(B, 1)
+    latlon = torch.tensor([[37.0, -122.0]] * B)
+    out = ce.forward(
+        {"sentinel2_l2a": tokens}, timestamps, patch_size=4, latlon=latlon
+    )["sentinel2_l2a"]
+    assert torch.allclose(
+        out[..., 3 * n : 4 * n], torch.zeros_like(out[..., 3 * n : 4 * n])
+    )
+
+
+def test_latlon_dropout_preserves_local_2d_slot() -> None:
+    """Dropping the global slot must NOT affect the local-2D slot [2n:3n]."""
+    ce_no_drop = _make_ce_with_dropout(0.0)
+    ce_full_drop = _make_ce_with_dropout(1.0)
+    ce_no_drop.train()
+    ce_full_drop.train()
+    n = ce_no_drop.embedding_dim_per_embedding_type
+    B, H, W, T = 2, 4, 4, 1
+    tokens = torch.zeros(B, H, W, T, 3, 384)
+    timestamps = _make_timestamps(B, T)
+    latlon = torch.tensor([[37.0, -122.0]] * B)
+    out_no = ce_no_drop.forward(
+        {"sentinel2_l2a": tokens}, timestamps, patch_size=4, latlon=latlon
+    )["sentinel2_l2a"]
+    out_full = ce_full_drop.forward(
+        {"sentinel2_l2a": tokens}, timestamps, patch_size=4, latlon=latlon
+    )["sentinel2_l2a"]
+    # Local 2D slot identical between the two paths.
+    assert torch.allclose(out_no[..., 2 * n : 3 * n], out_full[..., 2 * n : 3 * n])
+    # Channel/temporal slots also identical (dropout only touches global).
+    assert torch.allclose(out_no[..., : 2 * n], out_full[..., : 2 * n])
+
+
+def test_latlon_dropout_partial_rate_some_zeroed() -> None:
+    """At intermediate rate, some samples are zeroed and some aren't (bernoulli).
+
+    Run many samples so the bernoulli has high probability of producing at
+    least one of each outcome.
+    """
+    torch.manual_seed(0)
+    ce = _make_ce_with_dropout(0.5)
+    ce.train()
+    n = ce.embedding_dim_per_embedding_type
+    B = 64
+    tokens = torch.zeros(B, 2, 2, 1, 3, 384)
+    timestamps = _make_timestamps(B, 1)
+    # All non-trivial latlons so the "full encoding" path is non-zero.
+    latlon = torch.linspace(-60, 60, B).unsqueeze(-1).repeat(1, 2)
+    out = ce.forward(
+        {"sentinel2_l2a": tokens}, timestamps, patch_size=4, latlon=latlon
+    )["sentinel2_l2a"]
+    per_sample_norms = out[:, 0, 0, 0, 0, 3 * n : 4 * n].abs().sum(dim=-1)
+    num_zero = (per_sample_norms == 0).sum().item()
+    num_nonzero = (per_sample_norms > 0).sum().item()
+    assert num_zero > 0, "expected some samples to be zeroed at rate=0.5"
+    assert num_nonzero > 0, "expected some samples to keep their encoding at rate=0.5"
+    assert num_zero + num_nonzero == B
+
+
+def test_latlon_dropout_invalid_rate_raises() -> None:
+    """Invalid dropout rate at the config level should raise."""
+    from olmoearth_pretrain.nn.flexihelios import EncoderConfig
+
+    cfg = EncoderConfig(
+        supported_modality_names=["sentinel2_l2a"],
+        embedding_size=384,
+        max_patch_size=4,
+        num_heads=4,
+        depth=2,
+        spatial_encoding_mode="static_split",
+        latlon_dropout_rate=1.5,
+    )
+    with pytest.raises(ValueError, match="latlon_dropout_rate must be in"):
+        cfg.validate()
+
+
+def test_latlon_dropout_requires_static_split() -> None:
+    """latlon_dropout_rate > 0 requires spatial_encoding_mode='static_split'."""
+    from olmoearth_pretrain.nn.flexihelios import EncoderConfig
+
+    cfg = EncoderConfig(
+        supported_modality_names=["sentinel2_l2a"],
+        embedding_size=384,
+        max_patch_size=4,
+        num_heads=4,
+        depth=2,
+        spatial_encoding_mode="legacy",
+        latlon_dropout_rate=0.5,
+    )
+    with pytest.raises(ValueError, match="requires spatial_encoding_mode"):
+        cfg.validate()

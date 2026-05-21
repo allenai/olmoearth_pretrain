@@ -1,7 +1,7 @@
 """Single bandset + random band dropout (no S1) + random time + static_split spatial encoding.
 
 Same backbone as base_band_dropout_no_s1_drop_random_time.py, with two
-encoding-mode flips:
+encoding-mode flips plus latlon dropout:
 
 - ``timestamp_encoding_mode="static_temporal"``: shrunk-to-1n variant of the
   static_temporal PR (#527). Multi-frequency sinusoidal of fractional year in
@@ -10,6 +10,11 @@ encoding-mode flips:
   replacing the legacy 2D sincos. Local 2D physical position
   (resolution-aware, ``[2n:3n]``) and global sphere-mapped lat/lon
   (``[3n:4n]``). Both deterministic, no MLP.
+- ``latlon_dropout_rate=0.5``: at training time, with 50% per-sample
+  probability, zero out the broadcast global-latlon slot. This trains the
+  model to handle the eval-time-with-no-latlon distribution (e.g., So2Sat)
+  where the global slot also comes through as all zeros. The local 2D slot
+  is independent of latlon and is unaffected by dropout.
 
 The split addresses the failure mode of the prior ``learned-latlon-encoding``
 experiments, which fused per-token absolute lat/lon (tile center + grid
@@ -20,7 +25,7 @@ Final layout (n = embedding_size / 4):
 - ``[0:n]``    modality / channel
 - ``[n:2n]``   static_temporal (1 slot)
 - ``[2n:3n]``  local 2D position (NEW)
-- ``[3n:4n]``  global lat/lon (NEW)
+- ``[3n:4n]``  global lat/lon (NEW, dropped to all-zero with prob 0.5 during training)
 """
 
 import logging
@@ -410,6 +415,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         band_dropout_modalities=BAND_DROPOUT_MODALITIES,
         timestamp_encoding_mode="static_temporal",
         spatial_encoding_mode="static_split",
+        latlon_dropout_rate=0.5,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
@@ -422,6 +428,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         tokenization_config=common.tokenization_config,
         timestamp_encoding_mode="static_temporal",
         spatial_encoding_mode="static_split",
+        latlon_dropout_rate=0.5,
     )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
