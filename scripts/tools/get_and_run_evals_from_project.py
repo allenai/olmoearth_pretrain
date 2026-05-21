@@ -13,9 +13,8 @@ import argparse
 import subprocess  # nosec
 from logging import getLogger
 
-from olmo_core.utils import prepare_cli_environment
-
 import wandb
+from olmo_core.utils import prepare_cli_environment
 
 logger = getLogger(__name__)
 WANDB_ENTITY = "eai-ai2"
