@@ -77,6 +77,13 @@ _parser.add_argument(
     help="Score column suffix (REQUIRED, e.g. 'normalized_score', 'diverse_score_p95'). "
     "The column looked up for each strategy is '{strategy}_{suffix}'.",
 )
+_parser.add_argument(
+    "--candidate_only",
+    action="store_true",
+    default=False,
+    help="Train on candidate data only (no base dataset). "
+    "Use for from-scratch runs on candidate subsets.",
+)
 _known, _remaining = _parser.parse_known_args()
 sys.argv = [sys.argv[0]] + _remaining
 
@@ -84,6 +91,7 @@ CANDIDATE_COLUMNS: list[str] = _known.candidate_columns
 CANDIDATE_PARQUET: str | None = _known.candidate_parquet
 CANDIDATE_H5PY_DIR_RESOLVED: str | None = _known.candidate_h5py_dir
 SCORE_SUFFIX: str | None = _known.score_suffix
+CANDIDATE_ONLY: bool = _known.candidate_only
 
 if _known.total_budget is not None:
     SELECT_TOP: int | None = _known.total_budget // len(CANDIDATE_COLUMNS)
@@ -122,6 +130,7 @@ def build_common_components(
             + ["--select_top", str(SELECT_TOP)]
             + ["--candidate_parquet", CANDIDATE_PARQUET]
             + ["--candidate_h5py_dir", CANDIDATE_H5PY_DIR_RESOLVED]
+            + (["--candidate_only"] if CANDIDATE_ONLY else [])
         )
         # Insert after the 4 positional args (script, cmd, run_name, cluster)
         common.launch.cmd = common.launch.cmd[:4] + extra + common.launch.cmd[4:]
@@ -169,14 +178,21 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConf
         f"select_top={SELECT_TOP}, score_suffix={SCORE_SUFFIX}, ids_file={ids_file}"
     )
 
-    base_config = OlmoEarthDatasetConfig(
-        h5py_dir=BASE_H5PY_DIR,
-        training_modalities=common.training_modalities,
-    )
     candidate_config = OlmoEarthDatasetConfig(
         h5py_dir=CANDIDATE_H5PY_DIR_RESOLVED,
         training_modalities=common.training_modalities,
         filter_sample_ids_file=ids_file,
+    )
+    if CANDIDATE_ONLY:
+        logger.info(
+            "--candidate_only: training on candidate data only (no base dataset)"
+        )
+        return OlmoEarthConcatDatasetConfig(
+            dataset_configs=[candidate_config],
+        )
+    base_config = OlmoEarthDatasetConfig(
+        h5py_dir=BASE_H5PY_DIR,
+        training_modalities=common.training_modalities,
     )
     return OlmoEarthConcatDatasetConfig(
         dataset_configs=[base_config, candidate_config],
