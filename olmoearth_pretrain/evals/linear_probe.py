@@ -24,6 +24,7 @@ from olmoearth_pretrain.evals.metrics import (
     EvalResult,
     EvalTaskResult,
     classification_metrics,
+    regression_metrics,
     segmentation_metrics,
 )
 from olmoearth_pretrain.evals.utils import adjust_learning_rate
@@ -158,9 +159,9 @@ def train_and_eval_probe(
             raise ValueError("Embedding dims don't match.")
     in_features = train_embeddings.shape[-1]
     output_pixels_per_side_of_patch = None
-    if config.task_type == TaskType.SEGMENTATION:
+    if config.task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION):
         assert config.height_width is not None, (
-            "Height width is required for segmentation"
+            "Height width is required for spatial probe tasks"
         )
         # if the image is resized the patch size will correspond to a different number of pixels in the labels
         # This normalizes the number of logits per patch to the number of label pixels each patch corresponds to
@@ -168,9 +169,14 @@ def train_and_eval_probe(
         output_pixels_per_side_of_patch = int(
             (config.height_width**2 / num_patches) ** 0.5
         )
-        num_output_pixels = config.num_classes * output_pixels_per_side_of_patch**2
+        output_channels = (
+            1 if config.task_type == TaskType.REGRESSION else config.num_classes
+        )
+        num_output_pixels = output_channels * output_pixels_per_side_of_patch**2
         logits_per_patch = num_output_pixels
         if probe_type == ProbeType.ATTNPOOL:
+            if config.task_type == TaskType.REGRESSION:
+                raise ValueError("Attention pooling is not supported for regression.")
             probe = AttnPoolLinearProbe(
                 in_dim=in_features, out_dim=logits_per_patch
             ).to(device)
@@ -179,7 +185,9 @@ def train_and_eval_probe(
                 in_dim=in_features, out_dim=logits_per_patch, use_batchnorm=False
             ).to(device)
         else:
-            raise ValueError(f"Probe type {probe_type} not supported for segmentation.")
+            raise ValueError(
+                f"Probe type {probe_type} not supported for spatial tasks."
+            )
     else:
         if probe_type == ProbeType.LINEAR:
             probe = LinearProbe(
@@ -440,7 +448,9 @@ def train_probe(
     opt = torch.optim.AdamW(probe.parameters(), lr=lr)
 
     probe = probe.train()
-    if use_dice_loss:
+    if task_type == TaskType.REGRESSION:
+        loss_function = nn.MSELoss()
+    elif use_dice_loss:
         loss_function = functools.partial(weighted_dice_loss, num_classes=num_classes)
     else:
         loss_function = nn.CrossEntropyLoss(ignore_index=SEGMENTATION_IGNORE_LABEL)
@@ -481,7 +491,30 @@ def train_probe(
                             mode="bilinear",
                             align_corners=True,
                         )  # (bsz, num_classes, H, W)
-                loss = loss_function(logits, batch_labels.to(device))
+                    targets = batch_labels.to(device)
+                elif task_type == TaskType.REGRESSION:
+                    assert num_output_pixels_per_side_of_patch is not None, (
+                        "num_output_pixels_per_side_of_patch is required for regression"
+                    )
+                    logits = rearrange(
+                        logits,
+                        "b h w (i j) -> b (h i) (w j)",
+                        h=spatial_patches_per_dim,
+                        w=spatial_patches_per_dim,
+                        i=num_output_pixels_per_side_of_patch,
+                        j=num_output_pixels_per_side_of_patch,
+                    )
+                    if logits.shape[-2] != batch_labels.shape[-2]:
+                        logits = F.interpolate(
+                            logits.unsqueeze(1),
+                            size=(batch_labels.shape[-2], batch_labels.shape[-1]),
+                            mode="bilinear",
+                            align_corners=True,
+                        ).squeeze(1)
+                    targets = batch_labels.to(device).float()
+                else:
+                    targets = batch_labels.to(device)
+                loss = loss_function(logits, targets)
 
             loss.backward()
             adjust_learning_rate(
@@ -547,8 +580,31 @@ def get_probe_predictions(
                             mode="bilinear",
                             align_corners=True,
                         )  # (bsz, num_classes, H, W)
+                elif task_type == TaskType.REGRESSION:
+                    assert num_output_pixels_per_side_of_patch is not None, (
+                        "num_output_pixels_per_side_of_patch is required for regression"
+                    )
+                    spatial_patches_per_dim = batch_emb.shape[1]
+                    logits = rearrange(
+                        logits,
+                        "b h w (i j) -> b (h i) (w j)",
+                        h=spatial_patches_per_dim,
+                        w=spatial_patches_per_dim,
+                        i=num_output_pixels_per_side_of_patch,
+                        j=num_output_pixels_per_side_of_patch,
+                    )
+                    if logits.shape[-2] != batch_labels.shape[-2]:
+                        logits = F.interpolate(
+                            logits.unsqueeze(1),
+                            size=(batch_labels.shape[-2], batch_labels.shape[-1]),
+                            mode="bilinear",
+                            align_corners=True,
+                        ).squeeze(1)
 
-            preds = torch.argmax(logits, dim=1).cpu()
+            if task_type == TaskType.REGRESSION:
+                preds = logits.float().cpu()
+            else:
+                preds = torch.argmax(logits, dim=1).cpu()
             all_preds.append(preds)
             all_labels.append(batch_labels)
             if probe_type == ProbeType.ATTNPOOL:
@@ -584,13 +640,18 @@ def compute_metric(
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
         )
-    else:
-        return classification_metrics(
+    if task_type == TaskType.REGRESSION:
+        return regression_metrics(
             predictions=preds,
             labels=labels,
             primary_metric=primary_metric,
-            primary_metric_class=primary_metric_class,
         )
+    return classification_metrics(
+        predictions=preds,
+        labels=labels,
+        primary_metric=primary_metric,
+        primary_metric_class=primary_metric_class,
+    )
 
 
 def evaluate_probe(
