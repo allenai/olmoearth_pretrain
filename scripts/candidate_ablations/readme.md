@@ -34,7 +34,7 @@ h5 samples. Use `--random_seed` to activate this mode:
 If `--total_budget` exceeds the number of available samples, all samples are used.
 
 ```shell
-python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py launch basev11_200k_random_50k ai2/jupiter-cirrascale-2 \
+python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py launch basev11_200k_randcand_s42_50k ai2/jupiter-cirrascale-2 \
     --random_seed 42 \
     --total_budget 50000 \
     --candidate_h5py_dir /weka/dfive-default/helios/dataset/candidates/h5py_data_w_missing_timesteps_zstd_3_128_x_1/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/693942 \
@@ -49,7 +49,7 @@ python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py lau
     --launch.num_gpus=8 \
     --launch.num_nodes=1 \
     --trainer.callbacks.wandb.project=20260513_candidate_datasets \
-    --trainer.callbacks.wandb.name=basev11_200k_random_50k
+    --trainer.callbacks.wandb.name=basev11_200k_randcand_s42_50k
 ```
 
 
