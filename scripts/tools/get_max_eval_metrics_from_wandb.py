@@ -172,6 +172,39 @@ def group_runs_by_baseline_model_and_size(
     return grouped_runs
 
 
+# Metric name suffixes where lower values are better. Everything else is
+# treated as higher-is-better when picking the "best" run per metric.
+# Note: regression tasks default to primary_metric=NEG_RMSE (higher-is-better),
+# so the bare `eval/{task}` key is fine with max; only the explicit RMSE/MAE
+# sub-metric columns need the inverted comparison.
+_LOWER_IS_BETTER_SUFFIXES = {"rmse", "mae", "mse", "loss"}
+
+
+def _is_lower_is_better(metric_key: str) -> bool:
+    """True if this metric is one where lower values are better (e.g. RMSE, MAE)."""
+    return metric_key.rsplit("/", 1)[-1] in _LOWER_IS_BETTER_SUFFIXES
+
+
+def _update_best(
+    metrics: dict[str, float],
+    runs_per_metric: dict[str, "wandb.Run"],
+    key: str,
+    value: float,
+    run: "wandb.Run",
+) -> None:
+    """Update the best value (and originating run) for a metric in-place.
+
+    Uses min for lower-is-better metrics (RMSE/MAE/etc.) and max otherwise.
+    """
+    lower_is_better = _is_lower_is_better(key)
+    sentinel = float("inf") if lower_is_better else float("-inf")
+    prev_best = metrics.get(key, sentinel)
+    is_better = value < prev_best if lower_is_better else value > prev_best
+    if is_better:
+        metrics[key] = value
+        runs_per_metric[key] = run
+
+
 def _get_corresponding_test_key(key: str) -> str:
     """Get the corresponding test key for a given metric key."""
     return key.replace("eval/", "eval/test/")
@@ -381,23 +414,19 @@ def get_max_metrics_grouped(
                     if primary_metric_name is not None:
                         additional_key = f"{normalized_key}/{primary_metric_name}"
 
-                # When reporting test metrics, require the run to have logged a
-                # test value (so we can later look up the corresponding test
-                # result for the best-val run). When only collecting val
-                # metrics, runs without a test value (e.g. neg_rmse tasks where
-                # the evaluator's `>= 0` gate suppresses test logging) should
-                # still surface their val numbers.
-                if get_test_metrics:
-                    test_key_primary = f"eval/test/{task_name}"
-                    test_key = _get_corresponding_test_key(normalized_key)
-                    has_test = (
-                        run.summary.get(test_key) is not None
-                        or run.summary.get(test_key.replace("eval/", "eval_other/", 1))
-                        is not None
-                        or run.summary.get(test_key_primary) is not None
-                    )
-                    if not has_test:
-                        continue
+                # Ensure the run has test metrics (check both namespaces).
+                # For post-PR#504 runs, the primary test metric is at eval/test/{task}
+                # while sub-metrics are at eval_other/test/{task}/{metric}.
+                test_key_primary = f"eval/test/{task_name}"
+                test_key = _get_corresponding_test_key(normalized_key)
+                has_test = (
+                    run.summary.get(test_key) is not None
+                    or run.summary.get(test_key.replace("eval/", "eval_other/", 1))
+                    is not None
+                    or run.summary.get(test_key_primary) is not None
+                )
+                if not has_test:
+                    continue
 
                 # If for the given metric, it is a linear probe task skip if it was not done with early stop linear probing
                 task_config = run.config["trainer"]["callbacks"][
@@ -426,17 +455,13 @@ def get_max_metrics_grouped(
                     )
                     continue
 
-                prev_max_val = metrics.get(normalized_key, float("-inf"))
-                metrics[normalized_key] = max(prev_max_val, value)
-                if value > prev_max_val:
-                    max_runs_per_metric[normalized_key] = run
+                _update_best(metrics, max_runs_per_metric, normalized_key, value, run)
 
                 # Also record under the explicit sub-metric key
                 if additional_key is not None:
-                    prev_max_val = metrics.get(additional_key, float("-inf"))
-                    metrics[additional_key] = max(prev_max_val, value)
-                    if value > prev_max_val:
-                        max_runs_per_metric[additional_key] = run
+                    _update_best(
+                        metrics, max_runs_per_metric, additional_key, value, run
+                    )
 
         group_metrics[group_name] = metrics
         group_max_runs_per_metric[group_name] = max_runs_per_metric
@@ -527,8 +552,11 @@ def get_max_metrics_per_partition(
                 if not (key.startswith("eval/") or key.startswith("eval_other/")):
                     continue
                 normalized_key = _normalize_eval_key(key)
-                partition_max_metrics[normalized_key] = max(
-                    partition_max_metrics.get(normalized_key, value), value
+                prev = partition_max_metrics.get(normalized_key, value)
+                partition_max_metrics[normalized_key] = (
+                    min(prev, value)
+                    if _is_lower_is_better(normalized_key)
+                    else max(prev, value)
                 )
 
         partition_metrics[partition] = partition_max_metrics
@@ -569,7 +597,12 @@ def get_max_metrics(project_name: str, run_prefix: str) -> dict[str, float]:
             if not (key.startswith("eval/") or key.startswith("eval_other/")):
                 continue
             normalized_key = _normalize_eval_key(key)
-            metrics[normalized_key] = max(metrics.get(normalized_key, value), value)
+            prev = metrics.get(normalized_key, value)
+            metrics[normalized_key] = (
+                min(prev, value)
+                if _is_lower_is_better(normalized_key)
+                else max(prev, value)
+            )
     return metrics
 
 
@@ -729,12 +762,6 @@ if __name__ == "__main__":
                     # also try the segmentation suffixes
                     if val is None:
                         metric_alt = f"{metric}/miou"
-                        key_alt = f"eval/{metric_alt}"
-                        val = partition_metrics[partition].get(key_alt)
-                        name_for_print = metric_alt if val is not None else metric
-                    # also try the regression suffix (pretrain_subset_* probes)
-                    if val is None:
-                        metric_alt = f"{metric}/neg_rmse"
                         key_alt = f"eval/{metric_alt}"
                         val = partition_metrics[partition].get(key_alt)
                         name_for_print = metric_alt if val is not None else metric
