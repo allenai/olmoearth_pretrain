@@ -790,7 +790,7 @@
       "timeseries": true,
       "use_pretrain_norm": true,
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/lfmc_woody",
-      "window_size": 63
+      "window_size": 32
     },
     "nandi_crop_map": {
       "classes": [
