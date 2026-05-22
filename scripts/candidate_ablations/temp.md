@@ -271,7 +271,6 @@ python3 scripts/candidate_ablations/run_candidate_ablation_single_bandset.py lau
     --random_seed 42 \
     --total_budget 700000 \
     --candidate_h5py_dir /weka/dfive-default/helios/dataset/candidates/h5py_data_w_missing_timesteps_zstd_3_128_x_1/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/693942 \
-    --trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/hidden1/step200000 \
     --train_module.optim_config.lr=0.0001 \
     --train_module.scheduler.warmup_steps=8000 \
     --train_module.scheduler.alpha_f=0.1 \
