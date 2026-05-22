@@ -415,6 +415,7 @@ EVAL_TASKS = {
         input_modalities=[
             Modality.SENTINEL2_L2A.name,
         ],
+        patch_size=4,
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
