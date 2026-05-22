@@ -437,7 +437,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             valid = torch.as_tensor(
                 data_dict["valid"].image, dtype=torch.float32
             ).squeeze()
-            values[valid == 0] = 0.0
+            values[valid == 0] = float("nan")
             return masked_sample, values
         else:
             raise ValueError(

@@ -32,6 +32,17 @@ from olmoearth_pretrain.evals.utils import adjust_learning_rate
 logger = getLogger(__name__)
 
 
+class MaskedMSELoss(nn.Module):
+    """MSE loss that ignores NaN targets (used for sparse regression labels)."""
+
+    def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Compute MSE only over finite (non-NaN) target pixels."""
+        mask = torch.isfinite(targets)
+        if not mask.any():
+            return torch.tensor(0.0, device=predictions.device, requires_grad=True)
+        return (predictions[mask] - targets[mask]).pow(2).mean()
+
+
 class ProbeType(StrEnum):
     """Enumeration of probe types for linear probing."""
 
@@ -448,8 +459,9 @@ def train_probe(
     opt = torch.optim.AdamW(probe.parameters(), lr=lr)
 
     probe = probe.train()
+    loss_function: nn.Module | functools.partial
     if task_type == TaskType.REGRESSION:
-        loss_function = nn.MSELoss()
+        loss_function = MaskedMSELoss()
     elif use_dice_loss:
         loss_function = functools.partial(weighted_dice_loss, num_classes=num_classes)
     else:
