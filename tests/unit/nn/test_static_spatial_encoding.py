@@ -324,9 +324,9 @@ def test_latlon_dropout_zero_rate_unchanged() -> None:
         assert torch.allclose(out[b, 0, 0, 0, 0, 3 * n : 4 * n], expected[b], atol=1e-5)
 
 
-def test_latlon_dropout_eval_mode_no_dropout() -> None:
-    """In eval mode, dropout is disabled even with rate=1.0 — full encoding applied."""
-    ce = _make_ce_with_dropout(1.0)
+def test_latlon_dropout_eval_mode_partial_rate_no_dropout() -> None:
+    """In eval mode with partial dropout rate, no dropout applies — full encoding."""
+    ce = _make_ce_with_dropout(0.5)
     ce.eval()
     n = ce.embedding_dim_per_embedding_type
     B = 4
@@ -339,6 +339,29 @@ def test_latlon_dropout_eval_mode_no_dropout() -> None:
     expected = get_static_global_latlon_encoding(latlon, n)
     for b in range(B):
         assert torch.allclose(out[b, 0, 0, 0, 0, 3 * n : 4 * n], expected[b], atol=1e-5)
+
+
+def test_latlon_dropout_rate_one_disables_global_in_eval_too() -> None:
+    """rate>=1.0 is the 'fully disable global latlon' switch: zero in train AND eval.
+
+    Distinct from partial-rate dropout (train-only) — rate=1.0 means the
+    global latlon mechanism is treated as if it doesn't exist, equivalent to
+    passing latlon=None. Used as an ablation to test 'does the latlon
+    mechanism help at all?'
+    """
+    ce = _make_ce_with_dropout(1.0)
+    ce.eval()
+    n = ce.embedding_dim_per_embedding_type
+    B = 4
+    tokens = torch.zeros(B, 2, 2, 1, 3, 384)
+    timestamps = _make_timestamps(B, 1)
+    latlon = torch.tensor([[37.0, -122.0]] * B)
+    out = ce.forward(
+        {"sentinel2_l2a": tokens}, timestamps, patch_size=4, latlon=latlon
+    )["sentinel2_l2a"]
+    assert torch.allclose(
+        out[..., 3 * n : 4 * n], torch.zeros_like(out[..., 3 * n : 4 * n])
+    )
 
 
 def test_latlon_dropout_rate_one_zeros_global_slot_in_training() -> None:

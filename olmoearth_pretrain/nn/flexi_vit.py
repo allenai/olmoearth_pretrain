@@ -900,26 +900,32 @@ class CompositeEncodings(nn.Module):
 
         # Global lat/lon: applied for ALL modalities (spatial or not) under
         # static_split, so non-spatial modalities also pick up the global slot.
-        if self.spatial_encoding_mode == SpatialEncodingMode.STATIC_SPLIT:
-            if latlon is not None:
-                global_embed = get_static_global_latlon_encoding(
-                    latlon.to(device=device, dtype=modality_embed.dtype), n
-                )  # (b, n)
-                # Training-time dropout: per-sample bernoulli zeroing of the
-                # global slot, so the model also sees the eval-time-with-no-
-                # latlon distribution where this slot is all zeros. Local 2D
-                # slot is independent of latlon and remains untouched.
-                if self.training and self.latlon_dropout_rate > 0.0:
-                    keep_prob = 1.0 - self.latlon_dropout_rate
-                    keep = torch.bernoulli(
-                        torch.full((b,), keep_prob, device=global_embed.device)
-                    ).to(global_embed.dtype)
-                    global_embed = global_embed * keep.view(b, 1)
-                # Broadcast (b, n) across the middle (token) dims of
-                # modality_embed via the existing ein_dict.
-                num_middle_dims = modality_embed.ndim - 2
-                view_shape = (b, *([1] * num_middle_dims), n)
-                modality_embed[..., n * 3 : n * 4] += global_embed.view(*view_shape)
+        # Special case: rate>=1.0 means "always drop" — equivalent to
+        # latlon=None, applied in both train and eval modes. Useful as an
+        # ablation: "does the global latlon mechanism help at all?"
+        if (
+            self.spatial_encoding_mode == SpatialEncodingMode.STATIC_SPLIT
+            and latlon is not None
+            and self.latlon_dropout_rate < 1.0
+        ):
+            global_embed = get_static_global_latlon_encoding(
+                latlon.to(device=device, dtype=modality_embed.dtype), n
+            )  # (b, n)
+            # Training-time dropout: per-sample bernoulli zeroing of the
+            # global slot, so the model also sees the eval-time-with-no-
+            # latlon distribution where this slot is all zeros. Local 2D
+            # slot is independent of latlon and remains untouched.
+            if self.training and self.latlon_dropout_rate > 0.0:
+                keep_prob = 1.0 - self.latlon_dropout_rate
+                keep = torch.bernoulli(
+                    torch.full((b,), keep_prob, device=global_embed.device)
+                ).to(global_embed.dtype)
+                global_embed = global_embed * keep.view(b, 1)
+            # Broadcast (b, n) across the middle (token) dims of
+            # modality_embed via the existing ein_dict.
+            num_middle_dims = modality_embed.ndim - 2
+            view_shape = (b, *([1] * num_middle_dims), n)
+            modality_embed[..., n * 3 : n * 4] += global_embed.view(*view_shape)
         return modality_tokens + modality_embed
 
     def forward(
