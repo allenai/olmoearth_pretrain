@@ -541,17 +541,38 @@ def _chunk_prefixes(prefixes: list[str], num_jobs: int) -> list[list[str]]:
     return chunks
 
 
+def _upsert_beaker_secret(
+    workspace: str, name: str, value: str, dry_run: bool = False
+) -> None:
+    """Write or overwrite a Beaker secret via the CLI (reads value from stdin)."""
+    if dry_run:
+        logger.info(f"[DRY RUN] would write beaker secret {workspace}/{name}")
+        return
+    logger.info(f"Writing beaker secret {workspace}/{name}")
+    subprocess.run(
+        ["beaker", "secret", "write", "--workspace", workspace, name],
+        input=value,
+        text=True,
+        check=True,
+    )
+
+
 def cmd_launch_sync(args: argparse.Namespace) -> None:
     """Launch N parallel Beaker jobs that sync S3 -> Weka using s5cmd.
 
     Splits the corpus index space into 3-digit prefix buckets
     (`corpus_NNN*`, NNN ∈ 000..064) and distributes them across jobs.
-    AWS credentials are read from the local shell and passed as inline
-    Beaker env vars (so they expire with the local STS token).
-    """
-    from olmo_core.launch.beaker import BeakerEnvVar
 
-    from olmoearth_pretrain.internal.common import build_launch_config
+    AWS credentials are read from the local shell and uploaded as user-scoped
+    Beaker secrets (`{user}_LANDSAT_SYNC_AWS_*`) — Beaker rejects credential-
+    shaped names like `AWS_ACCESS_KEY_ID` when set as plaintext env vars.
+    Re-running this command overwrites the secrets, so refreshing creds is a
+    no-op for callers.
+    """
+    from olmo_core.internal.common import get_beaker_username
+    from olmo_core.launch.beaker import BeakerEnvSecret, BeakerEnvVar
+
+    from olmoearth_pretrain.internal.common import WORKSPACE, build_launch_config
 
     aws_key = os.environ.get("AWS_ACCESS_KEY_ID")
     aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY")
@@ -563,6 +584,18 @@ def cmd_launch_sync(args: argparse.Namespace) -> None:
     if not aws_token:
         logger.warning(
             "AWS_SESSION_TOKEN not set — assuming long-lived IAM credentials"
+        )
+
+    beaker_user = get_beaker_username()
+    secret_key = f"{beaker_user}_LANDSAT_SYNC_AWS_ACCESS_KEY_ID"
+    secret_secret = f"{beaker_user}_LANDSAT_SYNC_AWS_SECRET_ACCESS_KEY"
+    secret_token = f"{beaker_user}_LANDSAT_SYNC_AWS_SESSION_TOKEN"
+
+    _upsert_beaker_secret(WORKSPACE, secret_key, aws_key, dry_run=args.dry_run)
+    _upsert_beaker_secret(WORKSPACE, secret_secret, aws_secret, dry_run=args.dry_run)
+    if aws_token:
+        _upsert_beaker_secret(
+            WORKSPACE, secret_token, aws_token, dry_run=args.dry_run
         )
 
     max_prefix_idx = (args.total_windows - 1) // WINDOWS_PER_PREFIX
@@ -619,14 +652,17 @@ def cmd_launch_sync(args: argparse.Namespace) -> None:
             "&& /usr/local/bin/s5cmd version"
         )
 
-        config.env_vars.append(BeakerEnvVar(name="AWS_ACCESS_KEY_ID", value=aws_key))
-        config.env_vars.append(
-            BeakerEnvVar(name="AWS_SECRET_ACCESS_KEY", value=aws_secret)
+        config.env_secrets.append(
+            BeakerEnvSecret(name="AWS_ACCESS_KEY_ID", secret=secret_key)
+        )
+        config.env_secrets.append(
+            BeakerEnvSecret(name="AWS_SECRET_ACCESS_KEY", secret=secret_secret)
         )
         if aws_token:
-            config.env_vars.append(
-                BeakerEnvVar(name="AWS_SESSION_TOKEN", value=aws_token)
+            config.env_secrets.append(
+                BeakerEnvSecret(name="AWS_SESSION_TOKEN", secret=secret_token)
             )
+        # AWS_DEFAULT_REGION isn't credential-shaped; plain env var is allowed.
         config.env_vars.append(
             BeakerEnvVar(name="AWS_DEFAULT_REGION", value=args.region)
         )
