@@ -119,3 +119,81 @@ def get_month_encoding_table(encoding_dim: int) -> torch.Tensor:
     month_table = torch.concatenate([sin_table[:-1], cos_table[:-1]], axis=-1)
 
     return month_table  # (M, D)
+
+
+def rotate_half(x: torch.Tensor) -> torch.Tensor:
+    """Rotate adjacent feature pairs for rotary position embeddings."""
+    x_even = x[..., 0::2]
+    x_odd = x[..., 1::2]
+    return torch.stack((-x_odd, x_even), dim=-1).flatten(-2)
+
+
+def apply_1d_rope(
+    x: torch.Tensor, positions: torch.Tensor, base: float
+) -> torch.Tensor:
+    """Apply 1D RoPE to the last dimension of ``x``."""
+    if x.shape[-1] % 2 != 0:
+        raise ValueError(f"RoPE dimension must be even, got {x.shape[-1]}")
+
+    dtype = x.dtype
+    inv_freq = 1.0 / (
+        base
+        ** (
+            torch.arange(0, x.shape[-1], 2, device=x.device, dtype=torch.float32)
+            / x.shape[-1]
+        )
+    )
+    angles = positions.to(device=x.device, dtype=torch.float32).unsqueeze(-1) * inv_freq
+    cos = torch.repeat_interleave(torch.cos(angles), repeats=2, dim=-1).to(dtype=dtype)
+    sin = torch.repeat_interleave(torch.sin(angles), repeats=2, dim=-1).to(dtype=dtype)
+    return (x * cos) + (rotate_half(x) * sin)
+
+
+def apply_2d_rope(
+    x: torch.Tensor,
+    positions: torch.Tensor,
+    base: float = 10000.0,
+) -> torch.Tensor:
+    """Apply axial 2D RoPE to attention query/key tensors.
+
+    Args:
+        x: Attention tensor with shape ``(B, H, N, D)`` or packed shape
+            ``(N, H, D)``.
+        positions: Spatial coordinates with shape ``(B, N, 2)`` or packed shape
+            ``(N, 2)``. The last coordinate dimension is ``(row, col)``.
+        base: RoPE frequency base.
+    """
+    if x.shape[-1] % 4 != 0:
+        raise ValueError(
+            f"2D RoPE head dimension must be divisible by 4, got {x.shape[-1]}"
+        )
+    if positions.shape[-1] != 2:
+        raise ValueError(
+            f"2D RoPE positions must end with size 2, got {positions.shape}"
+        )
+    if x.ndim not in (3, 4):
+        raise ValueError(f"2D RoPE expects a 3D or 4D attention tensor, got {x.shape}")
+
+    half_dim = x.shape[-1] // 2
+    x_row, x_col = x[..., :half_dim], x[..., half_dim:]
+
+    if x.ndim == 4:
+        if positions.ndim != 3:
+            raise ValueError(
+                "unpacked 2D RoPE expects positions with shape "
+                f"(B, N, 2), got {positions.shape}"
+            )
+        row_pos = positions[:, None, :, 0]
+        col_pos = positions[:, None, :, 1]
+    else:
+        if positions.ndim != 2:
+            raise ValueError(
+                "packed 2D RoPE expects positions with shape "
+                f"(N, 2), got {positions.shape}"
+            )
+        row_pos = positions[:, None, 0]
+        col_pos = positions[:, None, 1]
+
+    x_row = apply_1d_rope(x_row, row_pos, base)
+    x_col = apply_1d_rope(x_col, col_pos, base)
+    return torch.cat([x_row, x_col], dim=-1)

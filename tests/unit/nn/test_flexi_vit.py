@@ -333,6 +333,39 @@ class TestEncoder:
         config = EncoderConfig(supported_modality_names)
         _ = config.build()
 
+    def test_encoder_config_rope(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Tests we can build an encoder with 2D RoPE."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=16,
+            num_heads=2,
+            spatial_pos_encoding="rope",
+            rope_base=5000.0,
+            rope_coordinate_scale=0.5,
+        )
+        encoder = config.build()
+        assert encoder.spatial_pos_encoding == "rope"
+        assert encoder.rope_base == 5000.0
+        assert encoder.rope_coordinate_scale == 0.5
+        assert encoder.blocks[0].attn.rope_base == 5000.0
+
+    def test_encoder_config_rope_requires_valid_head_dim(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """2D RoPE needs each attention head to split cleanly across x/y axes."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=12,
+            num_heads=2,
+            spatial_pos_encoding="rope",
+        )
+        with pytest.raises(ValueError, match="head_dim divisible by 4"):
+            config.build()
+
 
 class TestPredictor:
     """Unit tests for the Predictor class."""
@@ -659,6 +692,25 @@ class TestPredictor:
         supported_modality_names = [m.name for m in supported_modalities]
         config = PredictorConfig(supported_modality_names)
         _ = config.build()
+
+    def test_predictor_config_rope(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Tests we can build a predictor with 2D RoPE."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = PredictorConfig(
+            supported_modality_names,
+            decoder_embedding_size=16,
+            num_heads=2,
+            spatial_pos_encoding="rope",
+            rope_base=5000.0,
+            rope_coordinate_scale=0.5,
+        )
+        predictor = config.build()
+        assert predictor.spatial_pos_encoding == "rope"
+        assert predictor.rope_base == 5000.0
+        assert predictor.rope_coordinate_scale == 0.5
+        assert predictor.blocks[0].attn.rope_base == 5000.0
 
 
 class TestTokensAndMasks:

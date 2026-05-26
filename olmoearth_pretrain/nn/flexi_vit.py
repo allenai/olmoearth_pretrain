@@ -38,6 +38,8 @@ from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
 logger = logging.getLogger(__name__)
 
+SPATIAL_POS_ENCODING_TYPES = ("absolute", "rope", "none")
+
 
 def get_modalities_to_process(
     available_modalities: list[str], supported_modality_names: list[str]
@@ -639,6 +641,7 @@ class CompositeEncodings(nn.Module):
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        spatial_pos_encoding: str = "absolute",
     ):
         """Initialize the composite encodings.
 
@@ -650,14 +653,21 @@ class CompositeEncodings(nn.Module):
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             tokenization_config: Optional config for custom band groupings
+            spatial_pos_encoding: Spatial encoding type: "absolute", "rope", or "none"
         """
         super().__init__()
+        if spatial_pos_encoding not in SPATIAL_POS_ENCODING_TYPES:
+            raise ValueError(
+                f"spatial_pos_encoding must be one of {SPATIAL_POS_ENCODING_TYPES}, "
+                f"got {spatial_pos_encoding}"
+            )
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [
             modality.name for modality in supported_modalities
         ]
         self.tokenization_config = tokenization_config or TokenizationConfig()
+        self.spatial_pos_encoding = spatial_pos_encoding
         self.embedding_size = embedding_size
         self.max_sequence_length = (
             max_sequence_length  # This max sequence length is a time dim thing
@@ -820,7 +830,7 @@ class CompositeEncodings(nn.Module):
             month_embed = self.month_embed(months)
             month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
             modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
-        if modality.is_spatial:
+        if modality.is_spatial and self.spatial_pos_encoding == "absolute":
             # Spatial encodings
             assert input_res is not None
             assert patch_size is not None
@@ -891,9 +901,23 @@ class FlexiVitBase(nn.Module):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        spatial_pos_encoding: str = "absolute",
+        rope_base: float = 10000.0,
+        rope_coordinate_scale: float = 1.0,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
+        if spatial_pos_encoding not in SPATIAL_POS_ENCODING_TYPES:
+            raise ValueError(
+                f"spatial_pos_encoding must be one of {SPATIAL_POS_ENCODING_TYPES}, "
+                f"got {spatial_pos_encoding}"
+            )
+        if rope_base <= 0:
+            raise ValueError(f"rope_base must be positive, got {rope_base}")
+        if rope_coordinate_scale <= 0:
+            raise ValueError(
+                f"rope_coordinate_scale must be positive, got {rope_coordinate_scale}"
+            )
 
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
@@ -904,6 +928,9 @@ class FlexiVitBase(nn.Module):
         self._base_tokenization_config = tokenization_config or TokenizationConfig()
 
         self.use_flash_attn = use_flash_attn
+        self.spatial_pos_encoding = spatial_pos_encoding
+        self.rope_base = rope_base
+        self.rope_coordinate_scale = rope_coordinate_scale
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
         self.blocks = nn.ModuleList(
@@ -918,6 +945,8 @@ class FlexiVitBase(nn.Module):
                     cross_attn=self.cross_attn,
                     drop_path=drop_path,
                     use_flash_attn=self.use_flash_attn,
+                    use_2d_rope=self.spatial_pos_encoding == "rope",
+                    rope_base=self.rope_base,
                 )
                 for _ in range(depth)
             ]
@@ -930,6 +959,7 @@ class FlexiVitBase(nn.Module):
             learnable_channel_embeddings,
             random_channel_embeddings,
             tokenization_config=self._base_tokenization_config,
+            spatial_pos_encoding=self.spatial_pos_encoding,
         )
         self.apply(self._init_weights)
 
@@ -979,6 +1009,96 @@ class FlexiVitBase(nn.Module):
         masks = torch.cat(masks, dim=1)
 
         return tokens, masks
+
+    def build_spatial_positions(
+        self,
+        tokens_only_dict: dict[str, Tensor],
+        original_masks_dict: dict[str, Tensor],
+        patch_size: int,
+        input_res: int,
+    ) -> Tensor | None:
+        """Build per-token spatial coordinates for 2D RoPE."""
+        if self.spatial_pos_encoding != "rope":
+            return None
+
+        position_dict = {}
+        available_modalities = return_modalities_from_dict(tokens_only_dict)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        gsd_ratio = (
+            CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
+            * self.rope_coordinate_scale
+        )
+        for modality_name in modalities_to_process:
+            tokens = tokens_only_dict[modality_name]
+            modality = Modality.get(modality_name)
+            position_shape = (*tokens.shape[:-1], 2)
+            if not modality.is_spatial:
+                position_dict[modality_name] = torch.zeros(
+                    position_shape,
+                    dtype=torch.float32,
+                    device=tokens.device,
+                )
+                continue
+
+            if tokens.ndim not in (5, 6):
+                raise ValueError(
+                    f"Expected spatial tokens for {modality_name} to have 5 or 6 "
+                    f"dimensions, got {tokens.shape}"
+                )
+
+            b, h, w = tokens.shape[:3]
+            grid_row = torch.arange(h, device=tokens.device, dtype=torch.float32)
+            grid_col = torch.arange(w, device=tokens.device, dtype=torch.float32)
+            grid_row, grid_col = torch.meshgrid(grid_row, grid_col, indexing="ij")
+            grid = torch.stack([grid_row, grid_col], dim=-1) * gsd_ratio
+
+            if tokens.ndim == 5:
+                bandsets = tokens.shape[3]
+                positions = repeat(
+                    grid,
+                    "h w p -> b h w b_s p",
+                    b=b,
+                    b_s=bandsets,
+                )
+            else:
+                timesteps, bandsets = tokens.shape[3], tokens.shape[4]
+                positions = repeat(
+                    grid,
+                    "h w p -> b h w t b_s p",
+                    b=b,
+                    t=timesteps,
+                    b_s=bandsets,
+                )
+            position_dict[modality_name] = positions
+
+        position_dict.update(original_masks_dict)
+        positions, _ = self.collapse_and_combine_hwtc(position_dict)
+        return positions
+
+    @staticmethod
+    def split_x_y_positions(
+        positions: Tensor,
+        indices: Tensor,
+        max_length_of_decoded_tokens: Tensor,
+        max_length_of_unmasked_tokens: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        """Split positions using the same sorted order as predictor tokens."""
+        positions = positions.gather(1, indices[:, :, None].expand_as(positions))
+        positions_to_decode = positions[:, :max_length_of_decoded_tokens]
+        unmasked_positions = positions[:, -max_length_of_unmasked_tokens:]
+        return positions_to_decode, unmasked_positions
+
+    def add_register_positions(self, positions: Tensor) -> Tensor:
+        """Prepend zero coordinates for register tokens."""
+        batch_size = positions.shape[0]
+        register_positions = positions.new_zeros(
+            batch_size,
+            self.num_register_tokens,
+            positions.shape[-1],
+        )
+        return torch.cat([register_positions, positions], dim=1)
 
     @staticmethod
     def _construct_einops_pattern(
@@ -1129,6 +1249,9 @@ class Encoder(FlexiVitBase):
         band_dropout_modalities: list[str] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
+        spatial_pos_encoding: str = "absolute",
+        rope_base: float = 10000.0,
+        rope_coordinate_scale: float = 1.0,
     ):
         """Initialize the encoder.
 
@@ -1173,6 +1296,9 @@ class Encoder(FlexiVitBase):
             post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm.
+            spatial_pos_encoding: Spatial encoding type: "absolute", "rope", or "none".
+            rope_base: Frequency base for RoPE when spatial_pos_encoding is "rope".
+            rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1188,6 +1314,9 @@ class Encoder(FlexiVitBase):
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
+            spatial_pos_encoding=spatial_pos_encoding,
+            rope_base=rope_base,
+            rope_coordinate_scale=rope_coordinate_scale,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1525,6 +1654,12 @@ class Encoder(FlexiVitBase):
             patch_size,
             input_res,
         )
+        positions = self.build_spatial_positions(
+            tokens_only_dict,
+            original_masks_dict,
+            patch_size,
+            input_res,
+        )
         tokens_dict.update(original_masks_dict)
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -1532,6 +1667,8 @@ class Encoder(FlexiVitBase):
         tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
             self._maybe_remove_masked_tokens(tokens, mask, fast_pass)
         )
+        if positions is not None and bool_mask is not None:
+            positions, _, _, _, _ = self.remove_masked_tokens(positions, bool_mask)
 
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
@@ -1547,6 +1684,8 @@ class Encoder(FlexiVitBase):
             cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
             og_shape = tokens.shape
             tokens = self.pack_tokens(tokens, new_mask)
+            if positions is not None:
+                positions = self.pack_tokens(positions, new_mask)
         else:
             cu_seqlens = None
 
@@ -1557,6 +1696,8 @@ class Encoder(FlexiVitBase):
 
         if self.has_register_tokens:
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
+            if positions is not None:
+                positions = self.add_register_positions(positions)
 
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
@@ -1582,6 +1723,7 @@ class Encoder(FlexiVitBase):
                 max_seqlen=max_seqlen,
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
+                rope_positions=positions,
             )
 
         if self.has_register_tokens:
@@ -1719,6 +1861,9 @@ class PredictorBase(FlexiVitBase):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        spatial_pos_encoding: str = "absolute",
+        rope_base: float = 10000.0,
+        rope_coordinate_scale: float = 1.0,
     ):
         """Initialize the predictor.
 
@@ -1737,6 +1882,9 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn: Whether to use flash attention
             qk_norm: Whether to apply normalization to Q and K in attention
             tokenization_config: Optional config for custom band groupings
+            spatial_pos_encoding: Spatial encoding type: "absolute", "rope", or "none".
+            rope_base: Frequency base for RoPE when spatial_pos_encoding is "rope".
+            rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1752,6 +1900,9 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn=use_flash_attn,
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
+            spatial_pos_encoding=spatial_pos_encoding,
+            rope_base=rope_base,
+            rope_coordinate_scale=rope_coordinate_scale,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -1951,6 +2102,12 @@ class Predictor(PredictorBase):
         tokens_dict = self.composite_encodings(
             tokens_only_dict, timestamps, patch_size, input_res
         )
+        positions = self.build_spatial_positions(
+            tokens_only_dict,
+            original_masks_dict,
+            patch_size,
+            input_res,
+        )
         tokens_dict.update(original_masks_dict)
         all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
         # X contains the tokens to decode, Y contains the tokens to attend to for context
@@ -1965,16 +2122,34 @@ class Predictor(PredictorBase):
             max_length_of_tokens_to_decode,
             max_length_of_unmasked_tokens,
         ) = self.split_x_y(all_tokens, mask)
+        if positions is not None:
+            positions_to_decode, unmasked_positions = self.split_x_y_positions(
+                positions,
+                indices,
+                max_length_of_tokens_to_decode,
+                max_length_of_unmasked_tokens,
+            )
+        else:
+            positions_to_decode = None
+            unmasked_positions = None
         # Pack x tokens
         if self.use_flash_attn:
             og_shape_tokens_to_decode = tokens_to_decode.shape
             tokens_to_decode = self.pack_tokens(
                 tokens_to_decode, tokens_to_decode_mask.bool()
             )
+            if positions_to_decode is not None:
+                positions_to_decode = self.pack_tokens(
+                    positions_to_decode, tokens_to_decode_mask.bool()
+                )
             og_shape_unmasked_tokens = unmasked_tokens.shape
             unmasked_tokens = self.pack_tokens(
                 unmasked_tokens, unmasked_tokens_mask.bool()
             )
+            if unmasked_positions is not None:
+                unmasked_positions = self.pack_tokens(
+                    unmasked_positions, unmasked_tokens_mask.bool()
+                )
             cu_seqlens_tokens_to_decode = get_cumulative_sequence_lengths(
                 seqlens_tokens_to_decode
             )
@@ -1998,6 +2173,8 @@ class Predictor(PredictorBase):
                 cu_seqlens_k=cu_seqlens_unmasked_tokens,
                 max_seqlen_q=max_length_of_tokens_to_decode,
                 max_seqlen_k=max_length_of_unmasked_tokens,
+                rope_positions=positions_to_decode,
+                rope_positions_y=unmasked_positions,
             )
 
         if self.use_flash_attn:
@@ -2120,6 +2297,9 @@ class EncoderConfig(Config):
     band_dropout_modalities: list[str] | None = None
     patch_embed_hidden_sizes: list[int] | None = None
     post_proj_hidden_sizes: list[int] | None = None
+    spatial_pos_encoding: str = "absolute"
+    rope_base: float = 10000.0
+    rope_coordinate_scale: float = 1.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2145,6 +2325,23 @@ class EncoderConfig(Config):
                 )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
+        if self.spatial_pos_encoding not in SPATIAL_POS_ENCODING_TYPES:
+            raise ValueError(
+                f"spatial_pos_encoding must be one of {SPATIAL_POS_ENCODING_TYPES}, "
+                f"got {self.spatial_pos_encoding}"
+            )
+        if self.rope_base <= 0:
+            raise ValueError(f"rope_base must be positive, got {self.rope_base}")
+        if self.rope_coordinate_scale <= 0:
+            raise ValueError(
+                f"rope_coordinate_scale must be positive, got {self.rope_coordinate_scale}"
+            )
+        if self.spatial_pos_encoding == "rope":
+            head_dim = self.embedding_size // self.num_heads
+            if head_dim % 4 != 0:
+                raise ValueError(
+                    f"2D RoPE requires head_dim divisible by 4, got {head_dim}"
+                )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -2180,6 +2377,9 @@ class PredictorConfig(Config):
     use_flash_attn: bool = False
     qk_norm: bool = False
     tokenization_config: TokenizationConfig | None = None
+    spatial_pos_encoding: str = "absolute"
+    rope_base: float = 10000.0
+    rope_coordinate_scale: float = 1.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2196,6 +2396,23 @@ class PredictorConfig(Config):
                     raise ValueError(f"Modality {modality} is not supported")
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
+        if self.spatial_pos_encoding not in SPATIAL_POS_ENCODING_TYPES:
+            raise ValueError(
+                f"spatial_pos_encoding must be one of {SPATIAL_POS_ENCODING_TYPES}, "
+                f"got {self.spatial_pos_encoding}"
+            )
+        if self.rope_base <= 0:
+            raise ValueError(f"rope_base must be positive, got {self.rope_base}")
+        if self.rope_coordinate_scale <= 0:
+            raise ValueError(
+                f"rope_coordinate_scale must be positive, got {self.rope_coordinate_scale}"
+            )
+        if self.spatial_pos_encoding == "rope":
+            head_dim = self.decoder_embedding_size // self.num_heads
+            if head_dim % 4 != 0:
+                raise ValueError(
+                    f"2D RoPE requires head_dim divisible by 4, got {head_dim}"
+                )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:

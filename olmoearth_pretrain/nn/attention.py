@@ -10,6 +10,8 @@ from einops import rearrange
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
 
+from olmoearth_pretrain.nn.encodings import apply_2d_rope
+
 try:
     import flash_attn
 except ImportError:
@@ -110,6 +112,8 @@ class Attention(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
+        use_2d_rope: bool = False,
+        rope_base: float = 10000.0,
     ) -> None:
         """Initialize the attention module.
 
@@ -123,15 +127,23 @@ class Attention(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Enable cross-attention
             use_flash_attn: Use flash attention
+            use_2d_rope: Apply 2D RoPE to queries and keys
+            rope_base: RoPE frequency base
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
+        if use_2d_rope and self.head_dim % 4 != 0:
+            raise ValueError(
+                f"2D RoPE requires head_dim divisible by 4, got {self.head_dim}"
+            )
         self.scale = self.head_dim**-0.5
 
         self.cross_attn = cross_attn
         self.use_flash_attn = use_flash_attn
+        self.use_2d_rope = use_2d_rope
+        self.rope_base = rope_base
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
         self.q = nn.Linear(dim, dim, bias=qkv_bias)
         self.k = nn.Linear(dim, dim, bias=qkv_bias)
@@ -171,7 +183,6 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
-
         Returns:
             Output tensor of shape (B, H, N, D)
         """
@@ -227,6 +238,8 @@ class Attention(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
+        rope_positions: torch.Tensor | None = None,
+        rope_positions_y: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -240,6 +253,8 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
+            rope_positions: Optional 2D RoPE positions for x/query tokens
+            rope_positions_y: Optional 2D RoPE positions for y/key tokens
 
         Returns:
             Output tensor of shape (B, N, C) or (B* N , C) if packed
@@ -268,6 +283,18 @@ class Attention(nn.Module):
         # logger.info(f"q shape: {q.shape} k shape: {k.shape} v shape: {v.shape}")
 
         q, k = self.q_norm(q), self.k_norm(k)
+        if self.use_2d_rope:
+            if rope_positions is None:
+                raise ValueError(
+                    "rope_positions must be provided when 2D RoPE is enabled"
+                )
+            k_positions = rope_positions if y is None else rope_positions_y
+            if k_positions is None:
+                raise ValueError(
+                    "rope_positions_y must be provided for cross attention with 2D RoPE"
+                )
+            q = apply_2d_rope(q, rope_positions, base=self.rope_base)
+            k = apply_2d_rope(k, k_positions, base=self.rope_base)
         x = self.sdpa(
             q,
             k,
@@ -456,6 +483,8 @@ class Block(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
+        use_2d_rope: bool = False,
+        rope_base: float = 10000.0,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -473,6 +502,8 @@ class Block(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Whether to use cross attention
             use_flash_attn: Whether to use flash attention
+            use_2d_rope: Apply 2D RoPE to attention queries and keys
+            rope_base: RoPE frequency base
         """
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -486,6 +517,8 @@ class Block(nn.Module):
             norm_layer=norm_layer,
             cross_attn=cross_attn,
             use_flash_attn=use_flash_attn,
+            use_2d_rope=use_2d_rope,
+            rope_base=rope_base,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -514,6 +547,8 @@ class Block(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
+        rope_positions: torch.Tensor | None = None,
+        rope_positions_y: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -527,6 +562,8 @@ class Block(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
+            rope_positions: Optional 2D RoPE positions for x/query tokens
+            rope_positions_y: Optional 2D RoPE positions for y/key tokens
 
         Returns:
             Output tensor of shape (B, N, C)
@@ -543,6 +580,8 @@ class Block(nn.Module):
                     max_seqlen_q=max_seqlen_q,
                     max_seqlen_k=max_seqlen_k,
                     attn_mask=attn_mask,
+                    rope_positions=rope_positions,
+                    rope_positions_y=rope_positions_y,
                 )
             )
         )
