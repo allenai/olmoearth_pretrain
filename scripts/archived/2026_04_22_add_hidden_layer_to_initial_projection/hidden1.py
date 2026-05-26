@@ -345,6 +345,11 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         # but with step-based eval_interval matching pastis. SRTM and WorldCover
         # probes use osmbig (out-of-sample); WorldCereal isn't in osmbig so it
         # falls back to the in-distribution osm_sampling corpus.
+        #
+        # norm_stats_from_pretrained is irrelevant here: PretrainSubsetDataset
+        # ignores it and normalizes inputs via a plain OlmoEarthDataset ->
+        # Normalizer(COMPUTED), which is exactly what fix_srtm_norm_log_optical.py
+        # monkey-patches. So the S2/Landsat log reaches these probes regardless.
         "pretrain_srtm_regression": DownstreamTaskConfig(
             dataset="pretrain_subset_srtm",
             embedding_batch_size=16,

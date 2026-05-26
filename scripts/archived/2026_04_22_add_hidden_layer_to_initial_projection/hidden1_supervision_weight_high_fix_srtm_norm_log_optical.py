@@ -7,9 +7,18 @@ Extends hidden1_supervision_weight_high_fix_srtm_norm.py with two changes layere
    (raw → log-compressed [0, ~1] range). Negatives from atmospheric correction
    are clipped to 0 before log so log1p stays defined.
 
-Both overrides live in a dataset subclass instantiated only by this script's
-config builder, so the global Normalizer / computed.json is unchanged and
-checkpoints from other experiments load unaffected.
+The training-side overrides live in a dataset subclass instantiated only by this
+script's config builder, so the global Normalizer / computed.json is unchanged
+and checkpoints from other experiments load unaffected.
+
+For eval: in-loop probes normalize inputs via a plain OlmoEarthDataset ->
+Normalizer(COMPUTED), bypassing this script's dataset subclass entirely, so we
+additionally monkey-patch Normalizer.normalize at module import to apply the same
+log on S2/Landsat. The patch is a no-op during training (the dataset subclass
+short-circuits before reaching the global Normalizer). SRTM is not patched
+because no eval probe uses it as an input (the SRTM regression probe reads it as
+a raw, unnormalized target via OlmoEarthDataset(normalize=False)), so patching it
+would have no effect on eval anyway.
 """
 
 import logging
@@ -29,6 +38,7 @@ from hidden1_supervision import build_model_config as _build_model_config
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.data.dataset import OlmoEarthDataset, OlmoEarthDatasetConfig
+from olmoearth_pretrain.data.normalize import Normalizer
 from olmoearth_pretrain.internal.experiment import CommonComponents, main
 
 logger = logging.getLogger(__name__)
@@ -39,6 +49,25 @@ LOG_OPTICAL_MODALITIES = {
     Modality.SENTINEL2_L2A.name,
     Modality.LANDSAT.name,
 }
+
+
+def _patch_normalizer_for_log_optical_eval() -> None:
+    """Patch Normalizer.normalize so eval datasets see log-scaled S2 / Landsat."""
+    original_normalize = Normalizer.normalize
+
+    def _normalize_with_log_optical(
+        self: Normalizer,
+        modality: ModalitySpec,
+        data: np.ndarray,
+    ) -> np.ndarray:
+        if modality.name in LOG_OPTICAL_MODALITIES:
+            return np.log1p(np.maximum(data.astype(np.float32), 0.0)) / 10.0
+        return original_normalize(self, modality, data)
+
+    Normalizer.normalize = _normalize_with_log_optical  # type: ignore[method-assign]
+
+
+_patch_normalizer_for_log_optical_eval()
 
 build_model_config = partial(_build_model_config, weight_multiplier=WEIGHT_MULTIPLIER)
 
