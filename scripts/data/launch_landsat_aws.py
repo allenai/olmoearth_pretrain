@@ -712,8 +712,11 @@ def cmd_sync_worker(args: argparse.Namespace) -> None:
             s5cmd_path,
             "--numworkers",
             str(args.workers),
+            # --log info so retry/throttle messages surface; --log error hides
+            # silent stalls when S3 throttles us at high aggregate concurrency.
             "--log",
-            "error",
+            "info",
+            "--stat",
             "sync",
             s3_pattern,
             dest,
@@ -895,8 +898,9 @@ def main() -> None:
     p.add_argument(
         "--workers",
         type=int,
-        default=256,
-        help="s5cmd --numworkers per job (default 256)",
+        default=64,
+        help="s5cmd --numworkers per job (default 64). At 16 jobs that's 1024 "
+        "concurrent S3 connections total — higher values risk S3 throttling.",
     )
     p.add_argument(
         "--total-windows",
@@ -922,7 +926,7 @@ def main() -> None:
     p.add_argument("--s3-prefix", required=True)
     p.add_argument("--rslearn-dir", required=True)
     p.add_argument("--region", default="us-west-2")
-    p.add_argument("--workers", type=int, default=256)
+    p.add_argument("--workers", type=int, default=64)
     p.add_argument(
         "--corpus-prefixes",
         nargs="+",
