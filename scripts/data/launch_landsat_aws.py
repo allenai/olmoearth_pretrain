@@ -45,15 +45,29 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# Pinned s5cmd release. The corpus has 642,013 windows / many small landsat files;
+# the default `aws s3 sync` (~10 workers) is far too slow. s5cmd defaults to 256
+# concurrent workers and is typically 30-50x faster for this workload.
+S5CMD_VERSION = "2.2.2"
+S5CMD_URL = (
+    f"https://github.com/peak/s5cmd/releases/download/v{S5CMD_VERSION}"
+    f"/s5cmd_{S5CMD_VERSION}_Linux-64bit.tar.gz"
+)
+
+# studio_corpus_lonlats.json size; controls how the index space is sharded.
+DEFAULT_TOTAL_WINDOWS = 642013
+
+# Each "prefix" is corpus_NNNXXXX with a fixed 3-digit NNN, covering 10K windows.
+WINDOWS_PER_PREFIX = 10000
 
 USERDATA_TEMPLATE = r"""#!/bin/bash
 set -euo pipefail
@@ -191,13 +205,19 @@ def cmd_launch(args: argparse.Namespace) -> None:
     import boto3
 
     use_instance_profile = bool(args.iam_instance_profile)
-    aws_key_id, aws_secret, aws_session_token = _get_aws_creds(require=not use_instance_profile)
+    aws_key_id, aws_secret, aws_session_token = _get_aws_creds(
+        require=not use_instance_profile
+    )
     git_ref = _get_git_ref()
 
     if use_instance_profile:
-        logger.info(f"Using IAM instance profile: {args.iam_instance_profile} (no baked-in credentials)")
+        logger.info(
+            f"Using IAM instance profile: {args.iam_instance_profile} (no baked-in credentials)"
+        )
     else:
-        logger.warning("Baking AWS credentials into user-data (prefer --iam-instance-profile for production)")
+        logger.warning(
+            "Baking AWS credentials into user-data (prefer --iam-instance-profile for production)"
+        )
 
     logger.info(f"Git ref: {git_ref}")
     pricing = "spot" if args.spot else "on-demand"
@@ -215,7 +235,9 @@ def cmd_launch(args: argparse.Namespace) -> None:
         input_prefix = f"{args.s3_prefix}/inputs"
         with open(args.corpus, "rb") as f:
             s3.upload_fileobj(f, args.s3_bucket, f"{input_prefix}/corpus.json")
-        logger.info(f"Uploaded corpus to s3://{args.s3_bucket}/{input_prefix}/corpus.json")
+        logger.info(
+            f"Uploaded corpus to s3://{args.s3_bucket}/{input_prefix}/corpus.json"
+        )
 
         config_bytes = json.dumps(landsat_config, indent=2).encode()
         s3.put_object(
@@ -230,7 +252,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
     # Launch instances
     ec2 = boto3.client("ec2", region_name=args.region)
     instance_ids = []
-    run_id = f"landsat-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    run_id = f"landsat-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
 
     if args.shard_range:
         start, end = args.shard_range.split("-")
@@ -238,7 +260,9 @@ def cmd_launch(args: argparse.Namespace) -> None:
     else:
         shard_ids = list(range(args.num_instances))
 
-    logger.info(f"Launching shards: {shard_ids[0]}-{shard_ids[-1]} ({len(shard_ids)} instances, {args.num_instances} total shards)")
+    logger.info(
+        f"Launching shards: {shard_ids[0]}-{shard_ids[-1]} ({len(shard_ids)} instances, {args.num_instances} total shards)"
+    )
 
     for shard_id in shard_ids:
         if use_instance_profile:
@@ -257,7 +281,9 @@ def cmd_launch(args: argparse.Namespace) -> None:
         )
 
         if args.no_self_terminate:
-            self_terminate_block = "echo 'Instance kept alive for debugging (--no-self-terminate)'"
+            self_terminate_block = (
+                "echo 'Instance kept alive for debugging (--no-self-terminate)'"
+            )
         else:
             self_terminate_block = (
                 "# Self-terminate (IMDSv2)\n"
@@ -350,7 +376,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
         "max_samples": args.max_samples,
         "no_self_terminate": args.no_self_terminate,
         "spot": args.spot,
-        "launched_at": datetime.now(timezone.utc).isoformat(),
+        "launched_at": datetime.now(UTC).isoformat(),
     }
 
     manifest_path = Path(f"/tmp/{run_id}.json")
@@ -359,7 +385,9 @@ def cmd_launch(args: argparse.Namespace) -> None:
 
     logger.info(f"Run manifest saved to {manifest_path}")
     logger.info(f"Run ID: {run_id}")
-    logger.info(f"Check status:  python {__file__} status --run-manifest {manifest_path}")
+    logger.info(
+        f"Check status:  python {__file__} status --run-manifest {manifest_path}"
+    )
     logger.info(
         f"Sync to Weka:  python {__file__} sync --run-manifest {manifest_path} "
         f"--rslearn-dir /weka/.../your_rslearn_dir"
@@ -377,11 +405,15 @@ def cmd_status(args: argparse.Namespace) -> None:
     # Check S3 completion sentinels
     result = subprocess.run(
         [
-            "aws", "s3", "ls",
+            "aws",
+            "s3",
+            "ls",
             f"s3://{bucket}/{prefix}/windows/_COMPLETE_shard_",
-            "--region", manifest.get("region", "us-west-2"),
+            "--region",
+            manifest.get("region", "us-west-2"),
         ],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
 
     completed = set()
@@ -409,6 +441,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     if real_ids:
         try:
             import boto3
+
             ec2 = boto3.client("ec2", region_name=manifest.get("region", "us-west-2"))
             resp = ec2.describe_instances(InstanceIds=real_ids[:50])
             states: dict[str, int] = {}
@@ -443,7 +476,9 @@ def cmd_sync(args: argparse.Namespace) -> None:
     if s5cmd:
         logger.info("Using s5cmd for parallel transfer")
         cmd = [
-            s5cmd, "--log", "error",
+            s5cmd,
+            "--log",
+            "error",
             "sync",
             f"{s3_windows}*",
             local_windows,
@@ -451,11 +486,16 @@ def cmd_sync(args: argparse.Namespace) -> None:
     else:
         logger.info("Using aws s3 sync (install s5cmd for faster transfers)")
         cmd = [
-            "aws", "s3", "sync",
-            s3_windows, local_windows,
+            "aws",
+            "s3",
+            "sync",
+            s3_windows,
+            local_windows,
             "--only-show-errors",
-            "--region", region,
-            "--exclude", "_COMPLETE_*",
+            "--region",
+            region,
+            "--exclude",
+            "_COMPLETE_*",
         ]
 
     logger.info(f"Running: {' '.join(cmd)}")
@@ -472,12 +512,186 @@ def cmd_sync(args: argparse.Namespace) -> None:
 
     if args.cleanup:
         logger.info(f"Cleaning up S3 staging: s3://{bucket}/{prefix}/")
-        subprocess.run([
-            "aws", "s3", "rm", f"s3://{bucket}/{prefix}/",
-            "--recursive", "--only-show-errors",
-            "--region", region,
-        ])
+        subprocess.run(
+            [
+                "aws",
+                "s3",
+                "rm",
+                f"s3://{bucket}/{prefix}/",
+                "--recursive",
+                "--only-show-errors",
+                "--region",
+                region,
+            ]
+        )
         logger.info("S3 cleanup done")
+
+
+def _chunk_prefixes(prefixes: list[str], num_jobs: int) -> list[list[str]]:
+    """Split prefixes into roughly equal contiguous chunks for num_jobs jobs."""
+    n = len(prefixes)
+    num_jobs = min(num_jobs, n)
+    base, extra = divmod(n, num_jobs)
+    chunks = []
+    start = 0
+    for i in range(num_jobs):
+        size = base + (1 if i < extra else 0)
+        chunks.append(prefixes[start : start + size])
+        start += size
+    return chunks
+
+
+def cmd_launch_sync(args: argparse.Namespace) -> None:
+    """Launch N parallel Beaker jobs that sync S3 -> Weka using s5cmd.
+
+    Splits the corpus index space into 3-digit prefix buckets
+    (`corpus_NNN*`, NNN ∈ 000..064) and distributes them across jobs.
+    AWS credentials are read from the local shell and passed as inline
+    Beaker env vars (so they expire with the local STS token).
+    """
+    from olmo_core.launch.beaker import BeakerEnvVar
+
+    from olmoearth_pretrain.internal.common import build_launch_config
+
+    aws_key = os.environ.get("AWS_ACCESS_KEY_ID")
+    aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY")
+    aws_token = os.environ.get("AWS_SESSION_TOKEN")
+    if not aws_key or not aws_secret:
+        raise SystemExit(
+            "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set in the local shell"
+        )
+    if not aws_token:
+        logger.warning(
+            "AWS_SESSION_TOKEN not set — assuming long-lived IAM credentials"
+        )
+
+    max_prefix_idx = (args.total_windows - 1) // WINDOWS_PER_PREFIX
+    all_prefixes = [f"{i:03d}" for i in range(max_prefix_idx + 1)]
+    job_chunks = _chunk_prefixes(all_prefixes, args.num_jobs)
+
+    clusters = args.clusters if isinstance(args.clusters, list) else [args.clusters]
+    run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    logger.info(
+        f"Launching {len(job_chunks)} sync jobs over {len(all_prefixes)} prefixes "
+        f"({args.total_windows} windows) on clusters {clusters}"
+    )
+
+    experiment_ids = []
+    for job_idx, prefixes in enumerate(job_chunks):
+        worker_cmd = [
+            "scripts/data/launch_landsat_aws.py",
+            "sync-worker",
+            "--s3-bucket",
+            args.s3_bucket,
+            "--s3-prefix",
+            args.s3_prefix,
+            "--rslearn-dir",
+            args.rslearn_dir,
+            "--region",
+            args.region,
+            "--workers",
+            str(args.workers),
+            "--corpus-prefixes",
+            *prefixes,
+        ]
+
+        config = build_launch_config(
+            name=f"landsat-sync-{run_id}-{job_idx:02d}",
+            cmd=worker_cmd,
+            clusters=clusters,
+            task_name="landsat-sync",
+        )
+        config.num_gpus = 0
+        config.num_nodes = 1
+        config.preemptible = False
+        config.retries = 1
+        # Replace the heavy --all-extras install with the dataset-creation extra.
+        config.setup_steps = [
+            s.replace(
+                "uv sync --locked --all-extras",
+                "uv sync --locked --extra dataset-creation",
+            )
+            for s in config.setup_steps
+        ]
+        # Install s5cmd at the end of setup; idempotent if already present.
+        config.setup_steps.append(
+            f"curl -sL {S5CMD_URL} | tar xz -C /usr/local/bin s5cmd "
+            "&& /usr/local/bin/s5cmd version"
+        )
+
+        config.env_vars.append(BeakerEnvVar(name="AWS_ACCESS_KEY_ID", value=aws_key))
+        config.env_vars.append(
+            BeakerEnvVar(name="AWS_SECRET_ACCESS_KEY", value=aws_secret)
+        )
+        if aws_token:
+            config.env_vars.append(
+                BeakerEnvVar(name="AWS_SESSION_TOKEN", value=aws_token)
+            )
+        config.env_vars.append(
+            BeakerEnvVar(name="AWS_DEFAULT_REGION", value=args.region)
+        )
+
+        if args.dry_run:
+            logger.info(
+                f"[DRY RUN] job {job_idx}: prefixes={prefixes} cmd={' '.join(worker_cmd)}"
+            )
+            continue
+
+        logger.info(f"Launching job {job_idx}/{len(job_chunks)}: prefixes={prefixes}")
+        eid = config.launch(torchrun=False, entrypoint="python")
+        experiment_ids.append(eid)
+        print(f"  https://beaker.org/ex/{eid}")
+
+    logger.info(f"Launched {len(experiment_ids)} sync jobs")
+
+
+def cmd_sync_worker(args: argparse.Namespace) -> None:
+    """Sync a set of corpus_NNN* prefixes from S3 to Weka using s5cmd.
+
+    Runs inside each Beaker job. Installs s5cmd if missing, then runs
+    `s5cmd sync` once per prefix. s5cmd's `sync` is idempotent — re-running
+    skips files already present with matching size.
+    """
+    s5cmd_path = shutil.which("s5cmd")
+    if not s5cmd_path:
+        logger.info("Installing s5cmd...")
+        subprocess.check_call(
+            ["bash", "-c", f"curl -sL {S5CMD_URL} | tar xz -C /usr/local/bin s5cmd"]
+        )
+        s5cmd_path = "/usr/local/bin/s5cmd"
+
+    subprocess.check_call([s5cmd_path, "version"])
+
+    dest = f"{args.rslearn_dir.rstrip('/')}/windows/res_10.0/"
+    Path(dest).mkdir(parents=True, exist_ok=True)
+
+    bucket = args.s3_bucket
+    prefix = args.s3_prefix.strip("/")
+
+    for cp in args.corpus_prefixes:
+        s3_pattern = f"s3://{bucket}/{prefix}/windows/res_10.0/corpus_{cp}*"
+        logger.info(f"[{cp}] syncing {s3_pattern} -> {dest}")
+        t0 = time.time()
+        cmd = [
+            s5cmd_path,
+            "--numworkers",
+            str(args.workers),
+            "--log",
+            "error",
+            "sync",
+            s3_pattern,
+            dest,
+        ]
+        result = subprocess.run(cmd, check=False)
+        elapsed = time.time() - t0
+        if result.returncode != 0:
+            raise SystemExit(
+                f"s5cmd sync failed for corpus_{cp}* (exit={result.returncode}, "
+                f"after {elapsed:.0f}s)"
+            )
+        logger.info(f"[{cp}] done in {elapsed:.0f}s")
+
+    logger.info(f"All {len(args.corpus_prefixes)} prefixes synced.")
 
 
 def _load_manifest(args: argparse.Namespace) -> dict:
@@ -522,6 +736,7 @@ def _resolve_ami(region: str, ami: str | None) -> str:
     for ssm_path in SSM_AMI_PATHS:
         try:
             import boto3
+
             ssm = boto3.client("ssm", region_name=region)
             resp = ssm.get_parameter(Name=ssm_path)
             return resp["Parameter"]["Value"]
@@ -548,29 +763,61 @@ def main() -> None:
     p = sub.add_parser("launch", help="Launch EC2 spot instances for Landsat")
     p.add_argument("--corpus", required=True, help="Corpus JSON path (on Weka)")
     p.add_argument(
-        "--rslearn-config", required=True,
+        "--rslearn-config",
+        required=True,
         help="Full rslearn config (e.g. corpus_v2.json); landsat layer extracted automatically",
     )
     p.add_argument("--s3-bucket", required=True, help="S3 bucket for staging")
     p.add_argument(
-        "--s3-prefix", default=None,
+        "--s3-prefix",
+        default=None,
         help="S3 key prefix (default: auto-generated from timestamp)",
     )
-    p.add_argument("--num-instances", type=int, default=20, help="Total number of shards (determines how corpus is split)")
-    p.add_argument("--shard-range", default=None, help="Launch only a subset of shards, e.g. '0-19' for first 20. Default: all shards.")
+    p.add_argument(
+        "--num-instances",
+        type=int,
+        default=20,
+        help="Total number of shards (determines how corpus is split)",
+    )
+    p.add_argument(
+        "--shard-range",
+        default=None,
+        help="Launch only a subset of shards, e.g. '0-19' for first 20. Default: all shards.",
+    )
     p.add_argument("--instance-type", default="c5.9xlarge")
     p.add_argument("--region", default="us-west-2")
-    p.add_argument("--ami", default=None, help="EC2 AMI ID (default: latest Amazon Linux 2023)")
+    p.add_argument(
+        "--ami", default=None, help="EC2 AMI ID (default: latest Amazon Linux 2023)"
+    )
     p.add_argument("--key-name", default=None, help="EC2 key pair name for SSH access")
     p.add_argument("--security-group-id", default=None)
     p.add_argument("--subnet-id", default=None)
     p.add_argument("--iam-instance-profile", default=None)
-    p.add_argument("--workers", type=int, default=32, help="rslearn parallelism per instance")
-    p.add_argument("--volume-size", type=int, default=200, help="Root EBS volume size in GB")
-    p.add_argument("--max-samples", type=int, default=None, help="Limit corpus to first N samples (for testing)")
-    p.add_argument("--no-self-terminate", action="store_true", help="Keep instances alive after completion (for SSH debugging)")
-    p.add_argument("--spot", action="store_true", help="Use spot instances (~3-5x cheaper but can be reclaimed mid-job, losing all progress)")
-    p.add_argument("--dry-run", action="store_true", help="Print what would be launched")
+    p.add_argument(
+        "--workers", type=int, default=32, help="rslearn parallelism per instance"
+    )
+    p.add_argument(
+        "--volume-size", type=int, default=200, help="Root EBS volume size in GB"
+    )
+    p.add_argument(
+        "--max-samples",
+        type=int,
+        default=None,
+        help="Limit corpus to first N samples (for testing)",
+    )
+    p.add_argument(
+        "--no-self-terminate",
+        action="store_true",
+        help="Keep instances alive after completion (for SSH debugging)",
+    )
+    p.add_argument(
+        "--spot",
+        action="store_true",
+        help="Use spot instances (~3-5x cheaper but can be reclaimed mid-job, losing all progress)",
+    )
+    p.add_argument(
+        "--dry-run", action="store_true", help="Print what would be launched"
+    )
     p.set_defaults(func=cmd_launch)
 
     # -- status --
@@ -589,8 +836,64 @@ def main() -> None:
     p.add_argument("--s3-prefix", default=None)
     p.add_argument("--rslearn-dir", required=True, help="Weka rslearn dataset dir")
     p.add_argument("--region", default="us-west-2")
-    p.add_argument("--cleanup", action="store_true", help="Delete S3 staging data after sync")
+    p.add_argument(
+        "--cleanup", action="store_true", help="Delete S3 staging data after sync"
+    )
     p.set_defaults(func=cmd_sync)
+
+    # -- launch-sync --
+    p = sub.add_parser(
+        "launch-sync",
+        help="Launch N parallel Beaker jobs to sync S3 -> Weka with s5cmd",
+    )
+    p.add_argument("--s3-bucket", required=True)
+    p.add_argument("--s3-prefix", required=True, help="e.g. landsat_runs/full_run")
+    p.add_argument("--rslearn-dir", required=True, help="Weka rslearn dataset dir")
+    p.add_argument("--region", default="us-west-2")
+    p.add_argument(
+        "--num-jobs",
+        type=int,
+        default=16,
+        help="Number of parallel Beaker jobs (default 16, max 65 for default corpus)",
+    )
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=256,
+        help="s5cmd --numworkers per job (default 256)",
+    )
+    p.add_argument(
+        "--total-windows",
+        type=int,
+        default=DEFAULT_TOTAL_WINDOWS,
+        help=f"Total corpus size (default {DEFAULT_TOTAL_WINDOWS})",
+    )
+    p.add_argument(
+        "--clusters",
+        nargs="+",
+        default=["ai2/jupiter", "ai2/saturn"],
+        help="Beaker clusters to target",
+    )
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_launch_sync)
+
+    # -- sync-worker --
+    p = sub.add_parser(
+        "sync-worker",
+        help="(internal) sync one chunk of corpus_NNN* prefixes from S3 to Weka",
+    )
+    p.add_argument("--s3-bucket", required=True)
+    p.add_argument("--s3-prefix", required=True)
+    p.add_argument("--rslearn-dir", required=True)
+    p.add_argument("--region", default="us-west-2")
+    p.add_argument("--workers", type=int, default=256)
+    p.add_argument(
+        "--corpus-prefixes",
+        nargs="+",
+        required=True,
+        help="3-digit corpus prefixes to sync, e.g. 000 001 002",
+    )
+    p.set_defaults(func=cmd_sync_worker)
 
     args = parser.parse_args()
 
@@ -598,7 +901,7 @@ def main() -> None:
     if args.command == "launch":
         args.ami = _resolve_ami(args.region, args.ami)
         if args.s3_prefix is None:
-            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
             args.s3_prefix = f"landsat_runs/{ts}"
         logger.info(f"Using AMI: {args.ami}")
 
