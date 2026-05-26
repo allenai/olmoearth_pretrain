@@ -43,6 +43,35 @@ class MaskedMSELoss(nn.Module):
         return (predictions[mask] - targets[mask]).pow(2).mean()
 
 
+def _compute_regression_target_stats(
+    labels: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor] | tuple[None, None]:
+    """Compute mean/std of finite regression labels for target normalization.
+
+    Returns (None, None) when there are no finite labels to fit on, signalling
+    callers to skip normalization entirely.
+    """
+    finite = labels[torch.isfinite(labels)]
+    if finite.numel() == 0:
+        return None, None
+    mean = finite.mean()
+    # Clamp std away from zero so degenerate constant-label datasets don't
+    # produce inf/NaN after dividing.
+    std = finite.std().clamp_min(1e-6)
+    return mean, std
+
+
+def _unnormalize_regression(
+    t: torch.Tensor,
+    mean: torch.Tensor | None,
+    std: torch.Tensor | None,
+) -> torch.Tensor:
+    """Map a normalized regression tensor back to original target units."""
+    if mean is None or std is None:
+        return t
+    return t * std.to(t.device, dtype=t.dtype) + mean.to(t.device, dtype=t.dtype)
+
+
 class ProbeType(StrEnum):
     """Enumeration of probe types for linear probing."""
 
@@ -169,6 +198,30 @@ def train_and_eval_probe(
         if train_embeddings.shape[-1] != test_embeddings.shape[-1]:
             raise ValueError("Embedding dims don't match.")
     in_features = train_embeddings.shape[-1]
+
+    # Z-score regression targets using train-set statistics so the MSE probe
+    # is well-conditioned regardless of target units (e.g. raw LFMC values in
+    # [0, 302]). Predictions and labels are un-normalized before any metric
+    # is computed, so reported RMSE/MAE/R2 stay in original units. Stats are
+    # kept on CPU; NaN-masked invalid pixels stay NaN through the affine map.
+    target_mean: torch.Tensor | None = None
+    target_std: torch.Tensor | None = None
+    if config.task_type == TaskType.REGRESSION:
+        target_mean, target_std = _compute_regression_target_stats(train_labels)
+        if target_mean is not None and target_std is not None:
+            logger.info(
+                f"Normalizing regression targets with mean={target_mean.item():.4f}, "
+                f"std={target_std.item():.4f}"
+            )
+            train_labels = (train_labels - target_mean) / target_std
+            val_labels = (val_labels - target_mean) / target_std
+            if test_labels is not None:
+                test_labels = (test_labels - target_mean) / target_std
+        else:
+            logger.warning(
+                "No finite regression labels found in train set; "
+                "skipping target normalization."
+            )
     output_pixels_per_side_of_patch = None
     if config.task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION):
         assert config.height_width is not None, (
@@ -252,6 +305,8 @@ def train_and_eval_probe(
             probe_type=probe_type,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
+            target_mean=target_mean,
+            target_std=target_std,
         )
         logger.info(f"Epoch {end_epoch}, Val Score: {val_result.primary}")
         val_results.append(val_result)
@@ -315,6 +370,13 @@ def train_and_eval_probe(
             probe_type=probe_type,
             num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
         )
+
+        # Map regression preds/labels back to original target units so the
+        # downstream metrics (and bootstrap resamples of them) are reported
+        # on the same scale as the raw labels.
+        if config.task_type == TaskType.REGRESSION:
+            all_preds = _unnormalize_regression(all_preds, target_mean, target_std)
+            all_labels = _unnormalize_regression(all_labels, target_mean, target_std)
 
         if n_bootstrap > 0:
             # Bootstrap resample the predictions (very fast!)
@@ -676,8 +738,15 @@ def evaluate_probe(
     num_output_pixels_per_side_of_patch: int | None = None,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    target_mean: torch.Tensor | None = None,
+    target_std: torch.Tensor | None = None,
 ) -> EvalResult:
-    """Evaluate a trained linear probe on a segmentation or classification task."""
+    """Evaluate a trained linear probe on a segmentation or classification task.
+
+    For regression, ``target_mean``/``target_std`` are the train-set stats used
+    to normalize labels before training; they're applied in reverse here so the
+    reported metrics stay in original target units.
+    """
     preds, labels = get_probe_predictions(
         data_loader=data_loader,
         probe=probe,
@@ -687,6 +756,9 @@ def evaluate_probe(
         probe_type=probe_type,
         num_output_pixels_per_side_of_patch=num_output_pixels_per_side_of_patch,
     )
+    if task_type == TaskType.REGRESSION:
+        preds = _unnormalize_regression(preds, target_mean, target_std)
+        labels = _unnormalize_regression(labels, target_mean, target_std)
     return compute_metric(
         preds,
         labels,
