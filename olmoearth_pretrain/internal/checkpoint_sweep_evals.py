@@ -69,6 +69,7 @@ from olmoearth_pretrain.train.callbacks import (
 )
 from olmoearth_pretrain.train.callbacks.evaluator_callback import (
     DownstreamEvaluatorCallback,
+    eval_result_log_dict,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,7 +97,12 @@ def evaluate_checkpoints(
     checkpoint_dir: str,
     steps: list[int] | None = None,
 ) -> None:
-    """Evaluate all checkpoints in checkpoint_dir, logging to one wandb run."""
+    """Evaluate selected checkpoints and stream metrics to one wandb run.
+
+    Each evaluator result is logged as soon as it finishes, with
+    ``checkpoint_step`` included so W&B plots use the training checkpoint step as
+    the x-axis instead of wall-clock eval order.
+    """
     seed_all(config.init_seed)
 
     checkpoints = discover_checkpoints(checkpoint_dir, steps=steps)
@@ -133,12 +139,17 @@ def evaluate_checkpoints(
     # Tell wandb to use checkpoint_step as the x-axis for eval metrics
     if wandb_callback.enabled and get_rank() == 0:
         wandb_callback.wandb.define_metric("checkpoint_step")
-        wandb_callback.wandb.define_metric("eval/*", step_metric="checkpoint_step")
-        wandb_callback.wandb.define_metric("eval/test/*", step_metric="checkpoint_step")
-        wandb_callback.wandb.define_metric("eval_time/*", step_metric="checkpoint_step")
-        wandb_callback.wandb.define_metric(
-            "eval_embed_diagnostics/*", step_metric="checkpoint_step"
-        )
+        for metric_prefix in (
+            "eval/*",
+            "eval/test/*",
+            "eval_other/*",
+            "eval_other/test/*",
+            "eval_time/*",
+            "eval_embed_diagnostics/*",
+        ):
+            wandb_callback.wandb.define_metric(
+                metric_prefix, step_metric="checkpoint_step"
+            )
 
     # Get the evaluator callback (contains the built evaluator objects)
     eval_callback = trainer.callbacks.get("downstream_evaluator")
@@ -152,9 +163,6 @@ def evaluate_checkpoints(
         train_module_dir = os.path.join(step_path, "model_and_optim")
         load_model_and_optim_state(train_module_dir, model)
         model.to(device)
-
-        # Run all evaluators and collect metrics for this checkpoint
-        metrics: dict[str, float | int] = {"checkpoint_step": step_num}
 
         for evaluator in eval_callback.evaluators:
             if not eval_callback._check_supported_modalities(evaluator):
@@ -174,16 +182,19 @@ def evaluate_checkpoints(
 
             val_result = result.val_result
             test_result = result.test_result
+            metrics: dict[str, float | int] = {"checkpoint_step": step_num}
 
             if val_result is not None:
-                metrics[f"eval/{evaluator.evaluation_name}"] = val_result.primary
-                for k, v in val_result.metrics.items():
-                    metrics[f"eval/{evaluator.evaluation_name}/{k}"] = v
+                metrics.update(
+                    eval_result_log_dict("eval", evaluator.evaluation_name, val_result)
+                )
 
             if eval_callback.run_on_test and test_result is not None:
-                metrics[f"eval/test/{evaluator.evaluation_name}"] = test_result.primary
-                for k, v in test_result.metrics.items():
-                    metrics[f"eval/test/{evaluator.evaluation_name}/{k}"] = v
+                metrics.update(
+                    eval_result_log_dict(
+                        "eval/test", evaluator.evaluation_name, test_result
+                    )
+                )
 
             if result.embedding_diagnostics:
                 for k, v in result.embedding_diagnostics.items():
@@ -215,10 +226,12 @@ def evaluate_checkpoints(
                 f"({eval_time:.1f}s)"
             )
 
-        # Log all metrics for this checkpoint in one call
-        if wandb_callback.enabled and get_rank() == 0:
-            wandb_callback.wandb.log(metrics)
-            logger.info(f"Logged {len(metrics)} metrics for step {step_num}")
+            if wandb_callback.enabled and get_rank() == 0:
+                wandb_callback.wandb.log(metrics)
+                logger.info(
+                    f"Logged {len(metrics)} metrics for "
+                    f"{evaluator.evaluation_name} at step {step_num}"
+                )
 
         gc.collect()
         torch.cuda.empty_cache()

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 import tqdm
 from rslearn.dataset import Dataset, Window
 from rslearn.utils.mp import star_imap_unordered
+from rslearn.utils.raster_array import RasterArray
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality, TimeSpan
@@ -40,7 +41,7 @@ def convert_worldpop(window: Window, olmoearth_path: UPath) -> None:
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
     image = GEOTIFF_RASTER_FORMAT.decode_raster(
         raster_dir, window.projection, window.bounds
-    )
+    ).get_chw_array()
 
     # Clip population count to 0. NODATA is -99999 and includes locations that are
     # mapped as "unsettled" but really that is 0 population.
@@ -62,7 +63,7 @@ def convert_worldpop(window: Window, olmoearth_path: UPath) -> None:
         path=dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,
-        array=image,
+        raster=RasterArray(chw_array=image),
         fname=dst_fname.name,
     )
     metadata_fname = get_modality_temp_meta_fname(

@@ -54,7 +54,7 @@ def process_chm_tif(bucket: str, key: str, out_fname: str) -> None:
             bounds[3] * y_factor,
         )
 
-        array = GeotiffRasterFormat().decode_raster(
+        raster = GeotiffRasterFormat().decode_raster(
             local_fname.parent,
             wanted_projection,
             wanted_bounds,
@@ -62,12 +62,12 @@ def process_chm_tif(bucket: str, key: str, out_fname: str) -> None:
             fname=local_fname.name,
         )
         out_upath = UPath(out_fname)
-        print(f"writing {array.shape} to {out_upath}")
+        print(f"writing {raster.array.shape} to {out_upath}")
         GeotiffRasterFormat().encode_raster(
             out_upath.parent,
             wanted_projection,
             wanted_bounds,
-            array,
+            raster,
             fname=(out_upath.name + ".tmp"),
         )
         os.rename(out_upath.path + ".tmp", out_upath.path)
