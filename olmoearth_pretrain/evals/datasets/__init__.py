@@ -9,6 +9,7 @@ import olmoearth_pretrain.evals.datasets.paths as paths
 from olmoearth_pretrain.evals.studio_ingest.registry import get_dataset_entry
 
 from .breizhcrops import BreizhCropsDataset
+from .configs import dataset_to_config
 from .floods_dataset import Sen1Floods11Dataset
 from .geobench_dataset import GeobenchDataset
 from .mados_dataset import MADOSDataset
@@ -54,12 +55,15 @@ def get_eval_dataset(
         A PyTorch dataset that yields eval samples and labels.
     """
     if eval_dataset.startswith("pretrain_subset"):
+        patch_size = kwargs.get("pretrain_patch_size", 4)
+        config = dataset_to_config(eval_dataset)
+        hw_p = config.height_width // patch_size
         return PretrainSubsetDataset(
             h5py_dir=kwargs["h5py_dir"],
             training_modalities=kwargs.get("training_modalities", input_modalities),
             max_samples=kwargs.get("max_samples", 512),
-            patch_size=kwargs.get("pretrain_patch_size", 4),
-            hw_p=kwargs.get("pretrain_hw_p", 8),
+            patch_size=patch_size,
+            hw_p=hw_p,
             seed=kwargs.get("pretrain_seed", 42),
             split=kwargs.get("pretrain_split", split),
             target_modality=kwargs.get("target_modality"),

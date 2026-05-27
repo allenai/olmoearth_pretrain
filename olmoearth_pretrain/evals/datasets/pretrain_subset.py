@@ -445,4 +445,8 @@ class PretrainSubsetDataset(Dataset):
         )
         _, sample = self._dataset[args]
         masked = self._missing_aware_masked_sample(sample)
+        if self.target_modality is None:
+            pixel_size = self.hw_p * self.patch_size
+            dummy_label = torch.zeros(pixel_size, pixel_size, dtype=torch.long)
+            return masked, dummy_label
         return masked, self._get_label(args)

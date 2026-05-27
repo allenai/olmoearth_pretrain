@@ -30,6 +30,8 @@ from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn_variable_tim
 from olmoearth_pretrain.evals.embedding_diagnostics import (
     compute_embedding_diagnostics,
     compute_spatial_embedding_diagnostics,
+    compute_tiling_artifact_metrics,
+    pca_rgb_image,
 )
 from olmoearth_pretrain.evals.embedding_transforms import (
     dequantize_embeddings,
@@ -62,6 +64,7 @@ class EvalMode(StrEnum):
     LINEAR_PROBE = "linear_probe"
     FINETUNE = "finetune"
     EMBEDDING_DIAGNOSTICS = "embedding_diagnostics"
+    TILING_DIAGNOSTICS = "tiling_diagnostics"
 
 
 @dataclass
@@ -323,7 +326,7 @@ class DownstreamEvaluator:
         self, data_loader: DataLoader, is_train: bool
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Get the embeddings for the given data loader."""
-        print(
+        logger.info(
             f"Getting embeddings for {self.dataset} with norm method {self.norm_method}"
         )
         if hasattr(self.trainer.train_module.model, "encoder"):
@@ -576,7 +579,7 @@ class DownstreamEvaluator:
         return result
 
     def _val_embedding_diagnostics(self) -> EvalTaskResult:
-        """Compute embedding diagnostics only (no downstream task)."""
+        """Compute embedding geometry diagnostics (effective rank, uniformity, etc.)."""
         logger.info(f"Computing embedding diagnostics for {self.dataset}")
         data_loader = self._get_data_loader("train", self.embedding_batch_size)
         embeddings, _ = self._get_embeddings(data_loader, is_train=False)
@@ -592,10 +595,47 @@ class DownstreamEvaluator:
         result.embedding_diagnostics = diagnostics
         return result
 
+    def _val_tiling_diagnostics(self) -> EvalTaskResult:
+        """Compute tiling/striping artifact metrics and PCA RGB visualization.
+
+        Requires spatial embeddings [N, H, W, D].
+        """
+        logger.info(f"Computing tiling diagnostics for {self.dataset}")
+        data_loader = self._get_data_loader("train", self.embedding_batch_size)
+        embeddings, _ = self._get_embeddings(data_loader, is_train=False)
+        logger.info(f"Embeddings shape for {self.dataset}: {embeddings.shape}")
+
+        if embeddings.ndim != 4:
+            raise ValueError(
+                f"Tiling diagnostics requires [N, H, W, D] embeddings, "
+                f"got shape {embeddings.shape}. Use a segmentation-type dataset."
+            )
+
+        diagnostics = compute_tiling_artifact_metrics(
+            embeddings, patch_size=self.patch_size
+        )
+        logger.info(f"Tiling artifact metrics for {self.dataset}: {diagnostics}")
+
+        pca_rgb = None
+        try:
+            pca_rgb = pca_rgb_image(embeddings)
+        except Exception:
+            logger.warning(
+                f"Failed to generate PCA RGB image for {self.dataset}",
+                exc_info=True,
+            )
+
+        result = EvalTaskResult(val_result=None, test_result=None)
+        result.embedding_diagnostics = diagnostics
+        result.pca_rgb = pca_rgb
+        return result
+
     def val(self) -> EvalTaskResult:
         """Validate the model on the downstream task."""
         if self.eval_mode == EvalMode.EMBEDDING_DIAGNOSTICS:
             return self._val_embedding_diagnostics()
+        elif self.eval_mode == EvalMode.TILING_DIAGNOSTICS:
+            return self._val_tiling_diagnostics()
         elif self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
             return self._val_embed_probe()
         elif self.eval_mode == EvalMode.FINETUNE:
@@ -888,7 +928,24 @@ class DownstreamEvaluatorCallback(Callback):
                     f"eval_embed_diagnostics/{evaluator.evaluation_name}/{metric_name}",
                     metric_value,
                 )
-
+        if result.pca_rgb is not None:
+            try:
+                wandb_callback = next(
+                    cb
+                    for cb in self.trainer._iter_callbacks()
+                    if isinstance(cb, OlmoEarthWandBCallback)
+                )
+                if wandb_callback.enabled:
+                    wandb_callback.wandb.log(
+                        {
+                            f"eval_embed_diagnostics/{evaluator.evaluation_name}/pca_rgb": wandb_callback.wandb.Image(
+                                result.pca_rgb,
+                                caption=f"PCA RGB — {evaluator.evaluation_name} (step {self.step})",
+                            )
+                        }
+                    )
+            except StopIteration:
+                logger.debug("No WandB callback found, skipping PCA RGB logging")
         eval_time = time.monotonic() - start_time
         self.trainer.record_metric(f"eval_time/{evaluator.evaluation_name}", eval_time)
         logger.info(
@@ -959,9 +1016,9 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                 continue
 
             config = dataset_to_config(task.dataset)
-            if (
-                config.task_type == TaskType.SEGMENTATION
-                and task.eval_mode != EvalMode.EMBEDDING_DIAGNOSTICS
+            if config.task_type == TaskType.SEGMENTATION and task.eval_mode not in (
+                EvalMode.EMBEDDING_DIAGNOSTICS,
+                EvalMode.TILING_DIAGNOSTICS,
             ):
                 if task.probe_lr is None and task.ft_lr is None:
                     raise ValueError(
