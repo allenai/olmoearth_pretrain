@@ -252,6 +252,12 @@ def main() -> int:
     Returns:
         Exit code (0 for success, non-zero for failure)
     """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-5s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
     parser = argparse.ArgumentParser(
         prog="studio_ingest",
         description="Ingest Studio datasets into OlmoEarth eval system",
