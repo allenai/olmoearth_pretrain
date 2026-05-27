@@ -18,7 +18,7 @@ WANDB_PROJECT="--trainer.callbacks.wandb.project=2026_04_22_add_hidden_layer_to_
 ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.rope_coordinate_scale=0.25"
 
 for GRID in 16 32; do
-    for DIM in 768; do
+    for DIM in 192 288 528 768; do
         python "$SCRIPT" launch "regbtl_base10k_scale0.25_g${GRID}_d${DIM}" "$CLUSTER" \
             $LAUNCH_ARGS \
             $WANDB_PROJECT \
