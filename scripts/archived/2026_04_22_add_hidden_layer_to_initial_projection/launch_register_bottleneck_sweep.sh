@@ -9,6 +9,9 @@
 # Sweep (8 runs): register_grid_size in {16, 32} x register_dim in {192, 288, 528, 768}.
 # dims are multiples of 48 so head_dim = dim/12 is divisible by 4 (required by 2D RoPE);
 # head_dims are 16, 24, 44, 64 respectively (768 = full model width = no width bottleneck).
+#
+# Plus 1 ablation: g16 / d528 with NO supervision head, to isolate whether the low-weight
+# register supervision has any effect.
 set -e
 
 SCRIPT="scripts/archived/2026_04_22_add_hidden_layer_to_initial_projection/hidden1_supervision_register_bottleneck.py"
@@ -28,3 +31,13 @@ for GRID in 16 32; do
             --model.decoder_config.register_dim="${DIM}"
     done
 done
+
+# Ablation: g16 / d528 with NO supervision head (pure JEPA register bottleneck).
+NOSUP_SCRIPT="scripts/archived/2026_04_22_add_hidden_layer_to_initial_projection/hidden1_register_bottleneck_no_supervision.py"
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g16_d528_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS \
+    $WANDB_PROJECT \
+    $ROPE \
+    --model.encoder_config.register_grid_size=16 \
+    --model.encoder_config.register_dim=528 \
+    --model.decoder_config.register_dim=528

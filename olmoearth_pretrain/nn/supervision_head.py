@@ -161,6 +161,16 @@ class SupervisionHead(nn.Module):
         for name, cfg in modality_configs.items():
             modality_spec = Modality.get(name)
             if modality_spec.is_spatial:
+                # TODO: the max_patch_size^2 unfold is a holdover from decoder-token
+                # supervision (each token = one real patch of up to max_patch_size px).
+                # For register_supervision the registers are a coarse latent grid, not
+                # patches, and the output is bilinearly interpolated to the target
+                # resolution regardless — so this factor isn't needed. With register grids
+                # finer than the patch grid (e.g. n=16/32 vs ~13) it over-produces
+                # (n*max_patch_size > target) then downsamples, wasting head params.
+                # Consider making it configurable (e.g. 1, or ceil(max_target / n)) in
+                # register_supervision mode. Expected downstream effect: negligible (low-
+                # weight nudge, interpolated output, head discarded after pretraining).
                 out_dim = cfg.num_output_channels * max_patch_size * max_patch_size
             else:
                 out_dim = cfg.num_output_channels
