@@ -38,7 +38,7 @@ from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
 logger = logging.getLogger(__name__)
 
-SPATIAL_POS_ENCODING_TYPES = ("absolute", "rope", "none")
+SPATIAL_POS_ENCODING_TYPES = ("absolute", "rope", "rope_mixed", "none")
 
 
 def get_modalities_to_process(
@@ -653,7 +653,8 @@ class CompositeEncodings(nn.Module):
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             tokenization_config: Optional config for custom band groupings
-            spatial_pos_encoding: Spatial encoding type: "absolute", "rope", or "none"
+            spatial_pos_encoding: Spatial encoding type: "absolute", "rope",
+                "rope_mixed", or "none"
         """
         super().__init__()
         if spatial_pos_encoding not in SPATIAL_POS_ENCODING_TYPES:
@@ -904,6 +905,7 @@ class FlexiVitBase(nn.Module):
         spatial_pos_encoding: str = "absolute",
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
+        rope_mixed_base: float = 10.0,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -918,6 +920,8 @@ class FlexiVitBase(nn.Module):
             raise ValueError(
                 f"rope_coordinate_scale must be positive, got {rope_coordinate_scale}"
             )
+        if rope_mixed_base <= 0:
+            raise ValueError(f"rope_mixed_base must be positive, got {rope_mixed_base}")
 
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
@@ -931,6 +935,7 @@ class FlexiVitBase(nn.Module):
         self.spatial_pos_encoding = spatial_pos_encoding
         self.rope_base = rope_base
         self.rope_coordinate_scale = rope_coordinate_scale
+        self.rope_mixed_base = rope_mixed_base
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
         self.blocks = nn.ModuleList(
@@ -947,6 +952,8 @@ class FlexiVitBase(nn.Module):
                     use_flash_attn=self.use_flash_attn,
                     use_2d_rope=self.spatial_pos_encoding == "rope",
                     rope_base=self.rope_base,
+                    use_2d_rope_mixed=self.spatial_pos_encoding == "rope_mixed",
+                    rope_mixed_base=self.rope_mixed_base,
                 )
                 for _ in range(depth)
             ]
@@ -1017,8 +1024,8 @@ class FlexiVitBase(nn.Module):
         patch_size: int,
         input_res: int,
     ) -> Tensor | None:
-        """Build per-token spatial coordinates for 2D RoPE."""
-        if self.spatial_pos_encoding != "rope":
+        """Build per-token spatial coordinates for 2D RoPE / RoPE-Mixed."""
+        if self.spatial_pos_encoding not in ("rope", "rope_mixed"):
             return None
 
         position_dict = {}
@@ -1252,6 +1259,7 @@ class Encoder(FlexiVitBase):
         spatial_pos_encoding: str = "absolute",
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
+        rope_mixed_base: float = 10.0,
     ):
         """Initialize the encoder.
 
@@ -1296,9 +1304,12 @@ class Encoder(FlexiVitBase):
             post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm.
-            spatial_pos_encoding: Spatial encoding type: "absolute", "rope", or "none".
-            rope_base: Frequency base for RoPE when spatial_pos_encoding is "rope".
+            spatial_pos_encoding: Spatial encoding type: "absolute", "rope",
+                "rope_mixed", or "none".
+            rope_base: Frequency base for axial RoPE.
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
+            rope_mixed_base: Frequency base used to initialize learnable
+                RoPE-Mixed frequencies.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1317,6 +1328,7 @@ class Encoder(FlexiVitBase):
             spatial_pos_encoding=spatial_pos_encoding,
             rope_base=rope_base,
             rope_coordinate_scale=rope_coordinate_scale,
+            rope_mixed_base=rope_mixed_base,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1864,6 +1876,7 @@ class PredictorBase(FlexiVitBase):
         spatial_pos_encoding: str = "absolute",
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
+        rope_mixed_base: float = 10.0,
     ):
         """Initialize the predictor.
 
@@ -1882,9 +1895,12 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn: Whether to use flash attention
             qk_norm: Whether to apply normalization to Q and K in attention
             tokenization_config: Optional config for custom band groupings
-            spatial_pos_encoding: Spatial encoding type: "absolute", "rope", or "none".
-            rope_base: Frequency base for RoPE when spatial_pos_encoding is "rope".
+            spatial_pos_encoding: Spatial encoding type: "absolute", "rope",
+                "rope_mixed", or "none".
+            rope_base: Frequency base for axial RoPE.
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
+            rope_mixed_base: Frequency base used to initialize learnable
+                RoPE-Mixed frequencies.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1903,6 +1919,7 @@ class PredictorBase(FlexiVitBase):
             spatial_pos_encoding=spatial_pos_encoding,
             rope_base=rope_base,
             rope_coordinate_scale=rope_coordinate_scale,
+            rope_mixed_base=rope_mixed_base,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -2300,6 +2317,7 @@ class EncoderConfig(Config):
     spatial_pos_encoding: str = "absolute"
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
+    rope_mixed_base: float = 10.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2336,11 +2354,16 @@ class EncoderConfig(Config):
             raise ValueError(
                 f"rope_coordinate_scale must be positive, got {self.rope_coordinate_scale}"
             )
-        if self.spatial_pos_encoding == "rope":
+        if self.rope_mixed_base <= 0:
+            raise ValueError(
+                f"rope_mixed_base must be positive, got {self.rope_mixed_base}"
+            )
+        if self.spatial_pos_encoding in ("rope", "rope_mixed"):
             head_dim = self.embedding_size // self.num_heads
             if head_dim % 4 != 0:
                 raise ValueError(
-                    f"2D RoPE requires head_dim divisible by 4, got {head_dim}"
+                    f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "
+                    f"got {head_dim}"
                 )
 
     @property
@@ -2380,6 +2403,7 @@ class PredictorConfig(Config):
     spatial_pos_encoding: str = "absolute"
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
+    rope_mixed_base: float = 10.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2407,11 +2431,16 @@ class PredictorConfig(Config):
             raise ValueError(
                 f"rope_coordinate_scale must be positive, got {self.rope_coordinate_scale}"
             )
-        if self.spatial_pos_encoding == "rope":
+        if self.rope_mixed_base <= 0:
+            raise ValueError(
+                f"rope_mixed_base must be positive, got {self.rope_mixed_base}"
+            )
+        if self.spatial_pos_encoding in ("rope", "rope_mixed"):
             head_dim = self.decoder_embedding_size // self.num_heads
             if head_dim % 4 != 0:
                 raise ValueError(
-                    f"2D RoPE requires head_dim divisible by 4, got {head_dim}"
+                    f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "
+                    f"got {head_dim}"
                 )
 
     @property

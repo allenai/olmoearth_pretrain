@@ -197,3 +197,134 @@ def apply_2d_rope(
     x_row = apply_1d_rope(x_row, row_pos, base)
     x_col = apply_1d_rope(x_col, col_pos, base)
     return torch.cat([x_row, x_col], dim=-1)
+
+
+def init_2d_rope_mixed_freqs(
+    head_dim: int,
+    num_heads: int,
+    base: float = 10.0,
+    rotate: bool = True,
+) -> torch.Tensor:
+    """Initialize learnable 2D frequencies for RoPE-Mixed.
+
+    Follows the per-head random-direction init from
+    https://github.com/naver-ai/rope-vit (Heo et al., 2024). Each head receives
+    ``head_dim // 2`` complex-pair 2D frequencies. Half of them point along a
+    per-head random direction, the other half along the orthogonal direction,
+    so each head covers two non-parallel axes in 2D frequency space.
+
+    Args:
+        head_dim: Per-head channel dimension. Must be divisible by 4.
+        num_heads: Number of attention heads.
+        base: Frequency base. The paper uses 10 for RoPE-Mixed in ViT-B.
+        rotate: If True, randomize the per-head rotation angle.
+
+    Returns:
+        Tensor of shape ``(2, num_heads, head_dim // 2)``. The first axis
+        indexes ``(row_freq, col_freq)`` for each complex pair.
+    """
+    if head_dim % 4 != 0:
+        raise ValueError(
+            f"RoPE-Mixed init requires head_dim divisible by 4, got {head_dim}"
+        )
+    mag = 1.0 / (
+        base ** (torch.arange(0, head_dim, 4, dtype=torch.float32) / head_dim)
+    )  # (head_dim // 4,)
+    if rotate:
+        angles = torch.rand(num_heads) * 2 * torch.pi
+    else:
+        angles = torch.zeros(num_heads)
+    angles = angles.unsqueeze(-1)  # (num_heads, 1)
+    freqs_row = torch.cat(
+        [mag * torch.cos(angles), mag * torch.cos(angles + torch.pi / 2)],
+        dim=-1,
+    )
+    freqs_col = torch.cat(
+        [mag * torch.sin(angles), mag * torch.sin(angles + torch.pi / 2)],
+        dim=-1,
+    )
+    return torch.stack([freqs_row, freqs_col], dim=0)
+
+
+def apply_2d_rope_mixed(
+    x: torch.Tensor,
+    positions: torch.Tensor,
+    freqs: torch.Tensor,
+) -> torch.Tensor:
+    """Apply RoPE-Mixed (learnable 2D frequencies) to attention q/k.
+
+    Each complex feature pair is rotated by an angle of the form
+    ``theta_row * row + theta_col * col``, where ``(theta_row, theta_col)`` is
+    a learnable per-head, per-pair 2D frequency.
+
+    Args:
+        x: Attention tensor with shape ``(B, H, N, D)`` or packed
+            ``(N, H, D)``.
+        positions: Spatial coordinates with shape ``(B, N, 2)`` or packed
+            ``(N, 2)``. Last dim is ``(row, col)``.
+        freqs: Learnable 2D frequencies of shape ``(2, H, D // 2)``.
+            ``freqs[0]`` is the row component, ``freqs[1]`` is the col
+            component.
+    """
+    head_dim = x.shape[-1]
+    if head_dim % 2 != 0:
+        raise ValueError(f"RoPE head dimension must be even, got {head_dim}")
+    if positions.shape[-1] != 2:
+        raise ValueError(
+            f"2D RoPE positions must end with size 2, got {positions.shape}"
+        )
+    if x.ndim not in (3, 4):
+        raise ValueError(f"2D RoPE expects a 3D or 4D attention tensor, got {x.shape}")
+    if freqs.ndim != 3 or freqs.shape[0] != 2:
+        raise ValueError(
+            f"RoPE-Mixed freqs must have shape (2, H, D/2), got {freqs.shape}"
+        )
+    if freqs.shape[-1] * 2 != head_dim:
+        raise ValueError(
+            f"RoPE-Mixed freqs last dim must equal head_dim // 2, "
+            f"got freqs={freqs.shape}, head_dim={head_dim}"
+        )
+
+    dtype = x.dtype
+    freqs_row = freqs[0].to(device=x.device, dtype=torch.float32)  # (H, D/2)
+    freqs_col = freqs[1].to(device=x.device, dtype=torch.float32)  # (H, D/2)
+    positions = positions.to(device=x.device, dtype=torch.float32)
+
+    if x.ndim == 4:
+        if positions.ndim != 3:
+            raise ValueError(
+                "unpacked RoPE-Mixed expects positions with shape "
+                f"(B, N, 2), got {positions.shape}"
+            )
+        if freqs.shape[1] != x.shape[1]:
+            raise ValueError(
+                f"RoPE-Mixed freqs num_heads={freqs.shape[1]} does not match "
+                f"attention num_heads={x.shape[1]}"
+            )
+        row_pos = positions[..., 0]  # (B, N)
+        col_pos = positions[..., 1]  # (B, N)
+        angles = (
+            row_pos[:, None, :, None] * freqs_row[None, :, None, :]
+            + col_pos[:, None, :, None] * freqs_col[None, :, None, :]
+        )  # (B, H, N, D/2)
+    else:
+        if positions.ndim != 2:
+            raise ValueError(
+                "packed RoPE-Mixed expects positions with shape "
+                f"(N, 2), got {positions.shape}"
+            )
+        if freqs.shape[1] != x.shape[1]:
+            raise ValueError(
+                f"RoPE-Mixed freqs num_heads={freqs.shape[1]} does not match "
+                f"attention num_heads={x.shape[1]}"
+            )
+        row_pos = positions[..., 0]  # (N,)
+        col_pos = positions[..., 1]  # (N,)
+        angles = (
+            row_pos[:, None, None] * freqs_row[None, :, :]
+            + col_pos[:, None, None] * freqs_col[None, :, :]
+        )  # (N, H, D/2)
+
+    cos = torch.repeat_interleave(torch.cos(angles), repeats=2, dim=-1).to(dtype=dtype)
+    sin = torch.repeat_interleave(torch.sin(angles), repeats=2, dim=-1).to(dtype=dtype)
+    return (x * cos) + (rotate_half(x) * sin)

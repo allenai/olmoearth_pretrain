@@ -1059,6 +1059,48 @@ def test_encoder_rope_dynamic_patch_sizes(
         assert encoder.blocks[0].attn.q.weight.grad is not None
 
 
+def test_encoder_rope_mixed_forward_and_learns_freqs(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """RoPE-Mixed encoder should forward and backprop into learnable freqs."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        spatial_pos_encoding="rope_mixed",
+    )
+
+    B, H, W, T = 1, 8, 8, 2
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=4, input_res=10)
+    output, _, _ = unpack_encoder_output(output_dict)
+    assert output.sentinel2_l2a is not None
+    assert output.sentinel2_l2a.shape[:3] == (B, H // 4, W // 4)
+    output.sentinel2_l2a.sum().backward()
+    for blk in encoder.blocks:
+        assert blk.attn.rope_mixed_freqs.grad is not None
+        assert torch.isfinite(blk.attn.rope_mixed_freqs.grad).all()
+        assert blk.attn.rope_mixed_freqs.grad.abs().sum() > 0
+
+
 def test_predictor_forward_rope(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
@@ -1111,6 +1153,61 @@ def test_predictor_forward_rope(
     )
     output.sentinel2_l2a.sum().backward()
     assert predictor.blocks[0].attn.q.weight.grad is not None
+
+
+def test_predictor_forward_rope_mixed(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Predictor cross-attention should also work with RoPE-Mixed."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_band_sets = modality_band_set_len_and_total_bands[
+        "sentinel2_l2a"
+    ][0]
+    latlon_num_band_sets = modality_band_set_len_and_total_bands["latlon"][0]
+    predictor = Predictor(
+        supported_modalities=supported_modalities,
+        encoder_embedding_size=16,
+        decoder_embedding_size=16,
+        depth=2,
+        mlp_ratio=2.0,
+        num_heads=2,
+        max_sequence_length=12,
+        drop_path=0.0,
+        spatial_pos_encoding="rope_mixed",
+    )
+
+    B, H, W, T = 1, 2, 2, 2
+    sentinel2_l2a_tokens = torch.randn(
+        B, H, W, T, sentinel2_l2a_num_band_sets, 16, requires_grad=True
+    )
+    sentinel2_l2a_mask = torch.zeros(
+        B, H, W, T, sentinel2_l2a_num_band_sets, dtype=torch.float32
+    )
+    sentinel2_l2a_mask[:, 0, 0, :, :] = MaskValue.DECODER.value
+    latlon = torch.randn(B, latlon_num_band_sets, 16, requires_grad=True)
+    latlon_mask = torch.zeros(B, latlon_num_band_sets, dtype=torch.float32)
+    encoded_tokens = TokensAndMasks(
+        sentinel2_l2a=sentinel2_l2a_tokens,
+        sentinel2_l2a_mask=sentinel2_l2a_mask,
+        latlon=latlon,
+        latlon_mask=latlon_mask,
+    )
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+
+    output = predictor.forward(encoded_tokens, timestamps, patch_size=4, input_res=10)
+
+    assert output.sentinel2_l2a is not None
+    assert output.sentinel2_l2a.shape == (
+        B,
+        H,
+        W,
+        T,
+        sentinel2_l2a_num_band_sets,
+        16,
+    )
+    output.sentinel2_l2a.sum().backward()
+    assert predictor.blocks[0].attn.q.weight.grad is not None
+    assert predictor.blocks[0].attn.rope_mixed_freqs.grad is not None
 
 
 def test_end_to_end_with_exit_config(

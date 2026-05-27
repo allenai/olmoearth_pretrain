@@ -10,7 +10,11 @@ from einops import rearrange
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
 
-from olmoearth_pretrain.nn.encodings import apply_2d_rope
+from olmoearth_pretrain.nn.encodings import (
+    apply_2d_rope,
+    apply_2d_rope_mixed,
+    init_2d_rope_mixed_freqs,
+)
 
 try:
     import flash_attn
@@ -114,6 +118,8 @@ class Attention(nn.Module):
         use_flash_attn: bool = False,
         use_2d_rope: bool = False,
         rope_base: float = 10000.0,
+        use_2d_rope_mixed: bool = False,
+        rope_mixed_base: float = 10.0,
     ) -> None:
         """Initialize the attention module.
 
@@ -127,16 +133,26 @@ class Attention(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Enable cross-attention
             use_flash_attn: Use flash attention
-            use_2d_rope: Apply 2D RoPE to queries and keys
-            rope_base: RoPE frequency base
+            use_2d_rope: Apply axial 2D RoPE to queries and keys
+            rope_base: RoPE frequency base (axial)
+            use_2d_rope_mixed: Apply RoPE-Mixed (learnable 2D frequencies) to
+                queries and keys. Mutually exclusive with ``use_2d_rope``.
+            rope_mixed_base: Frequency base used to initialize the learnable
+                RoPE-Mixed frequencies.
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
+        if use_2d_rope and use_2d_rope_mixed:
+            raise ValueError("Cannot enable both axial 2D RoPE and RoPE-Mixed")
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         if use_2d_rope and self.head_dim % 4 != 0:
             raise ValueError(
                 f"2D RoPE requires head_dim divisible by 4, got {self.head_dim}"
+            )
+        if use_2d_rope_mixed and self.head_dim % 4 != 0:
+            raise ValueError(
+                f"RoPE-Mixed requires head_dim divisible by 4, got {self.head_dim}"
             )
         self.scale = self.head_dim**-0.5
 
@@ -144,6 +160,16 @@ class Attention(nn.Module):
         self.use_flash_attn = use_flash_attn
         self.use_2d_rope = use_2d_rope
         self.rope_base = rope_base
+        self.use_2d_rope_mixed = use_2d_rope_mixed
+        self.rope_mixed_base = rope_mixed_base
+        if use_2d_rope_mixed:
+            self.rope_mixed_freqs = nn.Parameter(
+                init_2d_rope_mixed_freqs(
+                    head_dim=self.head_dim,
+                    num_heads=self.num_heads,
+                    base=self.rope_mixed_base,
+                )
+            )
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
         self.q = nn.Linear(dim, dim, bias=qkv_bias)
         self.k = nn.Linear(dim, dim, bias=qkv_bias)
@@ -283,7 +309,7 @@ class Attention(nn.Module):
         # logger.info(f"q shape: {q.shape} k shape: {k.shape} v shape: {v.shape}")
 
         q, k = self.q_norm(q), self.k_norm(k)
-        if self.use_2d_rope:
+        if self.use_2d_rope or self.use_2d_rope_mixed:
             if rope_positions is None:
                 raise ValueError(
                     "rope_positions must be provided when 2D RoPE is enabled"
@@ -293,8 +319,12 @@ class Attention(nn.Module):
                 raise ValueError(
                     "rope_positions_y must be provided for cross attention with 2D RoPE"
                 )
-            q = apply_2d_rope(q, rope_positions, base=self.rope_base)
-            k = apply_2d_rope(k, k_positions, base=self.rope_base)
+            if self.use_2d_rope:
+                q = apply_2d_rope(q, rope_positions, base=self.rope_base)
+                k = apply_2d_rope(k, k_positions, base=self.rope_base)
+            else:
+                q = apply_2d_rope_mixed(q, rope_positions, self.rope_mixed_freqs)
+                k = apply_2d_rope_mixed(k, k_positions, self.rope_mixed_freqs)
         x = self.sdpa(
             q,
             k,
@@ -485,6 +515,8 @@ class Block(nn.Module):
         use_flash_attn: bool = False,
         use_2d_rope: bool = False,
         rope_base: float = 10000.0,
+        use_2d_rope_mixed: bool = False,
+        rope_mixed_base: float = 10.0,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -502,8 +534,10 @@ class Block(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Whether to use cross attention
             use_flash_attn: Whether to use flash attention
-            use_2d_rope: Apply 2D RoPE to attention queries and keys
-            rope_base: RoPE frequency base
+            use_2d_rope: Apply axial 2D RoPE to attention queries and keys
+            rope_base: RoPE frequency base (axial)
+            use_2d_rope_mixed: Apply RoPE-Mixed to attention queries and keys.
+            rope_mixed_base: Frequency base for RoPE-Mixed initialization.
         """
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -519,6 +553,8 @@ class Block(nn.Module):
             use_flash_attn=use_flash_attn,
             use_2d_rope=use_2d_rope,
             rope_base=rope_base,
+            use_2d_rope_mixed=use_2d_rope_mixed,
+            rope_mixed_base=rope_mixed_base,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
