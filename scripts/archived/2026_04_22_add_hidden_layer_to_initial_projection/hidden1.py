@@ -370,6 +370,29 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pretrain_test_samples=3072,
             pretrain_split_strategy="random",
         ),
+        # SRTM regression from S1 + S2 (multimodal). Mirrors pretrain_srtm_regression but
+        # feeds both modalities, to track whether combining modalities still hurts when
+        # frozen (the gap the register bottleneck is meant to close).
+        "pretrain_srtm_regression_s1_s2": DownstreamTaskConfig(
+            dataset="pretrain_subset_srtm",
+            embedding_batch_size=16,
+            probe_batch_size=4,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            probe_lr=0.01,
+            eval_interval=Duration.steps(20000),
+            input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
+            pretrain_target_modality=Modality.SRTM.name,
+            pretrain_train_samples=6144,
+            pretrain_valid_samples=3072,
+            pretrain_test_samples=3072,
+            pretrain_split_strategy="random",
+        ),
         "pretrain_worldcover_probe": DownstreamTaskConfig(
             dataset="pretrain_subset_worldcover",
             embedding_batch_size=16,
