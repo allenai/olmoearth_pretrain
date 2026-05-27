@@ -18,6 +18,7 @@ from olmo_core.train.config import TrainerConfig
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.datasets.pretrain_subset import PretrainSplitStrategy
 from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
 from olmoearth_pretrain.internal.experiment import (
@@ -412,6 +413,8 @@ PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py
 # modalities (CDL, WORLDCEREAL, WRI canopy) aren't present in osmbig, so their
 # probes fall back to PRETRAIN_SUBSET_H5PY_DIR (in-distribution).
 PRETRAIN_AUX_EVAL_H5PY_DIR = "/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928"
+PRESTO_OSM_EVAL_H5PY_DIR = "/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/469728"
+PRESTO_OSM_BALANCED_SPLITS_DIR = "analysis/presto_osm_balanced_splits"
 
 MAP_MODALITY_PROBE_INPUTS = [
     Modality.SENTINEL2_L2A.name,
@@ -432,8 +435,9 @@ def _map_modality_probe(
     target_modality: str,
     primary_metric: EvalMetric,
     h5py_dir: str,
-    split_strategy: str = "random",
+    split_strategy: PretrainSplitStrategy = PretrainSplitStrategy.RANDOM,
     input_modalities: list[str] | None = None,
+    split_dir: str | None = None,
 ) -> DownstreamTaskConfig:
     """Build a uniform DownstreamTaskConfig for a decode-only map modality probe."""
     return DownstreamTaskConfig(
@@ -457,6 +461,7 @@ def _map_modality_probe(
         pretrain_valid_samples=3072,
         pretrain_test_samples=3072,
         pretrain_split_strategy=split_strategy,
+        pretrain_split_dir=split_dir,
     )
 
 
@@ -507,42 +512,128 @@ EVAL_TASKS.update(
             target_modality=Modality.WORLDCOVER.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
-            split_strategy="geographic",
+            split_strategy=PretrainSplitStrategy.GEOGRAPHIC,
         ),
         f"pretrain_osm_probe_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_osm",
             target_modality=Modality.OPENSTREETMAP_RASTER.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
-            split_strategy="geographic",
+            split_strategy=PretrainSplitStrategy.GEOGRAPHIC,
         ),
         f"pretrain_srtm_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_srtm",
             target_modality=Modality.SRTM.name,
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
-            split_strategy="geographic",
+            split_strategy=PretrainSplitStrategy.GEOGRAPHIC,
         ),
         f"pretrain_canopy_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_canopy",
             target_modality=Modality.WRI_CANOPY_HEIGHT_MAP.name,
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
-            split_strategy="geographic",
+            split_strategy=PretrainSplitStrategy.GEOGRAPHIC,
         ),
         f"pretrain_cdl_probe_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_cdl",
             target_modality=Modality.CDL.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
-            split_strategy="geographic",
+            split_strategy=PretrainSplitStrategy.GEOGRAPHIC,
         ),
         f"pretrain_worldcereal_probe_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_worldcereal",
             target_modality=Modality.WORLDCEREAL.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
-            split_strategy="geographic",
+            split_strategy=PretrainSplitStrategy.GEOGRAPHIC,
+        ),
+        # Balanced variants: same probe/loss, but label-aware tile selection and
+        # tail-sensitive primary metrics for segmentation.
+        f"pretrain_worldcover_probe_balanced_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_worldcover",
+            target_modality=Modality.WORLDCOVER.name,
+            primary_metric=EvalMetric.MACRO_F1,
+            h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
+            split_strategy=PretrainSplitStrategy.BALANCED,
+        ),
+        f"pretrain_osm_probe_balanced_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_osm",
+            target_modality=Modality.OPENSTREETMAP_RASTER.name,
+            primary_metric=EvalMetric.MACRO_F1,
+            h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
+            split_strategy=PretrainSplitStrategy.BALANCED,
+        ),
+        f"pretrain_srtm_regression_balanced_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_srtm",
+            target_modality=Modality.SRTM.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
+            split_strategy=PretrainSplitStrategy.BALANCED,
+        ),
+        f"pretrain_canopy_regression_balanced_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_canopy",
+            target_modality=Modality.WRI_CANOPY_HEIGHT_MAP.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            split_strategy=PretrainSplitStrategy.BALANCED,
+        ),
+        f"pretrain_cdl_probe_balanced_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_cdl",
+            target_modality=Modality.CDL.name,
+            primary_metric=EvalMetric.MACRO_F1,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            split_strategy=PretrainSplitStrategy.BALANCED,
+        ),
+        f"pretrain_worldcereal_probe_balanced_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_worldcereal",
+            target_modality=Modality.WORLDCEREAL.name,
+            primary_metric=EvalMetric.MACRO_F1,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            split_strategy=PretrainSplitStrategy.BALANCED,
+        ),
+        f"pretrain_worldcover_probe_balanced_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_worldcover",
+            target_modality=Modality.WORLDCOVER.name,
+            primary_metric=EvalMetric.MACRO_F1,
+            h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
+            split_strategy=PretrainSplitStrategy.BALANCED_GEOGRAPHIC,
+        ),
+        f"pretrain_osm_probe_balanced_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_osm",
+            target_modality=Modality.OPENSTREETMAP_RASTER.name,
+            primary_metric=EvalMetric.MACRO_F1,
+            h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
+            split_strategy=PretrainSplitStrategy.BALANCED_GEOGRAPHIC,
+        ),
+        f"pretrain_srtm_regression_balanced_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_srtm",
+            target_modality=Modality.SRTM.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
+            split_strategy=PretrainSplitStrategy.BALANCED_GEOGRAPHIC,
+        ),
+        f"pretrain_canopy_regression_balanced_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_canopy",
+            target_modality=Modality.WRI_CANOPY_HEIGHT_MAP.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            split_strategy=PretrainSplitStrategy.BALANCED_GEOGRAPHIC,
+        ),
+        f"pretrain_cdl_probe_balanced_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_cdl",
+            target_modality=Modality.CDL.name,
+            primary_metric=EvalMetric.MACRO_F1,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            split_strategy=PretrainSplitStrategy.BALANCED_GEOGRAPHIC,
+        ),
+        f"pretrain_worldcereal_probe_balanced_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_worldcereal",
+            target_modality=Modality.WORLDCEREAL.name,
+            primary_metric=EvalMetric.MACRO_F1,
+            h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+            split_strategy=PretrainSplitStrategy.BALANCED_GEOGRAPHIC,
         ),
         # SRTM elevation regression from S1-only and S2+S1 inputs, so we can
         # compare elevation signal across modality combinations.
@@ -562,7 +653,29 @@ EVAL_TASKS.update(
                 target_modality=Modality.SRTM.name,
                 primary_metric=EvalMetric.NEG_RMSE,
                 h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
-                split_strategy="geographic",
+                split_strategy=PretrainSplitStrategy.GEOGRAPHIC,
+                input_modalities=inputs,
+            )
+            for inputs in SRTM_PROBE_INPUT_VARIANTS
+        },
+        **{
+            f"pretrain_srtm_regression_balanced_{'_'.join(inputs)}": _map_modality_probe(
+                dataset="pretrain_subset_srtm",
+                target_modality=Modality.SRTM.name,
+                primary_metric=EvalMetric.NEG_RMSE,
+                h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
+                split_strategy=PretrainSplitStrategy.BALANCED,
+                input_modalities=inputs,
+            )
+            for inputs in SRTM_PROBE_INPUT_VARIANTS
+        },
+        **{
+            f"pretrain_srtm_regression_balanced_geo_{'_'.join(inputs)}": _map_modality_probe(
+                dataset="pretrain_subset_srtm",
+                target_modality=Modality.SRTM.name,
+                primary_metric=EvalMetric.NEG_RMSE,
+                h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
+                split_strategy=PretrainSplitStrategy.BALANCED_GEOGRAPHIC,
                 input_modalities=inputs,
             )
             for inputs in SRTM_PROBE_INPUT_VARIANTS
@@ -610,6 +723,30 @@ EMBED_DIAG_TASKS = {
         eval_mode=EvalMode.EMBEDDING_DIAGNOSTICS,
         h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
         pretrain_max_samples=256,
+    ),
+}
+
+TILING_DIAG_TASKS = {
+    "presto_osm_base_balanced_probe_sentinel2_l2a": _map_modality_probe(
+        dataset="pretrain_subset_osm",
+        target_modality=Modality.OPENSTREETMAP_RASTER.name,
+        primary_metric=EvalMetric.MACRO_F1,
+        h5py_dir=PRESTO_OSM_EVAL_H5PY_DIR,
+        split_dir=f"{PRESTO_OSM_BALANCED_SPLITS_DIR}/osm_base_balanced",
+    ),
+    "presto_osm_diverse_context_probe_sentinel2_l2a": _map_modality_probe(
+        dataset="pretrain_subset_osm",
+        target_modality=Modality.OPENSTREETMAP_RASTER.name,
+        primary_metric=EvalMetric.MACRO_F1,
+        h5py_dir=PRESTO_OSM_EVAL_H5PY_DIR,
+        split_dir=f"{PRESTO_OSM_BALANCED_SPLITS_DIR}/osm_diverse_context",
+    ),
+    "presto_osm_rare_class_focused_probe_sentinel2_l2a": _map_modality_probe(
+        dataset="pretrain_subset_osm",
+        target_modality=Modality.OPENSTREETMAP_RASTER.name,
+        primary_metric=EvalMetric.MACRO_F1,
+        h5py_dir=PRESTO_OSM_EVAL_H5PY_DIR,
+        split_dir=f"{PRESTO_OSM_BALANCED_SPLITS_DIR}/osm_rare_class_focused",
     ),
 }
 
@@ -750,6 +887,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                 tasks=(
                     EMBED_DIAG_TASKS
                     if os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY")
+                    else TILING_DIAG_TASKS
+                    if os.environ.get("TILING_DIAGNOSTICS_ONLY")
                     else FT_EVAL_TASKS
                     if os.environ.get("FINETUNE")
                     else EVAL_TASKS

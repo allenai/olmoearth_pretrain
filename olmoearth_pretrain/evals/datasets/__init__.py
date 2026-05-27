@@ -14,7 +14,7 @@ from .geobench_dataset import GeobenchDataset
 from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset
-from .pretrain_subset import PretrainSubsetDataset
+from .pretrain_subset import PretrainSplitStrategy, PretrainSubsetDataset
 from .rslearn_dataset import from_registry_entry
 
 logger = logging.getLogger(__name__)
@@ -69,8 +69,11 @@ def get_eval_dataset(
             ),
             valid_samples=kwargs.get("pretrain_valid_samples", 512),
             test_samples=kwargs.get("pretrain_test_samples", 512),
-            split_strategy=kwargs.get("pretrain_split_strategy", "random"),
+            split_strategy=kwargs.get(
+                "pretrain_split_strategy", PretrainSplitStrategy.RANDOM
+            ),
             geographic_bin_size_deg=kwargs.get("pretrain_geographic_bin_size_deg", 5.0),
+            split_dir=kwargs.get("pretrain_split_dir"),
         )
     elif eval_dataset.startswith("m-"):
         # m- == "modified for geobench"

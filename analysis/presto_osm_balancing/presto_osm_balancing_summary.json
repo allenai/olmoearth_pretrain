@@ -1,0 +1,38 @@
+{
+  "cache_path": "analysis/pretrain_eval_label_metadata/presto_openstreetmap_raster_label_metadata.npz",
+  "num_tiles_with_osm": 316884,
+  "total_valid_osm_pixels": 144837181,
+  "num_classes_present_corpus": 28,
+  "missing_classes": [
+    {
+      "class_id": 16,
+      "class_name": "observatory"
+    },
+    {
+      "class_id": 28,
+      "class_name": "water_tower"
+    }
+  ],
+  "rare_class_presence_cutoff_q25_tiles": 20.0,
+  "rare_class_ids": [
+    0,
+    2,
+    6,
+    7,
+    14,
+    15,
+    24
+  ],
+  "rare_class_names": [
+    "aerialway_pylon",
+    "airstrip",
+    "communications_tower",
+    "crane",
+    "lighthouse",
+    "obelisk",
+    "satellite_dish"
+  ],
+  "tile_class_count_distribution_path": "analysis/presto_osm_balancing/presto_osm_tile_class_count_distribution.csv",
+  "class_presence_table_path": "analysis/presto_osm_balancing/presto_osm_class_presence_table.csv",
+  "interesting_tiles_path": "analysis/presto_osm_balancing/presto_osm_interesting_tiles.csv"
+}

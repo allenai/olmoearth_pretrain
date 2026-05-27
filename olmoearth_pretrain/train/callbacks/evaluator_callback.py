@@ -26,6 +26,7 @@ from olmoearth_pretrain.evals.datasets.configs import (
     get_eval_mode,
 )
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.datasets.pretrain_subset import PretrainSplitStrategy
 from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn_variable_time
 from olmoearth_pretrain.evals.embedding_diagnostics import (
     compute_embedding_diagnostics,
@@ -129,11 +130,11 @@ class DownstreamTaskConfig:
     pretrain_train_samples: int = 512
     pretrain_valid_samples: int = 512
     pretrain_test_samples: int = 512
-    # Geographic vs random index selection for pretrain subset auxiliary probes.
-    # "random" picks indices uniformly; "geographic" buckets samples into
-    # latlon-bin holdouts so train/val/test are spatially disjoint.
-    pretrain_split_strategy: str = "random"
+    # Sample selection strategy for pretrain subset auxiliary probes.
+    pretrain_split_strategy: PretrainSplitStrategy = PretrainSplitStrategy.RANDOM
     pretrain_geographic_bin_size_deg: float = 5.0
+    # Optional directory with train/valid/test CSVs containing H5 sample_index values.
+    pretrain_split_dir: str | None = None
 
 
 class DownstreamEvaluator:
@@ -201,8 +202,9 @@ class DownstreamEvaluator:
         self.pretrain_train_samples = task.pretrain_train_samples
         self.pretrain_valid_samples = task.pretrain_valid_samples
         self.pretrain_test_samples = task.pretrain_test_samples
-        self.pretrain_split_strategy = task.pretrain_split_strategy
+        self.pretrain_split_strategy = PretrainSplitStrategy(task.pretrain_split_strategy)
         self.pretrain_geographic_bin_size_deg = task.pretrain_geographic_bin_size_deg
+        self.pretrain_split_dir = task.pretrain_split_dir
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -299,6 +301,7 @@ class DownstreamEvaluator:
             extra_kwargs["pretrain_geographic_bin_size_deg"] = (
                 self.pretrain_geographic_bin_size_deg
             )
+            extra_kwargs["pretrain_split_dir"] = self.pretrain_split_dir
         eval_ds = get_eval_dataset(
             eval_dataset=self.dataset,
             split=split,

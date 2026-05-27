@@ -8,6 +8,7 @@ tasks such as WorldCover, OSM, SRTM, CDL, canopy height, and WorldCereal.
 from __future__ import annotations
 
 import logging
+from enum import StrEnum
 from functools import cache
 
 import numpy as np
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_PATCH_SIZE = 4
 DEFAULT_HW_P = 8
 DEFAULT_MAX_SAMPLES = 512
+BALANCED_CANDIDATE_MULTIPLIER = 8
 WORLDCOVER_CLASSES = torch.tensor([10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100])
 OSM_TARGET_MODALITY = "openstreetmap_raster"
 SRTM_TARGET_MODALITY = "srtm"
@@ -41,6 +43,15 @@ WRI_CANOPY_TARGET_MODALITY = "wri_canopy_height_map"
 WORLDCEREAL_PRIMARY_CHANNEL = 0
 # CDL uses 0 to mark no-data / background.
 CDL_IGNORE_CODE = 0
+
+
+class PretrainSplitStrategy(StrEnum):
+    """Sample-selection strategies for pretrain-derived eval probes."""
+
+    RANDOM = "random"
+    GEOGRAPHIC = "geographic"
+    BALANCED = "balanced"
+    BALANCED_GEOGRAPHIC = "balanced_geographic"
 
 
 @cache
@@ -78,8 +89,9 @@ class PretrainSubsetDataset(Dataset):
         train_samples: int = DEFAULT_MAX_SAMPLES,
         valid_samples: int = DEFAULT_MAX_SAMPLES,
         test_samples: int = DEFAULT_MAX_SAMPLES,
-        split_strategy: str = "random",
+        split_strategy: str | PretrainSplitStrategy = PretrainSplitStrategy.RANDOM,
         geographic_bin_size_deg: float = 5.0,
+        split_dir: str | None = None,
     ) -> None:
         """Initialize a deterministic pretrain eval subset.
 
@@ -97,9 +109,10 @@ class PretrainSubsetDataset(Dataset):
             train_samples: Maximum train samples after split assignment.
             valid_samples: Maximum validation samples after split assignment.
             test_samples: Maximum test samples after split assignment.
-            split_strategy: ``random`` for shuffled 80/10/10 sample splits or
-                ``geographic`` for shuffled 80/10/10 lat/lon-bin splits.
+            split_strategy: Strategy for assigning and selecting split samples.
             geographic_bin_size_deg: Geographic bin size for spatial holdouts.
+            split_dir: Optional directory containing train/valid/test CSVs with
+                H5 ``sample_index`` values to use directly.
         """
         self.patch_size = patch_size
         self.hw_p = hw_p
@@ -138,10 +151,18 @@ class PretrainSubsetDataset(Dataset):
             rng = np.random.RandomState(seed)
             self._indices = rng.choice(total, size=n, replace=False).tolist()
         else:
+            split_strategy = PretrainSplitStrategy(split_strategy)
+            if split_dir is not None:
+                self._indices = self._positions_from_split_csv(
+                    dataset=self._dataset,
+                    split_dir=split_dir,
+                    split=split,
+                ).tolist()
+                return
             eligible_positions = self._positions_with_target_present(
                 self._dataset, target_modality
             )
-            if split_strategy == "random":
+            if split_strategy == PretrainSplitStrategy.RANDOM:
                 selected = self._select_split_indices(
                     total=len(eligible_positions),
                     split=split,
@@ -151,7 +172,7 @@ class PretrainSubsetDataset(Dataset):
                     test_samples=test_samples,
                 )
                 self._indices = eligible_positions[selected].tolist()
-            elif split_strategy == "geographic":
+            elif split_strategy == PretrainSplitStrategy.GEOGRAPHIC:
                 self._indices = self._geographic_split_positions(
                     latlons=self._dataset.latlon_distribution,
                     candidate_positions=eligible_positions,
@@ -162,10 +183,24 @@ class PretrainSubsetDataset(Dataset):
                     test_samples=test_samples,
                     bin_size_deg=geographic_bin_size_deg,
                 ).tolist()
+            elif split_strategy in (
+                PretrainSplitStrategy.BALANCED,
+                PretrainSplitStrategy.BALANCED_GEOGRAPHIC,
+            ):
+                self._indices = self._balanced_split_positions(
+                    candidate_positions=eligible_positions,
+                    split=split,
+                    seed=label_seed,
+                    train_samples=train_samples,
+                    valid_samples=valid_samples,
+                    test_samples=test_samples,
+                    split_strategy=split_strategy,
+                    geographic_bin_size_deg=geographic_bin_size_deg,
+                ).tolist()
             else:
                 raise ValueError(
-                    f"Unsupported split_strategy '{split_strategy}'. "
-                    f"Expected 'random' or 'geographic'."
+                    f"Unsupported split_strategy '{split_strategy}'. Expected one of "
+                    f"{[strategy.value for strategy in PretrainSplitStrategy]}."
                 )
 
     @staticmethod
@@ -190,6 +225,37 @@ class PretrainSubsetDataset(Dataset):
         return eligible_positions
 
     @staticmethod
+    def _positions_from_split_csv(
+        dataset: OlmoEarthDataset,
+        split_dir: str,
+        split: str,
+    ) -> np.ndarray:
+        """Load split positions from a CSV of H5 sample indices."""
+        if dataset.sample_indices is None:
+            raise ValueError("Dataset must be prepared before loading split CSVs")
+        normalized_split = "valid" if split == "val" else split
+        if normalized_split not in {"train", "valid", "test"}:
+            raise ValueError(f"Unsupported pretrain subset split: {split}")
+
+        split_path = UPath(split_dir) / f"{normalized_split}.csv"
+        split_df = pd.read_csv(str(split_path))
+        if "sample_index" not in split_df.columns:
+            raise ValueError(f"Split CSV {split_path} must contain sample_index")
+
+        position_by_h5_idx = {
+            int(h5_idx): position
+            for position, h5_idx in enumerate(dataset.sample_indices.tolist())
+        }
+        positions = [
+            position_by_h5_idx[int(sample_index)]
+            for sample_index in split_df["sample_index"].to_numpy()
+            if int(sample_index) in position_by_h5_idx
+        ]
+        if not positions:
+            raise ValueError(f"Split CSV {split_path} produced no usable samples")
+        return np.asarray(positions, dtype=np.int64)
+
+    @staticmethod
     def _geographic_split_positions(
         latlons: np.ndarray,
         candidate_positions: np.ndarray,
@@ -208,17 +274,44 @@ class PretrainSubsetDataset(Dataset):
         shuffles the bins once before slicing them 80/10/10 into train/valid/test.
         This guarantees split disjointness while preserving geographic holdouts.
         """
-        if latlons is None:
-            raise ValueError(
-                "Dataset has no latlon_distribution; geographic split is unavailable."
-            )
+        split_positions = PretrainSubsetDataset._geographic_split_pool_positions(
+            latlons=latlons,
+            candidate_positions=candidate_positions,
+            split=split,
+            seed=seed,
+            bin_size_deg=bin_size_deg,
+            train_frac=train_frac,
+            valid_frac=valid_frac,
+        )
         split_sizes = {
             "train": train_samples,
             "valid": valid_samples,
             "val": valid_samples,
             "test": test_samples,
         }
-        if split not in split_sizes:
+        n_target = split_sizes[split]
+        if split_positions.size > n_target:
+            split_positions = np.random.RandomState(seed).permutation(split_positions)[
+                :n_target
+            ]
+        return np.asarray(split_positions, dtype=np.int64)
+
+    @staticmethod
+    def _geographic_split_pool_positions(
+        latlons: np.ndarray,
+        candidate_positions: np.ndarray,
+        split: str,
+        seed: int,
+        bin_size_deg: float = 5.0,
+        train_frac: float = 0.80,
+        valid_frac: float = 0.10,
+    ) -> np.ndarray:
+        """Assign candidates to geographic split buckets without sample caps."""
+        if latlons is None:
+            raise ValueError(
+                "Dataset has no latlon_distribution; geographic split is unavailable."
+            )
+        if split not in {"train", "valid", "val", "test"}:
             raise ValueError(f"Unsupported split for geographic strategy: {split}")
         if not (0.0 < train_frac < 1.0 and 0.0 < valid_frac < 1.0 - train_frac):
             raise ValueError(
@@ -249,9 +342,6 @@ class PretrainSubsetDataset(Dataset):
                 f"bin_size_deg or check latlon coverage."
             )
 
-        n_target = split_sizes[split]
-        if split_positions.size > n_target:
-            split_positions = bin_rng.permutation(split_positions)[:n_target]
         return np.asarray(split_positions, dtype=np.int64)
 
     @staticmethod
@@ -291,6 +381,217 @@ class PretrainSubsetDataset(Dataset):
                 f"train={train_samples}, valid={valid_samples}, test={test_samples}"
             )
         return selected.tolist()
+
+    @staticmethod
+    def _random_split_pool_positions(
+        candidate_positions: np.ndarray,
+        split: str,
+        seed: int,
+        train_frac: float = 0.80,
+        valid_frac: float = 0.10,
+    ) -> np.ndarray:
+        """Assign candidates to random split buckets without sample caps."""
+        if split not in {"train", "valid", "val", "test"}:
+            raise ValueError(f"Unsupported pretrain subset split: {split}")
+        if not (0.0 < train_frac < 1.0 and 0.0 < valid_frac < 1.0 - train_frac):
+            raise ValueError(
+                f"Invalid bucket fractions train={train_frac}, valid={valid_frac}"
+            )
+
+        shuffled = np.random.RandomState(seed).permutation(candidate_positions)
+        train_end = int(len(shuffled) * train_frac)
+        valid_end = train_end + int(len(shuffled) * valid_frac)
+        normalized_split = "valid" if split == "val" else split
+        split_to_slice = {
+            "train": slice(0, train_end),
+            "valid": slice(train_end, valid_end),
+            "test": slice(valid_end, len(shuffled)),
+        }
+        split_positions = shuffled[split_to_slice[normalized_split]]
+        if split_positions.size == 0:
+            raise ValueError(
+                f"Random split '{split}' produced no samples; total={len(shuffled)}"
+            )
+        return np.asarray(split_positions, dtype=np.int64)
+
+    @staticmethod
+    def _target_size_for_split(
+        split: str,
+        train_samples: int,
+        valid_samples: int,
+        test_samples: int,
+    ) -> int:
+        """Return the configured sample cap for a split name."""
+        split_sizes = {
+            "train": train_samples,
+            "valid": valid_samples,
+            "val": valid_samples,
+            "test": test_samples,
+        }
+        if split not in split_sizes:
+            raise ValueError(f"Unsupported pretrain subset split: {split}")
+        return split_sizes[split]
+
+    @staticmethod
+    def _regression_bin_edges(target_modality: str) -> np.ndarray:
+        """Fixed bins used to keep regression probes from overfocusing on easy modes."""
+        if target_modality == WRI_CANOPY_TARGET_MODALITY:
+            return np.asarray([0.0, 1.0, 5.0, 10.0, 20.0, 40.0], dtype=np.float32)
+        if target_modality == SRTM_TARGET_MODALITY:
+            return np.asarray([0.0, 250.0, 500.0, 1000.0, 1500.0, 2500.0], dtype=np.float32)
+        return np.asarray([], dtype=np.float32)
+
+    @staticmethod
+    def _label_balance_bins(label: torch.Tensor, target_modality: str) -> np.ndarray:
+        """Return class ids or regression-bin ids present in one target tile."""
+        if target_modality in (SRTM_TARGET_MODALITY, WRI_CANOPY_TARGET_MODALITY):
+            values = label.detach().cpu().float().numpy().reshape(-1)
+            values = values[np.isfinite(values)]
+            if values.size == 0:
+                return np.asarray([], dtype=np.int64)
+            edges = PretrainSubsetDataset._regression_bin_edges(target_modality)
+            return np.unique(np.digitize(values, edges, right=True)).astype(np.int64)
+
+        values = label.detach().cpu().long().numpy().reshape(-1)
+        values = values[values != SEGMENTATION_IGNORE_LABEL]
+        if values.size == 0:
+            return np.asarray([], dtype=np.int64)
+        return np.unique(values).astype(np.int64)
+
+    @staticmethod
+    def _select_balanced_positions(
+        candidate_positions: np.ndarray,
+        balance_bins_by_position: dict[int, np.ndarray],
+        target_size: int,
+        seed: int,
+    ) -> np.ndarray:
+        """Round-robin over label strata so rare classes/bins get selected."""
+        if candidate_positions.size <= target_size:
+            return np.asarray(candidate_positions, dtype=np.int64)
+
+        rng = np.random.RandomState(seed)
+        strata: dict[int, list[int]] = {}
+        for position in candidate_positions.tolist():
+            for bin_id in balance_bins_by_position.get(int(position), []):
+                strata.setdefault(int(bin_id), []).append(int(position))
+
+        if not strata:
+            return rng.permutation(candidate_positions)[:target_size].astype(np.int64)
+
+        for positions in strata.values():
+            rng.shuffle(positions)
+        strata_order = sorted(strata, key=lambda bin_id: (len(strata[bin_id]), bin_id))
+        cursors = {bin_id: 0 for bin_id in strata_order}
+        selected: list[int] = []
+        selected_set: set[int] = set()
+
+        while len(selected) < target_size:
+            made_progress = False
+            for bin_id in strata_order:
+                positions = strata[bin_id]
+                cursor = cursors[bin_id]
+                while cursor < len(positions) and positions[cursor] in selected_set:
+                    cursor += 1
+                cursors[bin_id] = cursor
+                if cursor >= len(positions):
+                    continue
+                position = positions[cursor]
+                selected.append(position)
+                selected_set.add(position)
+                cursors[bin_id] += 1
+                made_progress = True
+                if len(selected) == target_size:
+                    break
+            if not made_progress:
+                break
+
+        if len(selected) < target_size:
+            remaining = [
+                int(position)
+                for position in rng.permutation(candidate_positions).tolist()
+                if int(position) not in selected_set
+            ]
+            selected.extend(remaining[: target_size - len(selected)])
+
+        return np.asarray(selected, dtype=np.int64)
+
+    @staticmethod
+    def _cap_balance_candidates(
+        candidate_positions: np.ndarray,
+        target_size: int,
+        seed: int,
+    ) -> np.ndarray:
+        """Limit label reads while keeping a deterministic oversized candidate pool."""
+        max_candidates = min(
+            candidate_positions.size,
+            max(target_size, target_size * BALANCED_CANDIDATE_MULTIPLIER),
+        )
+        if candidate_positions.size <= max_candidates:
+            return candidate_positions
+        return np.random.RandomState(seed).permutation(candidate_positions)[
+            :max_candidates
+        ]
+
+    def _balanced_split_positions(
+        self,
+        candidate_positions: np.ndarray,
+        split: str,
+        seed: int,
+        train_samples: int,
+        valid_samples: int,
+        test_samples: int,
+        split_strategy: PretrainSplitStrategy,
+        geographic_bin_size_deg: float,
+    ) -> np.ndarray:
+        """Select a balanced capped subset within a random or geographic split pool."""
+        if self._label_dataset is None or self.target_modality is None:
+            raise RuntimeError("Balanced pretrain splits require a target modality")
+
+        if split_strategy == PretrainSplitStrategy.BALANCED_GEOGRAPHIC:
+            split_positions = self._geographic_split_pool_positions(
+                latlons=self._dataset.latlon_distribution,
+                candidate_positions=candidate_positions,
+                split=split,
+                seed=seed,
+                bin_size_deg=geographic_bin_size_deg,
+            )
+        else:
+            split_positions = self._random_split_pool_positions(
+                candidate_positions=candidate_positions,
+                split=split,
+                seed=seed,
+            )
+
+        target_size = self._target_size_for_split(
+            split=split,
+            train_samples=train_samples,
+            valid_samples=valid_samples,
+            test_samples=test_samples,
+        )
+        split_positions = self._cap_balance_candidates(
+            candidate_positions=split_positions,
+            target_size=target_size,
+            seed=seed,
+        )
+
+        balance_bins_by_position: dict[int, np.ndarray] = {}
+        for position in split_positions.tolist():
+            args = GetItemArgs(
+                idx=int(position),
+                patch_size=self.patch_size,
+                sampled_hw_p=self.hw_p,
+            )
+            label = self._get_label(args)
+            bins = self._label_balance_bins(label, self.target_modality)
+            if bins.size:
+                balance_bins_by_position[int(position)] = bins
+
+        return self._select_balanced_positions(
+            candidate_positions=split_positions,
+            balance_bins_by_position=balance_bins_by_position,
+            target_size=target_size,
+            seed=seed,
+        )
 
     @staticmethod
     def _squeeze_label(label: torch.Tensor) -> torch.Tensor:
