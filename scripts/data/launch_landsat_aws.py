@@ -594,9 +594,7 @@ def cmd_launch_sync(args: argparse.Namespace) -> None:
     _upsert_beaker_secret(WORKSPACE, secret_key, aws_key, dry_run=args.dry_run)
     _upsert_beaker_secret(WORKSPACE, secret_secret, aws_secret, dry_run=args.dry_run)
     if aws_token:
-        _upsert_beaker_secret(
-            WORKSPACE, secret_token, aws_token, dry_run=args.dry_run
-        )
+        _upsert_beaker_secret(WORKSPACE, secret_token, aws_token, dry_run=args.dry_run)
 
     max_prefix_idx = (args.total_windows - 1) // WINDOWS_PER_PREFIX
     all_prefixes = [f"{i:03d}" for i in range(max_prefix_idx + 1)]
@@ -682,11 +680,13 @@ def cmd_launch_sync(args: argparse.Namespace) -> None:
 
 
 def cmd_sync_worker(args: argparse.Namespace) -> None:
-    """Sync a set of corpus_NNN* prefixes from S3 to Weka using s5cmd.
+    """Copy a set of corpus_NNN* prefixes from S3 to Weka using s5cmd cp.
 
-    Runs inside each Beaker job. Installs s5cmd if missing, then runs
-    `s5cmd sync` once per prefix. s5cmd's `sync` is idempotent — re-running
-    skips files already present with matching size.
+    Runs inside each Beaker job. Uses `s5cmd cp --if-size-differ` instead of
+    `s5cmd sync`: sync has to enumerate the full source+destination listings
+    into memory to compute a diff, which OOMs on the 642K-window corpus.
+    cp streams object-by-object, and --if-size-differ keeps it idempotent
+    enough to resume partial runs without re-downloading matching files.
     """
     s5cmd_path = shutil.which("s5cmd")
     if not s5cmd_path:
@@ -706,7 +706,7 @@ def cmd_sync_worker(args: argparse.Namespace) -> None:
 
     for cp in args.corpus_prefixes:
         s3_pattern = f"s3://{bucket}/{prefix}/windows/res_10.0/corpus_{cp}*"
-        logger.info(f"[{cp}] syncing {s3_pattern} -> {dest}")
+        logger.info(f"[{cp}] copying {s3_pattern} -> {dest}")
         t0 = time.time()
         cmd = [
             s5cmd_path,
@@ -717,7 +717,8 @@ def cmd_sync_worker(args: argparse.Namespace) -> None:
             "--log",
             "info",
             "--stat",
-            "sync",
+            "cp",
+            "--if-size-differ",
             s3_pattern,
             dest,
         ]
@@ -725,12 +726,12 @@ def cmd_sync_worker(args: argparse.Namespace) -> None:
         elapsed = time.time() - t0
         if result.returncode != 0:
             raise SystemExit(
-                f"s5cmd sync failed for corpus_{cp}* (exit={result.returncode}, "
+                f"s5cmd cp failed for corpus_{cp}* (exit={result.returncode}, "
                 f"after {elapsed:.0f}s)"
             )
         logger.info(f"[{cp}] done in {elapsed:.0f}s")
 
-    logger.info(f"All {len(args.corpus_prefixes)} prefixes synced.")
+    logger.info(f"All {len(args.corpus_prefixes)} prefixes copied.")
 
 
 def _load_manifest(args: argparse.Namespace) -> dict:
