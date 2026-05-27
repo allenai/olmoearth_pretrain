@@ -137,6 +137,10 @@ class DownstreamTaskConfig:
     # latlon-bin holdouts so train/val/test are spatially disjoint.
     pretrain_split_strategy: str = "random"
     pretrain_geographic_bin_size_deg: float = 5.0
+    # Optional path to a .npy file of int sample indices. When set, the
+    # PretrainSubsetDataset uses these positions verbatim and skips the
+    # random/split/target-modality selection logic.
+    pretrain_filter_idx_file: str | None = None
 
 
 class DownstreamEvaluator:
@@ -206,6 +210,7 @@ class DownstreamEvaluator:
         self.pretrain_test_samples = task.pretrain_test_samples
         self.pretrain_split_strategy = task.pretrain_split_strategy
         self.pretrain_geographic_bin_size_deg = task.pretrain_geographic_bin_size_deg
+        self.pretrain_filter_idx_file = task.pretrain_filter_idx_file
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -302,6 +307,8 @@ class DownstreamEvaluator:
             extra_kwargs["pretrain_geographic_bin_size_deg"] = (
                 self.pretrain_geographic_bin_size_deg
             )
+            if self.pretrain_filter_idx_file is not None:
+                extra_kwargs["filter_idx_file"] = self.pretrain_filter_idx_file
         eval_ds = get_eval_dataset(
             eval_dataset=self.dataset,
             split=split,

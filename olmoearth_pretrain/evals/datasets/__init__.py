@@ -75,6 +75,7 @@ def get_eval_dataset(
             test_samples=kwargs.get("pretrain_test_samples", 512),
             split_strategy=kwargs.get("pretrain_split_strategy", "random"),
             geographic_bin_size_deg=kwargs.get("pretrain_geographic_bin_size_deg", 5.0),
+            filter_idx_file=kwargs.get("filter_idx_file"),
         )
     elif eval_dataset.startswith("m-"):
         # m- == "modified for geobench"

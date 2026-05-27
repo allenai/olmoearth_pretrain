@@ -631,6 +631,26 @@ TILING_DIAG_TASKS = {
     for px in (64, 128)
 }
 
+# Pinned subset of water-dominant samples (worldcover lc_frac_water >= 0.9), built
+# from the v0_1 osm-sampling scoring parquet via
+# ``scripts/data/build_worldcover_class_indices.py``. Low-variance scenes make
+# patch-grid tiling artifacts visually obvious in the PCA RGB output.
+WATER_INDEX_FILE = "/weka/dfive-default/henryh/helios/olmoearth_pretrain/water_p90_indices.npy"
+
+TILING_DIAG_TASKS["tiling_water_128px"] = DownstreamTaskConfig(
+    dataset="pretrain_subset_128",
+    embedding_batch_size=32,
+    num_workers=0,
+    pooling_type=PoolingType.MEAN,
+    eval_mode=EvalMode.TILING_DIAGNOSTICS,
+    eval_interval=Duration.epochs(1),
+    h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+    pretrain_max_samples=1000,
+    patch_size=4,
+    input_modalities=[Modality.SENTINEL2_L2A.name],
+    pretrain_filter_idx_file=WATER_INDEX_FILE,
+)
+
 FT_EVAL_TASKS = {
     "m_eurosat": DownstreamTaskConfig(
         dataset="m-eurosat",
