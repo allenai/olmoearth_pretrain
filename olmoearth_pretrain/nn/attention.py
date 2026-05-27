@@ -13,7 +13,11 @@ from torch.jit import Final
 from olmoearth_pretrain.nn.encodings import (
     apply_2d_rope,
     apply_2d_rope_mixed,
+    apply_3d_rope,
+    apply_3d_rope_mixed,
+    axial_3d_dim_split,
     init_2d_rope_mixed_freqs,
+    init_3d_rope_mixed_freqs,
 )
 
 try:
@@ -120,6 +124,9 @@ class Attention(nn.Module):
         rope_base: float = 10000.0,
         use_2d_rope_mixed: bool = False,
         rope_mixed_base: float = 10.0,
+        use_3d_rope: bool = False,
+        use_3d_rope_mixed: bool = False,
+        temporal_rope_dim_frac: float = 0.25,
     ) -> None:
         """Initialize the attention module.
 
@@ -136,14 +143,25 @@ class Attention(nn.Module):
             use_2d_rope: Apply axial 2D RoPE to queries and keys
             rope_base: RoPE frequency base (axial)
             use_2d_rope_mixed: Apply RoPE-Mixed (learnable 2D frequencies) to
-                queries and keys. Mutually exclusive with ``use_2d_rope``.
+                queries and keys. Mutually exclusive with the other RoPE flags.
             rope_mixed_base: Frequency base used to initialize the learnable
                 RoPE-Mixed frequencies.
+            use_3d_rope: Apply axial 3D RoPE (t, row, col) to queries and
+                keys. Mutually exclusive with the other RoPE flags.
+            use_3d_rope_mixed: Apply RoPE-Mixed (learnable 3D frequencies) to
+                queries and keys. Mutually exclusive with the other RoPE flags.
+            temporal_rope_dim_frac: Fraction of head_dim allocated to the
+                temporal chunk in axial 3D RoPE (default 0.25, matching the
+                additive 1/4 split used by absolute encodings).
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
-        if use_2d_rope and use_2d_rope_mixed:
-            raise ValueError("Cannot enable both axial 2D RoPE and RoPE-Mixed")
+        rope_flags = (use_2d_rope, use_2d_rope_mixed, use_3d_rope, use_3d_rope_mixed)
+        if sum(rope_flags) > 1:
+            raise ValueError(
+                "At most one of use_2d_rope, use_2d_rope_mixed, use_3d_rope, "
+                "use_3d_rope_mixed may be enabled"
+            )
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         if use_2d_rope and self.head_dim % 4 != 0:
@@ -154,6 +172,13 @@ class Attention(nn.Module):
             raise ValueError(
                 f"RoPE-Mixed requires head_dim divisible by 4, got {self.head_dim}"
             )
+        if use_3d_rope:
+            # Validate the split is feasible at construction time.
+            axial_3d_dim_split(self.head_dim, temporal_rope_dim_frac)
+        if use_3d_rope_mixed and self.head_dim % 4 != 0:
+            raise ValueError(
+                f"3D RoPE-Mixed requires head_dim divisible by 4, got {self.head_dim}"
+            )
         self.scale = self.head_dim**-0.5
 
         self.cross_attn = cross_attn
@@ -162,9 +187,20 @@ class Attention(nn.Module):
         self.rope_base = rope_base
         self.use_2d_rope_mixed = use_2d_rope_mixed
         self.rope_mixed_base = rope_mixed_base
+        self.use_3d_rope = use_3d_rope
+        self.use_3d_rope_mixed = use_3d_rope_mixed
+        self.temporal_rope_dim_frac = temporal_rope_dim_frac
         if use_2d_rope_mixed:
             self.rope_mixed_freqs = nn.Parameter(
                 init_2d_rope_mixed_freqs(
+                    head_dim=self.head_dim,
+                    num_heads=self.num_heads,
+                    base=self.rope_mixed_base,
+                )
+            )
+        if use_3d_rope_mixed:
+            self.rope_mixed_freqs = nn.Parameter(
+                init_3d_rope_mixed_freqs(
                     head_dim=self.head_dim,
                     num_heads=self.num_heads,
                     base=self.rope_mixed_base,
@@ -309,22 +345,44 @@ class Attention(nn.Module):
         # logger.info(f"q shape: {q.shape} k shape: {k.shape} v shape: {v.shape}")
 
         q, k = self.q_norm(q), self.k_norm(k)
-        if self.use_2d_rope or self.use_2d_rope_mixed:
+        rope_active = (
+            self.use_2d_rope
+            or self.use_2d_rope_mixed
+            or self.use_3d_rope
+            or self.use_3d_rope_mixed
+        )
+        if rope_active:
             if rope_positions is None:
                 raise ValueError(
-                    "rope_positions must be provided when 2D RoPE is enabled"
+                    "rope_positions must be provided when RoPE is enabled"
                 )
             k_positions = rope_positions if y is None else rope_positions_y
             if k_positions is None:
                 raise ValueError(
-                    "rope_positions_y must be provided for cross attention with 2D RoPE"
+                    "rope_positions_y must be provided for cross attention with RoPE"
                 )
             if self.use_2d_rope:
                 q = apply_2d_rope(q, rope_positions, base=self.rope_base)
                 k = apply_2d_rope(k, k_positions, base=self.rope_base)
-            else:
+            elif self.use_2d_rope_mixed:
                 q = apply_2d_rope_mixed(q, rope_positions, self.rope_mixed_freqs)
                 k = apply_2d_rope_mixed(k, k_positions, self.rope_mixed_freqs)
+            elif self.use_3d_rope:
+                q = apply_3d_rope(
+                    q,
+                    rope_positions,
+                    base=self.rope_base,
+                    temporal_dim_frac=self.temporal_rope_dim_frac,
+                )
+                k = apply_3d_rope(
+                    k,
+                    k_positions,
+                    base=self.rope_base,
+                    temporal_dim_frac=self.temporal_rope_dim_frac,
+                )
+            else:
+                q = apply_3d_rope_mixed(q, rope_positions, self.rope_mixed_freqs)
+                k = apply_3d_rope_mixed(k, k_positions, self.rope_mixed_freqs)
         x = self.sdpa(
             q,
             k,
@@ -517,6 +575,9 @@ class Block(nn.Module):
         rope_base: float = 10000.0,
         use_2d_rope_mixed: bool = False,
         rope_mixed_base: float = 10.0,
+        use_3d_rope: bool = False,
+        use_3d_rope_mixed: bool = False,
+        temporal_rope_dim_frac: float = 0.25,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -538,6 +599,10 @@ class Block(nn.Module):
             rope_base: RoPE frequency base (axial)
             use_2d_rope_mixed: Apply RoPE-Mixed to attention queries and keys.
             rope_mixed_base: Frequency base for RoPE-Mixed initialization.
+            use_3d_rope: Apply axial 3D RoPE (t, row, col) to queries and keys.
+            use_3d_rope_mixed: Apply RoPE-Mixed (learnable 3D frequencies).
+            temporal_rope_dim_frac: Fraction of head_dim allocated to the
+                temporal chunk in axial 3D RoPE.
         """
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -555,6 +620,9 @@ class Block(nn.Module):
             rope_base=rope_base,
             use_2d_rope_mixed=use_2d_rope_mixed,
             rope_mixed_base=rope_mixed_base,
+            use_3d_rope=use_3d_rope,
+            use_3d_rope_mixed=use_3d_rope_mixed,
+            temporal_rope_dim_frac=temporal_rope_dim_frac,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()

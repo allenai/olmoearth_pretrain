@@ -24,6 +24,7 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
+    axial_3d_dim_split,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
@@ -38,7 +39,17 @@ from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
 logger = logging.getLogger(__name__)
 
-SPATIAL_POS_ENCODING_TYPES = ("absolute", "rope", "rope_mixed", "none")
+SPATIAL_POS_ENCODING_TYPES = (
+    "absolute",
+    "rope",
+    "rope_mixed",
+    "rope_3d",
+    "rope_3d_mixed",
+    "none",
+)
+ROPE_2D_ENCODING_TYPES = ("rope", "rope_mixed")
+ROPE_3D_ENCODING_TYPES = ("rope_3d", "rope_3d_mixed")
+ROPE_ENCODING_TYPES = ROPE_2D_ENCODING_TYPES + ROPE_3D_ENCODING_TYPES
 
 
 def get_modalities_to_process(
@@ -821,11 +832,16 @@ class CompositeEncodings(nn.Module):
             modality_embed[..., :n] += channel_embed
 
         if modality.is_multitemporal and use_temporal_encodings:
-            # Time position encodings
-            time_embed = repeat(self.pos_embed[:t], f"t d -> {ein_string}", **ein_dict)
-            modality_embed[..., n : n * 2] += time_embed.to(device)
+            # Slot-index temporal encoding (additive). Skipped when 3D RoPE
+            # handles temporal position rotationally inside attention.
+            if self.spatial_pos_encoding not in ROPE_3D_ENCODING_TYPES:
+                time_embed = repeat(
+                    self.pos_embed[:t], f"t d -> {ein_string}", **ein_dict
+                )
+                modality_embed[..., n : n * 2] += time_embed.to(device)
 
-            # Month encodings
+            # Month encodings stay additive in all modes (calendar/seasonal
+            # signal is orthogonal to slot-index).
             assert timestamps is not None
             months = timestamps[:, :, 1]
             month_embed = self.month_embed(months)
@@ -906,6 +922,7 @@ class FlexiVitBase(nn.Module):
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
+        temporal_rope_dim_frac: float = 0.25,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -922,6 +939,10 @@ class FlexiVitBase(nn.Module):
             )
         if rope_mixed_base <= 0:
             raise ValueError(f"rope_mixed_base must be positive, got {rope_mixed_base}")
+        if not 0.0 < temporal_rope_dim_frac < 1.0:
+            raise ValueError(
+                f"temporal_rope_dim_frac must be in (0, 1), got {temporal_rope_dim_frac}"
+            )
 
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
@@ -936,6 +957,7 @@ class FlexiVitBase(nn.Module):
         self.rope_base = rope_base
         self.rope_coordinate_scale = rope_coordinate_scale
         self.rope_mixed_base = rope_mixed_base
+        self.temporal_rope_dim_frac = temporal_rope_dim_frac
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
         self.blocks = nn.ModuleList(
@@ -954,6 +976,9 @@ class FlexiVitBase(nn.Module):
                     rope_base=self.rope_base,
                     use_2d_rope_mixed=self.spatial_pos_encoding == "rope_mixed",
                     rope_mixed_base=self.rope_mixed_base,
+                    use_3d_rope=self.spatial_pos_encoding == "rope_3d",
+                    use_3d_rope_mixed=self.spatial_pos_encoding == "rope_3d_mixed",
+                    temporal_rope_dim_frac=self.temporal_rope_dim_frac,
                 )
                 for _ in range(depth)
             ]
@@ -1024,9 +1049,17 @@ class FlexiVitBase(nn.Module):
         patch_size: int,
         input_res: int,
     ) -> Tensor | None:
-        """Build per-token spatial coordinates for 2D RoPE / RoPE-Mixed."""
-        if self.spatial_pos_encoding not in ("rope", "rope_mixed"):
+        """Build per-token coordinates for RoPE.
+
+        Returns ``[B, N, 2]`` ``(row, col)`` for 2D RoPE modes and
+        ``[B, N, 3]`` ``(t, row, col)`` for 3D RoPE modes. ``None`` for any
+        non-RoPE encoding (the additive paths consume raw indices, not
+        per-token position tensors).
+        """
+        if self.spatial_pos_encoding not in ROPE_ENCODING_TYPES:
             return None
+        is_3d = self.spatial_pos_encoding in ROPE_3D_ENCODING_TYPES
+        coord_dim = 3 if is_3d else 2
 
         position_dict = {}
         available_modalities = return_modalities_from_dict(tokens_only_dict)
@@ -1040,43 +1073,102 @@ class FlexiVitBase(nn.Module):
         for modality_name in modalities_to_process:
             tokens = tokens_only_dict[modality_name]
             modality = Modality.get(modality_name)
-            position_shape = (*tokens.shape[:-1], 2)
-            if not modality.is_spatial:
-                position_dict[modality_name] = torch.zeros(
-                    position_shape,
-                    dtype=torch.float32,
-                    device=tokens.device,
-                )
+            position_shape = (*tokens.shape[:-1], coord_dim)
+            device = tokens.device
+
+            # Default: zeros. Each branch below fills in the coordinate axes
+            # that apply to the modality's token rank.
+            positions = torch.zeros(
+                position_shape, dtype=torch.float32, device=device
+            )
+
+            spatial_active = modality.is_spatial
+            temporal_active = is_3d  # only 3D modes consume the t axis
+
+            if not spatial_active and not temporal_active:
+                position_dict[modality_name] = positions
                 continue
 
-            if tokens.ndim not in (5, 6):
-                raise ValueError(
-                    f"Expected spatial tokens for {modality_name} to have 5 or 6 "
-                    f"dimensions, got {tokens.shape}"
+            # Build optional spatial grid (in patch coords scaled by GSD).
+            grid_row = grid_col = None
+            if spatial_active and tokens.ndim in (5, 6):
+                b, h, w = tokens.shape[:3]
+                grid_row = (
+                    torch.arange(h, device=device, dtype=torch.float32) * gsd_ratio
+                )
+                grid_col = (
+                    torch.arange(w, device=device, dtype=torch.float32) * gsd_ratio
                 )
 
-            b, h, w = tokens.shape[:3]
-            grid_row = torch.arange(h, device=tokens.device, dtype=torch.float32)
-            grid_col = torch.arange(w, device=tokens.device, dtype=torch.float32)
-            grid_row, grid_col = torch.meshgrid(grid_row, grid_col, indexing="ij")
-            grid = torch.stack([grid_row, grid_col], dim=-1) * gsd_ratio
+            if not is_3d:
+                # 2D RoPE — only spatial modalities populate; mirrors prior
+                # behavior. Non-spatial keep zero positions.
+                if not spatial_active:
+                    position_dict[modality_name] = positions
+                    continue
+                if tokens.ndim not in (5, 6):
+                    raise ValueError(
+                        f"Expected spatial tokens for {modality_name} to have 5 "
+                        f"or 6 dimensions, got {tokens.shape}"
+                    )
+                row_g, col_g = torch.meshgrid(grid_row, grid_col, indexing="ij")
+                grid = torch.stack([row_g, col_g], dim=-1)
+                if tokens.ndim == 5:
+                    bandsets = tokens.shape[3]
+                    positions = repeat(
+                        grid, "h w p -> b h w b_s p", b=b, b_s=bandsets
+                    )
+                else:
+                    timesteps, bandsets = tokens.shape[3], tokens.shape[4]
+                    positions = repeat(
+                        grid,
+                        "h w p -> b h w t b_s p",
+                        b=b,
+                        t=timesteps,
+                        b_s=bandsets,
+                    )
+                position_dict[modality_name] = positions
+                continue
 
-            if tokens.ndim == 5:
-                bandsets = tokens.shape[3]
-                positions = repeat(
-                    grid,
-                    "h w p -> b h w b_s p",
-                    b=b,
-                    b_s=bandsets,
+            # 3D RoPE: emit (t, row, col) coordinates per token.
+            if tokens.ndim == 3:
+                # (b, b_s, d): static modality. All zeros.
+                pass
+            elif tokens.ndim == 4:
+                # (b, t, b_s, d): temporal-only modality.
+                b_, t_, bs_, _ = tokens.shape
+                t_grid = torch.arange(t_, device=device, dtype=torch.float32)
+                positions[..., 0] = repeat(
+                    t_grid, "t -> b t b_s", b=b_, b_s=bs_
+                )
+            elif tokens.ndim == 5:
+                # (b, h, w, b_s, d): spatial-only multitemporal-static.
+                row_g, col_g = torch.meshgrid(grid_row, grid_col, indexing="ij")
+                bs_ = tokens.shape[3]
+                positions[..., 1] = repeat(
+                    row_g, "h w -> b h w b_s", b=b, b_s=bs_
+                )
+                positions[..., 2] = repeat(
+                    col_g, "h w -> b h w b_s", b=b, b_s=bs_
+                )
+            elif tokens.ndim == 6:
+                # (b, h, w, t, b_s, d): full spatiotemporal.
+                row_g, col_g = torch.meshgrid(grid_row, grid_col, indexing="ij")
+                t_ = tokens.shape[3]
+                bs_ = tokens.shape[4]
+                t_grid = torch.arange(t_, device=device, dtype=torch.float32)
+                positions[..., 0] = repeat(
+                    t_grid, "t -> b h w t b_s", b=b, h=tokens.shape[1], w=tokens.shape[2], b_s=bs_
+                )
+                positions[..., 1] = repeat(
+                    row_g, "h w -> b h w t b_s", b=b, t=t_, b_s=bs_
+                )
+                positions[..., 2] = repeat(
+                    col_g, "h w -> b h w t b_s", b=b, t=t_, b_s=bs_
                 )
             else:
-                timesteps, bandsets = tokens.shape[3], tokens.shape[4]
-                positions = repeat(
-                    grid,
-                    "h w p -> b h w t b_s p",
-                    b=b,
-                    t=timesteps,
-                    b_s=bandsets,
+                raise ValueError(
+                    f"Unsupported tokens shape for {modality_name}: {tokens.shape}"
                 )
             position_dict[modality_name] = positions
 
@@ -1260,6 +1352,7 @@ class Encoder(FlexiVitBase):
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
+        temporal_rope_dim_frac: float = 0.25,
     ):
         """Initialize the encoder.
 
@@ -1329,6 +1422,7 @@ class Encoder(FlexiVitBase):
             rope_base=rope_base,
             rope_coordinate_scale=rope_coordinate_scale,
             rope_mixed_base=rope_mixed_base,
+            temporal_rope_dim_frac=temporal_rope_dim_frac,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1877,6 +1971,7 @@ class PredictorBase(FlexiVitBase):
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
+        temporal_rope_dim_frac: float = 0.25,
     ):
         """Initialize the predictor.
 
@@ -1920,6 +2015,7 @@ class PredictorBase(FlexiVitBase):
             rope_base=rope_base,
             rope_coordinate_scale=rope_coordinate_scale,
             rope_mixed_base=rope_mixed_base,
+            temporal_rope_dim_frac=temporal_rope_dim_frac,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -2318,6 +2414,7 @@ class EncoderConfig(Config):
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
     rope_mixed_base: float = 10.0
+    temporal_rope_dim_frac: float = 0.25
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2358,13 +2455,25 @@ class EncoderConfig(Config):
             raise ValueError(
                 f"rope_mixed_base must be positive, got {self.rope_mixed_base}"
             )
+        if not 0.0 < self.temporal_rope_dim_frac < 1.0:
+            raise ValueError(
+                f"temporal_rope_dim_frac must be in (0, 1), got "
+                f"{self.temporal_rope_dim_frac}"
+            )
+        head_dim = self.embedding_size // self.num_heads
         if self.spatial_pos_encoding in ("rope", "rope_mixed"):
-            head_dim = self.embedding_size // self.num_heads
             if head_dim % 4 != 0:
                 raise ValueError(
                     f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "
                     f"got {head_dim}"
                 )
+        if self.spatial_pos_encoding == "rope_3d":
+            # Validates that head_dim splits cleanly into (d_t, d_x, d_y).
+            axial_3d_dim_split(head_dim, self.temporal_rope_dim_frac)
+        if self.spatial_pos_encoding == "rope_3d_mixed" and head_dim % 4 != 0:
+            raise ValueError(
+                f"3D RoPE-Mixed requires head_dim divisible by 4, got {head_dim}"
+            )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -2404,6 +2513,7 @@ class PredictorConfig(Config):
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
     rope_mixed_base: float = 10.0
+    temporal_rope_dim_frac: float = 0.25
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2435,13 +2545,24 @@ class PredictorConfig(Config):
             raise ValueError(
                 f"rope_mixed_base must be positive, got {self.rope_mixed_base}"
             )
+        if not 0.0 < self.temporal_rope_dim_frac < 1.0:
+            raise ValueError(
+                f"temporal_rope_dim_frac must be in (0, 1), got "
+                f"{self.temporal_rope_dim_frac}"
+            )
+        head_dim = self.decoder_embedding_size // self.num_heads
         if self.spatial_pos_encoding in ("rope", "rope_mixed"):
-            head_dim = self.decoder_embedding_size // self.num_heads
             if head_dim % 4 != 0:
                 raise ValueError(
                     f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "
                     f"got {head_dim}"
                 )
+        if self.spatial_pos_encoding == "rope_3d":
+            axial_3d_dim_split(head_dim, self.temporal_rope_dim_frac)
+        if self.spatial_pos_encoding == "rope_3d_mixed" and head_dim % 4 != 0:
+            raise ValueError(
+                f"3D RoPE-Mixed requires head_dim divisible by 4, got {head_dim}"
+            )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
