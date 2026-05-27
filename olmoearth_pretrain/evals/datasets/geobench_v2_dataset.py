@@ -174,9 +174,17 @@ def _sample_to_olmoearth(
         )
 
     if slug == "kuro_siwo":
-        # Use only post-event SAR (matching GeoBench2 reference evaluation);
-        # convert linear power → dB to match OlmoEarth pretraining scale.
-        s1 = _bchw_to_hwtc(_to_db(sample["image_post"].float()))  # (H, W, 1, C)
+        # Stack pre_1, pre_2, post as 3 SAR timesteps; convert linear power → dB.
+        s1 = _bchw_to_hwtc(
+            torch.stack(
+                [
+                    _to_db(sample["image_pre_1"].float()),
+                    _to_db(sample["image_pre_2"].float()),
+                    _to_db(sample["image_post"].float()),
+                ],
+                dim=1,
+            )
+        )  # (C=2, T=3, H, W) → (H, W, 3, C)
         dem = _bchw_to_hwtc(sample["image_dem"].float())
         t = max(s1.shape[2], dem.shape[2])
         return OlmoEarthSample(
