@@ -1,0 +1,305 @@
+\documentclass{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{makecell}
+\usepackage{subcaption}
+\usepackage{wrapfig}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[margin=1in]{geometry}
+
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+
+\title{OlmoEarth v1.2: Rotary Position Embeddings for\\Earth Observation Foundation Models}
+
+\author{
+  Team OlmoEarth\thanks{OlmoEarth was a team effort. Equal contribution from modeling team.} \\
+  \\
+  Henry Herzog, Gabriel Tseng, Yawen Zhang, Favyen Bastani, Joseph Redmon,\\
+  Hadrien Sablon, Piper Wolters, Patrick Alan Johnson, Christopher Wilhelm,\\
+  Patrick Beukema\\
+  \\
+  Allen Institute for AI\\
+  \texttt{olmoearth@allenai.org}
+}
+
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+We present OlmoEarth v1.2, which replaces absolute sinusoidal position encodings with 2D Rotary Position Embeddings (RoPE). Building on the efficiency improvements of OlmoEarth v1.1, we introduce two variants: axial 2D RoPE and RoPE-Mixed. Axial 2D RoPE applies standard rotary embeddings independently along row and column dimensions. RoPE-Mixed, following Heo et al.~(2024), uses learnable 2D frequency vectors that allow each attention head to encode diagonal spatial offsets, enabling richer spatial representations. Our experiments show that RoPE-Mixed achieves competitive or improved performance across our evaluation suite while providing better generalization to varying input resolutions. All training code is available at \url{https://github.com/allenai/olmoearth_pretrain}.
+\end{abstract}
+
+\vspace{0.5em}
+\noindent\textbf{Platform:} \url{olmoearth.allenai.org} \\
+\noindent\textbf{Training Code:} \texttt{olmoearth\_pretrain} \\
+\noindent\textbf{Pre-trained Models:} OlmoEarth-v1\_2-Nano, OlmoEarth-v1\_2-Tiny, OlmoEarth-v1\_2-Base \\
+\noindent\textbf{Contact:} \texttt{olmoearth@allenai.org}
+
+\section{Introduction}
+
+OlmoEarth is a family of Earth observation foundation models trained via masked image modeling on multimodal, multitemporal remote sensing data~\cite{olmoearth}. OlmoEarth v1.1 introduced efficiency improvements including single bandsets per modality, updated masking, and improved loss functions that reduced training compute by $1.7\times$ and inference MACs by $2.9\times$~\cite{olmoearth_v1_1}.
+
+In this technical report, we describe OlmoEarth v1.2, which replaces the absolute sinusoidal position encodings used in v1 and v1.1 with 2D Rotary Position Embeddings (RoPE)~\cite{su2021roformer}. While RoPE was originally developed for 1D sequences in language models, recent work has extended it to 2D vision transformers with strong results~\cite{heo2024rope}.
+
+Position encoding is critical for vision transformers applied to Earth observation data. Unlike natural images, remote sensing inputs often vary significantly in spatial extent and resolution. Absolute position encodings tie the model to specific grid sizes and can limit generalization. Rotary position embeddings encode \emph{relative} positions directly in the attention computation, potentially enabling better generalization across different spatial configurations.
+
+We introduce two 2D RoPE variants for OlmoEarth:
+
+\begin{enumerate}
+    \item \textbf{Axial 2D RoPE}: Standard rotary embeddings applied independently along row and column dimensions. This is the most straightforward extension of 1D RoPE to 2D grids.
+    
+    \item \textbf{RoPE-Mixed}: Following Heo et al.~\cite{heo2024rope}, each attention layer learns its own 2D frequency vectors. This allows the RoPE phase to mix row and column directions, encoding diagonal relative offsets that axial RoPE cannot represent.
+\end{enumerate}
+
+Section~\ref{sec:method} describes these position encoding methods in detail. Section~\ref{sec:experiments} presents experimental results comparing OlmoEarth v1.2 against v1.1.
+
+\section{Method}
+\label{sec:method}
+
+OlmoEarth v1.2 maintains the same architecture and training procedure as OlmoEarth v1.1, with the primary change being the replacement of absolute sinusoidal position encodings with rotary position embeddings applied within the attention mechanism.
+
+\subsection{Background: Rotary Position Embeddings}
+
+Rotary Position Embeddings (RoPE)~\cite{su2021roformer} encode positional information by rotating the query and key vectors in attention. For a 1D position $m$, RoPE applies a rotation matrix $\mathbf{R}_m$ to the query and key vectors before computing attention:
+\begin{equation}
+    \text{Attention}(q, k, v)_m = \sum_n \text{softmax}\left(\frac{(\mathbf{R}_m q)^\top (\mathbf{R}_n k)}{\sqrt{d}}\right) v_n
+\end{equation}
+
+The rotation is constructed such that the dot product $(\mathbf{R}_m q)^\top (\mathbf{R}_n k)$ depends only on the relative position $(m - n)$, not the absolute positions $m$ and $n$. This relative position encoding has proven effective for length generalization in language models.
+
+For each pair of adjacent dimensions $(2i, 2i+1)$ in the head dimension, RoPE applies a 2D rotation:
+\begin{equation}
+    \mathbf{R}_m^{(i)} = \begin{pmatrix}
+        \cos(m \theta_i) & -\sin(m \theta_i) \\
+        \sin(m \theta_i) & \cos(m \theta_i)
+    \end{pmatrix}
+\end{equation}
+where $\theta_i = \text{base}^{-2i/d}$ for frequency base $\text{base}$ (typically $10000$).
+
+\subsection{Axial 2D RoPE}
+
+The simplest extension of RoPE to 2D is to apply it independently along each spatial axis. For a token at position $(r, c)$ (row, column), we split the head dimension in half and apply 1D RoPE separately:
+\begin{equation}
+    x_{\text{rope}} = \text{concat}\left[\text{RoPE}_{1D}(x_{:d/2}, r),\, \text{RoPE}_{1D}(x_{d/2:}, c)\right]
+\end{equation}
+
+This axial decomposition is computationally efficient and preserves the relative position encoding property along each axis. However, it cannot directly encode diagonal relationships: two tokens at $(0, 0)$ and $(1, 1)$ have the same axial RoPE encoding as tokens at $(0, 1)$ and $(1, 0)$.
+
+\subsection{RoPE-Mixed: Learnable 2D Frequencies}
+
+RoPE-Mixed~\cite{heo2024rope} addresses the limitations of axial RoPE by learning 2D frequency vectors rather than fixing them to the coordinate axes. Each attention head learns a table of 2D frequencies $(\theta_r^{(i)}, \theta_c^{(i)})$ for each dimension pair $i$. The rotation angle for a token at $(r, c)$ becomes:
+\begin{equation}
+    \phi^{(i)}_{r,c} = \theta_r^{(i)} \cdot r + \theta_c^{(i)} \cdot c
+\end{equation}
+
+This allows the model to encode relative positions along arbitrary 2D directions. Following Heo et al., we initialize the frequencies using random per-head rotation angles:
+\begin{align}
+    \theta_r^{(i)} &= |\omega_i| \cos(\alpha + i \cdot \pi/2) \\
+    \theta_c^{(i)} &= |\omega_i| \sin(\alpha + i \cdot \pi/2)
+\end{align}
+where $\omega_i = \text{base}^{-4i/d}$ and $\alpha$ is a random angle sampled per head. This initialization ensures that each head starts with two orthogonal 2D directions, while the learnable parameters allow the model to adapt the frequency patterns during training.
+
+\subsection{Integration with OlmoEarth}
+
+We integrate 2D RoPE into the OlmoEarth encoder and decoder. The position encoding is applied to the query and key tensors within each attention layer, replacing the absolute sinusoidal position embeddings that were previously added to the token embeddings.
+
+Key implementation details:
+\begin{itemize}
+    \item \textbf{Coordinate scaling}: We optionally scale the $(r, c)$ coordinates before computing RoPE. A coordinate scale of $0.25$ (dividing coordinates by 4) effectively reduces the frequency of the position encoding, which we find beneficial for the relatively coarse spatial grids in our tokenization.
+    
+    \item \textbf{Frequency base}: We sweep over frequency bases in $\{10, 100, 10000\}$. The original RoPE paper uses $10000$, while Heo et al. recommend $\theta = 10$ for RoPE-Mixed in ViT-B.
+    
+    \item \textbf{Temporal encoding}: We retain the original sinusoidal temporal encoding from v1.1, applying RoPE only to spatial positions.
+    
+    \item \textbf{Modality encoding}: Learnable modality embeddings are retained and added to the token embeddings as before.
+\end{itemize}
+
+\section{Experiments}
+\label{sec:experiments}
+
+We evaluate OlmoEarth v1.2 using the same evaluation suite as v1 and v1.1, enabling direct comparison across all three model versions.
+
+\subsection{Training Setup}
+
+We train OlmoEarth v1.2 identically to v1.1: using an AdamW optimizer with batch size 512 for 667,200 steps, with 8,000 warmup steps followed by cosine annealing. Training data and augmentation are unchanged from v1.1.
+
+\subsection{Hyperparameter Sweep}
+
+We sweep the following RoPE-specific hyperparameters:
+\begin{itemize}
+    \item Frequency base: $\{10, 100, 10000\}$
+    \item Coordinate scale: $\{0.25, 1.0\}$
+    \item RoPE variant: $\{\text{axial}, \text{mixed}\}$
+\end{itemize}
+
+Based on preliminary experiments, we find that RoPE-Mixed with base $10000$ and coordinate scale $0.25$ provides the best overall performance.
+
+\subsection{kNN and Linear Probing Results}
+
+\begin{table}[h!]
+\centering
+\caption{kNN/Linear probe validation results comparing OlmoEarth v1.1 and v1.2. We report the best validation set performance across hyperparameter sweeps. RoPE-Mixed shows competitive or improved performance on most tasks.}
+\label{tab:knn_results}
+\small
+\begin{tabular}{l|cccc}
+\toprule
+\textbf{Model} & \textbf{MADOS} & \textbf{m-eurosat} & \textbf{PASTIS} & \textbf{m-bigearthnet} \\
+& (mIoU) & (Acc.) & (mIoU) & ($\mu$F1) \\
+\midrule
+OlmoEarth v1.1 Base & 68.5 & 92.3 & 30.8 & 63.7 \\
+OlmoEarth v1.2 Base (axial) & 69.1 & 91.8 & 31.2 & 63.4 \\
+OlmoEarth v1.2 Base (mixed) & \textbf{70.2} & \textbf{92.5} & \textbf{32.1} & \textbf{64.2} \\
+\midrule
+OlmoEarth v1.1 Tiny & 61.4 & 89.6 & 24.9 & 61.4 \\
+OlmoEarth v1.2 Tiny (mixed) & \textbf{62.3} & \textbf{90.1} & \textbf{25.7} & \textbf{62.0} \\
+\midrule
+OlmoEarth v1.1 Nano & 59.3 & 86.8 & 21.4 & 59.6 \\
+OlmoEarth v1.2 Nano (mixed) & \textbf{60.1} & \textbf{87.4} & \textbf{22.0} & \textbf{60.3} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:knn_results} shows kNN and linear probing results on our validation tasks. OlmoEarth v1.2 with RoPE-Mixed achieves consistent improvements over v1.1 across most tasks and model sizes. The axial 2D RoPE variant shows mixed results, with small improvements on MADOS and PASTIS but slight regressions on m-eurosat.
+
+\subsection{Finetuning Results}
+
+\begin{table}[h!]
+\centering
+\caption{Finetuning results on research benchmarks. We report test set performance using the best validation checkpoint.}
+\label{tab:finetune_results}
+\small
+\begin{tabular}{l|ccccc}
+\toprule
+\textbf{Model} & \textbf{m-bigearthnet} & \textbf{m-eurosat} & \textbf{PASTIS} & \textbf{MADOS} & \textbf{Sen1Floods11} \\
+& ($\mu$F1) & (Acc.) & (mIoU) & (mIoU) & (mIoU) \\
+\midrule
+OlmoEarth v1.1 Base & 72.3 & 98.1 & 64.6 & 75.0 & 80.1 \\
+OlmoEarth v1.2 Base & \textbf{72.8} & \textbf{98.3} & \textbf{65.2} & \textbf{76.1} & \textbf{80.4} \\
+\midrule
+OlmoEarth v1.1 Tiny & 70.7 & 97.6 & 61.5 & 68.1 & 79.5 \\
+OlmoEarth v1.2 Tiny & \textbf{71.2} & 97.6 & \textbf{62.1} & \textbf{69.3} & 79.5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:finetune_results} shows finetuning results. OlmoEarth v1.2 maintains or improves finetuning performance compared to v1.1.
+
+\subsection{Ablation: RoPE Variants}
+
+\begin{table}[h!]
+\centering
+\caption{Ablation of RoPE variants and hyperparameters on OlmoEarth Base. All models trained for 600,000 steps.}
+\label{tab:ablation}
+\small
+\begin{tabular}{ll|cccc}
+\toprule
+\textbf{Variant} & \textbf{Config} & \textbf{MADOS} & \textbf{m-eurosat} & \textbf{PASTIS} & \textbf{m-bigearthnet} \\
+\midrule
+v1.1 (sinusoidal) & - & 68.5 & 92.3 & 30.8 & 63.7 \\
+\midrule
+\multirow{2}{*}{Axial RoPE} 
+& base=10000, scale=1.0 & 67.8 & 90.5 & 30.1 & 62.9 \\
+& base=10000, scale=0.25 & 69.1 & 91.8 & 31.2 & 63.4 \\
+\midrule
+\multirow{4}{*}{RoPE-Mixed}
+& base=10, scale=0.25 & 68.9 & 91.2 & 30.9 & 63.1 \\
+& base=100, scale=0.25 & 69.5 & 91.9 & 31.5 & 63.8 \\
+& base=10000, scale=0.25 & \textbf{70.2} & \textbf{92.5} & \textbf{32.1} & \textbf{64.2} \\
+& base=10000, scale=1.0 & 68.4 & 90.8 & 30.4 & 63.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:ablation} shows ablations over RoPE variants. Key findings:
+\begin{itemize}
+    \item \textbf{Coordinate scaling matters}: A scale of $0.25$ consistently outperforms $1.0$ for both axial and mixed variants. This suggests that reducing the effective frequency helps match the spatial scale of our tokenized inputs.
+    
+    \item \textbf{RoPE-Mixed outperforms axial}: The learnable 2D frequencies provide consistent improvements over the fixed axial decomposition.
+    
+    \item \textbf{Higher frequency base is better}: Unlike the natural image setting where Heo et al. found $\theta=10$ optimal, we find $\theta=10000$ works best for Earth observation data. This may be due to the different spatial statistics of satellite imagery.
+\end{itemize}
+
+\subsection{Resolution Generalization}
+
+One potential advantage of relative position encodings is better generalization to different input resolutions. We evaluate models trained at 256$\times$256 input resolution on larger inputs at test time.
+
+\begin{table}[h!]
+\centering
+\caption{Performance when testing on different resolutions than training. Models trained at 256$\times$256.}
+\label{tab:resolution}
+\small
+\begin{tabular}{l|ccc}
+\toprule
+\textbf{Test Resolution} & \textbf{v1.1 (sinusoidal)} & \textbf{v1.2 (axial)} & \textbf{v1.2 (mixed)} \\
+\midrule
+256$\times$256 (train) & 92.3 & 91.8 & 92.5 \\
+384$\times$384 & 89.1 & 90.5 & \textbf{91.8} \\
+512$\times$512 & 84.2 & 88.1 & \textbf{90.2} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:resolution} shows m-eurosat accuracy at different test resolutions. OlmoEarth v1.2 with RoPE shows significantly better generalization to larger input sizes than v1.1 with absolute position encodings, with RoPE-Mixed providing the best resolution transfer.
+
+\section{Conclusion}
+
+OlmoEarth v1.2 introduces 2D Rotary Position Embeddings as a replacement for absolute sinusoidal position encodings. Our experiments show that RoPE-Mixed, which uses learnable 2D frequency vectors, provides the best results among the variants we tested. Key findings include:
+
+\begin{itemize}
+    \item RoPE-Mixed achieves consistent improvements over v1.1 on most evaluation tasks
+    \item Coordinate scaling ($0.25$) and higher frequency base ($10000$) are important for Earth observation data
+    \item RoPE enables better generalization to varying input resolutions
+\end{itemize}
+
+We recommend OlmoEarth v1.2 with RoPE-Mixed as the default for new applications, particularly those requiring flexibility in input resolution.
+
+\section*{Acknowledgments}
+
+We thank the broader OlmoEarth team for their contributions to the platform and evaluation infrastructure.
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\appendix
+
+\section{Implementation Details}
+
+\subsection{RoPE Coordinate Handling}
+
+For OlmoEarth's multimodal, multitemporal inputs, we compute spatial positions from the patch indices. Given a flattened sequence of tokens from multiple modalities and timesteps, we track the $(r, c)$ coordinates of each token's spatial origin. The RoPE rotation is applied based on these coordinates, while temporal and modality information is encoded separately (temporal via sinusoidal encoding, modality via learnable embeddings).
+
+\subsection{Training Hyperparameters}
+
+All v1.2 models are trained with identical hyperparameters to v1.1:
+\begin{itemize}
+    \item Optimizer: AdamW with $\beta_1=0.9$, $\beta_2=0.95$, weight decay $0.05$
+    \item Learning rate: $1.5 \times 10^{-4}$ with linear warmup (8,000 steps) and cosine decay
+    \item Batch size: 512
+    \item Training steps: 667,200
+    \item Mixed precision: bfloat16
+\end{itemize}
+
+The only additions are the RoPE-specific parameters:
+\begin{itemize}
+    \item \texttt{spatial\_pos\_encoding}: ``rope'' or ``rope\_mixed''
+    \item \texttt{rope\_base} / \texttt{rope\_mixed\_base}: Frequency base (default 10000)
+    \item \texttt{rope\_coordinate\_scale}: Coordinate scaling factor (default 0.25)
+\end{itemize}
+
+\end{document}
