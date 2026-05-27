@@ -112,6 +112,19 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                     return True
         return False
 
+    def _pool_registers(self, encoder_output: dict[str, Any]) -> torch.Tensor:
+        """Pool the register grid into the eval embedding.
+
+        For spatial tasks (segmentation/regression) the grid is returned as a coarse
+        ``[B, n_h, n_w, D]`` spatial map for the downstream head to upsample; otherwise
+        the registers are pooled across the grid to ``[B, D]``.
+        """
+        registers = encoder_output["registers"]  # [B, n_reg, D]
+        if self.spatial_pool:
+            n_h, n_w = self.model.register_bottleneck.register_grid
+            return rearrange(registers, "b (h w) d -> b h w d", h=n_h, w=n_w)
+        return reduce(registers, "b n d -> b d", self.pooling_type)
+
     def __call__(
         self,
         masked_olmoearth_sample: MaskedOlmoEarthSample,
@@ -121,16 +134,27 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         """Forward pass through the model produces the embedding specified by initialization."""
         if not self.use_pooled_tokens:
             fast_pass = not self._has_missing_tokens(masked_olmoearth_sample)
-            batch_embeddings: TokensAndMasks = self.model(
+            encoder_output = self.model(
                 masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=fast_pass
-            )["tokens_and_masks"]  # (bsz, dim)
-            # Concat features across modalities in space averaged across time
-            batch_embeddings = pool_unmasked_tokens(
-                batch_embeddings,
-                self.pooling_type,
-                spatial_pooling=self.spatial_pool,
-                concat_features=self.concat_features,
             )
+            if (
+                getattr(self.model, "use_register_bottleneck", False)
+                and "registers" in encoder_output
+            ):
+                # Register bottleneck: probe the register grid (the model's compressed,
+                # spatially-anchored representation), not the per-modality patch tokens.
+                batch_embeddings = self._pool_registers(encoder_output)
+            else:
+                tokens_and_masks: TokensAndMasks = encoder_output[
+                    "tokens_and_masks"
+                ]  # (bsz, dim)
+                # Concat features across modalities in space averaged across time
+                batch_embeddings = pool_unmasked_tokens(
+                    tokens_and_masks,
+                    self.pooling_type,
+                    spatial_pooling=self.spatial_pool,
+                    concat_features=self.concat_features,
+                )
         else:
             pooled_tokens_dict = self.model(
                 masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True

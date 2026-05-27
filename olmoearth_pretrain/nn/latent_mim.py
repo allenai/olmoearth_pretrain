@@ -94,7 +94,19 @@ class LatentMIM(nn.Module, DistributedMixins):
 
         supervision_preds = None
         if self.supervision_head is not None:
-            supervision_preds = self.supervision_head(decoded, x)
+            if getattr(self.supervision_head, "register_supervision", False):
+                # Supervise the register grid directly: reshape [B, n_reg, D] to the
+                # spatial grid [B, n_h, n_w, D] the heads expect.
+                registers = decoder_kwargs.get("registers")
+                n_h, n_w = self.encoder.register_bottleneck.register_grid
+                register_grid = registers.reshape(
+                    registers.shape[0], n_h, n_w, registers.shape[-1]
+                )
+                supervision_preds = self.supervision_head(
+                    decoded, x, register_grid=register_grid
+                )
+            else:
+                supervision_preds = self.supervision_head(decoded, x)
 
         return (
             latent,
@@ -172,6 +184,34 @@ class LatentMIMConfig(Config):
         )
         if encoder_output_size != self.decoder_config.encoder_embedding_size:
             raise ValueError("Encoder embedding size must be consistent!")
+        encoder_uses_registers = getattr(
+            self.encoder_config, "use_register_bottleneck", False
+        )
+        decoder_uses_registers = getattr(
+            self.decoder_config, "use_register_bottleneck", False
+        )
+        if encoder_uses_registers != decoder_uses_registers:
+            raise ValueError(
+                "use_register_bottleneck must match between encoder and decoder"
+            )
+        if encoder_uses_registers:
+            encoder_register_dim = self.encoder_config.register_dim or (
+                self.encoder_config.embedding_size // 2
+            )
+            if self.decoder_config.register_dim != encoder_register_dim:
+                raise ValueError(
+                    "decoder_config.register_dim "
+                    f"({self.decoder_config.register_dim}) must match the encoder "
+                    f"register dim ({encoder_register_dim})"
+                )
+        if (
+            self.supervision_head_config is not None
+            and getattr(self.supervision_head_config, "register_supervision", False)
+            and not encoder_uses_registers
+        ):
+            raise ValueError(
+                "register_supervision requires the encoder register bottleneck"
+            )
 
     def build(self) -> "LatentMIM":
         """Build the Latent Predictor."""
@@ -185,14 +225,20 @@ class LatentMIMConfig(Config):
         )
         supervision_head = None
         if self.supervision_head_config is not None:
-            output_embed_size = getattr(
-                self.decoder_config, "output_embedding_size", None
-            )
-            embedding_dim = (
-                output_embed_size
-                if output_embed_size is not None
-                else self.encoder_config.embedding_size
-            )
+            if getattr(self.supervision_head_config, "register_supervision", False):
+                # Heads read the register grid, so embedding_dim is the register dim.
+                embedding_dim = self.encoder_config.register_dim or (
+                    self.encoder_config.embedding_size // 2
+                )
+            else:
+                output_embed_size = getattr(
+                    self.decoder_config, "output_embedding_size", None
+                )
+                embedding_dim = (
+                    output_embed_size
+                    if output_embed_size is not None
+                    else self.encoder_config.embedding_size
+                )
             supervision_head = self.supervision_head_config.build(
                 embedding_dim=embedding_dim,
                 max_patch_size=self.encoder_config.max_patch_size,

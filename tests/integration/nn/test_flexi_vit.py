@@ -239,7 +239,7 @@ class TestEncoder:
         input_res = 10
 
         for fast_pass in [True, False]:
-            output, _ = encoder.apply_attn(
+            output, _, _ = encoder.apply_attn(
                 x=x,
                 timestamps=timestamps,
                 patch_size=patch_size,
@@ -316,7 +316,7 @@ class TestEncoder:
         encoder.eval()
         outputs = []
         for fast_pass in [True, False]:
-            output, _ = encoder.apply_attn(
+            output, _, _ = encoder.apply_attn(
                 x=x,
                 timestamps=timestamps,
                 patch_size=patch_size,
@@ -1056,6 +1056,68 @@ def test_encoder_rope_dynamic_patch_sizes(
             W // patch_size,
         )
         output.sentinel2_l2a.sum().backward()
+        assert encoder.blocks[0].attn.q.weight.grad is not None
+
+
+def test_encoder_register_bottleneck(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """The Perceiver-style register bottleneck returns a fixed grid, decoupled from input size."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    grid_size, register_dim = 3, 8
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        spatial_pos_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=grid_size,
+        register_dim=register_dim,
+        register_read_depth=1,
+        register_latent_depth=2,
+    )
+
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    prev_max_coord = None
+    for patch_size in (2, 4):
+        s2_mask = torch.zeros(B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long)
+        # Mark the top half decode-only so the read must exclude them via the mask.
+        s2_mask[:, : H // 2] = MaskValue.DECODER.value
+        sample = MaskedOlmoEarthSample(
+            sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+            sentinel2_l2a_mask=s2_mask,
+            latlon=torch.randn(B, latlon_num_bands),
+            latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+            timestamps=timestamps,
+        )
+        encoder.zero_grad()
+        output_dict = encoder.forward(sample, patch_size=patch_size, input_res=10)
+
+        registers = output_dict["registers"]
+        register_positions = output_dict["register_positions"]
+        # Register count is fixed regardless of patch grid; width is the bottleneck dim.
+        assert registers.shape == (B, grid_size * grid_size, register_dim)
+        assert register_positions.shape == (B, grid_size * grid_size, 2)
+        # Coordinates are anchored and rescale with the input extent (variable input size).
+        assert register_positions.amax() > 0
+        if prev_max_coord is not None:
+            assert register_positions.amax().item() != prev_max_coord
+        prev_max_coord = register_positions.amax().item()
+
+        registers.sum().backward()
+        assert encoder.register_bottleneck is not None
+        assert encoder.register_bottleneck.registers.grad is not None
         assert encoder.blocks[0].attn.q.weight.grad is not None
 
 

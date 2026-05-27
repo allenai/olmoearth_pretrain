@@ -100,6 +100,10 @@ class SupervisionHeadConfig(Config):
     """
 
     modality_configs: dict[str, SupervisionModalityConfig] = field(default_factory=dict)
+    # When True, the heads read the encoder register grid (the Perceiver bottleneck)
+    # instead of the per-modality decoder tokens, providing a spatial-salience signal to
+    # the registers. embedding_dim is then the register dim (resolved by LatentMIMConfig).
+    register_supervision: bool = False
 
     def __post_init__(self) -> None:
         """Coerce raw dicts in modality_configs to SupervisionModalityConfig instances."""
@@ -112,7 +116,8 @@ class SupervisionHeadConfig(Config):
         """Build the supervision head.
 
         Args:
-            embedding_dim: Dimension of the decoder output embeddings.
+            embedding_dim: Dimension of the feature source (decoder embeddings, or the
+                register dim when register_supervision is True).
             max_patch_size: Maximum patch size; each token predicts a
                 max_patch_size x max_patch_size sub-patch grid.
         """
@@ -120,6 +125,7 @@ class SupervisionHeadConfig(Config):
             modality_configs=self.modality_configs,
             embedding_dim=embedding_dim,
             max_patch_size=max_patch_size,
+            register_supervision=self.register_supervision,
         )
 
 
@@ -143,11 +149,13 @@ class SupervisionHead(nn.Module):
         modality_configs: dict[str, SupervisionModalityConfig],
         embedding_dim: int,
         max_patch_size: int,
+        register_supervision: bool = False,
     ) -> None:
         """Initialize the supervision head."""
         super().__init__()
         self.modality_configs = modality_configs
         self.max_patch_size = max_patch_size
+        self.register_supervision = register_supervision
         self._non_spatial_modalities: set[str] = set()
         self.heads = nn.ModuleDict()
         for name, cfg in modality_configs.items():
@@ -181,6 +189,7 @@ class SupervisionHead(nn.Module):
         self,
         decoded: TokensAndMasks,
         batch: MaskedOlmoEarthSample,
+        register_grid: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Produce per-supervised-modality predictions at pixel resolution.
 
@@ -191,6 +200,9 @@ class SupervisionHead(nn.Module):
         Args:
             decoded: Decoder output TokensAndMasks.
             batch: The original batch (used to determine target spatial dims).
+            register_grid: When register_supervision is True, the encoder register grid
+                ``[B, n_h, n_w, register_dim]`` that all heads read from instead of the
+                per-modality decoder tokens.
 
         Returns:
             Dictionary mapping supervised modality name to predictions.
@@ -200,13 +212,21 @@ class SupervisionHead(nn.Module):
         device = next(self.parameters()).device
         dtype = next(self.parameters()).dtype
 
+        if self.register_supervision and register_grid is None:
+            raise ValueError(
+                "register_grid must be provided when register_supervision is True"
+            )
+
         predictions: dict[str, Tensor] = {}
         for sup_name, head in self.heads.items():
             tokens = getattr(decoded, sup_name, None)
 
             if sup_name in self._non_spatial_modalities:
-                # Non-spatial modality: tokens are [B, BS, D] or None
-                if tokens is not None:
+                # Non-spatial modality: features [B, D]
+                if self.register_supervision:
+                    assert register_grid is not None
+                    features = register_grid.mean(dim=(1, 2))  # [B, D]
+                elif tokens is not None:
                     features = tokens.mean(dim=-2)  # [B, D]
                 else:
                     batch_size = self._get_batch_size(decoded)
@@ -215,8 +235,12 @@ class SupervisionHead(nn.Module):
                     )
                 output = head(features)  # [B, C]
             else:
-                # Spatial modality: tokens are [B, P_H, P_W, T, BS, D] or None
-                if tokens is not None:
+                # Spatial modality: features [B, P_H, P_W, T, D]. In register-supervision
+                # mode all heads read the shared register grid [B, n_h, n_w, D] (T=1).
+                if self.register_supervision:
+                    assert register_grid is not None
+                    features = register_grid.unsqueeze(3)  # [B, n_h, n_w, 1, D]
+                elif tokens is not None:
                     features = tokens.mean(dim=-2)  # [B, P_H, P_W, T, D]
                 else:
                     batch_size = self._get_batch_size(decoded)

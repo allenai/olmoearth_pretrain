@@ -1216,6 +1216,163 @@ class FlexiVitBase(nn.Module):
             block.apply_compile()
 
 
+class SpatialRegisterBottleneck(nn.Module):
+    """A Perceiver-style spatial register bottleneck.
+
+    A fixed ``n_h x n_w`` grid of learned latent tokens cross-attention *reads* the
+    encoded (visible) patch tokens, then a small *latent transformer* self-attends
+    over the grid. The grid is the model's compressed, spatially-anchored
+    representation: the decoder reads only this grid, and frozen evals probe it.
+
+    Register coordinates are placed per-batch evenly across the patch extent in the
+    same GSD-scaled frame as the patches, so 2D RoPE relative offsets are meaningful
+    and the grid adapts to variable input sizes without changing the register count.
+
+    The register count is decoupled from the patch count (the whole point of the
+    Perceiver read): ``n_h x n_w`` is a fixed hyperparameter regardless of input size.
+    """
+
+    def __init__(
+        self,
+        encoder_embedding_size: int,
+        register_dim: int,
+        register_grid: tuple[int, int],
+        num_heads: int,
+        mlp_ratio: float,
+        read_depth: int,
+        latent_transformer_depth: int,
+        use_2d_rope: bool,
+        rope_base: float = 10000.0,
+        qk_norm: bool = False,
+    ) -> None:
+        """Initialize the spatial register bottleneck.
+
+        Args:
+            encoder_embedding_size: Dimension of the encoded patch tokens (the read's K/V source).
+            register_dim: Dimension of the register grid (the bottleneck width, typically < encoder dim).
+            register_grid: ``(n_h, n_w)`` register grid size (fixed, independent of input size).
+            num_heads: Number of attention heads for the read + latent transformer blocks.
+            mlp_ratio: MLP ratio for the blocks.
+            read_depth: Number of cross-attention read blocks.
+            latent_transformer_depth: Number of self-attention blocks over the register grid.
+            use_2d_rope: Whether to apply 2D RoPE (requires per-token positions at call time).
+            rope_base: RoPE frequency base.
+            qk_norm: Whether to apply QK normalization in attention.
+        """
+        super().__init__()
+        self.register_grid = register_grid
+        self.num_registers = register_grid[0] * register_grid[1]
+        self.register_dim = register_dim
+        self.use_2d_rope = use_2d_rope
+        # Distinct per-cell latent vectors (NOT zero-init): because RoPE is *relative*,
+        # zero-init registers would give no locality at init; distinct content + fixed
+        # grid coordinates are what give each register its spatial identity.
+        self.registers = nn.Parameter(torch.empty(self.num_registers, register_dim))
+        nn.init.trunc_normal_(self.registers, std=0.02)
+        self.input_norm = nn.LayerNorm(encoder_embedding_size)
+        # Down-project the patch K/V source to the (smaller) register dim. The existing
+        # Attention ties q/k/v to a single dim, so the read happens entirely at register_dim.
+        self.kv_proj = nn.Linear(encoder_embedding_size, register_dim)
+        # The read + latent transformer run on small unpacked [B, N, D] tensors with an
+        # attention mask, so they use the SDPA path (use_flash_attn=False) regardless of
+        # the encoder's flash setting.
+        self.read_blocks = nn.ModuleList(
+            [
+                Block(
+                    register_dim,
+                    num_heads,
+                    mlp_ratio,
+                    qkv_bias=True,
+                    qk_norm=qk_norm,
+                    cross_attn=True,
+                    use_flash_attn=False,
+                    use_2d_rope=use_2d_rope,
+                    rope_base=rope_base,
+                )
+                for _ in range(read_depth)
+            ]
+        )
+        self.latent_blocks = nn.ModuleList(
+            [
+                Block(
+                    register_dim,
+                    num_heads,
+                    mlp_ratio,
+                    qkv_bias=True,
+                    qk_norm=qk_norm,
+                    cross_attn=False,
+                    use_flash_attn=False,
+                    use_2d_rope=use_2d_rope,
+                    rope_base=rope_base,
+                )
+                for _ in range(latent_transformer_depth)
+            ]
+        )
+        self.norm = nn.LayerNorm(register_dim)
+
+    def build_register_positions(self, patch_positions: Tensor) -> Tensor:
+        """Place the register grid evenly across the patch extent (GSD-scaled frame).
+
+        Args:
+            patch_positions: ``[B, N, 2]`` GSD-scaled ``(row, col)`` patch coordinates.
+
+        Returns:
+            ``[B, n_h * n_w, 2]`` register coordinates spanning ``[0, max_patch_coord]``.
+        """
+        n_h, n_w = self.register_grid
+        device = patch_positions.device
+        # Patch coords are >= 0 (non-spatial tokens sit at 0), so amax gives the extent.
+        max_pos = patch_positions.amax(dim=1)  # [B, 2]
+        lin_h = torch.linspace(0.0, 1.0, n_h, device=device)
+        lin_w = torch.linspace(0.0, 1.0, n_w, device=device)
+        grid_h, grid_w = torch.meshgrid(lin_h, lin_w, indexing="ij")
+        grid = torch.stack([grid_h, grid_w], dim=-1).reshape(
+            -1, 2
+        )  # [n_reg, 2] in [0, 1]
+        return grid.unsqueeze(0) * max_pos.unsqueeze(1)  # [B, n_reg, 2]
+
+    def forward(
+        self,
+        patch_tokens: Tensor,
+        patch_positions: Tensor | None,
+        visible_mask: Tensor | None,
+    ) -> tuple[Tensor, Tensor | None]:
+        """Read the (visible) patch tokens into the register grid.
+
+        Args:
+            patch_tokens: Encoded tokens ``[B, N, encoder_embedding_size]``.
+            patch_positions: GSD-scaled ``[B, N, 2]`` coords (None if not using RoPE).
+            visible_mask: Bool ``[B, N]``, True where a token is a valid key
+                (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
+
+        Returns:
+            registers: ``[B, num_registers, register_dim]``
+            register_positions: ``[B, num_registers, 2]`` or None
+        """
+        batch_size = patch_tokens.shape[0]
+        kv = self.kv_proj(self.input_norm(patch_tokens))
+        registers = self.registers.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
+        register_positions = None
+        if self.use_2d_rope:
+            if patch_positions is None:
+                raise ValueError(
+                    "patch_positions are required for the RoPE register bottleneck"
+                )
+            register_positions = self.build_register_positions(patch_positions)
+        attn_mask = visible_mask.bool() if visible_mask is not None else None
+        for blk in self.read_blocks:
+            registers = blk(
+                x=registers,
+                y=kv,
+                attn_mask=attn_mask,
+                rope_positions=register_positions,
+                rope_positions_y=patch_positions,
+            )
+        for blk in self.latent_blocks:
+            registers = blk(x=registers, rope_positions=register_positions)
+        return self.norm(registers), register_positions
+
+
 class Encoder(FlexiVitBase):
     """Encoder module that processes masked input samples into token representations."""
 
@@ -1252,6 +1409,12 @@ class Encoder(FlexiVitBase):
         spatial_pos_encoding: str = "absolute",
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
+        use_register_bottleneck: bool = False,
+        register_grid_size: int = 4,
+        register_dim: int | None = None,
+        register_read_depth: int = 1,
+        register_latent_depth: int = 2,
+        register_num_heads: int | None = None,
     ):
         """Initialize the encoder.
 
@@ -1299,6 +1462,17 @@ class Encoder(FlexiVitBase):
             spatial_pos_encoding: Spatial encoding type: "absolute", "rope", or "none".
             rope_base: Frequency base for RoPE when spatial_pos_encoding is "rope".
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
+            use_register_bottleneck: If True, add a Perceiver-style spatial register
+                bottleneck that reads the encoded patch tokens into a fixed register grid.
+            register_grid_size: Side length of the (square) register grid; the grid has
+                ``register_grid_size ** 2`` registers, independent of the patch grid size.
+            register_dim: Width of the register grid (the bottleneck dim). Defaults to
+                ``embedding_size // 2`` when None.
+            register_read_depth: Number of cross-attention read blocks.
+            register_latent_depth: Number of latent-transformer self-attention blocks
+                over the register grid.
+            register_num_heads: Number of attention heads in the bottleneck blocks.
+                Defaults to ``num_heads`` when None.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1368,6 +1542,29 @@ class Encoder(FlexiVitBase):
             aggregate_then_project=aggregate_then_project,
         )
         self.norm = nn.LayerNorm(self.embedding_size)
+
+        self.use_register_bottleneck = use_register_bottleneck
+        self.register_bottleneck: SpatialRegisterBottleneck | None = None
+        if use_register_bottleneck:
+            resolved_register_dim = (
+                register_dim if register_dim is not None else embedding_size // 2
+            )
+            resolved_register_heads = (
+                register_num_heads if register_num_heads is not None else num_heads
+            )
+            self.register_dim = resolved_register_dim
+            self.register_bottleneck = SpatialRegisterBottleneck(
+                encoder_embedding_size=embedding_size,
+                register_dim=resolved_register_dim,
+                register_grid=(register_grid_size, register_grid_size),
+                num_heads=resolved_register_heads,
+                mlp_ratio=mlp_ratio,
+                read_depth=register_read_depth,
+                latent_transformer_depth=register_latent_depth,
+                use_2d_rope=(spatial_pos_encoding == "rope"),
+                rope_base=rope_base,
+                qk_norm=qk_norm,
+            )
 
         self.apply(self._init_weights)
 
@@ -1636,7 +1833,7 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
-    ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
+    ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
@@ -1660,6 +1857,10 @@ class Encoder(FlexiVitBase):
             patch_size,
             input_res,
         )
+        # Full (pre-masking) positions in collapsed order, kept for the register
+        # bottleneck read so registers attend over the encoded *visible* patch tokens
+        # using their original coordinates (`positions` below is reduced/packed in place).
+        register_kv_positions = positions
         tokens_dict.update(original_masks_dict)
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -1757,12 +1958,27 @@ class Encoder(FlexiVitBase):
         # just use the original, unclipped mask here
         tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
 
+        # Perceiver-style read: a fixed register grid reads the encoded visible patch
+        # tokens (bool_mask restricts the read to ONLINE_ENCODER keys), followed by the
+        # latent transformer inside the bottleneck module.
+        register_output = None
+        if self.register_bottleneck is not None:
+            registers, register_positions = self.register_bottleneck(
+                patch_tokens=tokens,
+                patch_positions=register_kv_positions,
+                visible_mask=bool_mask,
+            )
+            register_output = {
+                "registers": registers,
+                "register_positions": register_positions,
+            }
+
         tokens_per_modality_dict = self.split_and_expand_per_modality(
             tokens, modalities_to_dims_dict
         )
         # merge original masks and the processed tokens
         tokens_per_modality_dict.update(original_masks_dict)
-        return tokens_per_modality_dict, token_norm_stats
+        return tokens_per_modality_dict, token_norm_stats, register_output
 
     def forward(
         self,
@@ -1789,16 +2005,20 @@ class Encoder(FlexiVitBase):
 
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
 
+        register_output: dict[str, Any] | None = None
+        token_norm_stats: dict[str, Any] | None = None
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
-            patchified_tokens_and_masks, token_norm_stats = self.apply_attn(
-                x=patchified_tokens_and_masks,
-                timestamps=x.timestamps,
-                patch_size=patch_size,
-                input_res=input_res,
-                token_exit_cfg=token_exit_cfg,
-                fast_pass=fast_pass,
+            patchified_tokens_and_masks, token_norm_stats, register_output = (
+                self.apply_attn(
+                    x=patchified_tokens_and_masks,
+                    timestamps=x.timestamps,
+                    patch_size=patch_size,
+                    input_res=input_res,
+                    token_exit_cfg=token_exit_cfg,
+                    fast_pass=fast_pass,
+                )
             )
         else:
             token_norm_stats = {}
@@ -1813,6 +2033,10 @@ class Encoder(FlexiVitBase):
         }
         if token_norm_stats:
             output_dict["token_norm_stats"] = token_norm_stats
+
+        if register_output is not None:
+            output_dict["registers"] = register_output["registers"]
+            output_dict["register_positions"] = register_output["register_positions"]
 
         if not fast_pass:
             output_dict["project_aggregated"] = self.project_and_aggregate(output)
@@ -1864,6 +2088,8 @@ class PredictorBase(FlexiVitBase):
         spatial_pos_encoding: str = "absolute",
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
+        use_register_bottleneck: bool = False,
+        register_dim: int | None = None,
     ):
         """Initialize the predictor.
 
@@ -1885,6 +2111,9 @@ class PredictorBase(FlexiVitBase):
             spatial_pos_encoding: Spatial encoding type: "absolute", "rope", or "none".
             rope_base: Frequency base for RoPE when spatial_pos_encoding is "rope".
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
+            use_register_bottleneck: If True, the decoder cross-attends to the encoder
+                register grid instead of the visible patch tokens.
+            register_dim: Width of the register grid; required when use_register_bottleneck.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1921,6 +2150,17 @@ class PredictorBase(FlexiVitBase):
 
         self.input_norm = nn.LayerNorm(encoder_embedding_size)
         self.norm = nn.LayerNorm(decoder_embedding_size)
+
+        self.use_register_bottleneck = use_register_bottleneck
+        self.register_to_decoder_embed: nn.Linear | None = None
+        if use_register_bottleneck:
+            if register_dim is None:
+                raise ValueError(
+                    "register_dim is required when use_register_bottleneck is True"
+                )
+            self.register_to_decoder_embed = nn.Linear(
+                register_dim, decoder_embedding_size, bias=True
+            )
 
         self.apply(self._init_weights)
 
@@ -2094,6 +2334,8 @@ class Predictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int,
+        registers: Tensor | None = None,
+        register_positions: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply attention to the tokens."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -2160,21 +2402,64 @@ class Predictor(PredictorBase):
             cu_seqlens_tokens_to_decode = None
             cu_seqlens_unmasked_tokens = None
 
+        # Decoder context: either the visible patch tokens (default) or, for the register
+        # bottleneck, the encoder register grid (projected to the decoder dim). The decode
+        # queries are mask tokens at masked-patch coords; they attend only to this context.
+        if registers is not None:
+            if self.register_to_decoder_embed is None:
+                raise ValueError(
+                    "Predictor received registers but was built without "
+                    "use_register_bottleneck=True"
+                )
+            context = self.register_to_decoder_embed(registers)
+            context_positions = register_positions
+            num_registers = context.shape[1]
+            if self.use_flash_attn:
+                register_bool = torch.ones(
+                    context.shape[0],
+                    num_registers,
+                    dtype=torch.bool,
+                    device=context.device,
+                )
+                context = self.pack_tokens(context, register_bool)
+                if context_positions is not None:
+                    context_positions = self.pack_tokens(
+                        context_positions, register_bool
+                    )
+                cu_seqlens_context = get_cumulative_sequence_lengths(
+                    torch.full(
+                        (register_bool.shape[0],),
+                        num_registers,
+                        dtype=torch.int32,
+                        device=context.device,
+                    )
+                )
+            else:
+                cu_seqlens_context = None
+            max_length_of_context = num_registers
+            context_attn_mask = None
+        else:
+            context = unmasked_tokens
+            context_positions = unmasked_positions
+            cu_seqlens_context = cu_seqlens_unmasked_tokens
+            max_length_of_context = max_length_of_unmasked_tokens
+            context_attn_mask = (
+                unmasked_tokens_mask.bool() if not self.use_flash_attn else None
+            )
+
         for blk in self.blocks:
             # note that we are not taking the inverse of the mask, since split_x_y gives us
             # true values for values we want to take part in attention
             tokens_to_decode = blk(
                 x=tokens_to_decode,
-                y=unmasked_tokens,
-                attn_mask=(
-                    unmasked_tokens_mask.bool() if not self.use_flash_attn else None
-                ),  # only for flash attn though this should not be left in
+                y=context,
+                attn_mask=context_attn_mask,
                 cu_seqlens_q=cu_seqlens_tokens_to_decode,
-                cu_seqlens_k=cu_seqlens_unmasked_tokens,
+                cu_seqlens_k=cu_seqlens_context,
                 max_seqlen_q=max_length_of_tokens_to_decode,
-                max_seqlen_k=max_length_of_unmasked_tokens,
+                max_seqlen_k=max_length_of_context,
                 rope_positions=positions_to_decode,
-                rope_positions_y=unmasked_positions,
+                rope_positions_y=context_positions,
             )
 
         if self.use_flash_attn:
@@ -2206,6 +2491,8 @@ class Predictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        registers: Tensor | None = None,
+        register_positions: Tensor | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -2214,6 +2501,10 @@ class Predictor(PredictorBase):
             timestamps: Timestamps of the tokens
             patch_size: Patch size of the tokens
             input_res: Input resolution of the tokens
+            registers: Optional encoder register grid ``[B, n_reg, register_dim]``. When
+                provided (register bottleneck), the decoder cross-attends to it instead of
+                the visible patch tokens.
+            register_positions: Optional ``[B, n_reg, 2]`` register coordinates for RoPE.
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
@@ -2238,7 +2529,12 @@ class Predictor(PredictorBase):
         tokens_only_dict = self.add_masks(decoder_emedded_dict)
         decoder_emedded_dict.update(tokens_only_dict)
         tokens_and_masks = self.apply_attn(
-            decoder_emedded_dict, timestamps, patch_size, input_res
+            decoder_emedded_dict,
+            timestamps,
+            patch_size,
+            input_res,
+            registers=registers,
+            register_positions=register_positions,
         )
         # TODO: Factor this out into a more readable function
         output_dict = {}
@@ -2300,6 +2596,13 @@ class EncoderConfig(Config):
     spatial_pos_encoding: str = "absolute"
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
+    # Perceiver-style spatial register bottleneck (sweepable).
+    use_register_bottleneck: bool = False
+    register_grid_size: int = 4
+    register_dim: int | None = None
+    register_read_depth: int = 1
+    register_latent_depth: int = 2
+    register_num_heads: int | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2342,6 +2645,34 @@ class EncoderConfig(Config):
                 raise ValueError(
                     f"2D RoPE requires head_dim divisible by 4, got {head_dim}"
                 )
+        if self.use_register_bottleneck:
+            if self.register_grid_size < 1:
+                raise ValueError(
+                    f"register_grid_size must be >= 1, got {self.register_grid_size}"
+                )
+            register_dim = (
+                self.register_dim
+                if self.register_dim is not None
+                else self.embedding_size // 2
+            )
+            register_heads = (
+                self.register_num_heads
+                if self.register_num_heads is not None
+                else self.num_heads
+            )
+            if register_dim % register_heads != 0:
+                raise ValueError(
+                    f"register_dim ({register_dim}) must be divisible by "
+                    f"register_num_heads ({register_heads})"
+                )
+            if (
+                self.spatial_pos_encoding == "rope"
+                and (register_dim // register_heads) % 4 != 0
+            ):
+                raise ValueError(
+                    "2D RoPE requires register head_dim divisible by 4, got "
+                    f"{register_dim // register_heads}"
+                )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -2380,6 +2711,10 @@ class PredictorConfig(Config):
     spatial_pos_encoding: str = "absolute"
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
+    # Perceiver-style register bottleneck: when True the decoder cross-attends to the
+    # encoder register grid (of width register_dim) instead of the visible patch tokens.
+    use_register_bottleneck: bool = False
+    register_dim: int | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2394,6 +2729,10 @@ class PredictorConfig(Config):
             for modality in self.supported_modalities:
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
+        if self.use_register_bottleneck and self.register_dim is None:
+            raise ValueError(
+                "register_dim must be set when use_register_bottleneck is True"
+            )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
         if self.spatial_pos_encoding not in SPATIAL_POS_ENCODING_TYPES:
