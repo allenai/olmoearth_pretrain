@@ -451,12 +451,13 @@ def build_commands(
 
     if args.task_skip_names:
         skip_names = [name.strip() for name in args.task_skip_names.split(",")]
-        tasks_to_run = [task for task in FT_TASK_NAMES if task not in skip_names]
+        tasks_to_run = [task for task in FT_EVAL_TASKS.keys() if task not in skip_names]
         tasks_to_run_arg = f" --trainer.callbacks.downstream_evaluator.tasks_to_run='{json.dumps(tasks_to_run)}'"
-        commands_new: list[str] = []
+        commands_new = []
         for cmd in commands:
             logger.info(f"Adding tasks_to_run filter to {cmd}")
-            commands_new.append(cmd + tasks_to_run_arg)
+            cmd += tasks_to_run_arg
+            commands_new.append(cmd)
         commands = commands_new
 
     return commands
@@ -525,7 +526,11 @@ def main() -> None:
         "--task-skip-names",
         type=str,
         required=False,
-        help="Comma-separated list of task names to skip (e.g., m_eurosat,m_bigearthnet)",
+        help=(
+            "Comma-separated FT eval task keys to skip (intersected with FT_EVAL_TASKS; "
+            "other names are ignored). If no FT tasks would remain, all FT tasks are run "
+            "with a warning."
+        ),
     )
 
     args, extra_cli = parser.parse_known_args()
