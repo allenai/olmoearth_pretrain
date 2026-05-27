@@ -20,17 +20,17 @@ LAUNCH_ARGS="--launch.num_gpus=8 --launch.priority=high --launch.clusters=[ai2/j
 WANDB_PROJECT="--trainer.callbacks.wandb.project=2026_04_22_add_hidden_layer_to_initial_projection"
 ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.rope_coordinate_scale=0.25"
 
-# for GRID in 16 32; do
-#     for DIM in 192 288 528 768; do
-#         python "$SCRIPT" launch "regbtl_base10k_scale0.25_g${GRID}_d${DIM}" "$CLUSTER" \
-#             $LAUNCH_ARGS \
-#             $WANDB_PROJECT \
-#             $ROPE \
-#             --model.encoder_config.register_grid_size="${GRID}" \
-#             --model.encoder_config.register_dim="${DIM}" \
-#             --model.decoder_config.register_dim="${DIM}"
-#     done
-# done
+for GRID in 16 32; do
+    for DIM in 192 288 528 768; do
+        python "$SCRIPT" launch "regbtl_base10k_scale0.25_g${GRID}_d${DIM}" "$CLUSTER" \
+            $LAUNCH_ARGS \
+            $WANDB_PROJECT \
+            $ROPE \
+            --model.encoder_config.register_grid_size="${GRID}" \
+            --model.encoder_config.register_dim="${DIM}" \
+            --model.decoder_config.register_dim="${DIM}"
+    done
+done
 
 # Ablation: g16 / d528 with NO supervision head (pure JEPA register bottleneck).
 NOSUP_SCRIPT="scripts/archived/2026_04_22_add_hidden_layer_to_initial_projection/hidden1_register_bottleneck_no_supervision.py"
