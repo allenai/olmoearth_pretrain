@@ -2,6 +2,7 @@
 
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -39,6 +40,17 @@ from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 logger = logging.getLogger(__name__)
 
 SPATIAL_POS_ENCODING_TYPES = ("absolute", "rope", "rope_mixed", "none")
+# Normalization layer used inside transformer blocks (and the final norms).
+NORM_TYPES = ("layernorm", "rmsnorm")
+# Feed-forward network variant used inside transformer blocks.
+FFN_TYPES = ("mlp", "swiglu")
+# Linear-layer initialization scheme.
+#   "xavier"       - xavier_uniform (the original FlexiViT behaviour)
+#   "trunc_normal" - truncated normal std=0.02 (DINO / timm style, pairs with
+#                    LayerScale via ``layer_scale_init``)
+#   "scaled"       - trunc_normal std=0.02 with residual-branch output
+#                    projections scaled by 1/sqrt(2*depth) (GPT-2 / OLMo style)
+INIT_SCHEMES = ("xavier", "trunc_normal", "scaled")
 
 
 def get_modalities_to_process(
@@ -906,13 +918,42 @@ class FlexiVitBase(nn.Module):
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
+        norm_type: str = "layernorm",
+        ffn_type: str = "mlp",
+        use_bias: bool = True,
+        init_scheme: str = "xavier",
+        layer_scale_init: float | None = None,
     ) -> None:
-        """Initialize the FlexiVitBase class."""
+        """Initialize the FlexiVitBase class.
+
+        In addition to the spatial encoding / RoPE options, the block can be
+        configured towards a more modern transformer recipe via ``norm_type``
+        ("rmsnorm"), ``ffn_type`` ("swiglu"), ``use_bias`` (drop biases on the
+        attention/FFN linears and norms), ``init_scheme`` (linear-layer init,
+        see ``INIT_SCHEMES``) and ``layer_scale_init`` (LayerScale residual
+        scaling, the DINO/CaiT mechanism; ``None`` disables it). All default to
+        the original behaviour so existing checkpoints are unchanged.
+        """
         super().__init__()
         if spatial_pos_encoding not in SPATIAL_POS_ENCODING_TYPES:
             raise ValueError(
                 f"spatial_pos_encoding must be one of {SPATIAL_POS_ENCODING_TYPES}, "
                 f"got {spatial_pos_encoding}"
+            )
+        if norm_type not in NORM_TYPES:
+            raise ValueError(f"norm_type must be one of {NORM_TYPES}, got {norm_type}")
+        if ffn_type not in FFN_TYPES:
+            raise ValueError(f"ffn_type must be one of {FFN_TYPES}, got {ffn_type}")
+        if init_scheme not in INIT_SCHEMES:
+            raise ValueError(
+                f"init_scheme must be one of {INIT_SCHEMES}, got {init_scheme}"
+            )
+        if init_scheme == "scaled" and layer_scale_init is not None:
+            # Both shrink the residual branch at init; combining them is almost
+            # certainly unintended (e.g. 1e-5 gain on already-downscaled weights).
+            raise ValueError(
+                "init_scheme='scaled' (GPT-2 residual scaling) and layer_scale_init "
+                "(LayerScale) are competing residual-taming mechanisms; enable only one."
             )
         if rope_base <= 0:
             raise ValueError(f"rope_base must be positive, got {rope_base}")
@@ -922,6 +963,15 @@ class FlexiVitBase(nn.Module):
             )
         if rope_mixed_base <= 0:
             raise ValueError(f"rope_mixed_base must be positive, got {rope_mixed_base}")
+
+        self.norm_type = norm_type
+        self.ffn_type = ffn_type
+        self.use_bias = use_bias
+        self.init_scheme = init_scheme
+        self.depth = depth
+        # Norm factory reused for the block norms (and the final norms in
+        # subclasses). RMSNorm is unaffected by ``use_bias`` (it has no bias).
+        self.norm_layer = self._build_norm_factory(norm_type, use_bias)
 
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
@@ -944,9 +994,9 @@ class FlexiVitBase(nn.Module):
                     embedding_size,
                     num_heads,
                     mlp_ratio,
-                    qkv_bias=True,
+                    qkv_bias=use_bias,
                     qk_norm=qk_norm,
-                    norm_layer=nn.LayerNorm,  # TODO: This should be configurable
+                    norm_layer=self.norm_layer,
                     cross_attn=self.cross_attn,
                     drop_path=drop_path,
                     use_flash_attn=self.use_flash_attn,
@@ -954,10 +1004,20 @@ class FlexiVitBase(nn.Module):
                     rope_base=self.rope_base,
                     use_2d_rope_mixed=self.spatial_pos_encoding == "rope_mixed",
                     rope_mixed_base=self.rope_mixed_base,
+                    ffn_type=ffn_type,
+                    proj_bias=use_bias,
+                    mlp_bias=use_bias,
+                    init_values=layer_scale_init,
                 )
                 for _ in range(depth)
             ]
         )
+        # Tag the residual-branch output projections so ``_init_weights`` can
+        # apply GPT-2 style 1/sqrt(2*depth) scaling when ``scaled_init`` is set.
+        # Both Mlp and SwiGLU expose ``fc2`` as their output projection.
+        for block in self.blocks:
+            block.attn.proj._is_residual_proj = True
+            block.mlp.fc2._is_residual_proj = True
 
         self.composite_encodings = CompositeEncodings(
             embedding_size,
@@ -970,14 +1030,48 @@ class FlexiVitBase(nn.Module):
         )
         self.apply(self._init_weights)
 
+    @staticmethod
+    def _build_norm_factory(
+        norm_type: str, use_bias: bool
+    ) -> Callable[[int], nn.Module]:
+        """Return a ``dim -> nn.Module`` norm constructor for the given type.
+
+        RMSNorm has no bias by construction; ``use_bias`` only affects LayerNorm.
+        """
+        if norm_type == "layernorm":
+
+            def factory(dim: int) -> nn.Module:
+                return nn.LayerNorm(dim, bias=use_bias)
+
+        elif norm_type == "rmsnorm":
+
+            def factory(dim: int) -> nn.Module:
+                return nn.RMSNorm(dim)
+
+        else:
+            raise ValueError(f"norm_type must be one of {NORM_TYPES}, got {norm_type}")
+        return factory
+
     def _init_weights(self, m: nn.Module) -> None:
         if getattr(m, "_skip_custom_init", False):
             logger.debug(f"Skipping custom init for {m}")
             return
         if isinstance(m, nn.Linear):
-            # we use xavier_uniform following official JAX ViT:
-            torch.nn.init.xavier_uniform_(m.weight)
-            if isinstance(m, nn.Linear) and m.bias is not None:
+            if self.init_scheme == "xavier":
+                # we use xavier_uniform following official JAX ViT:
+                torch.nn.init.xavier_uniform_(m.weight)
+            else:
+                # "trunc_normal" (DINO/timm) or "scaled" (GPT-2/OLMo). The latter
+                # additionally divides residual-branch output projections by
+                # sqrt(2*depth) so the residual stream variance does not grow
+                # with depth.
+                std = 0.02
+                if self.init_scheme == "scaled" and getattr(
+                    m, "_is_residual_proj", False
+                ):
+                    std /= math.sqrt(2 * self.depth)
+                torch.nn.init.trunc_normal_(m.weight, std=std)
+            if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
     @staticmethod
@@ -1260,6 +1354,11 @@ class Encoder(FlexiVitBase):
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
+        norm_type: str = "layernorm",
+        ffn_type: str = "mlp",
+        use_bias: bool = True,
+        init_scheme: str = "xavier",
+        layer_scale_init: float | None = None,
     ):
         """Initialize the encoder.
 
@@ -1310,6 +1409,12 @@ class Encoder(FlexiVitBase):
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
             rope_mixed_base: Frequency base used to initialize learnable
                 RoPE-Mixed frequencies.
+            norm_type: Normalization layer in blocks/final norm: "layernorm" or "rmsnorm".
+            ffn_type: Feed-forward network type: "mlp" (GELU) or "swiglu".
+            use_bias: If False, drop biases on attention/FFN linears and norms.
+            init_scheme: Linear-layer init: "xavier", "trunc_normal" or "scaled"
+                (see INIT_SCHEMES).
+            layer_scale_init: LayerScale init value (DINO/CaiT); None disables it.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1329,6 +1434,11 @@ class Encoder(FlexiVitBase):
             rope_base=rope_base,
             rope_coordinate_scale=rope_coordinate_scale,
             rope_mixed_base=rope_mixed_base,
+            norm_type=norm_type,
+            ffn_type=ffn_type,
+            use_bias=use_bias,
+            init_scheme=init_scheme,
+            layer_scale_init=layer_scale_init,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1379,7 +1489,7 @@ class Encoder(FlexiVitBase):
             num_layers=num_projection_layers,
             aggregate_then_project=aggregate_then_project,
         )
-        self.norm = nn.LayerNorm(self.embedding_size)
+        self.norm = self.norm_layer(self.embedding_size)
 
         self.apply(self._init_weights)
 
@@ -1877,6 +1987,11 @@ class PredictorBase(FlexiVitBase):
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
+        norm_type: str = "layernorm",
+        ffn_type: str = "mlp",
+        use_bias: bool = True,
+        init_scheme: str = "xavier",
+        layer_scale_init: float | None = None,
     ):
         """Initialize the predictor.
 
@@ -1901,6 +2016,12 @@ class PredictorBase(FlexiVitBase):
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
             rope_mixed_base: Frequency base used to initialize learnable
                 RoPE-Mixed frequencies.
+            norm_type: Normalization layer in blocks/final norm: "layernorm" or "rmsnorm".
+            ffn_type: Feed-forward network type: "mlp" (GELU) or "swiglu".
+            use_bias: If False, drop biases on attention/FFN linears and norms.
+            init_scheme: Linear-layer init: "xavier", "trunc_normal" or "scaled"
+                (see INIT_SCHEMES).
+            layer_scale_init: LayerScale init value (DINO/CaiT); None disables it.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1920,6 +2041,11 @@ class PredictorBase(FlexiVitBase):
             rope_base=rope_base,
             rope_coordinate_scale=rope_coordinate_scale,
             rope_mixed_base=rope_mixed_base,
+            norm_type=norm_type,
+            ffn_type=ffn_type,
+            use_bias=use_bias,
+            init_scheme=init_scheme,
+            layer_scale_init=layer_scale_init,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -1936,8 +2062,8 @@ class PredictorBase(FlexiVitBase):
         # THIS is the learnable mask token
         self.mask_token = nn.Parameter(torch.zeros(decoder_embedding_size))
 
-        self.input_norm = nn.LayerNorm(encoder_embedding_size)
-        self.norm = nn.LayerNorm(decoder_embedding_size)
+        self.input_norm = self.norm_layer(encoder_embedding_size)
+        self.norm = self.norm_layer(decoder_embedding_size)
 
         self.apply(self._init_weights)
 
@@ -2318,6 +2444,11 @@ class EncoderConfig(Config):
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
     rope_mixed_base: float = 10.0
+    norm_type: str = "layernorm"
+    ffn_type: str = "mlp"
+    use_bias: bool = True
+    init_scheme: str = "xavier"
+    layer_scale_init: float | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2332,6 +2463,23 @@ class EncoderConfig(Config):
             for modality in self.supported_modalities:
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
+        if self.norm_type not in NORM_TYPES:
+            raise ValueError(
+                f"norm_type must be one of {NORM_TYPES}, got {self.norm_type}"
+            )
+        if self.ffn_type not in FFN_TYPES:
+            raise ValueError(
+                f"ffn_type must be one of {FFN_TYPES}, got {self.ffn_type}"
+            )
+        if self.init_scheme not in INIT_SCHEMES:
+            raise ValueError(
+                f"init_scheme must be one of {INIT_SCHEMES}, got {self.init_scheme}"
+            )
+        if self.init_scheme == "scaled" and self.layer_scale_init is not None:
+            raise ValueError(
+                "init_scheme='scaled' and layer_scale_init are competing residual "
+                "scaling mechanisms; enable only one."
+            )
         if self.band_dropout_modalities is not None:
             unknown = set(self.band_dropout_modalities) - set(
                 self.supported_modality_names
@@ -2404,6 +2552,11 @@ class PredictorConfig(Config):
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
     rope_mixed_base: float = 10.0
+    norm_type: str = "layernorm"
+    ffn_type: str = "mlp"
+    use_bias: bool = True
+    init_scheme: str = "xavier"
+    layer_scale_init: float | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2418,6 +2571,23 @@ class PredictorConfig(Config):
             for modality in self.supported_modalities:
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
+        if self.norm_type not in NORM_TYPES:
+            raise ValueError(
+                f"norm_type must be one of {NORM_TYPES}, got {self.norm_type}"
+            )
+        if self.ffn_type not in FFN_TYPES:
+            raise ValueError(
+                f"ffn_type must be one of {FFN_TYPES}, got {self.ffn_type}"
+            )
+        if self.init_scheme not in INIT_SCHEMES:
+            raise ValueError(
+                f"init_scheme must be one of {INIT_SCHEMES}, got {self.init_scheme}"
+            )
+        if self.init_scheme == "scaled" and self.layer_scale_init is not None:
+            raise ValueError(
+                "init_scheme='scaled' and layer_scale_init are competing residual "
+                "scaling mechanisms; enable only one."
+            )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
         if self.spatial_pos_encoding not in SPATIAL_POS_ENCODING_TYPES:

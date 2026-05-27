@@ -120,6 +120,7 @@ class Attention(nn.Module):
         rope_base: float = 10000.0,
         use_2d_rope_mixed: bool = False,
         rope_mixed_base: float = 10.0,
+        proj_bias: bool = True,
     ) -> None:
         """Initialize the attention module.
 
@@ -139,6 +140,7 @@ class Attention(nn.Module):
                 queries and keys. Mutually exclusive with ``use_2d_rope``.
             rope_mixed_base: Frequency base used to initialize the learnable
                 RoPE-Mixed frequencies.
+            proj_bias: Enable bias for the output projection. Defaults to True.
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -178,7 +180,7 @@ class Attention(nn.Module):
         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
+        self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
 
     def sdpa(
@@ -404,6 +406,61 @@ class Mlp(nn.Module):
         return x
 
 
+class SwiGLU(nn.Module):
+    """SwiGLU gated feed-forward network.
+
+    Replaces the standard ``fc1 -> activation -> fc2`` MLP with a gated linear
+    unit using a SiLU gate, the variant used by LLaMA / PaLM / Gemma.
+
+    References:
+        GLU Variants Improve Transformer (https://arxiv.org/abs/2002.05202)
+
+    Args:
+        in_features: Number of input features
+        hidden_features: Post-gating hidden dimension. The input projection
+            produces ``2 * hidden_features`` (gate + value), so to match the
+            parameter count of a standard MLP, callers should pass roughly
+            ``2/3`` of the MLP hidden size. Defaults to ``in_features``.
+        out_features: Output dimension. Defaults to ``in_features``.
+        bias: Enable bias in the linear layers. Defaults to True.
+        drop: Dropout rate. Defaults to 0.0.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        hidden_features: int | None = None,
+        out_features: int | None = None,
+        bias: bool = True,
+        drop: float = 0.0,
+    ) -> None:
+        """Initialize the SwiGLU module."""
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+
+        # Single fused projection producing the gate and value halves.
+        self.fc1 = nn.Linear(in_features, 2 * hidden_features, bias=bias)
+        self.drop1 = nn.Dropout(drop)
+        self.fc2 = nn.Linear(hidden_features, out_features, bias=bias)
+        self.drop2 = nn.Dropout(drop)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass.
+
+        Args:
+            x: Input tensor
+
+        Returns:
+            Output tensor
+        """
+        x_gate, x_value = self.fc1(x).chunk(2, dim=-1)
+        x = self.drop1(F.silu(x_gate) * x_value)
+        x = self.fc2(x)
+        x = self.drop2(x)
+        return x
+
+
 class LayerScale(nn.Module):
     """Learnable scaling layer.
 
@@ -517,6 +574,9 @@ class Block(nn.Module):
         rope_base: float = 10000.0,
         use_2d_rope_mixed: bool = False,
         rope_mixed_base: float = 10.0,
+        ffn_type: str = "mlp",
+        proj_bias: bool = True,
+        mlp_bias: bool = True,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -538,6 +598,9 @@ class Block(nn.Module):
             rope_base: RoPE frequency base (axial)
             use_2d_rope_mixed: Apply RoPE-Mixed to attention queries and keys.
             rope_mixed_base: Frequency base for RoPE-Mixed initialization.
+            ffn_type: Feed-forward network type, "mlp" (GELU) or "swiglu".
+            proj_bias: Add bias to the attention output projection.
+            mlp_bias: Add bias to the feed-forward linear layers.
         """
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -555,6 +618,7 @@ class Block(nn.Module):
             rope_base=rope_base,
             use_2d_rope_mixed=use_2d_rope_mixed,
             rope_mixed_base=rope_mixed_base,
+            proj_bias=proj_bias,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -562,12 +626,31 @@ class Block(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
         self.norm2 = norm_layer(dim)
-        self.mlp = Mlp(
-            in_features=dim,
-            hidden_features=int(dim * mlp_ratio),
-            act_layer=act_layer,
-            drop=drop,
-        )
+        mlp_hidden = int(dim * mlp_ratio)
+        if ffn_type == "swiglu":
+            # The fused gate+value projection doubles the input matmul, so use a
+            # ~2/3 hidden width (rounded to a multiple of 8) to keep the
+            # parameter/FLOP count close to the equivalent GELU MLP.
+            swiglu_hidden = int(2 * mlp_hidden / 3)
+            swiglu_hidden = max(8, ((swiglu_hidden + 7) // 8) * 8)
+            self.mlp: nn.Module = SwiGLU(
+                in_features=dim,
+                hidden_features=swiglu_hidden,
+                bias=mlp_bias,
+                drop=drop,
+            )
+        elif ffn_type == "mlp":
+            self.mlp = Mlp(
+                in_features=dim,
+                hidden_features=mlp_hidden,
+                act_layer=act_layer,
+                bias=mlp_bias,
+                drop=drop,
+            )
+        else:
+            raise ValueError(
+                f"Unknown ffn_type {ffn_type!r}, expected 'mlp' or 'swiglu'"
+            )
         self.ls2 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
         )
