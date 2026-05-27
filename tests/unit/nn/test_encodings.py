@@ -3,6 +3,7 @@
 import torch
 
 from olmoearth_pretrain.nn.encodings import (
+    apply_2d_rope,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -128,3 +129,32 @@ def test_get_month_encoding_table() -> None:
     encoding = get_month_encoding_table(encoding_dim)
     assert encoding.shape == (12, encoding_dim)
     assert torch.allclose(encoding, expected_output, atol=atol, rtol=rtol)
+
+
+def test_apply_2d_rope_zero_positions_identity() -> None:
+    """Zero-valued positions should leave Q/K unchanged."""
+    x = torch.randn(2, 3, 4, 8)
+    positions = torch.zeros(2, 4, 2)
+    out = apply_2d_rope(x, positions)
+    assert torch.allclose(out, x)
+
+
+def test_apply_2d_rope_preserves_norms() -> None:
+    """RoPE should rotate feature pairs without changing vector norms."""
+    x = torch.randn(2, 3, 4, 8)
+    positions = torch.tensor(
+        [
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+            [[2.0, 3.0], [3.0, 2.0], [4.0, 1.0], [1.0, 4.0]],
+        ]
+    )
+    out = apply_2d_rope(x, positions)
+    assert torch.allclose(out.norm(dim=-1), x.norm(dim=-1), atol=1e-5, rtol=1e-5)
+
+
+def test_apply_2d_rope_packed_shape() -> None:
+    """Packed flash-attention layout should also be supported."""
+    x = torch.randn(5, 2, 8)
+    positions = torch.arange(10, dtype=torch.float32).reshape(5, 2)
+    out = apply_2d_rope(x, positions)
+    assert out.shape == x.shape
