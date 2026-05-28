@@ -677,25 +677,10 @@
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
-        "sentinel1",
         "sentinel2_l2a"
       ],
       "name": "lfmc_herb",
       "norm_stats": {
-        "sentinel1": {
-          "vh": {
-            "max": 3.9160192012786865,
-            "mean": -99.99918934084334,
-            "min": -100.0,
-            "std": 0.2824626553368819
-          },
-          "vv": {
-            "max": 11.892908096313477,
-            "mean": -99.83622472990983,
-            "min": -100.0,
-            "std": 4.035040024486018
-          }
-        },
         "sentinel2_l2a": {
           "B01": {
             "max": 18856.0,
@@ -799,25 +784,10 @@
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
-        "sentinel1",
         "sentinel2_l2a"
       ],
       "name": "lfmc_woody",
       "norm_stats": {
-        "sentinel1": {
-          "vh": {
-            "max": -6.573819160461426,
-            "mean": -99.99997211421302,
-            "min": -100.0,
-            "std": 0.05101639612589793
-          },
-          "vv": {
-            "max": 10.6225004196167,
-            "mean": -99.96420237689937,
-            "min": -100.0,
-            "std": 1.9088832910992002
-          }
-        },
         "sentinel2_l2a": {
           "B01": {
             "max": 14657.0,
@@ -921,25 +891,10 @@
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
-        "sentinel1",
         "sentinel2_l2a"
       ],
       "name": "lfmc_woody_3k",
       "norm_stats": {
-        "sentinel1": {
-          "vh": {
-            "max": 4.8908772468566895,
-            "mean": -99.99974626430608,
-            "min": -100.0,
-            "std": 0.15755697038108718
-          },
-          "vv": {
-            "max": 12.263010025024414,
-            "mean": -99.92055995997232,
-            "min": -100.0,
-            "std": 2.808993991802027
-          }
-        },
         "sentinel2_l2a": {
           "B01": {
             "max": 19394.0,
