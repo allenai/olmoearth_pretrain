@@ -28,6 +28,7 @@ from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
+    timestamps_to_days,
 )
 from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
@@ -923,6 +924,8 @@ class FlexiVitBase(nn.Module):
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
         temporal_rope_dim_frac: float = 0.25,
+        rope_temporal_base: float | None = None,
+        rope_temporal_coordinate_scale: float = 1.0,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -943,6 +946,15 @@ class FlexiVitBase(nn.Module):
             raise ValueError(
                 f"temporal_rope_dim_frac must be in (0, 1), got {temporal_rope_dim_frac}"
             )
+        if rope_temporal_base is not None and rope_temporal_base <= 0:
+            raise ValueError(
+                f"rope_temporal_base must be positive, got {rope_temporal_base}"
+            )
+        if rope_temporal_coordinate_scale <= 0:
+            raise ValueError(
+                "rope_temporal_coordinate_scale must be positive, got "
+                f"{rope_temporal_coordinate_scale}"
+            )
 
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
@@ -958,6 +970,8 @@ class FlexiVitBase(nn.Module):
         self.rope_coordinate_scale = rope_coordinate_scale
         self.rope_mixed_base = rope_mixed_base
         self.temporal_rope_dim_frac = temporal_rope_dim_frac
+        self.rope_temporal_base = rope_temporal_base
+        self.rope_temporal_coordinate_scale = rope_temporal_coordinate_scale
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
         self.blocks = nn.ModuleList(
@@ -979,6 +993,7 @@ class FlexiVitBase(nn.Module):
                     use_3d_rope=self.spatial_pos_encoding == "rope_3d",
                     use_3d_rope_mixed=self.spatial_pos_encoding == "rope_3d_mixed",
                     temporal_rope_dim_frac=self.temporal_rope_dim_frac,
+                    rope_temporal_base=self.rope_temporal_base,
                 )
                 for _ in range(depth)
             ]
@@ -1048,6 +1063,7 @@ class FlexiVitBase(nn.Module):
         original_masks_dict: dict[str, Tensor],
         patch_size: int,
         input_res: int,
+        timestamps: Tensor | None = None,
     ) -> Tensor | None:
         """Build per-token coordinates for RoPE.
 
@@ -1055,6 +1071,11 @@ class FlexiVitBase(nn.Module):
         ``[B, N, 3]`` ``(t, row, col)`` for 3D RoPE modes. ``None`` for any
         non-RoPE encoding (the additive paths consume raw indices, not
         per-token position tensors).
+
+        Under 3D RoPE the temporal coordinate is days-since-2000 derived from
+        ``timestamps`` (so models see real calendar deltas, not slot indices),
+        scaled by ``self.rope_temporal_coordinate_scale``. Static modalities
+        keep ``t=0`` (no temporal anchor).
         """
         if self.spatial_pos_encoding not in ROPE_ENCODING_TYPES:
             return None
@@ -1070,6 +1091,17 @@ class FlexiVitBase(nn.Module):
             CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
             * self.rope_coordinate_scale
         )
+
+        # For 3D RoPE, convert timestamps -> days-since-anchor once. Shape
+        # (B, T_max). Each multitemporal modality indexes into this with its
+        # own slot count (we assume the first T entries align across modalities,
+        # matching how additive temporal encodings already work).
+        days_per_timestep: Tensor | None = None
+        if is_3d and timestamps is not None:
+            days_per_timestep = timestamps_to_days(timestamps).to(torch.float32) * (
+                self.rope_temporal_coordinate_scale
+            )
+
         for modality_name in modalities_to_process:
             tokens = tokens_only_dict[modality_name]
             modality = Modality.get(modality_name)
@@ -1078,9 +1110,7 @@ class FlexiVitBase(nn.Module):
 
             # Default: zeros. Each branch below fills in the coordinate axes
             # that apply to the modality's token rank.
-            positions = torch.zeros(
-                position_shape, dtype=torch.float32, device=device
-            )
+            positions = torch.zeros(position_shape, dtype=torch.float32, device=device)
 
             spatial_active = modality.is_spatial
             temporal_active = is_3d  # only 3D modes consume the t axis
@@ -1115,9 +1145,7 @@ class FlexiVitBase(nn.Module):
                 grid = torch.stack([row_g, col_g], dim=-1)
                 if tokens.ndim == 5:
                     bandsets = tokens.shape[3]
-                    positions = repeat(
-                        grid, "h w p -> b h w b_s p", b=b, b_s=bandsets
-                    )
+                    positions = repeat(grid, "h w p -> b h w b_s p", b=b, b_s=bandsets)
                 else:
                     timesteps, bandsets = tokens.shape[3], tokens.shape[4]
                     positions = repeat(
@@ -1130,35 +1158,39 @@ class FlexiVitBase(nn.Module):
                 position_dict[modality_name] = positions
                 continue
 
-            # 3D RoPE: emit (t, row, col) coordinates per token.
+            # 3D RoPE: emit (t, row, col) coordinates per token. ``t_values``
+            # is per-(batch, slot) days, broadcast to the modality's token
+            # layout. Static modalities keep ``t=0`` (no temporal anchor).
             if tokens.ndim == 3:
                 # (b, b_s, d): static modality. All zeros.
                 pass
             elif tokens.ndim == 4:
                 # (b, t, b_s, d): temporal-only modality.
                 b_, t_, bs_, _ = tokens.shape
-                t_grid = torch.arange(t_, device=device, dtype=torch.float32)
-                positions[..., 0] = repeat(
-                    t_grid, "t -> b t b_s", b=b_, b_s=bs_
+                t_values = self._select_t_values(
+                    days_per_timestep, b_, t_, device=device
                 )
+                positions[..., 0] = repeat(t_values, "b t -> b t b_s", b_s=bs_)
             elif tokens.ndim == 5:
                 # (b, h, w, b_s, d): spatial-only multitemporal-static.
                 row_g, col_g = torch.meshgrid(grid_row, grid_col, indexing="ij")
                 bs_ = tokens.shape[3]
-                positions[..., 1] = repeat(
-                    row_g, "h w -> b h w b_s", b=b, b_s=bs_
-                )
-                positions[..., 2] = repeat(
-                    col_g, "h w -> b h w b_s", b=b, b_s=bs_
-                )
+                positions[..., 1] = repeat(row_g, "h w -> b h w b_s", b=b, b_s=bs_)
+                positions[..., 2] = repeat(col_g, "h w -> b h w b_s", b=b, b_s=bs_)
             elif tokens.ndim == 6:
                 # (b, h, w, t, b_s, d): full spatiotemporal.
                 row_g, col_g = torch.meshgrid(grid_row, grid_col, indexing="ij")
                 t_ = tokens.shape[3]
                 bs_ = tokens.shape[4]
-                t_grid = torch.arange(t_, device=device, dtype=torch.float32)
+                t_values = self._select_t_values(
+                    days_per_timestep, b, t_, device=device
+                )
                 positions[..., 0] = repeat(
-                    t_grid, "t -> b h w t b_s", b=b, h=tokens.shape[1], w=tokens.shape[2], b_s=bs_
+                    t_values,
+                    "b t -> b h w t b_s",
+                    h=tokens.shape[1],
+                    w=tokens.shape[2],
+                    b_s=bs_,
                 )
                 positions[..., 1] = repeat(
                     row_g, "h w -> b h w t b_s", b=b, t=t_, b_s=bs_
@@ -1175,6 +1207,31 @@ class FlexiVitBase(nn.Module):
         position_dict.update(original_masks_dict)
         positions, _ = self.collapse_and_combine_hwtc(position_dict)
         return positions
+
+    @staticmethod
+    def _select_t_values(
+        days_per_timestep: Tensor | None,
+        batch_size: int,
+        num_timesteps: int,
+        device: torch.device,
+    ) -> Tensor:
+        """Pick the first ``num_timesteps`` days for each sample.
+
+        Falls back to slot indices ``0..T-1`` when no timestamps were passed
+        (e.g. unit tests calling ``build_spatial_positions`` directly).
+        """
+        if days_per_timestep is None:
+            return repeat(
+                torch.arange(num_timesteps, device=device, dtype=torch.float32),
+                "t -> b t",
+                b=batch_size,
+            )
+        if days_per_timestep.shape[1] < num_timesteps:
+            raise ValueError(
+                f"timestamps has {days_per_timestep.shape[1]} slots but modality "
+                f"requires {num_timesteps}"
+            )
+        return days_per_timestep[:, :num_timesteps].to(device)
 
     @staticmethod
     def split_x_y_positions(
@@ -1353,6 +1410,8 @@ class Encoder(FlexiVitBase):
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
         temporal_rope_dim_frac: float = 0.25,
+        rope_temporal_base: float | None = None,
+        rope_temporal_coordinate_scale: float = 1.0,
     ):
         """Initialize the encoder.
 
@@ -1403,6 +1462,13 @@ class Encoder(FlexiVitBase):
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
             rope_mixed_base: Frequency base used to initialize learnable
                 RoPE-Mixed frequencies.
+            temporal_rope_dim_frac: Fraction of head_dim allocated to the
+                temporal axis in axial 3D RoPE.
+            rope_temporal_base: Optional separate frequency base for the
+                temporal axis in axial 3D RoPE. ``None`` reuses ``rope_base``.
+            rope_temporal_coordinate_scale: Multiplier applied to days-since-2000
+                temporal RoPE coordinates (default 1.0 = raw days). E.g. set to
+                1/30 for months.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1423,6 +1489,8 @@ class Encoder(FlexiVitBase):
             rope_coordinate_scale=rope_coordinate_scale,
             rope_mixed_base=rope_mixed_base,
             temporal_rope_dim_frac=temporal_rope_dim_frac,
+            rope_temporal_base=rope_temporal_base,
+            rope_temporal_coordinate_scale=rope_temporal_coordinate_scale,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1765,6 +1833,7 @@ class Encoder(FlexiVitBase):
             original_masks_dict,
             patch_size,
             input_res,
+            timestamps=timestamps,
         )
         tokens_dict.update(original_masks_dict)
 
@@ -1972,6 +2041,8 @@ class PredictorBase(FlexiVitBase):
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
         temporal_rope_dim_frac: float = 0.25,
+        rope_temporal_base: float | None = None,
+        rope_temporal_coordinate_scale: float = 1.0,
     ):
         """Initialize the predictor.
 
@@ -1996,6 +2067,13 @@ class PredictorBase(FlexiVitBase):
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
             rope_mixed_base: Frequency base used to initialize learnable
                 RoPE-Mixed frequencies.
+            temporal_rope_dim_frac: Fraction of head_dim allocated to the
+                temporal axis in axial 3D RoPE.
+            rope_temporal_base: Optional separate frequency base for the
+                temporal axis in axial 3D RoPE. ``None`` reuses ``rope_base``.
+            rope_temporal_coordinate_scale: Multiplier applied to days-since-2000
+                temporal RoPE coordinates (default 1.0 = raw days). E.g. set to
+                1/30 for months.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2016,6 +2094,8 @@ class PredictorBase(FlexiVitBase):
             rope_coordinate_scale=rope_coordinate_scale,
             rope_mixed_base=rope_mixed_base,
             temporal_rope_dim_frac=temporal_rope_dim_frac,
+            rope_temporal_base=rope_temporal_base,
+            rope_temporal_coordinate_scale=rope_temporal_coordinate_scale,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -2220,6 +2300,7 @@ class Predictor(PredictorBase):
             original_masks_dict,
             patch_size,
             input_res,
+            timestamps=timestamps,
         )
         tokens_dict.update(original_masks_dict)
         all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -2415,6 +2496,8 @@ class EncoderConfig(Config):
     rope_coordinate_scale: float = 1.0
     rope_mixed_base: float = 10.0
     temporal_rope_dim_frac: float = 0.25
+    rope_temporal_base: float | None = None
+    rope_temporal_coordinate_scale: float = 1.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2459,6 +2542,15 @@ class EncoderConfig(Config):
             raise ValueError(
                 f"temporal_rope_dim_frac must be in (0, 1), got "
                 f"{self.temporal_rope_dim_frac}"
+            )
+        if self.rope_temporal_base is not None and self.rope_temporal_base <= 0:
+            raise ValueError(
+                f"rope_temporal_base must be positive, got {self.rope_temporal_base}"
+            )
+        if self.rope_temporal_coordinate_scale <= 0:
+            raise ValueError(
+                "rope_temporal_coordinate_scale must be positive, got "
+                f"{self.rope_temporal_coordinate_scale}"
             )
         head_dim = self.embedding_size // self.num_heads
         if self.spatial_pos_encoding in ("rope", "rope_mixed"):
@@ -2514,6 +2606,8 @@ class PredictorConfig(Config):
     rope_coordinate_scale: float = 1.0
     rope_mixed_base: float = 10.0
     temporal_rope_dim_frac: float = 0.25
+    rope_temporal_base: float | None = None
+    rope_temporal_coordinate_scale: float = 1.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2549,6 +2643,15 @@ class PredictorConfig(Config):
             raise ValueError(
                 f"temporal_rope_dim_frac must be in (0, 1), got "
                 f"{self.temporal_rope_dim_frac}"
+            )
+        if self.rope_temporal_base is not None and self.rope_temporal_base <= 0:
+            raise ValueError(
+                f"rope_temporal_base must be positive, got {self.rope_temporal_base}"
+            )
+        if self.rope_temporal_coordinate_scale <= 0:
+            raise ValueError(
+                "rope_temporal_coordinate_scale must be positive, got "
+                f"{self.rope_temporal_coordinate_scale}"
             )
         head_dim = self.decoder_embedding_size // self.num_heads
         if self.spatial_pos_encoding in ("rope", "rope_mixed"):

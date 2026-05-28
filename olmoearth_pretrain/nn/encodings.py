@@ -12,6 +12,45 @@ They cover the following:
 import numpy as np
 import torch
 
+# Cumulative days at the start of each month (non-leap year). Index by 0-based
+# month. Used to convert (day, month, year) timestamps to a calendar-day count.
+_DAYS_BEFORE_MONTH = torch.tensor(
+    [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334],
+    dtype=torch.float32,
+)
+
+
+def timestamps_to_days(
+    timestamps: torch.Tensor, anchor_year: int = 2000
+) -> torch.Tensor:
+    """Convert ``(day, month, year)`` timestamps to days-since-anchor.
+
+    Helios timestamps are stored as ``(day, month - 1, year)`` (1-indexed day,
+    0-indexed month, full Gregorian year). Returns an approximate count of
+    calendar days since ``anchor_year-01-01`` using ``365.25`` days/year and
+    non-leap-year cumulative month offsets. Off by at most ~1 day, which is
+    well below the resolution RoPE rotation cares about.
+
+    Args:
+        timestamps: Long tensor with shape ``(..., 3)``. Last dim is
+            ``(day, month, year)``.
+        anchor_year: Reference year subtracted to keep magnitudes small.
+            Defaults to 2000.
+
+    Returns:
+        Float tensor of shape ``timestamps.shape[:-1]`` containing days since
+        ``anchor_year-01-01``.
+    """
+    if timestamps.shape[-1] != 3:
+        raise ValueError(
+            f"timestamps last dim must be 3 (day, month, year), got {timestamps.shape}"
+        )
+    day = timestamps[..., 0].to(torch.float32)
+    month = timestamps[..., 1].to(torch.long)
+    year = timestamps[..., 2].to(torch.float32)
+    offsets = _DAYS_BEFORE_MONTH.to(timestamps.device)[month]
+    return (year - anchor_year) * 365.25 + offsets + (day - 1.0)
+
 
 def get_1d_sincos_pos_encoding(pos: torch.Tensor, encoding_dim: int) -> torch.Tensor:
     """Get 1D sin cos position encoding for a given set of positions.
@@ -199,9 +238,7 @@ def apply_2d_rope(
     return torch.cat([x_row, x_col], dim=-1)
 
 
-def axial_3d_dim_split(
-    head_dim: int, temporal_dim_frac: float
-) -> tuple[int, int, int]:
+def axial_3d_dim_split(head_dim: int, temporal_dim_frac: float) -> tuple[int, int, int]:
     """Compute (d_t, d_row, d_col) chunk sizes for axial 3D RoPE.
 
     Allocates ``round(head_dim * temporal_dim_frac / 2) * 2`` to the temporal
@@ -234,6 +271,7 @@ def apply_3d_rope(
     positions: torch.Tensor,
     base: float = 10000.0,
     temporal_dim_frac: float = 0.25,
+    temporal_base: float | None = None,
 ) -> torch.Tensor:
     """Apply axial 3D RoPE to attention query/key tensors.
 
@@ -247,9 +285,13 @@ def apply_3d_rope(
             ``(N, H, D)``.
         positions: Spatiotemporal coordinates with shape ``(B, N, 3)`` or
             packed ``(N, 3)``. Last coord dim is ``(t, row, col)``.
-        base: RoPE frequency base.
+        base: RoPE frequency base for the spatial axes.
         temporal_dim_frac: Fraction of ``head_dim`` allocated to the temporal
             chunk (default 0.25, matching the existing additive 1/4 split).
+        temporal_base: Optional separate frequency base for the temporal
+            axis. ``None`` (default) reuses ``base``. Useful when temporal
+            coordinates live on a very different scale (e.g. days) than
+            spatial patch indices.
     """
     head_dim = x.shape[-1]
     if positions.shape[-1] != 3:
@@ -284,7 +326,8 @@ def apply_3d_rope(
     x_row = x[..., d_t : d_t + d_row]
     x_col = x[..., d_t + d_row :]
 
-    x_t = apply_1d_rope(x_t, t_pos, base)
+    t_base = base if temporal_base is None else temporal_base
+    x_t = apply_1d_rope(x_t, t_pos, t_base)
     x_row = apply_1d_rope(x_row, row_pos, base)
     x_col = apply_1d_rope(x_col, col_pos, base)
     return torch.cat([x_t, x_row, x_col], dim=-1)

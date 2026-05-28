@@ -1349,6 +1349,67 @@ def test_predictor_forward_rope_3d(
     assert predictor.blocks[0].attn.q.weight.grad is not None
 
 
+@torch.inference_mode()
+def test_encoder_rope_3d_uses_real_timestamp_deltas(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """3D RoPE outputs should change when timestamps shift (vs. slot index)."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=32,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        spatial_pos_encoding="rope_3d",
+        rope_temporal_base=1000.0,
+    )
+    encoder.eval()
+
+    B, H, W, T = 1, 8, 8, 2
+    s2 = torch.randn(B, H, W, T, sentinel2_l2a_num_bands)
+    s2_mask = torch.zeros(B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long)
+    latlon = torch.randn(B, latlon_num_bands)
+    latlon_mask = torch.zeros(B, latlon_num_bands, dtype=torch.long)
+
+    # Same slot indices, different real-day deltas (1 month apart vs 6 months).
+    timestamps_close = torch.tensor([[[1, 0, 2023], [1, 1, 2023]]], dtype=torch.long)
+    timestamps_far = torch.tensor([[[1, 0, 2023], [1, 6, 2023]]], dtype=torch.long)
+
+    sample_close = MaskedOlmoEarthSample(
+        sentinel2_l2a=s2,
+        sentinel2_l2a_mask=s2_mask,
+        latlon=latlon,
+        latlon_mask=latlon_mask,
+        timestamps=timestamps_close,
+    )
+    sample_far = MaskedOlmoEarthSample(
+        sentinel2_l2a=s2,
+        sentinel2_l2a_mask=s2_mask,
+        latlon=latlon,
+        latlon_mask=latlon_mask,
+        timestamps=timestamps_far,
+    )
+    out_close, _, _ = unpack_encoder_output(
+        encoder.forward(sample_close, patch_size=4, input_res=10)
+    )
+    out_far, _, _ = unpack_encoder_output(
+        encoder.forward(sample_far, patch_size=4, input_res=10)
+    )
+    assert out_close.sentinel2_l2a is not None
+    assert out_far.sentinel2_l2a is not None
+    # The month additive embedding changes too, but isolating that we still
+    # expect different outputs since the temporal RoPE rotation shifts with the
+    # day delta. Just assert tensors aren't identical.
+    assert not torch.allclose(out_close.sentinel2_l2a, out_far.sentinel2_l2a, atol=1e-4)
+
+
 def test_predictor_forward_rope_3d_mixed(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:

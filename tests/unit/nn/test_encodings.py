@@ -15,6 +15,7 @@ from olmoearth_pretrain.nn.encodings import (
     get_month_encoding_table,
     init_2d_rope_mixed_freqs,
     init_3d_rope_mixed_freqs,
+    timestamps_to_days,
 )
 
 
@@ -332,7 +333,9 @@ def test_apply_3d_rope_temporal_only_when_spatial_zero() -> None:
 
     x = torch.randn(1, 2, 3, 16)
     t_vals = torch.tensor([[1.0, 2.0, 3.0]])
-    positions = torch.stack([t_vals, torch.zeros_like(t_vals), torch.zeros_like(t_vals)], dim=-1)
+    positions = torch.stack(
+        [t_vals, torch.zeros_like(t_vals), torch.zeros_like(t_vals)], dim=-1
+    )
     out = apply_3d_rope(x, positions, temporal_dim_frac=0.25)
 
     d_t, _, _ = axial_3d_dim_split(16, 0.25)
@@ -469,3 +472,71 @@ def test_apply_3d_rope_mixed_rejects_freqs_shape_mismatch() -> None:
     freqs = init_3d_rope_mixed_freqs(head_dim, num_heads=3)
     with pytest.raises(ValueError):
         apply_3d_rope_mixed(x, positions, freqs)
+
+
+def test_apply_3d_rope_temporal_base_changes_only_temporal_slice() -> None:
+    """A different temporal_base should rotate only the temporal chunk."""
+    x = torch.randn(1, 2, 4, 16)
+    positions = torch.tensor([[[1.0, 0.0, 0.0]] * 4])  # all (t=1, 0, 0)
+
+    out_default = apply_3d_rope(x, positions, base=10000.0, temporal_dim_frac=0.25)
+    out_separate = apply_3d_rope(
+        x,
+        positions,
+        base=10000.0,
+        temporal_dim_frac=0.25,
+        temporal_base=1000.0,
+    )
+
+    d_t, _, _ = axial_3d_dim_split(16, 0.25)
+    # Spatial slice must match (positions are zero on row/col, base unchanged).
+    assert torch.allclose(out_default[..., d_t:], out_separate[..., d_t:])
+    # Temporal slice must differ (different base => different rotation angles).
+    assert not torch.allclose(out_default[..., :d_t], out_separate[..., :d_t])
+    # Both still preserve norms.
+    assert torch.allclose(out_separate.norm(dim=-1), x.norm(dim=-1), atol=1e-5)
+
+
+# ----- timestamps_to_days -----
+
+
+def test_timestamps_to_days_known_values() -> None:
+    """Sanity check days computation for hand-picked dates."""
+    # Helios convention: (day, month-1, year). All anchored at 2000-01-01.
+    timestamps = torch.tensor(
+        [
+            [1, 0, 2000],  # 2000-01-01 -> day 0
+            [1, 1, 2000],  # 2000-02-01 -> day 31
+            [1, 2, 2000],  # 2000-03-01 -> day 59 (non-leap offset)
+            [15, 7, 2023],  # 2023-08-15
+        ],
+        dtype=torch.long,
+    )
+    days = timestamps_to_days(timestamps)
+    assert days.shape == (4,)
+    assert days[0].item() == pytest.approx(0.0)
+    assert days[1].item() == pytest.approx(31.0)
+    assert days[2].item() == pytest.approx(59.0)
+    expected_2023 = 23 * 365.25 + 212 + 14
+    assert days[3].item() == pytest.approx(expected_2023, abs=1e-3)
+
+
+def test_timestamps_to_days_relative_deltas_match_calendar() -> None:
+    """Within a sample, deltas should approximate true calendar gaps."""
+    timestamps = torch.tensor(
+        [
+            [[15, 0, 2023], [15, 1, 2023], [15, 2, 2023]],  # Jan/Feb/Mar 15
+        ],
+        dtype=torch.long,
+    )
+    days = timestamps_to_days(timestamps)  # (1, 3)
+    deltas = days[0, 1:] - days[0, :-1]
+    # Gaps between (Jan15->Feb15) and (Feb15->Mar15) should be ~31 and ~28.
+    assert deltas[0].item() == pytest.approx(31.0, abs=1.0)
+    assert deltas[1].item() == pytest.approx(28.0, abs=1.0)
+
+
+def test_timestamps_to_days_rejects_bad_last_dim() -> None:
+    """Non-3 last dim should raise."""
+    with pytest.raises(ValueError):
+        timestamps_to_days(torch.zeros(2, 2, dtype=torch.long))

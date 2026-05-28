@@ -127,6 +127,7 @@ class Attention(nn.Module):
         use_3d_rope: bool = False,
         use_3d_rope_mixed: bool = False,
         temporal_rope_dim_frac: float = 0.25,
+        rope_temporal_base: float | None = None,
     ) -> None:
         """Initialize the attention module.
 
@@ -141,7 +142,7 @@ class Attention(nn.Module):
             cross_attn: Enable cross-attention
             use_flash_attn: Use flash attention
             use_2d_rope: Apply axial 2D RoPE to queries and keys
-            rope_base: RoPE frequency base (axial)
+            rope_base: RoPE frequency base (axial; spatial axes for 3D)
             use_2d_rope_mixed: Apply RoPE-Mixed (learnable 2D frequencies) to
                 queries and keys. Mutually exclusive with the other RoPE flags.
             rope_mixed_base: Frequency base used to initialize the learnable
@@ -153,6 +154,8 @@ class Attention(nn.Module):
             temporal_rope_dim_frac: Fraction of head_dim allocated to the
                 temporal chunk in axial 3D RoPE (default 0.25, matching the
                 additive 1/4 split used by absolute encodings).
+            rope_temporal_base: Optional separate frequency base for the
+                temporal axis in axial 3D RoPE. ``None`` reuses ``rope_base``.
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -190,6 +193,7 @@ class Attention(nn.Module):
         self.use_3d_rope = use_3d_rope
         self.use_3d_rope_mixed = use_3d_rope_mixed
         self.temporal_rope_dim_frac = temporal_rope_dim_frac
+        self.rope_temporal_base = rope_temporal_base
         if use_2d_rope_mixed:
             self.rope_mixed_freqs = nn.Parameter(
                 init_2d_rope_mixed_freqs(
@@ -353,9 +357,7 @@ class Attention(nn.Module):
         )
         if rope_active:
             if rope_positions is None:
-                raise ValueError(
-                    "rope_positions must be provided when RoPE is enabled"
-                )
+                raise ValueError("rope_positions must be provided when RoPE is enabled")
             k_positions = rope_positions if y is None else rope_positions_y
             if k_positions is None:
                 raise ValueError(
@@ -373,12 +375,14 @@ class Attention(nn.Module):
                     rope_positions,
                     base=self.rope_base,
                     temporal_dim_frac=self.temporal_rope_dim_frac,
+                    temporal_base=self.rope_temporal_base,
                 )
                 k = apply_3d_rope(
                     k,
                     k_positions,
                     base=self.rope_base,
                     temporal_dim_frac=self.temporal_rope_dim_frac,
+                    temporal_base=self.rope_temporal_base,
                 )
             else:
                 q = apply_3d_rope_mixed(q, rope_positions, self.rope_mixed_freqs)
@@ -578,6 +582,7 @@ class Block(nn.Module):
         use_3d_rope: bool = False,
         use_3d_rope_mixed: bool = False,
         temporal_rope_dim_frac: float = 0.25,
+        rope_temporal_base: float | None = None,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -603,6 +608,8 @@ class Block(nn.Module):
             use_3d_rope_mixed: Apply RoPE-Mixed (learnable 3D frequencies).
             temporal_rope_dim_frac: Fraction of head_dim allocated to the
                 temporal chunk in axial 3D RoPE.
+            rope_temporal_base: Optional separate frequency base for the
+                temporal axis in axial 3D RoPE. ``None`` reuses ``rope_base``.
         """
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -623,6 +630,7 @@ class Block(nn.Module):
             use_3d_rope=use_3d_rope,
             use_3d_rope_mixed=use_3d_rope_mixed,
             temporal_rope_dim_frac=temporal_rope_dim_frac,
+            rope_temporal_base=rope_temporal_base,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
