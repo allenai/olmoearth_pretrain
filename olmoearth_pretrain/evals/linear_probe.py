@@ -433,7 +433,7 @@ def weighted_dice_loss(
 
     # CE loss provides gradient even when the minority class is absent from
     # the batch, preventing the model from collapsing to all-background.
-    ce_loss = F.cross_entropy(logits, targets_masked, ignore_index=ignore_index)
+    ce_loss = F.cross_entropy(logits, targets, ignore_index=ignore_index)
 
     return dice_loss + ce_loss
 
