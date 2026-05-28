@@ -12,6 +12,7 @@ from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     EncoderConfig,
     FlexiVitBase,
+    MLPProjectionHead,
     MultiModalPatchEmbeddings,
     PoolingType,
     Predictor,
@@ -884,6 +885,85 @@ class TestProjectionAndAggregation:
         x_tensor = torch.ones((b, h * w * t, d))
         out_tensor = layer(x_tensor)
         assert out_tensor.shape == (b, h * w * t, out_d)
+
+
+class TestMLPProjectionHead:
+    """Unit tests for the non-linear output projection head."""
+
+    def test_projects_tokens_to_output_size(self) -> None:
+        """Per-token MLP packs tokens to output_size, preserving structure."""
+        b, h, w, t, d, out_d = 2, 4, 4, 3, 128, 64
+        sentinel_2 = torch.randn((b, h, w, t, d))
+        sentinel_2_mask = torch.zeros((b, h, w, t)).long()
+        t_and_m = TokensAndMasks(
+            sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
+        )
+
+        head = MLPProjectionHead(
+            input_size=d, output_size=out_d, hidden_sizes=[256, 256]
+        )
+        out = head(t_and_m)
+        assert isinstance(out, TokensAndMasks)
+        assert out.sentinel2_l2a is not None
+        assert out.sentinel2_l2a.shape == (b, h, w, t, out_d)
+        # Mask is passed through untouched.
+        assert torch.equal(out.sentinel2_l2a_mask, sentinel_2_mask)
+
+    def test_is_nonlinear(self) -> None:
+        """A multi-layer head with GELU is not a pure linear map."""
+        torch.manual_seed(0)
+        d, out_d = 32, 8
+        head = MLPProjectionHead(input_size=d, output_size=out_d, hidden_sizes=[64])
+        x = torch.randn(4, d)
+        # f(2x) != 2 f(x) for a non-linear map.
+        assert not torch.allclose(head(2 * x), 2 * head(x), atol=1e-4)
+
+    def test_tensor_input(self) -> None:
+        """Raw tensor input is projected on the last dim."""
+        b, n, d, out_d = 2, 10, 128, 64
+        head = MLPProjectionHead(input_size=d, output_size=out_d, hidden_sizes=[256])
+        out = head(torch.randn(b, n, d))
+        assert isinstance(out, torch.Tensor)
+        assert out.shape == (b, n, out_d)
+
+    def test_empty_hidden_sizes_raises(self) -> None:
+        """Empty hidden_sizes is rejected (use the linear projector instead)."""
+        with pytest.raises(ValueError):
+            MLPProjectionHead(input_size=16, output_size=8, hidden_sizes=[])
+
+    def test_encoder_uses_mlp_head_when_configured(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """EncoderConfig wires the MLP head when output_proj_hidden_sizes is set."""
+        config = EncoderConfig(
+            [m.name for m in supported_modalities],
+            output_embedding_size=64,
+            output_proj_hidden_sizes=[256, 128],
+        )
+        encoder = config.build()
+        assert isinstance(encoder.embedding_projector, MLPProjectionHead)
+
+    def test_encoder_uses_linear_head_by_default(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Without output_proj_hidden_sizes the packer stays a single linear."""
+        config = EncoderConfig(
+            [m.name for m in supported_modalities],
+            output_embedding_size=64,
+        )
+        encoder = config.build()
+        assert isinstance(encoder.embedding_projector, ProjectAndAggregate)
+
+    def test_config_validation_requires_output_embedding_size(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """output_proj_hidden_sizes without output_embedding_size is invalid."""
+        config = EncoderConfig(
+            [m.name for m in supported_modalities],
+            output_proj_hidden_sizes=[256],
+        )
+        with pytest.raises(ValueError):
+            config.validate()
 
 
 class TestBandDropout:

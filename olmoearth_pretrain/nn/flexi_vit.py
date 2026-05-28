@@ -180,6 +180,60 @@ class ProjectAndAggregate(nn.Module):
             return self.apply_project_then_aggregate(x)
 
 
+class MLPProjectionHead(nn.Module):
+    """Per-token non-linear MLP that packs tokens down to a small output size.
+
+    Replaces the single ``nn.Linear`` bottleneck used when projecting encoder
+    tokens to a small ``output_embedding_size`` (e.g. 64). Each token is mapped
+    ``input_size -> hidden_sizes[0] -> ... -> output_size`` with LayerNorm + GELU
+    between layers, giving the model more capacity to compress the representation
+    before the bottleneck. Token structure is preserved (applied per modality).
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        output_size: int,
+        hidden_sizes: list[int],
+        use_layernorm: bool = True,
+    ):
+        """Initialize the MLP projection head.
+
+        Args:
+            input_size: Embedding size of the incoming tokens.
+            output_size: Size of the projected output embedding.
+            hidden_sizes: Widths of the hidden layers. Must be non-empty (use the
+                plain ``ProjectAndAggregate`` linear projector for the no-hidden case).
+            use_layernorm: If True, apply LayerNorm after each hidden linear layer.
+        """
+        super().__init__()
+        if not hidden_sizes:
+            raise ValueError("hidden_sizes must be non-empty for MLPProjectionHead")
+        dims = [input_size, *hidden_sizes]
+        layers: list[nn.Module] = []
+        for in_dim, out_dim in zip(dims[:-1], dims[1:]):
+            layers.append(nn.Linear(in_dim, out_dim))
+            if use_layernorm:
+                layers.append(nn.LayerNorm(out_dim))
+            layers.append(nn.GELU())
+        layers.append(nn.Linear(dims[-1], output_size))
+        self.projection = nn.Sequential(*layers)
+
+    def forward(
+        self, x: TokensAndMasks | torch.Tensor
+    ) -> TokensAndMasks | torch.Tensor:
+        """Project each token, preserving the (masked) token structure."""
+        if isinstance(x, TokensAndMasks):
+            projected = x._asdict()
+            for modality in x.modalities:
+                projected[modality] = self.projection(getattr(x, modality))
+            return TokensAndMasks(**projected)
+        elif isinstance(x, torch.Tensor):
+            return self.projection(x)
+        else:
+            raise ValueError(f"Invalid input type: {type(x)}")
+
+
 class MultiModalPatchEmbeddings(nn.Module):
     """Module that patchifies and encodes the input data for multiple modalities."""
 
@@ -1129,6 +1183,7 @@ class Encoder(FlexiVitBase):
         band_dropout_modalities: list[str] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
+        output_proj_hidden_sizes: list[int] | None = None,
     ):
         """Initialize the encoder.
 
@@ -1173,6 +1228,14 @@ class Encoder(FlexiVitBase):
             post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm.
+            output_proj_hidden_sizes: Optional list of hidden layer widths for the
+                output projection ("packer") that maps tokens to
+                ``output_embedding_size``. Only used when ``output_embedding_size``
+                is set. If None/empty, the packer is a single nn.Linear (the
+                original hard bottleneck). Otherwise it is an MLP
+                Linear(embedding_size, h[0]) -> LN -> GELU -> ... -> Linear(h[-1],
+                output_embedding_size), giving more capacity to compress before
+                the bottleneck.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1208,6 +1271,7 @@ class Encoder(FlexiVitBase):
         self.band_dropout_modalities = band_dropout_modalities
         self.patch_embed_hidden_sizes = patch_embed_hidden_sizes
         self.post_proj_hidden_sizes = post_proj_hidden_sizes
+        self.output_proj_hidden_sizes = output_proj_hidden_sizes
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
@@ -1222,14 +1286,21 @@ class Encoder(FlexiVitBase):
         )
         self.output_embedding_size = output_embedding_size
         # If output_embedding_size is set, project tokens to that size after attention
-        self.embedding_projector: ProjectAndAggregate | None = None
+        self.embedding_projector: ProjectAndAggregate | MLPProjectionHead | None = None
         if output_embedding_size is not None:
-            self.embedding_projector = ProjectAndAggregate(
-                embedding_size=self.embedding_size,
-                num_layers=1,
-                output_embedding_size=output_embedding_size,
-                only_project=True,
-            )
+            if output_proj_hidden_sizes:
+                self.embedding_projector = MLPProjectionHead(
+                    input_size=self.embedding_size,
+                    output_size=output_embedding_size,
+                    hidden_sizes=output_proj_hidden_sizes,
+                )
+            else:
+                self.embedding_projector = ProjectAndAggregate(
+                    embedding_size=self.embedding_size,
+                    num_layers=1,
+                    output_embedding_size=output_embedding_size,
+                    only_project=True,
+                )
             final_embedding_size = output_embedding_size
         else:
             final_embedding_size = self.embedding_size
@@ -2120,6 +2191,7 @@ class EncoderConfig(Config):
     band_dropout_modalities: list[str] | None = None
     patch_embed_hidden_sizes: list[int] | None = None
     post_proj_hidden_sizes: list[int] | None = None
+    output_proj_hidden_sizes: list[int] | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2134,6 +2206,10 @@ class EncoderConfig(Config):
             for modality in self.supported_modalities:
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
+        if self.output_proj_hidden_sizes and self.output_embedding_size is None:
+            raise ValueError(
+                "output_proj_hidden_sizes requires output_embedding_size to be set"
+            )
         if self.band_dropout_modalities is not None:
             unknown = set(self.band_dropout_modalities) - set(
                 self.supported_modality_names
