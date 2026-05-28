@@ -419,9 +419,10 @@ MAP_MODALITY_PROBE_INPUTS = [
 MAP_MODALITY_PROBE_INPUT_SUFFIX = "_".join(MAP_MODALITY_PROBE_INPUTS)
 
 # Additional input-modality combinations used only for the SRTM probe so we can
-# compare elevation regression quality from S1, S2, and S1+S2 inputs.
+# compare elevation regression quality from S1, S2, Landsat, and S1+S2 inputs.
 SRTM_PROBE_INPUT_VARIANTS: list[list[str]] = [
     [Modality.SENTINEL1.name],
+    [Modality.LANDSAT.name],
     [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
 ]
 
