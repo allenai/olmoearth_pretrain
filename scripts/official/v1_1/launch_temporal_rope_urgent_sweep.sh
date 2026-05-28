@@ -4,10 +4,10 @@
 # Launches three families head-to-head:
 #   1. rope_large.py        -- ViT-large 2D RoPE baseline (the run that failed
 #                              earlier because the script wasn't committed).
-#   2. temporal_rope.py     -- axial 3D RoPE (t, row, col). Spatial base/scale
-#                              fixed; small sweep over the TEMPORAL base + scale.
+#   2. temporal_rope.py     -- axial 3D RoPE (t, row, col). Spatial + temporal
+#                              base fixed; 2-run sweep over the TEMPORAL scale.
 #   3. temporal_rope_mixed  -- learnable mixed 3D RoPE. Mixed base (2D init)
-#                              fixed; small sweep over the TEMPORAL scale (no
+#                              fixed; 2-run sweep over the TEMPORAL scale (no
 #                              temporal base knob -- freqs are learned).
 #
 # Temporal coordinate is days-since-2000, so scale=1.0 -> raw days and
@@ -33,17 +33,16 @@ SPATIAL_MIXED="\
 # ---------------------------------------------------------------------------
 # 1. ViT-large 2D RoPE baseline.
 # ---------------------------------------------------------------------------
-python scripts/official/v1_1/rope_large.py launch large_rope_base10k_scale1 ai2/jupiter \
+python scripts/official/v1_1/rope_large.py launch large_rope_base10k_scale0.25 ai2/jupiter \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT" \
     --model.encoder_config.rope_base=10000 \
     --model.decoder_config.rope_base=10000 \
-    --model.encoder_config.rope_coordinate_scale=1.0 \
-    --model.decoder_config.rope_coordinate_scale=1.0
+    --model.encoder_config.rope_coordinate_scale=0.25 \
+    --model.decoder_config.rope_coordinate_scale=0.25
 
 # ---------------------------------------------------------------------------
-# 2. Axial 3D RoPE: sweep temporal base x temporal scale, fixed spatial.
-#    temporal_base in {1000, 10000}, temporal_scale in {1.0 days, 0.0333 months}.
+# 2. Axial 3D RoPE: fixed temporal_base=1000, sweep temporal scale (days vs months).
 # ---------------------------------------------------------------------------
 AXIAL_SCRIPT="scripts/official/v1_1/temporal_rope.py"
 
@@ -55,14 +54,6 @@ python "$AXIAL_SCRIPT" launch trope_axial_tbase1k_tscale_days ai2/jupiter \
     --model.encoder_config.rope_temporal_coordinate_scale=1.0 \
     --model.decoder_config.rope_temporal_coordinate_scale=1.0
 
-python "$AXIAL_SCRIPT" launch trope_axial_tbase10k_tscale_days ai2/jupiter \
-    $LAUNCH_ARGS $SPATIAL_AXIAL \
-    --trainer.callbacks.wandb.project="$PROJECT" \
-    --model.encoder_config.rope_temporal_base=10000 \
-    --model.decoder_config.rope_temporal_base=10000 \
-    --model.encoder_config.rope_temporal_coordinate_scale=1.0 \
-    --model.decoder_config.rope_temporal_coordinate_scale=1.0
-
 python "$AXIAL_SCRIPT" launch trope_axial_tbase1k_tscale_months ai2/jupiter \
     $LAUNCH_ARGS $SPATIAL_AXIAL \
     --trainer.callbacks.wandb.project="$PROJECT" \
@@ -71,17 +62,9 @@ python "$AXIAL_SCRIPT" launch trope_axial_tbase1k_tscale_months ai2/jupiter \
     --model.encoder_config.rope_temporal_coordinate_scale=0.0333 \
     --model.decoder_config.rope_temporal_coordinate_scale=0.0333
 
-python "$AXIAL_SCRIPT" launch trope_axial_tbase100_tscale_months ai2/jupiter \
-    $LAUNCH_ARGS $SPATIAL_AXIAL \
-    --trainer.callbacks.wandb.project="$PROJECT" \
-    --model.encoder_config.rope_temporal_base=100 \
-    --model.decoder_config.rope_temporal_base=100 \
-    --model.encoder_config.rope_temporal_coordinate_scale=0.0333 \
-    --model.decoder_config.rope_temporal_coordinate_scale=0.0333
-
 # ---------------------------------------------------------------------------
 # 3. Mixed 3D RoPE: sweep temporal scale only (freqs learned), fixed 2D base.
-#    temporal_scale in {1.0 days, 0.0333 months, 0.00274 years}.
+#    temporal_scale in {1.0 days, 0.0333 months}.
 # ---------------------------------------------------------------------------
 MIXED_SCRIPT="scripts/official/v1_1/temporal_rope_mixed.py"
 
@@ -96,9 +79,3 @@ python "$MIXED_SCRIPT" launch trope_mixed_tscale_months ai2/jupiter \
     --trainer.callbacks.wandb.project="$PROJECT" \
     --model.encoder_config.rope_temporal_coordinate_scale=0.0333 \
     --model.decoder_config.rope_temporal_coordinate_scale=0.0333
-
-python "$MIXED_SCRIPT" launch trope_mixed_tscale_years ai2/jupiter \
-    $LAUNCH_ARGS $SPATIAL_MIXED \
-    --trainer.callbacks.wandb.project="$PROJECT" \
-    --model.encoder_config.rope_temporal_coordinate_scale=0.00274 \
-    --model.decoder_config.rope_temporal_coordinate_scale=0.00274
