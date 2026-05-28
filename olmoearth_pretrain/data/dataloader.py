@@ -376,6 +376,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 (standard_hw, standard_hw, 1, 1), dtype=np.float32
             )
             output_dict["worldcover"] = mock_worldcover
+        if Modality.WORLDCOVER_ONEHOT.name in self.dataset.training_modalities:
+            num_classes = Modality.WORLDCOVER_ONEHOT.num_bands
+            class_ids = rng.integers(0, num_classes, size=(standard_hw, standard_hw, 1))
+            mock_worldcover_onehot = np.eye(num_classes, dtype=np.float32)[class_ids]
+            output_dict["worldcover_onehot"] = mock_worldcover_onehot
         if Modality.LATLON.name in self.dataset.training_modalities:
             mock_latlon = rng.random((2,), dtype=np.float32)
             output_dict["latlon"] = mock_latlon

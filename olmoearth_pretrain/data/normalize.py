@@ -123,6 +123,10 @@ class Normalizer:
         Returns:
             The normalized data.
         """
+        # Categorical/one-hot modalities (e.g. worldcover_onehot) are already in the
+        # right range and have no min/max or mean/std entries in the config.
+        if modality.skip_normalization:
+            return data
         if self.strategy == Strategy.PREDEFINED:
             return self._normalize_predefined(modality, data)
         elif self.strategy == Strategy.COMPUTED:

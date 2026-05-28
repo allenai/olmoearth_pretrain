@@ -31,6 +31,11 @@ SENTINEL1_NODATA = -32768
 # Number of timesteps for YEAR data.
 YEAR_NUM_TIMESTEPS = 12
 
+# Raw ESA WorldCover class codes, in canonical order. The worldcover modality stores
+# a single band holding one of these codes per pixel. The derived worldcover_onehot
+# modality expands that band into one channel per class (in this order).
+WORLDCOVER_CLASSES = [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100]
+
 
 def get_resolution(resolution_factor: int) -> float | int:
     """Compute the resolution.
@@ -116,6 +121,8 @@ class ModalitySpec:
         is_multitemporal: whether the modality is multitemporal.
         ignore_when_parsing: whether to ignore the modality when parsing the data form the csv file.
         image_tile_size_factor: the factor of how much bigger the dimensions of the image tile are compared with the base tile size.
+        skip_normalization: whether to skip normalization for this modality. Used for
+                        categorical modalities that are already one-hot encoded (e.g. worldcover_onehot).
     """
 
     name: str
@@ -124,6 +131,7 @@ class ModalitySpec:
     is_multitemporal: bool
     ignore_when_parsing: bool  # If true this modality is not parsed from the csv file and not loaded form a file
     image_tile_size_factor: int = 1
+    skip_normalization: bool = False
 
     def __hash__(self) -> int:
         """Hash this Modality."""
@@ -277,6 +285,19 @@ class Modality:
         band_sets=[BandSet(["B1"], 16)],
         is_multitemporal=False,
         ignore_when_parsing=False,
+    )
+
+    # One-hot encoded version of WORLDCOVER. This is a derived modality: it is not stored
+    # on disk or parsed from the csv (ignore_when_parsing=True). Instead it is computed at
+    # load time from the raw worldcover class codes (see OlmoEarthDataset). One channel per
+    # class in WORLDCOVER_CLASSES order; values are already 0/1 so normalization is skipped.
+    WORLDCOVER_ONEHOT = ModalitySpec(
+        name="worldcover_onehot",
+        tile_resolution_factor=16,
+        band_sets=[BandSet([f"class_{c}" for c in WORLDCOVER_CLASSES], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=True,
+        skip_normalization=True,
     )
 
     WORLDCEREAL = ModalitySpec(
