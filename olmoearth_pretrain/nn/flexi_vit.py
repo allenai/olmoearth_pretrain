@@ -27,6 +27,8 @@ from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
+    get_static_latlon_encoding,
+    get_static_temporal_encoding,
 )
 from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
@@ -39,6 +41,40 @@ from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 logger = logging.getLogger(__name__)
 
 SPATIAL_POS_ENCODING_TYPES = ("absolute", "rope", "rope_mixed", "none")
+ENCODING_MODES = ("additive", "separate")
+
+
+def _validate_separate_encoding_fields(
+    encoding_mode: str,
+    channel_dim: int,
+    temporal_dim: int,
+    latlon_dim: int,
+    latlon_dropout_rate: float,
+) -> None:
+    """Validate the separate-encoding fields used by ``SeparateEncodings``."""
+    if encoding_mode not in ENCODING_MODES:
+        raise ValueError(
+            f"encoding_mode must be one of {ENCODING_MODES}, got {encoding_mode}"
+        )
+    if min(channel_dim, temporal_dim, latlon_dim) < 0:
+        raise ValueError("encoding dims must be non-negative")
+    if temporal_dim > 0 and temporal_dim % 2 != 0:
+        raise ValueError(f"temporal_encoding_dim must be even, got {temporal_dim}")
+    if latlon_dim > 0 and latlon_dim % 6 != 0:
+        raise ValueError(
+            f"latlon_encoding_dim must be divisible by 6, got {latlon_dim}"
+        )
+    if not 0.0 <= latlon_dropout_rate <= 1.0:
+        raise ValueError(
+            f"latlon_dropout_rate must be in [0, 1], got {latlon_dropout_rate}"
+        )
+    if encoding_mode == "additive" and (
+        channel_dim or temporal_dim or latlon_dim or latlon_dropout_rate
+    ):
+        raise ValueError(
+            "channel/temporal/latlon_encoding_dim and latlon_dropout_rate must be "
+            "zero unless encoding_mode='separate'"
+        )
 
 
 def get_modalities_to_process(
@@ -855,6 +891,7 @@ class CompositeEncodings(nn.Module):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        latlon: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply the encodings to the patchified data.
 
@@ -863,10 +900,13 @@ class CompositeEncodings(nn.Module):
             timestamps: Timestamps of the data
             patch_size: Size of patches
             input_res: Resolution of the input data
+            latlon: Ignored by the additive composite encodings; accepted for
+                interface parity with ``SeparateEncodings``.
 
         Returns:
             Tokens only for each modality
         """
+        del latlon  # not used by additive flow
         output_dict = {}
         available_modalities = return_modalities_from_dict(per_modality_input_tokens)
         modalities_to_process = get_modalities_to_process(
@@ -879,6 +919,219 @@ class CompositeEncodings(nn.Module):
                 timestamps=timestamps,
                 patch_size=patch_size,
                 input_res=input_res,
+            )
+        return output_dict
+
+
+class SeparateEncodings(nn.Module):
+    """Encodings that live on a separate path from the image patch projection.
+
+    The patch-projection (image) path and the encoding path are concatenated
+    and fused by a single linear layer to ``embedding_size``. There is no
+    additive mixing of encodings into image tokens.
+
+    The encoding side packs three signals into ``enc_dim`` channels:
+      * ``[:channel_dim]``  -- learnable per-modality, per-bandset channel
+        embedding (modality identity).
+      * ``[channel_dim:channel_dim+temporal_dim]`` -- static multi-frequency
+        sin/cos of fractional year (``static_temporal``). Zero for
+        non-multitemporal modalities.
+      * ``[channel_dim+temporal_dim:]`` -- static sphere-mapped multi-frequency
+        sin/cos of tile-center lat/lon (``static_latlon``), broadcast across
+        all spatial/temporal/bandset axes. Subject to ``latlon_dropout_rate``:
+        per-sample bernoulli zeroing during training; ``rate >= 1.0`` zeros
+        in both training and eval (ablation switch matching ``latlon=None``).
+
+    Spatial position is **not** added here -- it is handled by RoPE at
+    attention time when ``spatial_pos_encoding in {'rope', 'rope_mixed'}``.
+    """
+
+    def __init__(
+        self,
+        embedding_size: int,
+        supported_modalities: list[ModalitySpec],
+        tokenization_config: TokenizationConfig | None,
+        channel_dim: int,
+        temporal_dim: int,
+        latlon_dim: int,
+        latlon_dropout_rate: float = 0.0,
+        learnable_channel_embeddings: bool = True,
+        random_channel_embeddings: bool = False,
+    ) -> None:
+        """Initialize the separate-encoding token builder + combiner.
+
+        Args:
+            embedding_size: Output token dimension after the combine projection.
+            supported_modalities: Modalities this instance handles.
+            tokenization_config: Bandset layout for the channel embeddings.
+            channel_dim: Width of the per-modality, per-bandset learnable
+                channel embedding (set ``0`` to omit).
+            temporal_dim: Width of the static_temporal encoding slot. Must be
+                even. ``0`` omits the slot.
+            latlon_dim: Width of the static_latlon encoding slot. Must be
+                divisible by 6. ``0`` omits the slot.
+            latlon_dropout_rate: Per-sample probability of zeroing the latlon
+                slot at training time. ``rate >= 1.0`` zeros the latlon slot
+                in both training and eval (ablation switch). Default 0.
+            learnable_channel_embeddings: If True, channel embeddings are
+                trainable. If False, frozen at init values.
+            random_channel_embeddings: If True, init channel embeddings from
+                ``torch.rand``; otherwise zeros.
+        """
+        super().__init__()
+        if channel_dim < 0 or temporal_dim < 0 or latlon_dim < 0:
+            raise ValueError("encoding dims must be non-negative")
+        if temporal_dim > 0 and temporal_dim % 2 != 0:
+            raise ValueError(f"temporal_dim must be even, got {temporal_dim}")
+        if latlon_dim > 0 and latlon_dim % 6 != 0:
+            raise ValueError(f"latlon_dim must be divisible by 6, got {latlon_dim}")
+        if not 0.0 <= latlon_dropout_rate <= 1.0:
+            raise ValueError(
+                f"latlon_dropout_rate must be in [0, 1], got {latlon_dropout_rate}"
+            )
+
+        self.embedding_size = embedding_size
+        self.channel_dim = channel_dim
+        self.temporal_dim = temporal_dim
+        self.latlon_dim = latlon_dim
+        self.latlon_dropout_rate = float(latlon_dropout_rate)
+        self.enc_dim = channel_dim + temporal_dim + latlon_dim
+
+        self.supported_modalities = supported_modalities
+        self.supported_modality_names = [m.name for m in supported_modalities]
+        self.tokenization_config = tokenization_config or TokenizationConfig()
+
+        # Per-modality, per-bandset learnable channel embeddings.
+        self.per_modality_channel_embeddings = nn.ParameterDict()
+        if channel_dim > 0:
+            for modality in supported_modalities:
+                num_bandsets = self.tokenization_config.get_num_bandsets(modality.name)
+                shape = (num_bandsets, channel_dim)
+                if random_channel_embeddings:
+                    init = torch.rand(shape)
+                else:
+                    init = torch.zeros(shape)
+                self.per_modality_channel_embeddings[modality.name] = nn.Parameter(
+                    init, requires_grad=learnable_channel_embeddings
+                )
+
+        # Combine projection: [img(embedding_size) + enc(enc_dim)] -> embedding_size.
+        # If enc_dim==0 this collapses to a Linear(embedding_size, embedding_size).
+        self.combine_proj = nn.Linear(embedding_size + self.enc_dim, embedding_size)
+
+    def _ein_for_tokens(self, modality_tokens: Tensor) -> tuple[str, dict[str, int]]:
+        """Pick the einops shape string for the patch-projected token tensor."""
+        if modality_tokens.ndim == 3:
+            b, b_s, _ = modality_tokens.shape
+            return "b b_s d", {"b": b, "b_s": b_s}
+        if modality_tokens.ndim == 4:
+            b, t, b_s, _ = modality_tokens.shape
+            return "b t b_s d", {"b": b, "t": t, "b_s": b_s}
+        if modality_tokens.ndim == 5:
+            b, h, w, b_s, _ = modality_tokens.shape
+            return "b h w b_s d", {"b": b, "h": h, "w": w, "b_s": b_s}
+        if modality_tokens.ndim == 6:
+            b, h, w, t, b_s, _ = modality_tokens.shape
+            return (
+                "b h w t b_s d",
+                {"b": b, "h": h, "w": w, "t": t, "b_s": b_s},
+            )
+        raise ValueError(f"Unsupported tokens shape: {modality_tokens.shape}")
+
+    def _apply_per_modality(
+        self,
+        modality_name: str,
+        modality_tokens: Tensor,
+        timestamps: Tensor | None,
+        latlon: Tensor | None,
+    ) -> Tensor:
+        modality = Modality.get(modality_name)
+        ein_string, ein_dict = self._ein_for_tokens(modality_tokens)
+        device = modality_tokens.device
+        dtype = modality_tokens.dtype
+        b = modality_tokens.shape[0]
+        actual_bandsets = modality_tokens.shape[-2]
+
+        # Allocate encoding tensor with same leading shape as modality_tokens but
+        # last dim = enc_dim.
+        enc_shape = (*modality_tokens.shape[:-1], self.enc_dim)
+        enc = torch.zeros(enc_shape, device=device, dtype=dtype)
+
+        # --- Channel slot ---
+        if self.channel_dim > 0:
+            ch = self.per_modality_channel_embeddings[modality.name]
+            if ch.shape[0] != actual_bandsets:
+                raise ValueError(
+                    f"Channel embeddings for {modality.name} expect "
+                    f"{ch.shape[0]} bandsets but tokens have {actual_bandsets}."
+                )
+            ch_b = repeat(ch, f"b_s d -> {ein_string}", **ein_dict).to(
+                device=device, dtype=dtype
+            )
+            enc[..., : self.channel_dim] = ch_b
+
+        # --- Temporal slot ---
+        if (
+            self.temporal_dim > 0
+            and modality.is_multitemporal
+            and timestamps is not None
+        ):
+            ts_enc = get_static_temporal_encoding(
+                timestamps, self.temporal_dim
+            )  # (B, T, D)
+            ts_b = repeat(ts_enc, f"b t d -> {ein_string}", **ein_dict).to(
+                device=device, dtype=dtype
+            )
+            enc[..., self.channel_dim : self.channel_dim + self.temporal_dim] = ts_b
+
+        # --- Latlon slot ---
+        # Apply only if rate < 1.0 AND latlon is provided. Dropout is per-sample
+        # bernoulli at train; eval applies full encoding (unless rate >= 1.0).
+        if (
+            self.latlon_dim > 0
+            and latlon is not None
+            and self.latlon_dropout_rate < 1.0
+        ):
+            ll_enc = get_static_latlon_encoding(
+                latlon.to(device=device, dtype=torch.float32), self.latlon_dim
+            )  # (B, latlon_dim)
+            if self.training and self.latlon_dropout_rate > 0.0:
+                keep_prob = 1.0 - self.latlon_dropout_rate
+                keep = torch.bernoulli(torch.full((b,), keep_prob, device=device))
+                ll_enc = ll_enc * keep.unsqueeze(-1).to(dtype=ll_enc.dtype)
+            ll_b = repeat(ll_enc.to(dtype=dtype), f"b d -> {ein_string}", **ein_dict)
+            enc[..., self.channel_dim + self.temporal_dim :] = ll_b
+
+        # --- Combine: concat image and encoding tokens, then project. ---
+        combined = torch.cat([modality_tokens, enc], dim=-1)
+        return self.combine_proj(combined)
+
+    def forward(
+        self,
+        per_modality_input_tokens: dict[str, Tensor],
+        timestamps: Tensor,
+        patch_size: int,
+        input_res: int = BASE_GSD,
+        latlon: Tensor | None = None,
+    ) -> dict[str, Tensor]:
+        """Apply separate-path encodings to patchified tokens.
+
+        ``patch_size`` and ``input_res`` are accepted for interface parity with
+        :class:`CompositeEncodings` but are unused -- the separate-encoding flow
+        does not need them (spatial position is handled by RoPE at attention).
+        """
+        del patch_size, input_res  # unused in separate flow
+        output_dict: dict[str, Tensor] = {}
+        available = return_modalities_from_dict(per_modality_input_tokens)
+        modalities_to_process = get_modalities_to_process(
+            available, self.supported_modality_names
+        )
+        for modality_name in modalities_to_process:
+            output_dict[modality_name] = self._apply_per_modality(
+                modality_name,
+                per_modality_input_tokens[modality_name],
+                timestamps=timestamps,
+                latlon=latlon,
             )
         return output_dict
 
@@ -906,6 +1159,11 @@ class FlexiVitBase(nn.Module):
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
+        encoding_mode: str = "additive",
+        channel_encoding_dim: int = 0,
+        temporal_encoding_dim: int = 0,
+        latlon_encoding_dim: int = 0,
+        latlon_dropout_rate: float = 0.0,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -913,6 +1171,10 @@ class FlexiVitBase(nn.Module):
             raise ValueError(
                 f"spatial_pos_encoding must be one of {SPATIAL_POS_ENCODING_TYPES}, "
                 f"got {spatial_pos_encoding}"
+            )
+        if encoding_mode not in ENCODING_MODES:
+            raise ValueError(
+                f"encoding_mode must be one of {ENCODING_MODES}, got {encoding_mode}"
             )
         if rope_base <= 0:
             raise ValueError(f"rope_base must be positive, got {rope_base}")
@@ -959,15 +1221,29 @@ class FlexiVitBase(nn.Module):
             ]
         )
 
-        self.composite_encodings = CompositeEncodings(
-            embedding_size,
-            self.supported_modalities,
-            max_sequence_length,
-            learnable_channel_embeddings,
-            random_channel_embeddings,
-            tokenization_config=self._base_tokenization_config,
-            spatial_pos_encoding=self.spatial_pos_encoding,
-        )
+        self.encoding_mode = encoding_mode
+        if encoding_mode == "separate":
+            self.composite_encodings = SeparateEncodings(
+                embedding_size=embedding_size,
+                supported_modalities=self.supported_modalities,
+                tokenization_config=self._base_tokenization_config,
+                channel_dim=channel_encoding_dim,
+                temporal_dim=temporal_encoding_dim,
+                latlon_dim=latlon_encoding_dim,
+                latlon_dropout_rate=latlon_dropout_rate,
+                learnable_channel_embeddings=learnable_channel_embeddings,
+                random_channel_embeddings=random_channel_embeddings,
+            )
+        else:
+            self.composite_encodings = CompositeEncodings(
+                embedding_size,
+                self.supported_modalities,
+                max_sequence_length,
+                learnable_channel_embeddings,
+                random_channel_embeddings,
+                tokenization_config=self._base_tokenization_config,
+                spatial_pos_encoding=self.spatial_pos_encoding,
+            )
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module) -> None:
@@ -1260,6 +1536,11 @@ class Encoder(FlexiVitBase):
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
+        encoding_mode: str = "additive",
+        channel_encoding_dim: int = 0,
+        temporal_encoding_dim: int = 0,
+        latlon_encoding_dim: int = 0,
+        latlon_dropout_rate: float = 0.0,
     ):
         """Initialize the encoder.
 
@@ -1310,6 +1591,19 @@ class Encoder(FlexiVitBase):
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
             rope_mixed_base: Frequency base used to initialize learnable
                 RoPE-Mixed frequencies.
+            encoding_mode: "additive" (default; legacy CompositeEncodings) or
+                "separate" (concat image-projection token with a
+                channel+temporal+latlon encoding token, then linear-project to
+                ``embedding_size``).
+            channel_encoding_dim: Width of the channel embedding slot under
+                ``encoding_mode='separate'``. Must be ``0`` otherwise.
+            temporal_encoding_dim: Width of the static_temporal slot. Must be
+                even and ``0`` unless ``encoding_mode='separate'``.
+            latlon_encoding_dim: Width of the static_latlon slot. Must be
+                divisible by 6 and ``0`` unless ``encoding_mode='separate'``.
+            latlon_dropout_rate: Per-sample bernoulli dropout for the latlon
+                slot at training time. ``rate >= 1.0`` disables the slot
+                entirely (train+eval). Default ``0``.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1329,6 +1623,11 @@ class Encoder(FlexiVitBase):
             rope_base=rope_base,
             rope_coordinate_scale=rope_coordinate_scale,
             rope_mixed_base=rope_mixed_base,
+            encoding_mode=encoding_mode,
+            channel_encoding_dim=channel_encoding_dim,
+            temporal_encoding_dim=temporal_encoding_dim,
+            latlon_encoding_dim=latlon_encoding_dim,
+            latlon_dropout_rate=latlon_dropout_rate,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1648,6 +1947,7 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        latlon: Tensor | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1665,6 +1965,7 @@ class Encoder(FlexiVitBase):
             timestamps,
             patch_size,
             input_res,
+            latlon=latlon,
         )
         positions = self.build_spatial_positions(
             tokens_only_dict,
@@ -1811,6 +2112,7 @@ class Encoder(FlexiVitBase):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 fast_pass=fast_pass,
+                latlon=getattr(x, "latlon", None),
             )
         else:
             token_norm_stats = {}
@@ -1877,6 +2179,11 @@ class PredictorBase(FlexiVitBase):
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
+        encoding_mode: str = "additive",
+        channel_encoding_dim: int = 0,
+        temporal_encoding_dim: int = 0,
+        latlon_encoding_dim: int = 0,
+        latlon_dropout_rate: float = 0.0,
     ):
         """Initialize the predictor.
 
@@ -1901,6 +2208,14 @@ class PredictorBase(FlexiVitBase):
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
             rope_mixed_base: Frequency base used to initialize learnable
                 RoPE-Mixed frequencies.
+            encoding_mode: "additive" (default) or "separate" (concat
+                image+encoding then linear-project; see Encoder).
+            channel_encoding_dim: Channel-embedding slot width under
+                ``encoding_mode='separate'``.
+            temporal_encoding_dim: static_temporal slot width.
+            latlon_encoding_dim: static_latlon slot width (divisible by 6).
+            latlon_dropout_rate: Per-sample bernoulli dropout for the latlon
+                slot at training time. ``rate >= 1.0`` disables entirely.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1920,6 +2235,11 @@ class PredictorBase(FlexiVitBase):
             rope_base=rope_base,
             rope_coordinate_scale=rope_coordinate_scale,
             rope_mixed_base=rope_mixed_base,
+            encoding_mode=encoding_mode,
+            channel_encoding_dim=channel_encoding_dim,
+            temporal_encoding_dim=temporal_encoding_dim,
+            latlon_encoding_dim=latlon_encoding_dim,
+            latlon_dropout_rate=latlon_dropout_rate,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -2111,13 +2431,14 @@ class Predictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int,
+        latlon: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply attention to the tokens."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
         tokens_dict = self.composite_encodings(
-            tokens_only_dict, timestamps, patch_size, input_res
+            tokens_only_dict, timestamps, patch_size, input_res, latlon=latlon
         )
         positions = self.build_spatial_positions(
             tokens_only_dict,
@@ -2223,6 +2544,7 @@ class Predictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        latlon: Tensor | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -2231,6 +2553,8 @@ class Predictor(PredictorBase):
             timestamps: Timestamps of the tokens
             patch_size: Patch size of the tokens
             input_res: Input resolution of the tokens
+            latlon: Optional per-sample tile-center lat/lon. Ignored unless
+                ``encoding_mode='separate'`` with ``latlon_encoding_dim>0``.
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
@@ -2255,7 +2579,7 @@ class Predictor(PredictorBase):
         tokens_only_dict = self.add_masks(decoder_emedded_dict)
         decoder_emedded_dict.update(tokens_only_dict)
         tokens_and_masks = self.apply_attn(
-            decoder_emedded_dict, timestamps, patch_size, input_res
+            decoder_emedded_dict, timestamps, patch_size, input_res, latlon=latlon
         )
         # TODO: Factor this out into a more readable function
         output_dict = {}
@@ -2318,6 +2642,11 @@ class EncoderConfig(Config):
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
     rope_mixed_base: float = 10.0
+    encoding_mode: str = "additive"
+    channel_encoding_dim: int = 0
+    temporal_encoding_dim: int = 0
+    latlon_encoding_dim: int = 0
+    latlon_dropout_rate: float = 0.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2365,6 +2694,13 @@ class EncoderConfig(Config):
                     f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "
                     f"got {head_dim}"
                 )
+        _validate_separate_encoding_fields(
+            self.encoding_mode,
+            self.channel_encoding_dim,
+            self.temporal_encoding_dim,
+            self.latlon_encoding_dim,
+            self.latlon_dropout_rate,
+        )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -2404,6 +2740,11 @@ class PredictorConfig(Config):
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
     rope_mixed_base: float = 10.0
+    encoding_mode: str = "additive"
+    channel_encoding_dim: int = 0
+    temporal_encoding_dim: int = 0
+    latlon_encoding_dim: int = 0
+    latlon_dropout_rate: float = 0.0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2442,6 +2783,13 @@ class PredictorConfig(Config):
                     f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "
                     f"got {head_dim}"
                 )
+        _validate_separate_encoding_fields(
+            self.encoding_mode,
+            self.channel_encoding_dim,
+            self.temporal_encoding_dim,
+            self.latlon_encoding_dim,
+            self.latlon_dropout_rate,
+        )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:

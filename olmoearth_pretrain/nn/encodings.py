@@ -7,7 +7,12 @@ They cover the following:
 - 2D sinusoidal position encoding (for spatial data)
 - 1D sinusoidal position encoding (for temporal data)
 - Month encoding (for temporal data)
+- Static temporal encoding (multi-frequency sincos of fractional year)
+- Static lat/lon encoding (sphere-mapped multi-frequency sincos)
+- Axial 2D RoPE and RoPE-Mixed for attention.
 """
+
+import math
 
 import numpy as np
 import torch
@@ -328,3 +333,105 @@ def apply_2d_rope_mixed(
     cos = torch.repeat_interleave(torch.cos(angles), repeats=2, dim=-1).to(dtype=dtype)
     sin = torch.repeat_interleave(torch.sin(angles), repeats=2, dim=-1).to(dtype=dtype)
     return (x * cos) + (rotate_half(x) * sin)
+
+
+def get_static_temporal_encoding(
+    timestamps: torch.Tensor, encoding_dim: int
+) -> torch.Tensor:
+    """Multi-frequency sinusoidal encoding of timestamps as fractional years.
+
+    Computes ``frac_year = year + day_of_year/365.25 - 2020`` and applies
+    sin/cos at geometric-spaced frequencies spanning ~128-year periods down to
+    sub-daily resolution. The 1-cycle/year frequency naturally produces matching
+    values for the same calendar day across years.
+
+    No learnable parameters; deterministic; output dtype matches input.
+
+    Args:
+        timestamps: Tensor of shape ``(..., 3)`` where index 0 is day-of-month
+            (1-31), index 1 is month (0-indexed, 0-11), index 2 is year.
+        encoding_dim: Output dimension. Must be even.
+
+    Returns:
+        Tensor of shape ``(..., encoding_dim)``.
+    """
+    if encoding_dim % 2 != 0:
+        raise ValueError(f"encoding_dim must be even, got {encoding_dim}")
+
+    day = timestamps[..., 0].float()
+    month = timestamps[..., 1].float()
+    year = timestamps[..., 2].float()
+    # average month length so this is independent of which year we're in.
+    day_of_year = month * 30.4375 + day
+    frac_year = year + day_of_year / 365.25 - 2020.0
+
+    num_freqs = encoding_dim // 2
+    # exponents chosen so 2^0 = 1 cycle/year and the band stretches from
+    # ~128-year periods (exp=-7) to ~daily (exp=8.5; 2^8.5/year ~ 1/day).
+    exponents = torch.linspace(-7.0, 8.5, num_freqs, device=timestamps.device)
+    freqs = 2.0 * math.pi * (2.0**exponents)  # (num_freqs,)
+
+    angles = frac_year.unsqueeze(-1) * freqs  # (..., num_freqs)
+    sin = torch.sin(angles)
+    cos = torch.cos(angles)
+    return torch.cat([sin, cos], dim=-1)
+
+
+def get_static_latlon_encoding(latlon: torch.Tensor, encoding_dim: int) -> torch.Tensor:
+    """Multi-frequency sinusoidal encoding of tile-center latitude/longitude.
+
+    Maps ``(lat, lon)`` to a point on the unit sphere ``(x, y, z)`` so longitude
+    wrap-around and pole behavior are exact, then applies geometric-spaced
+    sinusoidal frequencies on each axis. The trig is done in float64 internally
+    so that ``lon=180`` and ``lon=-180`` are identical to machine precision at
+    the highest frequencies (which would otherwise blow up in float32).
+
+    Output is split equally across the three axes (x, y, z) and across sin/cos,
+    so ``encoding_dim`` must be divisible by 6.
+
+    Args:
+        latlon: Tensor of shape ``(..., 2)``; index 0 is latitude in degrees
+            [-90, 90], index 1 is longitude in degrees [-180, 180].
+        encoding_dim: Output dimension. Must be divisible by 6.
+
+    Returns:
+        Tensor of shape ``(..., encoding_dim)``.
+    """
+    if encoding_dim % 6 != 0:
+        raise ValueError(
+            "encoding_dim must be divisible by 6 (split across x/y/z and "
+            f"sin/cos); got {encoding_dim}"
+        )
+
+    in_dtype = latlon.dtype
+    work = torch.float64
+
+    lat_rad = latlon[..., 0].to(work) * (math.pi / 180.0)
+    lon_rad = latlon[..., 1].to(work) * (math.pi / 180.0)
+
+    cos_lat = torch.cos(lat_rad)
+    x = cos_lat * torch.cos(lon_rad)
+    y = cos_lat * torch.sin(lon_rad)
+    z = torch.sin(lat_rad)
+    xyz = torch.stack([x, y, z], dim=-1)  # (..., 3) in float64
+
+    # Frequency band: lowest is one cycle per full sphere axis (period 2 along
+    # the unit-axis); highest hits ~25 km on Earth at exp=9. linspace so the
+    # band stays the same as we vary num_freqs.
+    num_freqs = encoding_dim // 6
+    if num_freqs == 1:
+        exponents = torch.tensor([0.0], device=latlon.device, dtype=work)
+    else:
+        exponents = torch.linspace(
+            0.0, 9.0, num_freqs, device=latlon.device, dtype=work
+        )
+    freqs = math.pi * (2.0**exponents)  # (num_freqs,)
+
+    angles = xyz.unsqueeze(-1) * freqs  # (..., 3, num_freqs)
+    sin = torch.sin(angles)
+    cos = torch.cos(angles)
+    # Flatten the (3, num_freqs) axes; sin then cos.
+    flat_sin = sin.transpose(-1, -2).reshape(*xyz.shape[:-1], 3 * num_freqs)
+    flat_cos = cos.transpose(-1, -2).reshape(*xyz.shape[:-1], 3 * num_freqs)
+    out = torch.cat([flat_sin, flat_cos], dim=-1)
+    return out.to(dtype=in_dtype)

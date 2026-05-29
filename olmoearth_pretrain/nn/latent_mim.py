@@ -78,7 +78,11 @@ class LatentMIM(nn.Module, DistributedMixins):
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
         decoded = self.decoder(
-            latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
+            latent,
+            timestamps=x.timestamps,
+            patch_size=patch_size,
+            latlon=getattr(x, "latlon", None),
+            **decoder_kwargs,
         )
         return (
             latent,
