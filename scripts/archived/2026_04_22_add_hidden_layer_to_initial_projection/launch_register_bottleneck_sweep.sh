@@ -28,141 +28,141 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 
 # ============================ supervised (12) ===========================
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_g8_d192" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=192 --model.decoder_config.register_dim=192
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_g8_d192" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=192 --model.decoder_config.register_dim=192
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_g8_d288" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=288 --model.decoder_config.register_dim=288
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_g8_d288" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=288 --model.decoder_config.register_dim=288
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_g8_d528" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=528 --model.decoder_config.register_dim=528
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_g8_d528" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=528 --model.decoder_config.register_dim=528
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_g8_d768" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_g8_d768" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_g16_d192" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=192 --model.decoder_config.register_dim=192
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_g16_d192" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=192 --model.decoder_config.register_dim=192
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_g16_d288" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=288 --model.decoder_config.register_dim=288
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_g16_d288" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=288 --model.decoder_config.register_dim=288
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_g16_d528" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=528 --model.decoder_config.register_dim=528
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_g16_d528" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=528 --model.decoder_config.register_dim=528
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_g16_d768" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_g16_d768" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_g32_d192" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=192 --model.decoder_config.register_dim=192
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_g32_d192" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=192 --model.decoder_config.register_dim=192
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_g32_d288" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=288 --model.decoder_config.register_dim=288
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_g32_d288" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=288 --model.decoder_config.register_dim=288
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_g32_d528" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=528 --model.decoder_config.register_dim=528
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_g32_d528" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=528 --model.decoder_config.register_dim=528
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_g32_d768" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_g32_d768" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
 
-# # ========================= no supervision (12) =========================
+# ========================= no supervision (12) =========================
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g8_d192_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=192 --model.decoder_config.register_dim=192
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g8_d192_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=192 --model.decoder_config.register_dim=192
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g8_d288_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=288 --model.decoder_config.register_dim=288
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g8_d288_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=288 --model.decoder_config.register_dim=288
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g8_d528_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=528 --model.decoder_config.register_dim=528
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g8_d528_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=528 --model.decoder_config.register_dim=528
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g8_d768_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g8_d768_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=8 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g16_d192_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=192 --model.decoder_config.register_dim=192
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g16_d192_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=192 --model.decoder_config.register_dim=192
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g16_d288_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=288 --model.decoder_config.register_dim=288
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g16_d288_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=288 --model.decoder_config.register_dim=288
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g16_d528_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=528 --model.decoder_config.register_dim=528
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g16_d528_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=528 --model.decoder_config.register_dim=528
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g16_d768_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g16_d768_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g32_d192_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=192 --model.decoder_config.register_dim=192
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g32_d192_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=192 --model.decoder_config.register_dim=192
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g32_d288_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=288 --model.decoder_config.register_dim=288
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g32_d288_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=288 --model.decoder_config.register_dim=288
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g32_d528_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=528 --model.decoder_config.register_dim=528
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g32_d528_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=528 --model.decoder_config.register_dim=528
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g32_d768_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g32_d768_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
 
-# # ==================== dynamic grid: single cloned latent (2) ====================
-# # register_grid_size=null -> one shared latent cloned across the patch grid (no fixed
-# # grid). OmegaConf parses `null` to Python None; the decoder has no grid field.
+# ==================== dynamic grid: single cloned latent (2) ====================
+# register_grid_size=null -> one shared latent cloned across the patch grid (no fixed
+# grid). OmegaConf parses `null` to Python None; the decoder has no grid field.
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
 
-# =================== interleaved reads: [read -> self] x4 (4) ===================
-# register_interleave=true interleaves each cross-attention read with a latent self-
-# attention block (Perceiver/DETR/Flamingo) so the registers re-query after each refine,
-# instead of the default single up-front read. register_latent_depth=4 -> 4 reads + 4 self.
-# d768, on the g16 fixed grid and the gdyn dynamic grid, sup + nosup. Tagged "il".
+=================== interleaved reads: [read -> self] x4 (4) ===================
+register_interleave=true interleaves each cross-attention read with a latent self-
+attention block (Perceiver/DETR/Flamingo) so the registers re-query after each refine,
+instead of the default single up-front read. register_latent_depth=4 -> 4 reads + 4 self.
+d768, on the g16 fixed grid and the gdyn dynamic grid, sup + nosup. Tagged "il".
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_g16_d768_il" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-#     --model.encoder_config.register_interleave=true
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_g16_d768_il" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g16_d768_il_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-#     --model.encoder_config.register_interleave=true
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g16_d768_il_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-#     --model.encoder_config.register_interleave=true
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true
 
-# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_nosup" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-#     --model.encoder_config.register_interleave=true
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true
 
 # ============ multi-depth reads: read from intermediate encoder layers (2) ============
 # register_read_layers gives the 1-indexed encoder depths the bottleneck reads from -- one
