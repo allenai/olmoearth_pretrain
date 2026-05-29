@@ -77,6 +77,7 @@ class ProbeType(StrEnum):
 
     ATTNPOOL = "attnpool"
     LINEAR = "linear"
+    BILINEAR_CONV = "bilinear_conv"
 
 
 class AttnPoolLinearProbe(nn.Module):
@@ -143,6 +144,51 @@ class AttnPoolLinearProbe(nn.Module):
         x = torch.matmul(attn_weights, v)  # [B, head, 1, D_head]
         x = x.reshape(B, H, W, D)
         return {"logits": self.linear(x), "attn_weights": attn_weights}
+
+
+class BilinearConvProbe(nn.Module):
+    """Bilinear upsample + shared 1×1 conv probe for per-pixel regression.
+
+    Instead of a per-patch linear that reshapes outputs blockwise (no spatial
+    mixing, separate weights per sub-pixel slot), this probe:
+      1. Rearranges (B, H, W, D) patch embeddings to (B, D, H, W).
+      2. Bilinearly upsamples to the full label resolution (mixing neighbors).
+      3. Applies a single Conv2d(D, out_channels, 1) shared across all pixels.
+
+    This mirrors the rslearn Upsample+Conv head and is better regularized for
+    sparse point-label regression tasks like LFMC.
+    """
+
+    def __init__(self, in_dim: int, scale_factor: int, out_channels: int = 1) -> None:
+        """Initialize the bilinear conv probe.
+
+        Args:
+            in_dim: Embedding dimension per patch.
+            scale_factor: Spatial upsample factor (typically patch_size).
+            out_channels: Number of output channels (1 for regression).
+        """
+        super().__init__()
+        self.upsample = nn.Upsample(
+            scale_factor=scale_factor, mode="bilinear", align_corners=True
+        )
+        self.conv = nn.Conv2d(in_dim, out_channels, kernel_size=1)
+
+    def forward(self, x: torch.Tensor) -> dict:
+        """Forward pass.
+
+        Args:
+            x: Patch embeddings of shape (B, H, W, D).
+
+        Returns:
+            Dict with 'logits' of shape (B, H*scale, W*scale) for single-channel
+            regression, or (B, C, H*scale, W*scale) for multi-channel.
+        """
+        x = x.permute(0, 3, 1, 2)  # (B, D, H, W)
+        x = self.upsample(x)  # (B, D, H', W')
+        x = self.conv(x)  # (B, out_channels, H', W')
+        if x.shape[1] == 1:
+            x = x.squeeze(1)  # (B, H', W') for regression
+        return {"logits": x}
 
 
 class LinearProbe(nn.Module):
@@ -238,7 +284,20 @@ def train_and_eval_probe(
         )
         num_output_pixels = output_channels * output_pixels_per_side_of_patch**2
         logits_per_patch = num_output_pixels
-        if probe_type == ProbeType.ATTNPOOL:
+        if config.task_type == TaskType.REGRESSION and probe_type == ProbeType.LINEAR:
+            probe_type = ProbeType.BILINEAR_CONV
+            logger.info(
+                "Auto-upgrading probe from LINEAR to BILINEAR_CONV for regression "
+                "(shared 1×1 conv with bilinear upsampling is better regularized "
+                "for sparse per-pixel regression targets)."
+            )
+        if probe_type == ProbeType.BILINEAR_CONV:
+            probe = BilinearConvProbe(
+                in_dim=in_features,
+                scale_factor=output_pixels_per_side_of_patch,
+                out_channels=output_channels,
+            ).to(device)
+        elif probe_type == ProbeType.ATTNPOOL:
             if config.task_type == TaskType.REGRESSION:
                 raise ValueError("Attention pooling is not supported for regression.")
             probe = AttnPoolLinearProbe(
@@ -540,51 +599,32 @@ def train_probe(
                     batch_emb
                 )  # (bsz, num_patches, logits_per_patch) or (bsz, n_cls)
                 logits = outputs["logits"]
-                # logger.info(f"logits: {logits.shape}")
                 if task_type == TaskType.SEGMENTATION:
-                    assert num_output_pixels_per_side_of_patch is not None, (
-                        "num_output_pixels_per_side_of_patch is required for segmentation"
-                    )
-                    # This is effectively nearest neighbor interpolation
-                    logits = rearrange(
-                        logits,
-                        "b h w (c i j) -> b c (h i) (w j)",
-                        h=spatial_patches_per_dim,
-                        w=spatial_patches_per_dim,
-                        c=num_classes,
-                        i=num_output_pixels_per_side_of_patch,
-                        j=num_output_pixels_per_side_of_patch,
-                    )
-                    if logits.shape[-2] != batch_labels.shape[-2]:
-                        logger.debug(
-                            f"Logits shape {logits.shape} does not match batch_labels shape {batch_labels.shape} interpolating to labels shape"
+                    if not isinstance(probe, BilinearConvProbe):
+                        assert num_output_pixels_per_side_of_patch is not None, (
+                            "num_output_pixels_per_side_of_patch is required for segmentation"
                         )
-                        logits = F.interpolate(
+                        logits = rearrange(
                             logits,
-                            size=(batch_labels.shape[-2], batch_labels.shape[-1]),
-                            mode="bilinear",
-                            align_corners=True,
-                        )  # (bsz, num_classes, H, W)
+                            "b h w (c i j) -> b c (h i) (w j)",
+                            h=spatial_patches_per_dim,
+                            w=spatial_patches_per_dim,
+                            c=num_classes,
+                            i=num_output_pixels_per_side_of_patch,
+                            j=num_output_pixels_per_side_of_patch,
+                        )
+                        if logits.shape[-2] != batch_labels.shape[-2]:
+                            logger.debug(
+                                f"Logits shape {logits.shape} does not match batch_labels shape {batch_labels.shape} interpolating to labels shape"
+                            )
+                            logits = F.interpolate(
+                                logits,
+                                size=(batch_labels.shape[-2], batch_labels.shape[-1]),
+                                mode="bilinear",
+                                align_corners=True,
+                            )
                     targets = batch_labels.to(device)
                 elif task_type == TaskType.REGRESSION:
-                    assert num_output_pixels_per_side_of_patch is not None, (
-                        "num_output_pixels_per_side_of_patch is required for regression"
-                    )
-                    logits = rearrange(
-                        logits,
-                        "b h w (i j) -> b (h i) (w j)",
-                        h=spatial_patches_per_dim,
-                        w=spatial_patches_per_dim,
-                        i=num_output_pixels_per_side_of_patch,
-                        j=num_output_pixels_per_side_of_patch,
-                    )
-                    if logits.shape[-2] != batch_labels.shape[-2]:
-                        logits = F.interpolate(
-                            logits.unsqueeze(1),
-                            size=(batch_labels.shape[-2], batch_labels.shape[-1]),
-                            mode="bilinear",
-                            align_corners=True,
-                        ).squeeze(1)
                     targets = batch_labels.to(device).float()
                 else:
                     targets = batch_labels.to(device)
@@ -633,7 +673,8 @@ def get_probe_predictions(
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 outputs = probe(batch_emb)  # (bsz, num_patches, logits_per_patch)
                 logits = outputs["logits"]
-                if task_type == TaskType.SEGMENTATION:
+                is_bilinear_conv = isinstance(probe, BilinearConvProbe)
+                if task_type == TaskType.SEGMENTATION and not is_bilinear_conv:
                     assert num_output_pixels_per_side_of_patch is not None, (
                         "num_output_pixels_per_side_of_patch is required for segmentation"
                     )
@@ -653,27 +694,7 @@ def get_probe_predictions(
                             size=(batch_labels.shape[-2], batch_labels.shape[-1]),
                             mode="bilinear",
                             align_corners=True,
-                        )  # (bsz, num_classes, H, W)
-                elif task_type == TaskType.REGRESSION:
-                    assert num_output_pixels_per_side_of_patch is not None, (
-                        "num_output_pixels_per_side_of_patch is required for regression"
-                    )
-                    spatial_patches_per_dim = batch_emb.shape[1]
-                    logits = rearrange(
-                        logits,
-                        "b h w (i j) -> b (h i) (w j)",
-                        h=spatial_patches_per_dim,
-                        w=spatial_patches_per_dim,
-                        i=num_output_pixels_per_side_of_patch,
-                        j=num_output_pixels_per_side_of_patch,
-                    )
-                    if logits.shape[-2] != batch_labels.shape[-2]:
-                        logits = F.interpolate(
-                            logits.unsqueeze(1),
-                            size=(batch_labels.shape[-2], batch_labels.shape[-1]),
-                            mode="bilinear",
-                            align_corners=True,
-                        ).squeeze(1)
+                        )
 
             if task_type == TaskType.REGRESSION:
                 preds = logits.float().cpu()
