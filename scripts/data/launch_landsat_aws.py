@@ -596,15 +596,18 @@ def cmd_launch_sync(args: argparse.Namespace) -> None:
     if aws_token:
         _upsert_beaker_secret(WORKSPACE, secret_token, aws_token, dry_run=args.dry_run)
 
-    max_prefix_idx = (args.total_windows - 1) // WINDOWS_PER_PREFIX
-    all_prefixes = [f"{i:03d}" for i in range(max_prefix_idx + 1)]
+    if args.corpus_prefixes:
+        all_prefixes = [p.zfill(3) for p in dict.fromkeys(args.corpus_prefixes)]
+    else:
+        max_prefix_idx = (args.total_windows - 1) // WINDOWS_PER_PREFIX
+        all_prefixes = [f"{i:03d}" for i in range(max_prefix_idx + 1)]
     job_chunks = _chunk_prefixes(all_prefixes, args.num_jobs)
 
     clusters = args.clusters if isinstance(args.clusters, list) else [args.clusters]
     run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     logger.info(
         f"Launching {len(job_chunks)} sync jobs over {len(all_prefixes)} prefixes "
-        f"({args.total_windows} windows) on clusters {clusters}"
+        f"on clusters {clusters}: {all_prefixes}"
     )
 
     experiment_ids = []
@@ -908,6 +911,15 @@ def main() -> None:
         type=int,
         default=DEFAULT_TOTAL_WINDOWS,
         help=f"Total corpus size (default {DEFAULT_TOTAL_WINDOWS})",
+    )
+    p.add_argument(
+        "--corpus-prefixes",
+        nargs="+",
+        default=None,
+        help=(
+            "Optional 3-digit corpus prefixes to sync, e.g. 019 020 057 058. "
+            "When set, launch-sync only launches jobs for these prefixes."
+        ),
     )
     p.add_argument(
         "--clusters",
