@@ -1077,6 +1077,29 @@ class FlexiVitBase(nn.Module):
         positions, _ = self.collapse_and_combine_hwtc(position_dict)
         return positions
 
+    def _patch_grid_hw(self, tokens_only_dict: dict[str, Tensor]) -> tuple[int, int]:
+        """Spatial patch grid ``(h, w)`` of the (finest) spatial modality.
+
+        Used by the dynamic register bottleneck to size + place its grid to match the
+        patches. All spatial modalities share the GSD-scaled coordinate frame, so the
+        max over them gives the finest grid (and the largest coordinate extent).
+        """
+        available_modalities = return_modalities_from_dict(tokens_only_dict)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        h_max = w_max = 0
+        for modality_name in modalities_to_process:
+            if not Modality.get(modality_name).is_spatial:
+                continue
+            h, w = tokens_only_dict[modality_name].shape[1:3]
+            h_max, w_max = max(h_max, h), max(w_max, w)
+        if h_max == 0 or w_max == 0:
+            raise ValueError(
+                "dynamic register bottleneck requires at least one spatial modality"
+            )
+        return (h_max, w_max)
+
     @staticmethod
     def split_x_y_positions(
         positions: Tensor,
@@ -1219,24 +1242,32 @@ class FlexiVitBase(nn.Module):
 class SpatialRegisterBottleneck(nn.Module):
     """A Perceiver-style spatial register bottleneck.
 
-    A fixed ``n_h x n_w`` grid of learned latent tokens cross-attention *reads* the
-    encoded (visible) patch tokens, then a small *latent transformer* self-attends
-    over the grid. The grid is the model's compressed, spatially-anchored
-    representation: the decoder reads only this grid, and frozen evals probe it.
+    A grid of learned latent tokens cross-attention *reads* the encoded (visible) patch
+    tokens, then a small *latent transformer* self-attends over the grid. The grid is
+    the model's compressed, spatially-anchored representation: the decoder reads only
+    this grid, and frozen evals probe it. Register coordinates are placed in the same
+    GSD-scaled frame as the patches, so 2D RoPE relative offsets are meaningful.
 
-    Register coordinates are placed per-batch evenly across the patch extent in the
-    same GSD-scaled frame as the patches, so 2D RoPE relative offsets are meaningful
-    and the grid adapts to variable input sizes without changing the register count.
+    Two parameterizations, selected by ``register_grid``:
 
-    The register count is decoupled from the patch count (the whole point of the
-    Perceiver read): ``n_h x n_w`` is a fixed hyperparameter regardless of input size.
+    - **Legacy / fixed grid** (``register_grid=(n_h, n_w)``): distinct per-cell learned
+      latents on a fixed grid whose count is decoupled from the patch count. Kept for
+      backwards-compatible loading of checkpoints trained with this module.
+    - **Dynamic / single latent** (``register_grid=None``): a *single* learned latent is
+      cloned across a grid that matches the input patch grid at forward time. RS imagery
+      is translation-invariant, so every spatial query starts from the same content;
+      spatial identity comes entirely from 2D RoPE on the per-cell positions. This
+      enforces a translation-invariant prior and removes the grid size as a baked
+      hyperparameter (it follows the input). Precedents: Perceiver IO dense-output
+      queries (shared vector + per-position encoding), the MAE mask token, and Slot
+      Attention's shared slot distribution.
     """
 
     def __init__(
         self,
         encoder_embedding_size: int,
         register_dim: int,
-        register_grid: tuple[int, int],
+        register_grid: tuple[int, int] | None,
         num_heads: int,
         mlp_ratio: float,
         read_depth: int,
@@ -1250,7 +1281,9 @@ class SpatialRegisterBottleneck(nn.Module):
         Args:
             encoder_embedding_size: Dimension of the encoded patch tokens (the read's K/V source).
             register_dim: Dimension of the register grid (the bottleneck width, typically < encoder dim).
-            register_grid: ``(n_h, n_w)`` register grid size (fixed, independent of input size).
+            register_grid: ``(n_h, n_w)`` for a fixed grid of distinct per-cell latents, or
+                ``None`` for the dynamic single-latent mode (grid matches the patch grid at
+                forward time; requires ``use_2d_rope``).
             num_heads: Number of attention heads for the read + latent transformer blocks.
             mlp_ratio: MLP ratio for the blocks.
             read_depth: Number of cross-attention read blocks.
@@ -1260,15 +1293,32 @@ class SpatialRegisterBottleneck(nn.Module):
             qk_norm: Whether to apply QK normalization in attention.
         """
         super().__init__()
-        self.register_grid = register_grid
-        self.num_registers = register_grid[0] * register_grid[1]
         self.register_dim = register_dim
         self.use_2d_rope = use_2d_rope
-        # Distinct per-cell latent vectors (NOT zero-init): because RoPE is *relative*,
-        # zero-init registers would give no locality at init; distinct content + fixed
-        # grid coordinates are what give each register its spatial identity.
-        self.registers = nn.Parameter(torch.empty(self.num_registers, register_dim))
-        nn.init.trunc_normal_(self.registers, std=0.02)
+        self.dynamic_grid = register_grid is None
+        if register_grid is None:
+            if not use_2d_rope:
+                # With a single cloned latent the cells are identical at init and stay
+                # symmetric without a per-cell positional signal; RoPE is what breaks it.
+                raise ValueError(
+                    "SpatialRegisterBottleneck dynamic (single-latent) mode requires "
+                    "use_2d_rope=True to differentiate grid cells."
+                )
+            # Grid count + positions are resolved per-forward from the patch grid; the
+            # last-used grid is exposed on ``register_grid`` for eval/supervision reshapes.
+            self.register_grid: tuple[int, int] | None = None
+            self.num_registers: int | None = None
+            # A single learned latent, cloned across every grid cell (see class docstring).
+            self.register = nn.Parameter(torch.empty(1, register_dim))
+            nn.init.trunc_normal_(self.register, std=0.02)
+        else:
+            self.register_grid = register_grid
+            self.num_registers = register_grid[0] * register_grid[1]
+            # Distinct per-cell latent vectors (NOT zero-init): because RoPE is *relative*,
+            # zero-init registers would give no locality at init; distinct content + fixed
+            # grid coordinates are what give each register its spatial identity.
+            self.registers = nn.Parameter(torch.empty(self.num_registers, register_dim))
+            nn.init.trunc_normal_(self.registers, std=0.02)
         self.input_norm = nn.LayerNorm(encoder_embedding_size)
         # Down-project the patch K/V source to the (smaller) register dim. The existing
         # Attention ties q/k/v to a single dim, so the read happens entirely at register_dim.
@@ -1310,16 +1360,20 @@ class SpatialRegisterBottleneck(nn.Module):
         )
         self.norm = nn.LayerNorm(register_dim)
 
-    def build_register_positions(self, patch_positions: Tensor) -> Tensor:
+    def build_register_positions(
+        self, patch_positions: Tensor, register_grid: tuple[int, int]
+    ) -> Tensor:
         """Place the register grid evenly across the patch extent (GSD-scaled frame).
 
         Args:
             patch_positions: ``[B, N, 2]`` GSD-scaled ``(row, col)`` patch coordinates.
+            register_grid: ``(n_h, n_w)`` grid to lay down (matches the patch grid in
+                dynamic mode, so the register coords coincide with the patch coords).
 
         Returns:
             ``[B, n_h * n_w, 2]`` register coordinates spanning ``[0, max_patch_coord]``.
         """
-        n_h, n_w = self.register_grid
+        n_h, n_w = register_grid
         device = patch_positions.device
         # Patch coords are >= 0 (non-spatial tokens sit at 0), so amax gives the extent.
         max_pos = patch_positions.amax(dim=1)  # [B, 2]
@@ -1336,6 +1390,7 @@ class SpatialRegisterBottleneck(nn.Module):
         patch_tokens: Tensor,
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
+        spatial_grid: tuple[int, int] | None = None,
     ) -> tuple[Tensor, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1344,6 +1399,8 @@ class SpatialRegisterBottleneck(nn.Module):
             patch_positions: GSD-scaled ``[B, N, 2]`` coords (None if not using RoPE).
             visible_mask: Bool ``[B, N]``, True where a token is a valid key
                 (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
+            spatial_grid: ``(n_h, n_w)`` patch grid; required in dynamic mode (the single
+                latent is cloned to this many cells), ignored in fixed-grid mode.
 
         Returns:
             registers: ``[B, num_registers, register_dim]``
@@ -1351,14 +1408,37 @@ class SpatialRegisterBottleneck(nn.Module):
         """
         batch_size = patch_tokens.shape[0]
         kv = self.kv_proj(self.input_norm(patch_tokens))
-        registers = self.registers.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
+        if self.dynamic_grid:
+            if spatial_grid is None:
+                raise ValueError(
+                    "dynamic register bottleneck requires a spatial_grid (the patch grid)"
+                )
+            register_grid = spatial_grid
+            # Expose the grid actually used so eval/supervision can reshape the registers.
+            self.register_grid = register_grid
+            num_registers = register_grid[0] * register_grid[1]
+            # Clone the single learned latent across the batch and all grid cells; RoPE on
+            # the per-cell register_positions is what differentiates them.
+            registers = (
+                self.register.unsqueeze(0)
+                .expand(batch_size, num_registers, -1)
+                .contiguous()
+            )
+        else:
+            assert self.register_grid is not None  # set in __init__ for fixed-grid mode
+            register_grid = self.register_grid
+            registers = (
+                self.registers.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
+            )
         register_positions = None
         if self.use_2d_rope:
             if patch_positions is None:
                 raise ValueError(
                     "patch_positions are required for the RoPE register bottleneck"
                 )
-            register_positions = self.build_register_positions(patch_positions)
+            register_positions = self.build_register_positions(
+                patch_positions, register_grid
+            )
         attn_mask = visible_mask.bool() if visible_mask is not None else None
         for blk in self.read_blocks:
             registers = blk(
@@ -1410,7 +1490,7 @@ class Encoder(FlexiVitBase):
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
         use_register_bottleneck: bool = False,
-        register_grid_size: int = 4,
+        register_grid_size: int | None = 4,
         register_dim: int | None = None,
         register_read_depth: int = 1,
         register_latent_depth: int = 2,
@@ -1465,7 +1545,10 @@ class Encoder(FlexiVitBase):
             use_register_bottleneck: If True, add a Perceiver-style spatial register
                 bottleneck that reads the encoded patch tokens into a fixed register grid.
             register_grid_size: Side length of the (square) register grid; the grid has
-                ``register_grid_size ** 2`` registers, independent of the patch grid size.
+                ``register_grid_size ** 2`` distinct per-cell registers, independent of the
+                patch grid size. If ``None``, use the dynamic single-latent mode: one shared
+                latent cloned across a grid that matches the input patch grid at forward time
+                (requires ``spatial_pos_encoding="rope"``).
             register_dim: Width of the register grid (the bottleneck dim). Defaults to
                 ``embedding_size // 2`` when None.
             register_read_depth: Number of cross-attention read blocks.
@@ -1556,7 +1639,11 @@ class Encoder(FlexiVitBase):
             self.register_bottleneck = SpatialRegisterBottleneck(
                 encoder_embedding_size=embedding_size,
                 register_dim=resolved_register_dim,
-                register_grid=(register_grid_size, register_grid_size),
+                register_grid=(
+                    (register_grid_size, register_grid_size)
+                    if register_grid_size is not None
+                    else None
+                ),
                 num_heads=resolved_register_heads,
                 mlp_ratio=mlp_ratio,
                 read_depth=register_read_depth,
@@ -1963,10 +2050,18 @@ class Encoder(FlexiVitBase):
         # latent transformer inside the bottleneck module.
         register_output = None
         if self.register_bottleneck is not None:
+            # Dynamic mode clones the single latent to match the patch grid; fixed mode
+            # ignores spatial_grid and uses its own learned grid.
+            spatial_grid = (
+                self._patch_grid_hw(tokens_only_dict)
+                if self.register_bottleneck.dynamic_grid
+                else None
+            )
             registers, register_positions = self.register_bottleneck(
                 patch_tokens=tokens,
                 patch_positions=register_kv_positions,
                 visible_mask=bool_mask,
+                spatial_grid=spatial_grid,
             )
             register_output = {
                 "registers": registers,
@@ -2598,7 +2693,9 @@ class EncoderConfig(Config):
     rope_coordinate_scale: float = 1.0
     # Perceiver-style spatial register bottleneck (sweepable).
     use_register_bottleneck: bool = False
-    register_grid_size: int = 4
+    # int -> fixed grid of distinct per-cell latents; None -> dynamic single cloned latent
+    # whose grid matches the patch grid at forward time (requires rope).
+    register_grid_size: int | None = 4
     register_dim: int | None = None
     register_read_depth: int = 1
     register_latent_depth: int = 2
@@ -2646,9 +2743,15 @@ class EncoderConfig(Config):
                     f"2D RoPE requires head_dim divisible by 4, got {head_dim}"
                 )
         if self.use_register_bottleneck:
-            if self.register_grid_size < 1:
+            if self.register_grid_size is not None and self.register_grid_size < 1:
                 raise ValueError(
-                    f"register_grid_size must be >= 1, got {self.register_grid_size}"
+                    f"register_grid_size must be >= 1 or None, got "
+                    f"{self.register_grid_size}"
+                )
+            if self.register_grid_size is None and self.spatial_pos_encoding != "rope":
+                raise ValueError(
+                    "register_grid_size=None (dynamic single-latent bottleneck) requires "
+                    'spatial_pos_encoding="rope"'
                 )
             register_dim = (
                 self.register_dim
@@ -2686,6 +2789,9 @@ class EncoderConfig(Config):
         # supported_modality_names is replaced by supported_modalities
         kwargs.pop("supported_modality_names")
         kwargs["supported_modalities"] = self.supported_modalities
+        # exclude_none drops register_grid_size when None, but None is meaningful here
+        # (dynamic single-latent bottleneck), so pass it through explicitly.
+        kwargs["register_grid_size"] = self.register_grid_size
         logger.info(f"Encoder kwargs: {kwargs}")
         return Encoder(**kwargs)
 

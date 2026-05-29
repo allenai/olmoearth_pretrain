@@ -11,6 +11,10 @@
 # All use RoPE base10k + coordinate scale 0.25; head_dim = dim/12 in {16, 24, 44, 64}.
 # Registers per grid: g8 -> 64, g16 -> 256, g32 -> 1024.
 # register_read_depth=1, register_latent_depth=4, register_num_heads=12 (set in scripts).
+#
+# + 2 dynamic-grid runs (register_grid_size=null): a SINGLE learned latent cloned across
+#   a grid that MATCHES THE PATCH GRID at forward time (translation-invariant prior, no
+#   fixed grid size). d768, sup + nosup. Tagged "gdyn". See the final section below.
 
 SCRIPT="scripts/archived/2026_04_22_add_hidden_layer_to_initial_projection/hidden1_supervision_register_bottleneck.py"
 NOSUP_SCRIPT="scripts/archived/2026_04_22_add_hidden_layer_to_initial_projection/hidden1_register_bottleneck_no_supervision.py"
@@ -118,3 +122,15 @@ python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g32_d528_nosup" "$CLUSTE
 python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g32_d768_nosup" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
     --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
+
+# ==================== dynamic grid: single cloned latent (2) ====================
+# register_grid_size=null -> one shared latent cloned across the patch grid (no fixed
+# grid). OmegaConf parses `null` to Python None; the decoder has no grid field.
+
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
+
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
