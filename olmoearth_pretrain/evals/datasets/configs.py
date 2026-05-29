@@ -285,6 +285,7 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         imputes=[],
         num_classes=1,
         is_multilabel=False,
+        height_width=256,
         supported_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         timeseries=True,
     ),
