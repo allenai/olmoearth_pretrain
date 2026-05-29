@@ -1280,6 +1280,7 @@ class SpatialRegisterBottleneck(nn.Module):
         rope_base: float = 10000.0,
         qk_norm: bool = False,
         interleave: bool = False,
+        read_layers: list[int] | None = None,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1304,11 +1305,25 @@ class SpatialRegisterBottleneck(nn.Module):
                 so the latents re-query the input after each refinement, instead of reading
                 once up front. If False (default, backwards compatible), do all ``read_depth``
                 reads first, then all ``latent_transformer_depth`` self-attention blocks.
+            read_layers: If set, enables *multi-depth* reads: the bottleneck reads from a
+                different encoder depth at each ``[read -> self-attend]`` step instead of
+                re-reading the final layer. ``read_layers`` is the (1-indexed, ascending)
+                list of encoder block depths that supply the K/V at each step, so there is
+                one read + one latent block per entry. This recovers modality-unique
+                information that the final layer drops (Lee et al., CVPR 2026, "Beyond
+                What's Shared"). The encoder passes one K/V tensor per layer at forward
+                time. When set it forces the interleaved schedule and overrides
+                ``read_depth`` / ``latent_transformer_depth``; when None (default) behaviour
+                is unchanged (all reads share the final-layer K/V).
         """
         super().__init__()
         self.register_dim = register_dim
         self.use_2d_rope = use_2d_rope
-        self.interleave = interleave
+        # Multi-depth reads force the interleaved schedule (one read + one latent block per
+        # source layer); the read/latent counts are then set by ``read_layers``.
+        self.multi_depth = read_layers is not None
+        self.read_layers = list(read_layers) if read_layers is not None else None
+        self.interleave = interleave or self.multi_depth
         self.dynamic_grid = register_grid is None
         if register_grid is None:
             if not use_2d_rope:
@@ -1340,9 +1355,19 @@ class SpatialRegisterBottleneck(nn.Module):
         # The read + latent transformer run on small unpacked [B, N, D] tensors with an
         # attention mask, so they use the SDPA path (use_flash_attn=False) regardless of
         # the encoder's flash setting.
-        # In interleave mode there is one read per self-attention block, so the read count
-        # matches latent_transformer_depth; in legacy mode it is the separate read_depth.
-        num_read_blocks = latent_transformer_depth if interleave else read_depth
+        # Multi-depth: one read + one latent per source layer.
+        # Interleave: one read per self-attention block, so the read count matches
+        # latent_transformer_depth.
+        # Legacy: read_depth reads up front, then latent_transformer_depth self-attentions.
+        if self.multi_depth:
+            assert self.read_layers is not None
+            num_read_blocks = len(self.read_layers)
+            num_latent_blocks = len(self.read_layers)
+        else:
+            num_read_blocks = (
+                latent_transformer_depth if self.interleave else read_depth
+            )
+            num_latent_blocks = latent_transformer_depth
         self.read_blocks = nn.ModuleList(
             [
                 Block(
@@ -1372,7 +1397,7 @@ class SpatialRegisterBottleneck(nn.Module):
                     use_2d_rope=use_2d_rope,
                     rope_base=rope_base,
                 )
-                for _ in range(latent_transformer_depth)
+                for _ in range(num_latent_blocks)
             ]
         )
         self.norm = nn.LayerNorm(register_dim)
@@ -1404,7 +1429,7 @@ class SpatialRegisterBottleneck(nn.Module):
 
     def forward(
         self,
-        patch_tokens: Tensor,
+        patch_tokens: Tensor | list[Tensor],
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
         spatial_grid: tuple[int, int] | None = None,
@@ -1412,7 +1437,9 @@ class SpatialRegisterBottleneck(nn.Module):
         """Read the (visible) patch tokens into the register grid.
 
         Args:
-            patch_tokens: Encoded tokens ``[B, N, encoder_embedding_size]``.
+            patch_tokens: Encoded tokens ``[B, N, encoder_embedding_size]``. In multi-depth
+                mode (``read_layers`` set) this is instead a list of one such tensor per
+                read block, giving the K/V source at each successive encoder depth.
             patch_positions: GSD-scaled ``[B, N, 2]`` coords (None if not using RoPE).
             visible_mask: Bool ``[B, N]``, True where a token is a valid key
                 (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
@@ -1423,8 +1450,30 @@ class SpatialRegisterBottleneck(nn.Module):
             registers: ``[B, num_registers, register_dim]``
             register_positions: ``[B, num_registers, 2]`` or None
         """
-        batch_size = patch_tokens.shape[0]
-        kv = self.kv_proj(self.input_norm(patch_tokens))
+        # Down-project (shared kv_proj/input_norm) the K/V source(s). Multi-depth gets one
+        # per read block; otherwise a single source is reused by every read.
+        if self.multi_depth:
+            if not isinstance(patch_tokens, list):
+                raise ValueError(
+                    "multi-depth register bottleneck expects a list of per-layer "
+                    "patch_tokens (one per read block)"
+                )
+            if len(patch_tokens) != len(self.read_blocks):
+                raise ValueError(
+                    f"expected {len(self.read_blocks)} K/V sources (one per read layer), "
+                    f"got {len(patch_tokens)}"
+                )
+            kv_per_read = [self.kv_proj(self.input_norm(t)) for t in patch_tokens]
+            reference_tokens = patch_tokens[0]
+        else:
+            if isinstance(patch_tokens, list):
+                raise ValueError(
+                    "single-source register bottleneck expects a tensor, not a list"
+                )
+            kv = self.kv_proj(self.input_norm(patch_tokens))
+            kv_per_read = [kv] * len(self.read_blocks)
+            reference_tokens = patch_tokens
+        batch_size = reference_tokens.shape[0]
         if self.dynamic_grid:
             if spatial_grid is None:
                 raise ValueError(
@@ -1458,7 +1507,7 @@ class SpatialRegisterBottleneck(nn.Module):
             )
         attn_mask = visible_mask.bool() if visible_mask is not None else None
 
-        def read(registers: Tensor, blk: nn.Module) -> Tensor:
+        def read(registers: Tensor, blk: nn.Module, kv: Tensor) -> Tensor:
             return blk(
                 x=registers,
                 y=kv,
@@ -1469,14 +1518,18 @@ class SpatialRegisterBottleneck(nn.Module):
 
         if self.interleave:
             # [read -> self-attend] per layer: the latents re-query the input after each
-            # refinement (Perceiver/DETR/Flamingo style).
-            for read_blk, latent_blk in zip(self.read_blocks, self.latent_blocks):
-                registers = read(registers, read_blk)
+            # refinement (Perceiver/DETR/Flamingo style). In multi-depth mode each read
+            # draws its K/V from a successively deeper encoder layer; otherwise every read
+            # re-queries the same (final-layer) source.
+            for read_blk, latent_blk, kv in zip(
+                self.read_blocks, self.latent_blocks, kv_per_read
+            ):
+                registers = read(registers, read_blk, kv)
                 registers = latent_blk(x=registers, rope_positions=register_positions)
         else:
             # Legacy: all reads first, then the latent transformer.
-            for read_blk in self.read_blocks:
-                registers = read(registers, read_blk)
+            for read_blk, kv in zip(self.read_blocks, kv_per_read):
+                registers = read(registers, read_blk, kv)
             for latent_blk in self.latent_blocks:
                 registers = latent_blk(x=registers, rope_positions=register_positions)
         return self.norm(registers), register_positions
@@ -1525,6 +1578,7 @@ class Encoder(FlexiVitBase):
         register_latent_depth: int = 2,
         register_num_heads: int | None = None,
         register_interleave: bool = False,
+        register_read_layers: list[int] | None = None,
     ):
         """Initialize the encoder.
 
@@ -1590,6 +1644,13 @@ class Encoder(FlexiVitBase):
                 latent self-attention (``[read -> self] x register_latent_depth``) so the
                 registers re-query the input after each refinement, instead of reading once
                 up front. Defaults to False (legacy schedule, backwards compatible).
+            register_read_layers: If set, the register bottleneck reads from these (1-indexed,
+                ascending) encoder block depths -- one ``[read -> self-attend]`` step per
+                entry, each reading the patch tokens at that depth -- instead of re-reading
+                the final layer. Recovers modality-unique information that the final layer
+                drops. Forces the interleaved schedule and overrides ``register_read_depth``
+                / ``register_latent_depth``. Defaults to None (final-layer read only,
+                backwards compatible).
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1663,6 +1724,17 @@ class Encoder(FlexiVitBase):
         self.use_register_bottleneck = use_register_bottleneck
         self.register_bottleneck: SpatialRegisterBottleneck | None = None
         if use_register_bottleneck:
+            if register_read_layers is not None:
+                if sorted(set(register_read_layers)) != list(register_read_layers):
+                    raise ValueError(
+                        "register_read_layers must be strictly ascending and unique, got "
+                        f"{register_read_layers}"
+                    )
+                if not all(1 <= layer <= depth for layer in register_read_layers):
+                    raise ValueError(
+                        f"register_read_layers must lie in [1, depth={depth}], got "
+                        f"{register_read_layers}"
+                    )
             resolved_register_dim = (
                 register_dim if register_dim is not None else embedding_size // 2
             )
@@ -1686,6 +1758,7 @@ class Encoder(FlexiVitBase):
                 rope_base=rope_base,
                 qk_norm=qk_norm,
                 interleave=register_interleave,
+                read_layers=register_read_layers,
             )
 
         self.apply(self._init_weights)
@@ -2022,6 +2095,19 @@ class Encoder(FlexiVitBase):
             if positions is not None:
                 positions = self.add_register_positions(positions)
 
+        # Multi-depth register reads: stash the (raw, in-loop) patch tokens at the
+        # configured 1-indexed depths so the bottleneck can read each one. The patch stack
+        # is independent of the registers (registers never write back), so caching here is
+        # equivalent to truly interleaving the reads into the block loop.
+        multi_depth_read_layers: set[int] = set()
+        if (
+            self.register_bottleneck is not None
+            and self.register_bottleneck.multi_depth
+        ):
+            assert self.register_bottleneck.read_layers is not None
+            multi_depth_read_layers = set(self.register_bottleneck.read_layers)
+        cached_read_tokens: dict[int, Tensor] = {}
+
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
@@ -2048,6 +2134,9 @@ class Encoder(FlexiVitBase):
                 attn_mask=attn_mask,
                 rope_positions=positions,
             )
+            # Stash this depth's output for the multi-depth register read (1-indexed).
+            if (i_blk + 1) in multi_depth_read_layers:
+                cached_read_tokens[i_blk + 1] = tokens
 
         if self.has_register_tokens:
             tokens, register_tokens = self.pop_register_tokens(tokens)
@@ -2092,8 +2181,36 @@ class Encoder(FlexiVitBase):
                 if self.register_bottleneck.dynamic_grid
                 else None
             )
+            if self.register_bottleneck.multi_depth:
+                assert self.register_bottleneck.read_layers is not None
+                depth_total = len(self.blocks)
+
+                def _finalize_read_tokens(raw: Tensor) -> Tensor:
+                    # Bring a cached, in-loop block output into the same representation as
+                    # the final `tokens` the bottleneck reads: drop register tokens, unpack
+                    # (flash), norm, and re-add masked tokens (the read masks them out).
+                    t = raw
+                    if self.has_register_tokens:
+                        t, _ = self.pop_register_tokens(t)
+                    if self.use_flash_attn:
+                        t = self.unpack_tokens(t, new_mask, og_shape)
+                    t = self.norm(t)
+                    return self._maybe_add_removed_tokens(
+                        t, indices, new_mask, fast_pass
+                    )
+
+                # One K/V source per read layer; the final layer reuses the already
+                # finalized `tokens`, intermediate layers are finalized from the cache.
+                patch_tokens_arg: Tensor | list[Tensor] = [
+                    tokens
+                    if depth == depth_total
+                    else _finalize_read_tokens(cached_read_tokens[depth])
+                    for depth in self.register_bottleneck.read_layers
+                ]
+            else:
+                patch_tokens_arg = tokens
             registers, register_positions = self.register_bottleneck(
-                patch_tokens=tokens,
+                patch_tokens=patch_tokens_arg,
                 patch_positions=register_kv_positions,
                 visible_mask=bool_mask,
                 spatial_grid=spatial_grid,
@@ -2738,6 +2855,10 @@ class EncoderConfig(Config):
     # Interleave reads with latent self-attention ([read -> self] x register_latent_depth)
     # instead of reading once up front. False -> legacy schedule (backwards compatible).
     register_interleave: bool = False
+    # Multi-depth reads: 1-indexed, ascending encoder depths the bottleneck reads from
+    # (one [read -> self-attend] step per entry). Forces the interleaved schedule and
+    # overrides register_read_depth / register_latent_depth. None -> final-layer read only.
+    register_read_layers: list[int] | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2814,6 +2935,25 @@ class EncoderConfig(Config):
                     "2D RoPE requires register head_dim divisible by 4, got "
                     f"{register_dim // register_heads}"
                 )
+            if self.register_read_layers is not None:
+                if sorted(set(self.register_read_layers)) != list(
+                    self.register_read_layers
+                ):
+                    raise ValueError(
+                        "register_read_layers must be strictly ascending and unique, got "
+                        f"{self.register_read_layers}"
+                    )
+                if not all(
+                    1 <= layer <= self.depth for layer in self.register_read_layers
+                ):
+                    raise ValueError(
+                        f"register_read_layers must lie in [1, depth={self.depth}], got "
+                        f"{self.register_read_layers}"
+                    )
+        elif self.register_read_layers is not None:
+            raise ValueError(
+                "register_read_layers requires use_register_bottleneck=True"
+            )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:

@@ -163,3 +163,23 @@ python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_nosup" "$CL
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
     --model.encoder_config.register_interleave=true
+
+# ============ multi-depth reads: read from intermediate encoder layers (2) ============
+# register_read_layers gives the 1-indexed encoder depths the bottleneck reads from -- one
+# [read -> self-attend] step per entry, each reading the patch tokens AT THAT DEPTH instead
+# of re-reading the final layer. Motivation: the alignment/bottleneck objective drives the
+# final layer to drop modality-unique info; reading earlier layers recovers it (Lee et al.,
+# CVPR 2026, "Beyond What's Shared"). Encoder is ViT-base (12 layers); stride 3 ->
+# [3,6,9,12] (4 reads). Forces the interleaved schedule and overrides
+# register_read_depth/register_latent_depth. Dynamic grid, sup + nosup. Tagged "mdr3".
+# Brackets are quoted for the shell.
+
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    '--model.encoder_config.register_read_layers=[3,6,9,12]'
+
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    '--model.encoder_config.register_read_layers=[3,6,9,12]'
