@@ -1248,6 +1248,10 @@ class SpatialRegisterBottleneck(nn.Module):
     this grid, and frozen evals probe it. Register coordinates are placed in the same
     GSD-scaled frame as the patches, so 2D RoPE relative offsets are meaningful.
 
+    The read/process schedule is set by ``interleave``: legacy (all reads, then all
+    self-attention) or interleaved (``[read -> self-attend]`` per layer, so the latents
+    re-query the input after each refinement -- the Perceiver/DETR/Flamingo pattern).
+
     Two parameterizations, selected by ``register_grid``:
 
     - **Legacy / fixed grid** (``register_grid=(n_h, n_w)``): distinct per-cell learned
@@ -1275,6 +1279,7 @@ class SpatialRegisterBottleneck(nn.Module):
         use_2d_rope: bool,
         rope_base: float = 10000.0,
         qk_norm: bool = False,
+        interleave: bool = False,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1286,15 +1291,24 @@ class SpatialRegisterBottleneck(nn.Module):
                 forward time; requires ``use_2d_rope``).
             num_heads: Number of attention heads for the read + latent transformer blocks.
             mlp_ratio: MLP ratio for the blocks.
-            read_depth: Number of cross-attention read blocks.
+            read_depth: Number of cross-attention read blocks (legacy mode only; ignored
+                when ``interleave=True``).
             latent_transformer_depth: Number of self-attention blocks over the register grid.
+                In ``interleave`` mode this also sets the number of (read -> self-attend)
+                layers (one read paired with each self-attention block).
             use_2d_rope: Whether to apply 2D RoPE (requires per-token positions at call time).
             rope_base: RoPE frequency base.
             qk_norm: Whether to apply QK normalization in attention.
+            interleave: If True, interleave cross-attention reads with latent self-attention
+                (Perceiver/DETR/Flamingo style: ``[read -> self] x latent_transformer_depth``)
+                so the latents re-query the input after each refinement, instead of reading
+                once up front. If False (default, backwards compatible), do all ``read_depth``
+                reads first, then all ``latent_transformer_depth`` self-attention blocks.
         """
         super().__init__()
         self.register_dim = register_dim
         self.use_2d_rope = use_2d_rope
+        self.interleave = interleave
         self.dynamic_grid = register_grid is None
         if register_grid is None:
             if not use_2d_rope:
@@ -1326,6 +1340,9 @@ class SpatialRegisterBottleneck(nn.Module):
         # The read + latent transformer run on small unpacked [B, N, D] tensors with an
         # attention mask, so they use the SDPA path (use_flash_attn=False) regardless of
         # the encoder's flash setting.
+        # In interleave mode there is one read per self-attention block, so the read count
+        # matches latent_transformer_depth; in legacy mode it is the separate read_depth.
+        num_read_blocks = latent_transformer_depth if interleave else read_depth
         self.read_blocks = nn.ModuleList(
             [
                 Block(
@@ -1339,7 +1356,7 @@ class SpatialRegisterBottleneck(nn.Module):
                     use_2d_rope=use_2d_rope,
                     rope_base=rope_base,
                 )
-                for _ in range(read_depth)
+                for _ in range(num_read_blocks)
             ]
         )
         self.latent_blocks = nn.ModuleList(
@@ -1440,16 +1457,28 @@ class SpatialRegisterBottleneck(nn.Module):
                 patch_positions, register_grid
             )
         attn_mask = visible_mask.bool() if visible_mask is not None else None
-        for blk in self.read_blocks:
-            registers = blk(
+
+        def read(registers: Tensor, blk: nn.Module) -> Tensor:
+            return blk(
                 x=registers,
                 y=kv,
                 attn_mask=attn_mask,
                 rope_positions=register_positions,
                 rope_positions_y=patch_positions,
             )
-        for blk in self.latent_blocks:
-            registers = blk(x=registers, rope_positions=register_positions)
+
+        if self.interleave:
+            # [read -> self-attend] per layer: the latents re-query the input after each
+            # refinement (Perceiver/DETR/Flamingo style).
+            for read_blk, latent_blk in zip(self.read_blocks, self.latent_blocks):
+                registers = read(registers, read_blk)
+                registers = latent_blk(x=registers, rope_positions=register_positions)
+        else:
+            # Legacy: all reads first, then the latent transformer.
+            for read_blk in self.read_blocks:
+                registers = read(registers, read_blk)
+            for latent_blk in self.latent_blocks:
+                registers = latent_blk(x=registers, rope_positions=register_positions)
         return self.norm(registers), register_positions
 
 
@@ -1495,6 +1524,7 @@ class Encoder(FlexiVitBase):
         register_read_depth: int = 1,
         register_latent_depth: int = 2,
         register_num_heads: int | None = None,
+        register_interleave: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1556,6 +1586,10 @@ class Encoder(FlexiVitBase):
                 over the register grid.
             register_num_heads: Number of attention heads in the bottleneck blocks.
                 Defaults to ``num_heads`` when None.
+            register_interleave: If True, interleave the cross-attention reads with the
+                latent self-attention (``[read -> self] x register_latent_depth``) so the
+                registers re-query the input after each refinement, instead of reading once
+                up front. Defaults to False (legacy schedule, backwards compatible).
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1651,6 +1685,7 @@ class Encoder(FlexiVitBase):
                 use_2d_rope=(spatial_pos_encoding == "rope"),
                 rope_base=rope_base,
                 qk_norm=qk_norm,
+                interleave=register_interleave,
             )
 
         self.apply(self._init_weights)
@@ -2700,6 +2735,9 @@ class EncoderConfig(Config):
     register_read_depth: int = 1
     register_latent_depth: int = 2
     register_num_heads: int | None = None
+    # Interleave reads with latent self-attention ([read -> self] x register_latent_depth)
+    # instead of reading once up front. False -> legacy schedule (backwards compatible).
+    register_interleave: bool = False
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""

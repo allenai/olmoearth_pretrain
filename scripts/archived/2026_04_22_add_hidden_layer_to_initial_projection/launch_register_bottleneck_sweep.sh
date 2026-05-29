@@ -14,7 +14,10 @@
 #
 # + 2 dynamic-grid runs (register_grid_size=null): a SINGLE learned latent cloned across
 #   a grid that MATCHES THE PATCH GRID at forward time (translation-invariant prior, no
-#   fixed grid size). d768, sup + nosup. Tagged "gdyn". See the final section below.
+#   fixed grid size). d768, sup + nosup. Tagged "gdyn".
+# + 4 interleaved-read runs (register_interleave=true): [read -> self] x register_latent_depth
+#   instead of one up-front read (Perceiver/DETR/Flamingo). d768, g16 + gdyn, sup + nosup.
+#   Tagged "il". See the final two sections below.
 
 SCRIPT="scripts/archived/2026_04_22_add_hidden_layer_to_initial_projection/hidden1_supervision_register_bottleneck.py"
 NOSUP_SCRIPT="scripts/archived/2026_04_22_add_hidden_layer_to_initial_projection/hidden1_register_bottleneck_no_supervision.py"
@@ -134,3 +137,29 @@ python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768" "$CLUSTER" \
 python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_nosup" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
+
+# =================== interleaved reads: [read -> self] x4 (4) ===================
+# register_interleave=true interleaves each cross-attention read with a latent self-
+# attention block (Perceiver/DETR/Flamingo) so the registers re-query after each refine,
+# instead of the default single up-front read. register_latent_depth=4 -> 4 reads + 4 self.
+# d768, on the g16 fixed grid and the gdyn dynamic grid, sup + nosup. Tagged "il".
+
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_g16_d768_il" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true
+
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g16_d768_il_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=16 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true
+
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true
+
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true

@@ -1183,6 +1183,59 @@ def test_encoder_register_bottleneck_dynamic_grid(
         assert encoder.register_bottleneck.register.grad is not None
 
 
+def test_encoder_register_bottleneck_interleave(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """register_interleave pairs one read with each latent self-attention block."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    grid_size, register_dim, latent_depth = 3, 8, 3
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        spatial_pos_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=grid_size,
+        register_dim=register_dim,
+        register_read_depth=1,
+        register_latent_depth=latent_depth,
+        register_interleave=True,
+    )
+    bottleneck = encoder.register_bottleneck
+    assert bottleneck is not None
+    assert bottleneck.interleave
+    # One read per latent self-attention block (read_depth is ignored when interleaving).
+    assert len(bottleneck.read_blocks) == latent_depth
+    assert len(bottleneck.latent_blocks) == latent_depth
+
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=2, input_res=10)
+    assert output_dict["registers"].shape == (B, grid_size * grid_size, register_dim)
+    output_dict["registers"].sum().backward()
+    # Gradients reach the last interleaved read (only reached if reads run between selves).
+    assert bottleneck.read_blocks[-1].attn.q.weight.grad is not None
+
+
 def test_predictor_forward_rope(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
