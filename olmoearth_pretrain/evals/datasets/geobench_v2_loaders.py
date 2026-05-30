@@ -295,8 +295,8 @@ class BENV2Dataset(_BaseGeobenchDataset):
         return {"image_s1": image_s1, "image_s2": image_s2, "label": label}
 
 
-# No Water→0, Permanent Water→1, Flood→2, No Data/Invalid→3
-_KURO_SIWO_CLASS_MAP = torch.tensor([0, 1, 2, 3])
+# No Water→0, Permanent Water→1, Flood→2, No Data/Invalid→-1 (ignored)
+_KURO_SIWO_CLASS_MAP = torch.tensor([0, 1, 2, -1])
 
 
 class KuroSiwoDataset(_BaseGeobenchDataset):
@@ -312,7 +312,9 @@ class KuroSiwoDataset(_BaseGeobenchDataset):
         image_pre_1 = _raster_f32(row, 0).nan_to_num(0.0)
         image_pre_2 = _raster_f32(row, 1).nan_to_num(0.0)
         image_post = _raster_f32(row, 2).nan_to_num(0.0)
-        image_dem = _raster_f32(row, 3)
+        # nan_to_num handles float NaN from SRTM water nodata; clamp removes
+        # SRTM int16 nodata sentinels (-32768) stored as float.
+        image_dem = _raster_f32(row, 3).nan_to_num(0.0).clamp(min=-500.0)
         mask = _KURO_SIWO_CLASS_MAP[_raster_i64(row, 4).squeeze(0)]
         return {
             "image_pre_1": image_pre_1,

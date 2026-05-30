@@ -247,7 +247,7 @@ def _extract_label(
     num_classes: int,
 ) -> torch.Tensor:
     if task_type == TaskType.REGRESSION and "mask" in sample:
-        return torch.nanmean(sample["mask"].float()).unsqueeze(0)
+        return sample["mask"].float()
 
     if "mask" in sample:
         return sample["mask"].long().squeeze()
