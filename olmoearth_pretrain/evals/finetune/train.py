@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import math
 import os
 import random
@@ -41,6 +42,7 @@ from olmoearth_pretrain.evals.finetune.model import (
     snapshot_state_dict,
     to_device,
 )
+from olmoearth_pretrain.evals.linear_probe import weighted_dice_loss
 from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
 
 
@@ -178,6 +180,7 @@ def run_finetune_eval(
     primary_metric_class: int | None = None,
     ft_grad_accum_steps: int = 1,
     head_type: HeadType = "linear",
+    use_dice_loss: bool = False,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
     accum_steps = max(1, ft_grad_accum_steps)
@@ -243,13 +246,16 @@ def run_finetune_eval(
         cooldown=SCHEDULER_COOLDOWN,
     )
     if task_config.task_type == TaskType.CLASSIFICATION:
-        loss_fn: nn.Module = (
+        loss_fn: Any = (
             nn.MultiLabelSoftMarginLoss()
             if task_config.is_multilabel
             else nn.CrossEntropyLoss()
         )
     elif task_config.task_type == TaskType.REGRESSION:
         loss_fn = nn.MSELoss()
+    elif use_dice_loss:
+        num_classes = task_config.num_classes
+        loss_fn = functools.partial(weighted_dice_loss, num_classes=num_classes)
     else:
         loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
 

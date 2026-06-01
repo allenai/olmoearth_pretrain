@@ -382,7 +382,7 @@ def weighted_dice_loss(
     ignore_index: int = SEGMENTATION_IGNORE_LABEL,
     smooth: float = 1.0,
 ) -> torch.Tensor:
-    """Compute class-weighted dice loss for segmentation.
+    """Compute class-weighted dice + cross-entropy loss for segmentation.
 
     Args:
         logits: Model predictions of shape (N, C, ...) where C is num_classes.
@@ -392,7 +392,7 @@ def weighted_dice_loss(
         smooth: Smoothing term to avoid division by zero.
 
     Returns:
-        Scalar weighted dice loss.
+        Scalar combined dice + CE loss.
     """
     valid_mask = targets != ignore_index
     targets_masked = targets.clone()
@@ -417,18 +417,25 @@ def weighted_dice_loss(
 
     dice_per_class = (2.0 * intersection + smooth) / (cardinality + smooth)
 
-    # Class weights: inverse frequency of valid pixels per class
+    # Class weights: inverse frequency of valid pixels per class.
+    # Use uniform weight for absent classes so the CE term still provides
+    # gradient signal on batches where a rare class (e.g. flood) is absent.
     class_counts = one_hot.sum(dim=dims)
     total = class_counts.sum()
     weights = torch.where(
         class_counts > 0,
         total / (num_classes * class_counts),
-        torch.zeros_like(class_counts),
+        torch.ones_like(class_counts),
     )
     weights = weights / (weights.sum() + 1e-8)
 
-    loss = 1.0 - (weights * dice_per_class).sum()
-    return loss
+    dice_loss = 1.0 - (weights * dice_per_class).sum()
+
+    # CE loss provides gradient even when the minority class is absent from
+    # the batch, preventing the model from collapsing to all-background.
+    ce_loss = F.cross_entropy(logits, targets, ignore_index=ignore_index)
+
+    return dice_loss + ce_loss
 
 
 def train_probe(
