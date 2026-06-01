@@ -90,6 +90,7 @@ def compute_eval_metrics(
             val_loader,
             device,
             task_config.is_multilabel,
+            task_config.num_classes,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
         )
@@ -112,6 +113,7 @@ def compute_eval_metrics(
                 test_loader,
                 device,
                 task_config.is_multilabel,
+                task_config.num_classes,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
             )
@@ -322,6 +324,7 @@ def run_finetune_eval(
                 val_loader,
                 device,
                 task_config.is_multilabel,
+                task_config.num_classes,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
             )

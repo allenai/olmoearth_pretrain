@@ -6,36 +6,67 @@ Presto H5 corpus:
 `/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/469728`
 
 The splits are generated from cached per-sample OSM label metadata and are wired
-into `TILING_DIAG_TASKS` in `olmoearth_pretrain/internal/all_evals.py`.
+into `EVAL_TASKS` in `olmoearth_pretrain/internal/all_evals.py` as the three
+`presto_osm_*` probe tasks. Filter to just these with `--task-names`.
 
 ## Variants
 
 - `osm_base_balanced`: base class-balanced OSM eval. Anchors on classes with at
   least 500 tiles present. Current size: 6144 train / 3072 valid / 3072 test.
+  Uses per-pixel 30-class segmentation (argmax over OSM channels).
 - `osm_diverse_context`: context-heavy eval. Requires at least 3 OSM classes per
   tile and normalized entropy >= 0.5. Current size: 6144 train / 2093 valid /
-  2089 test.
+  2089 test. Eval task predicts the tile's anchor class (rarest eligible OSM
+  class present) as 30-way multi-class classification.
 - `osm_rare_class_focused`: rare-class diagnostic eval. Anchors on classes with
   more than 50 tiles present. Highway/building caps apply to filler/context tiles
   but rare-anchor tiles are exempt. Current size: 1290 train / 200 valid / 175 test.
+  Same tile-level 30-way anchor-class classification as diverse_context.
 
 Each variant contains:
 
 - `train.csv`, `valid.csv`, `test.csv`: selected H5 `sample_index` values.
 - `*_class_summary.csv`: class presence and pixel distribution for that split.
+- `class_support.json`: precomputed labeled-class ids per split for eval scoring.
+  Uses `tile_presence` for tile-classification tasks and `pixels` for segmentation.
 
 ## Eval Command
 
-Run only these three OSM balanced evals with:
+Validate config generation first:
 
 ```bash
-TILING_DIAGNOSTICS_ONLY=1 \
-TRAIN_SCRIPT_PATH=scripts/official/v1_1/base.py \
-CHECKPOINT_DIR=/weka/dfive-default/helios/checkpoints/favyen/hidden1 \
-CHECKPOINT_STEPS=665000 \
-torchrun olmoearth_pretrain/internal/checkpoint_sweep_evals.py \
-  evaluate v1_1_hidden1_osm_balanced_tiling_diag_step665k local \
-  --trainer.callbacks.wandb.project=2026_05_27_tiling_diag_rope
+python -m olmoearth_pretrain.internal.full_eval_sweep \
+  --dry_run \
+  --cluster=ai2/saturn-cirrascale \
+  --defaults_only \
+  --module_path=scripts/official/v1_1/base.py \
+  --checkpoint_path=/weka/dfive-default/helios/checkpoints/favyen/hidden1/step665000 \
+  --task-names=presto_osm_base_balanced_probe_sentinel2_l2a,presto_osm_diverse_context_probe_sentinel2_l2a,presto_osm_rare_class_focused_probe_sentinel2_l2a \
+  --project_name=2026_06_01_osm_balanced_eval
+```
+
+Launch to Beaker (push branch first):
+
+```bash
+python -m olmoearth_pretrain.internal.full_eval_sweep \
+  --cluster=ai2/saturn-cirrascale \
+  --defaults_only \
+  --module_path=scripts/official/v1_1/base.py \
+  --checkpoint_path=/weka/dfive-default/helios/checkpoints/favyen/hidden1/step665000 \
+  --task-names=presto_osm_base_balanced_probe_sentinel2_l2a,presto_osm_diverse_context_probe_sentinel2_l2a,presto_osm_rare_class_focused_probe_sentinel2_l2a \
+  --project_name=2026_06_01_osm_balanced_eval
+```
+
+Local run (single GPU):
+
+```bash
+python -m olmoearth_pretrain.internal.full_eval_sweep \
+  --cluster=local \
+  --defaults_only \
+  --module_path=scripts/official/v1_1/base.py \
+  --checkpoint_path=/weka/dfive-default/helios/checkpoints/favyen/hidden1/step665000 \
+  --task-names=presto_osm_base_balanced_probe_sentinel2_l2a,presto_osm_diverse_context_probe_sentinel2_l2a,presto_osm_rare_class_focused_probe_sentinel2_l2a \
+  --project_name=2026_06_01_osm_balanced_eval
 ```
 
 ## Supporting Artifacts

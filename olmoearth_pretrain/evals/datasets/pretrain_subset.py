@@ -54,6 +54,13 @@ class PretrainSplitStrategy(StrEnum):
     BALANCED_GEOGRAPHIC = "balanced_geographic"
 
 
+class OsmLabelMode(StrEnum):
+    """How to derive OSM labels for pretrain-derived probe tasks."""
+
+    SEGMENTATION = "segmentation"
+    TILE_ANCHOR_CLASS = "tile_anchor_class"
+
+
 @cache
 def _read_sample_metadata(path: str) -> pd.DataFrame:
     """Cached read of the immutable per-dataset sample-metadata CSV.
@@ -92,6 +99,7 @@ class PretrainSubsetDataset(Dataset):
         split_strategy: str | PretrainSplitStrategy = PretrainSplitStrategy.RANDOM,
         geographic_bin_size_deg: float = 5.0,
         split_dir: str | None = None,
+        osm_label_mode: str | OsmLabelMode = OsmLabelMode.SEGMENTATION,
     ) -> None:
         """Initialize a deterministic pretrain eval subset.
 
@@ -113,11 +121,16 @@ class PretrainSubsetDataset(Dataset):
             geographic_bin_size_deg: Geographic bin size for spatial holdouts.
             split_dir: Optional directory containing train/valid/test CSVs with
                 H5 ``sample_index`` values to use directly.
+            osm_label_mode: For OSM probes, ``segmentation`` returns per-pixel
+                argmax labels; ``tile_anchor_class`` returns the split CSV's
+                ``anchor_class_id`` as a single class label per tile.
         """
         self.patch_size = patch_size
         self.hw_p = hw_p
         self.max_samples = max_samples
         self.target_modality = target_modality
+        self.osm_label_mode = OsmLabelMode(osm_label_mode)
+        self._tile_class_labels: list[int] | None = None
 
         self._dataset = OlmoEarthDataset(
             h5py_dir=UPath(h5py_dir),
@@ -127,7 +140,11 @@ class PretrainSubsetDataset(Dataset):
         )
         self._dataset.prepare()
         self._label_dataset = None
-        if target_modality is not None:
+        use_raster_labels = (
+            target_modality is not None
+            and self.osm_label_mode != OsmLabelMode.TILE_ANCHOR_CLASS
+        )
+        if use_raster_labels:
             # Include the input modalities so extract_hwt_from_sample_dict has a
             # spatially-present modality to read H/W/T from even when the
             # (often non-multitemporal) target is missing for a given sample.
@@ -153,11 +170,21 @@ class PretrainSubsetDataset(Dataset):
         else:
             split_strategy = PretrainSplitStrategy(split_strategy)
             if split_dir is not None:
-                self._indices = self._positions_from_split_csv(
+                positions, split_rows = self._split_rows_from_split_csv(
                     dataset=self._dataset,
                     split_dir=split_dir,
                     split=split,
-                ).tolist()
+                )
+                self._indices = positions.tolist()
+                if self.osm_label_mode == OsmLabelMode.TILE_ANCHOR_CLASS:
+                    if "anchor_class_id" not in split_rows.columns:
+                        raise ValueError(
+                            f"Split CSV for {split_dir}/{split} must contain "
+                            "anchor_class_id when osm_label_mode is tile_anchor_class"
+                        )
+                    self._tile_class_labels = (
+                        split_rows["anchor_class_id"].astype(int).tolist()
+                    )
                 return
             eligible_positions = self._positions_with_target_present(
                 self._dataset, target_modality
@@ -225,12 +252,12 @@ class PretrainSubsetDataset(Dataset):
         return eligible_positions
 
     @staticmethod
-    def _positions_from_split_csv(
+    def _split_rows_from_split_csv(
         dataset: OlmoEarthDataset,
         split_dir: str,
         split: str,
-    ) -> np.ndarray:
-        """Load split positions from a CSV of H5 sample indices."""
+    ) -> tuple[np.ndarray, pd.DataFrame]:
+        """Load split rows from a CSV of H5 sample indices."""
         if dataset.sample_indices is None:
             raise ValueError("Dataset must be prepared before loading split CSVs")
         normalized_split = "valid" if split == "val" else split
@@ -246,14 +273,31 @@ class PretrainSubsetDataset(Dataset):
             int(h5_idx): position
             for position, h5_idx in enumerate(dataset.sample_indices.tolist())
         }
-        positions = [
-            position_by_h5_idx[int(sample_index)]
-            for sample_index in split_df["sample_index"].to_numpy()
-            if int(sample_index) in position_by_h5_idx
-        ]
+        positions: list[int] = []
+        matched_rows: list[pd.Series] = []
+        for _, row in split_df.iterrows():
+            sample_index = int(row["sample_index"])
+            if sample_index not in position_by_h5_idx:
+                continue
+            positions.append(position_by_h5_idx[sample_index])
+            matched_rows.append(row)
         if not positions:
             raise ValueError(f"Split CSV {split_path} produced no usable samples")
-        return np.asarray(positions, dtype=np.int64)
+        return np.asarray(positions, dtype=np.int64), pd.DataFrame(matched_rows)
+
+    @staticmethod
+    def _positions_from_split_csv(
+        dataset: OlmoEarthDataset,
+        split_dir: str,
+        split: str,
+    ) -> np.ndarray:
+        """Load split positions from a CSV of H5 sample indices."""
+        positions, _ = PretrainSubsetDataset._split_rows_from_split_csv(
+            dataset=dataset,
+            split_dir=split_dir,
+            split=split,
+        )
+        return positions
 
     @staticmethod
     def _geographic_split_positions(
@@ -746,4 +790,6 @@ class PretrainSubsetDataset(Dataset):
         )
         _, sample = self._dataset[args]
         masked = self._missing_aware_masked_sample(sample)
+        if self._tile_class_labels is not None:
+            return masked, torch.tensor(self._tile_class_labels[idx], dtype=torch.long)
         return masked, self._get_label(args)

@@ -10,6 +10,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from olmoearth_pretrain.evals.class_support import write_class_support
+
 CLASS_NAMES = [
     "aerialway_pylon",
     "aerodrome",
@@ -500,6 +502,11 @@ def main() -> None:
                 "split_path": str(split_path),
                 "class_summary_path": str(summary_path),
             }
+
+        class_support_path = write_class_support(variant_dir)
+        manifest["variants"][variant.name]["class_support_path"] = str(
+            class_support_path
+        )
 
     manifest_path = args.output_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")

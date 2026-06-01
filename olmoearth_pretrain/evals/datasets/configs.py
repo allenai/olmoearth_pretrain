@@ -86,6 +86,17 @@ DATASET_TO_CONFIG = {
             Modality.LANDSAT.name,
         ],
     ),
+    "pretrain_subset_osm_tile_classification": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[],
+        num_classes=30,
+        is_multilabel=False,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
     "pretrain_subset_srtm": EvalDatasetConfig(
         task_type=TaskType.REGRESSION,
         imputes=[],

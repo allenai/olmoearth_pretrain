@@ -17,6 +17,7 @@ from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.evals.class_support import EvalLabeledClassMode
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.datasets.pretrain_subset import PretrainSplitStrategy
 from olmoearth_pretrain.evals.metrics import EvalMetric
@@ -438,6 +439,7 @@ def _map_modality_probe(
     split_strategy: PretrainSplitStrategy = PretrainSplitStrategy.RANDOM,
     input_modalities: list[str] | None = None,
     split_dir: str | None = None,
+    eval_labeled_class_mode: EvalLabeledClassMode = EvalLabeledClassMode.PIXELS,
 ) -> DownstreamTaskConfig:
     """Build a uniform DownstreamTaskConfig for a decode-only map modality probe."""
     return DownstreamTaskConfig(
@@ -462,6 +464,7 @@ def _map_modality_probe(
         pretrain_test_samples=3072,
         pretrain_split_strategy=split_strategy,
         pretrain_split_dir=split_dir,
+        eval_labeled_class_mode=eval_labeled_class_mode,
     )
 
 
@@ -680,6 +683,35 @@ EVAL_TASKS.update(
             )
             for inputs in SRTM_PROBE_INPUT_VARIANTS
         },
+        # Class-balanced OSM raster probes built from cached Presto label
+        # metadata. Tile selection is label-aware (base / diverse-context /
+        # rare-class variants); filter to these with tasks_to_run when desired.
+        # base_balanced uses per-pixel segmentation; diverse_context and
+        # rare_class_focused use tile-level multi-class classification on the
+        # split CSV anchor_class_id (rarest eligible OSM class in the tile).
+        "presto_osm_base_balanced_probe_sentinel2_l2a": _map_modality_probe(
+            dataset="pretrain_subset_osm",
+            target_modality=Modality.OPENSTREETMAP_RASTER.name,
+            primary_metric=EvalMetric.MACRO_F1,
+            h5py_dir=PRESTO_OSM_EVAL_H5PY_DIR,
+            split_dir=f"{PRESTO_OSM_BALANCED_SPLITS_DIR}/osm_base_balanced",
+        ),
+        "presto_osm_diverse_context_probe_sentinel2_l2a": _map_modality_probe(
+            dataset="pretrain_subset_osm_tile_classification",
+            target_modality=Modality.OPENSTREETMAP_RASTER.name,
+            primary_metric=EvalMetric.MACRO_F1,
+            h5py_dir=PRESTO_OSM_EVAL_H5PY_DIR,
+            split_dir=f"{PRESTO_OSM_BALANCED_SPLITS_DIR}/osm_diverse_context",
+            eval_labeled_class_mode=EvalLabeledClassMode.TILE_PRESENCE,
+        ),
+        "presto_osm_rare_class_focused_probe_sentinel2_l2a": _map_modality_probe(
+            dataset="pretrain_subset_osm_tile_classification",
+            target_modality=Modality.OPENSTREETMAP_RASTER.name,
+            primary_metric=EvalMetric.MACRO_F1,
+            h5py_dir=PRESTO_OSM_EVAL_H5PY_DIR,
+            split_dir=f"{PRESTO_OSM_BALANCED_SPLITS_DIR}/osm_rare_class_focused",
+            eval_labeled_class_mode=EvalLabeledClassMode.TILE_PRESENCE,
+        ),
         # Embedding diagnostics on standard downstream datasets, so we can track
         # representation quality (effective rank / norm / cosine stats) on real
         # eval distributions alongside the probe metrics.
@@ -723,30 +755,6 @@ EMBED_DIAG_TASKS = {
         eval_mode=EvalMode.EMBEDDING_DIAGNOSTICS,
         h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
         pretrain_max_samples=256,
-    ),
-}
-
-TILING_DIAG_TASKS = {
-    "presto_osm_base_balanced_probe_sentinel2_l2a": _map_modality_probe(
-        dataset="pretrain_subset_osm",
-        target_modality=Modality.OPENSTREETMAP_RASTER.name,
-        primary_metric=EvalMetric.MACRO_F1,
-        h5py_dir=PRESTO_OSM_EVAL_H5PY_DIR,
-        split_dir=f"{PRESTO_OSM_BALANCED_SPLITS_DIR}/osm_base_balanced",
-    ),
-    "presto_osm_diverse_context_probe_sentinel2_l2a": _map_modality_probe(
-        dataset="pretrain_subset_osm",
-        target_modality=Modality.OPENSTREETMAP_RASTER.name,
-        primary_metric=EvalMetric.MACRO_F1,
-        h5py_dir=PRESTO_OSM_EVAL_H5PY_DIR,
-        split_dir=f"{PRESTO_OSM_BALANCED_SPLITS_DIR}/osm_diverse_context",
-    ),
-    "presto_osm_rare_class_focused_probe_sentinel2_l2a": _map_modality_probe(
-        dataset="pretrain_subset_osm",
-        target_modality=Modality.OPENSTREETMAP_RASTER.name,
-        primary_metric=EvalMetric.MACRO_F1,
-        h5py_dir=PRESTO_OSM_EVAL_H5PY_DIR,
-        split_dir=f"{PRESTO_OSM_BALANCED_SPLITS_DIR}/osm_rare_class_focused",
     ),
 }
 
@@ -887,8 +895,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                 tasks=(
                     EMBED_DIAG_TASKS
                     if os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY")
-                    else TILING_DIAG_TASKS
-                    if os.environ.get("TILING_DIAGNOSTICS_ONLY")
                     else FT_EVAL_TASKS
                     if os.environ.get("FINETUNE")
                     else EVAL_TASKS

@@ -14,7 +14,7 @@ from .geobench_dataset import GeobenchDataset
 from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset
-from .pretrain_subset import PretrainSplitStrategy, PretrainSubsetDataset
+from .pretrain_subset import OsmLabelMode, PretrainSplitStrategy, PretrainSubsetDataset
 from .rslearn_dataset import from_registry_entry
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,9 @@ def get_eval_dataset(
         A PyTorch dataset that yields eval samples and labels.
     """
     if eval_dataset.startswith("pretrain_subset"):
+        osm_label_mode = OsmLabelMode.SEGMENTATION
+        if eval_dataset == "pretrain_subset_osm_tile_classification":
+            osm_label_mode = OsmLabelMode.TILE_ANCHOR_CLASS
         return PretrainSubsetDataset(
             h5py_dir=kwargs["h5py_dir"],
             training_modalities=kwargs.get("training_modalities", input_modalities),
@@ -74,6 +77,7 @@ def get_eval_dataset(
             ),
             geographic_bin_size_deg=kwargs.get("pretrain_geographic_bin_size_deg", 5.0),
             split_dir=kwargs.get("pretrain_split_dir"),
+            osm_label_mode=osm_label_mode,
         )
     elif eval_dataset.startswith("m-"):
         # m- == "modified for geobench"

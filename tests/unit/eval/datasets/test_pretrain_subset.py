@@ -7,6 +7,7 @@ import torch
 
 from olmoearth_pretrain.evals.datasets.pretrain_subset import (
     BALANCED_CANDIDATE_MULTIPLIER,
+    OsmLabelMode,
     PretrainSplitStrategy,
     PretrainSubsetDataset,
 )
@@ -84,6 +85,34 @@ def test_positions_from_split_csv_maps_h5_indices_to_dataset_positions(tmp_path)
     )
 
     assert positions.tolist() == [2, 0]
+
+
+def test_split_rows_from_split_csv_returns_matched_rows(tmp_path) -> None:
+    """Split CSV loading should preserve matched rows for tile-level labels."""
+    split_dir = tmp_path / "splits"
+    split_dir.mkdir()
+    (split_dir / "train.csv").write_text(
+        "sample_index,anchor_class_id,anchor_class_name\n"
+        "30,12,highway\n"
+        "10,4,building\n"
+        "999,1,aerodrome\n"
+    )
+    dataset = SimpleNamespace(sample_indices=np.asarray([10, 20, 30]))
+
+    positions, rows = PretrainSubsetDataset._split_rows_from_split_csv(
+        dataset=dataset,
+        split_dir=str(split_dir),
+        split="train",
+    )
+
+    assert positions.tolist() == [2, 0]
+    assert rows["anchor_class_id"].tolist() == [12, 4]
+
+
+def test_osm_label_mode_enum_values() -> None:
+    """OSM label modes should be explicit enum values."""
+    assert OsmLabelMode.SEGMENTATION.value == "segmentation"
+    assert OsmLabelMode.TILE_ANCHOR_CLASS.value == "tile_anchor_class"
 
 
 def test_worldcover_label_maps_class_codes() -> None:

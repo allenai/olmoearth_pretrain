@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+import numpy as np
 import torch
 from sklearn.metrics import accuracy_score, f1_score
 
@@ -195,6 +196,28 @@ class EvalResult:
         )
 
 
+def _macro_f1_over_classes(
+    per_class_f1: list[float],
+    macro_class_ids: list[int] | None,
+    fallback_support=None,
+) -> float:
+    """Average per-class F1 over configured labeled classes."""
+    if macro_class_ids is not None:
+        class_ids = macro_class_ids
+    elif fallback_support is not None:
+        if isinstance(fallback_support, torch.Tensor):
+            fallback_support = fallback_support.detach().cpu().numpy()
+        class_ids = [i for i, count in enumerate(fallback_support) if count > 0]
+    else:
+        class_ids = list(range(len(per_class_f1)))
+    if not class_ids:
+        return 0.0
+    scores = [per_class_f1[i] for i in class_ids if i < len(per_class_f1)]
+    if not scores:
+        return 0.0
+    return float(sum(scores) / len(scores))
+
+
 def _build_confusion_matrix(
     predictions: torch.Tensor,
     labels: torch.Tensor,
@@ -245,6 +268,7 @@ def segmentation_metrics(
     ignore_label: int = SEGMENTATION_IGNORE_LABEL,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    macro_class_ids: list[int] | None = None,
 ) -> EvalResult:
     """Compute all segmentation metrics from predictions and labels.
 
@@ -281,8 +305,13 @@ def segmentation_metrics(
     # Macro accuracy (mean recall): mean of TP_c / (TP_c + FN_c) per class
     class_totals = tp + fn  # Total pixels per class (ground truth)
     per_class_acc = tp / (class_totals + 1e-8)
-    valid_acc_classes = class_totals > 0
-    macro_acc = per_class_acc[valid_acc_classes].mean().item()
+    if macro_class_ids is not None:
+        macro_acc = _macro_f1_over_classes(
+            per_class_acc.tolist(), macro_class_ids
+        )
+    else:
+        valid_acc_classes = class_totals > 0
+        macro_acc = per_class_acc[valid_acc_classes].mean().item()
 
     # Macro F1: mean of per-class F1 scores
     per_class_precision = tp / (tp + fp + 1e-8)
@@ -293,9 +322,9 @@ def segmentation_metrics(
         * per_class_recall
         / (per_class_precision + per_class_recall + 1e-8)
     )
-    # Only average over classes that have ground truth samples
-    valid_f1_classes = class_totals > 0
-    macro_f1 = per_class_f1[valid_f1_classes].mean().item()
+    macro_f1 = _macro_f1_over_classes(
+        per_class_f1.tolist(), macro_class_ids, fallback_support=class_totals
+    )
 
     # Micro F1: global TP / (TP + 0.5*(FP+FN))
     tp_sum = tp.sum()
@@ -317,8 +346,10 @@ def classification_metrics(
     predictions: torch.Tensor,
     labels: torch.Tensor,
     is_multilabel: bool = False,
+    num_classes: int | None = None,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    macro_class_ids: list[int] | None = None,
 ) -> EvalResult:
     """Compute classification metrics from predictions and labels."""
     preds_np = predictions.detach().cpu().numpy()
@@ -327,12 +358,17 @@ def classification_metrics(
     if is_multilabel:
         preds_np = preds_np.astype(int)
         labels_np = labels_np.astype(int)
+        if num_classes is None:
+            num_classes = labels_np.shape[1]
         accuracy = accuracy_score(labels_np, preds_np)
         micro_f1 = f1_score(labels_np, preds_np, average="micro", zero_division=0)
-        macro_f1 = f1_score(labels_np, preds_np, average="macro", zero_division=0)
         per_class_f1 = f1_score(
             labels_np, preds_np, average=None, zero_division=0
         ).tolist()
+        gt_support = labels_np.sum(axis=0).astype(int)
+        macro_f1 = _macro_f1_over_classes(
+            per_class_f1, macro_class_ids, fallback_support=gt_support
+        )
         return EvalResult.from_classification(
             accuracy,
             f1=micro_f1,
@@ -343,9 +379,26 @@ def classification_metrics(
             primary_metric_class=primary_metric_class,
         )
 
+    labels_np = labels_np.astype(int)
     accuracy = accuracy_score(labels_np, preds_np)
-    macro_f1 = f1_score(labels_np, preds_np, average="macro", zero_division=0)
-    per_class_f1 = f1_score(labels_np, preds_np, average=None, zero_division=0).tolist()
+    if num_classes is not None:
+        gt_support = np.bincount(labels_np, minlength=num_classes)
+        per_class_f1 = f1_score(
+            labels_np,
+            preds_np,
+            average=None,
+            zero_division=0,
+            labels=np.arange(num_classes),
+        ).tolist()
+        macro_f1 = _macro_f1_over_classes(
+            per_class_f1, macro_class_ids, fallback_support=gt_support
+        )
+    else:
+        macro_f1 = f1_score(labels_np, preds_np, average="macro", zero_division=0)
+        per_class_f1 = f1_score(
+            labels_np, preds_np, average=None, zero_division=0
+        ).tolist()
+
     return EvalResult.from_classification(
         accuracy,
         macro_f1=macro_f1,

@@ -142,6 +142,8 @@ def train_and_eval_probe(
     use_dice_loss: bool = False,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    val_macro_class_ids: list[int] | None = None,
+    test_macro_class_ids: list[int] | None = None,
 ) -> EvalTaskResult:
     """Run a linear probe on the OlmoEarth Pretrain model.
 
@@ -241,8 +243,8 @@ def train_and_eval_probe(
             probe_type=probe_type,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
+            macro_class_ids=val_macro_class_ids,
         )
-        logger.info(f"Epoch {end_epoch}, Val Score: {val_result.primary}")
         val_results.append(val_result)
 
         # Save best probe state based on primary metric
@@ -332,6 +334,7 @@ def train_and_eval_probe(
                     task_type=config.task_type,
                     primary_metric=primary_metric,
                     primary_metric_class=primary_metric_class,
+                    macro_class_ids=test_macro_class_ids,
                 )
                 bootstrap_scores.append(result.primary)
 
@@ -364,6 +367,7 @@ def train_and_eval_probe(
             task_type=config.task_type,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
+            macro_class_ids=test_macro_class_ids,
         )
         if n_bootstrap == 0:
             logger.info(f"Test result: {test_result}")
@@ -629,6 +633,7 @@ def compute_metric(
     task_type: TaskType,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    macro_class_ids: list[int] | None = None,
 ) -> EvalResult:
     """Compute metric from predictions and labels."""
     if task_type == TaskType.SEGMENTATION:
@@ -639,6 +644,7 @@ def compute_metric(
             ignore_label=SEGMENTATION_IGNORE_LABEL,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
+            macro_class_ids=macro_class_ids,
         )
     if task_type == TaskType.REGRESSION:
         return regression_metrics(
@@ -649,8 +655,10 @@ def compute_metric(
     return classification_metrics(
         predictions=preds,
         labels=labels,
+        num_classes=num_classes,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
+        macro_class_ids=macro_class_ids,
     )
 
 
@@ -664,6 +672,7 @@ def evaluate_probe(
     num_output_pixels_per_side_of_patch: int | None = None,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    macro_class_ids: list[int] | None = None,
 ) -> EvalResult:
     """Evaluate a trained linear probe on a segmentation or classification task."""
     preds, labels = get_probe_predictions(
@@ -682,4 +691,5 @@ def evaluate_probe(
         task_type,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
+        macro_class_ids=macro_class_ids,
     )

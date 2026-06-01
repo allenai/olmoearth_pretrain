@@ -18,7 +18,11 @@ from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader, IterableDataset
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.evals.datasets import get_eval_dataset
+from olmoearth_pretrain.evals.class_support import (
+    EvalLabeledClassMode,
+    labeled_classes_for_split,
+    load_class_support,
+)
 from olmoearth_pretrain.evals.datasets.configs import (
     EvalDatasetConfig,
     TaskType,
@@ -135,6 +139,11 @@ class DownstreamTaskConfig:
     pretrain_geographic_bin_size_deg: float = 5.0
     # Optional directory with train/valid/test CSVs containing H5 sample_index values.
     pretrain_split_dir: str | None = None
+    # Precomputed labeled-class lists for macro metrics live in
+    # ``{pretrain_split_dir}/class_support.json``. This selects which list to use.
+    eval_labeled_class_mode: EvalLabeledClassMode = EvalLabeledClassMode.PIXELS
+    # Optional explicit override for all splits when no class_support.json exists.
+    eval_labeled_classes: list[int] | None = None
 
 
 class DownstreamEvaluator:
@@ -205,6 +214,19 @@ class DownstreamEvaluator:
         self.pretrain_split_strategy = PretrainSplitStrategy(task.pretrain_split_strategy)
         self.pretrain_geographic_bin_size_deg = task.pretrain_geographic_bin_size_deg
         self.pretrain_split_dir = task.pretrain_split_dir
+        self.eval_labeled_class_mode = EvalLabeledClassMode(task.eval_labeled_class_mode)
+        self.eval_labeled_classes = task.eval_labeled_classes
+        self._class_support = (
+            load_class_support(task.pretrain_split_dir)
+            if task.pretrain_split_dir is not None
+            else None
+        )
+        if self._class_support is not None:
+            logger.info(
+                "Loaded class support for %s from %s/class_support.json",
+                evaluation_name,
+                task.pretrain_split_dir,
+            )
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -219,6 +241,11 @@ class DownstreamEvaluator:
             self.eval_mode = EvalMode(self.eval_mode)
 
         assert self.eval_mode in EvalMode, f"Unexpected eval mode {self.eval_mode}"
+
+        macro_class_kwargs = {
+            "val_macro_class_ids": self._labeled_classes_for_split("valid"),
+            "test_macro_class_ids": self._labeled_classes_for_split("test"),
+        }
 
         if self.eval_mode == EvalMode.LINEAR_PROBE:
             if self.probe_lr is None:
@@ -249,6 +276,7 @@ class DownstreamEvaluator:
                 run_knn,
                 primary_metric=self.primary_metric,
                 primary_metric_class=self.primary_metric_class,
+                **macro_class_kwargs,
             )
             if self.eval_mode == EvalMode.KNN
             else (
@@ -263,10 +291,20 @@ class DownstreamEvaluator:
                     use_dice_loss=self.use_dice_loss,
                     primary_metric=self.primary_metric,
                     primary_metric_class=self.primary_metric_class,
+                    **macro_class_kwargs,
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
                 else None
             )  # "finetune" handled explictly below in .val()
+        )
+
+    def _labeled_classes_for_split(self, split: str) -> list[int] | None:
+        """Return precomputed labeled classes for one eval split."""
+        return labeled_classes_for_split(
+            class_support=self._class_support,
+            split=split,
+            mode=self.eval_labeled_class_mode,
+            override=self.eval_labeled_classes,
         )
 
     def _get_data_loader(

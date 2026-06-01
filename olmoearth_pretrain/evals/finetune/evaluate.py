@@ -22,6 +22,7 @@ def eval_cls(
     loader: DataLoader,
     device: torch.device,
     is_multilabel: bool,
+    num_classes: int,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
 ) -> EvalResult:
@@ -45,6 +46,7 @@ def eval_cls(
         preds,
         labels,
         is_multilabel=is_multilabel,
+        num_classes=num_classes,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
     )
