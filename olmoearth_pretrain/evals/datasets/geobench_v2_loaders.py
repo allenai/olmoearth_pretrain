@@ -358,6 +358,23 @@ class BioMasstersDataset(_BaseGeobenchDataset):
         return {"image_s1": image_s1, "image_s2": image_s2, "mask": mask}
 
 
+class FotwDataset(_BaseGeobenchDataset):
+    """Fields of The World: bi-temporal 4-band RGBN → field boundary segmentation (3 classes)."""
+
+    TORTILLA = ["geobench_fotw.tortilla"]
+    # subfiles: [0]=image_a (RGBN), [1]=image_b (RGBN), [2]=instance map, [3]=semantic mask
+    band_order = {"s2": ["red", "green", "blue", "nir"]}
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
+        row = self._df.read(idx)
+        image = _raster_f32(row, 0)  # image_a: (4, H, W) RGBN uint16
+        mask = _raster_i64(row, 3).squeeze(
+            0
+        )  # semantic mask: 0=bg, 1=field, 2=boundary
+        return {"image": image, "mask": mask}
+
+
 class Flair2Dataset(_BaseGeobenchDataset):
     """FLAIR-2: 5-band aerial (RGBN + elevation) → 19-class land-cover segmentation."""
 
@@ -381,6 +398,7 @@ SLUG_TO_DATASET: dict[str, type[_BaseGeobenchDataset]] = {
     "caffe": CaFFeDataset,
     "cloudsen12": CloudSen12Dataset,
     "flair2": Flair2Dataset,
+    "fotw": FotwDataset,
     "kuro_siwo": KuroSiwoDataset,
     "spacenet2": SpaceNet2Dataset,
     "spacenet7": SpaceNet7Dataset,

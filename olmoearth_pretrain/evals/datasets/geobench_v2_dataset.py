@@ -149,6 +149,13 @@ def _sample_to_olmoearth(
             src = [rgbn_to_s2.get(s, s) for s in src]
         return _s2_sample(image, src, device)
 
+    if slug == "fotw":
+        # 4-band RGBN aerial (uint16, already in S2 DN scale); map to S2 band names
+        # and pad remaining channels to 0.
+        rgbn_to_s2 = {"red": "B04", "green": "B03", "blue": "B02", "nir": "B08"}
+        src = [rgbn_to_s2[b] for b in ("red", "green", "blue", "nir")]
+        return _s2_sample(sample["image"].float(), src, device)
+
     if slug == "flair2":
         # 5-band aerial uint8 [0–255] (RGBN + elevation); rescale to S2 DN range
         # and pad to 12 channels, treating the result as sentinel2_l2a.
