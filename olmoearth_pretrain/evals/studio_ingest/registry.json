@@ -670,7 +670,7 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/geo_ecosystem_annual_test",
       "window_size": 64
     },
-    "lfmc_herb": {
+    "lfmc_woody_3k": {
       "classes": [
         "0"
       ],
