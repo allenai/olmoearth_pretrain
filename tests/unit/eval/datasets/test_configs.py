@@ -18,8 +18,6 @@ def test_gb2_dataset_configs() -> None:
         assert cfg.num_classes >= 1
         if cfg.task_type == TaskType.SEGMENTATION:
             assert cfg.height_width is not None
-        elif cfg.task_type == TaskType.REGRESSION:
-            assert cfg.height_width is None
         else:
             assert cfg.task_type == TaskType.CLASSIFICATION
             assert cfg.height_width is None
