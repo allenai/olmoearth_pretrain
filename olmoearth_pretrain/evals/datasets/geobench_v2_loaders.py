@@ -358,12 +358,29 @@ class BioMasstersDataset(_BaseGeobenchDataset):
         return {"image_s1": image_s1, "image_s2": image_s2, "mask": mask}
 
 
+class Flair2Dataset(_BaseGeobenchDataset):
+    """FLAIR-2: 5-band aerial (RGBN + elevation) → 19-class land-cover segmentation."""
+
+    TORTILLA = ["geobench_flair2.tortilla"]
+    band_order = ["red", "green", "blue", "nir", "elevation"]
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
+        row = self._df.read(idx)
+        image = _raster_f32(row, 0)
+        # Raw labels are 1-indexed (1–19); shift to 0-indexed then clamp classes
+        # 13–19 into class 12 ("other"), matching GeoBench2's 13-class encoding.
+        mask = (_raster_i64(row, 1).squeeze(0) - 1).clamp(max=12)
+        return {"image": image, "mask": mask}
+
+
 SLUG_TO_DATASET: dict[str, type[_BaseGeobenchDataset]] = {
     "benv2": BENV2Dataset,
     "biomassters": BioMasstersDataset,
     "burn_scars": BurnScarsDataset,
     "caffe": CaFFeDataset,
     "cloudsen12": CloudSen12Dataset,
+    "flair2": Flair2Dataset,
     "kuro_siwo": KuroSiwoDataset,
     "spacenet2": SpaceNet2Dataset,
     "spacenet7": SpaceNet7Dataset,

@@ -149,6 +149,27 @@ def _sample_to_olmoearth(
             src = [rgbn_to_s2.get(s, s) for s in src]
         return _s2_sample(image, src, device)
 
+    if slug == "flair2":
+        # 5-band aerial uint8 [0–255] (RGBN + elevation); rescale to S2 DN range
+        # and pad to 12 channels, treating the result as sentinel2_l2a.
+        x = sample["image"].float() * (10000.0 / 255.0)
+        n = len(_S2_ORDER)
+        if x.shape[0] < n:
+            x = torch.cat(
+                [
+                    x,
+                    torch.zeros(
+                        n - x.shape[0], *x.shape[1:], device=x.device, dtype=x.dtype
+                    ),
+                ]
+            )
+        else:
+            x = x[:n]
+        hwtc = _bchw_to_hwtc(x)
+        return OlmoEarthSample(
+            sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device)
+        )
+
     if slug == "treesatai":
         return _s2_sample(sample["image_s2"].float(), _s2_names(band_order), device)
 

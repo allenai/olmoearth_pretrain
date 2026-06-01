@@ -344,6 +344,14 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         is_multilabel=True,
         supported_modalities=[Modality.SENTINEL2_L2A.name],
     ),
+    "gb2-flair2": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=13,
+        is_multilabel=False,
+        height_width=512,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+    ),
 }
 DATASET_TO_CONFIG.update(_GB2_DATASET_TO_CONFIG)
 
