@@ -75,8 +75,12 @@ class BurnScarsDataset(_BaseGeobenchDataset):
         return {"image": image, "mask": mask}
 
 
+# N/A→-1 (ignored), rock→0, glacier→1, ocean/ice melange→2
+_CAFFE_CLASS_MAP = torch.tensor([-1, 0, 1, 2])
+
+
 class CaFFeDataset(_BaseGeobenchDataset):
-    """Calving Front: grayscale → segmentation (4 classes)."""
+    """Calving Front: grayscale → segmentation (3 classes + ignore)."""
 
     TORTILLA = ["geobench_caffe.tortilla"]
     band_order = ["gray"]
@@ -85,7 +89,7 @@ class CaFFeDataset(_BaseGeobenchDataset):
         """Load sample at idx."""
         row = self._df.read(idx)
         image = _raster_f32(row, 0)
-        mask = _raster_i64(row, 1).squeeze(0)
+        mask = _CAFFE_CLASS_MAP[_raster_i64(row, 1).squeeze(0)]
         return {"image": image, "mask": mask}
 
 
