@@ -61,7 +61,7 @@ class _BaseGeobenchDataset(Dataset):
 
 
 class BurnScarsDataset(_BaseGeobenchDataset):
-    """HLS Burn Scars: 6-band S2 → segmentation (0=bg, 1=burn, 2=no-data)."""
+    """HLS Burn Scars: 6-band S2 → segmentation (0=bg, 1=burn; -1=no-data ignored)."""
 
     TORTILLA = ["geobench_burn_scars.tortilla"]
     band_order = {"s2": ["B02", "B03", "B04", "B8A", "B11", "B12"]}
@@ -71,7 +71,6 @@ class BurnScarsDataset(_BaseGeobenchDataset):
         row = self._df.read(idx)
         image = _raster_f32(row, 0)
         mask = _raster_i64(row, 1).squeeze(0)
-        mask = mask.masked_fill(mask == -1, 2)
         return {"image": image, "mask": mask}
 
 
