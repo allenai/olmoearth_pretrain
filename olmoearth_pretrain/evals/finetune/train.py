@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import math
 import os
 import random
@@ -11,8 +12,6 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from einops import rearrange
 from olmo_core.train.trainer import Trainer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
@@ -30,13 +29,20 @@ from olmoearth_pretrain.evals.finetune.constants import (
     SCHEDULER_PATIENCE,
     UNFREEZE_LR_FACTOR,
 )
-from olmoearth_pretrain.evals.finetune.evaluate import eval_cls, eval_reg, eval_seg
+from olmoearth_pretrain.evals.finetune.evaluate import (
+    _seg_logits_to_pixel,
+    eval_cls,
+    eval_reg,
+    eval_seg,
+)
 from olmoearth_pretrain.evals.finetune.model import (
     BackboneWithHead,
+    HeadType,
     set_backbone_trainable,
     snapshot_state_dict,
     to_device,
 )
+from olmoearth_pretrain.evals.linear_probe import weighted_dice_loss
 from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
 
 
@@ -173,6 +179,8 @@ def run_finetune_eval(
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
     ft_grad_accum_steps: int = 1,
+    head_type: HeadType = "linear",
+    use_dice_loss: bool = False,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
     accum_steps = max(1, ft_grad_accum_steps)
@@ -191,6 +199,7 @@ def run_finetune_eval(
         pooling_type=pooling_type,
         num_classes=task_config.num_classes,
         use_pooled_tokens=use_pooled_tokens,
+        head_type=head_type,
     ).to(device)
 
     # Trigger _init_head once with a tiny dry pass which initializes the head with the correct dimension.
@@ -237,13 +246,16 @@ def run_finetune_eval(
         cooldown=SCHEDULER_COOLDOWN,
     )
     if task_config.task_type == TaskType.CLASSIFICATION:
-        loss_fn: nn.Module = (
+        loss_fn: Any = (
             nn.MultiLabelSoftMarginLoss()
             if task_config.is_multilabel
             else nn.CrossEntropyLoss()
         )
     elif task_config.task_type == TaskType.REGRESSION:
         loss_fn = nn.MSELoss()
+    elif use_dice_loss:
+        num_classes = task_config.num_classes
+        loss_fn = functools.partial(weighted_dice_loss, num_classes=num_classes)
     else:
         loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
 
@@ -323,23 +335,13 @@ def run_finetune_eval(
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 logits, label = ft(masked, label)
                 if task_config.task_type == TaskType.SEGMENTATION:
-                    H, W = logits.shape[1], logits.shape[2]
-                    logits = rearrange(
+                    logits = _seg_logits_to_pixel(
                         logits,
-                        "b h w (c i j) -> b c (h i) (w j)",
-                        h=H,
-                        w=W,
-                        c=task_config.num_classes,
-                        i=patch_size,
-                        j=patch_size,
+                        label,
+                        ft.pixel_space_output,
+                        task_config.num_classes,
+                        patch_size,
                     )
-                    if logits.shape[-2:] != label.shape[-2:]:
-                        logits = F.interpolate(
-                            logits.float(),
-                            size=label.shape[-2:],
-                            mode="bilinear",
-                            align_corners=True,
-                        )
                 if task_config.task_type == TaskType.REGRESSION:
                     raw_loss = loss_fn(logits, label.float())
                 else:

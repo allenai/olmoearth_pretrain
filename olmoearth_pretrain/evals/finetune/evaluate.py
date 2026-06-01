@@ -74,6 +74,35 @@ def eval_reg(
     return regression_metrics(preds, labels, primary_metric=primary_metric)
 
 
+def _seg_logits_to_pixel(
+    logits: torch.Tensor,
+    label: torch.Tensor,
+    pixel_space_output: bool,
+    num_classes: int,
+    patch_size: int,
+) -> torch.Tensor:
+    """Pixel-shuffle patch-space logits and resize to label resolution."""
+    if not pixel_space_output:
+        H, W = logits.shape[1], logits.shape[2]
+        logits = rearrange(
+            logits,
+            "b h w (c i j) -> b c (h i) (w j)",
+            h=H,
+            w=W,
+            c=num_classes,
+            i=patch_size,
+            j=patch_size,
+        )
+    if logits.shape[-2:] != label.shape[-2:]:
+        logits = F.interpolate(
+            logits.float(),
+            size=label.shape[-2:],
+            mode="bilinear",
+            align_corners=True,
+        )
+    return logits
+
+
 @torch.no_grad()
 def eval_seg(
     module: BackboneWithHead,
@@ -91,24 +120,10 @@ def eval_seg(
         label = label.to(device=device)
         masked = to_device(masked, device)
         with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-            logits, _ = module(masked, label, is_train=False)  # (B, H, W, C*p*p)
-            H, W = logits.shape[1], logits.shape[2]
-            logits = rearrange(
-                logits,
-                "b h w (c i j) -> b c (h i) (w j)",
-                h=H,
-                w=W,
-                c=num_classes,
-                i=patch_size,
-                j=patch_size,
+            logits, _ = module(masked, label, is_train=False)
+            logits = _seg_logits_to_pixel(
+                logits, label, module.pixel_space_output, num_classes, patch_size
             )
-            if logits.shape[-2:] != label.shape[-2:]:
-                logits = F.interpolate(
-                    logits.float(),
-                    size=label.shape[-2:],
-                    mode="bilinear",
-                    align_corners=True,
-                )
         preds_all.append(torch.argmax(logits, dim=1).cpu())
         labels_all.append(label.cpu())
     preds = torch.cat(preds_all, 0)
