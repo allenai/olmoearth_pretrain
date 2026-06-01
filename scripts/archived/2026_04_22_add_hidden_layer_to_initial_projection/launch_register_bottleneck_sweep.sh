@@ -138,11 +138,11 @@ python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_nosup" "$CLUST
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
 
-=================== interleaved reads: [read -> self] x4 (4) ===================
-register_interleave=true interleaves each cross-attention read with a latent self-
-attention block (Perceiver/DETR/Flamingo) so the registers re-query after each refine,
-instead of the default single up-front read. register_latent_depth=4 -> 4 reads + 4 self.
-d768, on the g16 fixed grid and the gdyn dynamic grid, sup + nosup. Tagged "il".
+# =================== interleaved reads: [read -> self] x4 (4) ===================
+# register_interleave=true interleaves each cross-attention read with a latent self-
+# attention block (Perceiver/DETR/Flamingo) so the registers re-query after each refine,
+# instead of the default single up-front read. register_latent_depth=4 -> 4 reads + 4 self.
+# d768, on the g16 fixed grid and the gdyn dynamic grid, sup + nosup. Tagged "il".
 
 python "$SCRIPT" launch "regbtl_base10k_scale0.25_g16_d768_il" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
