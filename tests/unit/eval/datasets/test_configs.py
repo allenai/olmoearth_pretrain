@@ -18,9 +18,9 @@ def test_gb2_dataset_configs() -> None:
         assert cfg.num_classes >= 1
         if cfg.task_type == TaskType.SEGMENTATION:
             assert cfg.height_width is not None
-        else:
-            assert cfg.task_type == TaskType.CLASSIFICATION
+        elif cfg.task_type == TaskType.CLASSIFICATION:
             assert cfg.height_width is None
+        # regression: height_width is optional (spatial tasks like biomassters set it)
 
 
 def test_segmentation_tasks_have_hw() -> None:
