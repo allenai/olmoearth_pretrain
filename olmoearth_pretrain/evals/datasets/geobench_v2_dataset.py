@@ -313,6 +313,31 @@ def _apply_olmoearth_normalization(
     return olmo._replace(**updates) if updates else olmo
 
 
+def _rezero_padded_channels(
+    normalized: OlmoEarthSample, pre_norm: OlmoEarthSample
+) -> OlmoEarthSample:
+    """Re-zero channels that were all-zero before normalization.
+
+    Zero-padded missing bands become large negatives after normalization
+    ((0 - mean) / std ≈ -4), but the pretrained model sees 0 for dropped
+    bands (band dropout zeroes normalized values before patch embedding).
+    Restore those channels to 0 in normalized space to match training.
+    """
+    updates: dict[str, torch.Tensor] = {}
+    for field_name in _MODALITY_NORM_MAP:
+        pre = getattr(pre_norm, field_name, None)
+        post = getattr(normalized, field_name, None)
+        if pre is None or post is None:
+            continue
+        # (H, W, T, C) — find channels all-zero across every pixel and timestep
+        missing = (pre == 0).all(dim=(0, 1, 2))  # shape (C,)
+        if missing.any():
+            t = post.clone()
+            t[:, :, :, missing] = 0.0
+            updates[field_name] = t
+    return normalized._replace(**updates) if updates else normalized
+
+
 class GeobenchV2Dataset(Dataset):
     """Wraps a GeoBench v2 tortilla dataset as an OlmoEarth eval dataset."""
 
@@ -354,7 +379,9 @@ class GeobenchV2Dataset(Dataset):
             (v.device for v in raw.values() if torch.is_tensor(v)), torch.device("cpu")
         )
         olmo = _sample_to_olmoearth(raw, self._band_order, self._slug)
+        pre_norm = olmo
         olmo = _apply_olmoearth_normalization(olmo, self._normalizer)
+        olmo = _rezero_padded_channels(olmo, pre_norm)
         masked = MaskedOlmoEarthSample.from_olmoearthsample(olmo)
         label = _extract_label(
             raw, self._slug, self.config.task_type, self.config.num_classes
