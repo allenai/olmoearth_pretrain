@@ -1109,6 +1109,10 @@ def test_encoder_register_bottleneck(
         # Register count is fixed regardless of patch grid; width is the bottleneck dim.
         assert registers.shape == (B, grid_size * grid_size, register_dim)
         assert register_positions.shape == (B, grid_size * grid_size, 2)
+        # With a register bottleneck, project_and_aggregate pools the register tokens
+        # (only), so the contrastive projection is sized to register_dim.
+        project_aggregated = output_dict["project_aggregated"]
+        assert project_aggregated.shape == (B, register_dim)
         # Coordinates are anchored and rescale with the input extent (variable input size).
         assert register_positions.amax() > 0
         if prev_max_coord is not None:

@@ -183,3 +183,48 @@ python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_nosup" "$
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
     '--model.encoder_config.register_read_layers=[3,6,9,12]'
+
+# ========= contrastive projection from the register tokens + read-norm cleanup (2) =========
+# Re-baselines the mdr3 frontier (dynamic grid, d768, read_layers=[3,6,9,12]) under two
+# code changes that are now always-on for register-bottleneck models:
+#   1. project_and_aggregate (the contrastive/pooled projection) now pools the REGISTER
+#      tokens only and is sized to register_dim, instead of mean-pooling the patch tokens.
+#      The contrastive view now sees exactly what the JEPA decoder + frozen evals see.
+#   2. the multi-depth read drops the redundant encoder LayerNorm in _finalize_read_tokens
+#      (the bottleneck's input_norm already normalizes every K/V source, and reusing the
+#      encoder output-norm both double-normed and coupled its affine across read depths).
+# Config is identical to the mdr3 runs above; the new tag just tracks the new behavior so
+# it A/Bs cleanly against them. Dynamic grid, sup + nosup. Tagged "creg".
+# NOTE: checkpoints from older register-bottleneck runs will NOT load project_and_aggregate
+# (its Linear is now register_dim-wide), so these start fresh.
+
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_creg" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    '--model.encoder_config.register_read_layers=[3,6,9,12]'
+
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_creg_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    '--model.encoder_config.register_read_layers=[3,6,9,12]'
+
+# ============ no instance contrastive loss: InfoNCE weight = 0 (2) ============
+# Same mdr3 frontier config as the creg runs above, but the instance (InfoNCE) contrastive
+# loss is zeroed (--train_module.contrastive_config.loss_config.weight=0). InfoNCELoss.compute
+# returns weight * cross_entropy, so weight=0 removes its gradient contribution entirely.
+# Because the register-contrastive change only routes the project_and_aggregate pooled
+# vector into this loss, weight=0 effectively ablates that pathway -- isolating whether the
+# instance contrastive signal helps the bottleneck at all. Dynamic grid, sup + nosup.
+# Tagged "noic" (no instance contrastive).
+
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_noic" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+    --train_module.contrastive_config.loss_config.weight=0
+
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_noic_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+    --train_module.contrastive_config.loss_config.weight=0

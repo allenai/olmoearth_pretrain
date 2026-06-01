@@ -1714,11 +1714,6 @@ class Encoder(FlexiVitBase):
             final_embedding_size = output_embedding_size
         else:
             final_embedding_size = self.embedding_size
-        self.project_and_aggregate = ProjectAndAggregate(
-            embedding_size=final_embedding_size,
-            num_layers=num_projection_layers,
-            aggregate_then_project=aggregate_then_project,
-        )
         self.norm = nn.LayerNorm(self.embedding_size)
 
         self.use_register_bottleneck = use_register_bottleneck
@@ -1760,6 +1755,20 @@ class Encoder(FlexiVitBase):
                 interleave=register_interleave,
                 read_layers=register_read_layers,
             )
+
+        # When the register bottleneck is active, the contrastive projection reads the
+        # register tokens (only) rather than the patch tokens, so it operates at the
+        # bottleneck's register_dim instead of the encoder's final embedding size.
+        project_aggregate_embedding_size = (
+            self.register_dim
+            if self.register_bottleneck is not None
+            else final_embedding_size
+        )
+        self.project_and_aggregate = ProjectAndAggregate(
+            embedding_size=project_aggregate_embedding_size,
+            num_layers=num_projection_layers,
+            aggregate_then_project=aggregate_then_project,
+        )
 
         self.apply(self._init_weights)
 
@@ -2183,28 +2192,28 @@ class Encoder(FlexiVitBase):
             )
             if self.register_bottleneck.multi_depth:
                 assert self.register_bottleneck.read_layers is not None
-                depth_total = len(self.blocks)
 
                 def _finalize_read_tokens(raw: Tensor) -> Tensor:
-                    # Bring a cached, in-loop block output into the same representation as
-                    # the final `tokens` the bottleneck reads: drop register tokens, unpack
-                    # (flash), norm, and re-add masked tokens (the read masks them out).
+                    # Bring a cached, in-loop block output into the shape the bottleneck
+                    # reads: drop register tokens, unpack (flash), and re-add masked tokens
+                    # (the read masks them out). No norm here -- the bottleneck applies its
+                    # own input_norm to every K/V source, so an encoder norm would be a
+                    # redundant double-norm (and would mismatch across read depths).
                     t = raw
                     if self.has_register_tokens:
                         t, _ = self.pop_register_tokens(t)
                     if self.use_flash_attn:
                         t = self.unpack_tokens(t, new_mask, og_shape)
-                    t = self.norm(t)
                     return self._maybe_add_removed_tokens(
                         t, indices, new_mask, fast_pass
                     )
 
-                # One K/V source per read layer; the final layer reuses the already
-                # finalized `tokens`, intermediate layers are finalized from the cache.
+                # One K/V source per read layer, each finalized from its cached (pre-norm)
+                # block output so all depths are normalized identically by the bottleneck's
+                # input_norm. Every read layer is cached above, including the final depth
+                # when it is a read layer.
                 patch_tokens_arg: Tensor | list[Tensor] = [
-                    tokens
-                    if depth == depth_total
-                    else _finalize_read_tokens(cached_read_tokens[depth])
+                    _finalize_read_tokens(cached_read_tokens[depth])
                     for depth in self.register_bottleneck.read_layers
                 ]
             else:
@@ -2286,7 +2295,17 @@ class Encoder(FlexiVitBase):
             output_dict["register_positions"] = register_output["register_positions"]
 
         if not fast_pass:
-            output_dict["project_aggregated"] = self.project_and_aggregate(output)
+            if self.register_bottleneck is not None:
+                # The contrastive projection reads the register tokens (only) and is sized
+                # to register_dim. Registers are produced whenever attention runs (the
+                # standard, token_exit_cfg=None pass); the only path that skips them is the
+                # all-zero-exit target pass, which discards project_aggregated anyway.
+                if register_output is not None:
+                    output_dict["project_aggregated"] = self.project_and_aggregate(
+                        register_output["registers"]
+                    )
+            else:
+                output_dict["project_aggregated"] = self.project_and_aggregate(output)
 
         return output_dict
 
