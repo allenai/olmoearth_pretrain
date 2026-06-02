@@ -23,6 +23,14 @@ logger = logging.getLogger(__name__)
 
 _S2_ORDER = list(Modality.SENTINEL2_L2A.band_order)
 
+# Max digital number (DN) value of the Sentinel-2 L2A dynamic range; used to
+# rescale reflectance/uint8 inputs into the DN scale the OlmoEarth normalizer
+# expects. Non-S2 sensors are rescaled into this range to pass through the
+# S2 normalizer (ex. high-res imagery that isn't yet supported in the model).
+_S2_DN_MAX = 10000.0
+# Max value of a uint8 image, used when rescaling [0–255] inputs to DN scale.
+_UINT8_MAX = 255.0
+
 
 def _s2_names(band_order: Any) -> list[str]:
     if isinstance(band_order, dict) and "s2" in band_order:
@@ -127,7 +135,7 @@ def _sample_to_olmoearth(
         # Grayscale aerial [0–255]; broadcast to all 12 S2 channels and rescale
         # to S2 DN range so the OlmoEarth normalizer (mean ~1188) sees valid signal.
         filled = sample["image"].float()[:1].repeat(len(_S2_ORDER), 1, 1)
-        filled = filled * (10000.0 / 255.0)
+        filled = filled * (_S2_DN_MAX / _UINT8_MAX)
         hwtc = _bchw_to_hwtc(filled)
         return OlmoEarthSample(
             sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device)
@@ -139,12 +147,12 @@ def _sample_to_olmoearth(
         if slug == "burn_scars":
             # GeoBench2 stores HLS reflectance in [0, 1]; OlmoEarth pretraining
             # stats are in DN scale (~0–10000), so rescale to match.
-            image = image * 10000.0
+            image = image * _S2_DN_MAX
         if slug == "cloudsen12":
             image = image[: len(src)]  # tortilla has 14 bands; truncate to 12
         if slug == "spacenet7":
             # PlanetScope uint8 [0–255]; rescale to S2 DN range.
-            image = image * (10000.0 / 255.0)
+            image = image * (_S2_DN_MAX / _UINT8_MAX)
             rgbn_to_s2 = {"red": "B04", "green": "B03", "blue": "B02", "nir": "B08"}
             src = [rgbn_to_s2.get(s, s) for s in src]
         return _s2_sample(image, src, device)
@@ -159,7 +167,7 @@ def _sample_to_olmoearth(
     if slug == "flair2":
         # 5-band aerial uint8 [0–255] (RGBN + elevation); rescale to S2 DN range
         # and pad to 12 channels, treating the result as sentinel2_l2a.
-        x = sample["image"].float() * (10000.0 / 255.0)
+        x = sample["image"].float() * (_S2_DN_MAX / _UINT8_MAX)
         n = len(_S2_ORDER)
         if x.shape[0] < n:
             x = torch.cat(
