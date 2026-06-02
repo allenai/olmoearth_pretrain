@@ -9,6 +9,7 @@ import olmoearth_pretrain.evals.datasets.paths as paths
 from olmoearth_pretrain.evals.studio_ingest.registry import get_dataset_entry
 
 from .breizhcrops import BreizhCropsDataset
+from .fifty_cities_dataset import FiftyCitiesDataset
 from .floods_dataset import Sen1Floods11Dataset
 from .geobench_dataset import GeobenchDataset
 from .mados_dataset import MADOSDataset
@@ -117,6 +118,18 @@ def get_eval_dataset(
         else:
             kwargs["path_to_splits"] = paths.PASTIS_DIR
         return PASTISRDataset(**kwargs)  # type: ignore
+    elif eval_dataset.startswith("fifty_cities"):
+        # "fifty_cities" -> random split; "fifty_cities_by_city" -> by-city split.
+        split_mode = "by_city" if eval_dataset.endswith("by_city") else "random"
+        return FiftyCitiesDataset(
+            path_to_splits=paths.FIFTY_CITIES_DIR,
+            split=split,
+            split_mode=split_mode,
+            input_modalities=input_modalities,
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
+            label_fraction=label_fraction,
+        )
     elif eval_dataset == "breizhcrops":
         return BreizhCropsDataset(
             path_to_splits=paths.BREIZHCROPS_DIR,
