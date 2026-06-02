@@ -435,3 +435,63 @@ def get_static_latlon_encoding(latlon: torch.Tensor, encoding_dim: int) -> torch
     flat_cos = cos.transpose(-1, -2).reshape(*xyz.shape[:-1], 3 * num_freqs)
     out = torch.cat([flat_sin, flat_cos], dim=-1)
     return out.to(dtype=in_dtype)
+
+
+def get_simple_temporal_encoding(timestamps: torch.Tensor) -> torch.Tensor:
+    """Minimal 3-number temporal encoding: [frac_year, sin, cos].
+
+    Returns three channels per timestamp:
+      * ``[0]`` ``frac_year = year + day_of_year/365.25 - 2020`` -- a linear,
+        absolute measure of "years since 2020" (distinguishes calendar years).
+      * ``[1]`` ``sin(2*pi*frac_year)`` -- the annual phase. Integer years
+        vanish under sin, so the same day-of-year maps to the same value across
+        years (modulo the 365.25 / leap-year approximation).
+      * ``[2]`` ``cos(2*pi*frac_year)`` -- the orthogonal annual-phase channel.
+
+    No learnable parameters; deterministic; output dtype matches input.
+
+    Args:
+        timestamps: Tensor of shape ``(..., 3)`` where index 0 is day-of-month
+            (1-31), index 1 is month (0-indexed, 0-11), index 2 is year.
+
+    Returns:
+        Tensor of shape ``(..., 3)``.
+    """
+    day = timestamps[..., 0].float()
+    month = timestamps[..., 1].float()
+    year = timestamps[..., 2].float()
+    day_of_year = month * 30.4375 + day
+    frac_year = year + day_of_year / 365.25 - 2020.0
+
+    angle = 2.0 * math.pi * frac_year
+    return torch.stack([frac_year, torch.sin(angle), torch.cos(angle)], dim=-1)
+
+
+def get_simple_latlon_encoding(latlon: torch.Tensor) -> torch.Tensor:
+    """Minimal 3-number lat/lon encoding: unit-sphere (x, y, z).
+
+    Maps ``(lat, lon)`` in degrees to a point on the unit sphere:
+      * ``x = cos(lat) * cos(lon)``
+      * ``y = cos(lat) * sin(lon)``
+      * ``z = sin(lat)``
+
+    Longitude wrap-around and pole behavior are exact by construction (no
+    frequency expansion). Computed in float64 internally for precision, then
+    cast back to the input dtype.
+
+    Args:
+        latlon: Tensor of shape ``(..., 2)``; index 0 is latitude in degrees
+            [-90, 90], index 1 is longitude in degrees [-180, 180].
+
+    Returns:
+        Tensor of shape ``(..., 3)``.
+    """
+    in_dtype = latlon.dtype
+    work = torch.float64
+    lat_rad = latlon[..., 0].to(work) * (math.pi / 180.0)
+    lon_rad = latlon[..., 1].to(work) * (math.pi / 180.0)
+    cos_lat = torch.cos(lat_rad)
+    x = cos_lat * torch.cos(lon_rad)
+    y = cos_lat * torch.sin(lon_rad)
+    z = torch.sin(lat_rad)
+    return torch.stack([x, y, z], dim=-1).to(dtype=in_dtype)

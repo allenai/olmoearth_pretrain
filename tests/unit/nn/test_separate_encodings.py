@@ -231,3 +231,108 @@ def test_no_latlon_field_is_validated_for_additive_mode() -> None:
     )
     with pytest.raises(ValueError, match="encoding_mode='separate'"):
         cfg.validate()
+
+
+# ---- simple encoding types -----------------------------------------------
+
+
+def _make_simple(
+    embedding_size: int = 256,
+    channel_dim: int = 64,
+    latlon_dropout_rate: float = 0.0,
+) -> SeparateEncodings:
+    """SeparateEncodings with simple (3-number) temporal + latlon."""
+    return SeparateEncodings(
+        embedding_size=embedding_size,
+        supported_modalities=[Modality.SENTINEL2_L2A],
+        tokenization_config=_TOK,
+        channel_dim=channel_dim,
+        temporal_dim=3,
+        latlon_dim=3,
+        latlon_dropout_rate=latlon_dropout_rate,
+        temporal_encoding_type="simple",
+        latlon_encoding_type="simple",
+    )
+
+
+def test_simple_types_forward_shape() -> None:
+    """Simple temporal/latlon route produces correct output shape."""
+    ce = _make_simple()
+    assert ce.enc_dim == 64 + 3 + 3
+    B, H, W, T, B_s, D = 2, 3, 3, 4, 1, 256
+    tokens = torch.randn(B, H, W, T, B_s, D)
+    out = ce.forward(
+        {"sentinel2_l2a": tokens},
+        timestamps=_ts(B, T),
+        patch_size=4,
+        latlon=torch.tensor([[37.0, -122.0], [0.0, 0.0]]),
+    )["sentinel2_l2a"]
+    assert out.shape == (B, H, W, T, B_s, D)
+
+
+def test_simple_temporal_requires_dim_3() -> None:
+    """Simple temporal type with dim != 3 raises."""
+    with pytest.raises(ValueError, match="simple temporal encoding requires"):
+        SeparateEncodings(
+            embedding_size=256,
+            supported_modalities=[Modality.SENTINEL2_L2A],
+            tokenization_config=_TOK,
+            channel_dim=64,
+            temporal_dim=128,
+            latlon_dim=3,
+            temporal_encoding_type="simple",
+            latlon_encoding_type="simple",
+        )
+
+
+def test_simple_latlon_requires_dim_3() -> None:
+    """Simple latlon type with dim != 3 raises."""
+    with pytest.raises(ValueError, match="simple latlon encoding requires"):
+        SeparateEncodings(
+            embedding_size=256,
+            supported_modalities=[Modality.SENTINEL2_L2A],
+            tokenization_config=_TOK,
+            channel_dim=64,
+            temporal_dim=3,
+            latlon_dim=192,
+            temporal_encoding_type="simple",
+            latlon_encoding_type="simple",
+        )
+
+
+def test_simple_latlon_dropout_rate_one_disables() -> None:
+    """rate=1.0 zeros the simple latlon (x,y,z) slot in eval too."""
+    ce = _make_simple(latlon_dropout_rate=1.0)
+    ce.eval()
+    B, H, W, T, B_s, D = 2, 2, 2, 2, 1, 256
+    tokens = torch.zeros(B, H, W, T, B_s, D)
+    ll = torch.tensor([[37.0, -122.0], [-30.0, 150.0]])
+    ts = _ts(B, T)
+    out = ce.forward({"sentinel2_l2a": tokens}, timestamps=ts, patch_size=4, latlon=ll)[
+        "sentinel2_l2a"
+    ]
+    ce_ref = _make_simple(latlon_dropout_rate=0.0)
+    ce_ref.eval()
+    with torch.no_grad():
+        ce_ref.combine_proj.weight.copy_(ce.combine_proj.weight)
+        ce_ref.combine_proj.bias.copy_(ce.combine_proj.bias)
+        for k, v in ce.per_modality_channel_embeddings.items():
+            ce_ref.per_modality_channel_embeddings[k].copy_(v)
+    out_ref = ce_ref.forward(
+        {"sentinel2_l2a": tokens}, timestamps=ts, patch_size=4, latlon=None
+    )["sentinel2_l2a"]
+    assert torch.allclose(out, out_ref)
+
+
+def test_invalid_encoding_type_raises() -> None:
+    """Bad temporal_encoding_type raises."""
+    with pytest.raises(ValueError, match="temporal_encoding_type"):
+        SeparateEncodings(
+            embedding_size=256,
+            supported_modalities=[Modality.SENTINEL2_L2A],
+            tokenization_config=_TOK,
+            channel_dim=64,
+            temporal_dim=3,
+            latlon_dim=3,
+            temporal_encoding_type="bogus",
+        )

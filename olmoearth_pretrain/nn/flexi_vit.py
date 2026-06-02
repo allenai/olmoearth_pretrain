@@ -27,6 +27,8 @@ from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
+    get_simple_latlon_encoding,
+    get_simple_temporal_encoding,
     get_static_latlon_encoding,
     get_static_temporal_encoding,
 )
@@ -44,26 +46,53 @@ SPATIAL_POS_ENCODING_TYPES = ("absolute", "rope", "rope_mixed", "none")
 ENCODING_MODES = ("additive", "separate")
 
 
+ENCODING_TYPES = ("multifreq", "simple")
+
+
 def _validate_separate_encoding_fields(
     encoding_mode: str,
     channel_dim: int,
     temporal_dim: int,
     latlon_dim: int,
     latlon_dropout_rate: float,
+    temporal_encoding_type: str = "multifreq",
+    latlon_encoding_type: str = "multifreq",
 ) -> None:
     """Validate the separate-encoding fields used by ``SeparateEncodings``."""
     if encoding_mode not in ENCODING_MODES:
         raise ValueError(
             f"encoding_mode must be one of {ENCODING_MODES}, got {encoding_mode}"
         )
+    if temporal_encoding_type not in ENCODING_TYPES:
+        raise ValueError(
+            f"temporal_encoding_type must be one of {ENCODING_TYPES}, "
+            f"got {temporal_encoding_type}"
+        )
+    if latlon_encoding_type not in ENCODING_TYPES:
+        raise ValueError(
+            f"latlon_encoding_type must be one of {ENCODING_TYPES}, "
+            f"got {latlon_encoding_type}"
+        )
     if min(channel_dim, temporal_dim, latlon_dim) < 0:
         raise ValueError("encoding dims must be non-negative")
-    if temporal_dim > 0 and temporal_dim % 2 != 0:
-        raise ValueError(f"temporal_encoding_dim must be even, got {temporal_dim}")
-    if latlon_dim > 0 and latlon_dim % 6 != 0:
-        raise ValueError(
-            f"latlon_encoding_dim must be divisible by 6, got {latlon_dim}"
-        )
+    if temporal_dim > 0:
+        if temporal_encoding_type == "simple" and temporal_dim != 3:
+            raise ValueError(
+                f"simple temporal encoding requires temporal_encoding_dim=3, "
+                f"got {temporal_dim}"
+            )
+        if temporal_encoding_type == "multifreq" and temporal_dim % 2 != 0:
+            raise ValueError(f"temporal_encoding_dim must be even, got {temporal_dim}")
+    if latlon_dim > 0:
+        if latlon_encoding_type == "simple" and latlon_dim != 3:
+            raise ValueError(
+                f"simple latlon encoding requires latlon_encoding_dim=3, "
+                f"got {latlon_dim}"
+            )
+        if latlon_encoding_type == "multifreq" and latlon_dim % 6 != 0:
+            raise ValueError(
+                f"latlon_encoding_dim must be divisible by 6, got {latlon_dim}"
+            )
     if not 0.0 <= latlon_dropout_rate <= 1.0:
         raise ValueError(
             f"latlon_dropout_rate must be in [0, 1], got {latlon_dropout_rate}"
@@ -957,6 +986,8 @@ class SeparateEncodings(nn.Module):
         latlon_dropout_rate: float = 0.0,
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
+        temporal_encoding_type: str = "multifreq",
+        latlon_encoding_type: str = "multifreq",
     ) -> None:
         """Initialize the separate-encoding token builder + combiner.
 
@@ -966,10 +997,12 @@ class SeparateEncodings(nn.Module):
             tokenization_config: Bandset layout for the channel embeddings.
             channel_dim: Width of the per-modality, per-bandset learnable
                 channel embedding (set ``0`` to omit).
-            temporal_dim: Width of the static_temporal encoding slot. Must be
-                even. ``0`` omits the slot.
-            latlon_dim: Width of the static_latlon encoding slot. Must be
-                divisible by 6. ``0`` omits the slot.
+            temporal_dim: Width of the temporal encoding slot. ``0`` omits the
+                slot. For ``temporal_encoding_type='multifreq'`` must be even;
+                for ``'simple'`` must be exactly 3.
+            latlon_dim: Width of the lat/lon encoding slot. ``0`` omits the
+                slot. For ``latlon_encoding_type='multifreq'`` must be
+                divisible by 6; for ``'simple'`` must be exactly 3.
             latlon_dropout_rate: Per-sample probability of zeroing the latlon
                 slot at training time. ``rate >= 1.0`` zeros the latlon slot
                 in both training and eval (ablation switch). Default 0.
@@ -977,14 +1010,38 @@ class SeparateEncodings(nn.Module):
                 trainable. If False, frozen at init values.
             random_channel_embeddings: If True, init channel embeddings from
                 ``torch.rand``; otherwise zeros.
+            temporal_encoding_type: ``'multifreq'`` (multi-frequency sin/cos of
+                fractional year) or ``'simple'`` ([frac_year, sin, cos], dim 3).
+            latlon_encoding_type: ``'multifreq'`` (sphere-mapped multi-frequency
+                sin/cos) or ``'simple'`` (raw unit-sphere (x, y, z), dim 3).
         """
         super().__init__()
+        if temporal_encoding_type not in ("multifreq", "simple"):
+            raise ValueError(
+                f"temporal_encoding_type must be 'multifreq' or 'simple', "
+                f"got {temporal_encoding_type}"
+            )
+        if latlon_encoding_type not in ("multifreq", "simple"):
+            raise ValueError(
+                f"latlon_encoding_type must be 'multifreq' or 'simple', "
+                f"got {latlon_encoding_type}"
+            )
         if channel_dim < 0 or temporal_dim < 0 or latlon_dim < 0:
             raise ValueError("encoding dims must be non-negative")
-        if temporal_dim > 0 and temporal_dim % 2 != 0:
-            raise ValueError(f"temporal_dim must be even, got {temporal_dim}")
-        if latlon_dim > 0 and latlon_dim % 6 != 0:
-            raise ValueError(f"latlon_dim must be divisible by 6, got {latlon_dim}")
+        if temporal_dim > 0:
+            if temporal_encoding_type == "simple" and temporal_dim != 3:
+                raise ValueError(
+                    f"simple temporal encoding requires temporal_dim=3, got {temporal_dim}"
+                )
+            if temporal_encoding_type == "multifreq" and temporal_dim % 2 != 0:
+                raise ValueError(f"temporal_dim must be even, got {temporal_dim}")
+        if latlon_dim > 0:
+            if latlon_encoding_type == "simple" and latlon_dim != 3:
+                raise ValueError(
+                    f"simple latlon encoding requires latlon_dim=3, got {latlon_dim}"
+                )
+            if latlon_encoding_type == "multifreq" and latlon_dim % 6 != 0:
+                raise ValueError(f"latlon_dim must be divisible by 6, got {latlon_dim}")
         if not 0.0 <= latlon_dropout_rate <= 1.0:
             raise ValueError(
                 f"latlon_dropout_rate must be in [0, 1], got {latlon_dropout_rate}"
@@ -994,6 +1051,8 @@ class SeparateEncodings(nn.Module):
         self.channel_dim = channel_dim
         self.temporal_dim = temporal_dim
         self.latlon_dim = latlon_dim
+        self.temporal_encoding_type = temporal_encoding_type
+        self.latlon_encoding_type = latlon_encoding_type
         self.latlon_dropout_rate = float(latlon_dropout_rate)
         self.enc_dim = channel_dim + temporal_dim + latlon_dim
 
@@ -1076,9 +1135,12 @@ class SeparateEncodings(nn.Module):
             and modality.is_multitemporal
             and timestamps is not None
         ):
-            ts_enc = get_static_temporal_encoding(
-                timestamps, self.temporal_dim
-            )  # (B, T, D)
+            if self.temporal_encoding_type == "simple":
+                ts_enc = get_simple_temporal_encoding(timestamps)  # (B, T, 3)
+            else:
+                ts_enc = get_static_temporal_encoding(
+                    timestamps, self.temporal_dim
+                )  # (B, T, D)
             ts_b = repeat(ts_enc, f"b t d -> {ein_string}", **ein_dict).to(
                 device=device, dtype=dtype
             )
@@ -1092,9 +1154,13 @@ class SeparateEncodings(nn.Module):
             and latlon is not None
             and self.latlon_dropout_rate < 1.0
         ):
-            ll_enc = get_static_latlon_encoding(
-                latlon.to(device=device, dtype=torch.float32), self.latlon_dim
-            )  # (B, latlon_dim)
+            latlon_f = latlon.to(device=device, dtype=torch.float32)
+            if self.latlon_encoding_type == "simple":
+                ll_enc = get_simple_latlon_encoding(latlon_f)  # (B, 3)
+            else:
+                ll_enc = get_static_latlon_encoding(
+                    latlon_f, self.latlon_dim
+                )  # (B, latlon_dim)
             if self.training and self.latlon_dropout_rate > 0.0:
                 keep_prob = 1.0 - self.latlon_dropout_rate
                 keep = torch.bernoulli(torch.full((b,), keep_prob, device=device))
@@ -1164,6 +1230,8 @@ class FlexiVitBase(nn.Module):
         temporal_encoding_dim: int = 0,
         latlon_encoding_dim: int = 0,
         latlon_dropout_rate: float = 0.0,
+        temporal_encoding_type: str = "multifreq",
+        latlon_encoding_type: str = "multifreq",
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -1233,6 +1301,8 @@ class FlexiVitBase(nn.Module):
                 latlon_dropout_rate=latlon_dropout_rate,
                 learnable_channel_embeddings=learnable_channel_embeddings,
                 random_channel_embeddings=random_channel_embeddings,
+                temporal_encoding_type=temporal_encoding_type,
+                latlon_encoding_type=latlon_encoding_type,
             )
         else:
             self.composite_encodings = CompositeEncodings(
@@ -1541,6 +1611,8 @@ class Encoder(FlexiVitBase):
         temporal_encoding_dim: int = 0,
         latlon_encoding_dim: int = 0,
         latlon_dropout_rate: float = 0.0,
+        temporal_encoding_type: str = "multifreq",
+        latlon_encoding_type: str = "multifreq",
     ):
         """Initialize the encoder.
 
@@ -1604,6 +1676,10 @@ class Encoder(FlexiVitBase):
             latlon_dropout_rate: Per-sample bernoulli dropout for the latlon
                 slot at training time. ``rate >= 1.0`` disables the slot
                 entirely (train+eval). Default ``0``.
+            temporal_encoding_type: ``'multifreq'`` or ``'simple'`` (3-number
+                [frac_year, sin, cos]) under ``encoding_mode='separate'``.
+            latlon_encoding_type: ``'multifreq'`` or ``'simple'`` (3-number
+                unit-sphere [x, y, z]) under ``encoding_mode='separate'``.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1628,6 +1704,8 @@ class Encoder(FlexiVitBase):
             temporal_encoding_dim=temporal_encoding_dim,
             latlon_encoding_dim=latlon_encoding_dim,
             latlon_dropout_rate=latlon_dropout_rate,
+            temporal_encoding_type=temporal_encoding_type,
+            latlon_encoding_type=latlon_encoding_type,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -2184,6 +2262,8 @@ class PredictorBase(FlexiVitBase):
         temporal_encoding_dim: int = 0,
         latlon_encoding_dim: int = 0,
         latlon_dropout_rate: float = 0.0,
+        temporal_encoding_type: str = "multifreq",
+        latlon_encoding_type: str = "multifreq",
     ):
         """Initialize the predictor.
 
@@ -2216,6 +2296,8 @@ class PredictorBase(FlexiVitBase):
             latlon_encoding_dim: static_latlon slot width (divisible by 6).
             latlon_dropout_rate: Per-sample bernoulli dropout for the latlon
                 slot at training time. ``rate >= 1.0`` disables entirely.
+            temporal_encoding_type: ``'multifreq'`` or ``'simple'``.
+            latlon_encoding_type: ``'multifreq'`` or ``'simple'``.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2240,6 +2322,8 @@ class PredictorBase(FlexiVitBase):
             temporal_encoding_dim=temporal_encoding_dim,
             latlon_encoding_dim=latlon_encoding_dim,
             latlon_dropout_rate=latlon_dropout_rate,
+            temporal_encoding_type=temporal_encoding_type,
+            latlon_encoding_type=latlon_encoding_type,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -2647,6 +2731,8 @@ class EncoderConfig(Config):
     temporal_encoding_dim: int = 0
     latlon_encoding_dim: int = 0
     latlon_dropout_rate: float = 0.0
+    temporal_encoding_type: str = "multifreq"
+    latlon_encoding_type: str = "multifreq"
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2700,6 +2786,8 @@ class EncoderConfig(Config):
             self.temporal_encoding_dim,
             self.latlon_encoding_dim,
             self.latlon_dropout_rate,
+            self.temporal_encoding_type,
+            self.latlon_encoding_type,
         )
 
     @property
@@ -2745,6 +2833,8 @@ class PredictorConfig(Config):
     temporal_encoding_dim: int = 0
     latlon_encoding_dim: int = 0
     latlon_dropout_rate: float = 0.0
+    temporal_encoding_type: str = "multifreq"
+    latlon_encoding_type: str = "multifreq"
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2789,6 +2879,8 @@ class PredictorConfig(Config):
             self.temporal_encoding_dim,
             self.latlon_encoding_dim,
             self.latlon_dropout_rate,
+            self.temporal_encoding_type,
+            self.latlon_encoding_type,
         )
 
     @property
