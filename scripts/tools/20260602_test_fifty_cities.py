@@ -90,26 +90,21 @@ def main() -> None:
                 f"batch_sample={bshapes}"
             )
 
-    # Exercise the dataset-stats (non-pretrained) normalization path if the
-    # stats file has been computed.
-    if (paths.FIFTY_CITIES_DIR / "norm_stats.json").exists():
-        ds = get_eval_dataset(
-            "fifty_cities",
-            split="train",
-            norm_stats_from_pretrained=False,
-            input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
-        )
-        sample, _ = ds[0]
-        s2 = sample.sentinel2_l2a
-        print(
-            f"\nnorm_stats_from_pretrained=False OK: S2 {tuple(s2.shape)} "
-            f"range=[{float(s2.min()):.3f},{float(s2.max()):.3f}]"
-        )
-    else:
-        print(
-            "\n(norm_stats.json not found -- skipping non-pretrained norm check; "
-            "run 20260602_fifty_cities_norm_stats.py to enable it.)"
-        )
+    # Exercise the dataset-stats (non-pretrained) normalization path; its stats
+    # are committed (S2_BAND_STATS / S1_BAND_STATS + minmax_stats.json).
+    ds = get_eval_dataset(
+        "fifty_cities",
+        split="train",
+        norm_stats_from_pretrained=False,
+        input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+    )
+    sample, _ = ds[0]
+    s2, s1 = sample.sentinel2_l2a, sample.sentinel1
+    print(
+        f"\nnorm_stats_from_pretrained=False OK: "
+        f"S2 {tuple(s2.shape)} range=[{float(s2.min()):.3f},{float(s2.max()):.3f}] "
+        f"S1 range=[{float(s1.min()):.3f},{float(s1.max()):.3f}]"
+    )
 
     print("\nAll fifty_cities tasks loaded, sampled, and collated OK.")
 
