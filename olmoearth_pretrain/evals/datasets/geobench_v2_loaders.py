@@ -369,9 +369,13 @@ class FotwDataset(_BaseGeobenchDataset):
         """Load sample at idx."""
         row = self._df.read(idx)
         image = _raster_f32(row, 0)  # image_a: (4, H, W) RGBN uint16
-        mask = _raster_i64(row, 3).squeeze(
-            0
-        )  # semantic mask: 0=bg, 1=field, 2=boundary
+        mask = _raster_i64(row, 3).squeeze(0)  # semantic mask
+        # GeoBench2 m-fotw is 3 classes (0=bg, 1=field, 2=field-boundary); its
+        # official pixel stats cover only ~94% of pixels. The remaining value 3
+        # is unlabeled/out-of-AOI, so map it to the ignore index (matching the
+        # nodata convention used for caffe/kuro_siwo) instead of feeding an
+        # out-of-range target to the (num_classes=3) cross-entropy loss.
+        mask[mask > 2] = -1  # SEGMENTATION_IGNORE_LABEL
         return {"image": image, "mask": mask}
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,26 @@ _S2_ORDER = list(Modality.SENTINEL2_L2A.band_order)
 _S2_DN_MAX = 10000.0
 # Max value of a uint8 image, used when rescaling [0–255] inputs to DN scale.
 _UINT8_MAX = 255.0
+
+
+class Slug(str, Enum):
+    """GeoBench v2 dataset slugs we branch on when mapping samples to modalities.
+
+    Mirrors the keys of ``SLUG_TO_DATASET``; subclassing ``str`` lets these
+    compare equal to the plain slug strings flowing through the dataset.
+    """
+
+    BENV2 = "benv2"
+    BIOMASSTERS = "biomassters"
+    BURN_SCARS = "burn_scars"
+    CAFFE = "caffe"
+    CLOUDSEN12 = "cloudsen12"
+    FLAIR2 = "flair2"
+    FOTW = "fotw"
+    KURO_SIWO = "kuro_siwo"
+    SPACENET2 = "spacenet2"
+    SPACENET7 = "spacenet7"
+    TREESATAI = "treesatai"
 
 
 def _s2_names(band_order: Any) -> list[str]:
@@ -131,7 +152,7 @@ def _sample_to_olmoearth(
 ) -> OlmoEarthSample:
     device = next(iter(sample.values())).device
 
-    if slug == "caffe":
+    if slug == Slug.CAFFE:
         # Grayscale aerial [0–255]; broadcast to all 12 S2 channels and rescale
         # to S2 DN range so the OlmoEarth normalizer (mean ~1188) sees valid signal.
         filled = sample["image"].float()[:1].repeat(len(_S2_ORDER), 1, 1)
@@ -141,30 +162,30 @@ def _sample_to_olmoearth(
             sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device)
         )
 
-    if slug in ("burn_scars", "cloudsen12", "spacenet7"):
+    if slug in (Slug.BURN_SCARS, Slug.CLOUDSEN12, Slug.SPACENET7):
         image = sample["image"].float()
         src = _s2_names(band_order)
-        if slug == "burn_scars":
+        if slug == Slug.BURN_SCARS:
             # GeoBench2 stores HLS reflectance in [0, 1]; OlmoEarth pretraining
             # stats are in DN scale (~0–10000), so rescale to match.
             image = image * _S2_DN_MAX
-        if slug == "cloudsen12":
+        if slug == Slug.CLOUDSEN12:
             image = image[: len(src)]  # tortilla has 14 bands; truncate to 12
-        if slug == "spacenet7":
+        if slug == Slug.SPACENET7:
             # PlanetScope uint8 [0–255]; rescale to S2 DN range.
             image = image * (_S2_DN_MAX / _UINT8_MAX)
             rgbn_to_s2 = {"red": "B04", "green": "B03", "blue": "B02", "nir": "B08"}
             src = [rgbn_to_s2.get(s, s) for s in src]
         return _s2_sample(image, src, device)
 
-    if slug == "fotw":
+    if slug == Slug.FOTW:
         # 4-band RGBN aerial (uint16, already in S2 DN scale); map to S2 band names
         # and pad remaining channels to 0.
         rgbn_to_s2 = {"red": "B04", "green": "B03", "blue": "B02", "nir": "B08"}
         src = [rgbn_to_s2[b] for b in ("red", "green", "blue", "nir")]
         return _s2_sample(sample["image"].float(), src, device)
 
-    if slug == "flair2":
+    if slug == Slug.FLAIR2:
         # 5-band aerial uint8 [0–255] (RGBN + elevation); rescale to S2 DN range
         # and pad to 12 channels, treating the result as sentinel2_l2a.
         x = sample["image"].float() * (_S2_DN_MAX / _UINT8_MAX)
@@ -185,10 +206,10 @@ def _sample_to_olmoearth(
             sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device)
         )
 
-    if slug == "treesatai":
+    if slug == Slug.TREESATAI:
         return _s2_sample(sample["image_s2"].float(), _s2_names(band_order), device)
 
-    if slug == "biomassters":
+    if slug == Slug.BIOMASSTERS:
         x1 = sample["image_s1"].float()
         s1_src = _s1_names(band_order)
         # Average ascending and descending passes to get standard 2-channel (VV, VH).
@@ -209,7 +230,7 @@ def _sample_to_olmoearth(
             timestamps=_timestamps(t, device),
         )
 
-    if slug == "kuro_siwo":
+    if slug == Slug.KURO_SIWO:
         # Stack pre_1, pre_2, post as 3 SAR timesteps; convert linear power → dB.
         s1 = _bchw_to_hwtc(
             torch.stack(
@@ -229,7 +250,7 @@ def _sample_to_olmoearth(
             timestamps=_timestamps(t, device),
         )
 
-    if slug.startswith("spacenet"):
+    if slug == Slug.SPACENET2:
         # spacenet2: worldview (8-band) + pan (1-band) stacked into the S2 slot.
         parts = [v.float() for k, v in sorted(sample.items()) if k.startswith("image_")]
         x = torch.cat(parts, dim=0)
@@ -250,7 +271,7 @@ def _sample_to_olmoearth(
             sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device)
         )
 
-    if slug == "benv2":
+    if slug == Slug.BENV2:
         s2 = _bchw_to_hwtc(
             _align_s2_to_sentinel2_l2a(
                 sample["image_s2"].float(), _s2_names(band_order)
