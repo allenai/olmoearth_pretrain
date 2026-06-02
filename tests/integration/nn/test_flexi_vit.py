@@ -1328,6 +1328,121 @@ def test_encoder_register_bottleneck_multi_depth(
     assert encoder.blocks[3].attn.q.weight.grad is None
 
 
+def test_encoder_register_bottleneck_per_depth_read_proj(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """per_depth_read_proj gives each multi-depth read its own input_norm + kv_proj."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    grid_size, register_dim, depth = 3, 8, 4
+    read_layers = [2, 4]
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=depth,
+        drop_path=0.0,
+        spatial_pos_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=grid_size,
+        register_dim=register_dim,
+        register_read_layers=read_layers,
+        register_per_depth_read_proj=True,
+    )
+    bottleneck = encoder.register_bottleneck
+    assert bottleneck is not None
+    assert bottleneck.per_depth_read_proj
+    # One norm + one projection per read layer; no shared pair.
+    assert len(bottleneck.input_norms) == len(read_layers)
+    assert len(bottleneck.kv_projs) == len(read_layers)
+    assert not hasattr(bottleneck, "input_norm")
+    assert not hasattr(bottleneck, "kv_proj")
+
+    B, H, W = 2, 8, 8
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, 2, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, 2, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=2, input_res=10)
+    assert output_dict["registers"].shape == (B, grid_size * grid_size, register_dim)
+    output_dict["registers"].sum().backward()
+    # Each per-depth norm + projection receives gradient.
+    for norm in bottleneck.input_norms:
+        assert norm.weight.grad is not None
+    for proj in bottleneck.kv_projs:
+        assert proj.weight.grad is not None
+
+
+def test_encoder_register_bottleneck_contrastive_source(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """register_contrastive_source toggles the contrastive head between latents/tokens."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    embedding_size, register_dim = 16, 8
+
+    def build(source: str) -> Encoder:
+        return Encoder(
+            supported_modalities=supported_modalities,
+            embedding_size=embedding_size,
+            max_patch_size=4,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=2.0,
+            max_sequence_length=12,
+            depth=2,
+            drop_path=0.0,
+            spatial_pos_encoding="rope",
+            use_register_bottleneck=True,
+            register_grid_size=3,
+            register_dim=register_dim,
+            register_contrastive_source=source,
+        )
+
+    B, H, W = 2, 8, 8
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+
+    def sample() -> MaskedOlmoEarthSample:
+        return MaskedOlmoEarthSample(
+            sentinel2_l2a=torch.randn(B, H, W, 2, sentinel2_l2a_num_bands),
+            sentinel2_l2a_mask=torch.zeros(
+                B, H, W, 2, sentinel2_l2a_num_bands, dtype=torch.long
+            ),
+            latlon=torch.randn(B, latlon_num_bands),
+            latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+            timestamps=timestamps,
+        )
+
+    # Default: project from the register latents (sized to register_dim).
+    reg_encoder = build("registers")
+    assert reg_encoder.contrastive_from_registers
+    reg_out = reg_encoder.forward(sample(), patch_size=2, input_res=10)
+    assert reg_out["project_aggregated"].shape == (B, register_dim)
+
+    # Opt-in: project from the encoder patch tokens (sized to the final embedding size),
+    # the pre-bottleneck behaviour.
+    tok_encoder = build("encoder_tokens")
+    assert not tok_encoder.contrastive_from_registers
+    tok_out = tok_encoder.forward(sample(), patch_size=2, input_res=10)
+    assert tok_out["project_aggregated"].shape == (B, embedding_size)
+
+
 def test_predictor_forward_rope(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:

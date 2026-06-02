@@ -1281,6 +1281,7 @@ class SpatialRegisterBottleneck(nn.Module):
         qk_norm: bool = False,
         interleave: bool = False,
         read_layers: list[int] | None = None,
+        per_depth_read_proj: bool = False,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1315,6 +1316,13 @@ class SpatialRegisterBottleneck(nn.Module):
                 time. When set it forces the interleaved schedule and overrides
                 ``read_depth`` / ``latent_transformer_depth``; when None (default) behaviour
                 is unchanged (all reads share the final-layer K/V).
+            per_depth_read_proj: Multi-depth only. If True, give each read layer its own
+                ``input_norm`` LayerNorm *and* ``kv_proj`` down-projection instead of a
+                single shared pair. Features pulled from different encoder depths have
+                different per-channel statistics and semantics, so a shared affine (γ, β)
+                and a shared projection are a poor fit across all of them. Ignored when not
+                in multi-depth mode. False (default) keeps the shared norm + projection
+                (backwards compatible).
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1348,10 +1356,27 @@ class SpatialRegisterBottleneck(nn.Module):
             # grid coordinates are what give each register its spatial identity.
             self.registers = nn.Parameter(torch.empty(self.num_registers, register_dim))
             nn.init.trunc_normal_(self.registers, std=0.02)
-        self.input_norm = nn.LayerNorm(encoder_embedding_size)
+        # Per-depth read front-end only makes sense with multiple (multi-depth) K/V sources.
+        self.per_depth_read_proj = per_depth_read_proj and self.multi_depth
         # Down-project the patch K/V source to the (smaller) register dim. The existing
         # Attention ties q/k/v to a single dim, so the read happens entirely at register_dim.
-        self.kv_proj = nn.Linear(encoder_embedding_size, register_dim)
+        if self.per_depth_read_proj:
+            assert self.read_layers is not None
+            # One norm + projection per read layer: each encoder depth has its own
+            # per-channel statistics, so each gets its own affine and its own remixing
+            # into the register dim instead of a single shared pair.
+            self.input_norms = nn.ModuleList(
+                [nn.LayerNorm(encoder_embedding_size) for _ in self.read_layers]
+            )
+            self.kv_projs = nn.ModuleList(
+                [
+                    nn.Linear(encoder_embedding_size, register_dim)
+                    for _ in self.read_layers
+                ]
+            )
+        else:
+            self.input_norm = nn.LayerNorm(encoder_embedding_size)
+            self.kv_proj = nn.Linear(encoder_embedding_size, register_dim)
         # The read + latent transformer run on small unpacked [B, N, D] tensors with an
         # attention mask, so they use the SDPA path (use_flash_attn=False) regardless of
         # the encoder's flash setting.
@@ -1463,7 +1488,15 @@ class SpatialRegisterBottleneck(nn.Module):
                     f"expected {len(self.read_blocks)} K/V sources (one per read layer), "
                     f"got {len(patch_tokens)}"
                 )
-            kv_per_read = [self.kv_proj(self.input_norm(t)) for t in patch_tokens]
+            if self.per_depth_read_proj:
+                kv_per_read = [
+                    proj(norm(t))
+                    for norm, proj, t in zip(
+                        self.input_norms, self.kv_projs, patch_tokens
+                    )
+                ]
+            else:
+                kv_per_read = [self.kv_proj(self.input_norm(t)) for t in patch_tokens]
             reference_tokens = patch_tokens[0]
         else:
             if isinstance(patch_tokens, list):
@@ -1579,6 +1612,8 @@ class Encoder(FlexiVitBase):
         register_num_heads: int | None = None,
         register_interleave: bool = False,
         register_read_layers: list[int] | None = None,
+        register_per_depth_read_proj: bool = False,
+        register_contrastive_source: str = "registers",
     ):
         """Initialize the encoder.
 
@@ -1651,6 +1686,16 @@ class Encoder(FlexiVitBase):
                 drops. Forces the interleaved schedule and overrides ``register_read_depth``
                 / ``register_latent_depth``. Defaults to None (final-layer read only,
                 backwards compatible).
+            register_per_depth_read_proj: Multi-depth only. If True, give each read layer
+                its own input LayerNorm and K/V down-projection (different encoder depths
+                have different statistics). Defaults to False (shared norm + projection,
+                backwards compatible).
+            register_contrastive_source: Where the contrastive (project-and-aggregate)
+                head reads from when the bottleneck is active: ``"registers"`` (default,
+                project from the register latents at ``register_dim``) or
+                ``"encoder_tokens"`` (project from the encoder's patch-token output at the
+                final embedding size, as before the bottleneck existed). Ignored when the
+                bottleneck is off (always reads encoder tokens).
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1754,14 +1799,25 @@ class Encoder(FlexiVitBase):
                 qk_norm=qk_norm,
                 interleave=register_interleave,
                 read_layers=register_read_layers,
+                per_depth_read_proj=register_per_depth_read_proj,
             )
 
-        # When the register bottleneck is active, the contrastive projection reads the
-        # register tokens (only) rather than the patch tokens, so it operates at the
-        # bottleneck's register_dim instead of the encoder's final embedding size.
+        if register_contrastive_source not in ("registers", "encoder_tokens"):
+            raise ValueError(
+                "register_contrastive_source must be 'registers' or 'encoder_tokens', "
+                f"got {register_contrastive_source!r}"
+            )
+        # Whether the contrastive head projects from the register latents (default) or from
+        # the encoder patch-token output (backwards-compatible pre-bottleneck behaviour).
+        self.contrastive_from_registers = (
+            self.register_bottleneck is not None
+            and register_contrastive_source == "registers"
+        )
+        # When projecting from the register tokens the head operates at the bottleneck's
+        # register_dim; otherwise it reads the encoder's final-embedding-size patch tokens.
         project_aggregate_embedding_size = (
             self.register_dim
-            if self.register_bottleneck is not None
+            if self.contrastive_from_registers
             else final_embedding_size
         )
         self.project_and_aggregate = ProjectAndAggregate(
@@ -2295,7 +2351,7 @@ class Encoder(FlexiVitBase):
             output_dict["register_positions"] = register_output["register_positions"]
 
         if not fast_pass:
-            if self.register_bottleneck is not None:
+            if self.contrastive_from_registers:
                 # The contrastive projection reads the register tokens (only) and is sized
                 # to register_dim. Registers are produced whenever attention runs (the
                 # standard, token_exit_cfg=None pass); the only path that skips them is the
@@ -2305,6 +2361,9 @@ class Encoder(FlexiVitBase):
                         register_output["registers"]
                     )
             else:
+                # No bottleneck, or register_contrastive_source="encoder_tokens": project
+                # from the encoder's patch-token output (masked-mean pooled), as before the
+                # bottleneck existed.
                 output_dict["project_aggregated"] = self.project_and_aggregate(output)
 
         return output_dict
@@ -2878,6 +2937,13 @@ class EncoderConfig(Config):
     # (one [read -> self-attend] step per entry). Forces the interleaved schedule and
     # overrides register_read_depth / register_latent_depth. None -> final-layer read only.
     register_read_layers: list[int] | None = None
+    # Multi-depth only: give each read layer its own input norm + K/V down-projection
+    # instead of sharing one pair across depths. False -> shared (backwards compatible).
+    register_per_depth_read_proj: bool = False
+    # Where the contrastive head reads when the bottleneck is on: "registers" (default,
+    # project from the register latents) or "encoder_tokens" (project from the encoder
+    # patch-token output, as before the bottleneck existed). Ignored when bottleneck off.
+    register_contrastive_source: str = "registers"
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2972,6 +3038,11 @@ class EncoderConfig(Config):
         elif self.register_read_layers is not None:
             raise ValueError(
                 "register_read_layers requires use_register_bottleneck=True"
+            )
+        if self.register_contrastive_source not in ("registers", "encoder_tokens"):
+            raise ValueError(
+                "register_contrastive_source must be 'registers' or 'encoder_tokens', "
+                f"got {self.register_contrastive_source!r}"
             )
 
     @property
