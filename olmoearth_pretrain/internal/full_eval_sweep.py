@@ -575,6 +575,14 @@ def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
 
     if len(tasks_to_run) == len(EVAL_TASKS):
         return ""
+    # NOTE: json.dumps default separators add a space after each comma
+    # (["a", "b"]). When this list-valued override is baked into a launched
+    # Beaker job command, the surrounding quotes can be lost during shell
+    # re-serialization, so those spaces get word-split and OmegaConf receives an
+    # unterminated flow sequence (ParserError: "expected node content, but found
+    # <stream end>"). If that happens, emit compact JSON here, i.e.
+    # json.dumps(tasks_to_run, separators=(",", ":")). Left as-is for now since
+    # the change is untested.
     return (
         " --trainer.callbacks.downstream_evaluator.tasks_to_run="
         f"'{json.dumps(tasks_to_run)}'"
