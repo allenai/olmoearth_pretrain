@@ -15,6 +15,7 @@ import logging
 import torch
 from torch.utils.data import DataLoader
 
+from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets import get_eval_dataset, paths
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config
 from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn
@@ -88,6 +89,27 @@ def main() -> None:
                 f"label[min,max]=[{lo},{hi}]  batch_target={tuple(btarget.shape)} "
                 f"batch_sample={bshapes}"
             )
+
+    # Exercise the dataset-stats (non-pretrained) normalization path if the
+    # stats file has been computed.
+    if (paths.FIFTY_CITIES_DIR / "norm_stats.json").exists():
+        ds = get_eval_dataset(
+            "fifty_cities",
+            split="train",
+            norm_stats_from_pretrained=False,
+            input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        )
+        sample, _ = ds[0]
+        s2 = sample.sentinel2_l2a
+        print(
+            f"\nnorm_stats_from_pretrained=False OK: S2 {tuple(s2.shape)} "
+            f"range=[{float(s2.min()):.3f},{float(s2.max()):.3f}]"
+        )
+    else:
+        print(
+            "\n(norm_stats.json not found -- skipping non-pretrained norm check; "
+            "run 20260602_fifty_cities_norm_stats.py to enable it.)"
+        )
 
     print("\nAll fifty_cities tasks loaded, sampled, and collated OK.")
 

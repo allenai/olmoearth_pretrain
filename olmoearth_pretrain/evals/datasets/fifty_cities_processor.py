@@ -6,34 +6,30 @@ The raw dataset is one directory per city, each containing:
     S2.tif      (12 bands, uint16, L2A reflectance, B10/cirrus dropped)
     label.png   (RGBA, land-cover classes encoded as an RGB colormap)
 
-Only the ~28 cities that ship a ``label.png`` are usable for a supervised
+Only the cities that ship a ``label.png`` are usable for a supervised
 segmentation eval; the rest are dropped.
 
-Processing happens in two cheap-to-reload stages:
+``process()`` tiles every labeled city into non-overlapping 64x64 patches and
+writes ONE combined file per tile under ``tiles/<City>/<idx>.pt`` holding a dict
+with that tile's S2, S1 and label tensors together (plus its row/col). Per-tile
+files keep ``__getitem__`` memory-light (the full set is ~18GB), and
+``manifest.json`` records the per-city tile counts. This is the only expensive
+step and only needs to run once.
 
-1. ``process()`` tiles every labeled city into non-overlapping 64x64 patches and
-   writes ONE combined file per tile under ``tiles/<City>/<idx>.pt`` holding a
-   dict with that tile's S2, S1 and label tensors together (plus its row/col).
-   Per-tile files keep ``__getitem__`` memory-light (the full set is ~18GB), and
-   ``manifest.json`` records the per-city tile counts. Stage 1 is the expensive
-   step and only needs to run once.
+* S2 is stored as raw uint16 reflectance (the pretrained normalizer expects raw
+  L2A reflectance).
+* S1 is converted to dB (``10*log10``) so it matches the units the pretrained S1
+  normalizer was computed on; NaN/non-positive nodata is floored.
+* Labels: the RGB colormap is auto-discovered across all cities (anti-aliasing
+  noise at class boundaries is snapped to the nearest real palette color), so
+  class indices are consistent across cities. The two nodata/background colors
+  (black, white) are mapped to ``SEGMENTATION_IGNORE_LABEL``; the remaining 13
+  colors become contiguous semantic classes 0..12. The mapping is written to
+  ``colormap.json``.
 
-   * S2 is stored as raw uint16 reflectance (the pretrained normalizer expects
-     raw L2A reflectance).
-   * S1 is converted to dB (``10*log10``) so it matches the units the pretrained
-     S1 normalizer was computed on; NaN/non-positive nodata is floored.
-   * Labels: the RGB colormap is auto-discovered across all cities (anti-aliasing
-     noise at class boundaries is snapped to the nearest real palette color), so
-     class indices are consistent across cities. The two nodata/background colors
-     (black, white) are mapped to ``SEGMENTATION_IGNORE_LABEL``; the remaining 13
-     colors become contiguous semantic classes 0..12. The mapping is written to
-     ``colormap.json``.
-
-2. ``make_splits()`` writes lightweight JSON index files that reference the
-   per-city tiles, so both split modes share the same stage-1 tensors:
-
-   * ``splits/random.json``  -- tiles shuffled across all cities.
-   * ``splits/by_city.json`` -- whole cities assigned to train / valid / test.
+Train/valid/test splits are NOT written here -- they are defined in code in
+``fifty_cities_dataset.py`` (random / by_city / by_continent) and computed
+deterministically from ``manifest.json`` at load time.
 """
 
 import argparse
@@ -72,7 +68,11 @@ S2_TIF_BAND_NAMES = [
     "B11",
     "B12",
 ]
-S1_TIF_BAND_NAMES = ["vv", "vh"]
+# S1.tif channel order is VH, VV (determined empirically: channel-0 backscatter
+# is ~6 dB weaker than channel-1, and matches the pretrained vh/vv means). Tiles
+# are stored in this raw tif order; FiftyCitiesDataset maps it to the model's
+# band order at load time.
+S1_TIF_BAND_NAMES = ["vh", "vv"]
 
 TILE_SIZE = 64
 
@@ -110,8 +110,7 @@ class FiftyCitiesProcessor:
         self.data_dir = Path(data_dir)
         self.output_dir = Path(output_dir)
         self.tiles_dir = self.output_dir / "tiles"
-        self.splits_dir = self.output_dir / "splits"
-        for d in (self.output_dir, self.tiles_dir, self.splits_dir):
+        for d in (self.output_dir, self.tiles_dir):
             d.mkdir(parents=True, exist_ok=True)
 
     def labeled_cities(self) -> list[str]:
@@ -344,127 +343,28 @@ class FiftyCitiesProcessor:
             json.dump(manifest, f, indent=2)
         logger.info("Wrote manifest.json: %d tiles total", sum(counts.values()))
 
-    # ------------------------------------------------------------------ #
-    # Splits
-    # ------------------------------------------------------------------ #
-    def _tile_counts(self) -> dict[str, int]:
-        """Number of tiles per city from the stage-1 manifest."""
-        with open(self.output_dir / "manifest.json") as f:
-            return json.load(f)["counts"]
-
-    def make_random_split(
-        self,
-        ratios: tuple[float, float, float] = (0.7, 0.15, 0.15),
-        seed: int = 42,
-    ) -> None:
-        """Shuffle all tiles across cities into train/valid/test index lists."""
-        counts = self._tile_counts()
-        index = [(city, i) for city, n in counts.items() for i in range(n)]
-        rng = np.random.RandomState(seed)
-        perm = rng.permutation(len(index))
-        n_train = int(len(index) * ratios[0])
-        n_valid = int(len(index) * ratios[1])
-        splits = {
-            "train": [index[i] for i in perm[:n_train]],
-            "valid": [index[i] for i in perm[n_train : n_train + n_valid]],
-            "test": [index[i] for i in perm[n_train + n_valid :]],
-        }
-        self._write_split("random", splits)
-
-    def make_city_split(
-        self,
-        train_cities: list[str],
-        valid_cities: list[str],
-        test_cities: list[str],
-    ) -> None:
-        """Assign whole cities to a split (disjoint train/valid/test cities)."""
-        counts = self._tile_counts()
-        assignment = {
-            "train": train_cities,
-            "valid": valid_cities,
-            "test": test_cities,
-        }
-        # Validate the partition.
-        all_assigned = train_cities + valid_cities + test_cities
-        dupes = {c for c in all_assigned if all_assigned.count(c) > 1}
-        assert not dupes, f"Cities assigned to multiple splits: {dupes}"
-        unknown = [c for c in all_assigned if c not in counts]
-        assert not unknown, f"Unknown / unlabeled cities: {unknown}"
-
-        splits = {
-            split: [(city, i) for city in cities for i in range(counts[city])]
-            for split, cities in assignment.items()
-        }
-        self._write_split("by_city", splits, extra={"city_assignment": assignment})
-
-    def _write_split(
-        self,
-        name: str,
-        splits: dict[str, list[tuple[str, int]]],
-        extra: dict | None = None,
-    ) -> None:
-        payload: dict = {
-            "tiles_dir": "tiles",
-            "splits": {k: [[c, i] for c, i in v] for k, v in splits.items()},
-        }
-        if extra:
-            payload.update(extra)
-        with open(self.splits_dir / f"{name}.json", "w") as f:
-            json.dump(payload, f, indent=2)
-        sizes = {k: len(v) for k, v in splits.items()}
-        logger.info("Wrote splits/%s.json: %s", name, sizes)
-
-
-def _parse_cities(value: str | None) -> list[str]:
-    return [c.strip() for c in value.split(",") if c.strip()] if value else []
-
 
 def main() -> None:
-    """CLI entry point."""
+    """CLI entry point.
+
+    Stage 1 only: tile the cities and write tiles/, manifest.json and
+    colormap.json. Train/valid/test splits are defined in code in
+    ``fifty_cities_dataset.py`` (random / by_city / by_continent), so no split
+    files are written here.
+    """
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description="Process the 50Cities eval dataset.")
     parser.add_argument("--data_dir", required=True, help="Raw 50Cities directory.")
     parser.add_argument("--output_dir", required=True, help="Output directory.")
     parser.add_argument(
-        "--skip_tiling",
-        action="store_true",
-        help="Skip stage 1 (tiling); only (re)build split index files.",
-    )
-    parser.add_argument(
         "--keep_empty",
         action="store_true",
         help="Keep all-zero (off-scene) tiles instead of dropping them.",
     )
-    parser.add_argument("--seed", type=int, default=42, help="Random-split seed.")
-    parser.add_argument(
-        "--train_cities", help="Comma-separated cities for the by-city train split."
-    )
-    parser.add_argument("--valid_cities", help="Comma-separated by-city valid split.")
-    parser.add_argument("--test_cities", help="Comma-separated by-city test split.")
     args = parser.parse_args()
 
     proc = FiftyCitiesProcessor(args.data_dir, args.output_dir)
-
-    if not args.skip_tiling:
-        proc.process(drop_empty=not args.keep_empty)
-
-    proc.make_random_split(seed=args.seed)
-
-    train_c = _parse_cities(args.train_cities)
-    valid_c = _parse_cities(args.valid_cities)
-    test_c = _parse_cities(args.test_cities)
-    if train_c or valid_c or test_c:
-        proc.make_city_split(train_c, valid_c, test_c)
-    else:
-        # Default deterministic 70/15/15 city partition over sorted cities.
-        cities = proc.labeled_cities()
-        n_train = int(len(cities) * 0.7)
-        n_valid = int(len(cities) * 0.15)
-        proc.make_city_split(
-            cities[:n_train],
-            cities[n_train : n_train + n_valid],
-            cities[n_train + n_valid :],
-        )
+    proc.process(drop_empty=not args.keep_empty)
 
 
 if __name__ == "__main__":
