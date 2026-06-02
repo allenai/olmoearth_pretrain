@@ -119,8 +119,14 @@ def get_eval_dataset(
             kwargs["path_to_splits"] = paths.PASTIS_DIR
         return PASTISRDataset(**kwargs)  # type: ignore
     elif eval_dataset.startswith("fifty_cities"):
-        # "fifty_cities" -> random split; "fifty_cities_by_city" -> by-city split.
-        split_mode = "by_city" if eval_dataset.endswith("by_city") else "random"
+        # Split mode is encoded in the dataset-name suffix; "fifty_cities" alone
+        # is the random split.
+        if eval_dataset.endswith("by_continent"):
+            split_mode = "by_continent"
+        elif eval_dataset.endswith("by_city"):
+            split_mode = "by_city"
+        else:
+            split_mode = "random"
         return FiftyCitiesDataset(
             path_to_splits=paths.FIFTY_CITIES_DIR,
             split=split,
