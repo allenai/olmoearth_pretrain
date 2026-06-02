@@ -1,11 +1,12 @@
 """Compute per-band normalization stats for the 50Cities eval dataset.
 
-Writes ``norm_stats.json`` into the dataset dir, which FiftyCitiesDataset loads
-when ``norm_stats_from_pretrained=False``. Stats are computed over *all* tiles
-(split-mode independent), in the stored eval-band order:
+Prints paste-ready ``S2_BAND_STATS`` / ``S1_BAND_STATS`` (mean/std) for
+``fifty_cities_dataset.py`` and a ``minmax_stats.json`` fragment (min/max),
+matching how the other eval datasets keep their stats in git. Computed over
+*all* tiles (split-mode independent), in the stored band order:
 
     S2: EVAL_S2_L2A_BAND_NAMES  (raw uint16 reflectance, B10/cirrus dropped)
-    S1: EVAL_S1_BAND_NAMES      (dB; the -60 dB nodata floor is excluded)
+    S1: S1_STORED_BAND_NAMES    (dB, [vh, vv]; the -60 dB nodata floor excluded)
 
 Run on a machine with the dataset mounted (e.g. weka):
 
@@ -140,23 +141,34 @@ def main() -> None:
             s2_total.merge(s2_acc)
             s1_total.merge(s1_acc)
 
-    stats = {
-        Modality.SENTINEL2_L2A.name: s2_total.finalize(EVAL_S2_L2A_BAND_NAMES),
-        Modality.SENTINEL1.name: s1_total.finalize(S1_STORED_BAND_NAMES),
-    }
+    s2 = s2_total.finalize(EVAL_S2_L2A_BAND_NAMES)
+    s1 = s1_total.finalize(S1_STORED_BAND_NAMES)
 
-    out_path = data_dir / "norm_stats.json"
-    with open(out_path, "w") as f:
-        json.dump(stats, f, indent=2)
-    logger.info("Wrote %s", out_path)
-
-    for mod, band_stats in stats.items():
-        print(f"\n{mod}:")
-        for name, s in band_stats.items():
-            print(
-                f"  {name:28s} mean={s['mean']:10.3f} std={s['std']:10.3f} "
-                f"min={s['min']:10.3f} max={s['max']:10.3f}"
+    def _band_stats_literal(name: str, stats: dict) -> str:
+        lines = [f"{name} = {{"]
+        for band, s in stats.items():
+            lines.append(
+                f'    "{band}": {{"mean": {s["mean"]:.3f}, "std": {s["std"]:.3f}}},'
             )
+        lines.append("}")
+        return "\n".join(lines)
+
+    print("\n# --- paste into fifty_cities_dataset.py ---")
+    print(_band_stats_literal("S2_BAND_STATS", s2))
+    print(_band_stats_literal("S1_BAND_STATS", s1))
+
+    minmax_fragment = {
+        "fifty_cities": {
+            Modality.SENTINEL1.name: {
+                b: {"max": s["max"], "min": s["min"]} for b, s in s1.items()
+            },
+            Modality.SENTINEL2_L2A.name: {
+                b: {"max": s["max"], "min": s["min"]} for b, s in s2.items()
+            },
+        }
+    }
+    print("\n# --- merge into config/minmax_stats.json ---")
+    print(json.dumps(minmax_fragment, indent=2))
 
 
 if __name__ == "__main__":

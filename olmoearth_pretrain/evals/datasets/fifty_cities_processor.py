@@ -17,7 +17,11 @@ files keep ``__getitem__`` memory-light (the full set is ~18GB), and
 step and only needs to run once.
 
 * S2 is stored as raw uint16 reflectance (the pretrained normalizer expects raw
-  L2A reflectance).
+  L2A reflectance). NOTE: because the source S2.tif is *unsigned* (uint16), its
+  per-band min is structurally 0 -- unlike float L2A products (e.g. PASTIS),
+  which can hold small *negative* reflectances from atmospheric overcorrection
+  of dark targets. This only affects the stored min/max (used by the
+  ``min_max_int`` norm method); the default 2-std normalization uses mean/std.
 * S1 is converted to dB (``10*log10``) so it matches the units the pretrained S1
   normalizer was computed on; NaN/non-positive nodata is floored.
 * Labels: the RGB colormap is auto-discovered across all cities (anti-aliasing
@@ -297,6 +301,8 @@ class FiftyCitiesProcessor:
                 per_class += np.bincount(semantic.reshape(-1), minlength=num_classes)
                 tile = {
                     # int32 (not int16): raw uint16 reflectance can exceed 32767.
+                    # Source is unsigned, so values are >= 0 (no negative
+                    # reflectance, unlike float L2A products); see module docstring.
                     "s2": torch.from_numpy(s2_t.astype(np.int32)),  # (12, 64, 64)
                     "s1": torch.from_numpy(
                         s1[:, ys : ys + TILE_SIZE, xs : xs + TILE_SIZE].astype(

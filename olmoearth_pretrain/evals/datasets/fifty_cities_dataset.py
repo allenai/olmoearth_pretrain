@@ -32,6 +32,7 @@ from olmoearth_pretrain.evals.datasets.constants import (
     EVAL_TO_OLMOEARTH_S2_L2A_BANDS,
 )
 from olmoearth_pretrain.evals.datasets.normalize import normalize_bands
+from olmoearth_pretrain.evals.datasets.utils import load_min_max_stats
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,28 @@ S1_STORED_BAND_NAMES = ["vh", "vv"]
 S1_STORED_TO_MODEL = [
     S1_STORED_BAND_NAMES.index(b) for b in Modality.SENTINEL1.band_order
 ]
+
+# Per-band mean/std of this dataset, used only when norm_stats_from_pretrained
+# is False. Min/max live in config/minmax_stats.json under "fifty_cities".
+# Regenerate all of these with scripts/tools/20260602_fifty_cities_norm_stats.py.
+S2_BAND_STATS = {
+    "01 - Coastal aerosol": {"mean": 929.987, "std": 903.761},
+    "02 - Blue": {"mean": 1050.686, "std": 1019.675},
+    "03 - Green": {"mean": 1282.192, "std": 1099.984},
+    "04 - Red": {"mean": 1390.080, "std": 1255.881},
+    "05 - Vegetation Red Edge": {"mean": 1643.835, "std": 1261.506},
+    "06 - Vegetation Red Edge": {"mean": 2045.000, "std": 1276.813},
+    "07 - Vegetation Red Edge": {"mean": 2199.791, "std": 1330.759},
+    "08 - NIR": {"mean": 2253.265, "std": 1380.702},
+    "08A - Vegetation Red Edge": {"mean": 2295.290, "std": 1352.824},
+    "09 - Water vapour": {"mean": 2345.512, "std": 1454.604},
+    "11 - SWIR": {"mean": 2099.266, "std": 1370.791},
+    "12 - SWIR": {"mean": 1754.644, "std": 1325.780},
+}
+S1_BAND_STATS = {
+    "vh": {"mean": -17.401, "std": 5.338},
+    "vv": {"mean": -10.663, "std": 5.930},
+}
 
 # Continent of every city in the raw 50Cities dataset. Only labeled cities (the
 # ones with tiles) are used at runtime; the rest are listed for robustness so
@@ -155,15 +178,14 @@ class FiftyCitiesDataset(Dataset):
 
         Args:
             path_to_splits: Output dir from ``FiftyCitiesProcessor`` (holds
-                ``tiles/``, ``manifest.json``, ``colormap.json`` and, when using
-                dataset stats, ``norm_stats.json``).
+                ``tiles/``, ``manifest.json`` and ``colormap.json``).
             split: ``train``, ``valid``/``val`` or ``test``.
             split_mode: ``random``, ``by_city`` or ``by_continent``.
             input_modalities: Subset of ``["sentinel1", "sentinel2_l2a"]``.
             norm_stats_from_pretrained: If True, normalize with the pretrained
                 ``COMPUTED`` stats (S2 raw reflectance, S1 in dB). If False, use
-                this dataset's own stats from ``norm_stats.json`` (run
-                ``scripts/tools/20260602_fifty_cities_norm_stats.py`` to make it).
+                this dataset's own committed stats (``S2_BAND_STATS`` /
+                ``S1_BAND_STATS`` here, plus min/max from ``minmax_stats.json``).
             norm_method: Normalization method when not using pretrained stats.
             label_fraction: Fraction of train tiles to keep (low-label evals).
             label_fraction_seed: Seed for the label-fraction subsample.
@@ -240,23 +262,29 @@ class FiftyCitiesDataset(Dataset):
     # Normalization
     # ------------------------------------------------------------------ #
     def _load_dataset_norm_stats(self) -> None:
-        """Load this dataset's per-band mean/std/min/max from norm_stats.json."""
-        stats_path = self.path_to_splits / "norm_stats.json"
-        if not stats_path.exists():
-            raise FileNotFoundError(
-                f"norm_stats.json not found at {stats_path}. Run "
-                "scripts/tools/20260602_fifty_cities_norm_stats.py to create it, "
-                "or set norm_stats_from_pretrained=True."
-            )
-        with open(stats_path) as f:
-            stats = json.load(f)
-        self.s2_means, self.s2_stds, self.s2_mins, self.s2_maxs = self._stats_arrays(
-            stats[Modality.SENTINEL2_L2A.name], EVAL_S2_L2A_BAND_NAMES
-        )
+        """Build per-band mean/std/min/max from the in-repo dataset stats.
+
+        Mean/std are hardcoded (``S2_BAND_STATS`` / ``S1_BAND_STATS``); min/max
+        come from ``config/minmax_stats.json``. This mirrors how PASTIS / floods
+        / MADOS source their dataset stats (all committed to git). Regenerate the
+        numbers with ``scripts/tools/20260602_fifty_cities_norm_stats.py``.
+        """
+        minmax = load_min_max_stats()["fifty_cities"]
+        merged_s2 = {
+            band: {**S2_BAND_STATS[band], **minmax[Modality.SENTINEL2_L2A.name][band]}
+            for band in EVAL_S2_L2A_BAND_NAMES
+        }
         # S1 stats are ordered to match the *stored* channel order, since they
         # are applied before the channels are reordered to the model's order.
+        merged_s1 = {
+            band: {**S1_BAND_STATS[band], **minmax[Modality.SENTINEL1.name][band]}
+            for band in S1_STORED_BAND_NAMES
+        }
+        self.s2_means, self.s2_stds, self.s2_mins, self.s2_maxs = self._stats_arrays(
+            merged_s2, EVAL_S2_L2A_BAND_NAMES
+        )
         self.s1_means, self.s1_stds, self.s1_mins, self.s1_maxs = self._stats_arrays(
-            stats[Modality.SENTINEL1.name], S1_STORED_BAND_NAMES
+            merged_s1, S1_STORED_BAND_NAMES
         )
 
     @staticmethod
