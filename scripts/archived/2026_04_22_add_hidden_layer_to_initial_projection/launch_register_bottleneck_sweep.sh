@@ -244,16 +244,40 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 # NOTE: both changes alter the parameter set (project_and_aggregate width; per-depth
 # norms/projs), so these start fresh -- older checkpoints will not load.
 
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-    '--model.encoder_config.register_read_layers=[3,6,9,12]' \
-    --model.encoder_config.register_contrastive_source=encoder_tokens \
-    --model.encoder_config.register_per_depth_read_proj=true
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+#     --model.encoder_config.register_contrastive_source=encoder_tokens \
+#     --model.encoder_config.register_per_depth_read_proj=true
 
-python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_nosup" "$CLUSTER" \
+# python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_nosup" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+#     --model.encoder_config.register_contrastive_source=encoder_tokens \
+#     --model.encoder_config.register_per_depth_read_proj=true
+
+# === per-depth read norms/projections, no instance contrastive loss (2) ===
+# The ictok_pdproj config above with the instance (InfoNCE) contrastive loss ZEROED
+# (--train_module.contrastive_config.loss_config.weight=0). With the contrastive loss off,
+# register_contrastive_source is moot (the project_and_aggregate vector it routes is no
+# longer in the loss), so it is dropped here -- the only live change vs the plain mdr3
+# frontier is register_per_depth_read_proj=true. A/Bs against:
+#   - mdr3_noic        -> isolates per-depth read norms/projections (both have no IC loss)
+#   - mdr3_ictok_pdproj -> isolates the instance contrastive loss (both have per-depth proj)
+# Tagged "pdproj_noic". Dynamic grid, sup + nosup.
+
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_pdproj_noic" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
-    --model.encoder_config.register_contrastive_source=encoder_tokens \
-    --model.encoder_config.register_per_depth_read_proj=true
+    --model.encoder_config.register_per_depth_read_proj=true \
+    --train_module.contrastive_config.loss_config.weight=0
+
+python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_pdproj_noic_nosup" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+    --model.encoder_config.register_per_depth_read_proj=true \
+    --train_module.contrastive_config.loss_config.weight=0
