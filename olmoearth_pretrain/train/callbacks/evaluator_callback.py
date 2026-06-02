@@ -88,7 +88,7 @@ class DownstreamTaskConfig:
     ft_grad_accum_steps: int = 1
     finetune_seed: int = 42
     ft_head_type: str = (
-        "linear"  # "linear" or "unet" (unet only valid for segmentation)
+        "linear"  # "linear" or "unet" (unet only valid for segmentation/regression)
     )
     # LP / FT
     epochs: int = 50

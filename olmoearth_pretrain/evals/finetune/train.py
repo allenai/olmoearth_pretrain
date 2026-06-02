@@ -30,6 +30,7 @@ from olmoearth_pretrain.evals.finetune.constants import (
     UNFREEZE_LR_FACTOR,
 )
 from olmoearth_pretrain.evals.finetune.evaluate import (
+    _reg_logits_to_pixel,
     _seg_logits_to_pixel,
     eval_cls,
     eval_reg,
@@ -343,7 +344,10 @@ def run_finetune_eval(
                         patch_size,
                     )
                 if task_config.task_type == TaskType.REGRESSION:
-                    raw_loss = loss_fn(logits, label.float())
+                    reg_logits = _reg_logits_to_pixel(
+                        logits, label, ft.pixel_space_output
+                    )
+                    raw_loss = loss_fn(reg_logits, label.float())
                 else:
                     raw_loss = loss_fn(logits, label)
                 loss = raw_loss / accum_steps

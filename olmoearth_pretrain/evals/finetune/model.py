@@ -29,9 +29,13 @@ class BackboneWithHead(nn.Module):
         head_type: HeadType = "linear",
     ) -> None:
         """Initialize the backbone with head."""
-        if head_type == "unet" and task_type != TaskType.SEGMENTATION:
+        if head_type == "unet" and task_type not in (
+            TaskType.SEGMENTATION,
+            TaskType.REGRESSION,
+        ):
             raise ValueError(
-                f"head_type='unet' is only supported for SEGMENTATION tasks, got {task_type}"
+                "head_type='unet' is only supported for SEGMENTATION and "
+                f"REGRESSION tasks, got {task_type}"
             )
         super().__init__()
         self.backbone = model
@@ -55,14 +59,15 @@ class BackboneWithHead(nn.Module):
 
     def _init_head(self, emb_dim: int, device: torch.device) -> None:
         """Initialize the head based on the embedding dimension."""
-        if self.task_type in (TaskType.CLASSIFICATION, TaskType.REGRESSION):
-            self._head = nn.Linear(emb_dim, self.num_classes, bias=True)
-        elif self.head_type == "unet":
+        if self.head_type == "unet":
+            # Per-pixel decoder; num_classes=1 yields dense regression values.
             self._head = UNetDecoder(
                 in_dim=emb_dim,
                 num_classes=self.num_classes,
                 patch_size=self.patch_size,
             )
+        elif self.task_type in (TaskType.CLASSIFICATION, TaskType.REGRESSION):
+            self._head = nn.Linear(emb_dim, self.num_classes, bias=True)
         else:
             logits_per_patch = int(self.num_classes * self.patch_size * self.patch_size)
             self._head = nn.Linear(emb_dim, logits_per_patch, bias=True)

@@ -51,6 +51,37 @@ def eval_cls(
     )
 
 
+def _reg_logits_to_pixel(
+    logits: torch.Tensor,
+    label: torch.Tensor,
+    pixel_space_output: bool,
+) -> torch.Tensor:
+    """Convert regression head output to predictions matching the label shape.
+
+    Handles both the linear head, which emits one value per patch
+    (B, H//P, W//P, 1), and the UNet head, which emits per-pixel values
+    (B, 1, H, W). Patch-space predictions are bilinearly upsampled to the
+    label resolution; per-pixel predictions are returned as-is (resized only
+    if they still differ from the label).
+
+    Scalar-target regression (B, 1) -> (B,) is passed through unchanged.
+    """
+    if pixel_space_output:
+        preds = logits.squeeze(1).float()  # (B, 1, H, W) -> (B, H, W)
+    else:
+        preds = logits.squeeze(
+            -1
+        ).float()  # (B, H//P, W//P, 1) -> (B, H//P, W//P) or (B,)
+    if preds.dim() == 3 and preds.shape[-2:] != label.shape[-2:]:
+        preds = F.interpolate(
+            preds.unsqueeze(1),
+            size=label.shape[-2:],
+            mode="bilinear",
+            align_corners=True,
+        ).squeeze(1)
+    return preds
+
+
 @torch.no_grad()
 def eval_reg(
     module: BackboneWithHead,
@@ -58,7 +89,7 @@ def eval_reg(
     device: torch.device,
     primary_metric: EvalMetric | None = None,
 ) -> EvalResult:
-    """Evaluate regression metrics (scalar targets per sample)."""
+    """Evaluate regression metrics (per-pixel or scalar targets)."""
     module.eval()
     preds_all, labels_all = [], []
     for masked, label in loader:
@@ -66,7 +97,7 @@ def eval_reg(
         masked = to_device(masked, device)
         with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
             logits, _ = module(masked, label, is_train=False)
-            preds = logits.squeeze(-1).float()
+            preds = _reg_logits_to_pixel(logits, label, module.pixel_space_output)
         preds_all.append(preds.cpu())
         labels_all.append(label.float().cpu())
     preds = torch.cat(preds_all, 0)

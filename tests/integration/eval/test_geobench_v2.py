@@ -271,16 +271,37 @@ def _make_loader(slug: str, split: str, batch_size: int = 2) -> DataLoader:
 
 
 @pytest.mark.parametrize(
-    "slug,task_type,num_classes,modalities",
+    "slug,task_type,num_classes,modalities,head_type",
     [
-        ("burn_scars", TaskType.SEGMENTATION, 2, [Modality.SENTINEL2_L2A.name]),
+        (
+            "burn_scars",
+            TaskType.SEGMENTATION,
+            2,
+            [Modality.SENTINEL2_L2A.name],
+            "linear",
+        ),
         (
             "kuro_siwo",
             TaskType.SEGMENTATION,
             3,
             [Modality.SENTINEL1.name, Modality.SRTM.name],
+            "linear",
         ),
-        ("benv2", TaskType.CLASSIFICATION, 19, [Modality.SENTINEL2_L2A.name]),
+        ("benv2", TaskType.CLASSIFICATION, 19, [Modality.SENTINEL2_L2A.name], "linear"),
+        (
+            "biomassters",
+            TaskType.REGRESSION,
+            1,
+            [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+            "linear",
+        ),
+        (
+            "biomassters",
+            TaskType.REGRESSION,
+            1,
+            [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+            "unet",
+        ),
     ],
 )
 def test_finetune_one_epoch(
@@ -288,6 +309,7 @@ def test_finetune_one_epoch(
     task_type: TaskType,
     num_classes: int,
     modalities: list[str],
+    head_type: str,
     tmp_path: Path,
 ) -> None:
     """run_finetune_eval completes one epoch without error."""
@@ -328,6 +350,7 @@ def test_finetune_one_epoch(
         train_loader=train_loader,
         val_loader=val_loader,
         test_loader=None,
+        head_type=head_type,  # type: ignore[arg-type]
     )
     assert isinstance(result, EvalTaskResult)
     assert result.val_result is not None
