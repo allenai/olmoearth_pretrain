@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from enum import Enum
+from functools import lru_cache
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from einops import rearrange
 from torch.utils.data import Dataset
@@ -17,6 +21,7 @@ from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config
 from olmoearth_pretrain.evals.datasets.geobench_v2_loaders import SLUG_TO_DATASET
+from olmoearth_pretrain.evals.datasets.normalize import normalize_bands
 from olmoearth_pretrain.evals.task_types import TaskType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
@@ -349,6 +354,75 @@ def _apply_olmoearth_normalization(
     return olmo._replace(**updates) if updates else olmo
 
 
+@lru_cache(maxsize=1)
+def _load_geobench_norm_stats() -> dict[str, dict[str, dict[str, dict[str, float]]]]:
+    """Load per-dataset GeoBench normalization stats, keyed by slug.
+
+    The (optional) ``geobench2_norm_stats.json`` resource maps
+    ``slug -> modality_name -> band -> {mean, std[, min, max]}``. These are the
+    datasets' own published stats, used (instead of the OlmoEarth pretraining
+    stats) when we want eval numbers comparable to other models. Returns an empty
+    dict if the file is absent, so callers transparently fall back to OlmoEarth
+    stats for datasets we don't have stats for.
+    """
+    resource = (
+        files("olmoearth_pretrain.evals.datasets.config") / "geobench2_norm_stats.json"
+    )
+    if not resource.is_file():
+        return {}
+    with resource.open() as f:
+        return json.load(f)
+
+
+def _stats_arrays(
+    modality_spec: ModalitySpec, band_stats: dict[str, dict[str, float]]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+    """Build per-band (mean, std, min, max) arrays in the modality's band order."""
+    means, stds, mins, maxs = [], [], [], []
+    for band in modality_spec.band_order:
+        if band not in band_stats:
+            raise ValueError(
+                f"missing norm stats for band {band!r} in modality {modality_spec.name}"
+            )
+        s = band_stats[band]
+        means.append(s["mean"])
+        stds.append(s["std"])
+        mins.append(s.get("min"))
+        maxs.append(s.get("max"))
+    mins_arr = np.array(mins) if all(m is not None for m in mins) else None
+    maxs_arr = np.array(maxs) if all(m is not None for m in maxs) else None
+    return np.array(means), np.array(stds), mins_arr, maxs_arr
+
+
+def _apply_dataset_normalization(
+    olmo: OlmoEarthSample,
+    dataset_stats: dict[str, dict[str, dict[str, float]]],
+    norm_method: str,
+) -> OlmoEarthSample:
+    """Normalize each present modality with the dataset's own published stats.
+
+    Mirrors :func:`_apply_olmoearth_normalization` but uses ``normalize_bands``
+    with the given ``norm_method`` so results match how other models normalize
+    these datasets. Raises if a present modality lacks stats, rather than
+    silently mixing normalization schemes.
+    """
+    updates: dict[str, torch.Tensor] = {}
+    for field_name, modality_spec in _MODALITY_NORM_MAP.items():
+        tensor = getattr(olmo, field_name, None)
+        if tensor is None:
+            continue
+        band_stats = dataset_stats.get(modality_spec.name)
+        if band_stats is None:
+            raise ValueError(
+                f"no dataset norm stats for modality {modality_spec.name}; "
+                "stats must cover every modality present in the sample"
+            )
+        means, stds, mins, maxs = _stats_arrays(modality_spec, band_stats)
+        arr = normalize_bands(tensor.numpy(), means, stds, mins, maxs, norm_method)
+        updates[field_name] = torch.tensor(arr, dtype=torch.float32)
+    return olmo._replace(**updates) if updates else olmo
+
+
 def _rezero_padded_channels(
     normalized: OlmoEarthSample, pre_norm: OlmoEarthSample
 ) -> OlmoEarthSample:
@@ -385,7 +459,18 @@ class GeobenchV2Dataset(Dataset):
         norm_stats_from_pretrained: bool = False,
         norm_method: str = "norm_no_clip_2_std",
     ) -> None:
-        """Initialize dataset for the given gb2 slug and split."""
+        """Initialize dataset for the given gb2 slug and split.
+
+        Args:
+            dataset: ``gb2-<slug>`` dataset identifier.
+            split: One of ``train``, ``valid``, ``test``.
+            partition: Unused; splits are fixed per-dataset.
+            norm_stats_from_pretrained: If True, always normalize with the
+                OlmoEarth pretraining stats. If False, use the dataset's own
+                published stats *when available* (see ``geobench2_norm_stats.json``),
+                falling back to the pretraining stats otherwise.
+            norm_method: Normalization method applied when using dataset stats.
+        """
         del partition  # splits are fixed per-dataset; partition is not applicable
         if not dataset.startswith("gb2-"):
             raise ValueError(dataset)
@@ -398,6 +483,18 @@ class GeobenchV2Dataset(Dataset):
         self.config = dataset_to_config(dataset)
         self._slug = slug
         self._normalizer = Normalizer(Strategy.COMPUTED)
+        self._norm_method = norm_method
+        # Use the dataset's own stats only when asked AND we actually have them;
+        # otherwise leave None and fall back to OlmoEarth pretraining stats.
+        self._dataset_stats: dict[str, dict[str, dict[str, float]]] | None = None
+        if not norm_stats_from_pretrained:
+            self._dataset_stats = _load_geobench_norm_stats().get(slug)
+            if self._dataset_stats is None:
+                logger.warning(
+                    "No dataset norm stats for gb2 slug %r; falling back to "
+                    "OlmoEarth pretraining stats.",
+                    slug,
+                )
 
         loader_cls = SLUG_TO_DATASET[slug]
         root = str(Path(paths.GEOBENCH2_DIR) / slug)
@@ -416,7 +513,12 @@ class GeobenchV2Dataset(Dataset):
         )
         olmo = _sample_to_olmoearth(raw, self._band_order, self._slug)
         pre_norm = olmo
-        olmo = _apply_olmoearth_normalization(olmo, self._normalizer)
+        if self._dataset_stats is not None:
+            olmo = _apply_dataset_normalization(
+                olmo, self._dataset_stats, self._norm_method
+            )
+        else:
+            olmo = _apply_olmoearth_normalization(olmo, self._normalizer)
         olmo = _rezero_padded_channels(olmo, pre_norm)
         masked = MaskedOlmoEarthSample.from_olmoearthsample(olmo)
         label = _extract_label(
