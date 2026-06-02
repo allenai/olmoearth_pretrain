@@ -1,6 +1,7 @@
 """A common home for all eval dataset configs."""
 
 from dataclasses import asdict, dataclass
+from enum import Enum
 from typing import Any
 
 from olmoearth_pretrain.data.constants import Modality
@@ -17,7 +18,38 @@ def get_eval_mode(task_type: TaskType) -> str:
     raise ValueError(f"Unsupported task type: {task_type}")
 
 
-__all__ = ["TaskType", "get_eval_mode", "EvalDatasetConfig"]
+__all__ = ["TaskType", "get_eval_mode", "EvalDatasetConfig", "SourceImagery"]
+
+
+class SourceImagery(str, Enum):
+    """The true source sensor/imagery of an eval dataset.
+
+    This is distinct from ``EvalDatasetConfig.supported_modalities``, which
+    records the model modality slot(s) the data is fed through. Several eval
+    datasets are not collected from a sensor OlmoEarth trains against; their
+    imagery is rescaled/mapped into the closest training modality (usually
+    ``SENTINEL2_L2A``) before being passed to the model. This field records what
+    the data actually is so that masquerading is explicit in the config rather
+    than buried in dataloader comments.
+
+    ``UNKNOWN`` is the default and means the dataset's imagery is already one of
+    its ``supported_modalities`` (a native training source), so nothing special
+    needs flagging.
+    """
+
+    UNKNOWN = "unknown"
+    # Harmonized Landsat Sentinel-2 surface reflectance.
+    HLS = "hls"
+    # PlanetScope (Dove) optical imagery.
+    PLANETSCOPE = "planetscope"
+    # Maxar WorldView-2 multispectral (+ panchromatic).
+    WORLDVIEW2 = "worldview2"
+    # Single-channel (grayscale) aerial/amplitude imagery.
+    GRAYSCALE_AERIAL = "grayscale_aerial"
+    # 4-band RGB + NIR aerial imagery.
+    RGBN_AERIAL = "rgbn_aerial"
+    # 5-band RGB + NIR + elevation aerial imagery.
+    RGBNE_AERIAL = "rgbne_aerial"
 
 
 @dataclass
@@ -33,11 +65,16 @@ class EvalDatasetConfig:
     # and defines the input / output height width.
     height_width: int | None = None
     timeseries: bool = False
+    # True source sensor of the dataset; defaults to UNKNOWN, meaning the
+    # imagery is already one of `supported_modalities`. Set this when the data
+    # is not from a modality we train against (see SourceImagery).
+    source_imagery: SourceImagery = SourceImagery.UNKNOWN
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict."""
         d = asdict(self)
         d["task_type"] = self.task_type.value
+        d["source_imagery"] = self.source_imagery.value
         return d
 
     @classmethod
@@ -46,6 +83,8 @@ class EvalDatasetConfig:
         d = d.copy()
         d["task_type"] = TaskType(d["task_type"])
         d["imputes"] = [tuple(x) for x in d["imputes"]]
+        if "source_imagery" in d:
+            d["source_imagery"] = SourceImagery(d["source_imagery"])
         return cls(**d)
 
 
@@ -296,6 +335,7 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         is_multilabel=False,
         height_width=512,
         supported_modalities=[Modality.SENTINEL2_L2A.name],
+        source_imagery=SourceImagery.HLS,
     ),
     "gb2-caffe": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -304,6 +344,7 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         is_multilabel=False,
         height_width=512,
         supported_modalities=[Modality.SENTINEL2_L2A.name],
+        source_imagery=SourceImagery.GRAYSCALE_AERIAL,
     ),
     "gb2-cloudsen12": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -328,6 +369,7 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         is_multilabel=False,
         height_width=512,
         supported_modalities=[Modality.SENTINEL2_L2A.name],
+        source_imagery=SourceImagery.WORLDVIEW2,
     ),
     "gb2-spacenet7": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -336,6 +378,7 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         is_multilabel=False,
         height_width=512,
         supported_modalities=[Modality.SENTINEL2_L2A.name],
+        source_imagery=SourceImagery.PLANETSCOPE,
     ),
     "gb2-treesatai": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
@@ -351,6 +394,7 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         is_multilabel=False,
         height_width=512,
         supported_modalities=[Modality.SENTINEL2_L2A.name],
+        source_imagery=SourceImagery.RGBNE_AERIAL,
     ),
     "gb2-fotw": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -359,6 +403,7 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         is_multilabel=False,
         height_width=256,
         supported_modalities=[Modality.SENTINEL2_L2A.name],
+        source_imagery=SourceImagery.RGBN_AERIAL,
     ),
 }
 DATASET_TO_CONFIG.update(_GB2_DATASET_TO_CONFIG)

@@ -150,6 +150,13 @@ def _sample_to_olmoearth(
     band_order: Any,
     slug: str,
 ) -> OlmoEarthSample:
+    """Map a raw GeoBench sample into an OlmoEarthSample.
+
+    Several datasets are not collected from a modality the model trains against
+    (see ``EvalDatasetConfig.source_imagery``); their imagery is rescaled into
+    the S2 DN range and fed through the SENTINEL2_L2A slot. The per-branch
+    comments below describe the source sensor and the rescale it requires.
+    """
     device = next(iter(sample.values())).device
 
     if slug == Slug.CAFFE:
