@@ -64,7 +64,12 @@ def _reg_logits_to_pixel(
     label resolution; per-pixel predictions are returned as-is (resized only
     if they still differ from the label).
 
-    Scalar-target regression (B, 1) -> (B,) is passed through unchanged.
+    NOTE: Only dense (per-pixel) regression is supported. Scalar-target
+    regression (one value per sample) is NOT wired up: the eval wrapper forces
+    spatial pooling for all REGRESSION tasks (see OlmoEarthEvalWrapper), so the
+    head always produces a spatial map rather than a pooled (B, 1) vector. The
+    (B, 1) -> (B,) squeeze branch below is therefore currently unreachable; a
+    scalar-target task would need spatial pooling disabled in the wrapper first.
     """
     if pixel_space_output:
         preds = logits.squeeze(1).float()  # (B, 1, H, W) -> (B, H, W)
