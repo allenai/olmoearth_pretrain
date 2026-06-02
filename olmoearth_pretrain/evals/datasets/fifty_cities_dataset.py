@@ -208,6 +208,22 @@ class FiftyCitiesDataset(Dataset):
 
         self.index = self._build_index(split, split_mode)
 
+        # Log this split's composition so the train/val/test city (and continent)
+        # assignment is visible in the run logs.
+        split_cities = sorted({c for c, _ in self.index})
+        split_continents = sorted({CITY_TO_CONTINENT[c] for c in split_cities})
+        logger.info(
+            "FiftyCities[mode=%s, split=%s]: %d tiles, %d cities across "
+            "%d continents | continents=%s | cities=%s",
+            split_mode,
+            split,
+            len(self.index),
+            len(split_cities),
+            len(split_continents),
+            split_continents,
+            split_cities,
+        )
+
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
         if label_fraction < 1.0 and split == "train":
