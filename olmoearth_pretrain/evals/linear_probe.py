@@ -625,6 +625,16 @@ def train_probe(
                             )
                     targets = batch_labels.to(device)
                 elif task_type == TaskType.REGRESSION:
+                    if (
+                        logits.shape[-2] != batch_labels.shape[-2]
+                        or logits.shape[-1] != batch_labels.shape[-1]
+                    ):
+                        logits = F.interpolate(
+                            logits.unsqueeze(1),
+                            size=(batch_labels.shape[-2], batch_labels.shape[-1]),
+                            mode="bilinear",
+                            align_corners=True,
+                        ).squeeze(1)
                     targets = batch_labels.to(device).float()
                 else:
                     targets = batch_labels.to(device)
@@ -697,6 +707,16 @@ def get_probe_predictions(
                         )
 
             if task_type == TaskType.REGRESSION:
+                if (
+                    logits.shape[-2] != batch_labels.shape[-2]
+                    or logits.shape[-1] != batch_labels.shape[-1]
+                ):
+                    logits = F.interpolate(
+                        logits.unsqueeze(1),
+                        size=(batch_labels.shape[-2], batch_labels.shape[-1]),
+                        mode="bilinear",
+                        align_corners=True,
+                    ).squeeze(1)
                 preds = logits.float().cpu()
             else:
                 preds = torch.argmax(logits, dim=1).cpu()
