@@ -24,6 +24,15 @@ from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
+# These tests read real GeoBench v2 tortilla files from an internal weka mount
+# (paths.GEOBENCH2_DIR, "only available to internal users"). Skip the whole
+# module when that data isn't present, e.g. on CI runners, instead of failing
+# with an opaque "No objects to concatenate" from tacoreader/pandas.
+pytestmark = pytest.mark.skipif(
+    not GEOBENCH2_DIR.exists(),
+    reason=f"GeoBench v2 data not available at {GEOBENCH2_DIR}",
+)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
