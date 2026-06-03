@@ -191,8 +191,8 @@ def _sample_to_olmoearth(
         return _s2_sample(image, src, device)
 
     if slug == Slug.FOTW:
-        # 4-band RGBN aerial (uint16, already in S2 DN scale); map to S2 band names
-        # and pad remaining channels to 0.
+        # 4-band RGBN Sentinel-2 (uint16, already in S2 DN scale); map to S2 band
+        # names and pad remaining channels to 0.
         rgbn_to_s2 = {"red": "B04", "green": "B03", "blue": "B02", "nir": "B08"}
         src = [rgbn_to_s2[b] for b in ("red", "green", "blue", "nir")]
         return _s2_sample(sample["image"].float(), src, device)
