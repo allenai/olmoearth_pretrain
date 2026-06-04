@@ -1,4 +1,18 @@
-"""UNet-style decoder head for segmentation finetuning."""
+"""UNet-style decoder head for segmentation/regression finetuning.
+
+This mirrors ``rslearn.models.unet.UNetDecoder`` for the single-scale case. The
+OlmoEarth ViT backbone returns a *single* feature map (at 1/patch_size
+resolution), so — exactly as in rslearn when its ``in_channels`` has one entry —
+there are no multi-resolution skip connections; this is a plain progressive
+upsampler, not a true U-Net. To match rslearn's behavior (and its results) we
+keep the same choices it uses there:
+
+* full-width (``in_dim``) channels through every stage — no tapering,
+* one 3x3 conv + ReLU per upsample stage (``conv_layers_per_resolution``), with
+  one leading conv at the lowest resolution and a 3x3 output conv,
+* nearest-neighbor upsampling,
+* **no normalization** (no BatchNorm).
+"""
 
 from __future__ import annotations
 
@@ -8,24 +22,8 @@ import torch
 import torch.nn as nn
 
 
-class _ConvBnRelu(nn.Module):
-    def __init__(self, in_ch: int, out_ch: int) -> None:
-        super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.block(x)
-
-
 class UNetDecoder(nn.Module):
-    """Progressive upsampling decoder for segmentation on top of ViT patch tokens.
+    """Progressive upsampling decoder on top of ViT patch tokens.
 
     Accepts spatial patch embeddings (B, H_p, W_p, D) and produces per-pixel
     logits (B, num_classes, H, W) where H = H_p * patch_size.
@@ -39,7 +37,7 @@ class UNetDecoder(nn.Module):
         in_dim: int,
         num_classes: int,
         patch_size: int,
-        decoder_dims: tuple[int, ...] = (256, 128, 64),
+        conv_layers_per_resolution: int = 1,
     ) -> None:
         """Initialize UNetDecoder."""
         if patch_size < 1 or (patch_size & (patch_size - 1)) != 0:
@@ -47,31 +45,25 @@ class UNetDecoder(nn.Module):
         super().__init__()
         n_stages = int(math.log2(patch_size))
 
-        # Build per-stage channel widths, padding or truncating decoder_dims to fit.
-        dims: list[int] = list(decoder_dims)
-        while len(dims) < n_stages + 1:
-            dims.append(max(dims[-1] // 2, 16))
-        dims = dims[: n_stages + 1]
+        def conv() -> list[nn.Module]:
+            # 3x3 conv (padding=same for stride 1) + ReLU, keeping channels at in_dim.
+            return [
+                nn.Conv2d(in_dim, in_dim, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+            ]
 
-        # 1×1 projection from ViT embedding dim to first decoder width.
-        self.input_proj = nn.Conv2d(in_dim, dims[0], kernel_size=1)
-
-        # One block per upsampling stage: bilinear 2× upsample then conv.
-        self.up_blocks = nn.ModuleList()
-        for i in range(n_stages):
-            self.up_blocks.append(
-                nn.Sequential(
-                    nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
-                    _ConvBnRelu(dims[i], dims[i + 1]),
-                )
-            )
-
-        self.head = nn.Conv2d(dims[n_stages], num_classes, kernel_size=1)
+        # Leading conv at the lowest (1/patch_size) resolution.
+        layers: list[nn.Module] = conv()
+        # One nearest-upsample + conv(s) per stage, mirroring rslearn.
+        for _ in range(n_stages):
+            layers.append(nn.Upsample(scale_factor=2, mode="nearest"))
+            for _ in range(conv_layers_per_resolution):
+                layers.extend(conv())
+        # 3x3 output projection to per-pixel logits.
+        layers.append(nn.Conv2d(in_dim, num_classes, kernel_size=3, padding=1))
+        self.decoder = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass from patch tokens (B, H_p, W_p, D) to per-pixel logits (B, C, H, W)."""
         x = x.permute(0, 3, 1, 2).contiguous()  # (B, D, H_p, W_p)
-        x = self.input_proj(x)
-        for block in self.up_blocks:
-            x = block(x)
-        return self.head(x)  # (B, num_classes, H, W)
+        return self.decoder(x)
