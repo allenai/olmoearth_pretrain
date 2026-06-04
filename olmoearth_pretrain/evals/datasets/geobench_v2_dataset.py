@@ -528,6 +528,14 @@ class GeobenchV2Dataset(Dataset):
         label = _extract_label(
             raw, self._slug, self.config.task_type, self.config.num_classes
         )
+        # Z-score regression targets when train-split stats are configured, so
+        # reported RMSE is in standardized units (comparable to GeoBench-2).
+        if (
+            self.config.task_type == TaskType.REGRESSION
+            and self.config.target_mean is not None
+            and self.config.target_std is not None
+        ):
+            label = (label - self.config.target_mean) / self.config.target_std
         if label.device != device:
             label = label.to(device)
         return masked, label

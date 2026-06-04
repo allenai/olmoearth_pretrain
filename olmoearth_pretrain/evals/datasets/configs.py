@@ -68,6 +68,12 @@ class EvalDatasetConfig:
     # because a dataset may fuse several sensors. Defaults to empty only for
     # datasets whose source we haven't recorded (e.g. the dynamic registry).
     source_imagery: list[SourceImagery] = field(default_factory=list)
+    # Optional z-score normalization for REGRESSION targets, matching GeoBench-2's
+    # protocol (stats estimated on the train split). When both are set, labels are
+    # normalized as (y - mean) / std, so reported RMSE is in standardized units
+    # (and thus comparable to other models / GeoBench-2). None = raw targets.
+    target_mean: float | None = None
+    target_std: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict."""
@@ -328,6 +334,10 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         supported_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         source_imagery=[SourceImagery.SENTINEL1, SourceImagery.SENTINEL2],
         timeseries=True,
+        # AGB targets in tons/ha; train-split stats so RMSE matches GeoBench-2's
+        # z-scored convention. To get their leaderboard score: 1 - rmse * 0.2538.
+        target_mean=64.08,
+        target_std=74.04,
     ),
     "gb2-burn_scars": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
