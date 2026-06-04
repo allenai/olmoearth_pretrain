@@ -414,7 +414,8 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
-        primary_metric=EvalMetric.R2,
+        # RMSE (on z-scored targets) to match what GeoBench-2 reports/ranks on.
+        primary_metric=EvalMetric.RMSE,
     ),
     "gb2_burn_scars": DownstreamTaskConfig(
         dataset="gb2-burn_scars",
@@ -905,7 +906,8 @@ FT_EVAL_TASKS = {
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         epochs=50,
-        primary_metric=EvalMetric.R2,
+        # RMSE (on z-scored targets) to match what GeoBench-2 reports/ranks on.
+        primary_metric=EvalMetric.RMSE,
     ),
     "gb2_burn_scars": DownstreamTaskConfig(
         dataset="gb2-burn_scars",

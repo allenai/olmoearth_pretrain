@@ -30,6 +30,16 @@ class EvalMetric(StrEnum):
     R2 = "r2"
 
 
+# Error metrics where a smaller value is better. Every other metric (accuracy,
+# F1, mIoU, R2, neg_rmse, ...) is higher-is-better.
+LOWER_IS_BETTER_METRICS = frozenset({EvalMetric.MAE, EvalMetric.RMSE})
+
+
+def metric_higher_is_better(metric: EvalMetric) -> bool:
+    """Whether a larger value of ``metric`` indicates a better model."""
+    return metric not in LOWER_IS_BETTER_METRICS
+
+
 # Label value used to mark invalid/ignored pixels in segmentation targets.
 # Pixels with this label are excluded from loss and metric calculations.
 SEGMENTATION_IGNORE_LABEL = -1

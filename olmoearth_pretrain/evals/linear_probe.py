@@ -24,6 +24,7 @@ from olmoearth_pretrain.evals.metrics import (
     EvalResult,
     EvalTaskResult,
     classification_metrics,
+    metric_higher_is_better,
     regression_metrics,
     segmentation_metrics,
 )
@@ -201,6 +202,9 @@ def train_and_eval_probe(
     num_times_to_run_eval = math.ceil(epochs / eval_interval)
     val_results: list[EvalResult] = []
     best_probe_state = None
+    # Direction is resolved from the actual primary metric below (lower is better
+    # for error metrics like RMSE/MAE, higher for everything else).
+    higher_is_better = True
     best_val_score = float("-inf")
     best_epoch = 0
 
@@ -245,8 +249,14 @@ def train_and_eval_probe(
         logger.info(f"Epoch {end_epoch}, Val Score: {val_result.primary}")
         val_results.append(val_result)
 
-        # Save best probe state based on primary metric
-        if val_result.primary > best_val_score:
+        # Save best probe state based on primary metric (respecting its direction:
+        # e.g. minimize RMSE/MAE, maximize accuracy/F1/R2).
+        higher_is_better = metric_higher_is_better(val_result.primary_metric)
+        if higher_is_better:
+            improved = val_result.primary > best_val_score
+        else:
+            improved = val_result.primary < best_val_score
+        if best_probe_state is None or improved:
             best_val_score = val_result.primary
             best_epoch = end_epoch
             best_probe_state = copy.deepcopy(probe.state_dict())
@@ -267,9 +277,14 @@ def train_and_eval_probe(
         final_val_result = val_results[best_idx]
     else:
         final_val_result = val_results[-1]
-        if final_val_result.primary < best_val_score:
+        final_is_worse = (
+            final_val_result.primary < best_val_score
+            if higher_is_better
+            else final_val_result.primary > best_val_score
+        )
+        if final_is_worse:
             logger.warning(
-                f"Final Val Score: {final_val_result.primary} at epoch {epochs} is less than best Val Score: "
+                f"Final Val Score: {final_val_result.primary} at epoch {epochs} is worse than best Val Score: "
                 f"{best_val_score} at epoch {best_epoch}"
             )
 
