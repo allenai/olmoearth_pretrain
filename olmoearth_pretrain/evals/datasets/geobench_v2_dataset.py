@@ -488,8 +488,12 @@ class GeobenchV2Dataset(Dataset):
         # otherwise leave None and fall back to OlmoEarth pretraining stats.
         self._dataset_stats: dict[str, dict[str, dict[str, float]]] | None = None
         if not norm_stats_from_pretrained:
-            self._dataset_stats = _load_geobench_norm_stats().get(slug)
-            if self._dataset_stats is None:
+            all_stats = _load_geobench_norm_stats()
+            self._dataset_stats = all_stats.get(slug)
+            # Only flag a genuine gap: stats exist for other datasets but not
+            # this one. When no stats file is present at all, the feature simply
+            # isn't set up, so fall back silently.
+            if all_stats and self._dataset_stats is None:
                 logger.warning(
                     "No dataset norm stats for gb2 slug %r; falling back to "
                     "OlmoEarth pretraining stats.",
