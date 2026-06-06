@@ -1519,7 +1519,7 @@ class Encoder(FlexiVitBase):
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
         use_register_bottleneck: bool = False,
-        register_grid_size: int | None = 4,
+        register_grid_size: int | None = 0,
         register_dim: int | None = None,
         register_read_depth: int = 1,
         register_latent_depth: int = 2,
@@ -1576,9 +1576,10 @@ class Encoder(FlexiVitBase):
                 bottleneck that reads the encoded patch tokens into a fixed register grid.
             register_grid_size: Side length of the (square) register grid; the grid has
                 ``register_grid_size ** 2`` distinct per-cell registers, independent of the
-                patch grid size. If ``None``, use the dynamic single-latent mode: one shared
-                latent cloned across a grid that matches the input patch grid at forward time
-                (requires ``spatial_pos_encoding="rope"``).
+                patch grid size. If ``0`` (the dynamic sentinel; legacy ``None`` is also
+                accepted), use the dynamic single-latent mode: one shared latent cloned
+                across a grid that matches the input patch grid at forward time (requires
+                ``spatial_pos_encoding="rope"``).
             register_dim: Width of the register grid (the bottleneck dim). Defaults to
                 ``embedding_size // 2`` when None.
             register_read_depth: Number of cross-attention read blocks.
@@ -1674,9 +1675,10 @@ class Encoder(FlexiVitBase):
                 encoder_embedding_size=embedding_size,
                 register_dim=resolved_register_dim,
                 register_grid=(
-                    (register_grid_size, register_grid_size)
-                    if register_grid_size is not None
-                    else None
+                    # 0 (or legacy None) -> dynamic single-latent grid; >0 -> fixed grid.
+                    None
+                    if register_grid_size is None or register_grid_size <= 0
+                    else (register_grid_size, register_grid_size)
                 ),
                 num_heads=resolved_register_heads,
                 mlp_ratio=mlp_ratio,
@@ -2728,9 +2730,12 @@ class EncoderConfig(Config):
     rope_coordinate_scale: float = 1.0
     # Perceiver-style spatial register bottleneck (sweepable).
     use_register_bottleneck: bool = False
-    # int -> fixed grid of distinct per-cell latents; None -> dynamic single cloned latent
-    # whose grid matches the patch grid at forward time (requires rope).
-    register_grid_size: int | None = 4
+    # >0 -> fixed grid of distinct per-cell latents; 0 -> dynamic single cloned latent
+    # whose grid matches the patch grid at forward time (requires rope). 0 (not None) is
+    # the dynamic sentinel so it survives serialization: ``as_config_dict`` drops None
+    # values, which silently turned dynamic-grid checkpoints back into fixed grids on
+    # reload. Legacy None is coerced to 0 in ``__post_init__``.
+    register_grid_size: int = 0
     register_dim: int | None = None
     register_read_depth: int = 1
     register_latent_depth: int = 2
@@ -2781,14 +2786,17 @@ class EncoderConfig(Config):
                     f"2D RoPE requires head_dim divisible by 4, got {head_dim}"
                 )
         if self.use_register_bottleneck:
-            if self.register_grid_size is not None and self.register_grid_size < 1:
+            # Legacy None sentinel -> 0 (dynamic single-latent grid).
+            if self.register_grid_size is None:
+                self.register_grid_size = 0
+            if self.register_grid_size < 0:
                 raise ValueError(
-                    f"register_grid_size must be >= 1 or None, got "
-                    f"{self.register_grid_size}"
+                    f"register_grid_size must be >= 0 (0 = dynamic single-latent grid), "
+                    f"got {self.register_grid_size}"
                 )
-            if self.register_grid_size is None and self.spatial_pos_encoding != "rope":
+            if self.register_grid_size == 0 and self.spatial_pos_encoding != "rope":
                 raise ValueError(
-                    "register_grid_size=None (dynamic single-latent bottleneck) requires "
+                    "register_grid_size=0 (dynamic single-latent bottleneck) requires "
                     'spatial_pos_encoding="rope"'
                 )
             register_dim = (

@@ -110,16 +110,33 @@ def _resolve_artifact_path(
 
 
 def patch_legacy_encoder_config(config_dict: dict) -> dict:
-    """Patch checkpoint config dicts that predate use_linear_patch_embed.
+    """Patch checkpoint config dicts saved by older code.
 
-    Old checkpoints used Conv2d for patch projection and have no use_linear_patch_embed
-    key. Without this patch they would incorrectly default to True (Linear) and fail
-    to load. Call this on the raw config dict before passing to Config.from_dict.
+    Two legacy fixups, applied before passing the dict to ``Config.from_dict``:
+
+    1. ``use_linear_patch_embed``: old checkpoints used Conv2d for patch projection and
+       have no such key. Without this patch they would incorrectly default to True
+       (Linear) and fail to load.
+    2. ``register_grid_size``: the dynamic-grid register bottleneck used ``None`` as its
+       sentinel, but ``as_config_dict`` drops None values, so dynamic-grid checkpoints
+       saved the key as absent (or null). On reload that fell back to a fixed grid and
+       produced an incompatible model. When the bottleneck is enabled and the field is
+       missing/null, restore the dynamic sentinel (0).
     """
     enc = config_dict.get("model", {}).get("encoder_config", {})
-    if isinstance(enc, dict) and "use_linear_patch_embed" not in enc:
-        config_dict = copy.deepcopy(config_dict)
-        config_dict["model"]["encoder_config"]["use_linear_patch_embed"] = False
+    if not isinstance(enc, dict):
+        return config_dict
+    needs_patch = "use_linear_patch_embed" not in enc or (
+        enc.get("use_register_bottleneck") and enc.get("register_grid_size") is None
+    )
+    if not needs_patch:
+        return config_dict
+    config_dict = copy.deepcopy(config_dict)
+    enc = config_dict["model"]["encoder_config"]
+    if "use_linear_patch_embed" not in enc:
+        enc["use_linear_patch_embed"] = False
+    if enc.get("use_register_bottleneck") and enc.get("register_grid_size") is None:
+        enc["register_grid_size"] = 0
     return config_dict
 
 

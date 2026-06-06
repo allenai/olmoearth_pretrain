@@ -4,7 +4,6 @@ import importlib.util
 import json
 import os
 import sys
-from importlib import import_module
 from logging import getLogger
 from typing import Any
 
@@ -28,6 +27,7 @@ from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
     main,
 )
+from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -37,6 +37,7 @@ from olmoearth_pretrain.train.callbacks.evaluator_callback import (
     DownstreamTaskConfig,
     EvalMode,
 )
+from olmoearth_pretrain.train.train_module.train_module import _strip_unknown_fields
 
 logger = getLogger(__name__)
 
@@ -108,10 +109,11 @@ def build_model_config_from_checkpoint(fallback_builder: Any) -> Any:
             )
             return fallback_builder(common)
         logger.info("Reconstructing model architecture from %s", config_path)
-        model_dict = json.loads(config_path.read_text())["model"]
-        *modules, cls_name = model_dict[Config.CLASS_NAME_FIELD].split(".")
-        model_cls = getattr(import_module(".".join(modules)), cls_name)
-        return model_cls.from_dict(model_dict)
+        # Use the same reconstruction pipeline as the train-module compatibility check
+        # (patch legacy fields, strip fields unknown to the current schema) so the eval
+        # model and that check agree exactly.
+        config_dict = patch_legacy_encoder_config(json.loads(config_path.read_text()))
+        return Config.from_dict(_strip_unknown_fields(config_dict["model"]))
 
     return builder
 
