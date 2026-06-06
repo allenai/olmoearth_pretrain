@@ -178,6 +178,17 @@ def build_launch_config(
                 name="EMBEDDING_DIAGNOSTICS_ONLY", value=embedding_diagnostics_only
             )
         )
+    # Propagate the load-arch-from-checkpoint flag to the experiment if set
+    load_arch_from_checkpoint = os.environ.get("LOAD_ARCH_FROM_CHECKPOINT")
+    if load_arch_from_checkpoint is not None:
+        logger.info(
+            f"Propagating load-arch-from-checkpoint flag: {load_arch_from_checkpoint}"
+        )
+        env_vars.append(
+            BeakerEnvVar(
+                name="LOAD_ARCH_FROM_CHECKPOINT", value=load_arch_from_checkpoint
+            )
+        )
 
     return OlmoEarthBeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",
