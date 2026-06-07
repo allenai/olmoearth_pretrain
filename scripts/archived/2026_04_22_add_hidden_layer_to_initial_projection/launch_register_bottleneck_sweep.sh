@@ -12,7 +12,7 @@
 # Registers per grid: g8 -> 64, g16 -> 256, g32 -> 1024.
 # register_read_depth=1, register_latent_depth=4, register_num_heads=12 (set in scripts).
 #
-# + 2 dynamic-grid runs (register_grid_size=null): a SINGLE learned latent cloned across
+# + 2 dynamic-grid runs (register_grid_size=0): a SINGLE learned latent cloned across
 #   a grid that MATCHES THE PATCH GRID at forward time (translation-invariant prior, no
 #   fixed grid size). d768, sup + nosup. Tagged "gdyn".
 # + 4 interleaved-read runs (register_interleave=true): [read -> self] x register_latent_depth
@@ -127,16 +127,17 @@ python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g32_d768_nosup" "$CLUSTE
     --model.encoder_config.register_grid_size=32 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
 
 # ==================== dynamic grid: single cloned latent (2) ====================
-# register_grid_size=null -> one shared latent cloned across the patch grid (no fixed
-# grid). OmegaConf parses `null` to Python None; the decoder has no grid field.
+# register_grid_size=0 -> one shared latent cloned across the patch grid (no fixed grid).
+# 0 (not null) is the dynamic sentinel so it survives config serialization; the decoder
+# has no grid field.
 
 python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
 
 python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_nosup" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768
 
 # =================== interleaved reads: [read -> self] x4 (4) ===================
 # register_interleave=true interleaves each cross-attention read with a latent self-
@@ -156,12 +157,12 @@ python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_g16_d768_il_nosup" "$CLU
 
 python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
     --model.encoder_config.register_interleave=true
 
 python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_nosup" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
     --model.encoder_config.register_interleave=true
 
 # ============ multi-depth reads: read from intermediate encoder layers (2) ============
@@ -281,3 +282,14 @@ python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_pdproj_no
     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
     --model.encoder_config.register_per_depth_read_proj=true \
     --train_module.contrastive_config.loss_config.weight=0
+# ============ no instance contrastive loss: gdyn_d768_il, supervised (1) ============
+# Identical to regbtl_base10k_scale0.25_gdyn_d768_il above, but drops the instance-level
+# InfoNCE contrastive loss (train_module.contrastive_config -> null). The patch
+# discrimination (JEPA) loss and low-weight register supervision are unchanged. No code
+# change needed: contrastive_config is Optional and the train module no-ops when it's None.
+
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_noic" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true \
+    --train_module.contrastive_config=null

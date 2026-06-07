@@ -1,11 +1,13 @@
 """Launch script for evaluation allowing you to easily run all the evals for your model by just pointing at your training script."""
 
 import importlib.util
+import json
 import os
 import sys
 from logging import getLogger
 from typing import Any
 
+from olmo_core.config import Config
 from olmo_core.train.callbacks import (
     BeakerCallback,
     ConfigSaverCallback,
@@ -15,6 +17,7 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
+from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
@@ -24,6 +27,7 @@ from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
     main,
 )
+from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -33,6 +37,7 @@ from olmoearth_pretrain.train.callbacks.evaluator_callback import (
     DownstreamTaskConfig,
     EvalMode,
 )
+from olmoearth_pretrain.train.train_module.train_module import _strip_unknown_fields
 
 logger = getLogger(__name__)
 
@@ -61,6 +66,56 @@ def load_user_module(path: str) -> Any:
     assert loader is not None
     loader.exec_module(user_mod)
     return user_mod
+
+
+def _load_path_from_argv() -> str | None:
+    """Extract the checkpoint path from a ``--trainer.load_path=...`` CLI override."""
+    prefix = "--trainer.load_path="
+    for arg in sys.argv:
+        if arg.startswith(prefix):
+            return arg[len(prefix) :]
+    return None
+
+
+def build_model_config_from_checkpoint(fallback_builder: Any) -> Any:
+    """Wrap a model-config builder to reconstruct the architecture from a checkpoint.
+
+    When ``LOAD_ARCH_FROM_CHECKPOINT`` is set, the returned builder reads
+    ``{load_path}/config.json`` -- the fully-resolved config that ConfigSaverCallback
+    writes alongside every checkpoint -- and deserializes its ``model`` block. This
+    rebuilds the EXACT architecture the checkpoint weights expect, so train-time
+    architecture overrides (e.g. ``--model.encoder_config.register_dim=768``) do NOT
+    need to be re-passed at eval time.
+
+    Falls back to ``fallback_builder`` (the training module's ``build_model_config``)
+    when no ``--trainer.load_path`` is given or the ``config.json`` is missing -- e.g.
+    older checkpoints or baseline models -- so existing flows are unaffected.
+    """
+
+    def builder(common: Any) -> Any:
+        load_path = _load_path_from_argv()
+        if load_path is None:
+            logger.warning(
+                "LOAD_ARCH_FROM_CHECKPOINT is set but no --trainer.load_path was "
+                "provided; falling back to the module's build_model_config."
+            )
+            return fallback_builder(common)
+        config_path = UPath(load_path) / "config.json"
+        if not config_path.exists():
+            logger.warning(
+                "LOAD_ARCH_FROM_CHECKPOINT is set but %s does not exist; falling back "
+                "to the module's build_model_config.",
+                config_path,
+            )
+            return fallback_builder(common)
+        logger.info("Reconstructing model architecture from %s", config_path)
+        # Use the same reconstruction pipeline as the train-module compatibility check
+        # (patch legacy fields, strip fields unknown to the current schema) so the eval
+        # model and that check agree exactly.
+        config_dict = patch_legacy_encoder_config(json.loads(config_path.read_text()))
+        return Config.from_dict(_strip_unknown_fields(config_dict["model"]))
+
+    return builder
 
 
 EVAL_TASKS = {
@@ -784,6 +839,10 @@ if __name__ == "__main__":
         build_train_module_config = None
 
     build_model_config = user_mod.build_model_config
+    # Optionally reconstruct the architecture from the checkpoint's saved config.json,
+    # so train-time architecture overrides don't need to be re-passed at eval time.
+    if os.environ.get("LOAD_ARCH_FROM_CHECKPOINT"):
+        build_model_config = build_model_config_from_checkpoint(build_model_config)
     main(
         common_components_builder=build_common_components,
         model_config_builder=build_model_config,

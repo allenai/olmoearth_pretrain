@@ -471,11 +471,23 @@ def main() -> None:
         default=None,
         help="Base random seed applied to every finetune task (optional).",
     )
+    parser.add_argument(
+        "--load_arch_from_checkpoint",
+        action="store_true",
+        help=(
+            "Reconstruct the model architecture from the checkpoint's saved "
+            "config.json instead of the training module's defaults. Lets you eval "
+            "runs whose architecture was set via train-time CLI overrides without "
+            "re-passing those overrides here."
+        ),
+    )
 
     args, extra_cli = parser.parse_known_args()
 
     env = os.environ.copy()
     env["FINETUNE"] = "1"
+    if args.load_arch_from_checkpoint:
+        env["LOAD_ARCH_FROM_CHECKPOINT"] = "1"
     commands_to_run = build_commands(args, extra_cli)
     for cmd in commands_to_run:
         logger.info(cmd)
