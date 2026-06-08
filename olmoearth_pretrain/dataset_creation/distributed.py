@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from upath import UPath
 
@@ -31,35 +32,114 @@ class ShardSpec:
 
 
 def load_corpus(corpus_path: str) -> list[CorpusEntry]:
-    """Load corpus from CSV or JSON (studio_corpus_lonlats.json format)."""
+    """Load corpus from CSV, JSON, or JSONL.
+
+    JSON accepts either the original studio lon/lat list format or a list of records
+    with the same fields as the CSV schema.
+    """
     path = UPath(corpus_path)
+    if path.suffix == ".jsonl":
+        return _load_records_jsonl(path)
     if path.suffix == ".json":
         return _load_lonlats_json(path)
     return read_corpus_csv(path)
 
 
 def _load_lonlats_json(path: UPath) -> list[CorpusEntry]:
-    """Load the studio_corpus_lonlats.json format: list of [lon, lat] pairs.
+    """Load corpus JSON.
 
-    Generates deterministic sample_ids and default time ranges.
+    Supports the original studio_corpus_lonlats.json format, a list of [lon, lat]
+    pairs, plus record-style JSON matching the CSV schema.
     """
-    from datetime import UTC, datetime
-
     from olmoearth_pretrain.dataset_creation.constants import WINDOW_DURATION
 
     with path.open() as f:
-        lonlats = json.load(f)
+        data = json.load(f)
+
+    if isinstance(data, dict):
+        if "samples" not in data:
+            raise ValueError(f"JSON corpus object must contain a 'samples' key: {path}")
+        data = data["samples"]
+
+    if not isinstance(data, list):
+        raise ValueError(f"JSON corpus must be a list or object with samples: {path}")
+
+    if not data:
+        return []
+
+    if isinstance(data[0], dict):
+        return _records_to_entries(data)
 
     entries = []
     start_time = datetime(2024, 1, 1, tzinfo=UTC)
     end_time = start_time + WINDOW_DURATION
 
-    for i, (lon, lat) in enumerate(lonlats):
+    for i, pair in enumerate(data):
+        if not isinstance(pair, list | tuple) or len(pair) != 2:
+            raise ValueError(f"expected [lon, lat] pair at JSON row {i}: {pair!r}")
+        lon, lat = pair
         entries.append(
             CorpusEntry(
                 sample_id=f"corpus_{i:07d}",
                 lon=float(lon),
                 lat=float(lat),
+                start_time=start_time,
+                end_time=end_time,
+            )
+        )
+    return entries
+
+
+def _load_records_jsonl(path: UPath) -> list[CorpusEntry]:
+    records = []
+    with path.open() as f:
+        for line_idx, line in enumerate(f):
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                raise ValueError(f"expected JSON object at JSONL row {line_idx}")
+            records.append(record)
+    return _records_to_entries(records)
+
+
+def _parse_time(raw: object) -> datetime:
+    if not isinstance(raw, str):
+        raise ValueError(f"timestamp must be a string, got {type(raw).__name__}")
+    value = raw.strip()
+    if not value:
+        raise ValueError("empty timestamp")
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
+
+
+def _records_to_entries(records: list[dict]) -> list[CorpusEntry]:
+    from olmoearth_pretrain.dataset_creation.constants import WINDOW_DURATION
+
+    entries = []
+    seen: set[str] = set()
+    required = {"sample_id", "lon", "lat", "start_time"}
+    for row_idx, record in enumerate(records):
+        missing = required - set(record)
+        if missing:
+            raise ValueError(f"JSON corpus row {row_idx} missing columns {missing}")
+
+        sample_id = str(record["sample_id"]).strip()
+        if sample_id in seen:
+            raise ValueError(f"duplicate sample_id {sample_id!r} at row {row_idx}")
+        seen.add(sample_id)
+
+        start_time = _parse_time(record["start_time"])
+        end_raw = record.get("end_time")
+        end_time = _parse_time(end_raw) if end_raw else start_time + WINDOW_DURATION
+        entries.append(
+            CorpusEntry(
+                sample_id=sample_id,
+                lon=float(record["lon"]),
+                lat=float(record["lat"]),
                 start_time=start_time,
                 end_time=end_time,
             )
