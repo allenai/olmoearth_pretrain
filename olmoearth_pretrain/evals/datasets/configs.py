@@ -334,11 +334,11 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         supported_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         source_imagery=[SourceImagery.SENTINEL1, SourceImagery.SENTINEL2],
         timeseries=True,
-        # AGB targets in tons/ha; full train-split stats so RMSE matches
-        # GeoBench-2's z-scored convention. To get their leaderboard score:
-        # 1 - rmse * 0.2538.
-        target_mean=63.96,
-        target_std=72.52,
+        # Dataset-level z-scoring is DISABLED on this lfmc test branch: the merged
+        # linear_probe normalizes regression targets at probe time (train-set
+        # stats) and un-normalizes before metrics, so leaving these set would
+        # double-normalize. RMSE here is therefore in raw tons/ha.
+        # target_mean=63.96, target_std=72.52,  # (re-enable for GeoBench-2 z-scored RMSE)
     ),
     "gb2-burn_scars": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
