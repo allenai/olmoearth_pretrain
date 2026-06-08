@@ -11,13 +11,13 @@ from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
 
 from olmoearth_pretrain.nn.encodings import (
-    apply_2d_rope,
-    apply_2d_rope_mixed,
-    apply_3d_rope,
-    apply_3d_rope_mixed,
+    apply_2d_axial_rope,
+    apply_2d_mixed_rope,
+    apply_3d_axial_rope,
+    apply_3d_mixed_rope,
     axial_3d_dim_split,
-    init_2d_rope_mixed_freqs,
-    init_3d_rope_mixed_freqs,
+    init_2d_mixed_rope_freqs,
+    init_3d_mixed_rope_freqs,
 )
 
 try:
@@ -196,7 +196,7 @@ class Attention(nn.Module):
         self.rope_temporal_base = rope_temporal_base
         if use_2d_rope_mixed:
             self.rope_mixed_freqs = nn.Parameter(
-                init_2d_rope_mixed_freqs(
+                init_2d_mixed_rope_freqs(
                     head_dim=self.head_dim,
                     num_heads=self.num_heads,
                     base=self.rope_mixed_base,
@@ -204,7 +204,7 @@ class Attention(nn.Module):
             )
         if use_3d_rope_mixed:
             self.rope_mixed_freqs = nn.Parameter(
-                init_3d_rope_mixed_freqs(
+                init_3d_mixed_rope_freqs(
                     head_dim=self.head_dim,
                     num_heads=self.num_heads,
                     base=self.rope_mixed_base,
@@ -364,20 +364,20 @@ class Attention(nn.Module):
                     "rope_positions_y must be provided for cross attention with RoPE"
                 )
             if self.use_2d_rope:
-                q = apply_2d_rope(q, rope_positions, base=self.rope_base)
-                k = apply_2d_rope(k, k_positions, base=self.rope_base)
+                q = apply_2d_axial_rope(q, rope_positions, base=self.rope_base)
+                k = apply_2d_axial_rope(k, k_positions, base=self.rope_base)
             elif self.use_2d_rope_mixed:
-                q = apply_2d_rope_mixed(q, rope_positions, self.rope_mixed_freqs)
-                k = apply_2d_rope_mixed(k, k_positions, self.rope_mixed_freqs)
+                q = apply_2d_mixed_rope(q, rope_positions, self.rope_mixed_freqs)
+                k = apply_2d_mixed_rope(k, k_positions, self.rope_mixed_freqs)
             elif self.use_3d_rope:
-                q = apply_3d_rope(
+                q = apply_3d_axial_rope(
                     q,
                     rope_positions,
                     base=self.rope_base,
                     temporal_dim_frac=self.temporal_rope_dim_frac,
                     temporal_base=self.rope_temporal_base,
                 )
-                k = apply_3d_rope(
+                k = apply_3d_axial_rope(
                     k,
                     k_positions,
                     base=self.rope_base,
@@ -385,8 +385,8 @@ class Attention(nn.Module):
                     temporal_base=self.rope_temporal_base,
                 )
             else:
-                q = apply_3d_rope_mixed(q, rope_positions, self.rope_mixed_freqs)
-                k = apply_3d_rope_mixed(k, k_positions, self.rope_mixed_freqs)
+                q = apply_3d_mixed_rope(q, rope_positions, self.rope_mixed_freqs)
+                k = apply_3d_mixed_rope(k, k_positions, self.rope_mixed_freqs)
         x = self.sdpa(
             q,
             k,

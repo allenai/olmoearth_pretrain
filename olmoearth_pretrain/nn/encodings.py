@@ -188,7 +188,7 @@ def apply_1d_rope(
     return (x * cos) + (rotate_half(x) * sin)
 
 
-def apply_2d_rope(
+def apply_2d_axial_rope(
     x: torch.Tensor,
     positions: torch.Tensor,
     base: float = 10000.0,
@@ -266,7 +266,7 @@ def axial_3d_dim_split(head_dim: int, temporal_dim_frac: float) -> tuple[int, in
     return d_t, d_spatial, d_spatial
 
 
-def apply_3d_rope(
+def apply_3d_axial_rope(
     x: torch.Tensor,
     positions: torch.Tensor,
     base: float = 10000.0,
@@ -333,7 +333,7 @@ def apply_3d_rope(
     return torch.cat([x_t, x_row, x_col], dim=-1)
 
 
-def init_3d_rope_mixed_freqs(
+def init_3d_mixed_rope_freqs(
     head_dim: int,
     num_heads: int,
     base: float = 10.0,
@@ -341,7 +341,7 @@ def init_3d_rope_mixed_freqs(
 ) -> torch.Tensor:
     """Initialize learnable 3D frequencies for RoPE-Mixed (t, row, col).
 
-    Mirrors :func:`init_2d_rope_mixed_freqs` but in 3D: each head receives
+    Mirrors :func:`init_2d_mixed_rope_freqs` but in 3D: each head receives
     ``head_dim // 2`` 3D frequency vectors, organized as two groups of
     ``head_dim // 4`` pairs along two orthogonal random directions in R^3.
     Magnitudes follow the geometric series ``1 / base^(2k/head_dim)``.
@@ -381,7 +381,7 @@ def init_3d_rope_mixed_freqs(
     return torch.stack(freqs_per_axis, dim=0)  # (3, H, D/2)
 
 
-def apply_3d_rope_mixed(
+def apply_3d_mixed_rope(
     x: torch.Tensor,
     positions: torch.Tensor,
     freqs: torch.Tensor,
@@ -469,7 +469,7 @@ def apply_3d_rope_mixed(
     return (x * cos) + (rotate_half(x) * sin)
 
 
-def init_2d_rope_mixed_freqs(
+def init_2d_mixed_rope_freqs(
     head_dim: int,
     num_heads: int,
     base: float = 10.0,
@@ -516,7 +516,7 @@ def init_2d_rope_mixed_freqs(
     return torch.stack([freqs_row, freqs_col], dim=0)
 
 
-def apply_2d_rope_mixed(
+def apply_2d_mixed_rope(
     x: torch.Tensor,
     positions: torch.Tensor,
     freqs: torch.Tensor,

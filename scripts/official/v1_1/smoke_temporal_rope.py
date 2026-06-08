@@ -7,7 +7,7 @@ Run directly without launching a job:
 What this verifies (no GPU required):
 
   1. ``timestamps_to_days`` produces sensible day counts and calendar deltas.
-  2. ``apply_3d_rope`` honors a separate ``temporal_base``.
+  2. ``apply_3d_axial_rope`` honors a separate ``temporal_base``.
   3. The encoder under ``rope_3d`` rotates query/keys with calendar deltas
      (different timestamps -> different output features) while preserving
      vector norms (RoPE invariant).
@@ -27,7 +27,7 @@ import torch
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.nn.encodings import (
-    apply_3d_rope,
+    apply_3d_axial_rope,
     axial_3d_dim_split,
     timestamps_to_days,
 )
@@ -80,8 +80,10 @@ def check_temporal_base_changes_only_temporal_slice() -> None:
     """Confirm temporal_base only rotates the t chunk, leaving spatial intact."""
     x = torch.randn(1, 2, 4, 16)
     positions = torch.tensor([[[1.0, 0.0, 0.0]] * 4])
-    out_default = apply_3d_rope(x, positions, base=10000.0, temporal_dim_frac=0.25)
-    out_separate = apply_3d_rope(
+    out_default = apply_3d_axial_rope(
+        x, positions, base=10000.0, temporal_dim_frac=0.25
+    )
+    out_separate = apply_3d_axial_rope(
         x, positions, base=10000.0, temporal_dim_frac=0.25, temporal_base=1000.0
     )
     d_t, _, _ = axial_3d_dim_split(16, 0.25)
@@ -94,7 +96,7 @@ def check_temporal_base_changes_only_temporal_slice() -> None:
         not torch.allclose(out_default[..., :d_t], out_separate[..., :d_t]),
     )
     _check(
-        "norms preserved under apply_3d_rope",
+        "norms preserved under apply_3d_axial_rope",
         torch.allclose(out_separate.norm(dim=-1), x.norm(dim=-1), atol=1e-5),
     )
 
