@@ -7,6 +7,7 @@ import torch
 from einops import repeat
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.nn.encodings import timestamps_to_days
 from olmoearth_pretrain.nn.flexi_vit import (
     CompositeEncodings,
     Encoder,
@@ -196,6 +197,44 @@ class TestFlexiVitBase:
             5,
             4,
         ], f"Incorrect shape for modality2 tokens: {modality2_tokens.shape}"
+
+    def test_3d_rope_positions_share_timestamp_slots_across_modalities(self) -> None:
+        """All multitemporal modalities should use the same timestamp slot values."""
+        model = FlexiVitBase(
+            embedding_size=32,
+            num_heads=2,
+            mlp_ratio=2.0,
+            depth=1,
+            drop_path=0.0,
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.LANDSAT],
+            max_sequence_length=12,
+            spatial_pos_encoding="rope_3d",
+        )
+        timestamps = torch.tensor(
+            [[[1, 0, 2023], [1, 1, 2023], [1, 6, 2023]]], dtype=torch.long
+        )
+        tokens_only_dict = {
+            "sentinel2_l2a": torch.zeros(1, 1, 1, 3, 1, 32),
+            "landsat": torch.zeros(1, 1, 1, 3, 1, 32),
+        }
+        masks_dict = {
+            "sentinel2_l2a_mask": torch.zeros(1, 1, 1, 3, 1),
+            "landsat_mask": torch.zeros(1, 1, 1, 3, 1),
+        }
+
+        positions = model.build_spatial_positions(
+            tokens_only_dict=tokens_only_dict,
+            original_masks_dict=masks_dict,
+            patch_size=4,
+            input_res=10,
+            timestamps=timestamps,
+        )
+
+        assert positions is not None
+        expected_days = timestamps_to_days(timestamps)[0].repeat_interleave(2)
+        actual_days = torch.sort(positions[0, :, 0]).values
+        assert torch.allclose(actual_days, torch.sort(expected_days).values)
+        assert torch.equal(positions[0, :, 1:], torch.zeros_like(positions[0, :, 1:]))
 
 
 class TestEncoder:

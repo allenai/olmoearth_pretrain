@@ -319,8 +319,10 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
-            rope_positions: Optional 2D RoPE positions for x/query tokens
-            rope_positions_y: Optional 2D RoPE positions for y/key tokens
+            rope_positions: Optional RoPE coordinates for x/query tokens:
+                ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
+            rope_positions_y: Optional RoPE coordinates for y/key tokens:
+                ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
 
         Returns:
             Output tensor of shape (B, N, C) or (B* N , C) if packed
@@ -674,8 +676,10 @@ class Block(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
-            rope_positions: Optional 2D RoPE positions for x/query tokens
-            rope_positions_y: Optional 2D RoPE positions for y/key tokens
+            rope_positions: Optional RoPE coordinates for x/query tokens:
+                ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
+            rope_positions_y: Optional RoPE coordinates for y/key tokens:
+                ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
 
         Returns:
             Output tensor of shape (B, N, C)
