@@ -47,10 +47,14 @@ class PerModalityLinear(nn.Module):
             )
 
         out_shape = (*x.shape[:-1], self.layers[0].out_features)
-        out = x.new_empty(out_shape)
+        out: torch.Tensor | None = None
         for route_id, layer in enumerate(self.layers):
             route_mask = modality_ids == route_id
-            out[route_mask] = layer(x[route_mask])
+            route_out = layer(x[route_mask])
+            if out is None:
+                out = route_out.new_empty(out_shape)
+            out[route_mask] = route_out
+        assert out is not None
         return out
 
 
