@@ -954,8 +954,11 @@ class TestPerModalityLayers:
         assert torch.allclose(route_out, routed.layers[2](route_x))
 
         out.sum().backward()
+        # Empty routes are still executed, so all route params receive a (zero)
+        # gradient. This keeps the autograd graph identical across ranks for FSDP.
         assert routed.layers[0].weight.grad is not None
-        assert routed.layers[1].weight.grad is None
+        assert routed.layers[1].weight.grad is not None
+        assert torch.count_nonzero(routed.layers[1].weight.grad) == 0
         assert routed.layers[2].weight.grad is not None
 
     def test_per_modality_linear_autocast_dtype(self) -> None:
@@ -1070,9 +1073,25 @@ class TestPerModalityLayers:
         assert torch.allclose(out, ref)
 
         out.sum().backward()
+        # Empty routes are still executed, so all route params receive a (zero)
+        # gradient. This keeps the autograd graph identical across ranks for FSDP.
         assert mlp.fc1.layers[0].weight.grad is not None
-        assert mlp.fc1.layers[1].weight.grad is None
+        assert mlp.fc1.layers[1].weight.grad is not None
+        assert torch.count_nonzero(mlp.fc1.layers[1].weight.grad) == 0
         assert mlp.fc1.layers[2].weight.grad is not None
+
+    def test_modality_routing_covers_all_routes(self) -> None:
+        """Test routing always emits one entry per route, including empty ones."""
+        modality_ids = torch.tensor([[0, 2, 0, 2], [2, 0, 2, 0]])
+        routing = ModalityRouting.from_modality_ids(modality_ids, num_routes=3)
+        assert len(routing.route_indices) == 3
+        route_ids = [route_id for route_id, _ in routing.route_indices]
+        assert route_ids == [0, 1, 2]
+        # Route 1 is absent from modality_ids, so it carries an empty index tensor.
+        empty_indices = dict(routing.route_indices)[1]
+        assert empty_indices.numel() == 0
+        total = sum(indices.numel() for _, indices in routing.route_indices)
+        assert total == modality_ids.numel()
 
     def test_encoder_modality_ids_follow_remove(self) -> None:
         """Test encoder modality IDs stay aligned through flatten/remove."""

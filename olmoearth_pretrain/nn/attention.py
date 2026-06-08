@@ -31,14 +31,18 @@ class ModalityRouting:
     def from_modality_ids(
         cls, modality_ids: torch.Tensor, num_routes: int
     ) -> "ModalityRouting":
-        """Build reusable routing indices from per-token modality IDs."""
+        """Build reusable routing indices from per-token modality IDs.
+
+        Emit an entry for every route, including empty ones, so that all route
+        layers are exercised on every forward. This keeps the autograd graph and
+        FSDP collective schedule identical across ranks regardless of which
+        modalities happen to be present in a given microbatch.
+        """
         flat_ids = modality_ids.reshape(-1)
         route_indices: list[tuple[int, torch.Tensor]] = []
         routed_count = 0
         for route_id in range(num_routes):
             indices = torch.nonzero(flat_ids == route_id, as_tuple=False).flatten()
-            if indices.numel() == 0:
-                continue
             routed_count += indices.numel()
             route_indices.append((route_id, indices))
         if routed_count != flat_ids.numel():
@@ -99,21 +103,18 @@ class PerModalityLinear(nn.Module):
                 f"Expected {self.num_routes} routing routes, got {routing.num_routes}"
             )
 
-        out_shape = (*x.shape[:-1], self.layers[0].out_features)
+        out_features = self.layers[0].out_features
+        out_shape = (*x.shape[:-1], out_features)
         flat_x = x.reshape(-1, x.shape[-1])
-        if flat_x.shape[0] == 0:
-            return self.layers[0](flat_x).reshape(out_shape)
-        if len(routing.route_indices) == 1:
-            route_id, indices = routing.route_indices[0]
-            if indices.numel() == flat_x.shape[0]:
-                return self.forward_route(x, route_id)
 
+        # Always run every route (empty routes included) so all route params stay
+        # in the autograd graph on every rank, keeping FSDP collectives in sync.
         out: torch.Tensor | None = None
         for route_id, indices in routing.route_indices:
             route_x = flat_x.index_select(0, indices)
             route_out = self.forward_route(route_x, route_id)
             if out is None:
-                out = route_out.new_empty((flat_x.shape[0], route_out.shape[-1]))
+                out = route_out.new_empty((flat_x.shape[0], out_features))
             out.index_copy_(0, indices, route_out)
         assert out is not None
         return out.reshape(out_shape)
@@ -540,14 +541,9 @@ class Mlp(nn.Module):
         flat_x = x.reshape(-1, x.shape[-1])
         out_features = self.fc2.layers[0].out_features
         out_shape = (*x.shape[:-1], out_features)
-        if flat_x.shape[0] == 0:
-            route_out = self.fc1.forward_route(flat_x, 0)
-            route_out = self.act(route_out)
-            route_out = self.drop1(route_out)
-            route_out = self.fc2.forward_route(route_out, 0)
-            route_out = self.drop2(route_out)
-            return route_out.reshape(out_shape)
 
+        # Run every route (empty routes included) so all route params stay in the
+        # autograd graph on every rank, keeping FSDP collectives in sync.
         out: torch.Tensor | None = None
         for route_id, indices in modality_routing.route_indices:
             route_x = flat_x.index_select(0, indices)
