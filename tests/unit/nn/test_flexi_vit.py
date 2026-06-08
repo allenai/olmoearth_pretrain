@@ -333,6 +333,76 @@ class TestEncoder:
         config = EncoderConfig(supported_modality_names)
         _ = config.build()
 
+    def test_encoder_config_rope(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Tests we can build an encoder with 2D RoPE."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=16,
+            num_heads=2,
+            spatial_pos_encoding="rope",
+            rope_base=5000.0,
+            rope_coordinate_scale=0.5,
+        )
+        encoder = config.build()
+        assert encoder.spatial_pos_encoding == "rope"
+        assert encoder.rope_base == 5000.0
+        assert encoder.rope_coordinate_scale == 0.5
+        assert encoder.blocks[0].attn.rope_base == 5000.0
+
+    def test_encoder_config_rope_requires_valid_head_dim(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """2D RoPE needs each attention head to split cleanly across x/y axes."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=12,
+            num_heads=2,
+            spatial_pos_encoding="rope",
+        )
+        with pytest.raises(ValueError, match="head_dim divisible by 4"):
+            config.build()
+
+    def test_encoder_config_rope_mixed(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Tests we can build an encoder with RoPE-Mixed (learnable freqs)."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=16,
+            num_heads=2,
+            spatial_pos_encoding="rope_mixed",
+            rope_mixed_base=5.0,
+        )
+        encoder = config.build()
+        assert encoder.spatial_pos_encoding == "rope_mixed"
+        assert encoder.rope_mixed_base == 5.0
+        attn = encoder.blocks[0].attn
+        assert attn.use_2d_rope_mixed is True
+        assert attn.use_2d_rope is False
+        assert hasattr(attn, "rope_mixed_freqs")
+        # (2, num_heads, head_dim // 2)
+        assert attn.rope_mixed_freqs.shape == (2, 2, 4)
+        assert attn.rope_mixed_freqs.requires_grad is True
+
+    def test_encoder_config_rope_mixed_requires_valid_head_dim(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """RoPE-Mixed init also needs head_dim divisible by 4."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=12,
+            num_heads=2,
+            spatial_pos_encoding="rope_mixed",
+        )
+        with pytest.raises(ValueError, match="head_dim divisible by 4"):
+            config.build()
+
 
 class TestPredictor:
     """Unit tests for the Predictor class."""
@@ -659,6 +729,45 @@ class TestPredictor:
         supported_modality_names = [m.name for m in supported_modalities]
         config = PredictorConfig(supported_modality_names)
         _ = config.build()
+
+    def test_predictor_config_rope(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Tests we can build a predictor with 2D RoPE."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = PredictorConfig(
+            supported_modality_names,
+            decoder_embedding_size=16,
+            num_heads=2,
+            spatial_pos_encoding="rope",
+            rope_base=5000.0,
+            rope_coordinate_scale=0.5,
+        )
+        predictor = config.build()
+        assert predictor.spatial_pos_encoding == "rope"
+        assert predictor.rope_base == 5000.0
+        assert predictor.rope_coordinate_scale == 0.5
+        assert predictor.blocks[0].attn.rope_base == 5000.0
+
+    def test_predictor_config_rope_mixed(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Tests we can build a predictor with RoPE-Mixed."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = PredictorConfig(
+            supported_modality_names,
+            decoder_embedding_size=16,
+            num_heads=2,
+            spatial_pos_encoding="rope_mixed",
+            rope_mixed_base=5.0,
+        )
+        predictor = config.build()
+        assert predictor.spatial_pos_encoding == "rope_mixed"
+        assert predictor.rope_mixed_base == 5.0
+        attn = predictor.blocks[0].attn
+        assert attn.use_2d_rope_mixed is True
+        assert attn.use_2d_rope is False
+        assert attn.rope_mixed_freqs.shape == (2, 2, 4)
 
 
 class TestTokensAndMasks:
