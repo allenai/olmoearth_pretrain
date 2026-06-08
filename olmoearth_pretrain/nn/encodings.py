@@ -1,6 +1,6 @@
 """A collection of functions for creating position encodings for the OlmoEarth Pretrain model.
 
-These functions are based on the following repository:
+The absolute positon embedding functions are adapted from:
 https://github.com/bair-climate-initiative/scale-mae/blob/main/mae/util/pos_embed.py
 
 They cover the following:
