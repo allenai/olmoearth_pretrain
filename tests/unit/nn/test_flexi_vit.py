@@ -7,6 +7,7 @@ import torch
 from einops import repeat
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.nn.attention import PerModalityLinear
 from olmoearth_pretrain.nn.flexi_vit import (
     CompositeEncodings,
     Encoder,
@@ -19,8 +20,9 @@ from olmoearth_pretrain.nn.flexi_vit import (
     ProjectAndAggregate,
     TokensAndMasks,
 )
+from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.nn.pooling import pool_unmasked_tokens
-from olmoearth_pretrain.train.masking import MaskValue
+from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -884,6 +886,209 @@ class TestProjectionAndAggregation:
         x_tensor = torch.ones((b, h * w * t, d))
         out_tensor = layer(x_tensor)
         assert out_tensor.shape == (b, h * w * t, out_d)
+
+
+class TestPerModalityLayers:
+    """Unit tests for per-modality transformer/projection layers."""
+
+    def test_per_modality_linear_dispatch_grad_and_shared_equivalence(self) -> None:
+        """Test routed linear dispatch and equivalence when route weights match."""
+        torch.manual_seed(0)
+        x = torch.randn(2, 3, 4, requires_grad=True)
+        modality_ids = torch.tensor([[0, 1, 0], [1, 0, 1]])
+        routed = PerModalityLinear(4, 5, num_routes=2)
+        shared = torch.nn.Linear(4, 5)
+
+        for layer in routed.layers:
+            layer.weight.data.copy_(shared.weight.data)
+            assert shared.bias is not None
+            assert layer.bias is not None
+            layer.bias.data.copy_(shared.bias.data)
+
+        out = routed(x, modality_ids)
+        assert out.shape == (2, 3, 5)
+        assert torch.allclose(out, shared(x))
+
+        out.sum().backward()
+        assert x.grad is not None
+        for layer in routed.layers:
+            assert layer.weight.grad is not None
+            assert layer.bias is not None
+            assert layer.bias.grad is not None
+
+    def test_encoder_modality_ids_follow_remove(self) -> None:
+        """Test encoder modality IDs stay aligned through flatten/remove."""
+        encoder = Encoder(
+            embedding_size=4,
+            max_patch_size=8,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=2.0,
+            depth=1,
+            drop_path=0.0,
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
+            max_sequence_length=12,
+            per_modality_layers=True,
+        )
+        x = {
+            "sentinel2_l2a": torch.randn(2, 2, 1, 1, 1, 4),
+            "sentinel2_l2a_mask": torch.tensor(
+                [
+                    [
+                        [[[MaskValue.ONLINE_ENCODER.value]]],
+                        [[[MaskValue.DECODER.value]]],
+                    ],
+                    [
+                        [[[MaskValue.DECODER.value]]],
+                        [[[MaskValue.ONLINE_ENCODER.value]]],
+                    ],
+                ]
+            ),
+            "latlon": torch.randn(2, 1, 4),
+            "latlon_mask": torch.full(
+                (2, 1), MaskValue.ONLINE_ENCODER.value, dtype=torch.long
+            ),
+        }
+
+        tokens, mask, modality_ids = encoder.collapse_and_combine_hwtc(
+            x, return_modality_ids=True
+        )
+        s2_id = encoder.modality_to_id["sentinel2_l2a"]
+        latlon_id = encoder.modality_to_id["latlon"]
+        assert tokens.shape == (2, 3, 4)
+        assert torch.equal(
+            modality_ids,
+            torch.tensor([[s2_id, s2_id, latlon_id], [s2_id, s2_id, latlon_id]]),
+        )
+
+        kept = mask == MaskValue.ONLINE_ENCODER.value
+        tokens, indices, new_mask, _, _ = encoder.remove_masked_tokens(tokens, kept)
+        modality_ids = encoder.gather_sequence_by_indices(modality_ids, indices)
+        modality_ids = modality_ids[:, : tokens.shape[1]]
+        assert torch.equal(new_mask, torch.ones_like(new_mask).bool())
+        assert torch.equal(
+            modality_ids,
+            torch.tensor([[s2_id, latlon_id], [s2_id, latlon_id]]),
+        )
+
+    def test_per_modality_layers_reject_register_tokens(self) -> None:
+        """Test routed layers fail fast when register tokens are configured."""
+        with pytest.raises(ValueError, match="register tokens"):
+            Encoder(
+                embedding_size=4,
+                max_patch_size=8,
+                min_patch_size=1,
+                num_heads=2,
+                mlp_ratio=2.0,
+                depth=1,
+                drop_path=0.0,
+                supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
+                max_sequence_length=12,
+                num_register_tokens=1,
+                per_modality_layers=True,
+            )
+
+        config = EncoderConfig(
+            supported_modality_names=[
+                Modality.SENTINEL2_L2A.name,
+                Modality.LATLON.name,
+            ],
+            num_register_tokens=1,
+            per_modality_layers=True,
+        )
+        with pytest.raises(ValueError, match="register tokens"):
+            config.validate()
+
+    def test_decoder_split_x_y_preserves_modality_ids(self) -> None:
+        """Test decoder query/context split keeps matching modality IDs."""
+        tokens = torch.arange(18).view(2, 9, 1).float()
+        modality_ids = torch.tensor(
+            [[0, 0, 1, 1, 1, 0, 0, 1, 1], [1, 0, 0, 1, 0, 1, 1, 0, 0]]
+        )
+        mask = torch.tensor(
+            [
+                [
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.MISSING.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                ],
+                [
+                    MaskValue.MISSING.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.MISSING.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.MISSING.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                ],
+            ]
+        )
+
+        result = Predictor.split_x_y(tokens, mask, modality_ids=modality_ids)
+        tokens_to_decode_ids = result[9]
+        unmasked_tokens_ids = result[10]
+        assert torch.equal(tokens_to_decode_ids, torch.tensor([[0, 0, 1], [0, 1, 1]]))
+        assert torch.equal(
+            unmasked_tokens_ids, torch.tensor([[0, 1, 1, 0, 1], [0, 0, 0, 1, 0]])
+        )
+
+    def test_per_modality_forward_and_parameter_count(
+        self, masked_sample_dict: dict[str, torch.Tensor]
+    ) -> None:
+        """Test small per-modality LatentMIM forward and parameter-count increase."""
+        supported_modality_names = [
+            Modality.SENTINEL2_L2A.name,
+            Modality.LATLON.name,
+            Modality.WORLDCOVER.name,
+        ]
+
+        def build_config(per_modality_layers: bool) -> LatentMIMConfig:
+            encoder_config = EncoderConfig(
+                supported_modality_names=supported_modality_names,
+                embedding_size=8,
+                num_heads=2,
+                depth=1,
+                mlp_ratio=2.0,
+                output_embedding_size=8,
+                per_modality_layers=per_modality_layers,
+            )
+            decoder_config = PredictorConfig(
+                supported_modality_names=supported_modality_names,
+                encoder_embedding_size=8,
+                decoder_embedding_size=8,
+                depth=1,
+                mlp_ratio=2.0,
+                num_heads=2,
+                output_embedding_size=8,
+                per_modality_layers=per_modality_layers,
+            )
+            return LatentMIMConfig(
+                encoder_config=encoder_config, decoder_config=decoder_config
+            )
+
+        baseline = build_config(per_modality_layers=False).build()
+        per_modality = build_config(per_modality_layers=True).build()
+        baseline_params = sum(p.numel() for p in baseline.parameters())
+        per_modality_params = sum(p.numel() for p in per_modality.parameters())
+        assert per_modality_params > baseline_params
+
+        x = MaskedOlmoEarthSample(**masked_sample_dict)
+        latent, decoded, projected, reconstructed, _ = per_modality.forward(
+            x, patch_size=4
+        )
+        assert latent.sentinel2_l2a is not None
+        assert decoded.latlon is not None
+        assert decoded.worldcover is not None
+        assert projected.shape == (masked_sample_dict["sentinel2_l2a"].shape[0], 8)
+        assert reconstructed is None
 
 
 class TestBandDropout:

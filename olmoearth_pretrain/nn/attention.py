@@ -18,6 +18,42 @@ except ImportError:
 logger = getLogger(__name__)
 
 
+class PerModalityLinear(nn.Module):
+    """Apply a separate linear layer to tokens from each modality route."""
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        num_routes: int,
+        bias: bool = True,
+    ) -> None:
+        """Initialize the per-route linear layers."""
+        super().__init__()
+        self.num_routes = num_routes
+        self.layers = nn.ModuleList(
+            [nn.Linear(in_features, out_features, bias=bias) for _ in range(num_routes)]
+        )
+
+    def forward(
+        self, x: torch.Tensor, modality_ids: torch.Tensor | None
+    ) -> torch.Tensor:
+        """Apply the route-specific linear layer to each token."""
+        if modality_ids is None:
+            raise ValueError("modality_ids are required for PerModalityLinear")
+        if modality_ids.shape != x.shape[:-1]:
+            raise ValueError(
+                f"Expected modality_ids shape {x.shape[:-1]}, got {modality_ids.shape}"
+            )
+
+        out_shape = (*x.shape[:-1], self.layers[0].out_features)
+        out = x.new_empty(out_shape)
+        for route_id, layer in enumerate(self.layers):
+            route_mask = modality_ids == route_id
+            out[route_mask] = layer(x[route_mask])
+        return out
+
+
 @torch._dynamo.disable()
 def dispatch_flash_attn(
     q: torch.Tensor,
@@ -110,6 +146,8 @@ class Attention(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
+        per_modality_layers: bool = False,
+        num_modality_routes: int | None = None,
     ) -> None:
         """Initialize the attention module.
 
@@ -123,6 +161,8 @@ class Attention(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Enable cross-attention
             use_flash_attn: Use flash attention
+            per_modality_layers: Use per-modality Q/K/V/output projections
+            num_modality_routes: Number of modality routes
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -133,14 +173,28 @@ class Attention(nn.Module):
         self.cross_attn = cross_attn
         self.use_flash_attn = use_flash_attn
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
-        self.q = nn.Linear(dim, dim, bias=qkv_bias)
-        self.k = nn.Linear(dim, dim, bias=qkv_bias)
-        self.v = nn.Linear(dim, dim, bias=qkv_bias)
+        self.per_modality_layers = per_modality_layers
+        if per_modality_layers:
+            if num_modality_routes is None:
+                raise ValueError(
+                    "num_modality_routes must be set when per_modality_layers=True"
+                )
+            self.q = PerModalityLinear(dim, dim, num_modality_routes, bias=qkv_bias)
+            self.k = PerModalityLinear(dim, dim, num_modality_routes, bias=qkv_bias)
+            self.v = PerModalityLinear(dim, dim, num_modality_routes, bias=qkv_bias)
+        else:
+            self.q = nn.Linear(dim, dim, bias=qkv_bias)
+            self.k = nn.Linear(dim, dim, bias=qkv_bias)
+            self.v = nn.Linear(dim, dim, bias=qkv_bias)
 
         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
+        if per_modality_layers:
+            assert num_modality_routes is not None
+            self.proj = PerModalityLinear(dim, dim, num_modality_routes)
+        else:
+            self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
     def sdpa(
@@ -227,6 +281,8 @@ class Attention(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
+        modality_ids: torch.Tensor | None = None,
+        y_modality_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -240,22 +296,25 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
+            modality_ids: Optional route IDs for the query/input tokens.
+            y_modality_ids: Optional route IDs for the cross-attention context tokens.
 
         Returns:
             Output tensor of shape (B, N, C) or (B* N , C) if packed
         """
         original_shape = x.shape
 
-        q = self.q(x)
+        q = self.q(x, modality_ids) if self.per_modality_layers else self.q(x)
 
         if y is None:
             assert not self.cross_attn
-            k = self.k(x)
-            v = self.v(x)
+            k_ids = modality_ids
+            k = self.k(x, k_ids) if self.per_modality_layers else self.k(x)
+            v = self.v(x, k_ids) if self.per_modality_layers else self.v(x)
         else:
             assert self.cross_attn
-            k = self.k(y)
-            v = self.v(y)
+            k = self.k(y, y_modality_ids) if self.per_modality_layers else self.k(y)
+            v = self.v(y, y_modality_ids) if self.per_modality_layers else self.v(y)
         if not self.use_flash_attn:
             q = rearrange(q, "b n (h d) -> b h n d", h=self.num_heads)
             k = rearrange(k, "b n (h d) -> b h n d", h=self.num_heads)
@@ -284,7 +343,7 @@ class Attention(nn.Module):
             attn_mask=attn_mask,
         )
         x = x.transpose(1, 2).reshape(original_shape)
-        x = self.proj(x)
+        x = self.proj(x, modality_ids) if self.per_modality_layers else self.proj(x)
         x = self.proj_drop(x)
         return x
 
@@ -309,6 +368,8 @@ class Mlp(nn.Module):
         act_layer: nn.Module = nn.GELU,
         bias: bool = True,
         drop: float = 0.0,
+        per_modality_layers: bool = False,
+        num_modality_routes: int | None = None,
     ) -> None:
         """Initialize the MLP module.
 
@@ -319,30 +380,51 @@ class Mlp(nn.Module):
             act_layer: Activation layer. Defaults to nn.GELU.
             bias: Enable bias in linear layers. Defaults to True.
             drop: Dropout rate. Defaults to 0.0.
+            per_modality_layers: Whether to use per-modality MLP projections.
+            num_modality_routes: Number of modality routes.
         """
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
 
-        self.fc1 = nn.Linear(in_features, hidden_features, bias=bias)
+        self.per_modality_layers = per_modality_layers
+        if per_modality_layers:
+            if num_modality_routes is None:
+                raise ValueError(
+                    "num_modality_routes must be set when per_modality_layers=True"
+                )
+            self.fc1 = PerModalityLinear(
+                in_features, hidden_features, num_modality_routes, bias=bias
+            )
+        else:
+            self.fc1 = nn.Linear(in_features, hidden_features, bias=bias)
         self.act = act_layer()
         self.drop1 = nn.Dropout(drop)
-        self.fc2 = nn.Linear(hidden_features, out_features, bias=bias)
+        if per_modality_layers:
+            assert num_modality_routes is not None
+            self.fc2 = PerModalityLinear(
+                hidden_features, out_features, num_modality_routes, bias=bias
+            )
+        else:
+            self.fc2 = nn.Linear(hidden_features, out_features, bias=bias)
         self.drop2 = nn.Dropout(drop)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, modality_ids: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """Forward pass.
 
         Args:
             x: Input tensor
+            modality_ids: Optional route IDs for per-modality projections.
 
         Returns:
             Output tensor
         """
-        x = self.fc1(x)
+        x = self.fc1(x, modality_ids) if self.per_modality_layers else self.fc1(x)
         x = self.act(x)
         x = self.drop1(x)
-        x = self.fc2(x)
+        x = self.fc2(x, modality_ids) if self.per_modality_layers else self.fc2(x)
         x = self.drop2(x)
         return x
 
@@ -456,6 +538,8 @@ class Block(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
+        per_modality_layers: bool = False,
+        num_modality_routes: int | None = None,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -473,6 +557,8 @@ class Block(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Whether to use cross attention
             use_flash_attn: Whether to use flash attention
+            per_modality_layers: Whether to use per-modality attention and MLP projections
+            num_modality_routes: Number of modality routes
         """
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -486,6 +572,8 @@ class Block(nn.Module):
             norm_layer=norm_layer,
             cross_attn=cross_attn,
             use_flash_attn=use_flash_attn,
+            per_modality_layers=per_modality_layers,
+            num_modality_routes=num_modality_routes,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -498,6 +586,8 @@ class Block(nn.Module):
             hidden_features=int(dim * mlp_ratio),
             act_layer=act_layer,
             drop=drop,
+            per_modality_layers=per_modality_layers,
+            num_modality_routes=num_modality_routes,
         )
         self.ls2 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -514,6 +604,8 @@ class Block(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
+        modality_ids: torch.Tensor | None = None,
+        y_modality_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -527,6 +619,8 @@ class Block(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
+            modality_ids: Optional route IDs for the query/input tokens.
+            y_modality_ids: Optional route IDs for the cross-attention context tokens.
 
         Returns:
             Output tensor of shape (B, N, C)
@@ -543,11 +637,15 @@ class Block(nn.Module):
                     max_seqlen_q=max_seqlen_q,
                     max_seqlen_k=max_seqlen_k,
                     attn_mask=attn_mask,
+                    modality_ids=modality_ids,
+                    y_modality_ids=y_modality_ids,
                 )
             )
         )
 
-        x = x + self.drop_path(self.ls2(self.mlp(self.norm2(x))))
+        x = x + self.drop_path(
+            self.ls2(self.mlp(self.norm2(x), modality_ids=modality_ids))
+        )
         return x
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:

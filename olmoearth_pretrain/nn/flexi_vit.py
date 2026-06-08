@@ -3,7 +3,7 @@
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, overload
 
 import torch
 from einops import rearrange, reduce, repeat
@@ -22,7 +22,7 @@ from olmoearth_pretrain.datatypes import (
     MaskValue,
     TokensAndMasks,
 )
-from olmoearth_pretrain.nn.attention import Block
+from olmoearth_pretrain.nn.attention import Block, PerModalityLinear
 from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -72,6 +72,8 @@ class ProjectAndAggregate(nn.Module):
         aggregate_then_project: bool = True,
         output_embedding_size: int | None = None,
         only_project: bool = False,
+        per_modality_layers: bool = False,
+        supported_modality_names: list[str] | None = None,
     ):
         """Initialize the linear module.
 
@@ -83,26 +85,73 @@ class ProjectAndAggregate(nn.Module):
         output_embedding_size: If provided, the final layer will output this size instead
             of embedding_size.
         only_project: If True, only project the tokens without aggregation.
+        per_modality_layers: If True, use one projection per modality. This is only
+            supported for token-preserving projection.
+        supported_modality_names: Modalities to route for per-modality projection.
         """
         super().__init__()
         self.only_project = only_project
+        self.per_modality_layers = per_modality_layers
+        self.supported_modality_names = supported_modality_names
+        self.modality_to_id: dict[str, int] = {}
+        self.projection: PerModalityLinear | nn.Sequential
+        if per_modality_layers:
+            if not only_project or num_layers != 1:
+                raise ValueError(
+                    "per_modality_layers in ProjectAndAggregate only supports "
+                    "num_layers=1 and only_project=True"
+                )
+            if supported_modality_names is None:
+                raise ValueError(
+                    "supported_modality_names is required when per_modality_layers=True"
+                )
+            self.modality_to_id = {
+                modality: idx for idx, modality in enumerate(supported_modality_names)
+            }
         out_size = (
             output_embedding_size
             if output_embedding_size is not None
             else embedding_size
         )
         # Build projection layers: all intermediate layers use embedding_size, final uses out_size
-        if num_layers == 1:
-            projections = [nn.Linear(embedding_size, out_size)]
+        if per_modality_layers:
+            assert supported_modality_names is not None
+            self.projection = PerModalityLinear(
+                embedding_size, out_size, len(supported_modality_names)
+            )
+        elif num_layers == 1:
+            self.projection = nn.Sequential(nn.Linear(embedding_size, out_size))
         else:
-            projections = [nn.Linear(embedding_size, embedding_size)]
+            projection_layers: list[nn.Module] = [
+                nn.Linear(embedding_size, embedding_size)
+            ]
             for _ in range(1, num_layers - 1):
-                projections.append(nn.ReLU())
-                projections.append(nn.Linear(embedding_size, embedding_size))
-            projections.append(nn.ReLU())
-            projections.append(nn.Linear(embedding_size, out_size))
-        self.projection = nn.Sequential(*projections)
+                projection_layers.append(nn.ReLU())
+                projection_layers.append(nn.Linear(embedding_size, embedding_size))
+            projection_layers.append(nn.ReLU())
+            projection_layers.append(nn.Linear(embedding_size, out_size))
+            self.projection = nn.Sequential(*projection_layers)
         self.aggregate_then_project = aggregate_then_project
+
+    def _project_modality(self, x: Tensor, modality: str) -> Tensor:
+        if not self.per_modality_layers:
+            assert isinstance(self.projection, nn.Sequential)
+            return self.projection(x)
+        route_id = self.modality_to_id[modality]
+        modality_ids = torch.full(
+            x.shape[:-1], route_id, dtype=torch.long, device=x.device
+        )
+        assert isinstance(self.projection, PerModalityLinear)
+        return self.projection(x, modality_ids)
+
+    def _project_shared_tensor(self, x: Tensor) -> Tensor:
+        """Apply the shared projection to a tensor without modality context."""
+        if self.per_modality_layers:
+            raise ValueError(
+                "Raw tensor projection is not supported with per_modality_layers=True"
+            )
+        assert isinstance(self.projection, nn.Sequential)
+        return self.projection(x)
 
     def apply_aggregate_then_project(
         self, x: TokensAndMasks | torch.Tensor
@@ -116,7 +165,7 @@ class ProjectAndAggregate(nn.Module):
             pooled_for_contrastive = reduce(x, "b ... d -> b  d", "mean")
         else:
             raise ValueError(f"Invalid input type: {type(x)}")
-        return self.projection(pooled_for_contrastive)
+        return self._project_shared_tensor(pooled_for_contrastive)
 
     def apply_project_then_aggregate(
         self, x: TokensAndMasks | torch.Tensor
@@ -127,7 +176,7 @@ class ProjectAndAggregate(nn.Module):
             for modality in x.modalities:
                 x_modality = getattr(x, modality)
                 # Are these normalizations masked correctly?
-                x_modality = self.projection(x_modality)
+                x_modality = self._project_modality(x_modality, modality)
                 masked_modality_name = x.get_masked_modality_name(modality)
                 decoder_emedded_dict[modality] = x_modality
                 decoder_emedded_dict[masked_modality_name] = getattr(
@@ -138,7 +187,7 @@ class ProjectAndAggregate(nn.Module):
                 x_projected, PoolingType.MEAN, spatial_pooling=False
             )
         elif isinstance(x, torch.Tensor):
-            x_projected = self.projection(x)
+            x_projected = self._project_shared_tensor(x)
             projected_pooled = reduce(x_projected, "b ... d -> b  d", "mean")
         else:
             raise ValueError(f"Invalid input type: {type(x)}")
@@ -152,7 +201,7 @@ class ProjectAndAggregate(nn.Module):
             decoder_emedded_dict = x._asdict()
             for modality in x.modalities:
                 x_modality = getattr(x, modality)
-                x_modality = self.projection(x_modality)
+                x_modality = self._project_modality(x_modality, modality)
                 masked_modality_name = x.get_masked_modality_name(modality)
                 decoder_emedded_dict[modality] = x_modality
                 decoder_emedded_dict[masked_modality_name] = getattr(
@@ -160,7 +209,7 @@ class ProjectAndAggregate(nn.Module):
                 )
             return TokensAndMasks(**decoder_emedded_dict)
         elif isinstance(x, torch.Tensor):
-            return self.projection(x)
+            return self._project_shared_tensor(x)
         else:
             raise ValueError(f"Invalid input type: {type(x)}")
 
@@ -891,6 +940,7 @@ class FlexiVitBase(nn.Module):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        per_modality_layers: bool = False,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -899,6 +949,11 @@ class FlexiVitBase(nn.Module):
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [x.name for x in supported_modalities]
         logger.info(f"modalities being used by model: {self.supported_modality_names}")
+        self.per_modality_layers = per_modality_layers
+        self.modality_to_id = {
+            modality: idx for idx, modality in enumerate(self.supported_modality_names)
+        }
+        self.num_modality_routes = len(self.supported_modality_names)
 
         self.max_sequence_length = max_sequence_length
         self._base_tokenization_config = tokenization_config or TokenizationConfig()
@@ -918,6 +973,8 @@ class FlexiVitBase(nn.Module):
                     cross_attn=self.cross_attn,
                     drop_path=drop_path,
                     use_flash_attn=self.use_flash_attn,
+                    per_modality_layers=self.per_modality_layers,
+                    num_modality_routes=self.num_modality_routes,
                 )
                 for _ in range(depth)
             ]
@@ -960,9 +1017,30 @@ class FlexiVitBase(nn.Module):
         return modality_data.shape[1:-2] if modality_data.ndim > 3 else ()
 
     # is naming here confusing if one of these channels can be missing?
-    def collapse_and_combine_hwtc(self, x: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
+    def create_modality_ids_like(self, x: Tensor, modality: str) -> Tensor:
+        """Create per-token modality IDs matching a token tensor."""
+        return torch.full(
+            x.shape[:-1],
+            self.modality_to_id[modality],
+            dtype=torch.long,
+            device=x.device,
+        )
+
+    @overload
+    def collapse_and_combine_hwtc(
+        self, x: dict[str, Tensor], return_modality_ids: Literal[False] = False
+    ) -> tuple[Tensor, Tensor]: ...
+
+    @overload
+    def collapse_and_combine_hwtc(
+        self, x: dict[str, Tensor], return_modality_ids: Literal[True]
+    ) -> tuple[Tensor, Tensor, Tensor]: ...
+
+    def collapse_and_combine_hwtc(
+        self, x: dict[str, Tensor], return_modality_ids: bool = False
+    ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
         """Collapse the tokens and masks, respectively, into two tensors."""
-        tokens, masks = [], []
+        tokens, masks, modality_ids = [], [], []
         available_modalities = return_modalities_from_dict(x)
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
@@ -975,9 +1053,14 @@ class FlexiVitBase(nn.Module):
             x_modality_mask = x[masked_modality_name]
             tokens.append(rearrange(x_modality, "b ... d -> b (...) d"))
             masks.append(rearrange(x_modality_mask, "b ... -> b (...)"))
+            if return_modality_ids:
+                ids = self.create_modality_ids_like(x_modality, modality)
+                modality_ids.append(rearrange(ids, "b ... -> b (...)"))
         tokens = torch.cat(tokens, dim=1)
         masks = torch.cat(masks, dim=1)
 
+        if return_modality_ids:
+            return tokens, masks, torch.cat(modality_ids, dim=1)
         return tokens, masks
 
     @staticmethod
@@ -1071,6 +1154,13 @@ class FlexiVitBase(nn.Module):
         return tokens
 
     @staticmethod
+    def gather_sequence_by_indices(x: Tensor, indices: Tensor) -> Tensor:
+        """Gather a sequence tensor by per-batch sorted indices."""
+        if x.ndim == 2:
+            return x.gather(1, indices)
+        return x.gather(1, indices[:, :, None].expand_as(x))
+
+    @staticmethod
     def unpack_tokens(tokens: Tensor, mask: Tensor, og_shape: tuple) -> Tensor:
         """Unpack the Batch and sequence length dimensions of tokens and mask into a single tensor.
 
@@ -1129,6 +1219,7 @@ class Encoder(FlexiVitBase):
         band_dropout_modalities: list[str] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
+        per_modality_layers: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1173,7 +1264,15 @@ class Encoder(FlexiVitBase):
             post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm.
+            per_modality_layers: Whether to use per-modality transformer and
+                token output projection layers.
         """
+        if per_modality_layers and num_register_tokens > 0:
+            raise ValueError(
+                "per_modality_layers=True does not support register tokens; "
+                "set num_register_tokens=0."
+            )
+
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
             embedding_size=embedding_size,
@@ -1188,6 +1287,7 @@ class Encoder(FlexiVitBase):
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
+            per_modality_layers=per_modality_layers,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1229,6 +1329,8 @@ class Encoder(FlexiVitBase):
                 num_layers=1,
                 output_embedding_size=output_embedding_size,
                 only_project=True,
+                per_modality_layers=self.per_modality_layers,
+                supported_modality_names=self.supported_modality_names,
             )
             final_embedding_size = output_embedding_size
         else:
@@ -1366,7 +1468,7 @@ class Encoder(FlexiVitBase):
         tokens_only_dict: dict[str, Tensor],
         mask_only_dict: dict[str, Tensor],
         token_exit_cfg: dict[str, int] | None,
-    ) -> tuple[Tensor | None]:
+    ) -> Tensor | None:
         """Create the exit sequences and tokens."""
         # Check that tokens_only_dict doesn't contain any mask keys
         assert all(not key.endswith("_mask") for key in tokens_only_dict), (
@@ -1527,11 +1629,16 @@ class Encoder(FlexiVitBase):
         )
         tokens_dict.update(original_masks_dict)
 
-        tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+        tokens, mask, modality_ids = self.collapse_and_combine_hwtc(
+            tokens_dict, return_modality_ids=True
+        )
 
         tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
             self._maybe_remove_masked_tokens(tokens, mask, fast_pass)
         )
+        if indices is not None:
+            modality_ids = self.gather_sequence_by_indices(modality_ids, indices)
+            modality_ids = modality_ids[:, : tokens.shape[1]]
 
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
@@ -1547,6 +1654,7 @@ class Encoder(FlexiVitBase):
             cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
             og_shape = tokens.shape
             tokens = self.pack_tokens(tokens, new_mask)
+            modality_ids = self.pack_tokens(modality_ids, new_mask)
         else:
             cu_seqlens = None
 
@@ -1582,6 +1690,7 @@ class Encoder(FlexiVitBase):
                 max_seqlen=max_seqlen,
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
+                modality_ids=modality_ids if self.per_modality_layers else None,
             )
 
         if self.has_register_tokens:
@@ -1719,6 +1828,7 @@ class PredictorBase(FlexiVitBase):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        per_modality_layers: bool = False,
     ):
         """Initialize the predictor.
 
@@ -1737,6 +1847,8 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn: Whether to use flash attention
             qk_norm: Whether to apply normalization to Q and K in attention
             tokenization_config: Optional config for custom band groupings
+            per_modality_layers: Whether to use per-modality transformer and
+                decoder input/output projection layers.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1752,19 +1864,36 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn=use_flash_attn,
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
+            per_modality_layers=per_modality_layers,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
         self.encoder_embedding_size = encoder_embedding_size
-        self.encoder_to_decoder_embed = nn.Linear(
-            encoder_embedding_size, decoder_embedding_size, bias=True
-        )
+        if self.per_modality_layers:
+            self.encoder_to_decoder_embed = PerModalityLinear(
+                encoder_embedding_size,
+                decoder_embedding_size,
+                self.num_modality_routes,
+                bias=True,
+            )
+        else:
+            self.encoder_to_decoder_embed = nn.Linear(
+                encoder_embedding_size, decoder_embedding_size, bias=True
+            )
         if output_embedding_size is None:
             output_embedding_size = encoder_embedding_size
         self.output_embedding_size = output_embedding_size
-        self.to_output_embed = nn.Linear(
-            decoder_embedding_size, output_embedding_size, bias=True
-        )
+        if self.per_modality_layers:
+            self.to_output_embed = PerModalityLinear(
+                decoder_embedding_size,
+                output_embedding_size,
+                self.num_modality_routes,
+                bias=True,
+            )
+        else:
+            self.to_output_embed = nn.Linear(
+                decoder_embedding_size, output_embedding_size, bias=True
+            )
         # THIS is the learnable mask token
         self.mask_token = nn.Parameter(torch.zeros(decoder_embedding_size))
 
@@ -1810,7 +1939,9 @@ class PredictorBase(FlexiVitBase):
 
     # TODO: GIVE more explicit function names
     @staticmethod
-    def split_x_y(tokens: Tensor, mask: Tensor) -> tuple[Tensor, ...]:
+    def split_x_y(
+        tokens: Tensor, mask: Tensor, modality_ids: Tensor | None = None
+    ) -> tuple[Tensor, ...]:
         """Splits tokens into three groups based on mask values.
 
         This function:
@@ -1823,6 +1954,7 @@ class PredictorBase(FlexiVitBase):
         Args:
             tokens: Tokens to split of shape [B, T, D].
             mask: Mask of shape [B, T].
+            modality_ids: Optional route IDs to split alongside tokens.
 
         Returns:
             tokens_to_decode: Tokens to be decoded of shape [B, X_len, D].
@@ -1845,6 +1977,8 @@ class PredictorBase(FlexiVitBase):
             mask.int(), dim=1, descending=True, stable=True
         )
         tokens = tokens.gather(1, indices[:, :, None].expand_as(tokens))
+        if modality_ids is not None:
+            modality_ids = modality_ids.gather(1, indices)
 
         # Create binary masks for Encoder and Decoder
         binarized_decoder_mask = sorted_mask == MaskValue.DECODER.value
@@ -1870,6 +2004,27 @@ class PredictorBase(FlexiVitBase):
         unmasked_tokens_mask = binarized_online_encoder_mask[
             :, -max_length_of_unmasked_tokens:
         ].to(org_mask_dtype)
+
+        if modality_ids is not None:
+            tokens_to_decode_modality_ids = modality_ids[
+                :, :max_length_of_decoded_tokens
+            ]
+            unmasked_tokens_modality_ids = modality_ids[
+                :, -max_length_of_unmasked_tokens:
+            ]
+            return (
+                tokens_to_decode,
+                unmasked_tokens,
+                tokens_to_decode_mask,
+                unmasked_tokens_mask,
+                indices,
+                seqlens_tokens_to_decode,
+                seqlens_unmasked_tokens,
+                max_length_of_decoded_tokens,
+                max_length_of_unmasked_tokens,
+                tokens_to_decode_modality_ids,
+                unmasked_tokens_modality_ids,
+            )
 
         return (
             tokens_to_decode,
@@ -1952,7 +2107,9 @@ class Predictor(PredictorBase):
             tokens_only_dict, timestamps, patch_size, input_res
         )
         tokens_dict.update(original_masks_dict)
-        all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+        all_tokens, mask, all_modality_ids = self.collapse_and_combine_hwtc(
+            tokens_dict, return_modality_ids=True
+        )
         # X contains the tokens to decode, Y contains the tokens to attend to for context
         (
             tokens_to_decode,
@@ -1964,16 +2121,24 @@ class Predictor(PredictorBase):
             seqlens_unmasked_tokens,
             max_length_of_tokens_to_decode,
             max_length_of_unmasked_tokens,
-        ) = self.split_x_y(all_tokens, mask)
+            tokens_to_decode_modality_ids,
+            unmasked_tokens_modality_ids,
+        ) = self.split_x_y(all_tokens, mask, modality_ids=all_modality_ids)
         # Pack x tokens
         if self.use_flash_attn:
             og_shape_tokens_to_decode = tokens_to_decode.shape
             tokens_to_decode = self.pack_tokens(
                 tokens_to_decode, tokens_to_decode_mask.bool()
             )
+            tokens_to_decode_modality_ids = self.pack_tokens(
+                tokens_to_decode_modality_ids, tokens_to_decode_mask.bool()
+            )
             og_shape_unmasked_tokens = unmasked_tokens.shape
             unmasked_tokens = self.pack_tokens(
                 unmasked_tokens, unmasked_tokens_mask.bool()
+            )
+            unmasked_tokens_modality_ids = self.pack_tokens(
+                unmasked_tokens_modality_ids, unmasked_tokens_mask.bool()
             )
             cu_seqlens_tokens_to_decode = get_cumulative_sequence_lengths(
                 seqlens_tokens_to_decode
@@ -1998,6 +2163,12 @@ class Predictor(PredictorBase):
                 cu_seqlens_k=cu_seqlens_unmasked_tokens,
                 max_seqlen_q=max_length_of_tokens_to_decode,
                 max_seqlen_k=max_length_of_unmasked_tokens,
+                modality_ids=(
+                    tokens_to_decode_modality_ids if self.per_modality_layers else None
+                ),
+                y_modality_ids=(
+                    unmasked_tokens_modality_ids if self.per_modality_layers else None
+                ),
             )
 
         if self.use_flash_attn:
@@ -2051,7 +2222,11 @@ class Predictor(PredictorBase):
             x_modality = getattr(x, modality)
             # Although, we do not account for missing tokens both proj and normalize are on token dimension so there is no mixing with real tokens
             x_modality = self.input_norm(x_modality)
-            x_modality = self.encoder_to_decoder_embed(x_modality)
+            if self.per_modality_layers:
+                modality_ids = self.create_modality_ids_like(x_modality, modality)
+                x_modality = self.encoder_to_decoder_embed(x_modality, modality_ids)
+            else:
+                x_modality = self.encoder_to_decoder_embed(x_modality)
             masked_modality_name = x.get_masked_modality_name(modality)
             decoder_emedded_dict[modality] = x_modality
             decoder_emedded_dict[masked_modality_name] = getattr(
@@ -2081,7 +2256,12 @@ class Predictor(PredictorBase):
             num_band_sets = self.tokenization_config.get_num_bandsets(modality)
             for idx in range(num_band_sets):
                 per_channel_modality_data = modality_data[..., idx, :]
-                output_data = self.to_output_embed(self.norm(per_channel_modality_data))
+                output_data = self.norm(per_channel_modality_data)
+                if self.per_modality_layers:
+                    modality_ids = self.create_modality_ids_like(output_data, modality)
+                    output_data = self.to_output_embed(output_data, modality_ids)
+                else:
+                    output_data = self.to_output_embed(output_data)
                 per_modality_output_tokens.append(output_data)
             output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
             output_dict[masked_modality_name] = modality_mask
@@ -2120,6 +2300,7 @@ class EncoderConfig(Config):
     band_dropout_modalities: list[str] | None = None
     patch_embed_hidden_sizes: list[int] | None = None
     post_proj_hidden_sizes: list[int] | None = None
+    per_modality_layers: bool = False
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -2145,6 +2326,11 @@ class EncoderConfig(Config):
                 )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
+        if self.per_modality_layers and self.num_register_tokens > 0:
+            raise ValueError(
+                "per_modality_layers=True does not support register tokens; "
+                "set num_register_tokens=0."
+            )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -2180,6 +2366,7 @@ class PredictorConfig(Config):
     use_flash_attn: bool = False
     qk_norm: bool = False
     tokenization_config: TokenizationConfig | None = None
+    per_modality_layers: bool = False
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
