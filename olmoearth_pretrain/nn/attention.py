@@ -1,5 +1,6 @@
 """Attention Components for OlmoEarth Pretrain."""
 
+from dataclasses import dataclass
 from logging import getLogger
 from typing import Any
 
@@ -16,6 +17,37 @@ except ImportError:
     flash_attn = None
 
 logger = getLogger(__name__)
+
+
+@dataclass
+class ModalityRouting:
+    """Precomputed flat token indices for each non-empty modality route."""
+
+    shape: torch.Size
+    num_routes: int
+    route_indices: tuple[tuple[int, torch.Tensor], ...]
+
+    @classmethod
+    def from_modality_ids(
+        cls, modality_ids: torch.Tensor, num_routes: int
+    ) -> "ModalityRouting":
+        """Build reusable routing indices from per-token modality IDs."""
+        flat_ids = modality_ids.reshape(-1)
+        route_indices: list[tuple[int, torch.Tensor]] = []
+        routed_count = 0
+        for route_id in range(num_routes):
+            indices = torch.nonzero(flat_ids == route_id, as_tuple=False).flatten()
+            if indices.numel() == 0:
+                continue
+            routed_count += indices.numel()
+            route_indices.append((route_id, indices))
+        if routed_count != flat_ids.numel():
+            raise ValueError("modality_ids contain values outside configured routes")
+        return cls(
+            shape=torch.Size(modality_ids.shape),
+            num_routes=num_routes,
+            route_indices=tuple(route_indices),
+        )
 
 
 class PerModalityLinear(nn.Module):
@@ -35,27 +67,56 @@ class PerModalityLinear(nn.Module):
             [nn.Linear(in_features, out_features, bias=bias) for _ in range(num_routes)]
         )
 
+    def forward_route(self, x: torch.Tensor, route_id: int) -> torch.Tensor:
+        """Apply one route directly when all tokens share a known modality."""
+        if route_id < 0 or route_id >= self.num_routes:
+            raise ValueError(f"route_id {route_id} is outside configured routes")
+        return self.layers[route_id](x)
+
     def forward(
-        self, x: torch.Tensor, modality_ids: torch.Tensor | None
+        self,
+        x: torch.Tensor,
+        modality_ids: torch.Tensor | None = None,
+        routing: ModalityRouting | None = None,
     ) -> torch.Tensor:
         """Apply the route-specific linear layer to each token."""
-        if modality_ids is None:
-            raise ValueError("modality_ids are required for PerModalityLinear")
-        if modality_ids.shape != x.shape[:-1]:
+        if routing is None:
+            if modality_ids is None:
+                raise ValueError("modality_ids are required for PerModalityLinear")
+            if modality_ids.shape != x.shape[:-1]:
+                raise ValueError(
+                    f"Expected modality_ids shape {x.shape[:-1]}, "
+                    f"got {modality_ids.shape}"
+                )
+            routing = ModalityRouting.from_modality_ids(modality_ids, self.num_routes)
+        elif routing.shape != x.shape[:-1]:
             raise ValueError(
-                f"Expected modality_ids shape {x.shape[:-1]}, got {modality_ids.shape}"
+                f"Expected routing shape {x.shape[:-1]}, got {routing.shape}"
+            )
+
+        if routing.num_routes != self.num_routes:
+            raise ValueError(
+                f"Expected {self.num_routes} routing routes, got {routing.num_routes}"
             )
 
         out_shape = (*x.shape[:-1], self.layers[0].out_features)
+        flat_x = x.reshape(-1, x.shape[-1])
+        if flat_x.shape[0] == 0:
+            return self.layers[0](flat_x).reshape(out_shape)
+        if len(routing.route_indices) == 1:
+            route_id, indices = routing.route_indices[0]
+            if indices.numel() == flat_x.shape[0]:
+                return self.forward_route(x, route_id)
+
         out: torch.Tensor | None = None
-        for route_id, layer in enumerate(self.layers):
-            route_mask = modality_ids == route_id
-            route_out = layer(x[route_mask])
+        for route_id, indices in routing.route_indices:
+            route_x = flat_x.index_select(0, indices)
+            route_out = self.forward_route(route_x, route_id)
             if out is None:
-                out = route_out.new_empty(out_shape)
-            out[route_mask] = route_out
+                out = route_out.new_empty((flat_x.shape[0], route_out.shape[-1]))
+            out.index_copy_(0, indices, route_out)
         assert out is not None
-        return out
+        return out.reshape(out_shape)
 
 
 @torch._dynamo.disable()
@@ -178,14 +239,25 @@ class Attention(nn.Module):
         self.use_flash_attn = use_flash_attn
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
         self.per_modality_layers = per_modality_layers
+        self.q: nn.Linear | PerModalityLinear | None = None
+        self.k: nn.Linear | None = None
+        self.v: nn.Linear | None = None
+        self.qkv: PerModalityLinear | None = None
+        self.kv: PerModalityLinear | None = None
         if per_modality_layers:
             if num_modality_routes is None:
                 raise ValueError(
                     "num_modality_routes must be set when per_modality_layers=True"
                 )
-            self.q = PerModalityLinear(dim, dim, num_modality_routes, bias=qkv_bias)
-            self.k = PerModalityLinear(dim, dim, num_modality_routes, bias=qkv_bias)
-            self.v = PerModalityLinear(dim, dim, num_modality_routes, bias=qkv_bias)
+            if cross_attn:
+                self.q = PerModalityLinear(dim, dim, num_modality_routes, bias=qkv_bias)
+                self.kv = PerModalityLinear(
+                    dim, dim * 2, num_modality_routes, bias=qkv_bias
+                )
+            else:
+                self.qkv = PerModalityLinear(
+                    dim, dim * 3, num_modality_routes, bias=qkv_bias
+                )
         else:
             self.q = nn.Linear(dim, dim, bias=qkv_bias)
             self.k = nn.Linear(dim, dim, bias=qkv_bias)
@@ -194,6 +266,7 @@ class Attention(nn.Module):
         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.attn_drop = nn.Dropout(attn_drop)
+        self.proj: nn.Linear | PerModalityLinear
         if per_modality_layers:
             assert num_modality_routes is not None
             self.proj = PerModalityLinear(dim, dim, num_modality_routes)
@@ -287,6 +360,8 @@ class Attention(nn.Module):
         attn_mask: torch.Tensor | None = None,
         modality_ids: torch.Tensor | None = None,
         y_modality_ids: torch.Tensor | None = None,
+        modality_routing: ModalityRouting | None = None,
+        y_modality_routing: ModalityRouting | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -302,23 +377,40 @@ class Attention(nn.Module):
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
             modality_ids: Optional route IDs for the query/input tokens.
             y_modality_ids: Optional route IDs for the cross-attention context tokens.
+            modality_routing: Optional precomputed routing for the query/input tokens.
+            y_modality_routing: Optional precomputed routing for cross-attention context.
 
         Returns:
             Output tensor of shape (B, N, C) or (B* N , C) if packed
         """
         original_shape = x.shape
 
-        q = self.q(x, modality_ids) if self.per_modality_layers else self.q(x)
-
-        if y is None:
-            assert not self.cross_attn
-            k_ids = modality_ids
-            k = self.k(x, k_ids) if self.per_modality_layers else self.k(x)
-            v = self.v(x, k_ids) if self.per_modality_layers else self.v(x)
+        if self.per_modality_layers:
+            if y is None:
+                assert not self.cross_attn
+                assert self.qkv is not None
+                qkv = self.qkv(x, modality_ids, routing=modality_routing)
+                q, k, v = qkv.chunk(3, dim=-1)
+            else:
+                assert self.cross_attn
+                assert isinstance(self.q, PerModalityLinear)
+                assert self.kv is not None
+                q = self.q(x, modality_ids, routing=modality_routing)
+                kv = self.kv(y, y_modality_ids, routing=y_modality_routing)
+                k, v = kv.chunk(2, dim=-1)
         else:
-            assert self.cross_attn
-            k = self.k(y, y_modality_ids) if self.per_modality_layers else self.k(y)
-            v = self.v(y, y_modality_ids) if self.per_modality_layers else self.v(y)
+            assert isinstance(self.q, nn.Linear)
+            assert self.k is not None
+            assert self.v is not None
+            q = self.q(x)
+            if y is None:
+                assert not self.cross_attn
+                k = self.k(x)
+                v = self.v(x)
+            else:
+                assert self.cross_attn
+                k = self.k(y)
+                v = self.v(y)
         if not self.use_flash_attn:
             q = rearrange(q, "b n (h d) -> b h n d", h=self.num_heads)
             k = rearrange(k, "b n (h d) -> b h n d", h=self.num_heads)
@@ -347,7 +439,12 @@ class Attention(nn.Module):
             attn_mask=attn_mask,
         )
         x = x.transpose(1, 2).reshape(original_shape)
-        x = self.proj(x, modality_ids) if self.per_modality_layers else self.proj(x)
+        if self.per_modality_layers:
+            assert isinstance(self.proj, PerModalityLinear)
+            x = self.proj(x, modality_ids, routing=modality_routing)
+        else:
+            assert isinstance(self.proj, nn.Linear)
+            x = self.proj(x)
         x = self.proj_drop(x)
         return x
 
@@ -392,6 +489,8 @@ class Mlp(nn.Module):
         hidden_features = hidden_features or in_features
 
         self.per_modality_layers = per_modality_layers
+        self.fc1: nn.Linear | PerModalityLinear
+        self.fc2: nn.Linear | PerModalityLinear
         if per_modality_layers:
             if num_modality_routes is None:
                 raise ValueError(
@@ -413,22 +512,81 @@ class Mlp(nn.Module):
             self.fc2 = nn.Linear(hidden_features, out_features, bias=bias)
         self.drop2 = nn.Dropout(drop)
 
+    def _forward_routed(
+        self,
+        x: torch.Tensor,
+        modality_ids: torch.Tensor | None,
+        modality_routing: ModalityRouting | None,
+    ) -> torch.Tensor:
+        """Apply the full MLP route-wise with one gather/scatter per route."""
+        assert isinstance(self.fc1, PerModalityLinear)
+        assert isinstance(self.fc2, PerModalityLinear)
+        if modality_routing is None:
+            if modality_ids is None:
+                raise ValueError("modality_ids are required for per-modality MLP")
+            if modality_ids.shape != x.shape[:-1]:
+                raise ValueError(
+                    f"Expected modality_ids shape {x.shape[:-1]}, "
+                    f"got {modality_ids.shape}"
+                )
+            modality_routing = ModalityRouting.from_modality_ids(
+                modality_ids, self.fc1.num_routes
+            )
+        elif modality_routing.shape != x.shape[:-1]:
+            raise ValueError(
+                f"Expected routing shape {x.shape[:-1]}, got {modality_routing.shape}"
+            )
+
+        flat_x = x.reshape(-1, x.shape[-1])
+        out_features = self.fc2.layers[0].out_features
+        out_shape = (*x.shape[:-1], out_features)
+        if flat_x.shape[0] == 0:
+            route_out = self.fc1.forward_route(flat_x, 0)
+            route_out = self.act(route_out)
+            route_out = self.drop1(route_out)
+            route_out = self.fc2.forward_route(route_out, 0)
+            route_out = self.drop2(route_out)
+            return route_out.reshape(out_shape)
+
+        out: torch.Tensor | None = None
+        for route_id, indices in modality_routing.route_indices:
+            route_x = flat_x.index_select(0, indices)
+            route_x = self.fc1.forward_route(route_x, route_id)
+            route_x = self.act(route_x)
+            route_x = self.drop1(route_x)
+            route_x = self.fc2.forward_route(route_x, route_id)
+            route_x = self.drop2(route_x)
+            if out is None:
+                out = route_x.new_empty((flat_x.shape[0], route_x.shape[-1]))
+            out.index_copy_(0, indices, route_x)
+        assert out is not None
+        return out.reshape(out_shape)
+
     def forward(
-        self, x: torch.Tensor, modality_ids: torch.Tensor | None = None
+        self,
+        x: torch.Tensor,
+        modality_ids: torch.Tensor | None = None,
+        modality_routing: ModalityRouting | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
         Args:
             x: Input tensor
             modality_ids: Optional route IDs for per-modality projections.
+            modality_routing: Optional precomputed routing for per-modality projections.
 
         Returns:
             Output tensor
         """
-        x = self.fc1(x, modality_ids) if self.per_modality_layers else self.fc1(x)
+        if self.per_modality_layers:
+            return self._forward_routed(x, modality_ids, modality_routing)
+
+        assert isinstance(self.fc1, nn.Linear)
+        assert isinstance(self.fc2, nn.Linear)
+        x = self.fc1(x)
         x = self.act(x)
         x = self.drop1(x)
-        x = self.fc2(x, modality_ids) if self.per_modality_layers else self.fc2(x)
+        x = self.fc2(x)
         x = self.drop2(x)
         return x
 
@@ -610,6 +768,8 @@ class Block(nn.Module):
         attn_mask: torch.Tensor | None = None,
         modality_ids: torch.Tensor | None = None,
         y_modality_ids: torch.Tensor | None = None,
+        modality_routing: ModalityRouting | None = None,
+        y_modality_routing: ModalityRouting | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -625,6 +785,8 @@ class Block(nn.Module):
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
             modality_ids: Optional route IDs for the query/input tokens.
             y_modality_ids: Optional route IDs for the cross-attention context tokens.
+            modality_routing: Optional precomputed routing for the query/input tokens.
+            y_modality_routing: Optional precomputed routing for cross-attention context.
 
         Returns:
             Output tensor of shape (B, N, C)
@@ -643,12 +805,20 @@ class Block(nn.Module):
                     attn_mask=attn_mask,
                     modality_ids=modality_ids,
                     y_modality_ids=y_modality_ids,
+                    modality_routing=modality_routing,
+                    y_modality_routing=y_modality_routing,
                 )
             )
         )
 
         x = x + self.drop_path(
-            self.ls2(self.mlp(self.norm2(x), modality_ids=modality_ids))
+            self.ls2(
+                self.mlp(
+                    self.norm2(x),
+                    modality_ids=modality_ids,
+                    modality_routing=modality_routing,
+                )
+            )
         )
         return x
 

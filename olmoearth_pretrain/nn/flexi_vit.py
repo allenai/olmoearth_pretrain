@@ -22,7 +22,7 @@ from olmoearth_pretrain.datatypes import (
     MaskValue,
     TokensAndMasks,
 )
-from olmoearth_pretrain.nn.attention import Block, PerModalityLinear
+from olmoearth_pretrain.nn.attention import Block, ModalityRouting, PerModalityLinear
 from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -138,11 +138,8 @@ class ProjectAndAggregate(nn.Module):
             assert isinstance(self.projection, nn.Sequential)
             return self.projection(x)
         route_id = self.modality_to_id[modality]
-        modality_ids = torch.full(
-            x.shape[:-1], route_id, dtype=torch.long, device=x.device
-        )
         assert isinstance(self.projection, PerModalityLinear)
-        return self.projection(x, modality_ids)
+        return self.projection.forward_route(x, route_id)
 
     def _project_shared_tensor(self, x: Tensor) -> Tensor:
         """Apply the shared projection to a tensor without modality context."""
@@ -1666,6 +1663,14 @@ class Encoder(FlexiVitBase):
         if self.has_register_tokens:
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
 
+        modality_routing = (
+            ModalityRouting.from_modality_ids(
+                modality_ids, num_routes=self.num_modality_routes
+            )
+            if self.per_modality_layers
+            else None
+        )
+
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
@@ -1690,7 +1695,7 @@ class Encoder(FlexiVitBase):
                 max_seqlen=max_seqlen,
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
-                modality_ids=modality_ids if self.per_modality_layers else None,
+                modality_routing=modality_routing,
             )
 
         if self.has_register_tokens:
@@ -2150,6 +2155,21 @@ class Predictor(PredictorBase):
             cu_seqlens_tokens_to_decode = None
             cu_seqlens_unmasked_tokens = None
 
+        tokens_to_decode_routing = (
+            ModalityRouting.from_modality_ids(
+                tokens_to_decode_modality_ids, num_routes=self.num_modality_routes
+            )
+            if self.per_modality_layers
+            else None
+        )
+        unmasked_tokens_routing = (
+            ModalityRouting.from_modality_ids(
+                unmasked_tokens_modality_ids, num_routes=self.num_modality_routes
+            )
+            if self.per_modality_layers
+            else None
+        )
+
         for blk in self.blocks:
             # note that we are not taking the inverse of the mask, since split_x_y gives us
             # true values for values we want to take part in attention
@@ -2163,12 +2183,8 @@ class Predictor(PredictorBase):
                 cu_seqlens_k=cu_seqlens_unmasked_tokens,
                 max_seqlen_q=max_length_of_tokens_to_decode,
                 max_seqlen_k=max_length_of_unmasked_tokens,
-                modality_ids=(
-                    tokens_to_decode_modality_ids if self.per_modality_layers else None
-                ),
-                y_modality_ids=(
-                    unmasked_tokens_modality_ids if self.per_modality_layers else None
-                ),
+                modality_routing=tokens_to_decode_routing,
+                y_modality_routing=unmasked_tokens_routing,
             )
 
         if self.use_flash_attn:
@@ -2223,8 +2239,10 @@ class Predictor(PredictorBase):
             # Although, we do not account for missing tokens both proj and normalize are on token dimension so there is no mixing with real tokens
             x_modality = self.input_norm(x_modality)
             if self.per_modality_layers:
-                modality_ids = self.create_modality_ids_like(x_modality, modality)
-                x_modality = self.encoder_to_decoder_embed(x_modality, modality_ids)
+                assert isinstance(self.encoder_to_decoder_embed, PerModalityLinear)
+                x_modality = self.encoder_to_decoder_embed.forward_route(
+                    x_modality, self.modality_to_id[modality]
+                )
             else:
                 x_modality = self.encoder_to_decoder_embed(x_modality)
             masked_modality_name = x.get_masked_modality_name(modality)
@@ -2258,8 +2276,10 @@ class Predictor(PredictorBase):
                 per_channel_modality_data = modality_data[..., idx, :]
                 output_data = self.norm(per_channel_modality_data)
                 if self.per_modality_layers:
-                    modality_ids = self.create_modality_ids_like(output_data, modality)
-                    output_data = self.to_output_embed(output_data, modality_ids)
+                    assert isinstance(self.to_output_embed, PerModalityLinear)
+                    output_data = self.to_output_embed.forward_route(
+                        output_data, self.modality_to_id[modality]
+                    )
                 else:
                     output_data = self.to_output_embed(output_data)
                 per_modality_output_tokens.append(output_data)
