@@ -575,6 +575,23 @@ EVAL_TASKS = {
     #     epochs=50,
     #     eval_mode=EvalMode.LINEAR_PROBE,
     # ),
+    "lfmc_woody_3k": DownstreamTaskConfig(
+        dataset="lfmc_woody_3k",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.00005,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[
+            Modality.SENTINEL2_L2A.name,
+        ],
+        patch_size=4,
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+    ),
 }
 
 PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"

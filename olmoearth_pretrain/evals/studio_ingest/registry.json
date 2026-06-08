@@ -670,6 +670,113 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/geo_ecosystem_annual_test",
       "window_size": 64
     },
+    "lfmc_woody_3k": {
+      "classes": [
+        "0"
+      ],
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "lfmc_woody_3k",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 19394.0,
+            "mean": 1432.2353108105253,
+            "min": 0.0,
+            "std": 2299.3453747961707
+          },
+          "B02": {
+            "max": 18112.0,
+            "mean": 1548.658619760319,
+            "min": 0.0,
+            "std": 2296.056607980663
+          },
+          "B03": {
+            "max": 16688.0,
+            "mean": 1726.7691300822828,
+            "min": 0.0,
+            "std": 2173.9815613766204
+          },
+          "B04": {
+            "max": 16096.0,
+            "mean": 1854.4426372648595,
+            "min": 0.0,
+            "std": 2121.051205299479
+          },
+          "B05": {
+            "max": 16094.0,
+            "mean": 2147.055573896694,
+            "min": 0.0,
+            "std": 2078.547546317329
+          },
+          "B06": {
+            "max": 15911.0,
+            "mean": 2580.9945113524773,
+            "min": 0.0,
+            "std": 1912.6944375326182
+          },
+          "B07": {
+            "max": 15849.0,
+            "mean": 2710.1326936263254,
+            "min": 0.0,
+            "std": 1811.6425876258274
+          },
+          "B08": {
+            "max": 15960.0,
+            "mean": 2831.25388092438,
+            "min": 0.0,
+            "std": 1845.2575451292423
+          },
+          "B09": {
+            "max": 16672.0,
+            "mean": 3020.814551292712,
+            "min": 0.0,
+            "std": 2185.615342566997
+          },
+          "B11": {
+            "max": 15298.0,
+            "mean": 2226.823045027137,
+            "min": 0.0,
+            "std": 1056.8638230217407
+          },
+          "B12": {
+            "max": 15179.0,
+            "mean": 1732.7056427955788,
+            "min": 0.0,
+            "std": 943.4527098066219
+          },
+          "B8A": {
+            "max": 15743.0,
+            "mean": 2830.944765235629,
+            "min": 0.0,
+            "std": 1713.9263503363418
+          }
+        }
+      },
+      "num_classes": 1,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/lfmc/20251023/woody/scratch/dataset",
+      "split_stats": {
+        "test": {
+          "count": 445
+        },
+        "train": {
+          "count": 2933
+        },
+        "val": {
+          "count": 747
+        }
+      },
+      "split_tag_key": "eval_split",
+      "task_type": "regression",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/lfmc_woody_3k",
+      "window_size": 32
+    },
     "nandi_crop_map": {
       "classes": [
         "0",
@@ -1251,6 +1358,6 @@
       "window_size": 16
     }
   },
-  "updated_at": "2026-04-15T23:29:08.666694",
+  "updated_at": "2026-05-26T21:58:17.996682",
   "version": "1.0"
 }

@@ -51,6 +51,8 @@ def rslearn_task_type_to_olmoearth_task_type(rslearn_task: Any) -> TaskType:
         return TaskType.CLASSIFICATION
     elif "segmentation" in rslearn_name:
         return TaskType.SEGMENTATION
+    elif "regression" in rslearn_name:
+        return TaskType.REGRESSION
     else:
         # Default/fallback; update if regression is to be supported etc.
         raise ValueError(f"Unknown rslearn task type: {type(rslearn_task)}")
@@ -249,8 +251,11 @@ class EvalDatasetEntry(BaseModel):
                 f"Cannot convert '{self.name}' to EvalDatasetConfig: num_classes is required"
             )
 
-        # For segmentation, use window_size as height_width
-        height_width = self.window_size if self.task_type == "segmentation" else None
+        height_width = (
+            self.window_size
+            if self.task_type in ("segmentation", "regression")
+            else None
+        )
 
         return EvalDatasetConfig(
             task_type=TaskType(self.task_type),
