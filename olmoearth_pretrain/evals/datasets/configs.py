@@ -71,13 +71,13 @@ DATASET_TO_CONFIG = {
         )
         for px in (64, 128)
     },
-    # Backward-compat alias (defaults to 128px).
+    # Backward-compat alias. Keep this as a dummy classification config for
+    # older callers; use pretrain_subset_64/128 for embedding or tiling diagnostics.
     "pretrain_subset": EvalDatasetConfig(
-        task_type=TaskType.DIAGNOSTIC,
+        task_type=TaskType.CLASSIFICATION,
         imputes=[],
         num_classes=1,
         is_multilabel=False,
-        height_width=128,
         supported_modalities=_PRETRAIN_SUBSET_MODALITIES,
     ),
     "pretrain_subset_worldcover": EvalDatasetConfig(

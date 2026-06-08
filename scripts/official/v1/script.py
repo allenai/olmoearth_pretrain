@@ -37,10 +37,7 @@ from olmoearth_pretrain.train.callbacks import (
     OlmoEarthSpeedMonitorCallback,
     OlmoEarthWandBCallback,
 )
-from olmoearth_pretrain.train.callbacks.evaluator_callback import (
-    DownstreamTaskConfig,
-    EvalMode,
-)
+from olmoearth_pretrain.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
 from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
@@ -51,7 +48,6 @@ logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
-H5PY_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"
 
 
 def build_common_components(
@@ -231,21 +227,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             input_modalities=[Modality.SENTINEL2_L2A.name],
             epochs=50,
         ),
-        **{
-            f"tiling_{px}px": DownstreamTaskConfig(
-                dataset=f"pretrain_subset_{px}",
-                embedding_batch_size=32,
-                num_workers=0,
-                pooling_type=PoolingType.MEAN,
-                eval_mode=EvalMode.TILING_DIAGNOSTICS,
-                eval_interval=Duration.steps(20000),
-                h5py_dir=H5PY_DIR,
-                pretrain_max_samples=128,
-                patch_size=4,
-                input_modalities=[Modality.SENTINEL2_L2A.name],
-            )
-            for px in (64, 128)
-        },
     }
     trainer_config = (
         TrainerConfig(

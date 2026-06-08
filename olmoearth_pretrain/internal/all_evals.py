@@ -594,8 +594,6 @@ EVAL_TASKS.update(
     }
 )
 
-H5PY_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"
-
 EMBED_DIAG_TASKS = {
     "pretrain_subset_128": DownstreamTaskConfig(
         dataset="pretrain_subset_128",
@@ -635,21 +633,21 @@ TILING_DIAG_TASKS = {
 # from the v0_1 osm-sampling scoring parquet via
 # ``scripts/data/build_worldcover_class_indices.py``. Low-variance scenes make
 # patch-grid tiling artifacts visually obvious in the PCA RGB output.
-WATER_INDEX_FILE = "/weka/dfive-default/henryh/helios/olmoearth_pretrain/water_p90_indices.npy"
-
-TILING_DIAG_TASKS["tiling_water_128px"] = DownstreamTaskConfig(
-    dataset="pretrain_subset_128",
-    embedding_batch_size=32,
-    num_workers=0,
-    pooling_type=PoolingType.MEAN,
-    eval_mode=EvalMode.TILING_DIAGNOSTICS,
-    eval_interval=Duration.epochs(1),
-    h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
-    pretrain_max_samples=1000,
-    patch_size=4,
-    input_modalities=[Modality.SENTINEL2_L2A.name],
-    pretrain_filter_idx_file=WATER_INDEX_FILE,
-)
+WATER_INDEX_FILE = os.environ.get("OLMOEARTH_WATER_INDEX_FILE")
+if WATER_INDEX_FILE:
+    TILING_DIAG_TASKS["tiling_water_128px"] = DownstreamTaskConfig(
+        dataset="pretrain_subset_128",
+        embedding_batch_size=32,
+        num_workers=0,
+        pooling_type=PoolingType.MEAN,
+        eval_mode=EvalMode.TILING_DIAGNOSTICS,
+        eval_interval=Duration.epochs(1),
+        h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
+        pretrain_max_samples=1000,
+        patch_size=4,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        pretrain_filter_idx_file=WATER_INDEX_FILE,
+    )
 
 FT_EVAL_TASKS = {
     "m_eurosat": DownstreamTaskConfig(

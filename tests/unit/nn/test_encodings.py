@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from olmoearth_pretrain.nn.encodings import (
+    apply_1d_rope,
     apply_2d_rope,
     apply_2d_rope_mixed,
     apply_3d_rope,
@@ -329,8 +330,6 @@ def test_apply_3d_rope_packed_shape() -> None:
 
 def test_apply_3d_rope_temporal_only_when_spatial_zero() -> None:
     """With (row=col=0), output should match 1D RoPE applied to the temporal slice."""
-    from olmoearth_pretrain.nn.encodings import apply_1d_rope
-
     x = torch.randn(1, 2, 3, 16)
     t_vals = torch.tensor([[1.0, 2.0, 3.0]])
     positions = torch.stack(
