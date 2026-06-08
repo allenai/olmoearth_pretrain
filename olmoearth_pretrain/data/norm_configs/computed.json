@@ -45,6 +45,92 @@
       "var": 14.015199366779598
     }
   },
+  "era5l_day_10": {
+    "d2m": {
+      "count": 0,
+      "mean": 0.0,
+      "std": 1.0,
+      "var": 1.0
+    },
+    "e": {
+      "count": 0,
+      "mean": 0.0,
+      "std": 1.0,
+      "var": 1.0
+    },
+    "pev": {
+      "count": 0,
+      "mean": 0.0,
+      "std": 1.0,
+      "var": 1.0
+    },
+    "ro": {
+      "count": 0,
+      "mean": 0.0,
+      "std": 1.0,
+      "var": 1.0
+    },
+    "sp": {
+      "count": 0,
+      "mean": 0.0,
+      "std": 1.0,
+      "var": 1.0
+    },
+    "ssr": {
+      "count": 0,
+      "mean": 0.0,
+      "std": 1.0,
+      "var": 1.0
+    },
+    "ssrd": {
+      "count": 0,
+      "mean": 0.0,
+      "std": 1.0,
+      "var": 1.0
+    },
+    "str": {
+      "count": 0,
+      "mean": 0.0,
+      "std": 1.0,
+      "var": 1.0
+    },
+    "swvl1": {
+      "count": 0,
+      "mean": 0.0,
+      "std": 1.0,
+      "var": 1.0
+    },
+    "swvl2": {
+      "count": 0,
+      "mean": 0.0,
+      "std": 1.0,
+      "var": 1.0
+    },
+    "t2m": {
+      "count": 0,
+      "mean": 0.0,
+      "std": 1.0,
+      "var": 1.0
+    },
+    "tp": {
+      "count": 0,
+      "mean": 0.0,
+      "std": 1.0,
+      "var": 1.0
+    },
+    "u10": {
+      "count": 0,
+      "mean": 0.0,
+      "std": 1.0,
+      "var": 1.0
+    },
+    "v10": {
+      "count": 0,
+      "mean": 0.0,
+      "std": 1.0,
+      "var": 1.0
+    }
+  },
   "eurocrops": {
     "B1": {
       "count": 100,

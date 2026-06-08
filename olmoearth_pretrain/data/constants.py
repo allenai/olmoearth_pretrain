@@ -23,6 +23,10 @@ MISSING_VALUE = -99999
 # Default maximum sequence length.
 MAX_SEQUENCE_LENGTH = 12
 
+# Maximum sequence length for the dedicated daily ERA5-Land encoder.
+# A full annual window (366 to handle leap years) of one observation per day.
+MAX_ERA5L_DAY_10_SEQUENCE_LENGTH = 365
+
 # Resolution of the input data in meters
 BASE_GSD = 10
 # Default nodata value for Sentinel-1 data.
@@ -431,6 +435,41 @@ class Modality:
                     "10m-u-component-of-wind",
                     "10m-v-component-of-wind",
                     "total-precipitation",
+                ],
+                4096,
+            ),
+        ],
+        is_multitemporal=True,
+        ignore_when_parsing=False,
+        image_tile_size_factor=-256,
+    )
+
+    # ERA5-Land daily 9 km/pixel bands stored at 2.56 km/pixel, daily
+    # timesteps, non-spatial (one value per tile per day). Band names match
+    # the rslearn `ERA5LandDailyUTCv1` data source on disk (short ECMWF
+    # codes). All samples must have exactly MAX_ERA5L_DAY_10_SEQUENCE_LENGTH
+    # timesteps (ERA5 is dense, so length is uniform); a ValueError is
+    # raised otherwise (see olmoearth_pretrain/data/multi_task_era5_dataset.py).
+    ERA5L_DAY_10 = ModalitySpec(
+        name="era5l_day_10",
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [
+                    "d2m",
+                    "e",
+                    "pev",
+                    "ro",
+                    "sp",
+                    "ssr",
+                    "ssrd",
+                    "str",
+                    "swvl1",
+                    "swvl2",
+                    "t2m",
+                    "tp",
+                    "u10",
+                    "v10",
                 ],
                 4096,
             ),
