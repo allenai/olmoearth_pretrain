@@ -9,8 +9,33 @@ They cover the following:
 - Month encoding (for temporal data)
 """
 
+from enum import StrEnum
+
 import numpy as np
 import torch
+
+
+class SpatialPosEncoding(StrEnum):
+    """Supported spatial position encoding modes."""
+
+    ABSOLUTE = "absolute"
+    AXIAL_2D_ROPE = "rope"
+    MIXED_2D_ROPE = "rope_mixed"
+    AXIAL_3D_ROPE = "rope_3d"
+    MIXED_3D_ROPE = "rope_3d_mixed"
+    NONE = "none"
+
+
+SPATIAL_POS_ENCODING_TYPES = tuple(encoding.value for encoding in SpatialPosEncoding)
+ROPE_2D_ENCODING_TYPES = (
+    SpatialPosEncoding.AXIAL_2D_ROPE.value,
+    SpatialPosEncoding.MIXED_2D_ROPE.value,
+)
+ROPE_3D_ENCODING_TYPES = (
+    SpatialPosEncoding.AXIAL_3D_ROPE.value,
+    SpatialPosEncoding.MIXED_3D_ROPE.value,
+)
+ROPE_ENCODING_TYPES = ROPE_2D_ENCODING_TYPES + ROPE_3D_ENCODING_TYPES
 
 # Cumulative days at the start of each month (non-leap year). Index by 0-based
 # month. Used to convert (day, month, year) timestamps to a calendar-day count.

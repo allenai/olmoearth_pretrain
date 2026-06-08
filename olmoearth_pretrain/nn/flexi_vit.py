@@ -24,6 +24,11 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
+    ROPE_2D_ENCODING_TYPES,
+    ROPE_3D_ENCODING_TYPES,
+    ROPE_ENCODING_TYPES,
+    SPATIAL_POS_ENCODING_TYPES,
+    SpatialPosEncoding,
     axial_3d_dim_split,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -39,18 +44,6 @@ from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
 logger = logging.getLogger(__name__)
-
-SPATIAL_POS_ENCODING_TYPES = (
-    "absolute",
-    "rope",
-    "rope_mixed",
-    "rope_3d",
-    "rope_3d_mixed",
-    "none",
-)
-ROPE_2D_ENCODING_TYPES = ("rope", "rope_mixed")
-ROPE_3D_ENCODING_TYPES = ("rope_3d", "rope_3d_mixed")
-ROPE_ENCODING_TYPES = ROPE_2D_ENCODING_TYPES + ROPE_3D_ENCODING_TYPES
 
 
 def get_modalities_to_process(
@@ -666,7 +659,7 @@ class CompositeEncodings(nn.Module):
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             tokenization_config: Optional config for custom band groupings
             spatial_pos_encoding: Spatial encoding type: "absolute", "rope",
-                "rope_mixed", or "none"
+                "rope_mixed", "rope_3d", "rope_3d_mixed", or "none".
         """
         super().__init__()
         if spatial_pos_encoding not in SPATIAL_POS_ENCODING_TYPES:
@@ -848,7 +841,10 @@ class CompositeEncodings(nn.Module):
             month_embed = self.month_embed(months)
             month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
             modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
-        if modality.is_spatial and self.spatial_pos_encoding == "absolute":
+        if (
+            modality.is_spatial
+            and self.spatial_pos_encoding == SpatialPosEncoding.ABSOLUTE
+        ):
             # Spatial encodings
             assert input_res is not None
             assert patch_size is not None
@@ -986,12 +982,20 @@ class FlexiVitBase(nn.Module):
                     cross_attn=self.cross_attn,
                     drop_path=drop_path,
                     use_flash_attn=self.use_flash_attn,
-                    use_2d_rope=self.spatial_pos_encoding == "rope",
+                    use_2d_rope=(
+                        self.spatial_pos_encoding == SpatialPosEncoding.AXIAL_2D_ROPE
+                    ),
                     rope_base=self.rope_base,
-                    use_2d_rope_mixed=self.spatial_pos_encoding == "rope_mixed",
+                    use_2d_rope_mixed=(
+                        self.spatial_pos_encoding == SpatialPosEncoding.MIXED_2D_ROPE
+                    ),
                     rope_mixed_base=self.rope_mixed_base,
-                    use_3d_rope=self.spatial_pos_encoding == "rope_3d",
-                    use_3d_rope_mixed=self.spatial_pos_encoding == "rope_3d_mixed",
+                    use_3d_rope=(
+                        self.spatial_pos_encoding == SpatialPosEncoding.AXIAL_3D_ROPE
+                    ),
+                    use_3d_rope_mixed=(
+                        self.spatial_pos_encoding == SpatialPosEncoding.MIXED_3D_ROPE
+                    ),
                     temporal_rope_dim_frac=self.temporal_rope_dim_frac,
                     rope_temporal_base=self.rope_temporal_base,
                 )
@@ -2553,16 +2557,19 @@ class EncoderConfig(Config):
                 f"{self.rope_temporal_coordinate_scale}"
             )
         head_dim = self.embedding_size // self.num_heads
-        if self.spatial_pos_encoding in ("rope", "rope_mixed"):
+        if self.spatial_pos_encoding in ROPE_2D_ENCODING_TYPES:
             if head_dim % 4 != 0:
                 raise ValueError(
                     f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "
                     f"got {head_dim}"
                 )
-        if self.spatial_pos_encoding == "rope_3d":
+        if self.spatial_pos_encoding == SpatialPosEncoding.AXIAL_3D_ROPE:
             # Validates that head_dim splits cleanly into (d_t, d_x, d_y).
             axial_3d_dim_split(head_dim, self.temporal_rope_dim_frac)
-        if self.spatial_pos_encoding == "rope_3d_mixed" and head_dim % 4 != 0:
+        if (
+            self.spatial_pos_encoding == SpatialPosEncoding.MIXED_3D_ROPE
+            and head_dim % 4 != 0
+        ):
             raise ValueError(
                 f"3D RoPE-Mixed requires head_dim divisible by 4, got {head_dim}"
             )
@@ -2654,15 +2661,18 @@ class PredictorConfig(Config):
                 f"{self.rope_temporal_coordinate_scale}"
             )
         head_dim = self.decoder_embedding_size // self.num_heads
-        if self.spatial_pos_encoding in ("rope", "rope_mixed"):
+        if self.spatial_pos_encoding in ROPE_2D_ENCODING_TYPES:
             if head_dim % 4 != 0:
                 raise ValueError(
                     f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "
                     f"got {head_dim}"
                 )
-        if self.spatial_pos_encoding == "rope_3d":
+        if self.spatial_pos_encoding == SpatialPosEncoding.AXIAL_3D_ROPE:
             axial_3d_dim_split(head_dim, self.temporal_rope_dim_frac)
-        if self.spatial_pos_encoding == "rope_3d_mixed" and head_dim % 4 != 0:
+        if (
+            self.spatial_pos_encoding == SpatialPosEncoding.MIXED_3D_ROPE
+            and head_dim % 4 != 0
+        ):
             raise ValueError(
                 f"3D RoPE-Mixed requires head_dim divisible by 4, got {head_dim}"
             )
