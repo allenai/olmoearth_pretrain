@@ -24,10 +24,6 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
-    ROPE_2D_ENCODING_TYPES,
-    ROPE_3D_ENCODING_TYPES,
-    ROPE_ENCODING_TYPES,
-    SPATIAL_POS_ENCODING_TYPES,
     SpatialPosEncoding,
     axial_3d_dim_split,
     get_1d_sincos_pos_encoding,
@@ -662,9 +658,9 @@ class CompositeEncodings(nn.Module):
                 "rope_mixed", "rope_3d", "rope_3d_mixed", or "none".
         """
         super().__init__()
-        if spatial_pos_encoding not in SPATIAL_POS_ENCODING_TYPES:
+        if spatial_pos_encoding not in SpatialPosEncoding.values():
             raise ValueError(
-                f"spatial_pos_encoding must be one of {SPATIAL_POS_ENCODING_TYPES}, "
+                f"spatial_pos_encoding must be one of {SpatialPosEncoding.values()}, "
                 f"got {spatial_pos_encoding}"
             )
         self.embedding_size = embedding_size
@@ -828,7 +824,7 @@ class CompositeEncodings(nn.Module):
         if modality.is_multitemporal and use_temporal_encodings:
             # Slot-index temporal encoding (additive). Skipped when 3D RoPE
             # handles temporal position rotationally inside attention.
-            if self.spatial_pos_encoding not in ROPE_3D_ENCODING_TYPES:
+            if not SpatialPosEncoding.is_3d_rope(self.spatial_pos_encoding):
                 time_embed = repeat(
                     self.pos_embed[:t], f"t d -> {ein_string}", **ein_dict
                 )
@@ -925,9 +921,9 @@ class FlexiVitBase(nn.Module):
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
-        if spatial_pos_encoding not in SPATIAL_POS_ENCODING_TYPES:
+        if spatial_pos_encoding not in SpatialPosEncoding.values():
             raise ValueError(
-                f"spatial_pos_encoding must be one of {SPATIAL_POS_ENCODING_TYPES}, "
+                f"spatial_pos_encoding must be one of {SpatialPosEncoding.values()}, "
                 f"got {spatial_pos_encoding}"
             )
         if rope_base <= 0:
@@ -1081,9 +1077,9 @@ class FlexiVitBase(nn.Module):
         scaled by ``self.rope_temporal_coordinate_scale``. Static modalities
         keep ``t=0`` (no temporal anchor).
         """
-        if self.spatial_pos_encoding not in ROPE_ENCODING_TYPES:
+        if not SpatialPosEncoding.is_rope(self.spatial_pos_encoding):
             return None
-        is_3d = self.spatial_pos_encoding in ROPE_3D_ENCODING_TYPES
+        is_3d = SpatialPosEncoding.is_3d_rope(self.spatial_pos_encoding)
         coord_dim = 3 if is_3d else 2
 
         position_dict = {}
@@ -2527,9 +2523,9 @@ class EncoderConfig(Config):
                 )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
-        if self.spatial_pos_encoding not in SPATIAL_POS_ENCODING_TYPES:
+        if self.spatial_pos_encoding not in SpatialPosEncoding.values():
             raise ValueError(
-                f"spatial_pos_encoding must be one of {SPATIAL_POS_ENCODING_TYPES}, "
+                f"spatial_pos_encoding must be one of {SpatialPosEncoding.values()}, "
                 f"got {self.spatial_pos_encoding}"
             )
         if self.rope_base <= 0:
@@ -2557,7 +2553,7 @@ class EncoderConfig(Config):
                 f"{self.rope_temporal_coordinate_scale}"
             )
         head_dim = self.embedding_size // self.num_heads
-        if self.spatial_pos_encoding in ROPE_2D_ENCODING_TYPES:
+        if SpatialPosEncoding.is_2d_rope(self.spatial_pos_encoding):
             if head_dim % 4 != 0:
                 raise ValueError(
                     f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "
@@ -2631,9 +2627,9 @@ class PredictorConfig(Config):
                     raise ValueError(f"Modality {modality} is not supported")
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
-        if self.spatial_pos_encoding not in SPATIAL_POS_ENCODING_TYPES:
+        if self.spatial_pos_encoding not in SpatialPosEncoding.values():
             raise ValueError(
-                f"spatial_pos_encoding must be one of {SPATIAL_POS_ENCODING_TYPES}, "
+                f"spatial_pos_encoding must be one of {SpatialPosEncoding.values()}, "
                 f"got {self.spatial_pos_encoding}"
             )
         if self.rope_base <= 0:
@@ -2661,7 +2657,7 @@ class PredictorConfig(Config):
                 f"{self.rope_temporal_coordinate_scale}"
             )
         head_dim = self.decoder_embedding_size // self.num_heads
-        if self.spatial_pos_encoding in ROPE_2D_ENCODING_TYPES:
+        if SpatialPosEncoding.is_2d_rope(self.spatial_pos_encoding):
             if head_dim % 4 != 0:
                 raise ValueError(
                     f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "

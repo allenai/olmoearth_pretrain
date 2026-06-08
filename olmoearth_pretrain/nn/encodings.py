@@ -25,17 +25,26 @@ class SpatialPosEncoding(StrEnum):
     MIXED_3D_ROPE = "rope_3d_mixed"
     NONE = "none"
 
+    @classmethod
+    def values(cls) -> tuple[str, ...]:
+        """Return serialized config values accepted for spatial_pos_encoding."""
+        return tuple(encoding.value for encoding in cls)
 
-SPATIAL_POS_ENCODING_TYPES = tuple(encoding.value for encoding in SpatialPosEncoding)
-ROPE_2D_ENCODING_TYPES = (
-    SpatialPosEncoding.AXIAL_2D_ROPE.value,
-    SpatialPosEncoding.MIXED_2D_ROPE.value,
-)
-ROPE_3D_ENCODING_TYPES = (
-    SpatialPosEncoding.AXIAL_3D_ROPE.value,
-    SpatialPosEncoding.MIXED_3D_ROPE.value,
-)
-ROPE_ENCODING_TYPES = ROPE_2D_ENCODING_TYPES + ROPE_3D_ENCODING_TYPES
+    @classmethod
+    def is_2d_rope(cls, value: str) -> bool:
+        """Return whether ``value`` selects a 2D RoPE encoding."""
+        return value in {cls.AXIAL_2D_ROPE, cls.MIXED_2D_ROPE}
+
+    @classmethod
+    def is_3d_rope(cls, value: str) -> bool:
+        """Return whether ``value`` selects a 3D RoPE encoding."""
+        return value in {cls.AXIAL_3D_ROPE, cls.MIXED_3D_ROPE}
+
+    @classmethod
+    def is_rope(cls, value: str) -> bool:
+        """Return whether ``value`` selects any RoPE encoding."""
+        return cls.is_2d_rope(value) or cls.is_3d_rope(value)
+
 
 # Cumulative days at the start of each month (non-leap year). Index by 0-based
 # month. Used to convert (day, month, year) timestamps to a calendar-day count.
