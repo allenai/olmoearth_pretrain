@@ -40,8 +40,6 @@ import argparse
 import json
 import logging
 import multiprocessing
-import subprocess
-import sys
 
 from upath import UPath
 
@@ -724,19 +722,26 @@ def cmd_kill_jobs(args: argparse.Namespace) -> None:
 
     result = sp.run(
         [
-            "beaker", "rpc", "call", "ListWorkloads",
-            json.dumps({
-                "options": {
-                    "authorId": _get_beaker_author_id(),
-                    "organizationId": "us_wvnghctl47k0",
-                    "workloadType": "WORKLOAD_TYPE_EXPERIMENT",
-                    "nameOrDescriptionSubstring": args.pattern,
-                    "createdAfter": args.since or "2020-01-01T00:00:00Z",
-                    "pageSize": 200,
-                },
-            }),
+            "beaker",
+            "rpc",
+            "call",
+            "ListWorkloads",
+            json.dumps(
+                {
+                    "options": {
+                        "authorId": _get_beaker_author_id(),
+                        "organizationId": "us_wvnghctl47k0",
+                        "workloadType": "WORKLOAD_TYPE_EXPERIMENT",
+                        "nameOrDescriptionSubstring": args.pattern,
+                        "createdAfter": args.since or "2020-01-01T00:00:00Z",
+                        "pageSize": 200,
+                    },
+                }
+            ),
         ],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     data = json.loads(result.stdout)
     workloads = data.get("workloads", [])
@@ -764,7 +769,9 @@ def cmd_kill_jobs(args: argparse.Namespace) -> None:
         try:
             sp.run(
                 ["beaker", "experiment", "stop", eid],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             )
             cancelled += 1
         except sp.CalledProcessError:
@@ -800,7 +807,9 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
         print("No incomplete windows found.")
         return
 
-    print(f"Incomplete windows (no items.json, no layers, or empty layers): {len(incomplete)}")
+    print(
+        f"Incomplete windows (no items.json, no layers, or empty layers): {len(incomplete)}"
+    )
     for wd in incomplete[:10]:
         print(f"  {wd.name}")
     if len(incomplete) > 10:
@@ -811,7 +820,9 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
         return
 
     if not args.yes:
-        confirm = input(f"\nRemove {len(incomplete)} incomplete window directories? [y/N] ")
+        confirm = input(
+            f"\nRemove {len(incomplete)} incomplete window directories? [y/N] "
+        )
         if confirm.lower() != "y":
             print("Aborted.")
             return
@@ -828,9 +839,12 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
 
 def _get_beaker_author_id() -> str:
     import subprocess as sp
+
     result = sp.run(
         ["beaker", "account", "whoami", "--format", "json"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return json.loads(result.stdout)[0]["id"]
 
@@ -856,12 +870,38 @@ def main() -> None:
     p.add_argument("--rslearn-config", required=True, help="rslearn config.json path")
     p.add_argument("--num-shards", type=int, required=True)
     p.add_argument("--workers", type=int, default=16)
-    p.add_argument("--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters (e.g. ai2/jupiter ai2/saturn)")
-    p.add_argument("--disabled-layers", nargs="*", default=[], help="rslearn layers to skip")
-    p.add_argument("--only-layers", nargs="*", default=None, help="Only process these layers (disables all others)")
-    p.add_argument("--steps", nargs="*", default=None, choices=["prepare", "ingest", "materialize"], help="Only run these rslearn steps (default: all three)")
-    p.add_argument("--max-samples", type=int, default=None, help="Limit corpus to first N samples")
-    p.add_argument("--shard-ids", nargs="*", type=int, default=None, help="Only launch these shard IDs (for resuming failed/missing shards)")
+    p.add_argument(
+        "--clusters",
+        nargs="+",
+        default=["ai2/jupiter"],
+        help="Beaker clusters (e.g. ai2/jupiter ai2/saturn)",
+    )
+    p.add_argument(
+        "--disabled-layers", nargs="*", default=[], help="rslearn layers to skip"
+    )
+    p.add_argument(
+        "--only-layers",
+        nargs="*",
+        default=None,
+        help="Only process these layers (disables all others)",
+    )
+    p.add_argument(
+        "--steps",
+        nargs="*",
+        default=None,
+        choices=["prepare", "ingest", "materialize"],
+        help="Only run these rslearn steps (default: all three)",
+    )
+    p.add_argument(
+        "--max-samples", type=int, default=None, help="Limit corpus to first N samples"
+    )
+    p.add_argument(
+        "--shard-ids",
+        nargs="*",
+        type=int,
+        default=None,
+        help="Only launch these shard IDs (for resuming failed/missing shards)",
+    )
     p.set_defaults(func=cmd_launch_rslearn)
 
     # -- rslearn-worker --
@@ -874,7 +914,9 @@ def main() -> None:
     p.add_argument("--workers", type=int, default=16)
     p.add_argument("--disabled-layers", nargs="*", default=[])
     p.add_argument("--only-layers", nargs="*", default=None)
-    p.add_argument("--steps", nargs="*", default=None, choices=["prepare", "ingest", "materialize"])
+    p.add_argument(
+        "--steps", nargs="*", default=None, choices=["prepare", "ingest", "materialize"]
+    )
     p.add_argument("--max-samples", type=int, default=None)
     p.set_defaults(func=cmd_rslearn_worker)
 
@@ -882,10 +924,16 @@ def main() -> None:
     p = subparsers.add_parser("launch-convert", help="Launch convert on Beaker")
     p.add_argument("--corpus", required=True)
     p.add_argument("--rslearn-dir", required=True)
-    p.add_argument("--olmoearth-dir", default=None, help="Output dir (default: derived from rslearn-dir)")
+    p.add_argument(
+        "--olmoearth-dir",
+        default=None,
+        help="Output dir (default: derived from rslearn-dir)",
+    )
     p.add_argument("--num-shards", type=int, required=True)
     p.add_argument("--workers", type=int, default=16)
-    p.add_argument("--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters")
+    p.add_argument(
+        "--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters"
+    )
     p.add_argument("--disabled-layers", nargs="*", default=[])
     p.add_argument("--max-samples", type=int, default=None)
     p.set_defaults(func=cmd_launch_convert)
@@ -904,15 +952,23 @@ def main() -> None:
 
     # -- prepare-h5 --
     p = subparsers.add_parser("prepare-h5", help="Prepare H5 metadata (single machine)")
-    p.add_argument("--rslearn-dir", default=None, help="Used to derive --olmoearth-dir if not set")
-    p.add_argument("--olmoearth-dir", default=None, help="Output dir (default: derived from rslearn-dir)")
+    p.add_argument(
+        "--rslearn-dir", default=None, help="Used to derive --olmoearth-dir if not set"
+    )
+    p.add_argument(
+        "--olmoearth-dir",
+        default=None,
+        help="Output dir (default: derived from rslearn-dir)",
+    )
     p.set_defaults(func=cmd_prepare_h5)
 
     # -- launch-h5 --
     p = subparsers.add_parser("launch-h5", help="Launch H5 writing on Beaker")
     p.add_argument("--h5py-dir", required=True, help="H5 output dir from prepare-h5")
     p.add_argument("--num-h5-shards", type=int, required=True)
-    p.add_argument("--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters")
+    p.add_argument(
+        "--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters"
+    )
     p.set_defaults(func=cmd_launch_h5)
 
     # -- launch-h5-from-olmoearth --
@@ -920,10 +976,16 @@ def main() -> None:
         "launch-h5-from-olmoearth",
         help="Prepare H5 metadata, then launch H5 writing on Beaker",
     )
-    p.add_argument("--rslearn-dir", default=None, help="Used to derive --olmoearth-dir if not set")
-    p.add_argument("--olmoearth-dir", default=None, help="Converted OlmoEarth dataset dir")
+    p.add_argument(
+        "--rslearn-dir", default=None, help="Used to derive --olmoearth-dir if not set"
+    )
+    p.add_argument(
+        "--olmoearth-dir", default=None, help="Converted OlmoEarth dataset dir"
+    )
     p.add_argument("--num-h5-shards", type=int, required=True)
-    p.add_argument("--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters")
+    p.add_argument(
+        "--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters"
+    )
     p.set_defaults(func=cmd_launch_h5_from_olmoearth)
 
     # -- h5-worker --
@@ -941,9 +1003,17 @@ def main() -> None:
     p.set_defaults(func=cmd_status)
 
     # -- kill-jobs --
-    p = subparsers.add_parser("kill-jobs", help="Bulk cancel Beaker experiments by name pattern")
-    p.add_argument("--pattern", required=True, help="Substring to match experiment names")
-    p.add_argument("--since", default=None, help="Only match experiments created after this ISO timestamp")
+    p = subparsers.add_parser(
+        "kill-jobs", help="Bulk cancel Beaker experiments by name pattern"
+    )
+    p.add_argument(
+        "--pattern", required=True, help="Substring to match experiment names"
+    )
+    p.add_argument(
+        "--since",
+        default=None,
+        help="Only match experiments created after this ISO timestamp",
+    )
     p.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
     p.set_defaults(func=cmd_kill_jobs)
 
