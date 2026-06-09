@@ -50,6 +50,13 @@ class EvalDatasetConfig:
 
 
 DATASET_TO_CONFIG = {
+    "imagenet": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[],
+        num_classes=1000,
+        is_multilabel=False,
+        supported_modalities=[Modality.IMAGENET.name],
+    ),
     # Dummy config — only used for embedding diagnostics, not actual classification.
     "pretrain_subset": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
