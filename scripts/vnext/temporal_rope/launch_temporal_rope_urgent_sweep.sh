@@ -33,7 +33,7 @@ SPATIAL_MIXED="\
 # ---------------------------------------------------------------------------
 # 1. ViT-large 2D RoPE baseline.
 # ---------------------------------------------------------------------------
-python scripts/official/v1_1/rope_large.py launch large_rope_base10k_scale0.25 ai2/jupiter \
+python scripts/vnext/temporal_rope/rope_large.py launch large_rope_base10k_scale0.25 ai2/jupiter \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT" \
     --model.encoder_config.rope_base=10000 \
@@ -44,7 +44,7 @@ python scripts/official/v1_1/rope_large.py launch large_rope_base10k_scale0.25 a
 # ---------------------------------------------------------------------------
 # 2. Axial 3D RoPE: fixed temporal_base=1000, sweep temporal scale (days vs months).
 # ---------------------------------------------------------------------------
-AXIAL_SCRIPT="scripts/official/v1_1/temporal_rope.py"
+AXIAL_SCRIPT="scripts/vnext/temporal_rope/temporal_rope.py"
 
 python "$AXIAL_SCRIPT" launch trope_axial_tbase1k_tscale_days ai2/jupiter \
     $LAUNCH_ARGS $SPATIAL_AXIAL \
@@ -66,7 +66,7 @@ python "$AXIAL_SCRIPT" launch trope_axial_tbase1k_tscale_months ai2/jupiter \
 # 3. Mixed 3D RoPE: sweep temporal scale only (freqs learned), fixed 2D base.
 #    temporal_scale in {1.0 days, 0.0333 months}.
 # ---------------------------------------------------------------------------
-MIXED_SCRIPT="scripts/official/v1_1/temporal_rope_mixed.py"
+MIXED_SCRIPT="scripts/vnext/temporal_rope/temporal_rope_mixed.py"
 
 python "$MIXED_SCRIPT" launch trope_mixed_tscale_days ai2/jupiter \
     $LAUNCH_ARGS $SPATIAL_MIXED \

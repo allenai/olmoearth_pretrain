@@ -2,11 +2,11 @@
 # Small v1.1 ViT-base RoPE sweep against the hidden1 run:
 # https://wandb.ai/eai-ai2/2026_04_22_add_hidden_layer_to_initial_projection/runs/d7nfwd1i
 #
-# All runs use scripts/official/v1_1/rope.py, which imports v1_1/base.py and only
+# All runs use scripts/vnext/temporal_rope/rope.py, which imports v1_1/base.py and only
 # changes spatial positional encoding fields.
 set -e
 
-SCRIPT="scripts/official/v1_1/rope.py"
+SCRIPT="scripts/vnext/temporal_rope/rope.py"
 WANDB_PROJECT="--trainer.callbacks.wandb.project=2026_04_22_add_hidden_layer_to_initial_projection"
 LAUNCH_ARGS="--launch.num_gpus=8 --launch.priority=high --launch.clusters=[ai2/jupiter,ai2/ceres]"
 

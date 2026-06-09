@@ -2,7 +2,7 @@
 
 Run directly without launching a job:
 
-    python scripts/official/v1_1/smoke_temporal_rope.py
+    python scripts/vnext/temporal_rope/smoke_temporal_rope.py
 
 What this verifies (no GPU required):
 

@@ -1,6 +1,6 @@
 """ViT-base v1.1 hidden-projection baseline with axial 3D RoPE (t, row, col).
 
-Variant of scripts/official/v1_1/rope.py that extends 2D axial spatial RoPE
+Variant of scripts/vnext/temporal_rope/rope.py that extends 2D axial spatial RoPE
 to 3D by also rotating queries/keys along the temporal axis. The slot-index
 additive temporal encoding is automatically dropped when ``rope_3d`` is set;
 the calendar/month additive encoding is preserved.

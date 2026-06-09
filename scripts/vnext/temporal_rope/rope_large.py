@@ -3,7 +3,7 @@
 Same training / data / loss / trainer setup as scripts/official/v1_1/base.py,
 but swaps the encoder + decoder to ``large_shallow_decoder`` (1024 dim, 24
 encoder depth, 16 heads) and replaces additive absolute spatial encodings
-with attention-level axial 2D RoPE (matching scripts/official/v1_1/rope.py).
+with attention-level axial 2D RoPE (matching scripts/vnext/temporal_rope/rope.py).
 """
 
 import logging

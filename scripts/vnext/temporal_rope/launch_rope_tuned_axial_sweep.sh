@@ -19,7 +19,7 @@
 # These 4 fill the low-base curve at scale=0.25 plus a sharper-fine-end probe.
 set -e
 
-SCRIPT="scripts/official/v1_1/rope.py"
+SCRIPT="scripts/vnext/temporal_rope/rope.py"
 PROJECT="2026_04_22_add_hidden_layer_to_initial_projection"
 LAUNCH_ARGS="--launch.num_gpus=8 --launch.priority=urgent --launch.clusters=[ai2/jupiter]"
 

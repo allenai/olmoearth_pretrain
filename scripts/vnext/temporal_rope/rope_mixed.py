@@ -1,17 +1,12 @@
-"""ViT-base v1.1 hidden-projection baseline with mixed 3D RoPE (t, row, col).
+"""ViT-base v1.1 hidden-projection baseline with RoPE-Mixed.
 
-Variant of scripts/official/v1_1/rope_mixed.py that extends RoPE-Mixed
-(Heo et al. 2024) from 2D to 3D: every per-head per-pair frequency becomes
-a learnable 3-vector ``(theta_t, theta_row, theta_col)`` instead of a 2-vector.
-The full head_dim is shared across axes (no chunk split). The slot-index
-additive temporal encoding is dropped automatically; the calendar/month
-additive encoding is preserved.
+Variant of scripts/vnext/temporal_rope/rope.py that swaps axial 2D RoPE for the
+learnable mixed 2D frequencies from "Rotary Position Embedding for Vision
+Transformer" (Heo et al., 2024, https://arxiv.org/abs/2403.13298).
 
-Temporal coordinate is days-since-2000. ``rope_temporal_coordinate_scale``
-multiplies that into whatever unit you want (default raw days; set to 1/30
-for months, 24 for hours, etc.). The learnable mixed frequencies then adapt
-during training, so there is no separate ``rope_temporal_base`` knob in this
-variant — only the input scale matters.
+Each attention layer learns its own ``(2, num_heads, head_dim // 2)`` table of
+2D frequencies, allowing the RoPE phase to mix row/col directions and encode
+diagonal relative offsets that axial RoPE cannot represent.
 """
 
 import logging
@@ -33,28 +28,19 @@ from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 
 logger = logging.getLogger(__name__)
 
-SPATIAL_POS_ENCODING = "rope_3d_mixed"
+SPATIAL_POS_ENCODING = "rope_mixed"
 ROPE_MIXED_BASE = 10.0
-# Days are large numbers (~7000 in 2020); scale into a more typical range so
-# the learnable freqs don't have to fight magnitudes. 1/30 -> roughly months.
-ROPE_TEMPORAL_COORDINATE_SCALE = 1.0 / 30.0
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """Build the v1.1 base model with mixed 3D RoPE."""
+    """Build the v1.1 base model with RoPE-Mixed."""
     config = build_model_config_base(common)
 
     config.encoder_config.spatial_pos_encoding = SPATIAL_POS_ENCODING
     config.encoder_config.rope_mixed_base = ROPE_MIXED_BASE
-    config.encoder_config.rope_temporal_coordinate_scale = (
-        ROPE_TEMPORAL_COORDINATE_SCALE
-    )
 
     config.decoder_config.spatial_pos_encoding = SPATIAL_POS_ENCODING
     config.decoder_config.rope_mixed_base = ROPE_MIXED_BASE
-    config.decoder_config.rope_temporal_coordinate_scale = (
-        ROPE_TEMPORAL_COORDINATE_SCALE
-    )
 
     return config
 
