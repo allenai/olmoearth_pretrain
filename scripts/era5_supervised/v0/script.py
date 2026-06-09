@@ -114,6 +114,7 @@ class Era5SupervisedCommonComponents(CommonComponents):
     direct_is_multilabel: bool = False
     direct_modality_layer_name: str = "era5_daily"
     direct_train_groups: list[str] = field(default_factory=lambda: ["train"])
+    direct_train_tags: dict[str, str] = field(default_factory=dict)
     direct_max_samples: int | None = None
     encoder_embedding_size: int = 384
     encoder_depth: int = 8
@@ -205,6 +206,7 @@ def _resolve_direct_task_spec(
         weka_path=common.direct_weka_path,
         model_yaml_path=common.direct_model_yaml_path,
         groups_override=common.direct_train_groups,
+        tags_override=common.direct_train_tags or None,
         norm_stats_from_pretrained=True,
         label_extractor_name=label_extractor_name,
         max_samples=common.direct_max_samples,
