@@ -47,6 +47,10 @@ from olmoearth_pretrain.data.multi_task_era5_dataset import (
     MultiTaskEra5DataLoaderConfig,
     MultiTaskEra5DatasetConfig,
 )
+from olmoearth_pretrain.evals.datasets.rslearn_builder import (
+    get_task_info,
+    parse_model_config,
+)
 from olmoearth_pretrain.evals.studio_ingest.registry import Registry
 from olmoearth_pretrain.evals.task_types import TaskType
 from olmoearth_pretrain.internal.common import (
@@ -90,6 +94,27 @@ class Era5SupervisedCommonComponents(CommonComponents):
     tasks: list[str] = field(default_factory=list)
     task_weights: dict[str, float] = field(default_factory=dict)
     registry_path: str | None = None
+    # ------------------------------------------------------------------
+    # Direct-load (bypass the eval registry).
+    #
+    # When ``direct_weka_path`` is set, the registry is skipped entirely and a
+    # single task is loaded straight from an rslearn dataset on Weka using
+    # ``direct_model_yaml_path``. This lets us train objective A on a full
+    # original rslearn dataset without first ingesting/copying it.
+    #
+    # ``direct_modality_layer_name`` MUST match the ERA5 *input key* in the
+    # model.yaml ``data.init_args.inputs`` block (e.g. ``era5_daily``), not the
+    # on-disk rslearn layer name (``era5_365dhistory``).
+    # ------------------------------------------------------------------
+    direct_task_name: str | None = None
+    direct_weka_path: str | None = None
+    direct_model_yaml_path: str | None = None
+    direct_task_type: str = "classification"
+    direct_num_classes: int | None = 2
+    direct_is_multilabel: bool = False
+    direct_modality_layer_name: str = "era5_daily"
+    direct_train_groups: list[str] = field(default_factory=lambda: ["train"])
+    direct_max_samples: int | None = None
     encoder_embedding_size: int = 384
     encoder_depth: int = 8
     encoder_num_heads: int = 6
@@ -135,10 +160,63 @@ def _task_type_from_str(value: str) -> TaskType:
         return TaskType[value.upper()]
 
 
+def _resolve_direct_task_spec(
+    common: Era5SupervisedCommonComponents,
+) -> Era5TaskSpec:
+    """Build a single direct-load task spec that bypasses the eval registry."""
+    if common.direct_model_yaml_path is None:
+        raise ValueError(
+            "common.direct_weka_path is set but common.direct_model_yaml_path "
+            "is not — both are required for direct-load."
+        )
+    task_type = _task_type_from_str(common.direct_task_type)
+    if task_type not in (TaskType.CLASSIFICATION, TaskType.REGRESSION):
+        raise ValueError(
+            f"direct_task_type={common.direct_task_type!r} is unsupported "
+            "(only classification / regression are wired)."
+        )
+    # Only reduce a segmentation target to a scalar when the rslearn dataset is
+    # genuinely a segmentation task *and* we want classification out of it.
+    # Otherwise fall back to the spec's default extractor (which expects a real
+    # classification / regression target dict). We pass the extractor *by name*
+    # so the spec stays serializable inside the olmo_core `Config` tree.
+    label_extractor_name = None
+    if task_type == TaskType.CLASSIFICATION:
+        rslearn_task_type = get_task_info(
+            parse_model_config(common.direct_model_yaml_path)
+        )["task_type"]
+        if rslearn_task_type == "segmentation":
+            label_extractor_name = "segmentation_to_scalar"
+        else:
+            logger.info(
+                "Direct-load classification task %r: rslearn task_type=%r "
+                "(not segmentation) — using the default classification label "
+                "extractor.",
+                common.direct_task_name,
+                rslearn_task_type,
+            )
+    return Era5TaskSpec(
+        name=common.direct_task_name or "direct_task",
+        weight=1.0,
+        task_type=task_type,
+        is_multilabel=common.direct_is_multilabel,
+        num_classes=common.direct_num_classes,
+        modality_layer_name=common.direct_modality_layer_name,
+        weka_path=common.direct_weka_path,
+        model_yaml_path=common.direct_model_yaml_path,
+        groups_override=common.direct_train_groups,
+        norm_stats_from_pretrained=True,
+        label_extractor_name=label_extractor_name,
+        max_samples=common.direct_max_samples,
+    )
+
+
 def _resolve_task_specs(
     common: Era5SupervisedCommonComponents,
 ) -> list[Era5TaskSpec]:
     """Look up registry entries for each requested task and build specs."""
+    if common.direct_weka_path is not None:
+        return [_resolve_direct_task_spec(common)]
     if not common.tasks:
         raise ValueError(
             "common.tasks is empty — set it to a list of registered task "

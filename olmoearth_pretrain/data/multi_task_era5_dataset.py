@@ -134,6 +134,57 @@ def make_regression_extractor(key: str = "value") -> LabelExtractor:
     return _fn
 
 
+def segmentation_to_scalar_label(target: Any) -> Tensor:
+    """Reduce a (1x1) rslearn segmentation target to a single class label.
+
+    Some direct-load classification tasks (e.g. burn-risk) are defined in
+    rslearn as a ``MultiTask`` -> ``SegmentationTask`` whose per-pixel target is
+    pooled to a single 1x1 pixel by an ``AdaptivePooling`` transform. rslearn
+    returns that target as
+    ``{"segmentation": {"classes": RasterImage, "valid": RasterImage}}`` where
+    the ``RasterImage`` holds a CTHW tensor. We collapse it to a scalar class id
+    for the ERA5 classification head; pixels whose ``valid`` mask is all-zero are
+    mapped to the ignore label.
+    """
+    from olmoearth_pretrain.nn.era5_heads import SEGMENTATION_IGNORE_LABEL
+
+    seg = target
+    if isinstance(target, dict):
+        seg = target.get("segmentation", target)
+    if not isinstance(seg, dict) or "classes" not in seg:
+        raise KeyError(
+            "Expected a segmentation target dict with a 'classes' entry, got "
+            f"keys={sorted(seg.keys()) if isinstance(seg, dict) else type(seg)}"
+        )
+
+    def _to_hw(value: Any) -> Tensor:
+        if hasattr(value, "get_hw_tensor"):
+            return value.get_hw_tensor()
+        if hasattr(value, "image"):
+            return value.image.reshape(value.image.shape[-2:])
+        return torch.as_tensor(value)
+
+    classes = _to_hw(seg["classes"]).reshape(-1).long()
+    valid = seg.get("valid")
+    if valid is not None:
+        valid_t = _to_hw(valid).reshape(-1)
+        if not bool((valid_t > 0).any()):
+            return torch.tensor(SEGMENTATION_IGNORE_LABEL, dtype=torch.long)
+    # Already 1x1 after pooling; max() keeps the positive class if any pixel is
+    # positive (robust even if pooling is changed upstream).
+    return classes.max().reshape(())
+
+
+# Named label extractors that take no constructor args. Referenced by name from
+# ``Era5TaskSpec.label_extractor_name`` so that the (non-serializable) callable
+# never has to live on a field that is part of an olmo_core ``Config`` tree
+# (OmegaConf cannot build a schema for a ``Callable`` annotation).
+LABEL_EXTRACTORS: dict[str, LabelExtractor] = {
+    "default_classification": default_classification_label,
+    "segmentation_to_scalar": segmentation_to_scalar_label,
+}
+
+
 @dataclass
 class Era5TaskSpec:
     """How to load + interpret a single task's ERA5 supervised data.
@@ -146,7 +197,10 @@ class Era5TaskSpec:
         num_classes: Number of output classes (regression: number of outputs).
         regression_label_key: Key used to read regression labels from the
             rslearn target dict (only used when `task_type=regression`).
-        label_extractor: Override the default label extraction logic.
+        label_extractor_name: Optional name of a registered `LabelExtractor`
+            (see `LABEL_EXTRACTORS`) that overrides the default per-`task_type`
+            extraction logic. A plain string is used (rather than a callable)
+            so this spec stays serializable inside an olmo_core `Config`.
         modality_layer_name: rslearn input-dict key that holds the ERA5 daily
             tensor. Defaults to ``"era5l_day_10"`` which matches
             ``Modality.ERA5L_DAY_10.name`` and the mapping in
@@ -163,7 +217,7 @@ class Era5TaskSpec:
     is_multilabel: bool = False
     num_classes: int | None = None
     regression_label_key: str = "value"
-    label_extractor: LabelExtractor | None = None
+    label_extractor_name: str | None = None
     modality_layer_name: str = "era5l_day_10"
     groups_override: list[str] | None = None
     tags_override: dict[str, str] | None = None
@@ -175,8 +229,14 @@ class Era5TaskSpec:
 
     def get_label_extractor(self) -> LabelExtractor:
         """Resolve the `LabelExtractor` to use for this task."""
-        if self.label_extractor is not None:
-            return self.label_extractor
+        if self.label_extractor_name is not None:
+            try:
+                return LABEL_EXTRACTORS[self.label_extractor_name]
+            except KeyError:
+                raise ValueError(
+                    f"Unknown label_extractor_name={self.label_extractor_name!r}; "
+                    f"registered extractors: {sorted(LABEL_EXTRACTORS)}"
+                ) from None
         task_type = TaskType(self.task_type)
         if task_type == TaskType.CLASSIFICATION:
             return default_classification_label
