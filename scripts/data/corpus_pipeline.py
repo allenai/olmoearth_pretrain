@@ -347,7 +347,7 @@ def cmd_convert_worker(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 
-def cmd_prepare_h5(args: argparse.Namespace) -> None:
+def _prepare_h5(olmoearth_dir: str) -> UPath:
     """Scan olmoearth TIFFs, filter, assign global indices, write metadata.
 
     Produces sample_manifest.json + sample_metadata.csv + latlon_distribution.npy
@@ -356,13 +356,9 @@ def cmd_prepare_h5(args: argparse.Namespace) -> None:
     from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5pyConfig
     from olmoearth_pretrain.dataset_creation.pipeline import MODALITIES_FOR_H5
 
-    if not args.olmoearth_dir:
-        if not args.rslearn_dir:
-            raise SystemExit("Must provide --olmoearth-dir or --rslearn-dir")
-        args.olmoearth_dir = _derive_olmoearth_dir(args.rslearn_dir)
-    logger.info(f"prepare-h5: scanning {args.olmoearth_dir}")
+    logger.info(f"prepare-h5: scanning {olmoearth_dir}")
     config = ConvertToH5pyConfig(
-        tile_path=args.olmoearth_dir,
+        tile_path=olmoearth_dir,
         supported_modality_names=MODALITIES_FOR_H5,
         compression="zstd",
         compression_opts=3,
@@ -393,7 +389,7 @@ def cmd_prepare_h5(args: argparse.Namespace) -> None:
     manifest_path = h5py_dir / "sample_manifest.json"
     manifest = {
         "h5py_dir": str(h5py_dir),
-        "olmoearth_dir": args.olmoearth_dir,
+        "olmoearth_dir": olmoearth_dir,
         "num_samples": len(tuples),
         "modalities": MODALITIES_FOR_H5,
         "compression": "zstd",
@@ -404,6 +400,16 @@ def cmd_prepare_h5(args: argparse.Namespace) -> None:
 
     logger.info(f"prepare-h5 complete: {len(tuples)} samples, h5py_dir={h5py_dir}")
     logger.info(f"Manifest written to {manifest_path}")
+    return h5py_dir
+
+
+def cmd_prepare_h5(args: argparse.Namespace) -> None:
+    """Prepare H5 metadata for a converted OlmoEarth dataset."""
+    if not args.olmoearth_dir:
+        if not args.rslearn_dir:
+            raise SystemExit("Must provide --olmoearth-dir or --rslearn-dir")
+        args.olmoearth_dir = _derive_olmoearth_dir(args.rslearn_dir)
+    _prepare_h5(args.olmoearth_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -589,6 +595,23 @@ def cmd_launch_h5(args: argparse.Namespace) -> None:
     )
     for eid in experiment_ids:
         print(f"  https://beaker.org/ex/{eid}")
+
+
+def cmd_launch_h5_from_olmoearth(args: argparse.Namespace) -> None:
+    """Prepare H5 metadata locally, then launch H5 writing on Beaker."""
+    if not args.olmoearth_dir:
+        if not args.rslearn_dir:
+            raise SystemExit("Must provide --olmoearth-dir or --rslearn-dir")
+        args.olmoearth_dir = _derive_olmoearth_dir(args.rslearn_dir)
+
+    h5py_dir = _prepare_h5(args.olmoearth_dir)
+    logger.info(f"launch-h5-from-olmoearth: launching workers for {h5py_dir}")
+    launch_args = argparse.Namespace(
+        h5py_dir=str(h5py_dir),
+        num_h5_shards=args.num_h5_shards,
+        clusters=args.clusters,
+    )
+    cmd_launch_h5(launch_args)
 
 
 # ---------------------------------------------------------------------------
@@ -891,6 +914,17 @@ def main() -> None:
     p.add_argument("--num-h5-shards", type=int, required=True)
     p.add_argument("--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters")
     p.set_defaults(func=cmd_launch_h5)
+
+    # -- launch-h5-from-olmoearth --
+    p = subparsers.add_parser(
+        "launch-h5-from-olmoearth",
+        help="Prepare H5 metadata, then launch H5 writing on Beaker",
+    )
+    p.add_argument("--rslearn-dir", default=None, help="Used to derive --olmoearth-dir if not set")
+    p.add_argument("--olmoearth-dir", default=None, help="Converted OlmoEarth dataset dir")
+    p.add_argument("--num-h5-shards", type=int, required=True)
+    p.add_argument("--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters")
+    p.set_defaults(func=cmd_launch_h5_from_olmoearth)
 
     # -- h5-worker --
     p = subparsers.add_parser("h5-worker", help="Write H5 files for one shard")
