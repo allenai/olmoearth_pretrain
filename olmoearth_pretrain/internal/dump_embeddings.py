@@ -184,7 +184,14 @@ def _build_one_command(
         if args.dry_run
         else (SubCmd.train if args.cluster == "local" else SubCmd.launch)
     )
-    launch_command = "torchrun" if sub_command == SubCmd.train else "python3"
+    # For local single-node runs, use a standalone rendezvous (random free
+    # port) so multiple torchrun invocations -- partitions within a group, or
+    # sequential groups -- never collide on the default port 29500.
+    launch_command = (
+        "torchrun --standalone --nproc_per_node=1"
+        if sub_command == SubCmd.train
+        else "python3"
+    )
     module_path = _get_module_path(args)
     run_name = _build_run_name(args) + run_name_suffix
 
@@ -408,8 +415,11 @@ def main() -> None:
         return result.returncode
 
     failures = 0
-    # Submissions are independent and I/O-bound; fire partitions in parallel.
-    with cf.ThreadPoolExecutor(max_workers=max(1, len(cmds))) as ex:
+    # Beaker submissions are independent and I/O-bound, so fire partitions in
+    # parallel. Local runs share one GPU, so serialize them (and avoid two
+    # torchrun processes contending for the device).
+    max_workers = 1 if args.cluster == "local" else max(1, len(cmds))
+    with cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
         for rc in ex.map(_run, cmds):
             if rc != 0:
                 print(f"  -> partition failed (rc={rc}); continuing")
