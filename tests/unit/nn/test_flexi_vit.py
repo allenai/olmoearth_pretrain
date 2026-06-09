@@ -222,7 +222,7 @@ class TestFlexiVitBase:
             "landsat_mask": torch.zeros(1, 1, 1, 3, 1),
         }
 
-        positions = model.build_spatial_positions(
+        positions = model.build_rope_positions(
             tokens_only_dict=tokens_only_dict,
             original_masks_dict=masks_dict,
             patch_size=4,
