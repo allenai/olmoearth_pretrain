@@ -212,12 +212,32 @@ class DownstreamEvaluator:
         )
 
     def _get_data_loader(
-        self, split: str, batch_size: int, seed: int | None = None
+        self,
+        split: str,
+        batch_size: int,
+        seed: int | None = None,
+        shuffle: bool | None = None,
     ) -> DataLoader:
-        """Get the data loader for the given split."""
+        """Get the data loader for the given split.
+
+        Args:
+            split: "train", "valid", or "test".
+            batch_size: Loader batch size.
+            seed: If set, seeds the shuffle generator and DataLoader workers
+                so iteration order is reproducible.
+            shuffle: Whether to shuffle. Defaults to ``split == "train"`` (the
+                historical behavior used by KNN/LP, where row order is
+                irrelevant). Pass ``False`` to emit samples in canonical
+                dataset order across every split -- required by EMBEDDING_DUMP
+                so that train embeddings line up with the source dataset and
+                with other models' dumps (val/test are already unshuffled).
+        """
         logger.info(
             f"Getting data loader for {self.dataset} with norm method {self.norm_method} and norm stats from pretrained {self.norm_stats_from_pretrained}"
         )
+
+        if shuffle is None:
+            shuffle = split == "train"
 
         generator = None
         worker_init_fn = None
@@ -243,7 +263,7 @@ class DownstreamEvaluator:
             num_workers=self.num_workers,
             generator=generator,
             worker_init_fn=worker_init_fn,
-            shuffle=(split == "train"),  # Only shuffle train data
+            shuffle=shuffle,
         )
 
     def _get_embeddings(
@@ -473,7 +493,21 @@ class DownstreamEvaluator:
             if os.path.exists(out_path):
                 logger.info(f"  {split} already on disk, skipping")
                 continue
-            loader = self._get_data_loader(split, self.embedding_batch_size)
+            # shuffle=False for every split so saved embeddings come out in
+            # canonical dataset order: train then lines up row-for-row with the
+            # source dataset and with other models' dumps. (The KNN/LP path
+            # shuffles train, but row order is irrelevant there and is consumed
+            # in-process; a persisted dump must be order-stable.)
+            #
+            # NOTE: this does NOT make AnySat segmentation dumps pixel-alignable.
+            # For anysat_seg we pass is_train=True below, which subsamples 1/16
+            # of pixels per image via an unseeded randperm (see _get_embeddings
+            # -> AnySatEvalWrapper). Sample/image order is canonical, but the
+            # kept pixels within each image are random and non-reproducible.
+            # Documented as a known caveat in the dataset README.
+            loader = self._get_data_loader(
+                split, self.embedding_batch_size, shuffle=False
+            )
             # Match the paper LP protocol: train embeddings get is_train=True,
             # val/test get is_train=False. AnySat seg additionally needs
             # is_train=True for val/test to avoid OOM (see comment above).
