@@ -678,8 +678,8 @@ class CompositeEncodings(nn.Module):
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             tokenization_config: Optional config for custom band groupings
-            spatial_pos_encoding: Spatial encoding type: "absolute", "rope",
-                "rope_mixed", "rope_3d", "rope_3d_mixed", or "none".
+            spatial_pos_encoding: Spatial encoding mode; one of the
+                ``SpatialPosEncoding`` values.
         """
         super().__init__()
         if spatial_pos_encoding not in SpatialPosEncoding.values():
@@ -1520,8 +1520,8 @@ class Encoder(FlexiVitBase):
             post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm.
-            spatial_pos_encoding: Spatial encoding type: "absolute", "rope",
-                "rope_mixed", or "none".
+            spatial_pos_encoding: Spatial encoding mode; one of the
+                ``SpatialPosEncoding`` values.
             rope_base: Frequency base for axial RoPE.
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
             rope_mixed_base: Frequency base used to initialize learnable
@@ -2125,8 +2125,8 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn: Whether to use flash attention
             qk_norm: Whether to apply normalization to Q and K in attention
             tokenization_config: Optional config for custom band groupings
-            spatial_pos_encoding: Spatial encoding type: "absolute", "rope",
-                "rope_mixed", or "none".
+            spatial_pos_encoding: Spatial encoding mode; one of the
+                ``SpatialPosEncoding`` values.
             rope_base: Frequency base for axial RoPE.
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
             rope_mixed_base: Frequency base used to initialize learnable
