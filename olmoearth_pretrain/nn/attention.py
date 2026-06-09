@@ -11,6 +11,7 @@ from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
 
 from olmoearth_pretrain.nn.encodings import (
+    SpatialPosEncoding,
     apply_2d_axial_rope,
     apply_2d_mixed_rope,
     apply_3d_axial_rope,
@@ -120,12 +121,9 @@ class Attention(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
-        use_2d_rope: bool = False,
+        spatial_pos_encoding: str = SpatialPosEncoding.ABSOLUTE,
         rope_base: float = 10000.0,
-        use_2d_rope_mixed: bool = False,
         rope_mixed_base: float = 10.0,
-        use_3d_rope: bool = False,
-        use_3d_rope_mixed: bool = False,
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
     ) -> None:
@@ -141,16 +139,12 @@ class Attention(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Enable cross-attention
             use_flash_attn: Use flash attention
-            use_2d_rope: Apply axial 2D RoPE to queries and keys
+            spatial_pos_encoding: Spatial position encoding mode. RoPE is applied
+                to queries/keys for the ``rope``, ``rope_mixed``, ``rope_3d``, and
+                ``rope_3d_mixed`` modes; other modes leave q/k unrotated.
             rope_base: RoPE frequency base (axial; spatial axes for 3D)
-            use_2d_rope_mixed: Apply RoPE-Mixed (learnable 2D frequencies) to
-                queries and keys. Mutually exclusive with the other RoPE flags.
             rope_mixed_base: Frequency base used to initialize the learnable
                 RoPE-Mixed frequencies.
-            use_3d_rope: Apply axial 3D RoPE (t, row, col) to queries and
-                keys. Mutually exclusive with the other RoPE flags.
-            use_3d_rope_mixed: Apply RoPE-Mixed (learnable 3D frequencies) to
-                queries and keys. Mutually exclusive with the other RoPE flags.
             temporal_rope_dim_frac: Fraction of head_dim allocated to the
                 temporal chunk in axial 3D RoPE (default 0.25, matching the
                 additive 1/4 split used by absolute encodings).
@@ -159,26 +153,23 @@ class Attention(nn.Module):
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
-        rope_flags = (use_2d_rope, use_2d_rope_mixed, use_3d_rope, use_3d_rope_mixed)
-        if sum(rope_flags) > 1:
-            raise ValueError(
-                "At most one of use_2d_rope, use_2d_rope_mixed, use_3d_rope, "
-                "use_3d_rope_mixed may be enabled"
-            )
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        if use_2d_rope and self.head_dim % 4 != 0:
+        if (
+            SpatialPosEncoding.is_2d_rope(spatial_pos_encoding)
+            and self.head_dim % 4 != 0
+        ):
             raise ValueError(
-                f"2D RoPE requires head_dim divisible by 4, got {self.head_dim}"
+                f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "
+                f"got {self.head_dim}"
             )
-        if use_2d_rope_mixed and self.head_dim % 4 != 0:
-            raise ValueError(
-                f"RoPE-Mixed requires head_dim divisible by 4, got {self.head_dim}"
-            )
-        if use_3d_rope:
+        if spatial_pos_encoding == SpatialPosEncoding.AXIAL_3D_ROPE:
             # Validate the split is feasible at construction time.
             axial_3d_dim_split(self.head_dim, temporal_rope_dim_frac)
-        if use_3d_rope_mixed and self.head_dim % 4 != 0:
+        if (
+            spatial_pos_encoding == SpatialPosEncoding.MIXED_3D_ROPE
+            and self.head_dim % 4 != 0
+        ):
             raise ValueError(
                 f"3D RoPE-Mixed requires head_dim divisible by 4, got {self.head_dim}"
             )
@@ -186,15 +177,13 @@ class Attention(nn.Module):
 
         self.cross_attn = cross_attn
         self.use_flash_attn = use_flash_attn
-        self.use_2d_rope = use_2d_rope
+        self.spatial_pos_encoding = spatial_pos_encoding
         self.rope_base = rope_base
-        self.use_2d_rope_mixed = use_2d_rope_mixed
         self.rope_mixed_base = rope_mixed_base
-        self.use_3d_rope = use_3d_rope
-        self.use_3d_rope_mixed = use_3d_rope_mixed
         self.temporal_rope_dim_frac = temporal_rope_dim_frac
         self.rope_temporal_base = rope_temporal_base
-        if use_2d_rope_mixed:
+        self.rope_mixed_freqs: nn.Parameter | None = None
+        if spatial_pos_encoding == SpatialPosEncoding.MIXED_2D_ROPE:
             self.rope_mixed_freqs = nn.Parameter(
                 init_2d_mixed_rope_freqs(
                     head_dim=self.head_dim,
@@ -202,7 +191,7 @@ class Attention(nn.Module):
                     base=self.rope_mixed_base,
                 )
             )
-        if use_3d_rope_mixed:
+        elif spatial_pos_encoding == SpatialPosEncoding.MIXED_3D_ROPE:
             self.rope_mixed_freqs = nn.Parameter(
                 init_3d_mixed_rope_freqs(
                     head_dim=self.head_dim,
@@ -351,13 +340,7 @@ class Attention(nn.Module):
         # logger.info(f"q shape: {q.shape} k shape: {k.shape} v shape: {v.shape}")
 
         q, k = self.q_norm(q), self.k_norm(k)
-        rope_active = (
-            self.use_2d_rope
-            or self.use_2d_rope_mixed
-            or self.use_3d_rope
-            or self.use_3d_rope_mixed
-        )
-        if rope_active:
+        if SpatialPosEncoding.is_rope(self.spatial_pos_encoding):
             if rope_positions is None:
                 raise ValueError("rope_positions must be provided when RoPE is enabled")
             k_positions = rope_positions if y is None else rope_positions_y
@@ -365,13 +348,13 @@ class Attention(nn.Module):
                 raise ValueError(
                     "rope_positions_y must be provided for cross attention with RoPE"
                 )
-            if self.use_2d_rope:
+            if self.spatial_pos_encoding == SpatialPosEncoding.AXIAL_2D_ROPE:
                 q = apply_2d_axial_rope(q, rope_positions, base=self.rope_base)
                 k = apply_2d_axial_rope(k, k_positions, base=self.rope_base)
-            elif self.use_2d_rope_mixed:
+            elif self.spatial_pos_encoding == SpatialPosEncoding.MIXED_2D_ROPE:
                 q = apply_2d_mixed_rope(q, rope_positions, self.rope_mixed_freqs)
                 k = apply_2d_mixed_rope(k, k_positions, self.rope_mixed_freqs)
-            elif self.use_3d_rope:
+            elif self.spatial_pos_encoding == SpatialPosEncoding.AXIAL_3D_ROPE:
                 q = apply_3d_axial_rope(
                     q,
                     rope_positions,
@@ -577,12 +560,9 @@ class Block(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
-        use_2d_rope: bool = False,
+        spatial_pos_encoding: str = SpatialPosEncoding.ABSOLUTE,
         rope_base: float = 10000.0,
-        use_2d_rope_mixed: bool = False,
         rope_mixed_base: float = 10.0,
-        use_3d_rope: bool = False,
-        use_3d_rope_mixed: bool = False,
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
     ) -> None:
@@ -602,12 +582,10 @@ class Block(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Whether to use cross attention
             use_flash_attn: Whether to use flash attention
-            use_2d_rope: Apply axial 2D RoPE to attention queries and keys
+            spatial_pos_encoding: Spatial position encoding mode passed through
+                to attention, which applies the matching RoPE variant to q/k.
             rope_base: RoPE frequency base (axial)
-            use_2d_rope_mixed: Apply RoPE-Mixed to attention queries and keys.
             rope_mixed_base: Frequency base for RoPE-Mixed initialization.
-            use_3d_rope: Apply axial 3D RoPE (t, row, col) to queries and keys.
-            use_3d_rope_mixed: Apply RoPE-Mixed (learnable 3D frequencies).
             temporal_rope_dim_frac: Fraction of head_dim allocated to the
                 temporal chunk in axial 3D RoPE.
             rope_temporal_base: Optional separate frequency base for the
@@ -625,12 +603,9 @@ class Block(nn.Module):
             norm_layer=norm_layer,
             cross_attn=cross_attn,
             use_flash_attn=use_flash_attn,
-            use_2d_rope=use_2d_rope,
+            spatial_pos_encoding=spatial_pos_encoding,
             rope_base=rope_base,
-            use_2d_rope_mixed=use_2d_rope_mixed,
             rope_mixed_base=rope_mixed_base,
-            use_3d_rope=use_3d_rope,
-            use_3d_rope_mixed=use_3d_rope_mixed,
             temporal_rope_dim_frac=temporal_rope_dim_frac,
             rope_temporal_base=rope_temporal_base,
         )

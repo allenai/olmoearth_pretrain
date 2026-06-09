@@ -421,9 +421,8 @@ class TestEncoder:
         assert encoder.spatial_pos_encoding == "rope_mixed"
         assert encoder.rope_mixed_base == 5.0
         attn = encoder.blocks[0].attn
-        assert attn.use_2d_rope_mixed is True
-        assert attn.use_2d_rope is False
-        assert hasattr(attn, "rope_mixed_freqs")
+        assert attn.spatial_pos_encoding == "rope_mixed"
+        assert attn.rope_mixed_freqs is not None
         # (2, num_heads, head_dim // 2)
         assert attn.rope_mixed_freqs.shape == (2, 2, 4)
         assert attn.rope_mixed_freqs.requires_grad is True
@@ -804,8 +803,7 @@ class TestPredictor:
         assert predictor.spatial_pos_encoding == "rope_mixed"
         assert predictor.rope_mixed_base == 5.0
         attn = predictor.blocks[0].attn
-        assert attn.use_2d_rope_mixed is True
-        assert attn.use_2d_rope is False
+        assert attn.spatial_pos_encoding == "rope_mixed"
         assert attn.rope_mixed_freqs.shape == (2, 2, 4)
 
 

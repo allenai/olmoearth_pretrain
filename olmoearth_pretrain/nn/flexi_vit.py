@@ -1002,20 +1002,9 @@ class FlexiVitBase(nn.Module):
                     cross_attn=self.cross_attn,
                     drop_path=drop_path,
                     use_flash_attn=self.use_flash_attn,
-                    use_2d_rope=(
-                        self.spatial_pos_encoding == SpatialPosEncoding.AXIAL_2D_ROPE
-                    ),
+                    spatial_pos_encoding=self.spatial_pos_encoding,
                     rope_base=self.rope_base,
-                    use_2d_rope_mixed=(
-                        self.spatial_pos_encoding == SpatialPosEncoding.MIXED_2D_ROPE
-                    ),
                     rope_mixed_base=self.rope_mixed_base,
-                    use_3d_rope=(
-                        self.spatial_pos_encoding == SpatialPosEncoding.AXIAL_3D_ROPE
-                    ),
-                    use_3d_rope_mixed=(
-                        self.spatial_pos_encoding == SpatialPosEncoding.MIXED_3D_ROPE
-                    ),
                     temporal_rope_dim_frac=self.temporal_rope_dim_frac,
                     rope_temporal_base=self.rope_temporal_base,
                 )
@@ -1258,7 +1247,7 @@ class FlexiVitBase(nn.Module):
             )
             return positions
 
-        if tokens.ndim == 6 and modality.is_multitemporal:
+        if tokens.ndim == 6:
             # (b, h, w, t, b_s, d): full spatiotemporal modality.
             timesteps, bandsets = tokens.shape[3], tokens.shape[4]
             t_values = self._select_t_values(
