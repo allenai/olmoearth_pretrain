@@ -111,6 +111,7 @@ beaker = [
     "einops>=0.7.0",
     "gcsfs>=2025.9.0",
     "geobench>=1.0.1",
+    "hdf5plugin>=6.0.0",
     "interrogate>=1.7.0",
     "numpy>=1.26.4",
     "pandas>=2.3.3",
