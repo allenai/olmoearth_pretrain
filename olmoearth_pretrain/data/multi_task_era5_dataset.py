@@ -67,14 +67,14 @@ class Era5SupervisedSample(NamedTuple):
     Shapes:
         era5         : ``[T, C]``       float32
         timestamps   : ``[T, 3]``       int64    ``[day-of-year, month0, year]``
-        padding_mask : ``[T]``          bool     (always all-False; kept for interface compat)
+        ignore_mask  : ``[T]``          bool     (always all-False; kept for interface compat)
         label        : task-specific (scalar or vector)
         task_name    : str
     """
 
     era5: Tensor
     timestamps: Tensor
-    padding_mask: Tensor
+    ignore_mask: Tensor
     label: Tensor
     task_name: str
 
@@ -84,7 +84,7 @@ class Era5SupervisedBatch(NamedTuple):
 
     era5: Tensor  # [B, T_max, C]
     timestamps: Tensor  # [B, T_max, 3]
-    padding_mask: Tensor  # [B, T_max]
+    ignore_mask: Tensor  # [B, T_max]
     labels: Tensor  # task-specific stacking of labels
     task_name: str
 
@@ -215,7 +215,7 @@ class Era5TaskDataset(Dataset):
         return len(self.dataset)
 
     def _extract_era5(self, inputs: dict[str, Any]) -> tuple[Tensor, Tensor, Tensor]:
-        """Return ``(era5[T, C], timestamps[T, 3], padding_mask[T])``."""
+        """Return ``(era5[T, C], timestamps[T, 3], ignore_mask[T])``."""
         layer_name = self.task_spec.modality_layer_name
         if layer_name not in inputs:
             raise KeyError(
@@ -260,8 +260,8 @@ class Era5TaskDataset(Dataset):
                 f"{self.max_sequence_length}, got {t}. ERA5 is a dense "
                 f"reanalysis product — all samples must have uniform length."
             )
-        padding_mask = torch.zeros(t, dtype=torch.bool)
-        return era5, timestamps, padding_mask
+        ignore_mask = torch.zeros(t, dtype=torch.bool)
+        return era5, timestamps, ignore_mask
 
     @staticmethod
     def _build_timestamps(
@@ -300,12 +300,12 @@ class Era5TaskDataset(Dataset):
                 f"Unexpected rslearn sample type for task {self.task_spec.name!r}: "
                 f"{type(sample).__name__}"
             )
-        era5, timestamps, padding_mask = self._extract_era5(inputs)
+        era5, timestamps, ignore_mask = self._extract_era5(inputs)
         label = self._label_extractor(target)
         return Era5SupervisedSample(
             era5=era5,
             timestamps=timestamps,
-            padding_mask=padding_mask,
+            ignore_mask=ignore_mask,
             label=label,
             task_name=self.task_spec.name,
         )
@@ -317,12 +317,12 @@ def _collate_samples(
     """Stack a list of `Era5SupervisedSample`s from one task into a batch."""
     era5 = torch.stack([s.era5 for s in samples], dim=0)
     timestamps = torch.stack([s.timestamps for s in samples], dim=0)
-    padding_mask = torch.stack([s.padding_mask for s in samples], dim=0)
+    ignore_mask = torch.stack([s.ignore_mask for s in samples], dim=0)
     labels = torch.stack([s.label for s in samples], dim=0)
     return Era5SupervisedBatch(
         era5=era5,
         timestamps=timestamps,
-        padding_mask=padding_mask,
+        ignore_mask=ignore_mask,
         labels=labels,
         task_name=task_name,
     )
@@ -648,7 +648,7 @@ class MultiTaskEra5DataLoader(DataLoaderBase):
         timestamps[..., 0] = torch.arange(1, t_max + 1).unsqueeze(0)
         timestamps[..., 1] = (timestamps[..., 0] - 1) * 12 // 365
         timestamps[..., 2] = 1970
-        padding_mask = torch.zeros(bsz, t_max, dtype=torch.bool)
+        ignore_mask = torch.zeros(bsz, t_max, dtype=torch.bool)
         if TaskType(spec.task_type) == TaskType.CLASSIFICATION:
             labels = torch.zeros(bsz, dtype=torch.long)
         else:
@@ -656,7 +656,7 @@ class MultiTaskEra5DataLoader(DataLoaderBase):
         return Era5SupervisedBatch(
             era5=era5,
             timestamps=timestamps,
-            padding_mask=padding_mask,
+            ignore_mask=ignore_mask,
             labels=labels,
             task_name=task_name,
         )

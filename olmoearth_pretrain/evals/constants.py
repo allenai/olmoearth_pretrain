@@ -17,5 +17,5 @@ RSLEARN_TO_OLMOEARTH: dict[str, ModalitySpec] = {
     # case existing rslearn dataset configs spell it differently.
     "era5l_day_10": Modality.ERA5L_DAY_10,
     "era5_land_daily": Modality.ERA5L_DAY_10,
-    "era5_land": Modality.ERA5L_DAY_10,
+    "era5d_historical": Modality.ERA5L_DAY_10,
 }

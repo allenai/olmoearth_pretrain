@@ -262,7 +262,7 @@ class SupervisedObjective(_Objective):
         out = encoder(
             era5=batch.era5,
             timestamps=batch.timestamps,
-            padding_mask=batch.padding_mask,
+            ignore_mask=batch.ignore_mask,
         )
         pooled = out["pooled"]
         loss, head_metrics = self.registry.compute_loss(
@@ -456,7 +456,7 @@ class MultiObjectiveEra5TrainModule(OlmoEarthTrainModule):
                 Era5SupervisedBatch(
                     era5=batch.era5[start:end],
                     timestamps=batch.timestamps[start:end],
-                    padding_mask=batch.padding_mask[start:end],
+                    ignore_mask=batch.ignore_mask[start:end],
                     labels=batch.labels[start:end],
                     task_name=batch.task_name,
                 )
@@ -467,7 +467,7 @@ class MultiObjectiveEra5TrainModule(OlmoEarthTrainModule):
         return Era5SupervisedBatch(
             era5=batch.era5.to(self.device, non_blocking=True),
             timestamps=batch.timestamps.to(self.device, non_blocking=True),
-            padding_mask=batch.padding_mask.to(self.device, non_blocking=True),
+            ignore_mask=batch.ignore_mask.to(self.device, non_blocking=True),
             labels=batch.labels.to(self.device, non_blocking=True),
             task_name=batch.task_name,
         )
