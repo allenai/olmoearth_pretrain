@@ -1316,12 +1316,15 @@ class SpatialRegisterBottleneck(nn.Module):
                 time. When set it forces the interleaved schedule and overrides
                 ``read_depth`` / ``latent_transformer_depth``; when None (default) behaviour
                 is unchanged (all reads share the final-layer K/V).
-            per_depth_read_proj: Multi-depth only. If True, give each read layer its own
-                ``input_norm`` LayerNorm *and* ``kv_proj`` down-projection instead of a
-                single shared pair. Features pulled from different encoder depths have
-                different per-channel statistics and semantics, so a shared affine (γ, β)
-                and a shared projection are a poor fit across all of them. Ignored when not
-                in multi-depth mode. False (default) keeps the shared norm + projection
+            per_depth_read_proj: If True, give each read block its own ``input_norm``
+                LayerNorm *and* ``kv_proj`` down-projection instead of a single shared
+                pair. In multi-depth mode each read draws from a different encoder depth,
+                which have different per-channel statistics and semantics, so a shared
+                affine (γ, β) and a shared projection are a poor fit across all of them.
+                In interleaved single-source mode every read re-queries the same final
+                layer, so per-block projections instead let successive reads extract
+                different views through their own lens. Requires more than one read block
+                (ignored otherwise). False (default) keeps the shared norm + projection
                 (backwards compatible).
         """
         super().__init__()
@@ -1356,27 +1359,6 @@ class SpatialRegisterBottleneck(nn.Module):
             # grid coordinates are what give each register its spatial identity.
             self.registers = nn.Parameter(torch.empty(self.num_registers, register_dim))
             nn.init.trunc_normal_(self.registers, std=0.02)
-        # Per-depth read front-end only makes sense with multiple (multi-depth) K/V sources.
-        self.per_depth_read_proj = per_depth_read_proj and self.multi_depth
-        # Down-project the patch K/V source to the (smaller) register dim. The existing
-        # Attention ties q/k/v to a single dim, so the read happens entirely at register_dim.
-        if self.per_depth_read_proj:
-            assert self.read_layers is not None
-            # One norm + projection per read layer: each encoder depth has its own
-            # per-channel statistics, so each gets its own affine and its own remixing
-            # into the register dim instead of a single shared pair.
-            self.input_norms = nn.ModuleList(
-                [nn.LayerNorm(encoder_embedding_size) for _ in self.read_layers]
-            )
-            self.kv_projs = nn.ModuleList(
-                [
-                    nn.Linear(encoder_embedding_size, register_dim)
-                    for _ in self.read_layers
-                ]
-            )
-        else:
-            self.input_norm = nn.LayerNorm(encoder_embedding_size)
-            self.kv_proj = nn.Linear(encoder_embedding_size, register_dim)
         # The read + latent transformer run on small unpacked [B, N, D] tensors with an
         # attention mask, so they use the SDPA path (use_flash_attn=False) regardless of
         # the encoder's flash setting.
@@ -1393,6 +1375,36 @@ class SpatialRegisterBottleneck(nn.Module):
                 latent_transformer_depth if self.interleave else read_depth
             )
             num_latent_blocks = latent_transformer_depth
+        # Per-depth read front-end: give every read block its own input norm + K/V
+        # down-projection instead of a single shared pair. Only meaningful with >1 read
+        # block. Multi-depth: each block draws from a different encoder depth (distinct
+        # per-channel statistics), so a shared affine + projection is a poor fit.
+        # Interleaved single-source: each block re-queries the SAME final-layer tokens
+        # through its own projection, so successive reads can extract different views
+        # instead of being forced through one shared lens.
+        # The ``multi_depth`` clause preserves the original gate exactly (multi-depth runs
+        # always got per-depth projections when requested); ``num_read_blocks > 1`` extends
+        # it to interleaved single-source reads. So this is a strict superset of the old
+        # behaviour -- existing checkpoints build the identical parameter set.
+        self.per_depth_read_proj = per_depth_read_proj and (
+            self.multi_depth or num_read_blocks > 1
+        )
+        # Down-project the patch K/V source to the (smaller) register dim. The existing
+        # Attention ties q/k/v to a single dim, so the read happens entirely at register_dim.
+        if self.per_depth_read_proj:
+            # One norm + projection per read block.
+            self.input_norms = nn.ModuleList(
+                [nn.LayerNorm(encoder_embedding_size) for _ in range(num_read_blocks)]
+            )
+            self.kv_projs = nn.ModuleList(
+                [
+                    nn.Linear(encoder_embedding_size, register_dim)
+                    for _ in range(num_read_blocks)
+                ]
+            )
+        else:
+            self.input_norm = nn.LayerNorm(encoder_embedding_size)
+            self.kv_proj = nn.Linear(encoder_embedding_size, register_dim)
         self.read_blocks = nn.ModuleList(
             [
                 Block(
@@ -1475,8 +1487,10 @@ class SpatialRegisterBottleneck(nn.Module):
             registers: ``[B, num_registers, register_dim]``
             register_positions: ``[B, num_registers, 2]`` or None
         """
-        # Down-project (shared kv_proj/input_norm) the K/V source(s). Multi-depth gets one
-        # per read block; otherwise a single source is reused by every read.
+        # Down-project the K/V source(s) to register_dim. Multi-depth gets one source per
+        # read block; otherwise a single source is reused by every read. With
+        # per_depth_read_proj each read block has its own norm + projection (so even the
+        # single-source case is projected once per block); otherwise they share one pair.
         if self.multi_depth:
             if not isinstance(patch_tokens, list):
                 raise ValueError(
@@ -1503,8 +1517,16 @@ class SpatialRegisterBottleneck(nn.Module):
                 raise ValueError(
                     "single-source register bottleneck expects a tensor, not a list"
                 )
-            kv = self.kv_proj(self.input_norm(patch_tokens))
-            kv_per_read = [kv] * len(self.read_blocks)
+            if self.per_depth_read_proj:
+                # Each read block re-projects the same final-layer source through its own
+                # norm + projection (interleaved single-source reads).
+                kv_per_read = [
+                    proj(norm(patch_tokens))
+                    for norm, proj in zip(self.input_norms, self.kv_projs)
+                ]
+            else:
+                kv = self.kv_proj(self.input_norm(patch_tokens))
+                kv_per_read = [kv] * len(self.read_blocks)
             reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
         if self.dynamic_grid:
@@ -1687,10 +1709,12 @@ class Encoder(FlexiVitBase):
                 drops. Forces the interleaved schedule and overrides ``register_read_depth``
                 / ``register_latent_depth``. Defaults to None (final-layer read only,
                 backwards compatible).
-            register_per_depth_read_proj: Multi-depth only. If True, give each read layer
-                its own input LayerNorm and K/V down-projection (different encoder depths
-                have different statistics). Defaults to False (shared norm + projection,
-                backwards compatible).
+            register_per_depth_read_proj: If True, give each read block its own input
+                LayerNorm and K/V down-projection instead of one shared pair. Helps
+                multi-depth reads (different encoder depths have different statistics) and
+                interleaved single-source reads (each block gets its own lens on the final
+                layer). Requires more than one read block. Defaults to False (shared norm +
+                projection, backwards compatible).
             register_contrastive_source: Where the contrastive (project-and-aggregate)
                 head reads from when the bottleneck is active: ``"registers"`` (default,
                 project from the register latents at ``register_dim``) or
@@ -2942,8 +2966,9 @@ class EncoderConfig(Config):
     # (one [read -> self-attend] step per entry). Forces the interleaved schedule and
     # overrides register_read_depth / register_latent_depth. None -> final-layer read only.
     register_read_layers: list[int] | None = None
-    # Multi-depth only: give each read layer its own input norm + K/V down-projection
-    # instead of sharing one pair across depths. False -> shared (backwards compatible).
+    # Give each read block its own input norm + K/V down-projection instead of sharing one
+    # pair (multi-depth: per-depth stats; interleave: a distinct lens per re-read). Needs
+    # >1 read block. False -> shared (backwards compatible).
     register_per_depth_read_proj: bool = False
     # Where the contrastive head reads when the bottleneck is on: "registers" (default,
     # project from the register latents) or "encoder_tokens" (project from the encoder
