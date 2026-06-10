@@ -86,11 +86,34 @@ DATASET_TO_CONFIG = {
             Modality.LANDSAT.name,
         ],
     ),
+    "pretrain_subset_osm_populous12": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=12,
+        is_multilabel=False,
+        height_width=32,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
     "pretrain_subset_osm_tile_classification": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
         imputes=[],
         num_classes=30,
         is_multilabel=False,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
+    "pretrain_subset_osm_tile_presence": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[],
+        num_classes=30,
+        is_multilabel=True,
         supported_modalities=[
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,

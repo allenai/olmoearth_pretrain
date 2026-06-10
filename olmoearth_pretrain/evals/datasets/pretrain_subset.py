@@ -31,9 +31,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_PATCH_SIZE = 4
 DEFAULT_HW_P = 8
 DEFAULT_MAX_SAMPLES = 512
-BALANCED_CANDIDATE_MULTIPLIER = 8
 WORLDCOVER_CLASSES = torch.tensor([10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100])
 OSM_TARGET_MODALITY = "openstreetmap_raster"
+OSM_NUM_CLASSES = 30
+OSM_POPULOUS_12_CLASS_IDS = [1, 3, 4, 12, 13, 17, 19, 20, 21, 22, 23, 29]
 SRTM_TARGET_MODALITY = "srtm"
 WORLDCOVER_TARGET_MODALITY = "worldcover"
 CDL_TARGET_MODALITY = "cdl"
@@ -50,8 +51,6 @@ class PretrainSplitStrategy(StrEnum):
 
     RANDOM = "random"
     GEOGRAPHIC = "geographic"
-    BALANCED = "balanced"
-    BALANCED_GEOGRAPHIC = "balanced_geographic"
 
 
 class OsmLabelMode(StrEnum):
@@ -59,6 +58,7 @@ class OsmLabelMode(StrEnum):
 
     SEGMENTATION = "segmentation"
     TILE_ANCHOR_CLASS = "tile_anchor_class"
+    TILE_PRESENCE = "tile_presence"
 
 
 @cache
@@ -100,6 +100,7 @@ class PretrainSubsetDataset(Dataset):
         geographic_bin_size_deg: float = 5.0,
         split_dir: str | None = None,
         osm_label_mode: str | OsmLabelMode = OsmLabelMode.SEGMENTATION,
+        osm_class_ids: list[int] | None = None,
     ) -> None:
         """Initialize a deterministic pretrain eval subset.
 
@@ -123,14 +124,20 @@ class PretrainSubsetDataset(Dataset):
                 H5 ``sample_index`` values to use directly.
             osm_label_mode: For OSM probes, ``segmentation`` returns per-pixel
                 argmax labels; ``tile_anchor_class`` returns the split CSV's
-                ``anchor_class_id`` as a single class label per tile.
+                ``anchor_class_id`` as a single class label per tile; and
+                ``tile_presence`` returns a multi-hot class-presence vector.
+            osm_class_ids: Optional raw OSM class ids to keep for segmentation
+                labels. Kept classes are remapped to contiguous ids in list order;
+                all other labeled pixels become ignore labels.
         """
         self.patch_size = patch_size
         self.hw_p = hw_p
         self.max_samples = max_samples
         self.target_modality = target_modality
         self.osm_label_mode = OsmLabelMode(osm_label_mode)
+        self.osm_class_ids = osm_class_ids
         self._tile_class_labels: list[int] | None = None
+        self._tile_presence_labels: list[torch.Tensor] | None = None
 
         self._dataset = OlmoEarthDataset(
             h5py_dir=UPath(h5py_dir),
@@ -142,7 +149,7 @@ class PretrainSubsetDataset(Dataset):
         self._label_dataset = None
         use_raster_labels = (
             target_modality is not None
-            and self.osm_label_mode != OsmLabelMode.TILE_ANCHOR_CLASS
+            and self.osm_label_mode == OsmLabelMode.SEGMENTATION
         )
         if use_raster_labels:
             # Include the input modalities so extract_hwt_from_sample_dict has a
@@ -185,6 +192,16 @@ class PretrainSubsetDataset(Dataset):
                     self._tile_class_labels = (
                         split_rows["anchor_class_id"].astype(int).tolist()
                     )
+                elif self.osm_label_mode == OsmLabelMode.TILE_PRESENCE:
+                    if "labels" not in split_rows.columns:
+                        raise ValueError(
+                            f"Split CSV for {split_dir}/{split} must contain "
+                            "labels when osm_label_mode is tile_presence"
+                        )
+                    self._tile_presence_labels = [
+                        self._multi_hot_osm_presence(label_ids)
+                        for label_ids in split_rows["labels"].astype(str).tolist()
+                    ]
                 return
             eligible_positions = self._positions_with_target_present(
                 self._dataset, target_modality
@@ -209,20 +226,6 @@ class PretrainSubsetDataset(Dataset):
                     valid_samples=valid_samples,
                     test_samples=test_samples,
                     bin_size_deg=geographic_bin_size_deg,
-                ).tolist()
-            elif split_strategy in (
-                PretrainSplitStrategy.BALANCED,
-                PretrainSplitStrategy.BALANCED_GEOGRAPHIC,
-            ):
-                self._indices = self._balanced_split_positions(
-                    candidate_positions=eligible_positions,
-                    split=split,
-                    seed=label_seed,
-                    train_samples=train_samples,
-                    valid_samples=valid_samples,
-                    test_samples=test_samples,
-                    split_strategy=split_strategy,
-                    geographic_bin_size_deg=geographic_bin_size_deg,
                 ).tolist()
             else:
                 raise ValueError(
@@ -477,165 +480,17 @@ class PretrainSubsetDataset(Dataset):
         return split_sizes[split]
 
     @staticmethod
-    def _regression_bin_edges(target_modality: str) -> np.ndarray:
-        """Fixed bins used to keep regression probes from overfocusing on easy modes."""
-        if target_modality == WRI_CANOPY_TARGET_MODALITY:
-            return np.asarray([0.0, 1.0, 5.0, 10.0, 20.0, 40.0], dtype=np.float32)
-        if target_modality == SRTM_TARGET_MODALITY:
-            return np.asarray([0.0, 250.0, 500.0, 1000.0, 1500.0, 2500.0], dtype=np.float32)
-        return np.asarray([], dtype=np.float32)
-
-    @staticmethod
-    def _label_balance_bins(label: torch.Tensor, target_modality: str) -> np.ndarray:
-        """Return class ids or regression-bin ids present in one target tile."""
-        if target_modality in (SRTM_TARGET_MODALITY, WRI_CANOPY_TARGET_MODALITY):
-            values = label.detach().cpu().float().numpy().reshape(-1)
-            values = values[np.isfinite(values)]
-            if values.size == 0:
-                return np.asarray([], dtype=np.int64)
-            edges = PretrainSubsetDataset._regression_bin_edges(target_modality)
-            return np.unique(np.digitize(values, edges, right=True)).astype(np.int64)
-
-        values = label.detach().cpu().long().numpy().reshape(-1)
-        values = values[values != SEGMENTATION_IGNORE_LABEL]
-        if values.size == 0:
-            return np.asarray([], dtype=np.int64)
-        return np.unique(values).astype(np.int64)
-
-    @staticmethod
-    def _select_balanced_positions(
-        candidate_positions: np.ndarray,
-        balance_bins_by_position: dict[int, np.ndarray],
-        target_size: int,
-        seed: int,
-    ) -> np.ndarray:
-        """Round-robin over label strata so rare classes/bins get selected."""
-        if candidate_positions.size <= target_size:
-            return np.asarray(candidate_positions, dtype=np.int64)
-
-        rng = np.random.RandomState(seed)
-        strata: dict[int, list[int]] = {}
-        for position in candidate_positions.tolist():
-            for bin_id in balance_bins_by_position.get(int(position), []):
-                strata.setdefault(int(bin_id), []).append(int(position))
-
-        if not strata:
-            return rng.permutation(candidate_positions)[:target_size].astype(np.int64)
-
-        for positions in strata.values():
-            rng.shuffle(positions)
-        strata_order = sorted(strata, key=lambda bin_id: (len(strata[bin_id]), bin_id))
-        cursors = {bin_id: 0 for bin_id in strata_order}
-        selected: list[int] = []
-        selected_set: set[int] = set()
-
-        while len(selected) < target_size:
-            made_progress = False
-            for bin_id in strata_order:
-                positions = strata[bin_id]
-                cursor = cursors[bin_id]
-                while cursor < len(positions) and positions[cursor] in selected_set:
-                    cursor += 1
-                cursors[bin_id] = cursor
-                if cursor >= len(positions):
-                    continue
-                position = positions[cursor]
-                selected.append(position)
-                selected_set.add(position)
-                cursors[bin_id] += 1
-                made_progress = True
-                if len(selected) == target_size:
-                    break
-            if not made_progress:
-                break
-
-        if len(selected) < target_size:
-            remaining = [
-                int(position)
-                for position in rng.permutation(candidate_positions).tolist()
-                if int(position) not in selected_set
-            ]
-            selected.extend(remaining[: target_size - len(selected)])
-
-        return np.asarray(selected, dtype=np.int64)
-
-    @staticmethod
-    def _cap_balance_candidates(
-        candidate_positions: np.ndarray,
-        target_size: int,
-        seed: int,
-    ) -> np.ndarray:
-        """Limit label reads while keeping a deterministic oversized candidate pool."""
-        max_candidates = min(
-            candidate_positions.size,
-            max(target_size, target_size * BALANCED_CANDIDATE_MULTIPLIER),
-        )
-        if candidate_positions.size <= max_candidates:
-            return candidate_positions
-        return np.random.RandomState(seed).permutation(candidate_positions)[
-            :max_candidates
-        ]
-
-    def _balanced_split_positions(
-        self,
-        candidate_positions: np.ndarray,
-        split: str,
-        seed: int,
-        train_samples: int,
-        valid_samples: int,
-        test_samples: int,
-        split_strategy: PretrainSplitStrategy,
-        geographic_bin_size_deg: float,
-    ) -> np.ndarray:
-        """Select a balanced capped subset within a random or geographic split pool."""
-        if self._label_dataset is None or self.target_modality is None:
-            raise RuntimeError("Balanced pretrain splits require a target modality")
-
-        if split_strategy == PretrainSplitStrategy.BALANCED_GEOGRAPHIC:
-            split_positions = self._geographic_split_pool_positions(
-                latlons=self._dataset.latlon_distribution,
-                candidate_positions=candidate_positions,
-                split=split,
-                seed=seed,
-                bin_size_deg=geographic_bin_size_deg,
-            )
-        else:
-            split_positions = self._random_split_pool_positions(
-                candidate_positions=candidate_positions,
-                split=split,
-                seed=seed,
-            )
-
-        target_size = self._target_size_for_split(
-            split=split,
-            train_samples=train_samples,
-            valid_samples=valid_samples,
-            test_samples=test_samples,
-        )
-        split_positions = self._cap_balance_candidates(
-            candidate_positions=split_positions,
-            target_size=target_size,
-            seed=seed,
-        )
-
-        balance_bins_by_position: dict[int, np.ndarray] = {}
-        for position in split_positions.tolist():
-            args = GetItemArgs(
-                idx=int(position),
-                patch_size=self.patch_size,
-                sampled_hw_p=self.hw_p,
-            )
-            label = self._get_label(args)
-            bins = self._label_balance_bins(label, self.target_modality)
-            if bins.size:
-                balance_bins_by_position[int(position)] = bins
-
-        return self._select_balanced_positions(
-            candidate_positions=split_positions,
-            balance_bins_by_position=balance_bins_by_position,
-            target_size=target_size,
-            seed=seed,
-        )
+    def _multi_hot_osm_presence(label_ids: str) -> torch.Tensor:
+        """Convert a split CSV label-id string into a multi-hot OSM target."""
+        target = torch.zeros(OSM_NUM_CLASSES, dtype=torch.long)
+        for label_id in label_ids.split():
+            class_id = int(label_id)
+            if not 0 <= class_id < OSM_NUM_CLASSES:
+                raise ValueError(
+                    f"OSM class id {class_id} outside [0, {OSM_NUM_CLASSES})"
+                )
+            target[class_id] = 1
+        return target
 
     @staticmethod
     def _squeeze_label(label: torch.Tensor) -> torch.Tensor:
@@ -662,7 +517,9 @@ class PretrainSubsetDataset(Dataset):
         return mapped
 
     @staticmethod
-    def _osm_label(label: torch.Tensor) -> torch.Tensor:
+    def _osm_label(
+        label: torch.Tensor, class_ids: list[int] | None = None
+    ) -> torch.Tensor:
         """Convert multi-channel OSM raster labels to a single class id per pixel."""
         label = label.float().squeeze()
         if label.ndim != 3:
@@ -675,7 +532,14 @@ class PretrainSubsetDataset(Dataset):
             channels_last = label
         valid = channels_last.sum(dim=-1) > 0
         classes = channels_last.argmax(dim=-1).long()
-        return classes.masked_fill(~valid, -1)
+        classes = classes.masked_fill(~valid, SEGMENTATION_IGNORE_LABEL)
+        if class_ids is None:
+            return classes
+
+        remapped = torch.full_like(classes, SEGMENTATION_IGNORE_LABEL)
+        for new_class_id, raw_class_id in enumerate(class_ids):
+            remapped[classes == raw_class_id] = new_class_id
+        return remapped
 
     @staticmethod
     def _srtm_label(label: torch.Tensor) -> torch.Tensor:
@@ -728,7 +592,7 @@ class PretrainSubsetDataset(Dataset):
         if self.target_modality == WORLDCOVER_TARGET_MODALITY:
             return self._worldcover_label(label)
         if self.target_modality == OSM_TARGET_MODALITY:
-            return self._osm_label(label)
+            return self._osm_label(label, self.osm_class_ids)
         if self.target_modality == SRTM_TARGET_MODALITY:
             return self._srtm_label(label)
         if self.target_modality == WRI_CANOPY_TARGET_MODALITY:
@@ -792,4 +656,6 @@ class PretrainSubsetDataset(Dataset):
         masked = self._missing_aware_masked_sample(sample)
         if self._tile_class_labels is not None:
             return masked, torch.tensor(self._tile_class_labels[idx], dtype=torch.long)
+        if self._tile_presence_labels is not None:
+            return masked, self._tile_presence_labels[idx]
         return masked, self._get_label(args)

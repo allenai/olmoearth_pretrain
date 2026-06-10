@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 from olmoearth_pretrain.evals.datasets.pretrain_subset import (
-    BALANCED_CANDIDATE_MULTIPLIER,
+    OSM_POPULOUS_12_CLASS_IDS,
     OsmLabelMode,
     PretrainSplitStrategy,
     PretrainSubsetDataset,
@@ -18,8 +18,6 @@ def test_split_strategy_enum_values() -> None:
     """Split strategies should be explicit enum values, not ad hoc strings."""
     assert PretrainSplitStrategy.RANDOM.value == "random"
     assert PretrainSplitStrategy.GEOGRAPHIC.value == "geographic"
-    assert PretrainSplitStrategy.BALANCED.value == "balanced"
-    assert PretrainSplitStrategy.BALANCED_GEOGRAPHIC.value == "balanced_geographic"
 
 
 def test_split_indices_are_disjoint_and_deterministic() -> None:
@@ -113,6 +111,7 @@ def test_osm_label_mode_enum_values() -> None:
     """OSM label modes should be explicit enum values."""
     assert OsmLabelMode.SEGMENTATION.value == "segmentation"
     assert OsmLabelMode.TILE_ANCHOR_CLASS.value == "tile_anchor_class"
+    assert OsmLabelMode.TILE_PRESENCE.value == "tile_presence"
 
 
 def test_worldcover_label_maps_class_codes() -> None:
@@ -133,6 +132,24 @@ def test_osm_label_uses_argmax_and_ignores_empty_pixels() -> None:
     label = PretrainSubsetDataset._osm_label(raw)
 
     expected = torch.tensor([[1, 2], [-1, -1]])
+    assert torch.equal(label, expected)
+
+
+def test_osm_label_remaps_populous_classes_and_ignores_other_classes() -> None:
+    """Populous OSM eval labels should be contiguous and ignore other classes."""
+    raw = torch.zeros(2, 2, 30)
+    raw[0, 0, 1] = 1
+    raw[0, 1, 12] = 1
+    raw[1, 0, 2] = 1
+
+    label = PretrainSubsetDataset._osm_label(raw, OSM_POPULOUS_12_CLASS_IDS)
+
+    expected = torch.tensor(
+        [
+            [0, 3],
+            [SEGMENTATION_IGNORE_LABEL, SEGMENTATION_IGNORE_LABEL],
+        ]
+    )
     assert torch.equal(label, expected)
 
 
@@ -181,69 +198,20 @@ def test_worldcereal_label_uses_primary_channel_and_ignores_empty_pixels() -> No
     assert torch.equal(label, expected)
 
 
-def test_label_balance_bins_for_segmentation_ignores_invalid_pixels() -> None:
-    """Segmentation balance bins should only include valid classes in a tile."""
-    label = torch.tensor([[1, 1, 2], [SEGMENTATION_IGNORE_LABEL, 4, 4]])
+def test_multi_hot_osm_presence_from_split_labels() -> None:
+    """OSM tile-presence labels should become 30-way multi-hot targets."""
+    label = PretrainSubsetDataset._multi_hot_osm_presence("4 12 22")
 
-    bins = PretrainSubsetDataset._label_balance_bins(label, "cdl")
-
-    assert bins.tolist() == [1, 2, 4]
-
-
-def test_label_balance_bins_for_canopy_separates_zero_and_positive_heights() -> None:
-    """Canopy balance bins should not collapse zero and tall-canopy pixels."""
-    label = torch.tensor([[0.0, 0.0, 2.0], [7.0, 25.0, float("nan")]])
-
-    bins = PretrainSubsetDataset._label_balance_bins(
-        label, "wri_canopy_height_map"
-    )
-
-    assert bins.tolist() == [0, 2, 3, 5]
-
-
-def test_balanced_selection_prefers_rare_strata() -> None:
-    """Balanced selection should cover rare bins before filling common-only tiles."""
-    candidate_positions = np.arange(6)
-    bins_by_position = {
-        0: np.asarray([0]),
-        1: np.asarray([0]),
-        2: np.asarray([0]),
-        3: np.asarray([0]),
-        4: np.asarray([1]),
-        5: np.asarray([2]),
-    }
-
-    selected = PretrainSubsetDataset._select_balanced_positions(
-        candidate_positions=candidate_positions,
-        balance_bins_by_position=bins_by_position,
-        target_size=3,
-        seed=7,
-    )
-
-    assert {4, 5}.issubset(set(selected.tolist()))
-
-
-def test_balance_candidates_are_deterministically_capped() -> None:
-    """Balanced split selection should not scan every candidate H5 label."""
-    candidate_positions = np.arange(100)
-
-    capped = PretrainSubsetDataset._cap_balance_candidates(
-        candidate_positions=candidate_positions,
-        target_size=5,
-        seed=7,
-    )
-    capped_again = PretrainSubsetDataset._cap_balance_candidates(
-        candidate_positions=candidate_positions,
-        target_size=5,
-        seed=7,
-    )
-
-    assert len(capped) == 5 * BALANCED_CANDIDATE_MULTIPLIER
-    assert capped.tolist() == capped_again.tolist()
+    assert label.shape == (30,)
+    assert label.dtype == torch.long
+    assert label.sum().item() == 3
+    assert label[4] == 1
+    assert label[12] == 1
+    assert label[22] == 1
 
 
 def test_random_split_pool_positions_are_disjoint() -> None:
-    """Balanced random splitting should assign pools before balanced subsampling."""
+    """Random split pools should be disjoint before sample caps are applied."""
     candidate_positions = np.arange(100)
 
     train = PretrainSubsetDataset._random_split_pool_positions(
