@@ -1592,6 +1592,7 @@ class Encoder(FlexiVitBase):
         supported_modalities: list[ModalitySpec],
         max_sequence_length: int,
         num_register_tokens: int = 0,
+        use_class_token: bool = False,
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         num_projection_layers: int = 1,
@@ -1633,6 +1634,11 @@ class Encoder(FlexiVitBase):
             supported_modalities: list documenting modalities used in a given model instantiation
             max_sequence_length: Maximum sequence length
             num_register_tokens: Number of register tokens to use
+            use_class_token: If True, a single learnable class token is
+                appended to every sample's (unmasked) token sequence, attends
+                through all blocks, and is surfaced as the ``class_token``
+                output key — the per-sample instance embedding. It never
+                enters ``TokensAndMasks``, masking, or the token-level loss.
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             num_projection_layers: The number of layers to use in the projection. If >1, then
@@ -1721,6 +1727,13 @@ class Encoder(FlexiVitBase):
             self.register_tokens = nn.Parameter(
                 torch.zeros(num_register_tokens, embedding_size)
             )
+        self.use_class_token = use_class_token
+        if use_class_token:
+            if use_flash_attn:
+                # The packed varlen layout ([sum_N, D] + cu_seqlens) has no
+                # per-sample insertion point implemented for extra tokens.
+                raise ValueError("use_class_token is not supported with use_flash_attn")
+            self.class_token = nn.Parameter(torch.zeros(1, embedding_size))
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
@@ -1772,6 +1785,8 @@ class Encoder(FlexiVitBase):
                 p.requires_grad = False
         if self.has_register_tokens:
             self._init_register_tokens()
+        if self.use_class_token:
+            nn.init.xavier_uniform_(self.class_token)
 
     def enable_band_dropout(self) -> None:
         """Enable band dropout using the configured rate.
@@ -2033,8 +2048,15 @@ class Encoder(FlexiVitBase):
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
         latlon: Tensor | None = None,
-    ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
-        """Apply the attention to the tokens and masks."""
+    ) -> tuple[dict[str, Tensor], dict[str, Any] | None, Tensor | None]:
+        """Apply the attention to the tokens and masks.
+
+        Returns:
+            tokens_per_modality_dict: Per-modality tokens and masks.
+            token_norm_stats: Optional register-token norm statistics.
+            class_token: ``[B, D]`` normalized class token, or None when
+                ``use_class_token`` is disabled.
+        """
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
@@ -2092,6 +2114,24 @@ class Encoder(FlexiVitBase):
             fast_pass=fast_pass,
         )
 
+        if self.use_class_token:
+            if exit_ids_seq is not None:
+                # The exit bookkeeping tensors are not class-token-aware; the
+                # target encoder (the only exit user) runs without a class
+                # token under token_exit_cfg=0 anyway.
+                raise ValueError(
+                    "use_class_token does not support token_exit_cfg depths > 0"
+                )
+            # Prepended before register tokens, so the final layout is
+            # [registers, class token, patch tokens] and pop_register_tokens
+            # keeps working on the sequence front.
+            tokens, attn_mask = self.add_class_token_and_mask(tokens, attn_mask)
+            if positions is not None:
+                # Zero coordinates = identity rotation under RoPE.
+                positions = torch.cat(
+                    [torch.zeros_like(positions[:, :1]), positions], dim=1
+                )
+
         if self.has_register_tokens:
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
             if positions is not None:
@@ -2134,6 +2174,11 @@ class Encoder(FlexiVitBase):
         else:
             token_norm_stats = None
 
+        class_token = None
+        if self.use_class_token:
+            class_token = self.norm(tokens[:, 0])
+            tokens = tokens[:, 1:]
+
         if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
 
@@ -2160,7 +2205,21 @@ class Encoder(FlexiVitBase):
         )
         # merge original masks and the processed tokens
         tokens_per_modality_dict.update(original_masks_dict)
-        return tokens_per_modality_dict, token_norm_stats
+        return tokens_per_modality_dict, token_norm_stats, class_token
+
+    def add_class_token_and_mask(
+        self, tokens: Tensor, attn_mask: Tensor | None
+    ) -> tuple[Tensor, Tensor | None]:
+        """Prepend the single class token (always attended) to the sequence."""
+        batch_size = tokens.shape[0]
+        cls = self.class_token.unsqueeze(0).expand(batch_size, -1, -1)
+        tokens = torch.cat([cls, tokens], dim=1)
+        if attn_mask is not None:
+            cls_mask = torch.ones(
+                batch_size, 1, dtype=attn_mask.dtype, device=attn_mask.device
+            )
+            attn_mask = torch.cat([cls_mask, attn_mask], dim=1)
+        return tokens, attn_mask
 
     def forward(
         self,
@@ -2190,31 +2249,48 @@ class Encoder(FlexiVitBase):
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
-            patchified_tokens_and_masks, token_norm_stats = self.apply_attn(
-                x=patchified_tokens_and_masks,
-                timestamps=x.timestamps,
-                patch_size=patch_size,
-                input_res=input_res,
-                token_exit_cfg=token_exit_cfg,
-                fast_pass=fast_pass,
-                latlon=getattr(x, "latlon", None),
+            patchified_tokens_and_masks, token_norm_stats, class_token = (
+                self.apply_attn(
+                    x=patchified_tokens_and_masks,
+                    timestamps=x.timestamps,
+                    patch_size=patch_size,
+                    input_res=input_res,
+                    token_exit_cfg=token_exit_cfg,
+                    fast_pass=fast_pass,
+                    latlon=getattr(x, "latlon", None),
+                )
             )
         else:
             token_norm_stats = {}
+            class_token = None
         output = TokensAndMasks(**patchified_tokens_and_masks)
 
         # Project to output_embedding_size if configured
         if self.embedding_projector is not None:
             output = self.embedding_projector(output)
+            if class_token is not None:
+                class_token = self.embedding_projector(class_token)
 
         output_dict: dict[str, Any] = {
             "tokens_and_masks": output,
         }
         if token_norm_stats:
             output_dict["token_norm_stats"] = token_norm_stats
+        if class_token is not None:
+            # Emitted in both the normal and fast_pass paths: evals read this
+            # key as the instance embedding, and unpack_encoder_output threads
+            # it to the decoder as cross-attention context.
+            output_dict["class_token"] = class_token
 
         if not fast_pass:
-            output_dict["project_aggregated"] = self.project_and_aggregate(output)
+            if class_token is not None:
+                # The instance contrastive loss consumes the projected class
+                # token; evals consume the raw pre-projection token above.
+                output_dict["project_aggregated"] = self.project_and_aggregate(
+                    class_token
+                )
+            else:
+                output_dict["project_aggregated"] = self.project_and_aggregate(output)
 
         return output_dict
 
@@ -2523,8 +2599,20 @@ class Predictor(PredictorBase):
         patch_size: int,
         input_res: int,
         latlon: Tensor | None = None,
+        class_token: Tensor | None = None,
     ) -> dict[str, Tensor]:
-        """Apply attention to the tokens."""
+        """Apply attention to the tokens.
+
+        Args:
+            x: Per-modality tokens and masks.
+            timestamps: Timestamps of the tokens.
+            patch_size: Patch size of the tokens.
+            input_res: Input resolution of the tokens.
+            latlon: Optional per-sample tile-center lat/lon.
+            class_token: Optional ``[B, D_dec]`` encoder class token (already
+                projected to the decoder dim) appended to the cross-attention
+                context so every masked-token query can read it.
+        """
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
@@ -2589,21 +2677,47 @@ class Predictor(PredictorBase):
             cu_seqlens_tokens_to_decode = None
             cu_seqlens_unmasked_tokens = None
 
+        # The class token rides along as one extra always-attended context
+        # column; combine_x_y below still uses the original unmasked tokens,
+        # so the appended column never re-enters the per-modality layout.
+        context_tokens = unmasked_tokens
+        context_mask = unmasked_tokens_mask
+        context_positions = unmasked_positions
+        max_context_length = max_length_of_unmasked_tokens
+        if class_token is not None:
+            if self.use_flash_attn:
+                raise ValueError(
+                    "class_token context is not supported with use_flash_attn"
+                )
+            context_tokens = torch.cat(
+                [unmasked_tokens, class_token.unsqueeze(1)], dim=1
+            )
+            context_mask = torch.cat(
+                [unmasked_tokens_mask, torch.ones_like(unmasked_tokens_mask[:, :1])],
+                dim=1,
+            )
+            if unmasked_positions is not None:
+                context_positions = torch.cat(
+                    [unmasked_positions, torch.zeros_like(unmasked_positions[:, :1])],
+                    dim=1,
+                )
+            max_context_length = max_length_of_unmasked_tokens + 1
+
         for blk in self.blocks:
             # note that we are not taking the inverse of the mask, since split_x_y gives us
             # true values for values we want to take part in attention
             tokens_to_decode = blk(
                 x=tokens_to_decode,
-                y=unmasked_tokens,
+                y=context_tokens,
                 attn_mask=(
-                    unmasked_tokens_mask.bool() if not self.use_flash_attn else None
+                    context_mask.bool() if not self.use_flash_attn else None
                 ),  # only for flash attn though this should not be left in
                 cu_seqlens_q=cu_seqlens_tokens_to_decode,
                 cu_seqlens_k=cu_seqlens_unmasked_tokens,
                 max_seqlen_q=max_length_of_tokens_to_decode,
-                max_seqlen_k=max_length_of_unmasked_tokens,
+                max_seqlen_k=max_context_length,
                 rope_positions=positions_to_decode,
-                rope_positions_y=unmasked_positions,
+                rope_positions_y=context_positions,
             )
 
         if self.use_flash_attn:
@@ -2636,6 +2750,7 @@ class Predictor(PredictorBase):
         patch_size: int,
         input_res: int = BASE_GSD,
         latlon: Tensor | None = None,
+        class_token: Tensor | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -2646,6 +2761,8 @@ class Predictor(PredictorBase):
             input_res: Input resolution of the tokens
             latlon: Optional per-sample tile-center lat/lon. Ignored unless
                 ``encoding_mode='separate'`` with ``latlon_encoding_dim>0``.
+            class_token: Optional ``[B, D_enc]`` encoder class token, made
+                available to every decoder query as cross-attention context.
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
@@ -2669,8 +2786,16 @@ class Predictor(PredictorBase):
 
         tokens_only_dict = self.add_masks(decoder_emedded_dict)
         decoder_emedded_dict.update(tokens_only_dict)
+        if class_token is not None:
+            # Same treatment as the encoder-output context tokens.
+            class_token = self.encoder_to_decoder_embed(self.input_norm(class_token))
         tokens_and_masks = self.apply_attn(
-            decoder_emedded_dict, timestamps, patch_size, input_res, latlon=latlon
+            decoder_emedded_dict,
+            timestamps,
+            patch_size,
+            input_res,
+            latlon=latlon,
+            class_token=class_token,
         )
         # TODO: Factor this out into a more readable function
         output_dict = {}
@@ -2713,6 +2838,7 @@ class EncoderConfig(Config):
     drop_path: float = 0.1
     max_sequence_length: int = 12
     num_register_tokens: int = 0
+    use_class_token: bool = False
     learnable_channel_embeddings: bool = True
     random_channel_embeddings: bool = False
     num_projection_layers: int = 1
@@ -2787,6 +2913,8 @@ class EncoderConfig(Config):
                     f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "
                     f"got {head_dim}"
                 )
+        if self.use_class_token and self.use_flash_attn:
+            raise ValueError("use_class_token is not supported with use_flash_attn")
         _validate_separate_encoding_fields(
             self.encoding_mode,
             self.channel_encoding_dim,
