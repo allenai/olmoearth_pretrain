@@ -23,6 +23,7 @@ from olmoearth_pretrain.evals.class_support import (
     labeled_classes_for_split,
     load_class_support,
 )
+from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
     EvalDatasetConfig,
     TaskType,
@@ -332,7 +333,12 @@ class DownstreamEvaluator:
             extra_kwargs["target_modality"] = self.pretrain_target_modality
             extra_kwargs["pretrain_split"] = split
             extra_kwargs["pretrain_label_seed"] = self.pretrain_label_seed
-            extra_kwargs["pretrain_train_samples"] = self.pretrain_train_samples
+            pretrain_train_samples = self.pretrain_train_samples
+            if split == "train" and self.max_train_samples is not None:
+                pretrain_train_samples = min(
+                    pretrain_train_samples, self.max_train_samples
+                )
+            extra_kwargs["pretrain_train_samples"] = pretrain_train_samples
             extra_kwargs["pretrain_valid_samples"] = self.pretrain_valid_samples
             extra_kwargs["pretrain_test_samples"] = self.pretrain_test_samples
             extra_kwargs["pretrain_split_strategy"] = self.pretrain_split_strategy

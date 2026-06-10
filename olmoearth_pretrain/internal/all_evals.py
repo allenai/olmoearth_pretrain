@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import sys
+from importlib.resources import files
 from logging import getLogger
 from typing import Any
 
@@ -415,7 +416,11 @@ PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py
 # probes fall back to PRETRAIN_SUBSET_H5PY_DIR (in-distribution).
 PRETRAIN_AUX_EVAL_H5PY_DIR = "/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928"
 PRESTO_OSM_EVAL_H5PY_DIR = "/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/469728"
-PRESTO_OSM_BALANCED_SPLITS_DIR = "analysis/presto_osm_balanced_splits"
+PRESTO_OSM_BALANCED_SPLITS_DIR = str(
+    files("olmoearth_pretrain.evals.datasets").joinpath(
+        "splits/presto_osm_balanced"
+    )
+)
 
 MAP_MODALITY_PROBE_INPUTS = [
     Modality.SENTINEL2_L2A.name,

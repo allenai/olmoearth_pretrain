@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--splits-dir",
         type=Path,
-        default=Path("analysis/presto_osm_balanced_splits"),
+        default=Path("olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced"),
     )
     parser.add_argument(
         "--output-dir",

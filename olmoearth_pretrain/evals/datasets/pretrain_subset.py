@@ -182,6 +182,14 @@ class PretrainSubsetDataset(Dataset):
                     split_dir=split_dir,
                     split=split,
                 )
+                target_size = self._target_size_for_split(
+                    split=split,
+                    train_samples=train_samples,
+                    valid_samples=valid_samples,
+                    test_samples=test_samples,
+                )
+                positions = positions[:target_size]
+                split_rows = split_rows.iloc[:target_size].reset_index(drop=True)
                 self._indices = positions.tolist()
                 if self.osm_label_mode == OsmLabelMode.TILE_ANCHOR_CLASS:
                     if "anchor_class_id" not in split_rows.columns:

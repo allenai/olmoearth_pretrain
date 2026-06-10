@@ -107,6 +107,22 @@ def test_split_rows_from_split_csv_returns_matched_rows(tmp_path) -> None:
     assert rows["anchor_class_id"].tolist() == [12, 4]
 
 
+def test_split_csv_rows_can_be_capped_by_split_sample_count() -> None:
+    """Split-backed probes should support small train/valid/test smoke subsets."""
+    positions = np.asarray([2, 0, 4, 1])
+    rows = torch.arange(4)
+
+    target_size = PretrainSubsetDataset._target_size_for_split(
+        split="train",
+        train_samples=2,
+        valid_samples=8,
+        test_samples=6,
+    )
+
+    assert positions[:target_size].tolist() == [2, 0]
+    assert rows[:target_size].tolist() == [0, 1]
+
+
 def test_osm_label_mode_enum_values() -> None:
     """OSM label modes should be explicit enum values."""
     assert OsmLabelMode.SEGMENTATION.value == "segmentation"
