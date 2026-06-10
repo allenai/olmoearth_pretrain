@@ -14,10 +14,14 @@ from einops import rearrange, repeat
 from torch import Tensor
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.datatypes import (
+    MaskedOlmoEarthSample,
+    MaskValue,
+    TokensAndMasks,
+)
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,427 @@ class Loss(ABC):
 
 
 LOSS_REGISTRY = ClassRegistry[Loss]()
+
+
+@LOSS_REGISTRY.register("clip_patch_discrimination")
+class ClipPatchDiscriminationLoss(Loss):
+    """Loss function for configurable CLIP-like patch discrimination task.
+
+    Token-level symmetric CLIP-style cross-entropy between decoded predictions
+    and target-encoder tokens, closer to the original loss from the CLIP paper.
+    Instead of a fixed tau temperature, the learned logit scale is passed to
+    ``compute`` on every call (already clamped and exponentiated by the caller).
+
+    Differences from the original implementation (PR #376), each fixing a
+    defect found in review:
+        - Predictions and targets are L2-normalized by default
+          (``prediction_norm``/``target_norm`` default to 1.0; ``None``
+          disables normalization).
+        - Scores and cross-entropy are computed in float32 regardless of the
+          input dtype, so a logit scale of ~100 does not collapse logit
+          differences in bf16.
+        - ``logit_scale`` is threaded through as a local variable rather than
+          stored as mutable state on the loss object.
+        - The two symmetric directions (pred->target and target->pred) are
+          averaged in pairs rather than appended as separate loss entries, so
+          enabling ``symmetric`` does not silently reweight modalities or
+          grouping variants in the final reduction.
+        - Optional same-target negative masking
+          (``same_target_threshold``/``mask_negatives_for_modalities``) so
+          map-like modalities (worldcover/srtm/osm/cdl/worldcereal/canopy)
+          do not produce false negatives. Only supported for the
+          ``modality_loss`` grouping.
+    """
+
+    name = "ClipPatchDisc"
+
+    def __init__(
+        self,
+        label_smoothing: float = 0.0,
+        prediction_norm: float | None = 1.0,
+        target_norm: float | None = 1.0,
+        modality_loss: bool = True,
+        symmetric: bool = True,
+        batch_loss: bool = False,
+        bandset_loss: bool = False,
+        spatial_loss: bool = False,
+        time_loss: bool = False,
+        mean_of_modalities: bool = True,
+        sum_of_modalities: bool = False,
+        decode_only: bool = True,
+        weight: float = 1.0,
+        same_target_threshold: float | None = None,
+        mask_negatives_for_modalities: list[str] | None = None,
+    ):
+        """Initialize CLIP-style patch discrimination loss.
+
+        Args:
+            label_smoothing: label smoothing [0,1], 0=none, 1=too much
+            prediction_norm: if not None, predictions are L2-normalized and
+                multiplied by this value
+            target_norm: if not None, targets are L2-normalized and multiplied
+                by this value
+            modality_loss: contrast each token against the other tokens of the
+                same sample and modality
+            symmetric: average the pred->target and target->pred directions
+            batch_loss: contrast each token against the same position across
+                the batch
+            bandset_loss: contrast within (sample, band-set) groups
+            spatial_loss: contrast within (sample, timestep) groups for
+                space-time varying modalities (falls back to modality_loss
+                otherwise)
+            time_loss: contrast within (sample, spatial position) groups for
+                space-time varying modalities (falls back to modality_loss
+                otherwise)
+            mean_of_modalities: mean of per-(modality, grouping) means instead
+                of a mean over all per-token losses
+            sum_of_modalities: sum of per-(modality, grouping) means instead
+                of a mean over all per-token losses
+            decode_only: only allow targets at DECODER positions as
+                candidates (prevents cheating maybe?)
+            weight: the weight to apply to this loss
+            same_target_threshold: if not None, negatives whose target
+                embedding has cosine similarity above this threshold with the
+                positive's target are masked out of the softmax denominator
+                (diagonal excluded). Only supported with the modality_loss
+                grouping.
+            mask_negatives_for_modalities: list of modality names to apply
+                same-target masking for. If None, applies to all modalities.
+        """
+        if same_target_threshold is not None and (
+            batch_loss or bandset_loss or spatial_loss or time_loss
+        ):
+            raise ValueError(
+                "same_target_threshold is only supported with the "
+                "modality_loss grouping; disable batch_loss/bandset_loss/"
+                "spatial_loss/time_loss or set same_target_threshold=None."
+            )
+        self.label_smoothing = label_smoothing
+        self.weight = weight
+        self.prediction_norm = prediction_norm
+        self.target_norm = target_norm
+        self.modality_loss = modality_loss
+        self.symmetric = symmetric
+        self.batch_loss = batch_loss
+        self.bandset_loss = bandset_loss
+        self.mean_of_modalities = mean_of_modalities
+        self.sum_of_modalities = sum_of_modalities
+        self.decode_only = decode_only
+        self.spatial_loss = spatial_loss
+        self.time_loss = time_loss
+        self.same_target_threshold = same_target_threshold
+        self.mask_negatives_for_modalities = mask_negatives_for_modalities
+
+    def _grouped_loss(
+        self,
+        rows: Tensor,
+        cols: Tensor,
+        masks: Tensor,
+        logit_scale: Tensor,
+        invalid_negatives: Tensor | None = None,
+    ) -> Tensor:
+        """Token-level CLIP cross-entropy for one grouping of tokens.
+
+        Args:
+            rows: (groups, n, d) query embeddings (already normalized).
+            cols: (groups, n, d) candidate embeddings; cols[g, i] is the
+                positive for rows[g, i].
+            masks: (groups, n) mask values; only rows at DECODER positions
+                contribute to the loss.
+            logit_scale: final multiplicative scale for the logits.
+            invalid_negatives: optional (groups, n, n) bool tensor; True
+                entries are same-target negatives to exclude from the softmax
+                denominator.
+
+        Returns:
+            1-D tensor of per-token losses at DECODER positions.
+        """
+        # Compute in float32: bf16 logits at scale ~100 collapse differences.
+        rows = rows.float()
+        cols = cols.float()
+        score = torch.einsum("gxd,gyd->gxy", rows, cols) * logit_scale
+        neg_inf = -torch.finfo(score.dtype).max
+        decoder_cols = masks == MaskValue.DECODER.value  # (groups, n)
+        if self.decode_only:
+            score = score.masked_fill(~decoder_cols.unsqueeze(1), neg_inf)
+        if invalid_negatives is not None:
+            score = score.masked_fill(invalid_negatives, neg_inf)
+        num_tokens = score.shape[-1]
+        labels = torch.arange(num_tokens, dtype=torch.long, device=score.device)
+        loss = F.cross_entropy(
+            score.flatten(0, 1),
+            labels.repeat(score.shape[0]),
+            reduction="none",
+            label_smoothing=self.label_smoothing,
+        )
+        row_select = decoder_cols.reshape(-1)
+        if invalid_negatives is not None:
+            # Rows whose negatives were all masked carry no contrastive
+            # signal; exclude them (mirrors the skip in the masked-negatives
+            # losses).
+            diagonal = torch.eye(
+                num_tokens, dtype=torch.bool, device=score.device
+            ).unsqueeze(0)
+            valid_negatives = ~invalid_negatives & ~diagonal
+            if self.decode_only:
+                valid_negatives = valid_negatives & decoder_cols.unsqueeze(1)
+            row_select = row_select & valid_negatives.any(dim=-1).reshape(-1)
+        return loss[row_select]
+
+    def _calculate_modality_loss(
+        self,
+        rows: Tensor,
+        cols: Tensor,
+        masks: Tensor,
+        logit_scale: Tensor,
+        invalid_negatives: Tensor | None = None,
+    ) -> Tensor:
+        """Contrast each token against the other tokens of the same sample."""
+        return self._grouped_loss(
+            rearrange(rows, "b ... d -> b (...) d"),
+            rearrange(cols, "b ... d -> b (...) d"),
+            rearrange(masks, "b ... -> b (...)"),
+            logit_scale,
+            invalid_negatives,
+        )
+
+    def _calculate_batch_loss(
+        self,
+        rows: Tensor,
+        cols: Tensor,
+        masks: Tensor,
+        logit_scale: Tensor,
+        invalid_negatives: Tensor | None = None,
+    ) -> Tensor:
+        """Contrast each token against the same position across the batch."""
+        return self._grouped_loss(
+            rearrange(rows, "b ... d -> (...) b d"),
+            rearrange(cols, "b ... d -> (...) b d"),
+            rearrange(masks, "b ... -> (...) b"),
+            logit_scale,
+            invalid_negatives,
+        )
+
+    def _calculate_bandset_loss(
+        self,
+        rows: Tensor,
+        cols: Tensor,
+        masks: Tensor,
+        logit_scale: Tensor,
+        invalid_negatives: Tensor | None = None,
+    ) -> Tensor:
+        """Contrast within (sample, band-set) groups."""
+        return self._grouped_loss(
+            rearrange(rows, "b ... bs d -> (b bs) (...) d"),
+            rearrange(cols, "b ... bs d -> (b bs) (...) d"),
+            rearrange(masks, "b ... bs -> (b bs) (...)"),
+            logit_scale,
+            invalid_negatives,
+        )
+
+    def _calculate_spatial_loss(
+        self,
+        rows: Tensor,
+        cols: Tensor,
+        masks: Tensor,
+        logit_scale: Tensor,
+        invalid_negatives: Tensor | None = None,
+    ) -> Tensor:
+        """Contrast within (sample, timestep) groups across spatial positions."""
+        if rows.ndim == 6:
+            embed_rearrange = "b ph pw t bs d -> (b t) (ph pw bs) d"
+            mask_rearrange = "b ph pw t bs -> (b t) (ph pw bs)"
+        elif rows.ndim == 5:
+            embed_rearrange = "b ph pw t d -> (b t) (ph pw) d"
+            mask_rearrange = "b ph pw t -> (b t) (ph pw)"
+        else:
+            raise ValueError(
+                f"spatial_loss requires space-time varying tokens of rank 5 "
+                f"or 6, got rank {rows.ndim}"
+            )
+        return self._grouped_loss(
+            rearrange(rows, embed_rearrange),
+            rearrange(cols, embed_rearrange),
+            rearrange(masks, mask_rearrange),
+            logit_scale,
+            invalid_negatives,
+        )
+
+    def _calculate_time_loss(
+        self,
+        rows: Tensor,
+        cols: Tensor,
+        masks: Tensor,
+        logit_scale: Tensor,
+        invalid_negatives: Tensor | None = None,
+    ) -> Tensor:
+        """Contrast within (sample, spatial position) groups across time."""
+        if rows.ndim == 6:
+            embed_rearrange = "b ph pw t bs d -> (b ph pw) (t bs) d"
+            mask_rearrange = "b ph pw t bs -> (b ph pw) (t bs)"
+        elif rows.ndim == 5:
+            embed_rearrange = "b ph pw t d -> (b ph pw) t d"
+            mask_rearrange = "b ph pw t -> (b ph pw) t"
+        else:
+            raise ValueError(
+                f"time_loss requires space-time varying tokens of rank 5 "
+                f"or 6, got rank {rows.ndim}"
+            )
+        return self._grouped_loss(
+            rearrange(rows, embed_rearrange),
+            rearrange(cols, embed_rearrange),
+            rearrange(masks, mask_rearrange),
+            logit_scale,
+            invalid_negatives,
+        )
+
+    def _symmetric_loss(
+        self,
+        loss_fn: Any,
+        preds: Tensor,
+        targs: Tensor,
+        masks: Tensor,
+        logit_scale: Tensor,
+        invalid_negatives: Tensor | None = None,
+    ) -> Tensor:
+        """Average the two contrastive directions into a single loss vector.
+
+        The same-target ``invalid_negatives`` matrix is built from target
+        cosine similarity, which is symmetric, so it applies unchanged to both
+        directions.
+        """
+        forward = loss_fn(preds, targs, masks, logit_scale, invalid_negatives)
+        if not self.symmetric:
+            return forward
+        backward = loss_fn(targs, preds, masks, logit_scale, invalid_negatives)
+        return 0.5 * (forward + backward)
+
+    def _build_same_target_negatives(self, targs: Tensor) -> Tensor:
+        """Mark same-target negatives, excluding the diagonal.
+
+        Args:
+            targs: target tokens of shape (b, ..., d).
+
+        Returns:
+            Bool tensor of shape (b, n, n) where True marks pairs of distinct
+            tokens whose target embeddings have cosine similarity above
+            ``same_target_threshold``.
+        """
+        targs_flat = rearrange(targs, "b ... d -> b (...) d").float()
+        normed = F.normalize(targs_flat, p=2, dim=-1)
+        similarity = torch.bmm(normed, normed.transpose(1, 2))
+        same_target = similarity > self.same_target_threshold
+        diagonal = torch.eye(
+            same_target.shape[-1], dtype=torch.bool, device=same_target.device
+        ).unsqueeze(0)
+        return same_target & ~diagonal
+
+    def compute(
+        self,
+        predictions: TokensAndMasks,
+        targets: TokensAndMasks,
+        logit_scale: Tensor | None = None,
+        **kwargs: Any,
+    ) -> Tensor:
+        """Compute CLIP-style patch discrimination loss.
+
+        Args:
+            predictions: Decoded predictions. Masks are read from here:
+                DECODER positions mark which tokens participate in the loss.
+            targets: Target-encoder tokens.
+            logit_scale: The final multiplicative scale applied to the logits.
+                The caller is responsible for clamping and exponentiating the
+                learned parameter, i.e. pass
+                ``model.logit_scale.clamp(max=...).exp()``, not the raw
+                log-space parameter.
+            **kwargs: Additional keyword arguments (ignored).
+
+        Returns:
+            The computed loss value.
+        """
+        assert logit_scale is not None, (
+            "ClipPatchDiscriminationLoss.compute() requires a logit_scale "
+            "kwarg: the final multiplicative logit scale, post clamp().exp() "
+            "(e.g. model.logit_scale.clamp(max=math.log(100.0)).exp())."
+        )
+        losses: list[Tensor] = []
+        for modality_name in predictions.modalities:
+            # Cast to float32 up front (matches the masked-negatives-vec
+            # convention) so normalization and scoring are stable.
+            preds = getattr(predictions, modality_name).float()
+            targs = getattr(targets, modality_name).float()
+            masks = getattr(
+                predictions, predictions.get_masked_modality_name(modality_name)
+            )
+            if self.target_norm is not None:
+                targs = self.target_norm * F.normalize(targs, p=2, dim=-1)
+            if self.prediction_norm is not None:
+                preds = self.prediction_norm * F.normalize(preds, p=2, dim=-1)
+
+            invalid_negatives = None
+            if self.same_target_threshold is not None and (
+                self.mask_negatives_for_modalities is None
+                or modality_name in self.mask_negatives_for_modalities
+            ):
+                invalid_negatives = self._build_same_target_negatives(targs)
+
+            if self.modality_loss:
+                losses.append(
+                    self._symmetric_loss(
+                        self._calculate_modality_loss,
+                        preds,
+                        targs,
+                        masks,
+                        logit_scale,
+                        invalid_negatives,
+                    )
+                )
+
+            if self.batch_loss:
+                losses.append(
+                    self._symmetric_loss(
+                        self._calculate_batch_loss, preds, targs, masks, logit_scale
+                    )
+                )
+
+            if self.bandset_loss:
+                losses.append(
+                    self._symmetric_loss(
+                        self._calculate_bandset_loss, preds, targs, masks, logit_scale
+                    )
+                )
+
+            if self.time_loss:
+                time_fn = (
+                    self._calculate_time_loss
+                    if Modality.get(modality_name).is_spacetime_varying
+                    else self._calculate_modality_loss
+                )
+                losses.append(
+                    self._symmetric_loss(time_fn, preds, targs, masks, logit_scale)
+                )
+
+            if self.spatial_loss:
+                spatial_fn = (
+                    self._calculate_spatial_loss
+                    if Modality.get(modality_name).is_spacetime_varying
+                    else self._calculate_modality_loss
+                )
+                losses.append(
+                    self._symmetric_loss(spatial_fn, preds, targs, masks, logit_scale)
+                )
+
+        nonempty = [loss for loss in losses if loss.numel() > 0]
+        if len(nonempty) == 0:
+            return torch.tensor(0.0, device=predictions.device)
+        if self.mean_of_modalities:
+            total_loss = torch.stack([loss.mean() for loss in nonempty]).mean()
+        elif self.sum_of_modalities:
+            total_loss = torch.stack([loss.mean() for loss in nonempty]).sum()
+        else:
+            total_loss = torch.cat([loss.flatten() for loss in nonempty]).mean()
+
+        return self.weight * total_loss
 
 
 @LOSS_REGISTRY.register("all_discrimination")

@@ -2,11 +2,13 @@
 
 import logging
 
+import pytest
 import torch
 
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.train.loss import (
     AdjustedPatchDiscriminationLoss,
+    ClipPatchDiscriminationLoss,
     CrossEntropyLoss,
     InfoNCELoss,
     KoLeoLoss,
@@ -1352,3 +1354,202 @@ def test_masked_neg_vec_large_batch() -> None:
     assert torch.isclose(loss_seq, loss_vec, rtol=RTOL, atol=ATOL), (
         f"large batch: seq={loss_seq.item()}, vec={loss_vec.item()}"
     )
+
+
+# ---------------------------------------------------------------------------
+# ClipPatchDiscriminationLoss
+# ---------------------------------------------------------------------------
+
+CLIP_LOGIT_SCALE = torch.tensor(1.0 / 0.07)
+
+
+def _one_hot_clip_tokens(
+    b: int, t_h: int, t_w: int, t: int, d: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build per-sample mutually orthogonal (one-hot) tokens and decoder masks."""
+    n = t_h * t_w * t
+    assert d >= n
+    base = torch.eye(n, d)
+    tokens = base.reshape(1, t_h, t_w, t, d).repeat(b, 1, 1, 1, 1)
+    mask = torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value
+    return tokens, mask
+
+
+def test_clip_patch_disc_aligned_low_shuffled_high() -> None:
+    """Aligned positives give a low loss; shuffled targets give a high loss."""
+    b, t_h, t_w, t, d = 2, 2, 2, 2, 16
+    n = t_h * t_w * t
+    target_s2, mask = _one_hot_clip_tokens(b, t_h, t_w, t, d)
+    targets = TokensAndMasks(sentinel2_l2a=target_s2.clone(), sentinel2_l2a_mask=mask)
+    loss = ClipPatchDiscriminationLoss()
+
+    # Predictions identical to targets: positive pair is distinctly more
+    # similar (cos=1) than every negative (cos=0).
+    preds_aligned = TokensAndMasks(
+        sentinel2_l2a=target_s2.clone(), sentinel2_l2a_mask=mask
+    )
+    low = loss.compute(preds_aligned, targets, logit_scale=CLIP_LOGIT_SCALE)
+
+    # Predictions shifted by one token: the positive has cos=0 while one
+    # negative has cos=1.
+    shuffled = (
+        target_s2.reshape(b, n, d).roll(shifts=1, dims=1).reshape(b, t_h, t_w, t, d)
+    )
+    preds_shuffled = TokensAndMasks(sentinel2_l2a=shuffled, sentinel2_l2a_mask=mask)
+    high = loss.compute(preds_shuffled, targets, logit_scale=CLIP_LOGIT_SCALE)
+
+    assert low < 0.1, f"aligned loss should be near zero, got {low.item()}"
+    assert high > 5.0, f"shuffled loss should be large, got {high.item()}"
+    assert low < high
+
+
+def test_clip_patch_disc_symmetric_is_average_of_directions() -> None:
+    """symmetric=True equals the average of the two contrastive directions."""
+    b, t_h, t_w, t, d = 3, 2, 2, 2, 8
+    torch.manual_seed(0)
+    pred_data = torch.randn((b, t_h, t_w, t, d))
+    targ_data = torch.randn((b, t_h, t_w, t, d))
+    mask = torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value
+
+    preds = TokensAndMasks(sentinel2_l2a=pred_data, sentinel2_l2a_mask=mask)
+    targets = TokensAndMasks(sentinel2_l2a=targ_data, sentinel2_l2a_mask=mask)
+    # Swapping predictions and targets computes the reverse direction (masks
+    # are identical so the same rows are selected).
+    swapped_preds = TokensAndMasks(sentinel2_l2a=targ_data, sentinel2_l2a_mask=mask)
+    swapped_targets = TokensAndMasks(sentinel2_l2a=pred_data, sentinel2_l2a_mask=mask)
+
+    sym = ClipPatchDiscriminationLoss(symmetric=True).compute(
+        preds, targets, logit_scale=CLIP_LOGIT_SCALE
+    )
+    fwd = ClipPatchDiscriminationLoss(symmetric=False).compute(
+        preds, targets, logit_scale=CLIP_LOGIT_SCALE
+    )
+    bwd = ClipPatchDiscriminationLoss(symmetric=False).compute(
+        swapped_preds, swapped_targets, logit_scale=CLIP_LOGIT_SCALE
+    )
+
+    assert torch.isclose(sym, 0.5 * (fwd + bwd), rtol=RTOL, atol=ATOL), (
+        f"sym={sym.item()}, fwd={fwd.item()}, bwd={bwd.item()}"
+    )
+    assert not torch.isclose(fwd, bwd, rtol=RTOL, atol=ATOL), (
+        "directions should differ for random inputs"
+    )
+
+
+def test_clip_patch_disc_requires_logit_scale() -> None:
+    """Omitting logit_scale raises a helpful error."""
+    b, t_h, t_w, t, d = 2, 2, 2, 2, 8
+    data = torch.randn((b, t_h, t_w, t, d))
+    mask = torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value
+    preds = TokensAndMasks(sentinel2_l2a=data, sentinel2_l2a_mask=mask)
+    targets = TokensAndMasks(sentinel2_l2a=data.clone(), sentinel2_l2a_mask=mask)
+
+    with pytest.raises(AssertionError, match="logit_scale"):
+        ClipPatchDiscriminationLoss().compute(preds, targets)
+
+
+def test_clip_patch_disc_same_target_masking() -> None:
+    """Decoder tokens with identical targets must not act as each other's negatives."""
+    b, t_h, t_w, t, d = 2, 2, 2, 1, 16
+    target_s2, mask = _one_hot_clip_tokens(b, t_h, t_w, t, d)
+    # Make tokens 0 and 1 share an identical target (e.g. same map class).
+    flat = target_s2.reshape(b, t_h * t_w * t, d)
+    flat[:, 1] = flat[:, 0]
+    target_s2 = flat.reshape(b, t_h, t_w, t, d)
+
+    preds = TokensAndMasks(sentinel2_l2a=target_s2.clone(), sentinel2_l2a_mask=mask)
+    targets = TokensAndMasks(sentinel2_l2a=target_s2.clone(), sentinel2_l2a_mask=mask)
+
+    unmasked = ClipPatchDiscriminationLoss().compute(
+        preds, targets, logit_scale=CLIP_LOGIT_SCALE
+    )
+    masked = ClipPatchDiscriminationLoss(
+        same_target_threshold=0.999,
+        mask_negatives_for_modalities=["sentinel2_l2a"],
+    ).compute(preds, targets, logit_scale=CLIP_LOGIT_SCALE)
+
+    # Without masking the identical-target twin contributes a logit equal to
+    # the positive, so the loss is ~log(2)/2 averaged over rows; with masking
+    # the predictions match their targets perfectly and the loss is ~0.
+    assert masked < unmasked, (
+        f"masked={masked.item()} should be < unmasked={unmasked.item()}"
+    )
+    assert masked < 0.01, f"masked loss should be near zero, got {masked.item()}"
+
+
+def test_clip_patch_disc_same_target_masking_modality_grouping_only() -> None:
+    """Same-target masking is only supported for the modality_loss grouping."""
+    with pytest.raises(ValueError, match="same_target_threshold"):
+        ClipPatchDiscriminationLoss(same_target_threshold=0.999, batch_loss=True)
+
+
+def test_clip_patch_disc_bf16_inputs_give_finite_float32_loss() -> None:
+    """bf16 inputs are cast to float32; loss stays finite at large logit scale."""
+    b, t_h, t_w, t, d = 2, 2, 2, 2, 16
+    torch.manual_seed(1)
+    mask = torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)).bfloat16(),
+        sentinel2_l2a_mask=mask,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)).bfloat16(),
+        sentinel2_l2a_mask=mask,
+    )
+    # Scale of 100 collapses logit differences in bf16; float32 must not.
+    loss = ClipPatchDiscriminationLoss().compute(
+        preds, targets, logit_scale=torch.tensor(100.0, dtype=torch.bfloat16)
+    )
+    assert torch.isfinite(loss), f"loss not finite: {loss.item()}"
+    assert loss.dtype == torch.float32
+
+
+def test_clip_patch_disc_all_grouping_variants_run() -> None:
+    """Smoke test: every grouping variant runs on current token shapes."""
+    b, t_h, t_w, t, d = 3, 4, 4, 2, 8
+    torch.manual_seed(3)
+    s2_mask = torch.randint(0, 3, (b, t_h, t_w, t))
+    ll_mask = torch.ones((b, 1)) * MaskValue.DECODER.value
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=s2_mask,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=ll_mask,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=s2_mask,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=ll_mask,
+    )
+    loss = ClipPatchDiscriminationLoss(
+        modality_loss=True,
+        batch_loss=True,
+        bandset_loss=True,
+        spatial_loss=True,
+        time_loss=True,
+    )
+    value = loss.compute(preds, targets, logit_scale=CLIP_LOGIT_SCALE)
+    assert torch.isfinite(value)
+    assert value > 0
+
+
+def test_clip_patch_disc_weight() -> None:
+    """The weight kwarg scales the loss."""
+    b, t_h, t_w, t, d = 2, 2, 2, 2, 8
+    torch.manual_seed(4)
+    mask = torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)), sentinel2_l2a_mask=mask
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)), sentinel2_l2a_mask=mask
+    )
+    base = ClipPatchDiscriminationLoss().compute(
+        preds, targets, logit_scale=CLIP_LOGIT_SCALE
+    )
+    weighted = ClipPatchDiscriminationLoss(weight=0.25).compute(
+        preds, targets, logit_scale=CLIP_LOGIT_SCALE
+    )
+    assert torch.isclose(weighted, 0.25 * base, rtol=RTOL, atol=ATOL)

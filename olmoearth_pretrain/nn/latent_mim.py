@@ -47,6 +47,9 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
+        # Learned CLIP temperature (log-space inverse temperature); the train
+        # module clamps and exponentiates it before passing it to the loss.
+        self.logit_scale = nn.Parameter(torch.tensor([1.0 / 0.07]).log())
 
     def forward(
         self, x: MaskedOlmoEarthSample, patch_size: int
