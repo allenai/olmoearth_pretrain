@@ -11,6 +11,7 @@ from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
+from torch.distributed.tensor import DTensor
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.transform import TransformConfig
@@ -56,6 +57,9 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
     reinit_targets: bool = False
+    # Clamp for the model's learned log logit_scale (CLIP temperature):
+    # exp(4.6) ~ 99.5, matching CLIP's max scale of 100.
+    max_logit_scale: float = 4.6
 
     def build(
         self,
@@ -106,6 +110,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         contrastive_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         reinit_targets: bool = False,
+        max_logit_scale: float = 4.6,
     ):
         """Initialize the training module.
 
@@ -133,6 +138,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             contrastive_config: An optional contrastive configration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
             reinit_targets: Whether or not to reinitialize the target encoder.
+            max_logit_scale: Clamp (in log space) for the model's learned CLIP
+                temperature; the exp'd scale is passed to the base loss.
         """
         super().__init__(
             model=model,
@@ -152,6 +159,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         )
         self.start_ema, self.end_ema = ema_decay
         self.token_exit_cfg = token_exit_cfg
+        self.max_logit_scale = max_logit_scale
         self.base_loss = loss_config.build()
         self.masking_strategy = masking_config.build()
         tokenization_config = getattr(self.model.encoder, "tokenization_config", None)
@@ -177,9 +185,20 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 )
             self.model.target_encoder.apply(self.model.target_encoder._init_weights)
 
-    def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
+    def loss_fn(self, pred: Any, targets: Any, **kwargs: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
-        return self.base_loss.compute(pred, targets)
+        return self.base_loss.compute(pred, targets, **kwargs)
+
+    def _effective_logit_scale(self) -> torch.Tensor:
+        """CLIP temperature as the final multiplicative scale (clamp + exp).
+
+        The parameter may be an FSDP DTensor whose local shard is empty on
+        some ranks, so it is gathered to a full tensor (differentiable) first.
+        """
+        logit_scale = self.model.logit_scale
+        if isinstance(logit_scale, DTensor):
+            logit_scale = logit_scale.full_tensor()
+        return logit_scale.clamp(max=self.max_logit_scale).exp()
 
     def train_batch(
         self,
@@ -204,6 +223,11 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         """
         if not dry_run:
             self.update_target_encoder()
+        # The loss-side clamp is forward-only; re-clamp the parameter itself so
+        # the optimizer cannot walk the log-scale arbitrarily far past the cap
+        # (CLIP clamps param data after each optimizer step).
+        with torch.no_grad():
+            get_local_tensor(self.model.logit_scale).clamp_(max=self.max_logit_scale)
         # Set the model to train mode
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
@@ -287,6 +311,14 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 total_batch_con,
                 ReduceType.mean,
             )
+        # The effective CLIP temperature is the best early-warning signal for
+        # shortcut/false-negative problems in the contrastive losses.
+        with torch.no_grad():
+            self.trainer.record_metric(
+                "train/logit_scale",
+                self._effective_logit_scale().mean(),
+                ReduceType.mean,
+            )
         self.log_regularization(total_batch_reg)
 
         del batch  # In case this helps with memory utilization.
@@ -319,7 +351,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     token_exit_cfg=token_exit_cfg,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
-            loss = self.loss_fn(decoded, target_output)
+            loss = self.loss_fn(
+                decoded, target_output, logit_scale=self._effective_logit_scale()
+            )
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output, latent_projected_and_pooled
