@@ -210,7 +210,11 @@ def process_mados(
 class MADOSDataset(Dataset):
     """MADOS dataset to be used by evals."""
 
-    default_day_month_year = [1, 6, 2020]
+    # MADOS samples carry no acquisition dates, so this (day, month0, year)
+    # triple is fabricated. year=0 is the in-band "year unknown" sentinel
+    # consumed by get_simple_temporal_encoding; the month/day still feed the
+    # annual-phase channels.
+    default_day_month_year = [1, 6, 0]
 
     def __init__(
         self,

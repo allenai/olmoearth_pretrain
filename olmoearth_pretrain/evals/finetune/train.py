@@ -148,6 +148,7 @@ def run_finetune_eval(
     resume_checkpoint_path: str | None = None,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    instance_embedding: str = "auto",
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
     if seed is not None:
@@ -165,6 +166,7 @@ def run_finetune_eval(
         pooling_type=pooling_type,
         num_classes=task_config.num_classes,
         use_pooled_tokens=use_pooled_tokens,
+        instance_embedding=instance_embedding,
     ).to(device)
 
     # Trigger _init_head once with a tiny dry pass which initializes the head with the correct dimension.

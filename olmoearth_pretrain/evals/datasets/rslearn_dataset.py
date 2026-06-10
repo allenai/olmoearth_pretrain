@@ -41,6 +41,7 @@ def get_timestamps(
     start_time: str,
     end_time: str,
     num_timesteps: int | None = None,
+    dates_are_real: bool = False,
 ) -> list[torch.Tensor]:
     """Return monthly (day, month0, year) long tensors for the specified range.
 
@@ -48,6 +49,12 @@ def get_timestamps(
         start_time: Start date in YYYY-MM-DD format.
         end_time: End date in YYYY-MM-DD format.
         num_timesteps: Number of timesteps to generate. If None, uses YEAR_NUM_TIMESTEPS.
+        dates_are_real: Whether start_time/end_time are the sample's real
+            acquisition window. When False (the default -- every current call
+            site fabricates a monthly ramp from default dates), the year column
+            is set to 0, the in-band "year unknown" sentinel consumed by
+            get_simple_temporal_encoding. Month/day are kept either way: they
+            feed the annual-phase channels.
 
     Returns:
         List of tensors, each containing [day, month (0-indexed), year].
@@ -67,11 +74,10 @@ def get_timestamps(
     dates: list[torch.Tensor] = []
     cur = start
     while cur <= end and len(dates) < num_timesteps:
-        # month stored 0-indexed
+        # month stored 0-indexed; year 0 == "year unknown" sentinel
+        year = int(cur.year) if dates_are_real else 0
         dates.append(
-            torch.tensor(
-                [int(cur.day), int(cur.month) - 1, int(cur.year)], dtype=torch.long
-            )
+            torch.tensor([int(cur.day), int(cur.month) - 1, year], dtype=torch.long)
         )
         cur += relativedelta(months=1)
     return dates
@@ -107,6 +113,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         start_time: str = "2022-09-01",
         end_time: str = "2023-09-01",
         num_timesteps: int = 12,
+        dates_are_real: bool = False,
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
@@ -124,6 +131,10 @@ class RslearnToOlmoEarthDataset(Dataset):
             start_time: Start time for timestamp generation.
             end_time: End time for timestamp generation.
             num_timesteps: Number of timesteps per sample.
+            dates_are_real: Whether start_time/end_time come from the real
+                acquisition window. When False (the default monthly ramp), the
+                synthesized timestamps carry year=0, the "year unknown"
+                sentinel; only set True when callers pass real window dates.
         """
         if (
             not norm_stats_from_pretrained
@@ -149,6 +160,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         # Store temporal config for per-sample timestamp generation
         self.start_time = start_time
         self.end_time = end_time
+        self.dates_are_real = dates_are_real
         self.max_timesteps = num_timesteps  # Max expected timesteps (for validation)
 
         # Target parsing config - derived from Task structure
@@ -190,6 +202,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         tags_override: dict[str, str] | None = None,
         label_fraction: float = 1.0,
         label_fraction_seed: int = 42,
+        dates_are_real: bool = False,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -216,6 +229,9 @@ class RslearnToOlmoEarthDataset(Dataset):
                 datasets. Non-train splits always use the full split.
             label_fraction_seed: Seed for the deterministic label_fraction
                 subsample so the same low-label subset is used across runs.
+            dates_are_real: Whether start_time/end_time come from the real
+                acquisition window. When False (the default), the synthesized
+                timestamps carry year=0, the "year unknown" sentinel.
         """
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
@@ -278,6 +294,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             start_time=start_time,
             end_time=end_time,
             num_timesteps=num_timesteps,
+            dates_are_real=dates_are_real,
         )
 
     @staticmethod
@@ -390,7 +407,10 @@ class RslearnToOlmoEarthDataset(Dataset):
 
         sample_timesteps = sample_timesteps or self.max_timesteps
         timestamps = get_timestamps(
-            self.start_time, self.end_time, num_timesteps=sample_timesteps
+            self.start_time,
+            self.end_time,
+            num_timesteps=sample_timesteps,
+            dates_are_real=self.dates_are_real,
         )
         sample_dict["timestamps"] = torch.stack(timestamps)
 

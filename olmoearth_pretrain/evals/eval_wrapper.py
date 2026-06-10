@@ -33,6 +33,14 @@ from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = getLogger(__name__)
 
+# Valid values for the ``instance_embedding`` knob:
+#   * "auto": use the encoder's class token as the instance embedding when the
+#     encoder has one (``use_class_token=True``), otherwise mean-pool tokens.
+#   * "class_token": require the class token; error if the model emits none.
+#   * "mean_pool": always pool the unmasked tokens, even when a class token
+#     exists (for A/B comparison against the class-token embedding).
+INSTANCE_EMBEDDING_OPTIONS = ("auto", "class_token", "mean_pool")
+
 
 class EvalWrapper:
     """Base class for eval wrappers.
@@ -48,6 +56,7 @@ class EvalWrapper:
         pooling_type: PoolingType,
         concat_features: bool = False,
         use_pooled_tokens: bool = False,
+        instance_embedding: str = "auto",
     ):
         """Initialize the eval wrapper.
 
@@ -58,6 +67,12 @@ class EvalWrapper:
             pooling_type: The pooling type to use for the model.
             concat_features: Whether to concatenate features across modalities.
             use_pooled_tokens: Whether to use pooled tokens.
+            instance_embedding: How to produce the [B, D] instance embedding for
+                non-spatial (classification/instance) tasks. One of "auto",
+                "class_token", or "mean_pool" (see INSTANCE_EMBEDDING_OPTIONS).
+                Spatial tasks (segmentation/regression) always use spatial
+                pooling regardless of this setting -- a single class token
+                cannot serve per-patch probes.
             is_train: whether this is being used on the training data.
         """
         super().__init__()
@@ -68,10 +83,21 @@ class EvalWrapper:
         self.concat_features = concat_features
         self.spatial_pool = task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION)
         self.use_pooled_tokens = use_pooled_tokens
+        if instance_embedding not in INSTANCE_EMBEDDING_OPTIONS:
+            raise ValueError(
+                f"instance_embedding must be one of {INSTANCE_EMBEDDING_OPTIONS}, "
+                f"got {instance_embedding!r}"
+            )
+        self.instance_embedding = instance_embedding
         if self.use_pooled_tokens:
             assert isinstance(self.model, EncodeEarlyAttnPool), (
                 "Pooled tokens are only supported for EncodeEarlyAttnPool"
             )
+            if self.instance_embedding == "class_token":
+                raise ValueError(
+                    "instance_embedding='class_token' is incompatible with "
+                    "use_pooled_tokens: the pooled-token path emits no class token."
+                )
 
     @property
     def device(self) -> torch.device:
@@ -112,6 +138,22 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                     return True
         return False
 
+    def _use_class_token_embedding(self) -> bool:
+        """Whether the [B, D] instance embedding should be the class token.
+
+        Spatial tasks (segmentation/regression) always spatially pool the patch
+        tokens -- a single class token cannot serve per-patch probes -- so this
+        is only consulted on the non-spatial path.
+        """
+        if self.spatial_pool:
+            return False
+        if self.instance_embedding == "class_token":
+            return True
+        if self.instance_embedding == "mean_pool":
+            return False
+        # "auto": use the class token iff the wrapped encoder has one.
+        return bool(getattr(self.model, "use_class_token", False))
+
     def __call__(
         self,
         masked_olmoearth_sample: MaskedOlmoEarthSample,
@@ -121,16 +163,28 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         """Forward pass through the model produces the embedding specified by initialization."""
         if not self.use_pooled_tokens:
             fast_pass = not self._has_missing_tokens(masked_olmoearth_sample)
-            batch_embeddings: TokensAndMasks = self.model(
+            model_output = self.model(
                 masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=fast_pass
-            )["tokens_and_masks"]  # (bsz, dim)
-            # Concat features across modalities in space averaged across time
-            batch_embeddings = pool_unmasked_tokens(
-                batch_embeddings,
-                self.pooling_type,
-                spatial_pooling=self.spatial_pool,
-                concat_features=self.concat_features,
             )
+            if self._use_class_token_embedding():
+                if "class_token" not in model_output:
+                    raise ValueError(
+                        f"instance_embedding={self.instance_embedding!r} requires a "
+                        "class token, but the model emitted none. Enable "
+                        "use_class_token on the encoder or set "
+                        "instance_embedding='mean_pool'."
+                    )
+                # [B, D] class token as the instance embedding.
+                batch_embeddings = model_output["class_token"]
+            else:
+                tokens_and_masks: TokensAndMasks = model_output["tokens_and_masks"]
+                # Concat features across modalities in space averaged across time
+                batch_embeddings = pool_unmasked_tokens(
+                    tokens_and_masks,
+                    self.pooling_type,
+                    spatial_pooling=self.spatial_pool,
+                    concat_features=self.concat_features,
+                )
         else:
             pooled_tokens_dict = self.model(
                 masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True

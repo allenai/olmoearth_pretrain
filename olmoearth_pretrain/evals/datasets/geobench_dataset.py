@@ -73,7 +73,11 @@ _LABEL_FRACTION_TO_PARTITION = {
 class GeobenchDataset(Dataset):
     """GeoBench dataset, returning data in the OlmoEarth Pretrain format."""
 
-    default_day_month_year = [1, 6, 2020]
+    # GeoBench does not expose acquisition dates, so this (day, month0, year)
+    # triple is fabricated. year=0 is the in-band "year unknown" sentinel
+    # consumed by get_simple_temporal_encoding; the month/day still feed the
+    # annual-phase channels.
+    default_day_month_year = [1, 6, 0]
 
     def __init__(
         self,

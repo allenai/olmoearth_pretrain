@@ -94,6 +94,9 @@ class DownstreamTaskConfig:
     eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
+    # Instance embedding source: "auto" (class token if the encoder has one,
+    # else masked mean pool), "class_token", or "mean_pool".
+    instance_embedding: str = "auto"
     # Fraction of training labels to use for low-label evals. Dataset-specific
     # code translates this into fixed partitions or deterministic subsamples.
     label_fraction: float = 1.0
@@ -188,6 +191,7 @@ class DownstreamEvaluator:
         self.label_fraction = task.label_fraction
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
+        self.instance_embedding = task.instance_embedding
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
         self.embedding_dim = task.embedding_dim
@@ -349,6 +353,7 @@ class DownstreamEvaluator:
             "pooling_type": self.pooling_type,
             "concat_features": (self.probe_type == "attn_pool"),
             "use_pooled_tokens": self.use_pooled_tokens,
+            "instance_embedding": self.instance_embedding,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(
@@ -556,6 +561,7 @@ class DownstreamEvaluator:
             patch_size=self.patch_size,
             pooling_type=self.pooling_type,
             use_pooled_tokens=self.use_pooled_tokens,
+            instance_embedding=self.instance_embedding,
             train_loader=train_loader,
             val_loader=val_loader,
             test_loader=test_loader,

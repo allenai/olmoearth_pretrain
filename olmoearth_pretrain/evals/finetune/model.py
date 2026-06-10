@@ -23,6 +23,7 @@ class BackboneWithHead(nn.Module):
         pooling_type: str,
         num_classes: int,
         use_pooled_tokens: bool = False,
+        instance_embedding: str = "auto",
     ) -> None:
         """Initialize the backbone with head."""
         super().__init__()
@@ -34,6 +35,7 @@ class BackboneWithHead(nn.Module):
             pooling_type=pooling_type,
             concat_features=False,
             use_pooled_tokens=use_pooled_tokens,
+            instance_embedding=instance_embedding,
         )
         self.task_type = task_type
         self.patch_size = patch_size

@@ -27,6 +27,12 @@ def test_geobench_dataset(geobench_dir: Path) -> None:
     sample, _ = d[0]
     assert isinstance(sample.sentinel2_l2a, torch.Tensor)
     assert sample.sentinel2_l2a.shape == (64, 64, 1, 12)
+    # GeoBench dates are fabricated: day/month kept, year zeroed to the
+    # "year unknown" sentinel consumed by get_simple_temporal_encoding.
+    assert sample.timestamps.shape == (1, 3)
+    assert (sample.timestamps[:, 0] == 1).all()
+    assert (sample.timestamps[:, 1] == 6).all()  # month stays 0-indexed
+    assert (sample.timestamps[:, 2] == 0).all()
 
 
 def test_geobench_dataset_and_dataloader(geobench_dir: Path) -> None:

@@ -190,7 +190,11 @@ def get_sen1floods11(
 class Sen1Floods11Dataset(Dataset):
     """Sen1Floods eval dataset."""
 
-    default_day_month_year = [1, 6, 2020]
+    # Sen1Floods11 samples are loaded without acquisition dates, so this
+    # (day, month0, year) triple is fabricated. year=0 is the in-band
+    # "year unknown" sentinel consumed by get_simple_temporal_encoding; the
+    # month/day still feed the annual-phase channels.
+    default_day_month_year = [1, 6, 0]
 
     def __init__(
         self,
