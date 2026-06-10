@@ -347,6 +347,10 @@ def classification_metrics(
     Args:
         predictions: Hard predictions (thresholded multi-hot or argmax indices).
         labels: Ground-truth labels (multi-hot for multilabel, indices otherwise).
+        is_multilabel: Whether this is a multi-label task (sigmoid/multi-hot)
+            rather than single-label (softmax/argmax).
+        primary_metric: Override the default primary metric (None = task default).
+        primary_metric_class: Class index for the CLASS_F1 primary metric.
         scores: Optional per-class continuous scores (e.g. sigmoid probabilities),
             shape (N, num_classes). Required to compute ``micro_map`` for
             multilabel tasks — this is the threshold-free, ranking-based metric
