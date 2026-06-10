@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from olmo_core.data.utils import get_rng
-from sklearn.metrics import accuracy_score, average_precision_score, f1_score
+from sklearn.metrics import accuracy_score, average_precision_score
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
 from olmoearth_pretrain.evals.metrics import (
@@ -386,6 +386,7 @@ def _run_knn_for_k(
             1) of shape (n_test, num_classes) instead of hard argmax predictions.
             Used to compute ranking-based metrics (e.g. micro mAP) for multilabel
             tasks, where the per-class positive probability is column 1.
+
     Returns:
         Predictions of shape (n_test,), or soft scores of shape
         (n_test, num_classes) when ``return_scores`` is True.
