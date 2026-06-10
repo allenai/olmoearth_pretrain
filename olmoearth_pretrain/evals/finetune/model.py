@@ -9,13 +9,12 @@ import torch.nn as nn
 
 from olmoearth_pretrain.evals.datasets.configs import TaskType
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
-from olmoearth_pretrain.evals.finetune.fpn_head import FPNDecoder
 from olmoearth_pretrain.evals.finetune.unet_head import UNetDecoder
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
-HeadType = Literal["linear", "unet", "unet_fpn"]
+HeadType = Literal["linear", "unet"]
 # Dense (per-pixel) heads that emit (B, num_classes, H, W) pixel-space logits.
-_PIXEL_HEADS = ("unet", "unet_fpn")
+_PIXEL_HEADS = ("unet",)
 
 
 class BackboneWithHead(nn.Module):
@@ -65,13 +64,6 @@ class BackboneWithHead(nn.Module):
         if self.head_type == "unet":
             # Per-pixel decoder; num_classes=1 yields dense regression values.
             self._head = UNetDecoder(
-                in_dim=emb_dim,
-                num_classes=self.num_classes,
-                patch_size=self.patch_size,
-            )
-        elif self.head_type == "unet_fpn":
-            # Multi-scale (simple feature pyramid + FPN) per-pixel decoder.
-            self._head = FPNDecoder(
                 in_dim=emb_dim,
                 num_classes=self.num_classes,
                 patch_size=self.patch_size,
