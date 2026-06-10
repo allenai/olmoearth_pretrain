@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from olmo_core.data.utils import get_rng
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, average_precision_score, f1_score
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
 from olmoearth_pretrain.evals.metrics import (
@@ -132,6 +132,8 @@ def run_knn(
             assert config.num_classes == test_labels.shape[-1]
         val_predictions = []
         test_predictions = []
+        val_scores = []
+        test_scores = []
         for class_idx in range(config.num_classes):
             train_single_labels = train_labels[:, class_idx]  # (num_samples)
             single_val_predictions = _run_knn_for_k(
@@ -144,6 +146,19 @@ def run_knn(
                 skip_idx=skip_idx,
             )  # (num_samples)
             val_predictions.append(single_val_predictions)
+            # Soft positive-class score (column 1) for ranking-based mAP.
+            val_scores.append(
+                _run_knn_for_k(
+                    train_embeddings=train_embeddings,
+                    train_labels=train_single_labels,
+                    test_embeddings=val_embeddings,
+                    num_classes=2,
+                    k=k,
+                    device=device,
+                    skip_idx=skip_idx,
+                    return_scores=True,
+                )[:, 1]
+            )
 
             if test_embeddings is not None:
                 if test_labels is None:
@@ -158,6 +173,18 @@ def run_knn(
                     skip_idx=skip_idx,
                 )  # (num_samples)
                 test_predictions.append(single_test_predictions)
+                test_scores.append(
+                    _run_knn_for_k(
+                        train_embeddings=train_embeddings,
+                        train_labels=train_single_labels,
+                        test_embeddings=test_embeddings,
+                        num_classes=2,
+                        k=k,
+                        device=device,
+                        skip_idx=skip_idx,
+                        return_scores=True,
+                    )[:, 1]
+                )
 
         val_predictions = torch.stack(
             val_predictions, dim=1
@@ -168,6 +195,7 @@ def run_knn(
             is_multilabel=True,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
+            scores=torch.stack(val_scores, dim=1),
         )
 
         if len(test_predictions) > 0:
@@ -180,6 +208,7 @@ def run_knn(
                 is_multilabel=True,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
+                scores=torch.stack(test_scores, dim=1),
             )
 
             # Perform bootstrap sampling if requested
@@ -255,11 +284,12 @@ def _bootstrap_knn_test(
             skip_idx=skip_idx,
         )
     else:
-        # Multilabel case: compute predictions once per class
-        all_predictions = []
+        # Multilabel case: compute soft per-class scores once. The reported
+        # metric is micro mAP (ranking-based), so we bootstrap on scores.
+        all_scores = []
         for class_idx in range(config.num_classes):
             train_single_labels = train_labels[:, class_idx]
-            single_predictions = _run_knn_for_k(
+            single_scores = _run_knn_for_k(
                 train_embeddings=train_embeddings,
                 train_labels=train_single_labels,
                 test_embeddings=test_embeddings,
@@ -267,9 +297,10 @@ def _bootstrap_knn_test(
                 k=k,
                 device=device,
                 skip_idx=skip_idx,
-            )
-            all_predictions.append(single_predictions)
-        all_predictions = torch.stack(all_predictions, dim=1)
+                return_scores=True,
+            )[:, 1]
+            all_scores.append(single_scores)
+        all_predictions = torch.stack(all_scores, dim=1)
 
     # Bootstrap resample the predictions (very fast!)
     rng = get_rng(seed)
@@ -293,9 +324,11 @@ def _bootstrap_knn_test(
         if not config.is_multilabel:
             score = accuracy_score(y_true=bootstrap_labels, y_pred=bootstrap_preds)
         else:
-            score = f1_score(
+            # bootstrap_preds here are soft per-class scores; micro mAP matches
+            # the primary metric reported for multilabel tasks.
+            score = average_precision_score(
                 y_true=bootstrap_labels,
-                y_pred=bootstrap_preds,
+                y_score=bootstrap_preds,
                 average="micro",
             )
 
@@ -335,6 +368,7 @@ def _run_knn_for_k(
     device: torch.device,
     skip_idx: bool,
     chunk_size: int = 2000,
+    return_scores: bool = False,
 ) -> torch.Tensor:
     """Run KNN classification with chunked batch processing for efficiency.
 
@@ -347,8 +381,14 @@ def _run_knn_for_k(
         device: Device to run on
         skip_idx: Whether to skip the first neighbor
         chunk_size: Chunk size for batch processing
+        return_scores: If True, return per-class soft scores (the
+            similarity-weighted neighbor-vote distribution, normalized to sum to
+            1) of shape (n_test, num_classes) instead of hard argmax predictions.
+            Used to compute ranking-based metrics (e.g. micro mAP) for multilabel
+            tasks, where the per-class positive probability is column 1.
     Returns:
-        Predictions of shape (n_test,)
+        Predictions of shape (n_test,), or soft scores of shape
+        (n_test, num_classes) when ``return_scores`` is True.
     """
     train_embeddings = train_embeddings.to(device)
     test_embeddings = test_embeddings.to(device)
@@ -388,8 +428,14 @@ def _run_knn_for_k(
 
         weighted_sum = (weights.unsqueeze(-1) * top_k_onehots).sum(dim=1)
 
-        chunk_predictions = torch.argmax(weighted_sum, dim=1)
-        all_predictions.append(chunk_predictions)
+        if return_scores:
+            # Normalize the weighted vote distribution to a probability per class.
+            chunk_out = weighted_sum / weighted_sum.sum(dim=1, keepdim=True).clamp_min(
+                eps
+            )
+        else:
+            chunk_out = torch.argmax(weighted_sum, dim=1)
+        all_predictions.append(chunk_out)
 
     # Concatenate all predictions and return on CPU
     return torch.cat(all_predictions, dim=0).cpu()

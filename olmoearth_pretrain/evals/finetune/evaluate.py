@@ -38,8 +38,10 @@ def eval_cls(
         labels_all.append(label.cpu())
     logits = torch.cat(logits_all, 0)
     labels = torch.cat(labels_all, 0)
+    scores: torch.Tensor | None = None
     if is_multilabel:
-        preds = torch.sigmoid(logits).gt(0.5).int()
+        scores = torch.sigmoid(logits)
+        preds = scores.gt(0.5).int()
     else:
         preds = torch.argmax(logits, dim=-1)
     return classification_metrics(
@@ -48,6 +50,7 @@ def eval_cls(
         is_multilabel=is_multilabel,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
+        scores=scores,
     )
 
 

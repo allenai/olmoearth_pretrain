@@ -398,7 +398,8 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(10),
         input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         eval_mode=EvalMode.KNN,
-        primary_metric=EvalMetric.MACRO_F1,
+        # Multilabel: GeoBench-2 reports micro-averaged mAP (threshold-free).
+        primary_metric=EvalMetric.MICRO_MAP,
         epochs=50,
     ),
     "gb2_biomassters": DownstreamTaskConfig(
@@ -556,7 +557,8 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(10),
         input_modalities=[Modality.SENTINEL2_L2A.name],
         eval_mode=EvalMode.KNN,
-        primary_metric=EvalMetric.MACRO_F1,
+        # Multilabel: GeoBench-2 reports micro-averaged mAP (threshold-free).
+        primary_metric=EvalMetric.MICRO_MAP,
         epochs=50,
     ),
     # this eval is very large and can lead to
@@ -894,7 +896,9 @@ FT_EVAL_TASKS = {
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         epochs=50,
-        primary_metric=EvalMetric.MACRO_F1,
+        # Multilabel: GeoBench-2 reports micro-averaged mAP (threshold-free),
+        # not macro-F1 at a fixed 0.5 threshold.
+        primary_metric=EvalMetric.MICRO_MAP,
     ),
     "gb2_biomassters": DownstreamTaskConfig(
         dataset="gb2-biomassters",
@@ -1015,7 +1019,9 @@ FT_EVAL_TASKS = {
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
-        primary_metric=EvalMetric.MACRO_F1,
+        # Multilabel: GeoBench-2 reports micro-averaged mAP (threshold-free),
+        # not macro-F1 at a fixed 0.5 threshold.
+        primary_metric=EvalMetric.MICRO_MAP,
     ),
 }
 
