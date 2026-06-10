@@ -27,6 +27,8 @@ from upath import UPath
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.collate import (
+    METADATA_DROPOUT_VIEW_MODES,
+    MetadataDropout,
     collate_double_masked_batched,
     collate_single_masked_batched,
 )
@@ -641,6 +643,10 @@ class OlmoEarthDataLoaderConfig(Config):
     masking_config_b: MaskingConfig | None = None
     num_masked_views: int = 1  # 1 = single, 2 = double
     tokenization_config: TokenizationConfig | None = None
+    # Batch-level metadata dropout (drawn once per rank batch in the collator)
+    year_dropout_rate: float = 0.0
+    latlon_dropout_rate: float = 0.0
+    metadata_dropout_view_mode: str = "shared"
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -653,6 +659,11 @@ class OlmoEarthDataLoaderConfig(Config):
         if self.num_masked_views not in (1, 2):
             raise ValueError(
                 f"num_masked_views must be 1 or 2, got {self.num_masked_views}"
+            )
+        if self.metadata_dropout_view_mode not in METADATA_DROPOUT_VIEW_MODES:
+            raise ValueError(
+                "metadata_dropout_view_mode must be one of "
+                f"{METADATA_DROPOUT_VIEW_MODES}, got {self.metadata_dropout_view_mode}"
             )
 
     @property
@@ -683,12 +694,21 @@ class OlmoEarthDataLoaderConfig(Config):
         # Select appropriate collator based on num_masked_views
         # Use batched collators that apply transform + masking to the entire batch
         # at once for better vectorization
+        metadata_dropout = None
+        if self.year_dropout_rate > 0.0 or self.latlon_dropout_rate > 0.0:
+            metadata_dropout = MetadataDropout(
+                year_dropout_rate=self.year_dropout_rate,
+                latlon_dropout_rate=self.latlon_dropout_rate,
+                view_mode=self.metadata_dropout_view_mode,
+            )
+
         collator: Callable
         if self.num_masked_views == 1:
             collator = functools.partial(
                 collate_single_masked_batched,
                 transform=transform,
                 masking_strategy=masking_strategy,
+                metadata_dropout=metadata_dropout,
             )
         else:  # num_masked_views == 2
             collator = functools.partial(
@@ -696,6 +716,7 @@ class OlmoEarthDataLoaderConfig(Config):
                 transform=transform,
                 masking_strategy=masking_strategy,
                 masking_strategy_b=masking_strategy_b,
+                metadata_dropout=metadata_dropout,
             )
 
         return OlmoEarthDataLoader(

@@ -241,13 +241,13 @@ def _make_simple(
     channel_dim: int = 64,
     latlon_dropout_rate: float = 0.0,
 ) -> SeparateEncodings:
-    """SeparateEncodings with simple (3-number) temporal + latlon."""
+    """SeparateEncodings with simple temporal (4ch) + latlon (3ch)."""
     return SeparateEncodings(
         embedding_size=embedding_size,
         supported_modalities=[Modality.SENTINEL2_L2A],
         tokenization_config=_TOK,
         channel_dim=channel_dim,
-        temporal_dim=3,
+        temporal_dim=4,
         latlon_dim=3,
         latlon_dropout_rate=latlon_dropout_rate,
         temporal_encoding_type="simple",
@@ -258,7 +258,7 @@ def _make_simple(
 def test_simple_types_forward_shape() -> None:
     """Simple temporal/latlon route produces correct output shape."""
     ce = _make_simple()
-    assert ce.enc_dim == 64 + 3 + 3
+    assert ce.enc_dim == 64 + 4 + 3
     B, H, W, T, B_s, D = 2, 3, 3, 4, 1, 256
     tokens = torch.randn(B, H, W, T, B_s, D)
     out = ce.forward(
@@ -293,7 +293,7 @@ def test_simple_latlon_requires_dim_3() -> None:
             supported_modalities=[Modality.SENTINEL2_L2A],
             tokenization_config=_TOK,
             channel_dim=64,
-            temporal_dim=3,
+            temporal_dim=4,
             latlon_dim=192,
             temporal_encoding_type="simple",
             latlon_encoding_type="simple",
@@ -332,7 +332,7 @@ def test_invalid_encoding_type_raises() -> None:
             supported_modalities=[Modality.SENTINEL2_L2A],
             tokenization_config=_TOK,
             channel_dim=64,
-            temporal_dim=3,
+            temporal_dim=4,
             latlon_dim=3,
             temporal_encoding_type="bogus",
         )

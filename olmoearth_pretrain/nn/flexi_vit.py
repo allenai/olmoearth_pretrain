@@ -24,6 +24,7 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
+    SIMPLE_TEMPORAL_DIM,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
@@ -76,10 +77,10 @@ def _validate_separate_encoding_fields(
     if min(channel_dim, temporal_dim, latlon_dim) < 0:
         raise ValueError("encoding dims must be non-negative")
     if temporal_dim > 0:
-        if temporal_encoding_type == "simple" and temporal_dim != 3:
+        if temporal_encoding_type == "simple" and temporal_dim != SIMPLE_TEMPORAL_DIM:
             raise ValueError(
-                f"simple temporal encoding requires temporal_encoding_dim=3, "
-                f"got {temporal_dim}"
+                f"simple temporal encoding requires temporal_encoding_dim="
+                f"{SIMPLE_TEMPORAL_DIM}, got {temporal_dim}"
             )
         if temporal_encoding_type == "multifreq" and temporal_dim % 2 != 0:
             raise ValueError(f"temporal_encoding_dim must be even, got {temporal_dim}")
@@ -999,7 +1000,7 @@ class SeparateEncodings(nn.Module):
                 channel embedding (set ``0`` to omit).
             temporal_dim: Width of the temporal encoding slot. ``0`` omits the
                 slot. For ``temporal_encoding_type='multifreq'`` must be even;
-                for ``'simple'`` must be exactly 3.
+                for ``'simple'`` must be exactly 4.
             latlon_dim: Width of the lat/lon encoding slot. ``0`` omits the
                 slot. For ``latlon_encoding_type='multifreq'`` must be
                 divisible by 6; for ``'simple'`` must be exactly 3.
@@ -1011,7 +1012,8 @@ class SeparateEncodings(nn.Module):
             random_channel_embeddings: If True, init channel embeddings from
                 ``torch.rand``; otherwise zeros.
             temporal_encoding_type: ``'multifreq'`` (multi-frequency sin/cos of
-                fractional year) or ``'simple'`` ([frac_year, sin, cos], dim 3).
+                fractional year) or ``'simple'``
+                ([frac_year/10, sin, cos, year_valid], dim 4).
             latlon_encoding_type: ``'multifreq'`` (sphere-mapped multi-frequency
                 sin/cos) or ``'simple'`` (raw unit-sphere (x, y, z), dim 3).
         """
@@ -1029,9 +1031,13 @@ class SeparateEncodings(nn.Module):
         if channel_dim < 0 or temporal_dim < 0 or latlon_dim < 0:
             raise ValueError("encoding dims must be non-negative")
         if temporal_dim > 0:
-            if temporal_encoding_type == "simple" and temporal_dim != 3:
+            if (
+                temporal_encoding_type == "simple"
+                and temporal_dim != SIMPLE_TEMPORAL_DIM
+            ):
                 raise ValueError(
-                    f"simple temporal encoding requires temporal_dim=3, got {temporal_dim}"
+                    f"simple temporal encoding requires temporal_dim="
+                    f"{SIMPLE_TEMPORAL_DIM}, got {temporal_dim}"
                 )
             if temporal_encoding_type == "multifreq" and temporal_dim % 2 != 0:
                 raise ValueError(f"temporal_dim must be even, got {temporal_dim}")
@@ -1136,7 +1142,7 @@ class SeparateEncodings(nn.Module):
             and timestamps is not None
         ):
             if self.temporal_encoding_type == "simple":
-                ts_enc = get_simple_temporal_encoding(timestamps)  # (B, T, 3)
+                ts_enc = get_simple_temporal_encoding(timestamps)  # (B, T, 4)
             else:
                 ts_enc = get_static_temporal_encoding(
                     timestamps, self.temporal_dim
@@ -1676,8 +1682,9 @@ class Encoder(FlexiVitBase):
             latlon_dropout_rate: Per-sample bernoulli dropout for the latlon
                 slot at training time. ``rate >= 1.0`` disables the slot
                 entirely (train+eval). Default ``0``.
-            temporal_encoding_type: ``'multifreq'`` or ``'simple'`` (3-number
-                [frac_year, sin, cos]) under ``encoding_mode='separate'``.
+            temporal_encoding_type: ``'multifreq'`` or ``'simple'`` (4-number
+                [frac_year/10, sin, cos, year_valid]) under
+                ``encoding_mode='separate'``.
             latlon_encoding_type: ``'multifreq'`` or ``'simple'`` (3-number
                 unit-sphere [x, y, z]) under ``encoding_mode='separate'``.
         """

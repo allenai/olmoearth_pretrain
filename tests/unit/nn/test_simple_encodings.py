@@ -1,8 +1,9 @@
-"""Tests for the minimal 3-number temporal and lat/lon encodings."""
+"""Tests for the minimal simple temporal and lat/lon encodings."""
 
 import torch
 
 from olmoearth_pretrain.nn.encodings import (
+    SIMPLE_TEMPORAL_YEAR_SCALE,
     get_simple_latlon_encoding,
     get_simple_temporal_encoding,
 )
@@ -17,29 +18,30 @@ def _ts(year: int, month: int, day: int) -> torch.Tensor:
 
 
 def test_simple_temporal_shape() -> None:
-    """Output is 3 channels: [frac_year, sin, cos]."""
+    """Output is 4 channels: [frac_year/10, sin, cos, year_valid]."""
     e = get_simple_temporal_encoding(_ts(2023, 4, 15))
-    assert e.shape == (1, 1, 3)
+    assert e.shape == (1, 1, 4)
 
 
 def test_simple_temporal_frac_year_value() -> None:
-    """Channel 0 is years-from-2020 (continuous)."""
+    """Channel 0 is years-from-2020 (continuous, scaled)."""
     e = get_simple_temporal_encoding(_ts(2020, 0, 1))  # ~start of 2020
     assert abs(e[0, 0, 0].item()) < 0.02  # frac_year ~ 0
 
 
 def test_simple_temporal_year_offset_is_linear() -> None:
-    """Same day-of-year one year apart differs by ~1.0 on channel 0."""
+    """Same day-of-year one year apart differs by ~1/SCALE on channel 0."""
     a = get_simple_temporal_encoding(_ts(2023, 4, 15))
     b = get_simple_temporal_encoding(_ts(2024, 4, 15))
-    assert abs((b[0, 0, 0] - a[0, 0, 0]).item() - 1.0) < 1e-3
+    expected = 1.0 / SIMPLE_TEMPORAL_YEAR_SCALE
+    assert abs((b[0, 0, 0] - a[0, 0, 0]).item() - expected) < 1e-4
 
 
 def test_simple_temporal_annual_phase_matches_across_years() -> None:
     """sin/cos (channels 1,2) match for the same day-of-year across years."""
     a = get_simple_temporal_encoding(_ts(2021, 6, 10))
     b = get_simple_temporal_encoding(_ts(2024, 6, 10))
-    assert torch.allclose(a[..., 1:], b[..., 1:], atol=1e-3)
+    assert torch.allclose(a[..., 1:3], b[..., 1:3], atol=1e-3)
 
 
 def test_simple_temporal_sincos_unit_norm() -> None:
@@ -53,7 +55,34 @@ def test_simple_temporal_different_days_differ() -> None:
     """Different days-of-year give different annual phase."""
     a = get_simple_temporal_encoding(_ts(2023, 0, 1))
     b = get_simple_temporal_encoding(_ts(2023, 6, 1))
-    assert (a[..., 1:] - b[..., 1:]).abs().max() > 0.1
+    assert (a[..., 1:3] - b[..., 1:3]).abs().max() > 0.1
+
+
+def test_simple_temporal_year_valid_channel() -> None:
+    """Channel 3 is 1.0 for real years."""
+    e = get_simple_temporal_encoding(_ts(2023, 4, 15))
+    assert e[0, 0, 3].item() == 1.0
+
+
+def test_simple_temporal_year_zero_is_unknown_sentinel() -> None:
+    """year=0 zeroes the absolute-year channel and the validity flag."""
+    e = get_simple_temporal_encoding(_ts(0, 6, 10))
+    assert e[0, 0, 0].item() == 0.0  # no frac_year = -2020 outlier
+    assert e[0, 0, 3].item() == 0.0
+
+
+def test_simple_temporal_year_zero_keeps_annual_phase() -> None:
+    """A dropped year keeps the same sin/cos phase as the real date."""
+    dropped = get_simple_temporal_encoding(_ts(0, 6, 10))
+    real = get_simple_temporal_encoding(_ts(2024, 6, 10))
+    assert torch.allclose(dropped[..., 1:3], real[..., 1:3], atol=1e-3)
+
+
+def test_simple_temporal_zero_padded_timestamps_are_benign() -> None:
+    """The eval collate zero-pad [0, 0, 0] yields bounded, valid=0 output."""
+    e = get_simple_temporal_encoding(_ts(0, 0, 0))
+    assert e.abs().max() <= 1.0
+    assert e[0, 0, 3].item() == 0.0
 
 
 def test_simple_temporal_batched() -> None:
@@ -62,7 +91,7 @@ def test_simple_temporal_batched() -> None:
     ts[..., 1] = torch.randint(0, 12, (3, 5), dtype=torch.long)
     ts[..., 2] = torch.randint(2018, 2024, (3, 5), dtype=torch.long)
     e = get_simple_temporal_encoding(ts)
-    assert e.shape == (3, 5, 3)
+    assert e.shape == (3, 5, 4)
 
 
 # ---- simple lat/lon ------------------------------------------------------

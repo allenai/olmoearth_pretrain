@@ -437,16 +437,34 @@ def get_static_latlon_encoding(latlon: torch.Tensor, encoding_dim: int) -> torch
     return out.to(dtype=in_dtype)
 
 
-def get_simple_temporal_encoding(timestamps: torch.Tensor) -> torch.Tensor:
-    """Minimal 3-number temporal encoding: [frac_year, sin, cos].
+SIMPLE_TEMPORAL_DIM = 4
+# Brings the linear years-since-epoch channel to O(1), matching the
+# unit-scale sin/cos channels it is fused with.
+SIMPLE_TEMPORAL_YEAR_SCALE = 10.0
+TEMPORAL_EPOCH_YEAR = 2020.0
 
-    Returns three channels per timestamp:
-      * ``[0]`` ``frac_year = year + day_of_year/365.25 - 2020`` -- a linear,
-        absolute measure of "years since 2020" (distinguishes calendar years).
-      * ``[1]`` ``sin(2*pi*frac_year)`` -- the annual phase. Integer years
-        vanish under sin, so the same day-of-year maps to the same value across
-        years (modulo the 365.25 / leap-year approximation).
-      * ``[2]`` ``cos(2*pi*frac_year)`` -- the orthogonal annual-phase channel.
+
+def get_simple_temporal_encoding(timestamps: torch.Tensor) -> torch.Tensor:
+    """Minimal 4-number temporal encoding: [frac_year/10, sin, cos, year_valid].
+
+    Returns four channels per timestamp:
+      * ``[0]`` ``(year + day_of_year/365.25 - 2020) / 10`` -- a linear,
+        absolute measure of years since 2020, scaled to O(1). Zero when the
+        year is unknown.
+      * ``[1]`` ``sin(2*pi*day_of_year/365.25)`` -- the annual phase. Computed
+        from day-of-year directly, which equals ``sin(2*pi*frac_year)``
+        (integer years vanish under sin/cos) but stays numerically stable for
+        the year-0 sentinel.
+      * ``[2]`` the orthogonal ``cos`` annual-phase channel.
+      * ``[3]`` ``year_valid`` -- 1.0 when the absolute year is known, 0.0
+        when it is not.
+
+    ``year == 0`` is the in-band "year unknown" sentinel: batch-level year
+    dropout writes it during pretraining, eval tasks with fabricated dates can
+    use it, and the zero-padded timestamps from variable-time eval collation
+    hit it instead of producing a ``frac_year = -2020`` outlier. The explicit
+    indicator channel exists because a zeroed year channel alone would be
+    indistinguishable from a real date near Jan 2020 (the epoch).
 
     No learnable parameters; deterministic; output dtype matches input.
 
@@ -455,16 +473,21 @@ def get_simple_temporal_encoding(timestamps: torch.Tensor) -> torch.Tensor:
             (1-31), index 1 is month (0-indexed, 0-11), index 2 is year.
 
     Returns:
-        Tensor of shape ``(..., 3)``.
+        Tensor of shape ``(..., 4)``.
     """
     day = timestamps[..., 0].float()
     month = timestamps[..., 1].float()
     year = timestamps[..., 2].float()
     day_of_year = month * 30.4375 + day
-    frac_year = year + day_of_year / 365.25 - 2020.0
 
-    angle = 2.0 * math.pi * frac_year
-    return torch.stack([frac_year, torch.sin(angle), torch.cos(angle)], dim=-1)
+    year_valid = (year > 0).float()
+    frac_year = year + day_of_year / 365.25 - TEMPORAL_EPOCH_YEAR
+    scaled_year = year_valid * frac_year / SIMPLE_TEMPORAL_YEAR_SCALE
+
+    phase = 2.0 * math.pi * day_of_year / 365.25
+    return torch.stack(
+        [scaled_year, torch.sin(phase), torch.cos(phase), year_valid], dim=-1
+    )
 
 
 def get_simple_latlon_encoding(latlon: torch.Tensor) -> torch.Tensor:

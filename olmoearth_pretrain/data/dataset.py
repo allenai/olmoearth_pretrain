@@ -839,7 +839,10 @@ class OlmoEarthDataset(Dataset):
 
         if self.normalize:
             for modality_name in sample_dict.keys():
-                if modality_name == "timestamps":
+                # latlon stays in raw degrees: geographic encodings (unit-sphere
+                # xyz, sin/cos expansions) assume degrees, and eval tasks that
+                # supply latlon construct samples without dataset normalization.
+                if modality_name in ("timestamps", "latlon"):
                     continue
                 # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
                 if modality_name in missing_modalities:
