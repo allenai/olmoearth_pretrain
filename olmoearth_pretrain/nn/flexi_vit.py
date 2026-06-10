@@ -248,6 +248,29 @@ class ProjectAndAggregate(nn.Module):
             return self.apply_project_then_aggregate(x)
 
 
+class LatLonTokenEmbed(nn.Module):
+    """Embed per-sample (lat, lon) in DEGREES as a token via unit-sphere xyz.
+
+    The sphere mapping (x, y, z) = (cos lat cos lon, cos lat sin lon, sin lat)
+    is continuous across the antimeridian and at the poles, and the zero
+    vector is off the unit sphere, so a zeroed input stays distinguishable
+    from every real location. Inputs must be degrees: the dataset exempts
+    latlon from min-max normalization, and eval tasks construct samples with
+    raw coordinates.
+    """
+
+    def __init__(self, embedding_size: int):
+        """Initialize the projection from unit-sphere xyz to the token dim."""
+        super().__init__()
+        self.proj = nn.Linear(3, embedding_size)
+
+    def forward(self, latlon: Tensor) -> Tensor:
+        """Map ``(..., 2)`` degrees to ``(..., embedding_size)`` tokens."""
+        xyz = get_simple_latlon_encoding(latlon)
+        # Match the projection weights' dtype (e.g. bf16 under FSDP).
+        return self.proj(xyz.to(self.proj.weight.dtype))
+
+
 class MultiModalPatchEmbeddings(nn.Module):
     """Module that patchifies and encodes the input data for multiple modalities."""
 
@@ -353,6 +376,16 @@ class MultiModalPatchEmbeddings(nn.Module):
         # I likely will need to know about what the embedding strategy is in the forward as well
         # Static modality
         if not modality_spec.is_spatial:
+            if modality == Modality.LATLON.name:
+                # Degrees -> unit-sphere xyz -> Linear; see LatLonTokenEmbed.
+                return nn.ModuleDict(
+                    {
+                        self._get_embedding_module_name(
+                            modality, idx
+                        ): LatLonTokenEmbed(self.embedding_size)
+                        for idx in range(len(bandset_indices))
+                    }
+                )
             # static in space
             return nn.ModuleDict(
                 {
