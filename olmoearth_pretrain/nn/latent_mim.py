@@ -103,6 +103,22 @@ class LatentMIM(nn.Module, DistributedMixins):
             extra_metrics["register_read_gates"] = {
                 str(layer): gates[i].item() for i, layer in enumerate(read_layers)
             }
+        # Log the per-depth contribution norms of the fused read source (when enabled),
+        # keyed by encoder read depth. In the learned arm, drift of these norms (e.g.
+        # collapse onto the final layer) is the signal the A/B exists to measure; in the
+        # uniform arm they are ~constant by construction. Activations, not parameters, so
+        # no FSDP gather is needed.
+        if (
+            register_bottleneck is not None
+            and getattr(register_bottleneck, "fused_read", None) is not None
+            and register_bottleneck.last_read_source_norms is not None
+        ):
+            source_norms = register_bottleneck.last_read_source_norms
+            assert register_bottleneck.read_layers is not None
+            extra_metrics["register_read_source_norms"] = {
+                str(layer): source_norms[i].item()
+                for i, layer in enumerate(register_bottleneck.read_layers)
+            }
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)

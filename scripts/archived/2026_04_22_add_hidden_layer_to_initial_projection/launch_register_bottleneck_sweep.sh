@@ -339,53 +339,91 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 #     mdr3_ictok_pdproj_lrw (isolates the IC loss).
 # NOTE: read_gates is a new parameter, so these start fresh; older checkpoints will not load.
 
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_lrw" "$CLUSTER" \
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_lrw" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+#     --model.encoder_config.register_contrastive_source=encoder_tokens \
+#     --model.encoder_config.register_per_depth_read_proj=true \
+#     --model.encoder_config.register_learned_read_weighting=true
+
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_pdproj_lrw_noic" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+#     --model.encoder_config.register_per_depth_read_proj=true \
+#     --model.encoder_config.register_learned_read_weighting=true \
+#     --train_module.contrastive_config.loss_config.weight=0
+
+# # ============ read-layer schedule sweep on the mdr3 frontier (3) ============
+# # The mdr3_ictok_pdproj frontier (dynamic grid, d768, encoder_tokens contrastive,
+# # per_depth_read_proj) with everything fixed EXCEPT register_read_layers. This is the
+# # hard-pruned complement to the learned-gate (lrw) runs: instead of letting the model
+# # down-weight the early mid-level reads, we just remove them. Tests whether dropping the
+# # earliest read(s) recovers the in-domain probe/regression fidelity that the full
+# # [3,6,9,12] blend dilutes -- and, as a bonus, fewer reads mean less of the cross-attention
+# # dilution over large token fields that drives mdr3's large-grid penalty. A/Bs directly
+# # against regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj ([3,6,9,12]). Tagged by the
+# # layers read. Supervised only (nosup omitted -- it consistently underperforms here).
+# #   - mdr_6_9_12   -> drop the earliest (layer-3) read
+# #   - mdr_9_12     -> only the two latest reads
+# #   - mdr_8_10_12  -> three late, evenly-spaced reads
+
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr_6_9_12_ictok_pdproj" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     '--model.encoder_config.register_read_layers=[6,9,12]' \
+#     --model.encoder_config.register_contrastive_source=encoder_tokens \
+#     --model.encoder_config.register_per_depth_read_proj=true
+
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr_9_12_ictok_pdproj" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     '--model.encoder_config.register_read_layers=[9,12]' \
+#     --model.encoder_config.register_contrastive_source=encoder_tokens \
+#     --model.encoder_config.register_per_depth_read_proj=true
+
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr_8_10_12_ictok_pdproj" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     '--model.encoder_config.register_read_layers=[8,10,12]' \
+#     --model.encoder_config.register_contrastive_source=encoder_tokens \
+#     --model.encoder_config.register_per_depth_read_proj=true
+
+# ============ fused multi-depth read source on the il schedule: il_fsum (2) ============
+# RAEv2-style (arXiv 2605.18324, sec 2.1 "MLS") multi-layer fusion of the K/V source: the
+# encoder taps at [3,6,9,12] are combined into ONE fused source, and the bottleneck runs
+# the EXACT il schedule ([read -> self] x4) reading that source -- so this is a single
+# config delta vs regbtl_base10k_scale0.25_gdyn_d768_il (final-layer source) and tests
+# whether mid-depth content (mdr3's external-transfer edge) survives when delivered
+# order-free, without mdr3's sequential-injection dilution or its 4-separate-reads
+# large-grid penalty. Win condition is two-dimensional: match il on the in-domain
+# probes/regression AND match mdr3 on external transfer.
+#   - il_fsum     -> register_fused_read=uniform: parameter-free standardize-and-average.
+#     The combination has NO learnable weights, so the pretext loss cannot collapse it
+#     onto the pretext-aligned layer 12 (the RAEv2 "training-free" property) -- mid-level
+#     features are preserved even though the training objective would discard them.
+#     Parameter set is IDENTICAL to il (the fusion adds no parameters).
+#   - il_fsum_lrn -> register_fused_read=learned: per-depth norm + projection to
+#     register_dim, mean-combined (replaces the shared input_norm/kv_proj, so this starts
+#     fresh). The projections CAN re-weight depths; per-depth contribution norms are
+#     logged as register_read_source_norms/{3,6,9,12} -- if they collapse onto 12 and the
+#     run loses mdr3's transfer gains while il_fsum keeps them, that demonstrates that
+#     learned depth-weighting under the pretext objective optimizes the wrong target
+#     (the same mechanism predicted to cap the lrw gate runs).
+# Dynamic grid, d768, supervised only (nosup consistently underperforms here). The il
+# baseline keeps the default contrastive source/IC loss, so these do too.
+
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_fsum" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true \
     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
-    --model.encoder_config.register_contrastive_source=encoder_tokens \
-    --model.encoder_config.register_per_depth_read_proj=true \
-    --model.encoder_config.register_learned_read_weighting=true
+    --model.encoder_config.register_fused_read=uniform
 
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_pdproj_lrw_noic" "$CLUSTER" \
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_fsum_lrn" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true \
     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
-    --model.encoder_config.register_per_depth_read_proj=true \
-    --model.encoder_config.register_learned_read_weighting=true \
-    --train_module.contrastive_config.loss_config.weight=0
-
-# ============ read-layer schedule sweep on the mdr3 frontier (3) ============
-# The mdr3_ictok_pdproj frontier (dynamic grid, d768, encoder_tokens contrastive,
-# per_depth_read_proj) with everything fixed EXCEPT register_read_layers. This is the
-# hard-pruned complement to the learned-gate (lrw) runs: instead of letting the model
-# down-weight the early mid-level reads, we just remove them. Tests whether dropping the
-# earliest read(s) recovers the in-domain probe/regression fidelity that the full
-# [3,6,9,12] blend dilutes -- and, as a bonus, fewer reads mean less of the cross-attention
-# dilution over large token fields that drives mdr3's large-grid penalty. A/Bs directly
-# against regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj ([3,6,9,12]). Tagged by the
-# layers read. Supervised only (nosup omitted -- it consistently underperforms here).
-#   - mdr_6_9_12   -> drop the earliest (layer-3) read
-#   - mdr_9_12     -> only the two latest reads
-#   - mdr_8_10_12  -> three late, evenly-spaced reads
-
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr_6_9_12_ictok_pdproj" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-    '--model.encoder_config.register_read_layers=[6,9,12]' \
-    --model.encoder_config.register_contrastive_source=encoder_tokens \
-    --model.encoder_config.register_per_depth_read_proj=true
-
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr_9_12_ictok_pdproj" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-    '--model.encoder_config.register_read_layers=[9,12]' \
-    --model.encoder_config.register_contrastive_source=encoder_tokens \
-    --model.encoder_config.register_per_depth_read_proj=true
-
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr_8_10_12_ictok_pdproj" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-    '--model.encoder_config.register_read_layers=[8,10,12]' \
-    --model.encoder_config.register_contrastive_source=encoder_tokens \
-    --model.encoder_config.register_per_depth_read_proj=true
+    --model.encoder_config.register_fused_read=learned

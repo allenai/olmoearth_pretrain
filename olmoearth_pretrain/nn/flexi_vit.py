@@ -1283,6 +1283,7 @@ class SpatialRegisterBottleneck(nn.Module):
         read_layers: list[int] | None = None,
         per_depth_read_proj: bool = False,
         learned_read_weighting: bool = False,
+        fused_read: str | None = None,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1336,15 +1337,55 @@ class SpatialRegisterBottleneck(nn.Module):
                 at init (reproduces the ungated behaviour) and existing checkpoints are
                 unaffected; the learned gates are exposed as ``read_gates`` for logging.
                 False (default) keeps the ungated reads.
+            fused_read: If set, the multi-depth K/V sources are combined into ONE fused
+                source (RAEv2 "multi-layer sum" style) instead of one read block per
+                depth: the read/latent schedule reverts to the single-source rules
+                (``interleave`` / ``read_depth`` / ``latent_transformer_depth``), and
+                every read consumes the fused source -- so the bottleneck architecture
+                matches a final-layer-only model exactly, with only the K/V source
+                differing. Two combinations:
+
+                - ``"uniform"``: each depth is standardized by a parameter-free
+                  LayerNorm and the depths are averaged, then fed through the standard
+                  shared ``input_norm``/``kv_proj``. Training cannot re-weight the
+                  combination, so mid-depth features are preserved even where the
+                  pretext loss would discard them.
+                - ``"learned"``: each depth gets its own LayerNorm + projection to
+                  ``register_dim`` and the projected contributions are averaged
+                  (replacing the shared ``input_norm``/``kv_proj``). The projections
+                  can learn to re-weight or suppress depths.
+
+                Per-depth contribution norms are stashed on ``last_read_source_norms``
+                for logging (collapse toward the final layer in the learned arm is the
+                signal to watch). Requires ``read_layers``; incompatible with
+                ``per_depth_read_proj`` (the fusion replaces per-depth projections).
+                None (default) keeps one read block per depth.
         """
         super().__init__()
         self.register_dim = register_dim
         self.use_2d_rope = use_2d_rope
         # Multi-depth reads force the interleaved schedule (one read + one latent block per
-        # source layer); the read/latent counts are then set by ``read_layers``.
+        # source layer); the read/latent counts are then set by ``read_layers``. With
+        # ``fused_read`` the per-depth sources are combined into one K/V source instead, so
+        # the schedule reverts to the single-source rules.
         self.multi_depth = read_layers is not None
         self.read_layers = list(read_layers) if read_layers is not None else None
-        self.interleave = interleave or self.multi_depth
+        if fused_read is not None:
+            if fused_read not in ("uniform", "learned"):
+                raise ValueError(
+                    f"fused_read must be 'uniform' or 'learned', got {fused_read!r}"
+                )
+            if not self.multi_depth:
+                raise ValueError("fused_read requires read_layers (the depths to fuse)")
+            if per_depth_read_proj:
+                raise ValueError(
+                    "fused_read replaces the per-depth read projections; it cannot be "
+                    "combined with per_depth_read_proj"
+                )
+        self.fused_read = fused_read
+        # Per-depth contribution norms from the most recent fused read, for logging.
+        self.last_read_source_norms: Tensor | None = None
+        self.interleave = interleave or (self.multi_depth and fused_read is None)
         self.dynamic_grid = register_grid is None
         if register_grid is None:
             if not use_2d_rope:
@@ -1376,7 +1417,7 @@ class SpatialRegisterBottleneck(nn.Module):
         # Interleave: one read per self-attention block, so the read count matches
         # latent_transformer_depth.
         # Legacy: read_depth reads up front, then latent_transformer_depth self-attentions.
-        if self.multi_depth:
+        if self.multi_depth and self.fused_read is None:
             assert self.read_layers is not None
             num_read_blocks = len(self.read_layers)
             num_latent_blocks = len(self.read_layers)
@@ -1401,7 +1442,20 @@ class SpatialRegisterBottleneck(nn.Module):
         )
         # Down-project the patch K/V source to the (smaller) register dim. The existing
         # Attention ties q/k/v to a single dim, so the read happens entirely at register_dim.
-        if self.per_depth_read_proj:
+        if self.fused_read == "learned":
+            # One norm + projection per fused source depth; their mean IS the fused K/V
+            # source (already at register_dim), so no shared input_norm/kv_proj pair.
+            assert self.read_layers is not None
+            self.fused_norms = nn.ModuleList(
+                [nn.LayerNorm(encoder_embedding_size) for _ in self.read_layers]
+            )
+            self.fused_projs = nn.ModuleList(
+                [
+                    nn.Linear(encoder_embedding_size, register_dim)
+                    for _ in self.read_layers
+                ]
+            )
+        elif self.per_depth_read_proj:
             # One norm + projection per read block.
             self.input_norms = nn.ModuleList(
                 [nn.LayerNorm(encoder_embedding_size) for _ in range(num_read_blocks)]
@@ -1413,6 +1467,12 @@ class SpatialRegisterBottleneck(nn.Module):
                 ]
             )
         else:
+            if self.fused_read == "uniform":
+                # Parameter-free per-depth standardization before the uniform average;
+                # no learnable affine, so training cannot re-weight the combination.
+                self.fused_norm = nn.LayerNorm(
+                    encoder_embedding_size, elementwise_affine=False
+                )
             self.input_norm = nn.LayerNorm(encoder_embedding_size)
             self.kv_proj = nn.Linear(encoder_embedding_size, register_dim)
         self.read_blocks = nn.ModuleList(
@@ -1480,6 +1540,46 @@ class SpatialRegisterBottleneck(nn.Module):
         )  # [n_reg, 2] in [0, 1]
         return grid.unsqueeze(0) * max_pos.unsqueeze(1)  # [B, n_reg, 2]
 
+    def _fuse_read_sources(
+        self, patch_tokens: list[Tensor], visible_mask: Tensor | None
+    ) -> Tensor:
+        """Mean-combine the per-depth K/V sources into one fused source.
+
+        ``uniform``: standardize each depth with the parameter-free ``fused_norm`` and
+        average, then run the standard shared ``input_norm`` + ``kv_proj``. ``learned``:
+        project each depth through its own ``fused_norms[i]`` + ``fused_projs[i]`` and
+        average the projected contributions (already at register_dim).
+
+        Stashes the mean per-depth contribution norm (over visible tokens) on
+        ``last_read_source_norms`` -- in the learned arm these drifting apart (e.g.
+        collapsing onto the final layer) is the signal the run exists to measure; in the
+        uniform arm they are ~constant by construction and just confirm uniformity.
+        """
+        if self.fused_read == "learned":
+            contribs = [
+                proj(norm(t))
+                for norm, proj, t in zip(
+                    self.fused_norms, self.fused_projs, patch_tokens
+                )
+            ]
+            kv = torch.stack(contribs).mean(dim=0)
+        else:
+            contribs = [self.fused_norm(t) for t in patch_tokens]
+            kv = self.kv_proj(self.input_norm(torch.stack(contribs).mean(dim=0)))
+        with torch.no_grad():
+            per_depth = []
+            for contrib in contribs:
+                token_norms = contrib.detach().float().norm(dim=-1)  # [B, N]
+                if visible_mask is not None:
+                    mask = visible_mask.bool()
+                    per_depth.append(
+                        (token_norms * mask).sum() / mask.sum().clamp(min=1)
+                    )
+                else:
+                    per_depth.append(token_norms.mean())
+            self.last_read_source_norms = torch.stack(per_depth)
+        return kv
+
     def forward(
         self,
         patch_tokens: Tensor | list[Tensor],
@@ -1513,12 +1613,17 @@ class SpatialRegisterBottleneck(nn.Module):
                     "multi-depth register bottleneck expects a list of per-layer "
                     "patch_tokens (one per read block)"
                 )
-            if len(patch_tokens) != len(self.read_blocks):
+            assert self.read_layers is not None
+            if len(patch_tokens) != len(self.read_layers):
                 raise ValueError(
-                    f"expected {len(self.read_blocks)} K/V sources (one per read layer), "
+                    f"expected {len(self.read_layers)} K/V sources (one per read layer), "
                     f"got {len(patch_tokens)}"
                 )
-            if self.per_depth_read_proj:
+            if self.fused_read is not None:
+                # All reads consume the single fused source (RAEv2 multi-layer-sum style).
+                kv = self._fuse_read_sources(patch_tokens, visible_mask)
+                kv_per_read = [kv] * len(self.read_blocks)
+            elif self.per_depth_read_proj:
                 kv_per_read = [
                     proj(norm(t))
                     for norm, proj, t in zip(
@@ -1656,6 +1761,7 @@ class Encoder(FlexiVitBase):
         register_read_layers: list[int] | None = None,
         register_per_depth_read_proj: bool = False,
         register_learned_read_weighting: bool = False,
+        register_fused_read: str | None = None,
         register_contrastive_source: str = "registers",
     ):
         """Initialize the encoder.
@@ -1741,6 +1847,16 @@ class Encoder(FlexiVitBase):
                 model can weight how much each (multi-depth) read contributes. Gates init to
                 1.0 (no-op at init); exposed as ``register_bottleneck.read_gates``. Defaults
                 to False.
+            register_fused_read: If set (``"uniform"`` or ``"learned"``), fuse the
+                multi-depth K/V sources (``register_read_layers``) into ONE source read on
+                the standard single-source schedule (RAEv2 multi-layer-sum style), instead
+                of one read block per depth. ``"uniform"`` standardizes and averages the
+                depths with no learnable combination weights; ``"learned"`` gives each
+                depth its own norm + projection (mean-combined), which can re-weight
+                depths. Per-depth contribution norms are exposed as
+                ``register_bottleneck.last_read_source_norms`` for logging. Requires
+                ``register_read_layers``; incompatible with
+                ``register_per_depth_read_proj``. Defaults to None (one read per depth).
             register_contrastive_source: Where the contrastive (project-and-aggregate)
                 head reads from when the bottleneck is active: ``"registers"`` (default,
                 project from the register latents at ``register_dim``) or
@@ -1853,6 +1969,7 @@ class Encoder(FlexiVitBase):
                 read_layers=register_read_layers,
                 per_depth_read_proj=register_per_depth_read_proj,
                 learned_read_weighting=register_learned_read_weighting,
+                fused_read=register_fused_read,
             )
 
         if register_contrastive_source not in ("registers", "encoder_tokens"):
@@ -3001,6 +3118,15 @@ class EncoderConfig(Config):
     # how much each (multi-depth) read contributes. Gates init to 1.0 (no-op at init).
     # False -> ungated reads (backwards compatible).
     register_learned_read_weighting: bool = False
+    # Fuse the multi-depth K/V sources into ONE source read on the standard single-source
+    # schedule (RAEv2 multi-layer-sum style), instead of one read block per depth.
+    # "uniform": parameter-free standardize-and-average (training cannot re-weight the
+    # combination, so mid-depth features survive even where the pretext loss would discard
+    # them); "learned": per-depth norm + projection, mean-combined (can re-weight depths;
+    # per-depth contribution norms are logged to watch for collapse onto the final layer).
+    # Requires register_read_layers; incompatible with register_per_depth_read_proj.
+    # None -> one read per depth (backwards compatible).
+    register_fused_read: str | None = None
     # Where the contrastive head reads when the bottleneck is on: "registers" (default,
     # project from the register latents) or "encoder_tokens" (project from the encoder
     # patch-token output, as before the bottleneck existed). Ignored when bottleneck off.
@@ -3099,9 +3225,30 @@ class EncoderConfig(Config):
                         f"register_read_layers must lie in [1, depth={self.depth}], got "
                         f"{self.register_read_layers}"
                     )
+            if self.register_fused_read is not None:
+                if self.register_fused_read not in ("uniform", "learned"):
+                    raise ValueError(
+                        "register_fused_read must be 'uniform' or 'learned', got "
+                        f"{self.register_fused_read!r}"
+                    )
+                if self.register_read_layers is None:
+                    raise ValueError(
+                        "register_fused_read requires register_read_layers (the depths "
+                        "to fuse)"
+                    )
+                if self.register_per_depth_read_proj:
+                    raise ValueError(
+                        "register_fused_read is incompatible with "
+                        "register_per_depth_read_proj (the fusion replaces the per-depth "
+                        "read projections)"
+                    )
         elif self.register_read_layers is not None:
             raise ValueError(
                 "register_read_layers requires use_register_bottleneck=True"
+            )
+        elif self.register_fused_read is not None:
+            raise ValueError(
+                "register_fused_read requires use_register_bottleneck=True"
             )
         if self.register_contrastive_source not in ("registers", "encoder_tokens"):
             raise ValueError(

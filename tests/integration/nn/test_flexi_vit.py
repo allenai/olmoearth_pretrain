@@ -1454,6 +1454,141 @@ def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
         assert proj.weight.grad is not None
 
 
+@pytest.mark.parametrize("fused_read", ["uniform", "learned"])
+def test_encoder_register_bottleneck_fused_read(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    fused_read: str,
+) -> None:
+    """register_fused_read combines the multi-depth sources into one fused K/V source.
+
+    The schedule reverts to the single-source rules (read/latent counts decouple from
+    len(read_layers)), the fused source draws only from the configured depths, and the
+    per-depth contribution norms are stashed for logging.
+    """
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    grid_size, register_dim, depth, latent_depth = 3, 8, 4, 3
+    # Reading only depth 2 pins down that the fused source comes from the tapped depth:
+    # blocks AFTER depth 2 then have no path to the registers.
+    read_layers = [2]
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=depth,
+        drop_path=0.0,
+        spatial_pos_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=grid_size,
+        register_dim=register_dim,
+        register_interleave=True,
+        register_latent_depth=latent_depth,
+        register_read_layers=read_layers,
+        register_fused_read=fused_read,
+    )
+    bottleneck = encoder.register_bottleneck
+    assert bottleneck is not None
+    assert bottleneck.multi_depth
+    assert bottleneck.fused_read == fused_read
+    # Single-source schedule: interleave -> one read per latent block, decoupled from
+    # len(read_layers) (a non-fused multi-depth model would have 1 read block here).
+    assert len(bottleneck.read_blocks) == latent_depth
+    assert len(bottleneck.latent_blocks) == latent_depth
+    if fused_read == "uniform":
+        # Parameter-free per-depth standardization + the standard shared pair.
+        assert bottleneck.fused_norm.weight is None
+        assert hasattr(bottleneck, "input_norm")
+        assert hasattr(bottleneck, "kv_proj")
+        assert not hasattr(bottleneck, "fused_projs")
+    else:
+        # Per-depth norm + projection replace the shared pair.
+        assert len(bottleneck.fused_norms) == len(read_layers)
+        assert len(bottleneck.fused_projs) == len(read_layers)
+        assert not hasattr(bottleneck, "input_norm")
+        assert not hasattr(bottleneck, "kv_proj")
+
+    B, H, W = 2, 8, 8
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, 2, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, 2, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=2, input_res=10)
+    assert output_dict["registers"].shape == (B, grid_size * grid_size, register_dim)
+    # One contribution norm per fused depth, stashed for logging.
+    assert bottleneck.last_read_source_norms is not None
+    assert bottleneck.last_read_source_norms.shape == (len(read_layers),)
+    assert bool(torch.isfinite(bottleneck.last_read_source_norms).all())
+
+    output_dict["registers"].sum().backward()
+    # The fused source draws only from depth 2: blocks up to depth 2 get gradient,
+    # blocks after it have no path to the registers.
+    assert encoder.blocks[0].attn.q.weight.grad is not None
+    assert encoder.blocks[1].attn.q.weight.grad is not None
+    assert encoder.blocks[2].attn.q.weight.grad is None
+    assert encoder.blocks[3].attn.q.weight.grad is None
+    if fused_read == "learned":
+        for norm, proj in zip(bottleneck.fused_norms, bottleneck.fused_projs):
+            assert norm.weight.grad is not None
+            assert proj.weight.grad is not None
+    else:
+        assert bottleneck.kv_proj.weight.grad is not None
+
+
+def test_encoder_register_bottleneck_fused_read_validation(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """fused_read requires read_layers and rejects per_depth_read_proj."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+
+    def build_encoder(
+        register_read_layers: list[int] | None = None,
+        register_fused_read: str | None = None,
+        register_per_depth_read_proj: bool = False,
+    ) -> Encoder:
+        return Encoder(
+            supported_modalities=supported_modalities,
+            embedding_size=16,
+            max_patch_size=4,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=2.0,
+            max_sequence_length=12,
+            depth=4,
+            drop_path=0.0,
+            spatial_pos_encoding="rope",
+            use_register_bottleneck=True,
+            register_grid_size=3,
+            register_dim=8,
+            register_read_layers=register_read_layers,
+            register_fused_read=register_fused_read,
+            register_per_depth_read_proj=register_per_depth_read_proj,
+        )
+
+    with pytest.raises(ValueError, match="requires read_layers"):
+        build_encoder(register_fused_read="uniform")
+    with pytest.raises(ValueError, match="per_depth_read_proj"):
+        build_encoder(
+            register_read_layers=[2, 4],
+            register_fused_read="uniform",
+            register_per_depth_read_proj=True,
+        )
+    with pytest.raises(ValueError, match="must be 'uniform' or 'learned'"):
+        build_encoder(register_read_layers=[2, 4], register_fused_read="sum")
+
+
 def test_encoder_register_bottleneck_contrastive_source(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
