@@ -177,12 +177,12 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 
 # python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3" "$CLUSTER" \
 #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
 #     '--model.encoder_config.register_read_layers=[3,6,9,12]'
 
 # python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_nosup" "$CLUSTER" \
 #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
 #     '--model.encoder_config.register_read_layers=[3,6,9,12]'
 
 # # ========= contrastive projection from the register tokens + read-norm cleanup (2) =========
@@ -201,12 +201,12 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 
 # python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_creg" "$CLUSTER" \
 #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
 #     '--model.encoder_config.register_read_layers=[3,6,9,12]'
 
 # python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_creg_nosup" "$CLUSTER" \
 #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
 #     '--model.encoder_config.register_read_layers=[3,6,9,12]'
 
 # # ============ no instance contrastive loss: InfoNCE weight = 0 (2) ============
@@ -220,13 +220,13 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 
 # python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_noic" "$CLUSTER" \
 #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
 #     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
 #     --train_module.contrastive_config.loss_config.weight=0
 
 # python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_noic_nosup" "$CLUSTER" \
 #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
 #     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
 #     --train_module.contrastive_config.loss_config.weight=0
 
@@ -247,14 +247,14 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 
 # python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj" "$CLUSTER" \
 #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
 #     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
 #     --model.encoder_config.register_contrastive_source=encoder_tokens \
 #     --model.encoder_config.register_per_depth_read_proj=true
 
 # python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_nosup" "$CLUSTER" \
 #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
 #     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
 #     --model.encoder_config.register_contrastive_source=encoder_tokens \
 #     --model.encoder_config.register_per_depth_read_proj=true
@@ -271,14 +271,14 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 
 # python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_pdproj_noic" "$CLUSTER" \
 #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
 #     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
 #     --model.encoder_config.register_per_depth_read_proj=true \
 #     --train_module.contrastive_config.loss_config.weight=0
 
 # python "$NOSUP_SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_pdproj_noic_nosup" "$CLUSTER" \
 #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
 #     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
 #     --model.encoder_config.register_per_depth_read_proj=true \
 #     --train_module.contrastive_config.loss_config.weight=0
@@ -341,7 +341,7 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 
 python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_lrw" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
     --model.encoder_config.register_contrastive_source=encoder_tokens \
     --model.encoder_config.register_per_depth_read_proj=true \
@@ -349,7 +349,7 @@ python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_lr
 
 python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_pdproj_lrw_noic" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
     --model.encoder_config.register_per_depth_read_proj=true \
     --model.encoder_config.register_learned_read_weighting=true \
@@ -371,21 +371,21 @@ python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_pdproj_lrw_noic
 
 python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr_6_9_12_ictok_pdproj" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
     '--model.encoder_config.register_read_layers=[6,9,12]' \
     --model.encoder_config.register_contrastive_source=encoder_tokens \
     --model.encoder_config.register_per_depth_read_proj=true
 
 python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr_9_12_ictok_pdproj" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
     '--model.encoder_config.register_read_layers=[9,12]' \
     --model.encoder_config.register_contrastive_source=encoder_tokens \
     --model.encoder_config.register_per_depth_read_proj=true
 
 python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr_8_10_12_ictok_pdproj" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=null --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
     '--model.encoder_config.register_read_layers=[8,10,12]' \
     --model.encoder_config.register_contrastive_source=encoder_tokens \
     --model.encoder_config.register_per_depth_read_proj=true
