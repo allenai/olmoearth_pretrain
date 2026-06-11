@@ -27,8 +27,11 @@ class MetadataDropout:
     Dropping the year sets timestamps[..., 2] = 0; year 0 is the in-band
     "year unknown" sentinel consumed by the temporal encoding (the sin/cos
     fractional-year channels survive, only absolute time is removed).
-    Dropping latlon sets the field to None, so the latlon token is absent
-    from the token sequence — bit-identical to eval tasks without latlon.
+    Dropping latlon marks the latlon token MISSING for the whole batch (see
+    pin_latlon_to_encoder): MISSING tokens are removed before attention, so
+    the model sees the same condition as eval tasks without latlon, while
+    the latlon embedding module keeps participating in every backward —
+    required for stable FSDP gradient reduction.
 
     view_mode controls the two contrastive views:
       - "shared": one draw, applied to the stacked sample before masking, so
@@ -70,48 +73,57 @@ class MetadataDropout:
         self.latlon_dropout_rate = latlon_dropout_rate
         self.view_mode = view_mode
 
-    def apply(self, sample: OlmoEarthSample) -> OlmoEarthSample:
-        """Draw one batch-level condition and apply it to the stacked sample."""
-        replacements: dict[str, torch.Tensor | None] = {}
-        if (
-            self.year_dropout_rate > 0.0
-            and sample.timestamps is not None
-            and bool(torch.rand(()) < self.year_dropout_rate)
-        ):
-            timestamps = sample.timestamps.clone()
-            timestamps[..., 2] = 0
-            replacements["timestamps"] = timestamps
-        if (
-            self.latlon_dropout_rate > 0.0
-            and sample.latlon is not None
-            and bool(torch.rand(()) < self.latlon_dropout_rate)
-        ):
-            replacements["latlon"] = None
-        if replacements:
-            sample = sample._replace(**replacements)
-        return sample
+    def draw(self) -> tuple[bool, bool]:
+        """Draw one batch-level (drop_year, drop_latlon) condition."""
+        drop_year = self.year_dropout_rate > 0.0 and bool(
+            torch.rand(()) < self.year_dropout_rate
+        )
+        drop_latlon = self.latlon_dropout_rate > 0.0 and bool(
+            torch.rand(()) < self.latlon_dropout_rate
+        )
+        return drop_year, drop_latlon
+
+    @staticmethod
+    def apply_year(sample: OlmoEarthSample, drop_year: bool) -> OlmoEarthSample:
+        """Write the year-unknown sentinel (year 0) for the whole batch."""
+        if not drop_year or sample.timestamps is None:
+            return sample
+        timestamps = sample.timestamps.clone()
+        timestamps[..., 2] = 0
+        return sample._replace(timestamps=timestamps)
 
 
 def pin_latlon_to_encoder(
     masked_sample: MaskedOlmoEarthSample,
+    drop_latlon: bool = False,
 ) -> MaskedOlmoEarthSample:
-    """Force the latlon token to be encoder-visible whenever it is present.
+    """Control latlon token visibility after the masking strategy has run.
 
     The latlon token is a metadata input, not a prediction target: masking
     strategies randomize non-spatial modality masks across the batch dim,
     which would make latlon a DECODER target (or hide it from the encoder)
-    for a random subset of samples. Its visibility must be controlled solely
-    by the batch-level MetadataDropout, so any non-MISSING mask value is
-    pinned to ONLINE_ENCODER here, after the masking strategy has run.
+    for a random subset of samples. Any non-MISSING mask value is therefore
+    pinned to ONLINE_ENCODER here.
+
+    Batch-level latlon dropout sets the mask to MISSING instead of removing
+    the field: MISSING tokens are removed before attention, so the model sees
+    exactly the eval-time-absent condition, while the latlon embedding module
+    still participates in every forward/backward. Module participation that
+    flips per batch/rank destabilizes FSDP gradient reduction (observed as
+    corrupted gradient shards in the adjacent decoder parameters; see the
+    grad-explosion debugging notes, 2026-06-11).
     """
     if masked_sample.latlon is None or masked_sample.latlon_mask is None:
         return masked_sample
     mask = masked_sample.latlon_mask
-    pinned = torch.where(
-        mask == MaskValue.MISSING.value,
-        mask,
-        torch.full_like(mask, MaskValue.ONLINE_ENCODER.value),
-    )
+    if drop_latlon:
+        pinned = torch.full_like(mask, MaskValue.MISSING.value)
+    else:
+        pinned = torch.where(
+            mask == MaskValue.MISSING.value,
+            mask,
+            torch.full_like(mask, MaskValue.ONLINE_ENCODER.value),
+        )
     return masked_sample._replace(latlon_mask=pinned)
 
 
@@ -168,12 +180,15 @@ def collate_single_masked_batched(
     if transform is not None:
         stacked_sample = transform.apply(stacked_sample)
 
+    drop_latlon = False
     if metadata_dropout is not None:
-        stacked_sample = metadata_dropout.apply(stacked_sample)
+        drop_year, drop_latlon = metadata_dropout.draw()
+        stacked_sample = metadata_dropout.apply_year(stacked_sample, drop_year)
 
     # Apply masking to the batch
     masked_sample = pin_latlon_to_encoder(
-        masking_strategy.apply_mask(stacked_sample, patch_size)
+        masking_strategy.apply_mask(stacked_sample, patch_size),
+        drop_latlon=drop_latlon,
     )
 
     return patch_size, masked_sample
@@ -210,23 +225,36 @@ def collate_double_masked_batched(
     if transform is not None:
         stacked_sample = transform.apply(stacked_sample)
 
-    if metadata_dropout is not None and metadata_dropout.view_mode == "decorrelated":
-        stacked_sample_a = metadata_dropout.apply(stacked_sample)
-        stacked_sample_b = metadata_dropout.apply(stacked_sample)
-    elif metadata_dropout is not None:
-        stacked_sample_a = stacked_sample_b = metadata_dropout.apply(stacked_sample)
-    else:
-        stacked_sample_a = stacked_sample_b = stacked_sample
+    drop_a = drop_b = (False, False)
+    if metadata_dropout is not None:
+        drop_a = metadata_dropout.draw()
+        drop_b = (
+            metadata_dropout.draw()
+            if metadata_dropout.view_mode == "decorrelated"
+            else drop_a
+        )
+    stacked_sample_a = (
+        metadata_dropout.apply_year(stacked_sample, drop_a[0])
+        if metadata_dropout is not None
+        else stacked_sample
+    )
+    stacked_sample_b = (
+        metadata_dropout.apply_year(stacked_sample, drop_b[0])
+        if metadata_dropout is not None
+        else stacked_sample
+    )
 
     # Apply both masking strategies to the batch
     masked_sample_a = pin_latlon_to_encoder(
-        masking_strategy.apply_mask(stacked_sample_a, patch_size)
+        masking_strategy.apply_mask(stacked_sample_a, patch_size),
+        drop_latlon=drop_a[1],
     )
     strategy_b = (
         masking_strategy_b if masking_strategy_b is not None else masking_strategy
     )
     masked_sample_b = pin_latlon_to_encoder(
-        strategy_b.apply_mask(stacked_sample_b, patch_size)
+        strategy_b.apply_mask(stacked_sample_b, patch_size),
+        drop_latlon=drop_b[1],
     )
 
     return patch_size, masked_sample_a, masked_sample_b

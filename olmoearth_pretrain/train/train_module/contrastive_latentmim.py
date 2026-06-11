@@ -1,5 +1,7 @@
 """Training and optimizer abstraction for OlmoEarth Pretrain."""
 
+import math
+import os
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any
@@ -189,6 +191,114 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets, **kwargs)
 
+    def _maybe_capture_exploding_batch(
+        self,
+        capture_dir: str,
+        microbatch_idx: int,
+        microbatch_a: MaskedOlmoEarthSample,
+        microbatch_b: MaskedOlmoEarthSample,
+        patch_size: int,
+    ) -> None:
+        """Debug hook: dump the microbatch when decoder-head grads explode.
+
+        Enabled via the OE_DEBUG_CAPTURE_DIR env var; checks the parameters
+        the production explosions concentrate in.
+        """
+        from olmo_core.distributed.utils import get_local_tensor as _glt
+
+        head_norm = 0.0
+        for name, p in self.model.named_parameters():
+            if p.grad is None:
+                continue
+            if (
+                "to_output_embed" in name
+                or name.endswith("decoder.norm.bias")
+                or name.endswith("mask_token")
+            ):
+                grad = _glt(p.grad)
+                if grad.numel():
+                    val = grad.float().norm().item()
+                    head_norm = max(head_norm, val)
+        # Gradients are FSDP-reduced across ranks by the time we check, so a
+        # single guilty batch poisons every rank's shards — and the guilty
+        # rank's own shards may look fine. All-reduce the flag so every
+        # rank's batch is captured whenever any rank trips.
+        import torch.distributed as dist
+
+        if not (head_norm > 1e4 or not math.isfinite(head_norm)):
+            # also reset the stash on clean microbatches
+            pass
+        bad = head_norm > 1e4 or not math.isfinite(head_norm)
+        if dist.is_initialized():
+            flag = torch.tensor(
+                [1.0 if bad else 0.0], device=next(self.model.parameters()).device
+            )
+            dist.all_reduce(flag, op=dist.ReduceOp.MAX)
+            bad = flag.item() > 0
+        if not bad:
+            self._debug_decoded: list[TokensAndMasks] = []
+        if bad:
+            from olmo_core.distributed.utils import get_rank
+
+            step = getattr(getattr(self, "trainer", None), "global_step", -1)
+            rank = get_rank()
+            if len(os.listdir(capture_dir)) > 40:
+                self._debug_decoded = []
+                return
+            decoded_grads = []
+            for view_idx, decoded in enumerate(getattr(self, "_debug_decoded", [])):
+                dec_dict = decoded.as_dict()
+                for m in decoded.modalities:
+                    t = dec_dict[m]
+                    if t.grad is None:
+                        continue
+                    mask = dec_dict[decoded.get_masked_modality_name(m)]
+                    for mask_value in (0, 1, 2, 3):
+                        sel = mask == mask_value
+                        if not sel.any():
+                            continue
+                        g = t.grad[sel].float()
+                        vals = t.detach()[sel].float().norm(dim=-1)
+                        decoded_grads.append(
+                            dict(
+                                view=view_idx,
+                                modality=m,
+                                mask_value=mask_value,
+                                count=int(sel.sum()),
+                                grad_norm=g.norm().item(),
+                                grad_absmax=g.abs().max().item(),
+                                value_norm_min=vals.min().item(),
+                                value_norm_max=vals.max().item(),
+                            )
+                        )
+            self._debug_decoded = []
+            path = os.path.join(
+                capture_dir,
+                f"exploding_batch_step{step}_rank{rank}_mb{microbatch_idx}.pt",
+            )
+            if not os.path.exists(path):
+                # Write atomically: ranks share the filesystem and a partial
+                # file from a raced/killed writer is useless.
+                tmp_path = f"{path}.rank{rank}.tmp"
+                torch.save(
+                    {
+                        "microbatch_a": microbatch_a.as_dict(),
+                        "microbatch_b": microbatch_b.as_dict(),
+                        "head_norm": head_norm,
+                        "step": step,
+                        "patch_size": patch_size,
+                        "rank": rank,
+                        "decoded_grads": decoded_grads,
+                    },
+                    tmp_path,
+                )
+                os.replace(tmp_path, path)
+                logger.warning(
+                    "Captured exploding batch (head grad norm %.3e) to %s",
+                    head_norm,
+                    path,
+                )
+
     def _effective_logit_scale(self, param_name: str = "logit_scale") -> torch.Tensor:
         """CLIP temperature as the final multiplicative scale (clamp + exp).
 
@@ -199,6 +309,10 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             param_name: Which temperature parameter on the model to read —
                 "logit_scale" (token loss) or "instance_logit_scale".
         """
+        if os.environ.get("OE_DEBUG_CONST_SCALE"):
+            # Bisection probe: fixed scale, no parameter read, no DTensor
+            # collective in the loss graph.
+            return torch.tensor(1.0 / 0.07, device=self.device)
         logit_scale = getattr(self.model, param_name)
         if isinstance(logit_scale, DTensor):
             logit_scale = logit_scale.full_tensor()
@@ -308,6 +422,16 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 del latent_a, latent_b
                 loss.backward()
 
+                capture_dir = os.environ.get("OE_DEBUG_CAPTURE_DIR")
+                if capture_dir:
+                    self._maybe_capture_exploding_batch(
+                        capture_dir,
+                        microbatch_idx,
+                        microbatch_a,
+                        microbatch_b,
+                        patch_size,
+                    )
+
         if dry_run:
             return
 
@@ -357,6 +481,14 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 reconstructed,
                 extra_metrics,
             ) = self.model(batch, patch_size)
+            if os.environ.get("OE_DEBUG_CAPTURE_DIR"):
+                # Keep d(loss)/d(decoded) so the capture hook can attribute
+                # gradient explosions to positions/mask values.
+                for _m in decoded.modalities:
+                    getattr(decoded, _m).retain_grad()
+                if not hasattr(self, "_debug_decoded"):
+                    self._debug_decoded = []
+                self._debug_decoded.append(decoded)
             if extra_metrics is not None:
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():

@@ -192,7 +192,10 @@ def test_combined_recipe_metadata_dropped(
     )
     batch = _collate(samples_without_missing_modalities, metadata_dropout=dropout)
     for view in (batch[1], batch[2]):
-        assert view.latlon is None
+        # Dropped latlon = MISSING-masked (removed pre-attention), with the
+        # field kept so the embedding module participates in every backward.
+        assert view.latlon is not None
+        assert (view.latlon_mask == MaskValue.MISSING.value).all()
         assert (view.timestamps[..., 2] == 0).all()
     metrics = _run_train_batch(combined_model, batch)
     _assert_finite_positive(metrics["train/ClipPatchDisc"])

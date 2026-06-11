@@ -2,6 +2,7 @@
 
 import contextlib
 import json
+import os
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from logging import getLogger
@@ -421,10 +422,42 @@ class OlmoEarthTrainModule(TrainModule):
         """Zero the gradients."""
         self.optimizer.zero_grad(set_to_none=True)
 
+    def _compute_total_grad_norm(self, norm_type: float = 2.0) -> torch.Tensor:
+        """Total grad norm without clipping (debug helper)."""
+        grads = [p.grad for p in self.model.parameters() if p.grad is not None]
+        total = nn.utils.get_total_norm(
+            grads, norm_type=norm_type, error_if_nonfinite=False
+        )
+        if isinstance(total, DTensor):
+            total = total.full_tensor()
+        return total
+
     def optim_step(self) -> None:
         """Optimize the model."""
         # Maybe clip gradients.
         if self.max_grad_norm is not None:
+            if os.environ.get("OE_DEBUG_GRAD_RACE"):
+                import torch.distributed as _dist
+
+                norm_before = self._compute_total_grad_norm()
+                torch.cuda.synchronize()
+                if _dist.is_initialized():
+                    _dist.barrier()
+                torch.cuda.synchronize()
+                norm_after = self._compute_total_grad_norm()
+                if (
+                    not torch.isfinite(norm_before).all()
+                    or not torch.isfinite(norm_after).all()
+                    or norm_before > 100
+                    or norm_after > 100
+                ):
+                    logger.warning(
+                        "GRAD RACE CHECK step=%s: norm_before_sync=%s "
+                        "norm_after_sync=%s",
+                        getattr(getattr(self, "trainer", None), "global_step", -1),
+                        norm_before.item(),
+                        norm_after.item(),
+                    )
             grad_norm = self._clip_grad_norm(self.max_grad_norm)
             # NOTE: grad norm is already reduced over ranks, so we set `reduce_type` to `None`.
             self.trainer.record_metric(
