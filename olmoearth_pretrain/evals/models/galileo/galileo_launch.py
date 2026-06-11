@@ -97,7 +97,7 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
             # so the dataset config validates -- no pretraining happens during
             # eval, so any extant h5py dir works. Match the path used by the
             # other eval launch scripts.
-            h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928",
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling_subset_1k/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/3996",
             training_modalities=common.training_modalities,
         ),
     ]
