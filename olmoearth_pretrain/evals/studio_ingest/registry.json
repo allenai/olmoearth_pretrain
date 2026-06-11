@@ -677,10 +677,25 @@
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
+        "sentinel1",
         "sentinel2_l2a"
       ],
       "name": "lfmc_woody_3k",
       "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": null,
+            "mean": null,
+            "min": null,
+            "std": null
+          },
+          "vv": {
+            "max": null,
+            "mean": null,
+            "min": null,
+            "std": null
+          }
+        },
         "sentinel2_l2a": {
           "B01": {
             "max": 19394.0,
