@@ -17,12 +17,14 @@ into `EVAL_TASKS` in `olmoearth_pretrain/internal/all_evals.py` as the three
   contiguous labels and ignores all other OSM pixels.
 - `osm_diverse_context`: context-heavy eval. Requires at least 3 OSM classes per
   tile and normalized entropy >= 0.5. Current size: 6144 train / 2093 valid /
-  2089 test. Eval task predicts the tile's anchor class (rarest eligible OSM
-  class present) as 30-way multi-class classification.
+  2089 test. Eval task predicts 30-way multi-label OSM class presence for each
+  tile.
 - `osm_rare_class_focused`: rare-class diagnostic eval. Anchors on classes with
   more than 50 tiles present. Highway/building caps apply to filler/context tiles
-  but rare-anchor tiles are exempt. Current size: 1290 train / 200 valid / 175 test.
-  Eval task predicts 30-way multi-label OSM class presence for each tile.
+  but rare-anchor tiles are exempt. Current size: 1227 train / 200 valid / 175 test.
+  Eval remaps the feasible rare OSM classes (`fountain`, `generator_wind`,
+  `storage_tank`, `taxiway`) to contiguous per-pixel segmentation labels and
+  ignores all other OSM pixels.
 
 Each variant contains:
 
@@ -42,7 +44,7 @@ python -m olmoearth_pretrain.internal.full_eval_sweep \
   --defaults_only \
   --module_path=scripts/official/v1_1/base.py \
   --checkpoint_path=/weka/dfive-default/helios/checkpoints/favyen/hidden1/step665000 \
-  --task-names=presto_osm_populous12_seg_probe_sentinel2_l2a,presto_osm_diverse_context_probe_sentinel2_l2a,presto_osm_rare_class_focused_probe_sentinel2_l2a \
+  --task-names=presto_osm_populous12_seg_probe_sentinel2_l2a,presto_osm_diverse_context_probe_sentinel2_l2a,presto_osm_rare4_seg_probe_sentinel2_l2a \
   --project_name=2026_06_01_osm_balanced_eval
 ```
 
@@ -54,7 +56,7 @@ python -m olmoearth_pretrain.internal.full_eval_sweep \
   --defaults_only \
   --module_path=scripts/official/v1_1/base.py \
   --checkpoint_path=/weka/dfive-default/helios/checkpoints/favyen/hidden1/step665000 \
-  --task-names=presto_osm_populous12_seg_probe_sentinel2_l2a,presto_osm_diverse_context_probe_sentinel2_l2a,presto_osm_rare_class_focused_probe_sentinel2_l2a \
+  --task-names=presto_osm_populous12_seg_probe_sentinel2_l2a,presto_osm_diverse_context_probe_sentinel2_l2a,presto_osm_rare4_seg_probe_sentinel2_l2a \
   --project_name=2026_06_01_osm_balanced_eval
 ```
 
@@ -66,7 +68,7 @@ python -m olmoearth_pretrain.internal.full_eval_sweep \
   --defaults_only \
   --module_path=scripts/official/v1_1/base.py \
   --checkpoint_path=/weka/dfive-default/helios/checkpoints/favyen/hidden1/step665000 \
-  --task-names=presto_osm_populous12_seg_probe_sentinel2_l2a,presto_osm_diverse_context_probe_sentinel2_l2a,presto_osm_rare_class_focused_probe_sentinel2_l2a \
+  --task-names=presto_osm_populous12_seg_probe_sentinel2_l2a,presto_osm_diverse_context_probe_sentinel2_l2a,presto_osm_rare4_seg_probe_sentinel2_l2a \
   --project_name=2026_06_01_osm_balanced_eval
 ```
 

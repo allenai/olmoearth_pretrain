@@ -44,6 +44,8 @@ CLASS_NAMES = [
     "water_tower",
     "works",
 ]
+POWER_TOWER_CLASS_ID = 21
+RARE_FOCUS_CLASS_IDS = [9, 10, 26, 27]
 
 SPLIT_SIZES = {
     "train": 6144,
@@ -62,12 +64,17 @@ class VariantConfig:
     min_normalized_entropy: float = 0.0
     presence_caps: dict[int, float] | None = None
     cap_exempt_max_anchor_presence: int | None = None
+    required_presence_by_split: dict[int, dict[str, int]] | None = None
+    allow_extra_required_presence: bool = False
 
 
 VARIANTS = [
     VariantConfig(
         name="osm_base_balanced",
         min_anchor_tile_presence=500,
+        required_presence_by_split={
+            POWER_TOWER_CLASS_ID: {"train": 2000, "valid": 900, "test": 900},
+        },
     ),
     VariantConfig(
         name="osm_diverse_context",
@@ -80,6 +87,11 @@ VARIANTS = [
         min_anchor_tile_presence=51,
         presence_caps={12: 0.80, 4: 0.70},
         cap_exempt_max_anchor_presence=499,
+        required_presence_by_split={
+            class_id: {"train": 70, "valid": 20, "test": 20}
+            for class_id in RARE_FOCUS_CLASS_IDS
+        },
+        allow_extra_required_presence=True,
     ),
 ]
 
@@ -252,6 +264,60 @@ def fits_presence_caps(
     return True
 
 
+def fits_required_presence_limits(
+    row_labels: set[int],
+    selected_presence: dict[int, int],
+    variant: VariantConfig,
+    split: str,
+    required_presence_limits: dict[int, int],
+) -> bool:
+    """Return whether a row avoids over-consuming quota classes for val/test."""
+    if split == "train" or not variant.required_presence_by_split:
+        return True
+    required_classes = set(variant.required_presence_by_split)
+    row_required_classes = row_labels & required_classes
+    if not row_required_classes:
+        return True
+    return any(
+        selected_presence.get(class_id, 0)
+        < required_presence_limits.get(
+            class_id, variant.required_presence_by_split[class_id].get(split, 0)
+        )
+        for class_id in row_required_classes
+    )
+
+
+def required_presence_limits_for_split(
+    *,
+    variant: VariantConfig,
+    split: str,
+    pool: pd.DataFrame,
+    row_labels_by_idx: dict[int, set[int]],
+) -> dict[int, int]:
+    """Return max quota-class counts this split may consume during filling."""
+    if not variant.required_presence_by_split:
+        return {}
+    current_required = {
+        class_id: split_targets.get(split, 0)
+        for class_id, split_targets in variant.required_presence_by_split.items()
+    }
+    if split == "train" or not variant.allow_extra_required_presence:
+        return current_required
+
+    split_order = ("valid", "test", "train")
+    future_splits = split_order[split_order.index(split) + 1 :]
+    limits = {}
+    for class_id, split_targets in variant.required_presence_by_split.items():
+        available = sum(
+            1
+            for row in pool.itertuples()
+            if class_id in row_labels_by_idx[int(row.row_idx)]
+        )
+        future_required = sum(split_targets.get(future_split, 0) for future_split in future_splits)
+        limits[class_id] = max(current_required[class_id], available - future_required)
+    return limits
+
+
 def add_selected_row(
     row_idx: int,
     row_labels_by_idx: dict[int, set[int]],
@@ -264,6 +330,90 @@ def add_selected_row(
     selected_set.add(row_idx)
     for class_id in row_labels_by_idx[row_idx]:
         selected_presence[class_id] = selected_presence.get(class_id, 0) + 1
+
+
+def add_required_presence_rows(
+    *,
+    split: str,
+    variant: VariantConfig,
+    pool: pd.DataFrame,
+    row_labels_by_idx: dict[int, set[int]],
+    score_by_row: dict[int, float],
+    selected: list[int],
+    selected_set: set[int],
+    selected_presence: dict[int, int],
+    presence_caps: dict[int, float] | None,
+    exempt_classes: set[int],
+    target_size: int,
+    required_presence_limits: dict[int, int],
+) -> None:
+    """Add high-scoring rows until configured class-presence minima are met."""
+    if not variant.required_presence_by_split:
+        return
+
+    rows_by_class: dict[int, list[int]] = {}
+    for class_id in variant.required_presence_by_split:
+        rows = [
+            int(row.row_idx)
+            for row in pool.itertuples()
+            if class_id in row_labels_by_idx[int(row.row_idx)]
+        ]
+        rows.sort(key=lambda row_idx: -score_by_row[row_idx])
+        rows_by_class[class_id] = rows
+
+    made_progress = True
+    while made_progress and len(selected) < target_size:
+        made_progress = False
+        for class_id, split_targets in variant.required_presence_by_split.items():
+            required = split_targets.get(split, 0)
+            if selected_presence.get(class_id, 0) >= required:
+                continue
+            for row_idx in rows_by_class[class_id]:
+                if row_idx in selected_set:
+                    continue
+                row_required_classes = (
+                    row_labels_by_idx[row_idx] & set(variant.required_presence_by_split)
+                )
+                over_limit = any(
+                    selected_presence.get(other_class_id, 0)
+                    >= required_presence_limits.get(other_class_id, 0)
+                    and not (
+                        other_class_id == class_id
+                        and selected_presence.get(other_class_id, 0) < required
+                    )
+                    for other_class_id in row_required_classes
+                )
+                if over_limit:
+                    continue
+                if not fits_presence_caps(
+                    row_labels=row_labels_by_idx[row_idx],
+                    selected_presence=selected_presence,
+                    presence_caps=presence_caps,
+                    exempt_classes=exempt_classes,
+                    target_size=target_size,
+                ):
+                    continue
+                add_selected_row(
+                    row_idx=row_idx,
+                    row_labels_by_idx=row_labels_by_idx,
+                    selected=selected,
+                    selected_set=selected_set,
+                    selected_presence=selected_presence,
+                )
+                made_progress = True
+                break
+
+    unmet = {
+        class_id: split_targets[split]
+        for class_id, split_targets in variant.required_presence_by_split.items()
+        if selected_presence.get(class_id, 0) < split_targets.get(split, 0)
+    }
+    if unmet:
+        details = ", ".join(
+            f"{CLASS_NAMES[class_id]}={selected_presence.get(class_id, 0)}/{target}"
+            for class_id, target in unmet.items()
+        )
+        raise ValueError(f"Could not satisfy required {split} support: {details}")
 
 
 def trim_to_fraction_caps(
@@ -314,6 +464,7 @@ def select_variant_split(
     global_presence: np.ndarray,
     variant: VariantConfig,
     target_size: int,
+    split: str,
     seed: int,
 ) -> pd.DataFrame:
     """Select one split for one variant."""
@@ -441,17 +592,166 @@ def summarize_split(selected: pd.DataFrame, metadata: OsmMetadata) -> pd.DataFra
         labels, counts = metadata.row_labels_counts(row_idx)
         presence[labels] += 1
         pixels[labels] += counts
+    anchor_counts = np.zeros(len(CLASS_NAMES), dtype=np.int64)
+    if "anchor_class_id" in selected.columns:
+        anchors = selected["anchor_class_id"].dropna().astype(int)
+        anchor_counts += np.bincount(anchors, minlength=len(CLASS_NAMES))
     total_pixels = int(pixels.sum())
     return pd.DataFrame(
         {
             "class_id": np.arange(len(CLASS_NAMES)),
             "class_name": CLASS_NAMES,
+            "anchor_class_count": anchor_counts,
             "tile_presence_count": presence,
             "tile_presence_fraction": presence / max(len(selected_rows), 1),
             "pixel_count": pixels,
             "pixel_fraction": pixels / max(total_pixels, 1),
         }
     )
+
+
+def split_presence_counts(
+    selected: pd.DataFrame,
+    row_labels_by_idx: dict[int, set[int]],
+) -> dict[int, int]:
+    """Count tile presence per class in one selected split."""
+    counts: dict[int, int] = {}
+    for row_idx in selected["row_idx"].astype(int):
+        for class_id in row_labels_by_idx[row_idx]:
+            counts[class_id] = counts.get(class_id, 0) + 1
+    return counts
+
+
+def row_can_be_removed(
+    *,
+    row_idx: int,
+    split_counts: dict[int, int],
+    row_labels_by_idx: dict[int, set[int]],
+    required_targets: dict[int, int],
+) -> bool:
+    """Return whether removing a row preserves required class minima."""
+    for class_id in row_labels_by_idx[row_idx]:
+        required = required_targets.get(class_id)
+        if required is not None and split_counts.get(class_id, 0) - 1 < required:
+            return False
+    return True
+
+
+def ensure_required_presence_by_replacement(
+    *,
+    selected_by_split: dict[str, pd.DataFrame],
+    records: pd.DataFrame,
+    metadata: OsmMetadata,
+    variant: VariantConfig,
+) -> dict[str, pd.DataFrame]:
+    """Replace low-priority rows so every split meets required class support."""
+    if not variant.required_presence_by_split:
+        return selected_by_split
+
+    row_labels_by_idx = {
+        int(row.row_idx): labels_for_row(metadata, int(row.row_idx))
+        for row in records.itertuples()
+    }
+    score_by_row = {
+        int(row.row_idx): selection_score(row, variant) for row in records.itertuples()
+    }
+    selected_rows = {
+        int(row_idx)
+        for selected in selected_by_split.values()
+        for row_idx in selected["row_idx"].astype(int).tolist()
+    }
+    records_by_row = {
+        int(row.row_idx): row._asdict()
+        for row in records.itertuples(index=False)
+    }
+
+    for split in SPLIT_SIZES:
+        selected = selected_by_split[split].copy()
+        required_targets = {
+            class_id: split_targets.get(split, 0)
+            for class_id, split_targets in variant.required_presence_by_split.items()
+        }
+        for class_id, required in required_targets.items():
+            split_counts_by_split = {
+                split_name: split_presence_counts(split_df, row_labels_by_idx)
+                for split_name, split_df in selected_by_split.items()
+            }
+            split_counts = split_counts_by_split[split]
+            while split_counts.get(class_id, 0) < required:
+                row_to_split = {
+                    int(row_idx): split_name
+                    for split_name, split_df in selected_by_split.items()
+                    for row_idx in split_df["row_idx"].astype(int).tolist()
+                }
+                candidates = [
+                    row_idx
+                    for row_idx, labels in row_labels_by_idx.items()
+                    if class_id in labels
+                    and row_to_split.get(row_idx) != split
+                    and (
+                        row_idx not in selected_rows
+                        or row_can_be_removed(
+                            row_idx=row_idx,
+                            split_counts=split_counts_by_split[row_to_split[row_idx]],
+                            row_labels_by_idx=row_labels_by_idx,
+                            required_targets={
+                                required_class_id: split_targets.get(
+                                    row_to_split[row_idx], 0
+                                )
+                                for required_class_id, split_targets in (
+                                    variant.required_presence_by_split or {}
+                                ).items()
+                            },
+                        )
+                    )
+                ]
+                candidates.sort(key=lambda row_idx: -score_by_row[row_idx])
+                removable = [
+                    int(row_idx)
+                    for row_idx in selected["row_idx"].astype(int).tolist()
+                    if class_id not in row_labels_by_idx[int(row_idx)]
+                    and row_can_be_removed(
+                        row_idx=int(row_idx),
+                        split_counts=split_counts,
+                        row_labels_by_idx=row_labels_by_idx,
+                        required_targets=required_targets,
+                    )
+                ]
+                removable.sort(key=lambda row_idx: score_by_row.get(row_idx, 0.0))
+                if not candidates or not removable:
+                    raise ValueError(
+                        f"Could not meet {variant.name} {split} support for "
+                        f"{CLASS_NAMES[class_id]}: "
+                        f"{split_counts.get(class_id, 0)}/{required}"
+                    )
+
+                add_row_idx = candidates[0]
+                remove_row_idx = removable[0]
+                selected = selected[selected["row_idx"].astype(int) != remove_row_idx]
+                selected = pd.concat(
+                    [selected, pd.DataFrame([records_by_row[add_row_idx]])],
+                    ignore_index=True,
+                )
+                donor_split = row_to_split.get(add_row_idx)
+                if donor_split is not None:
+                    selected_by_split[donor_split] = selected_by_split[donor_split][
+                        selected_by_split[donor_split]["row_idx"].astype(int)
+                        != add_row_idx
+                    ]
+                selected_rows.remove(remove_row_idx)
+                selected_rows.add(add_row_idx)
+                selected_by_split[split] = selected
+                split_counts_by_split = {
+                    split_name: split_presence_counts(split_df, row_labels_by_idx)
+                    for split_name, split_df in selected_by_split.items()
+                }
+                split_counts = split_presence_counts(selected, row_labels_by_idx)
+
+        selected_by_split[split] = (
+            selected.sort_values("sample_index").reset_index(drop=True)
+        )
+
+    return selected_by_split
 
 
 def main() -> None:
@@ -476,6 +776,12 @@ def main() -> None:
                     CLASS_NAMES[class_id]: max_fraction
                     for class_id, max_fraction in (variant.presence_caps or {}).items()
                 },
+                "required_presence_by_split": {
+                    CLASS_NAMES[class_id]: split_targets
+                    for class_id, split_targets in (
+                        variant.required_presence_by_split or {}
+                    ).items()
+                },
                 "cap_exempt_classes": [
                     CLASS_NAMES[class_id]
                     for class_id in sorted(cap_exempt_classes(global_presence, variant))
@@ -483,7 +789,9 @@ def main() -> None:
             },
             "splits": {},
         }
+        selected_by_split = {}
         for split, target_size in SPLIT_SIZES.items():
+            target_size = SPLIT_SIZES[split]
             selected = select_variant_split(
                 metadata=metadata,
                 records=records,
@@ -491,8 +799,19 @@ def main() -> None:
                 global_presence=global_presence,
                 variant=variant,
                 target_size=target_size,
+                split=split,
                 seed=args.seed,
             )
+            selected_by_split[split] = selected
+
+        selected_by_split = ensure_required_presence_by_replacement(
+            selected_by_split=selected_by_split,
+            records=records,
+            metadata=metadata,
+            variant=variant,
+        )
+
+        for split, selected in selected_by_split.items():
             split_path = variant_dir / f"{split}.csv"
             selected.to_csv(split_path, index=False)
             summary_path = variant_dir / f"{split}_class_summary.csv"

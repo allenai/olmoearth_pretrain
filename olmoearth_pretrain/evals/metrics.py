@@ -95,6 +95,7 @@ class EvalResult:
         f1: float | None = None,
         macro_f1: float | None = None,
         per_class_f1: list[float] | None = None,
+        per_class_f1_class_ids: list[int] | None = None,
         is_multilabel: bool = False,
         primary_metric: EvalMetric | None = None,
         primary_metric_class: int | None = None,
@@ -109,8 +110,13 @@ class EvalResult:
         if macro_f1 is not None:
             metrics[EvalMetric.MACRO_F1.value] = macro_f1
         if per_class_f1 is not None:
-            for i, score in enumerate(per_class_f1):
-                metrics[f"f1_class_{i}"] = score
+            class_ids = (
+                per_class_f1_class_ids
+                if per_class_f1_class_ids is not None
+                else list(range(len(per_class_f1)))
+            )
+            for class_id, score in zip(class_ids, per_class_f1, strict=True):
+                metrics[f"f1_class_{class_id}"] = score
 
         if primary_metric is None:
             primary_metric = EvalMetric.F1 if is_multilabel else EvalMetric.ACCURACY
@@ -136,6 +142,7 @@ class EvalResult:
         macro_f1: float,
         micro_f1: float,
         per_class_f1: list[float] | None = None,
+        per_class_f1_class_ids: list[int] | None = None,
         primary_metric: EvalMetric | None = None,
         primary_metric_class: int | None = None,
     ) -> EvalResult:
@@ -148,8 +155,13 @@ class EvalResult:
             EvalMetric.MICRO_F1.value: micro_f1,
         }
         if per_class_f1 is not None:
-            for i, score in enumerate(per_class_f1):
-                metrics[f"f1_class_{i}"] = score
+            class_ids = (
+                per_class_f1_class_ids
+                if per_class_f1_class_ids is not None
+                else list(range(len(per_class_f1)))
+            )
+            for class_id, score in zip(class_ids, per_class_f1, strict=True):
+                metrics[f"f1_class_{class_id}"] = score
         if primary_metric is None:
             primary_metric = EvalMetric.MIOU
         resolved_key = cls._resolve_metric_key(primary_metric, primary_metric_class)
@@ -216,6 +228,17 @@ def _macro_f1_over_classes(
     if not scores:
         return 0.0
     return float(sum(scores) / len(scores))
+
+
+def _per_class_scores_to_log(
+    per_class_f1: list[float],
+    macro_class_ids: list[int] | None,
+) -> tuple[list[float], list[int] | None]:
+    """Return per-class F1 scores that should be exposed as logged metrics."""
+    if macro_class_ids is None:
+        return per_class_f1, None
+    class_ids = [class_id for class_id in macro_class_ids if class_id < len(per_class_f1)]
+    return [per_class_f1[class_id] for class_id in class_ids], class_ids
 
 
 def _build_confusion_matrix(
@@ -330,13 +353,17 @@ def segmentation_metrics(
     tp_sum = tp.sum()
     micro_f1 = (2 * tp_sum / (2 * tp_sum + fp.sum() + fn.sum() + 1e-8)).item()
 
+    logged_per_class_f1, logged_class_ids = _per_class_scores_to_log(
+        per_class_f1.tolist(), macro_class_ids
+    )
     return EvalResult.from_segmentation(
         miou=miou,
         overall_acc=overall_acc,
         macro_acc=macro_acc,
         macro_f1=macro_f1,
         micro_f1=micro_f1,
-        per_class_f1=per_class_f1.tolist(),
+        per_class_f1=logged_per_class_f1,
+        per_class_f1_class_ids=logged_class_ids,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
     )
@@ -369,11 +396,15 @@ def classification_metrics(
         macro_f1 = _macro_f1_over_classes(
             per_class_f1, macro_class_ids, fallback_support=gt_support
         )
+        logged_per_class_f1, logged_class_ids = _per_class_scores_to_log(
+            per_class_f1, macro_class_ids
+        )
         return EvalResult.from_classification(
             accuracy,
             f1=micro_f1,
             macro_f1=macro_f1,
-            per_class_f1=per_class_f1,
+            per_class_f1=logged_per_class_f1,
+            per_class_f1_class_ids=logged_class_ids,
             is_multilabel=True,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
@@ -399,10 +430,14 @@ def classification_metrics(
             labels_np, preds_np, average=None, zero_division=0
         ).tolist()
 
+    logged_per_class_f1, logged_class_ids = _per_class_scores_to_log(
+        per_class_f1, macro_class_ids
+    )
     return EvalResult.from_classification(
         accuracy,
         macro_f1=macro_f1,
-        per_class_f1=per_class_f1,
+        per_class_f1=logged_per_class_f1,
+        per_class_f1_class_ids=logged_class_ids,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
     )

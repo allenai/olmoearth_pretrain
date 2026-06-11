@@ -7,6 +7,7 @@ import torch
 
 from olmoearth_pretrain.evals.datasets.pretrain_subset import (
     OSM_POPULOUS_12_CLASS_IDS,
+    OSM_RARE_4_CLASS_IDS,
     OsmLabelMode,
     PretrainSplitStrategy,
     PretrainSubsetDataset,
@@ -163,6 +164,24 @@ def test_osm_label_remaps_populous_classes_and_ignores_other_classes() -> None:
     expected = torch.tensor(
         [
             [0, 3],
+            [SEGMENTATION_IGNORE_LABEL, SEGMENTATION_IGNORE_LABEL],
+        ]
+    )
+    assert torch.equal(label, expected)
+
+
+def test_osm_label_remaps_rare_classes_and_ignores_other_classes() -> None:
+    """Rare OSM eval labels should be contiguous and ignore other classes."""
+    raw = torch.zeros(2, 2, 30)
+    raw[0, 0, 9] = 1
+    raw[0, 1, 26] = 1
+    raw[1, 0, 12] = 1
+
+    label = PretrainSubsetDataset._osm_label(raw, OSM_RARE_4_CLASS_IDS)
+
+    expected = torch.tensor(
+        [
+            [0, 2],
             [SEGMENTATION_IGNORE_LABEL, SEGMENTATION_IGNORE_LABEL],
         ]
     )

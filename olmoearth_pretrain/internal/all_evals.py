@@ -421,6 +421,23 @@ PRESTO_OSM_BALANCED_SPLITS_DIR = str(
         "splits/presto_osm_balanced"
     )
 )
+PRESTO_OSM_RARE_FOCUS_CLASS_IDS = [9, 10, 26, 27]
+PRESTO_OSM_DIVERSE_CONTEXT_CLASS_IDS = [
+    1,
+    3,
+    4,
+    12,
+    13,
+    17,
+    19,
+    20,
+    21,
+    22,
+    23,
+    26,
+    27,
+    29,
+]
 
 MAP_MODALITY_PROBE_INPUTS = [
     Modality.SENTINEL2_L2A.name,
@@ -586,8 +603,8 @@ EVAL_TASKS.update(
         # Class-balanced OSM raster probes built from cached Presto label
         # metadata. Tile selection is label-aware (base / diverse-context /
         # rare-class variants); filter to these with tasks_to_run when desired.
-        # base_balanced uses per-pixel segmentation; diverse_context and
-        # rare_class_focused use tile-level classification from the split CSVs.
+        # base_balanced and rare_class_focused use per-pixel segmentation;
+        # diverse_context uses tile-level multi-label classification from split CSVs.
         "presto_osm_populous12_seg_probe_sentinel2_l2a": _map_modality_probe(
             dataset="pretrain_subset_osm_populous12",
             target_modality=Modality.OPENSTREETMAP_RASTER.name,
@@ -597,21 +614,22 @@ EVAL_TASKS.update(
             eval_labeled_classes=list(range(12)),
         ),
         "presto_osm_diverse_context_probe_sentinel2_l2a": _map_modality_probe(
-            dataset="pretrain_subset_osm_tile_classification",
+            dataset="pretrain_subset_osm_tile_presence",
             target_modality=Modality.OPENSTREETMAP_RASTER.name,
             primary_metric=EvalMetric.MACRO_F1,
             h5py_dir=PRESTO_OSM_EVAL_H5PY_DIR,
             split_dir=f"{PRESTO_OSM_BALANCED_SPLITS_DIR}/osm_diverse_context",
             eval_labeled_class_mode=EvalLabeledClassMode.TILE_PRESENCE,
+            eval_labeled_classes=PRESTO_OSM_DIVERSE_CONTEXT_CLASS_IDS,
+            eval_mode=EvalMode.KNN,
         ),
-        "presto_osm_rare_class_focused_probe_sentinel2_l2a": _map_modality_probe(
-            dataset="pretrain_subset_osm_tile_presence",
+        "presto_osm_rare4_seg_probe_sentinel2_l2a": _map_modality_probe(
+            dataset="pretrain_subset_osm_rare4",
             target_modality=Modality.OPENSTREETMAP_RASTER.name,
             primary_metric=EvalMetric.MACRO_F1,
             h5py_dir=PRESTO_OSM_EVAL_H5PY_DIR,
             split_dir=f"{PRESTO_OSM_BALANCED_SPLITS_DIR}/osm_rare_class_focused",
-            eval_labeled_class_mode=EvalLabeledClassMode.TILE_PRESENCE,
-            eval_mode=EvalMode.KNN,
+            eval_labeled_classes=list(range(4)),
         ),
         # Embedding diagnostics on standard downstream datasets, so we can track
         # representation quality (effective rank / norm / cosine stats) on real

@@ -16,6 +16,7 @@ from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset
 from .pretrain_subset import (
     OSM_POPULOUS_12_CLASS_IDS,
+    OSM_RARE_4_CLASS_IDS,
     OsmLabelMode,
     PretrainSplitStrategy,
     PretrainSubsetDataset,
@@ -67,6 +68,8 @@ def get_eval_dataset(
         osm_class_ids = None
         if eval_dataset == "pretrain_subset_osm_populous12":
             osm_class_ids = OSM_POPULOUS_12_CLASS_IDS
+        elif eval_dataset == "pretrain_subset_osm_rare4":
+            osm_class_ids = OSM_RARE_4_CLASS_IDS
         return PretrainSubsetDataset(
             h5py_dir=kwargs["h5py_dir"],
             training_modalities=kwargs.get("training_modalities", input_modalities),

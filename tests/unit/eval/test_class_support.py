@@ -17,6 +17,7 @@ def test_labeled_classes_from_summary(tmp_path: Path) -> None:
         {
             "class_id": [0, 1, 2],
             "class_name": ["a", "b", "c"],
+            "anchor_class_count": [0, 2, 0],
             "tile_presence_count": [0, 3, 1],
             "pixel_count": [0, 10, 0],
         }
@@ -27,6 +28,7 @@ def test_labeled_classes_from_summary(tmp_path: Path) -> None:
 
     payload = build_class_support_from_split_dir(split_dir)
     assert payload["num_classes"] == 3
+    assert payload["splits"]["valid"]["anchor_class"] == [1]
     assert payload["splits"]["valid"]["tile_presence"] == [1, 2]
     assert payload["splits"]["valid"]["pixels"] == [1]
 

@@ -284,7 +284,7 @@ class TestSegmentationMetrics:
             assert 0.0 <= result.metrics[key] <= 1.0
 
     def test_macro_class_ids_exclude_unlabeled_classes(self) -> None:
-        """Configured labeled classes should define macro-F1 averaging."""
+        """Configured classes should define macro-F1 averaging and logged F1s."""
         preds = torch.tensor([[[0, 0], [0, 0]]], dtype=torch.long)
         labels = torch.tensor([[[0, 0], [0, 0]]], dtype=torch.long)
         result = segmentation_metrics(
@@ -295,7 +295,8 @@ class TestSegmentationMetrics:
         )
 
         assert result.metrics["macro_f1"] == pytest.approx(1.0)
-        assert result.metrics["f1_class_1"] == pytest.approx(0.0)
+        assert result.metrics["f1_class_0"] == pytest.approx(1.0)
+        assert "f1_class_1" not in result.metrics
 
 
 class TestClassificationMetrics:
@@ -314,7 +315,7 @@ class TestClassificationMetrics:
         assert "f1_class_1" in result.metrics
 
     def test_single_label_classification_with_missing_classes(self) -> None:
-        """Configured macro classes define averaging even when labels omit a class."""
+        """Configured macro classes define averaging and logged F1s."""
         preds = torch.tensor([0, 0, 0, 0], dtype=torch.long)
         labels = torch.tensor([0, 0, 0, 0], dtype=torch.long)
         result = classification_metrics(
@@ -326,7 +327,9 @@ class TestClassificationMetrics:
         )
 
         assert result.metrics["macro_f1"] == pytest.approx(0.5)
-        assert len([k for k in result.metrics if k.startswith("f1_class_")]) == 3
+        assert result.metrics["f1_class_0"] == pytest.approx(1.0)
+        assert result.metrics["f1_class_1"] == pytest.approx(0.0)
+        assert "f1_class_2" not in result.metrics
 
     def test_multilabel_classification(self) -> None:
         """Multilabel metrics should include exact-match accuracy and micro F1."""

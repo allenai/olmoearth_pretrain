@@ -14,6 +14,7 @@ CLASS_SUPPORT_FILENAME = "class_support.json"
 class EvalLabeledClassMode(StrEnum):
     """Which precomputed class list to use when averaging macro metrics."""
 
+    ANCHOR_CLASS = "anchor_class"
     TILE_PRESENCE = "tile_presence"
     PIXELS = "pixels"
 
@@ -24,10 +25,16 @@ def labeled_classes_from_summary(summary: pd.DataFrame) -> dict[str, list[int]]:
         summary["tile_presence_count"] > 0, "class_id"
     ].astype(int)
     pixels = summary.loc[summary["pixel_count"] > 0, "class_id"].astype(int)
-    return {
+    result = {
         EvalLabeledClassMode.TILE_PRESENCE.value: tile_presence.tolist(),
         EvalLabeledClassMode.PIXELS.value: pixels.tolist(),
     }
+    if "anchor_class_count" in summary.columns:
+        anchor_class = summary.loc[
+            summary["anchor_class_count"] > 0, "class_id"
+        ].astype(int)
+        result[EvalLabeledClassMode.ANCHOR_CLASS.value] = anchor_class.tolist()
+    return result
 
 
 def build_class_support_from_split_dir(split_dir: str | Path) -> dict:
