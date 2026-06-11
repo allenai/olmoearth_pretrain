@@ -18,7 +18,7 @@ from olmo_core.distributed.parallel import (
     get_dp_mesh,
     get_dp_process_group,
 )
-from olmo_core.distributed.utils import get_world_size
+from olmo_core.distributed.utils import get_local_tensor, get_world_size
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
@@ -40,6 +40,11 @@ from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.train.loss import LossConfig
 
 logger = getLogger(__name__)
+
+# Pre-clip total grad norms above this trigger a per-parameter norm dump so
+# explosions are attributable to a subsystem from the logs (normal values for
+# the v1.1-family recipes are ~1-3).
+GRAD_NORM_DEBUG_THRESHOLD = 100.0
 
 
 def _strip_unknown_fields(d: Any) -> Any:
@@ -425,6 +430,18 @@ class OlmoEarthTrainModule(TrainModule):
             self.trainer.record_metric(
                 "total grad norm", grad_norm, reduce_type=None, namespace="optim"
             )
+            if not torch.isfinite(grad_norm).all():
+                # A non-finite norm makes clip_grads_with_norm_ scale grads by
+                # 0 (inf) or poison them (nan); zero them so the optimizer
+                # step is a guaranteed no-op for this batch on every rank.
+                logger.warning(
+                    "Non-finite total grad norm (%s); zeroing gradients and "
+                    "skipping this batch's update.",
+                    grad_norm.item(),
+                )
+                for p in self.model.parameters():
+                    if p.grad is not None:
+                        p.grad.detach().zero_()
             if isinstance(self.optimizer, SkipStepOptimizer):
                 self.optimizer.latest_grad_norm = grad_norm
 
@@ -536,10 +553,38 @@ class OlmoEarthTrainModule(TrainModule):
             # If only using PP, total_norm will be a local tensor.
             total_norm = total_norm.full_tensor()
 
+        if (
+            not torch.isfinite(total_norm).all()
+            or total_norm > GRAD_NORM_DEBUG_THRESHOLD
+        ):
+            self._log_top_grad_norms(total_norm)
+
         torch.nn.utils.clip_grads_with_norm_(
             parameters, max_grad_norm, total_norm, foreach=foreach
         )
         return total_norm
+
+    def _log_top_grad_norms(self, total_norm: torch.Tensor, top_k: int = 12) -> None:
+        """Log the largest per-parameter gradient norms (local shards).
+
+        Called when the total norm explodes so the offending subsystem is
+        identifiable from the logs. Costs one GPU sync per offending step.
+        """
+        per_param: list[tuple[float, str]] = []
+        for name, p in self.model.named_parameters():
+            if p.grad is None:
+                continue
+            grad = get_local_tensor(p.grad)
+            if grad.numel() == 0:
+                continue
+            per_param.append((torch.linalg.vector_norm(grad.float()).item(), name))
+        per_param.sort(reverse=True)
+        logger.warning(
+            "Gradient norm explosion: total=%s; top per-parameter grad norms "
+            "(local shards): %s",
+            total_norm.item(),
+            [(name, f"{value:.3e}") for value, name in per_param[:top_k]],
+        )
 
     def update_target_encoder(self) -> None:
         """Update the target encoder."""
