@@ -1,0 +1,321 @@
+"""Smoke test for ERA5 objective B (reconstruction).
+
+Tests the forward pass and loss computation for:
+  1. B-only: reconstruction objective alone
+  2. A+B: both supervised and reconstruction objectives
+  3. A-only: supervised only (regression check)
+
+Does NOT require distributed training, GPUs, or real data — uses
+synthetic tensors with the correct shapes.
+
+Usage:
+    cd /weka/dfive-default/hadriens/olmoearth_pretrain
+    source ./.venv/bin/activate
+    python scripts/era5_supervised/v0/smoke_test_objective_b.py
+"""
+
+from __future__ import annotations
+
+import sys
+
+import torch
+
+from olmoearth_pretrain.data.constants import MAX_ERA5L_DAY_10_SEQUENCE_LENGTH, Modality
+from olmoearth_pretrain.data.multi_task_era5_dataset import Era5SupervisedBatch
+from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
+from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig
+from olmoearth_pretrain.nn.transforms.era5_corruption import (
+    CorruptionConfig,
+    corrupt_era5,
+)
+from olmoearth_pretrain.nn.transforms.era5_swt import (
+    StationaryWaveletTransform1d,
+    multiscale_swt_loss,
+)
+from olmoearth_pretrain.train.train_module.era5_multiobjective import (
+    Era5MultiObjectiveModelConfig,
+    ReconstructionObjectiveConfig,
+    SupervisedObjectiveConfig,
+    SupervisedTaskConfig,
+)
+
+T = MAX_ERA5L_DAY_10_SEQUENCE_LENGTH  # 365
+V = Modality.ERA5L_DAY_10.num_bands  # 14
+D = 128  # small for smoke test
+B = 4
+
+
+def _make_batch(device: torch.device = torch.device("cpu")) -> Era5SupervisedBatch:
+    """Create a synthetic ERA5 supervised batch."""
+    era5 = torch.randn(B, T, V, device=device)
+    timestamps = torch.zeros(B, T, 3, dtype=torch.long, device=device)
+    timestamps[..., 0] = torch.arange(1, T + 1).unsqueeze(0)
+    timestamps[..., 1] = (timestamps[..., 0] - 1) * 12 // 365
+    timestamps[..., 2] = 2020
+    ignore_mask = torch.zeros(B, T, dtype=torch.bool, device=device)
+    labels = torch.zeros(B, dtype=torch.long, device=device)
+    return Era5SupervisedBatch(
+        era5=era5,
+        timestamps=timestamps,
+        ignore_mask=ignore_mask,
+        labels=labels,
+        task_name="smoke_task",
+    )
+
+
+def test_corruption():
+    """Test that corruption produces valid masks and shapes."""
+    print("--- test_corruption ---")
+    batch = _make_batch()
+    config = CorruptionConfig(
+        num_time_masks=2,
+        time_mask_min_len=5,
+        time_mask_max_len=20,
+        num_variable_group_masks=1,
+    )
+    x_c, mask = corrupt_era5(batch.era5, batch.ignore_mask, config)
+    assert x_c.shape == (B, T, V), f"Bad shape: {x_c.shape}"
+    assert mask.shape == (B, T, V), f"Bad mask shape: {mask.shape}"
+    assert mask.any(), "Nothing was masked"
+    assert (x_c[mask] == 0).all(), "Masked positions should be zero"
+    frac = mask.float().mean().item()
+    print(f"  Masked fraction: {frac:.3f}")
+    print("  PASS")
+
+
+def test_swt():
+    """Test SWT forward + loss."""
+    print("--- test_swt ---")
+    x = torch.randn(B, T, V)
+    x_hat = x + 0.1 * torch.randn_like(x)
+    swt = StationaryWaveletTransform1d(num_channels=V, max_levels=3, wavelet="db2")
+    levels = [0, 1, 2]
+
+    # SWT forward
+    bands = swt(x.transpose(1, 2), levels=levels)
+    assert len(bands) == 3, f"Expected 3 levels, got {len(bands)}"
+    for i, (approx, detail) in enumerate(bands):
+        assert approx.shape == (B, V, T), f"Level {i} approx shape: {approx.shape}"
+        assert detail.shape == (B, V, T), f"Level {i} detail shape: {detail.shape}"
+
+    # SWT loss
+    loss, metrics = multiscale_swt_loss(x_hat, x, swt, levels=levels)
+    assert loss.ndim == 0, f"Loss should be scalar, got {loss.shape}"
+    assert torch.isfinite(loss), f"Loss not finite: {loss.item()}"
+    print(f"  SWT loss: {loss.item():.6f}")
+    for k, v in metrics.items():
+        print(f"  {k}: {v.item():.6f}")
+    print("  PASS")
+
+
+def test_decoder_forward():
+    """Test the decoder produces correct output shape."""
+    print("--- test_decoder_forward ---")
+    decoder_cfg = Era5TimeQueryDecoderConfig(
+        embedding_size=D,
+        depth=2,
+        num_heads=4,
+        max_sequence_length=T,
+        num_output_channels=V,
+    )
+    decoder = decoder_cfg.build()
+
+    encoder_cfg = Era5DailyEncoderConfig(
+        embedding_size=D,
+        depth=2,
+        num_heads=4,
+        max_sequence_length=T,
+        modality_name=Modality.ERA5L_DAY_10.name.lower(),
+    )
+    encoder = encoder_cfg.build()
+
+    batch = _make_batch()
+    with torch.no_grad():
+        out = encoder(
+            era5=batch.era5, timestamps=batch.timestamps, ignore_mask=batch.ignore_mask
+        )
+        x_hat = decoder(
+            tokens=out["tokens"],
+            token_ignore_mask=out["ignore_mask"],
+            timestamps=batch.timestamps,
+        )
+    assert x_hat.shape == (B, T, V), f"Expected ({B}, {T}, {V}), got {x_hat.shape}"
+    assert torch.isfinite(x_hat).all(), "Non-finite values in x_hat"
+    print(f"  x_hat shape: {x_hat.shape}")
+    print("  PASS")
+
+
+def test_b_only():
+    """B-only: reconstruction objective produces finite loss, correct shapes."""
+    print("--- test_b_only (reconstruction only) ---")
+    model_cfg = Era5MultiObjectiveModelConfig(
+        encoder_config=Era5DailyEncoderConfig(
+            embedding_size=D,
+            depth=2,
+            num_heads=4,
+            max_sequence_length=T,
+            modality_name=Modality.ERA5L_DAY_10.name.lower(),
+        ),
+        supervised_objective=None,
+        reconstruction_objective=ReconstructionObjectiveConfig(
+            decoder=Era5TimeQueryDecoderConfig(
+                embedding_size=D,
+                depth=1,
+                num_heads=4,
+                max_sequence_length=T,
+                num_output_channels=V,
+            ),
+            swt_levels=[0, 1],
+            swt_lambda=0.1,
+        ),
+    )
+    model = model_cfg.build()
+    assert len(model.objective_list) == 1
+    obj = model.objective_list[0]
+    assert obj.name == "reconstruction"
+
+    batch = _make_batch()
+    loss, metrics = obj.compute(model.encoder, batch)
+    assert loss.ndim == 0, f"Loss should be scalar, got {loss.shape}"
+    assert torch.isfinite(loss), f"Loss not finite: {loss.item()}"
+    print(f"  Total reconstruction loss: {loss.item():.6f}")
+    for k, v in metrics.items():
+        print(f"  {k}: {v.item():.6f}")
+
+    # Check backward works
+    loss.backward()
+    encoder_grad = sum(
+        p.grad.abs().sum().item()
+        for p in model.encoder.parameters()
+        if p.grad is not None
+    )
+    assert encoder_grad > 0, "No gradients flowed to encoder"
+    print(f"  Encoder grad norm (sum): {encoder_grad:.4f}")
+    print("  PASS")
+
+
+def test_a_plus_b():
+    """A+B: both objectives fire on the same batch, gradients flow."""
+    print("--- test_a_plus_b (supervised + reconstruction) ---")
+    model_cfg = Era5MultiObjectiveModelConfig(
+        encoder_config=Era5DailyEncoderConfig(
+            embedding_size=D,
+            depth=2,
+            num_heads=4,
+            max_sequence_length=T,
+            modality_name=Modality.ERA5L_DAY_10.name.lower(),
+        ),
+        supervised_objective=SupervisedObjectiveConfig(
+            tasks=[
+                SupervisedTaskConfig(
+                    name="smoke_task",
+                    task_type="classification",
+                    num_classes=2,
+                )
+            ],
+        ),
+        reconstruction_objective=ReconstructionObjectiveConfig(
+            decoder=Era5TimeQueryDecoderConfig(
+                embedding_size=D,
+                depth=1,
+                num_heads=4,
+                max_sequence_length=T,
+                num_output_channels=V,
+            ),
+            swt_levels=[0],
+            swt_lambda=0.1,
+        ),
+    )
+    model = model_cfg.build()
+    assert len(model.objective_list) == 2
+    names = {obj.name for obj in model.objective_list}
+    assert names == {"supervised", "reconstruction"}, f"Got: {names}"
+
+    batch = _make_batch()
+
+    # Both objectives should apply
+    for obj in model.objective_list:
+        assert obj.applies_to(batch), f"{obj.name} should apply to batch"
+
+    # Run both
+    total_loss = torch.zeros(())
+    for obj in model.objective_list:
+        loss, metrics = obj.compute(model.encoder, batch)
+        assert torch.isfinite(loss), f"{obj.name} loss not finite"
+        total_loss = total_loss + loss * obj.weight
+        print(f"  {obj.name} loss: {loss.item():.6f}")
+
+    total_loss.backward()
+    encoder_grad = sum(
+        p.grad.abs().sum().item()
+        for p in model.encoder.parameters()
+        if p.grad is not None
+    )
+    assert encoder_grad > 0, "No gradients flowed to encoder"
+    print(f"  Combined loss: {total_loss.item():.6f}")
+    print(f"  Encoder grad norm (sum): {encoder_grad:.4f}")
+    print("  PASS")
+
+
+def test_a_only():
+    """A-only: supervised objective still works (regression check)."""
+    print("--- test_a_only (supervised only) ---")
+    model_cfg = Era5MultiObjectiveModelConfig(
+        encoder_config=Era5DailyEncoderConfig(
+            embedding_size=D,
+            depth=2,
+            num_heads=4,
+            max_sequence_length=T,
+            modality_name=Modality.ERA5L_DAY_10.name.lower(),
+        ),
+        supervised_objective=SupervisedObjectiveConfig(
+            tasks=[
+                SupervisedTaskConfig(
+                    name="smoke_task",
+                    task_type="classification",
+                    num_classes=2,
+                )
+            ],
+        ),
+        reconstruction_objective=None,
+    )
+    model = model_cfg.build()
+    assert len(model.objective_list) == 1
+    obj = model.objective_list[0]
+    assert obj.name == "supervised"
+
+    batch = _make_batch()
+    loss, metrics = obj.compute(model.encoder, batch)
+    assert torch.isfinite(loss), f"Loss not finite: {loss.item()}"
+    loss.backward()
+    print(f"  Supervised loss: {loss.item():.6f}")
+    print("  PASS")
+
+
+if __name__ == "__main__":
+    print(f"PyTorch {torch.__version__}")
+    print(f"T={T}, V={V}, D={D}, B={B}\n")
+
+    tests = [
+        test_corruption,
+        test_swt,
+        test_decoder_forward,
+        test_b_only,
+        test_a_plus_b,
+        test_a_only,
+    ]
+    failed = []
+    for test_fn in tests:
+        try:
+            test_fn()
+            print()
+        except Exception as e:
+            print(f"  FAIL: {e}\n")
+            failed.append(test_fn.__name__)
+
+    if failed:
+        print(f"\nFAILED: {', '.join(failed)}")
+        sys.exit(1)
+    else:
+        print("All smoke tests passed.")
+        sys.exit(0)

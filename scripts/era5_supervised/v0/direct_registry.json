@@ -1,0 +1,39 @@
+{
+  "tasks": {
+    "burnrisk_canada_nbac": {
+      "groups": [
+        "train"
+      ],
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "/weka/dfive-default/hadriens/olmoearth_pretrain/scripts/era5_supervised/v0/configs/burnrisk_canada_nbac_era5d.yaml",
+      "notes": "Canada NBAC wildfire burn-risk, full rslearn dataset. rslearn segmentation target reduced to a scalar 2-class label.",
+      "num_classes": 2,
+      "task_type": "classification",
+      "test_groups": [
+        "test"
+      ],
+      "val_groups": [
+        "val"
+      ],
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_nbac"
+    },
+    "burnrisk_canada_nbac_test": {
+      "groups": [
+        "train"
+      ],
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "/weka/dfive-default/hadriens/olmoearth_pretrain/scripts/era5_supervised/v0/configs/burnrisk_canada_nbac_era5d.yaml",
+      "notes": "Small Canada NBAC subset for local smoke tests.",
+      "num_classes": 2,
+      "task_type": "classification",
+      "test_groups": [
+        "test"
+      ],
+      "val_groups": [
+        "val"
+      ],
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_nbac_test"
+    }
+  },
+  "version": "1.0"
+}

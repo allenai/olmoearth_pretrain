@@ -593,6 +593,9 @@ class MultiTaskEra5DataLoader(DataLoaderBase):
         self.num_workers = num_workers
         self.prefetch_factor = prefetch_factor
         self.persistent_workers = persistent_workers
+        self.token_budget: int | None = (
+            None  # Required by OlmoEarthSpeedMonitorCallback.pre_train(); not used
+        )
 
         self._task_names = sorted(dataset.task_specs.keys())
         weights = np.array(
