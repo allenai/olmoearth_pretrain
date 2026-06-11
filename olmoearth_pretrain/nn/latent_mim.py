@@ -47,9 +47,15 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
-        # Learned CLIP temperature (log-space inverse temperature); the train
-        # module clamps and exponentiates it before passing it to the loss.
+        # Learned CLIP temperatures (log-space inverse temperatures); the
+        # train module clamps and exponentiates them before passing them to
+        # the losses. Separate parameters per objective (CLIP practice): the
+        # token loss's within-sample negatives and the instance loss's
+        # cross-sample negatives have very different similarity
+        # distributions, so coupling their temperatures would let one
+        # objective drag the other's sharpness around.
         self.logit_scale = nn.Parameter(torch.tensor([1.0 / 0.07]).log())
+        self.instance_logit_scale = nn.Parameter(torch.tensor([1.0 / 0.07]).log())
 
     def forward(
         self, x: MaskedOlmoEarthSample, patch_size: int

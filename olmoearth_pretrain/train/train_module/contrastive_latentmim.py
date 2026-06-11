@@ -189,13 +189,17 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets, **kwargs)
 
-    def _effective_logit_scale(self) -> torch.Tensor:
+    def _effective_logit_scale(self, param_name: str = "logit_scale") -> torch.Tensor:
         """CLIP temperature as the final multiplicative scale (clamp + exp).
 
         The parameter may be an FSDP DTensor whose local shard is empty on
         some ranks, so it is gathered to a full tensor (differentiable) first.
+
+        Args:
+            param_name: Which temperature parameter on the model to read —
+                "logit_scale" (token loss) or "instance_logit_scale".
         """
-        logit_scale = self.model.logit_scale
+        logit_scale = getattr(self.model, param_name)
         if isinstance(logit_scale, DTensor):
             logit_scale = logit_scale.full_tensor()
         return logit_scale.clamp(max=self.max_logit_scale).exp()
@@ -223,11 +227,14 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         """
         if not dry_run:
             self.update_target_encoder()
-        # The loss-side clamp is forward-only; re-clamp the parameter itself so
-        # the optimizer cannot walk the log-scale arbitrarily far past the cap
-        # (CLIP clamps param data after each optimizer step).
+        # The loss-side clamp is forward-only; re-clamp the parameters
+        # themselves so the optimizer cannot walk the log-scales arbitrarily
+        # far past the cap (CLIP clamps param data after each optimizer step).
         with torch.no_grad():
             get_local_tensor(self.model.logit_scale).clamp_(max=self.max_logit_scale)
+            get_local_tensor(self.model.instance_logit_scale).clamp_(
+                max=self.max_logit_scale
+            )
         # Set the model to train mode
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
@@ -276,7 +283,11 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     )
 
                 if self.contrastive_loss is not None:
-                    contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
+                    contrastive_loss = self.contrastive_loss.compute(
+                        pooled_a,
+                        pooled_b,
+                        logit_scale=self._effective_logit_scale("instance_logit_scale"),
+                    )
                     loss += contrastive_loss
                     total_batch_con += (
                         get_local_tensor(contrastive_loss.detach()) / num_microbatches
@@ -311,12 +322,17 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 total_batch_con,
                 ReduceType.mean,
             )
-        # The effective CLIP temperature is the best early-warning signal for
-        # shortcut/false-negative problems in the contrastive losses.
+        # The effective CLIP temperatures are the best early-warning signal
+        # for shortcut/false-negative problems in the contrastive losses.
         with torch.no_grad():
             self.trainer.record_metric(
                 "train/logit_scale",
                 self._effective_logit_scale().mean(),
+                ReduceType.mean,
+            )
+            self.trainer.record_metric(
+                "train/instance_logit_scale",
+                self._effective_logit_scale("instance_logit_scale").mean(),
                 ReduceType.mean,
             )
         self.log_regularization(total_batch_reg)

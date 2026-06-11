@@ -3,8 +3,8 @@
 Exercises the full clip_rope_simple.py configuration at toy scale through the
 real collator (metadata dropout + latlon pinning), masking strategy, model
 (class token, latlon token, RoPE, separate simple encodings), and train module
-(CLIP token loss with learned temperature, InfoNCE on the projected class
-token).
+(CLIP token loss and CLIP instance loss, each with its own learned
+temperature).
 """
 
 import logging
@@ -97,7 +97,9 @@ def _train_module_config() -> ContrastiveLatentMIMTrainModuleConfig:
                 "mask_negatives_for_modalities": [Modality.WORLDCOVER.name],
             }
         ),
-        contrastive_config=LossConfig(loss_config={"type": "InfoNCE", "weight": 0.05}),
+        contrastive_config=LossConfig(
+            loss_config={"type": "clip_infonce", "weight": 0.05}
+        ),
         masking_config=MaskingConfig(strategy_config={"type": "random"}),
         token_exit_cfg={modality: 0 for modality in Modality.names()},
         ema_decay=(1.0, 1.0),
@@ -173,9 +175,10 @@ def test_combined_recipe_latlon_kept(
         ).all()
     metrics = _run_train_batch(combined_model, batch)
     _assert_finite_positive(metrics["train/ClipPatchDisc"])
-    _assert_finite_positive(metrics["train/InfoNCE"])
-    # Initial learned temperature: exp(log(1/0.07)) ~ 14.29
+    _assert_finite_positive(metrics["train/ClipInfoNCE"])
+    # Initial learned temperatures: exp(log(1/0.07)) ~ 14.29
     assert abs(float(metrics["train/logit_scale"]) - 1.0 / 0.07) < 0.1
+    assert abs(float(metrics["train/instance_logit_scale"]) - 1.0 / 0.07) < 0.1
 
 
 def test_combined_recipe_metadata_dropped(
@@ -193,7 +196,7 @@ def test_combined_recipe_metadata_dropped(
         assert (view.timestamps[..., 2] == 0).all()
     metrics = _run_train_batch(combined_model, batch)
     _assert_finite_positive(metrics["train/ClipPatchDisc"])
-    _assert_finite_positive(metrics["train/InfoNCE"])
+    _assert_finite_positive(metrics["train/ClipInfoNCE"])
 
 
 def test_combined_recipe_missing_modalities(
@@ -205,4 +208,4 @@ def test_combined_recipe_missing_modalities(
     batch = _collate(samples_with_missing_modalities, metadata_dropout=None)
     metrics = _run_train_batch(combined_model, batch)
     _assert_finite_positive(metrics["train/ClipPatchDisc"])
-    _assert_finite_positive(metrics["train/InfoNCE"])
+    _assert_finite_positive(metrics["train/ClipInfoNCE"])

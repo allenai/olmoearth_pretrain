@@ -8,6 +8,7 @@ import torch
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.train.loss import (
     AdjustedPatchDiscriminationLoss,
+    ClipInfoNCELoss,
     ClipPatchDiscriminationLoss,
     CrossEntropyLoss,
     InfoNCELoss,
@@ -1553,3 +1554,79 @@ def test_clip_patch_disc_weight() -> None:
         preds, targets, logit_scale=CLIP_LOGIT_SCALE
     )
     assert torch.isclose(weighted, 0.25 * base, rtol=RTOL, atol=ATOL)
+
+
+# ---- ClipInfoNCELoss (instance-level CLIP loss) ---------------------------
+
+
+def test_clip_infonce_aligned_low_shuffled_high() -> None:
+    """Aligned view pairs give low loss; shuffled pairs give high loss."""
+    torch.manual_seed(0)
+    a = torch.eye(8, 16)
+    aligned = ClipInfoNCELoss().compute(a, a, logit_scale=CLIP_LOGIT_SCALE)
+    shuffled = ClipInfoNCELoss().compute(
+        a, a.roll(shifts=1, dims=0), logit_scale=CLIP_LOGIT_SCALE
+    )
+    assert aligned < 0.1
+    assert shuffled > 5.0
+
+
+def test_clip_infonce_is_symmetric_average() -> None:
+    """Loss equals the average of both softmax directions."""
+    torch.manual_seed(1)
+    a = torch.randn(6, 16)
+    b = torch.randn(6, 16)
+    loss = ClipInfoNCELoss().compute(a, b, logit_scale=CLIP_LOGIT_SCALE)
+    a_n = torch.nn.functional.normalize(a, dim=-1)
+    b_n = torch.nn.functional.normalize(b, dim=-1)
+    logits = CLIP_LOGIT_SCALE * (a_n @ b_n.T)
+    labels = torch.arange(6)
+    expected = 0.5 * (
+        torch.nn.functional.cross_entropy(logits, labels)
+        + torch.nn.functional.cross_entropy(logits.T, labels)
+    )
+    assert torch.isclose(loss, expected, rtol=RTOL, atol=ATOL)
+    # And the directions genuinely differ for asymmetric inputs.
+    fwd = torch.nn.functional.cross_entropy(logits, labels)
+    bwd = torch.nn.functional.cross_entropy(logits.T, labels)
+    assert not torch.isclose(fwd, bwd, rtol=1e-3, atol=1e-3)
+
+
+def test_clip_infonce_requires_logit_scale() -> None:
+    """Omitting logit_scale raises a clear error."""
+    a = torch.randn(4, 8)
+    with pytest.raises(AssertionError, match="logit_scale"):
+        ClipInfoNCELoss().compute(a, a)
+
+
+def test_clip_infonce_gradient_flows_to_logit_scale() -> None:
+    """The learnable temperature receives gradient through the loss."""
+    torch.manual_seed(2)
+    log_scale = torch.tensor([1.0 / 0.07]).log().requires_grad_()
+    a = torch.randn(4, 8, requires_grad=True)
+    b = torch.randn(4, 8)
+    loss = ClipInfoNCELoss().compute(a, b, logit_scale=log_scale.exp())
+    loss.backward()
+    assert log_scale.grad is not None
+    assert log_scale.grad.abs().sum() > 0
+    assert a.grad is not None
+
+
+def test_clip_infonce_bf16_inputs_give_finite_float32_loss() -> None:
+    """bf16 inputs at scale ~100 produce a finite float32 loss."""
+    torch.manual_seed(3)
+    a = torch.randn(8, 16, dtype=torch.bfloat16)
+    b = torch.randn(8, 16, dtype=torch.bfloat16)
+    loss = ClipInfoNCELoss().compute(a, b, logit_scale=torch.tensor(99.5))
+    assert loss.dtype == torch.float32
+    assert torch.isfinite(loss)
+
+
+def test_clip_infonce_weight() -> None:
+    """The weight kwarg scales the loss."""
+    torch.manual_seed(4)
+    a = torch.randn(5, 8)
+    b = torch.randn(5, 8)
+    base = ClipInfoNCELoss().compute(a, b, logit_scale=CLIP_LOGIT_SCALE)
+    weighted = ClipInfoNCELoss(weight=0.05).compute(a, b, logit_scale=CLIP_LOGIT_SCALE)
+    assert torch.isclose(weighted, 0.05 * base, rtol=RTOL, atol=ATOL)

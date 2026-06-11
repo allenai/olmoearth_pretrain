@@ -1616,6 +1616,65 @@ class InfoNCELoss(Loss):
         return self.weight * F.cross_entropy(logits / self.tau, labels)
 
 
+@LOSS_REGISTRY.register("clip_infonce")
+class ClipInfoNCELoss(Loss):
+    """CLIP-style instance contrastive loss on pooled [B, D] embeddings.
+
+    Differences from :class:`InfoNCELoss`:
+      * Learnable temperature: ``compute`` receives ``logit_scale`` — the
+        final multiplicative scale, post ``clamp().exp()`` — instead of a
+        fixed ``1/tau``. Gradient flows through it, so the optimizer tunes
+        the softmax sharpness.
+      * Symmetric: cross-entropy is averaged over both directions
+        (predictions as queries and targets as queries), as in CLIP.
+      * float32: logits and CE are computed in float32 regardless of input
+        dtype (a scale near 100 collapses bf16 logit differences).
+    """
+
+    name = "ClipInfoNCE"
+
+    def __init__(self, weight: float = 1.0):
+        """Initialize the CLIP-style InfoNCE loss.
+
+        Args:
+            weight: the weight to apply to this loss
+        """
+        self.weight = weight
+
+    def compute(
+        self,
+        predictions: torch.Tensor,
+        targets: torch.Tensor,
+        logit_scale: Tensor | None = None,
+        **kwargs: Any,
+    ) -> Tensor:
+        """Compute symmetric temperature-scaled InfoNCE between [B, D] embeddings.
+
+        Args:
+            predictions: Pooled embeddings of one view, shape [B, D].
+            targets: Pooled embeddings of the other view, shape [B, D].
+            logit_scale: The final multiplicative scale (post clamp().exp()).
+            **kwargs: Additional keyword arguments (ignored).
+
+        Returns:
+            The computed loss value.
+        """
+        assert logit_scale is not None, (
+            "ClipInfoNCELoss requires logit_scale — the final multiplicative "
+            "scale, post clamp().exp() — passed by the train module."
+        )
+        predictions = F.normalize(predictions.float(), p=2, dim=-1)
+        targets = F.normalize(targets.float(), p=2, dim=-1)
+        logits = logit_scale.float() * (predictions @ targets.transpose(-2, -1))
+
+        labels = torch.arange(len(predictions), device=predictions.device)
+        loss = 0.5 * (
+            F.cross_entropy(logits, labels)
+            + F.cross_entropy(logits.transpose(-2, -1), labels)
+        )
+        return self.weight * loss
+
+
 @LOSS_REGISTRY.register("KoLeo")
 class KoLeoLoss(Loss):
     """Loss function for cross entropy.

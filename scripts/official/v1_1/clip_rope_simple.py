@@ -8,6 +8,10 @@ Combines, on top of the v1.1 base recipe:
   at 4.6 in log space, excluded from weight decay). Same-target negative
   masking (cosine > 0.999) is kept for the map modalities. Negatives stay
   microbatch-local — no cross-GPU gathering.
+- **CLIP instance loss** on the projected class token: symmetric InfoNCE
+  with its own learned temperature (``instance_logit_scale`` — separate
+  parameter, since within-sample token negatives and cross-sample instance
+  negatives have very different similarity distributions).
 - **Spatial RoPE** (axial, base 10000, coordinate scale 0.25 — the winning
   sweep setting) with ``encoding_mode='separate'``.
 - **Simple temporal encoding** (4 numbers): ``[frac_year/10, sin, cos,
@@ -134,9 +138,12 @@ def build_train_module_config(
             betas=(0.9, 0.95),
             fused=False,
             # CLIP convention: weight decay must not pull the learned
-            # log-temperature toward 0 (temperature toward 1).
+            # log-temperatures toward 0 (temperature toward 1).
             group_overrides=[
-                OptimGroupOverride(params=["logit_scale"], opts=dict(weight_decay=0.0))
+                OptimGroupOverride(
+                    params=["logit_scale", "instance_logit_scale"],
+                    opts=dict(weight_decay=0.0),
+                )
             ],
         ),
         rank_microbatch_size=64,
@@ -150,12 +157,13 @@ def build_train_module_config(
                 "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
             }
         ),
-        # Weight 0.05 was tuned for the mean-pool embedding; the class token
-        # also gets token-loss gradient via decoder visibility, but this is a
+        # CLIP-style instance loss on the projected class token: symmetric,
+        # learnable temperature (instance_logit_scale, separate from the token
+        # loss's). Weight 0.05 was tuned for the fixed-tau mean-pool setup;
         # candidate for retuning.
         contrastive_config=LossConfig(
             loss_config={
-                "type": "InfoNCE",
+                "type": "clip_infonce",
                 "weight": 0.05,
             }
         ),
