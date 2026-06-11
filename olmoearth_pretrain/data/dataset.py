@@ -16,7 +16,6 @@ import hdf5plugin  # noqa: F401
 import numpy as np
 import pandas as pd
 from olmo_core.data.utils import get_rng
-from PIL import Image, ImageOps
 from torch.utils.data import Dataset
 from upath import UPath
 
@@ -25,7 +24,6 @@ from olmoearth_pretrain._compat import (
 )
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
-    IMAGE_TILE_SIZE,
     MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
     Modality,
@@ -40,10 +38,6 @@ from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
-
-IMAGENET_IMAGE_EXTENSIONS = frozenset(
-    {".bmp", ".jpeg", ".jpg", ".png", ".ppm", ".webp"}
-)
 
 
 # =============================================================================
@@ -867,165 +861,6 @@ class OlmoEarthDataset(Dataset):
         return args.patch_size, OlmoEarthSample(**sample_dict)
 
 
-class ImageNetDataset(Dataset):
-    """ImageNet-style natural image dataset for pretraining.
-
-    Expected layout is an ImageFolder-style tree rooted at ``root_dir``:
-    ``root_dir/<class_name>/<image>.JPEG``. Labels and class names are ignored;
-    all supported image files under ``root_dir`` are loaded recursively.
-    """
-
-    def __init__(
-        self,
-        root_dir: UPath,
-        dtype: np.dtype,
-        image_size: int = IMAGE_TILE_SIZE,
-        max_sequence_length: int = MAX_SEQUENCE_LENGTH,
-        normalize: bool = True,
-        dataset_percentage: float = 1.0,
-        seed: int = 0,
-    ) -> None:
-        """Initialize the ImageNet dataset."""
-        self.root_dir = root_dir
-        if not self.root_dir.exists():
-            raise FileNotFoundError(
-                f"ImageNet root directory does not exist: {root_dir}"
-            )
-        self.training_modalities = [Modality.IMAGENET.name]
-        self.dtype = dtype
-        self.image_size = image_size
-        self.max_sequence_length = max_sequence_length
-        self.normalize = normalize
-        self.dataset_percentage = dataset_percentage
-        self.seed = seed
-        if self.normalize:
-            self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
-        self.image_paths: list[UPath] | None = None
-        self.sample_indices: np.ndarray | None = None
-        self.latlon_distribution: np.ndarray | None = None
-
-    @property
-    def fingerprint_version(self) -> str:
-        """The version of the fingerprint."""
-        return "v0.1"
-
-    @property
-    def fingerprint(self) -> str:
-        """Can be used to identify/compare a dataset."""
-        if not self.is_dataset_prepared:
-            raise RuntimeError("Dataset must be prepared before creating a fingerprint")
-        assert self.image_paths is not None
-        sha256_hash = hashlib.sha256()
-        sha256_hash.update(
-            f"dataset=imagenet,"
-            f"root_dir={self.root_dir},"
-            f"num_images={len(self.image_paths)},"
-            f"dtype={self.dtype},"
-            f"image_size={self.image_size},"
-            f"normalize={self.normalize}".encode()
-        )
-        return sha256_hash.hexdigest()
-
-    @property
-    def is_dataset_prepared(self) -> bool:
-        """Check if the dataset is prepared."""
-        return self.sample_indices is not None and self.image_paths is not None
-
-    def _list_image_paths(self) -> list[UPath]:
-        """List all ImageNet image paths."""
-        return sorted(
-            (
-                path
-                for path in self.root_dir.rglob("*")
-                if path.suffix.lower() in IMAGENET_IMAGE_EXTENSIONS
-            ),
-            key=str,
-        )
-
-    def _filter_sample_indices_by_dataset_percentage(self) -> None:
-        """Filter the sample indices for dataset percentage."""
-        assert self.sample_indices is not None, (
-            "Sample indices must be set before filtering by dataset percentage"
-        )
-        if self.dataset_percentage < 1.0:
-            rng = get_rng(self.seed)
-            self.sample_indices = rng.choice(
-                self.sample_indices,
-                size=int(len(self.sample_indices) * self.dataset_percentage),
-                replace=False,
-            )
-
-    def prepare(self) -> None:
-        """Prepare the dataset."""
-        if self.is_dataset_prepared:
-            return
-        self.image_paths = self._list_image_paths()
-        if not self.image_paths:
-            raise ValueError(f"No ImageNet images found under {self.root_dir}")
-        self.sample_indices = np.arange(len(self.image_paths))
-        self._filter_sample_indices_by_dataset_percentage()
-        self.latlon_distribution = np.zeros(
-            (len(self.sample_indices), 2), dtype=np.float32
-        )
-
-    def __len__(self) -> int:
-        """Get the length of the dataset."""
-        if self.sample_indices is None:
-            raise ValueError("Dataset is not prepared")
-        return self.sample_indices.shape[0]
-
-    def normalize_image(self, image: np.ndarray) -> np.ndarray:
-        """Normalize an ImageNet RGB image."""
-        try:
-            return self.normalizer_computed.normalize(Modality.IMAGENET, image)
-        except Exception:
-            return self.normalizer_predefined.normalize(Modality.IMAGENET, image)
-
-    def _read_image(self, image_path: UPath) -> np.ndarray:
-        """Read an image as H, W, T=1, C RGB float data."""
-        with image_path.open("rb") as f:
-            with Image.open(f) as image:
-                image = ImageOps.fit(
-                    image.convert("RGB"),
-                    (self.image_size, self.image_size),
-                    method=Image.Resampling.BICUBIC,
-                )
-                image_data = np.asarray(image, dtype=self.dtype) / np.array(
-                    255, dtype=self.dtype
-                )
-        image_data = image_data[:, :, np.newaxis, :]
-        if self.normalize:
-            image_data = self.normalize_image(image_data).astype(self.dtype)
-        return image_data
-
-    def _timestamps(self) -> np.ndarray:
-        """Return dummy timestamps for the existing training interface."""
-        return np.tile(
-            np.array([[1, 1, 1970]], dtype=np.int32),
-            (self.max_sequence_length, 1),
-        )
-
-    def __getitem__(self, args: GetItemArgs) -> tuple[int, OlmoEarthSample]:
-        """Get the sample at the given index."""
-        if self.sample_indices is None or self.image_paths is None:
-            raise ValueError("Dataset is not prepared")
-        index = self.sample_indices[args.idx]
-        sample = OlmoEarthSample(
-            imagenet=self._read_image(self.image_paths[index]),
-            timestamps=self._timestamps(),
-        )
-        subset_sample = subset_sample_default(
-            sample,
-            patch_size=args.patch_size,
-            max_tokens_per_instance=args.token_budget,
-            sampled_hw_p=args.sampled_hw_p,
-            current_length=1,
-            tokenization_config=args.tokenization_config,
-        )
-        return args.patch_size, subset_sample
-
-
 @dataclass
 class OlmoEarthDatasetConfig(Config):
     """Configuration for the OlmoEarthDataset."""
@@ -1084,51 +919,6 @@ class OlmoEarthDatasetConfig(Config):
         kwargs["dtype"] = self.get_numpy_dtype()
         logger.info(f"OlmoEarthDataset kwargs: {kwargs}")
         return OlmoEarthDataset(**kwargs)
-
-
-@dataclass
-class ImageNetDatasetConfig(Config):
-    """Configuration for ImageNet natural-image pretraining data."""
-
-    root_dir: str
-    dtype: str = "float32"
-    image_size: int = IMAGE_TILE_SIZE
-    normalize: bool = True
-    dataset_percentage: float = 1.0
-    seed: int = 0
-
-    def get_numpy_dtype(self) -> np.dtype:
-        """Get the numpy dtype."""
-        if self.dtype == "float16":
-            return np.float16
-        elif self.dtype == "float32":
-            return np.float32
-        else:
-            raise ValueError(f"Unsupported dtype: {self.dtype}")
-
-    def validate(self) -> None:
-        """Validate the configuration."""
-        if self.image_size <= 0:
-            raise ValueError("image_size must be positive")
-        if not 0 < self.dataset_percentage <= 1:
-            raise ValueError("dataset_percentage must be in (0, 1]")
-
-    @property
-    def root_dir_upath(self) -> UPath:
-        """Get the ImageNet root directory."""
-        return UPath(self.root_dir)
-
-    def build(self) -> ImageNetDataset:
-        """Build the dataset."""
-        self.validate()
-        return ImageNetDataset(
-            root_dir=self.root_dir_upath,
-            dtype=self.get_numpy_dtype(),
-            image_size=self.image_size,
-            normalize=self.normalize,
-            dataset_percentage=self.dataset_percentage,
-            seed=self.seed,
-        )
 
 
 HeliosSample = _deprecated_class_alias(

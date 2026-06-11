@@ -198,14 +198,6 @@ class ModalitySpec:
 class Modality:
     """Enum-like access to ModalitySpecs."""
 
-    IMAGENET = ModalitySpec(
-        name="imagenet",
-        tile_resolution_factor=16,
-        band_sets=[BandSet(["R", "G", "B"], 16)],
-        is_multitemporal=False,
-        ignore_when_parsing=False,
-    )
-
     NAIP = ModalitySpec(
         name="naip",
         tile_resolution_factor=1,
