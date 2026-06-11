@@ -1046,7 +1046,7 @@ class SeparateEncodings(nn.Module):
                 ``torch.rand``; otherwise zeros.
             temporal_encoding_type: ``'multifreq'`` (multi-frequency sin/cos of
                 fractional year) or ``'simple'``
-                ([frac_year/10, sin, cos, year_valid], dim 4).
+                ([frac_year, sin, cos, year_valid], dim 4).
             latlon_encoding_type: ``'multifreq'`` (sphere-mapped multi-frequency
                 sin/cos) or ``'simple'`` (raw unit-sphere (x, y, z), dim 3).
         """
@@ -1722,7 +1722,7 @@ class Encoder(FlexiVitBase):
                 slot at training time. ``rate >= 1.0`` disables the slot
                 entirely (train+eval). Default ``0``.
             temporal_encoding_type: ``'multifreq'`` or ``'simple'`` (4-number
-                [frac_year/10, sin, cos, year_valid]) under
+                [frac_year, sin, cos, year_valid]) under
                 ``encoding_mode='separate'``.
             latlon_encoding_type: ``'multifreq'`` or ``'simple'`` (3-number
                 unit-sphere [x, y, z]) under ``encoding_mode='separate'``.

@@ -3,7 +3,6 @@
 import torch
 
 from olmoearth_pretrain.nn.encodings import (
-    SIMPLE_TEMPORAL_YEAR_SCALE,
     get_simple_latlon_encoding,
     get_simple_temporal_encoding,
 )
@@ -18,23 +17,32 @@ def _ts(year: int, month: int, day: int) -> torch.Tensor:
 
 
 def test_simple_temporal_shape() -> None:
-    """Output is 4 channels: [frac_year/10, sin, cos, year_valid]."""
+    """Output is 4 channels: [frac_year, sin, cos, year_valid]."""
     e = get_simple_temporal_encoding(_ts(2023, 4, 15))
     assert e.shape == (1, 1, 4)
 
 
 def test_simple_temporal_frac_year_value() -> None:
-    """Channel 0 is years-from-2020 (continuous, scaled)."""
+    """Channel 0 is years-from-2020 (continuous, direct)."""
     e = get_simple_temporal_encoding(_ts(2020, 0, 1))  # ~start of 2020
     assert abs(e[0, 0, 0].item()) < 0.02  # frac_year ~ 0
 
 
 def test_simple_temporal_year_offset_is_linear() -> None:
-    """Same day-of-year one year apart differs by ~1/SCALE on channel 0."""
+    """Same day-of-year one year apart differs by ~1.0 on channel 0."""
     a = get_simple_temporal_encoding(_ts(2023, 4, 15))
     b = get_simple_temporal_encoding(_ts(2024, 4, 15))
-    expected = 1.0 / SIMPLE_TEMPORAL_YEAR_SCALE
-    assert abs((b[0, 0, 0] - a[0, 0, 0]).item() - expected) < 1e-4
+    assert abs((b[0, 0, 0] - a[0, 0, 0]).item() - 1.0) < 1e-3
+
+
+def test_simple_temporal_direct_year_values() -> None:
+    """Channel 0 is DIRECT years since 2020: ~1.0 for Jan 1 2021, negative pre-2020."""
+    jan_2021 = get_simple_temporal_encoding(_ts(2021, 0, 1))
+    assert abs(jan_2021[0, 0, 0].item() - 1.0) < 0.01
+    jul_2022 = get_simple_temporal_encoding(_ts(2022, 6, 1))
+    assert abs(jul_2022[0, 0, 0].item() - 2.5) < 0.01
+    y2019 = get_simple_temporal_encoding(_ts(2019, 0, 1))
+    assert abs(y2019[0, 0, 0].item() + 1.0) < 0.01
 
 
 def test_simple_temporal_annual_phase_matches_across_years() -> None:
@@ -81,7 +89,7 @@ def test_simple_temporal_year_zero_keeps_annual_phase() -> None:
 def test_simple_temporal_zero_padded_timestamps_are_benign() -> None:
     """The eval collate zero-pad [0, 0, 0] yields bounded, valid=0 output."""
     e = get_simple_temporal_encoding(_ts(0, 0, 0))
-    assert e.abs().max() <= 1.0
+    assert e.abs().max() <= 1.0  # no frac_year = -2020 outlier
     assert e[0, 0, 3].item() == 0.0
 
 

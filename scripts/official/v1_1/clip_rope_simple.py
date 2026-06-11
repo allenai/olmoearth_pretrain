@@ -84,7 +84,7 @@ ROPE_COORDINATE_SCALE = 0.25
 ENCODING_MODE = "separate"
 ENCODER_CHANNEL_ENCODING_DIM = 0  # redundant given per-bandset embed biases
 DECODER_CHANNEL_ENCODING_DIM = 128  # required: queries share one mask token
-TEMPORAL_ENCODING_DIM = 4  # [frac_year/10, sin, cos, year_valid]
+TEMPORAL_ENCODING_DIM = 4  # [frac_year, sin, cos, year_valid]
 TEMPORAL_ENCODING_TYPE = "simple"
 LATLON_ENCODING_DIM = 0  # location enters via the latlon TOKEN only
 

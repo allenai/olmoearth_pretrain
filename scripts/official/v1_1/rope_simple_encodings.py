@@ -46,7 +46,7 @@ ROPE_COORDINATE_SCALE = 0.25
 # --- Separate-path encodings, MINIMAL temporal/latlon ---
 ENCODING_MODE = "separate"
 CHANNEL_ENCODING_DIM = 128  # per-modality, per-bandset learnable channel embed
-TEMPORAL_ENCODING_DIM = 4  # [frac_year/10, sin, cos, year_valid]
+TEMPORAL_ENCODING_DIM = 4  # [frac_year, sin, cos, year_valid]
 LATLON_ENCODING_DIM = 3  # unit-sphere [x, y, z]
 TEMPORAL_ENCODING_TYPE = "simple"
 LATLON_ENCODING_TYPE = "simple"

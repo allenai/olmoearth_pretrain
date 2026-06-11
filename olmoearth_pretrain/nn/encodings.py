@@ -438,19 +438,16 @@ def get_static_latlon_encoding(latlon: torch.Tensor, encoding_dim: int) -> torch
 
 
 SIMPLE_TEMPORAL_DIM = 4
-# Brings the linear years-since-epoch channel to O(1), matching the
-# unit-scale sin/cos channels it is fused with.
-SIMPLE_TEMPORAL_YEAR_SCALE = 10.0
 TEMPORAL_EPOCH_YEAR = 2020.0
 
 
 def get_simple_temporal_encoding(timestamps: torch.Tensor) -> torch.Tensor:
-    """Minimal 4-number temporal encoding: [frac_year/10, sin, cos, year_valid].
+    """Minimal 4-number temporal encoding: [frac_year, sin, cos, year_valid].
 
     Returns four channels per timestamp:
-      * ``[0]`` ``(year + day_of_year/365.25 - 2020) / 10`` -- a linear,
-        absolute measure of years since 2020, scaled to O(1). Zero when the
-        year is unknown.
+      * ``[0]`` ``year + day_of_year/365.25 - 2020`` -- direct fractional
+        years since 2020 (Jan 1 2021 ~ 1.0, July 2022 ~ 2.5, negative before
+        2020). Zero when the year is unknown.
       * ``[1]`` ``sin(2*pi*day_of_year/365.25)`` -- the annual phase. Computed
         from day-of-year directly, which equals ``sin(2*pi*frac_year)``
         (integer years vanish under sin/cos) but stays numerically stable for
@@ -481,12 +478,11 @@ def get_simple_temporal_encoding(timestamps: torch.Tensor) -> torch.Tensor:
     day_of_year = month * 30.4375 + day
 
     year_valid = (year > 0).float()
-    frac_year = year + day_of_year / 365.25 - TEMPORAL_EPOCH_YEAR
-    scaled_year = year_valid * frac_year / SIMPLE_TEMPORAL_YEAR_SCALE
+    frac_year = year_valid * (year + day_of_year / 365.25 - TEMPORAL_EPOCH_YEAR)
 
     phase = 2.0 * math.pi * day_of_year / 365.25
     return torch.stack(
-        [scaled_year, torch.sin(phase), torch.cos(phase), year_valid], dim=-1
+        [frac_year, torch.sin(phase), torch.cos(phase), year_valid], dim=-1
     )
 
 
