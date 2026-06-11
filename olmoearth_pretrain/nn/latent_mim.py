@@ -13,6 +13,7 @@ from torch.distributed.fsdp import (
     fully_shard,
     register_fsdp_forward_method,
 )
+from torch.distributed.tensor import DTensor
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
@@ -85,6 +86,23 @@ class LatentMIM(nn.Module, DistributedMixins):
         extra_metrics = {}
         if token_norm_stats is not None:
             extra_metrics["token_norm_stats"] = token_norm_stats
+        # Log the learned per-read residual gates (when enabled) keyed by encoder read
+        # depth, so we can see whether the multi-depth reads stay distributed or collapse
+        # toward the final layer. Tiny (one scalar per read); full_tensor() gathers the
+        # FSDP-sharded parameter (a collective all ranks hit, since the flag is uniform).
+        register_bottleneck = getattr(self.encoder, "register_bottleneck", None)
+        if register_bottleneck is not None and getattr(
+            register_bottleneck, "learned_read_weighting", False
+        ):
+            gates = register_bottleneck.read_gates.detach()
+            if isinstance(gates, DTensor):
+                gates = gates.full_tensor()
+            read_layers = register_bottleneck.read_layers or list(
+                range(1, gates.numel() + 1)
+            )
+            extra_metrics["register_read_gates"] = {
+                str(layer): gates[i].item() for i, layer in enumerate(read_layers)
+            }
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)

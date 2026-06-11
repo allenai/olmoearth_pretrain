@@ -1282,6 +1282,7 @@ class SpatialRegisterBottleneck(nn.Module):
         interleave: bool = False,
         read_layers: list[int] | None = None,
         per_depth_read_proj: bool = False,
+        learned_read_weighting: bool = False,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1326,6 +1327,15 @@ class SpatialRegisterBottleneck(nn.Module):
                 different views through their own lens. Requires more than one read block
                 (ignored otherwise). False (default) keeps the shared norm + projection
                 (backwards compatible).
+            learned_read_weighting: If True, give each read block a learnable scalar gate
+                on its residual contribution to the latent: ``z = z + g_d * (read_d(z) -
+                z)``. With multi-depth reads this lets the model weight how much each
+                encoder depth contributes (ELMo-style scalar mixing / LayerScale per read),
+                e.g. down-weighting the early mid-level reads that dilute the pretext-aligned
+                final-layer read. Gates initialise to 1.0, so the module is a strict no-op
+                at init (reproduces the ungated behaviour) and existing checkpoints are
+                unaffected; the learned gates are exposed as ``read_gates`` for logging.
+                False (default) keeps the ungated reads.
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1437,6 +1447,12 @@ class SpatialRegisterBottleneck(nn.Module):
                 for _ in range(num_latent_blocks)
             ]
         )
+        # Learnable per-read residual gates (one scalar per read block). Init to 1.0 so the
+        # gated update ``z + g*(read(z) - z)`` equals the ungated ``read(z)`` at init, making
+        # this a no-op until the gates move (and leaving existing checkpoints unchanged).
+        self.learned_read_weighting = learned_read_weighting
+        if learned_read_weighting:
+            self.read_gates = nn.Parameter(torch.ones(num_read_blocks))
         self.norm = nn.LayerNorm(register_dim)
 
     def build_register_positions(
@@ -1562,29 +1578,33 @@ class SpatialRegisterBottleneck(nn.Module):
             )
         attn_mask = visible_mask.bool() if visible_mask is not None else None
 
-        def read(registers: Tensor, blk: nn.Module, kv: Tensor) -> Tensor:
-            return blk(
+        def read(registers: Tensor, i: int, blk: nn.Module, kv: Tensor) -> Tensor:
+            out = blk(
                 x=registers,
                 y=kv,
                 attn_mask=attn_mask,
                 rope_positions=register_positions,
                 rope_positions_y=patch_positions,
             )
+            if self.learned_read_weighting:
+                # Gate the read's residual contribution; g=1 reproduces the ungated read.
+                return registers + self.read_gates[i] * (out - registers)
+            return out
 
         if self.interleave:
             # [read -> self-attend] per layer: the latents re-query the input after each
             # refinement (Perceiver/DETR/Flamingo style). In multi-depth mode each read
             # draws its K/V from a successively deeper encoder layer; otherwise every read
             # re-queries the same (final-layer) source.
-            for read_blk, latent_blk, kv in zip(
-                self.read_blocks, self.latent_blocks, kv_per_read
+            for i, (read_blk, latent_blk, kv) in enumerate(
+                zip(self.read_blocks, self.latent_blocks, kv_per_read)
             ):
-                registers = read(registers, read_blk, kv)
+                registers = read(registers, i, read_blk, kv)
                 registers = latent_blk(x=registers, rope_positions=register_positions)
         else:
             # Legacy: all reads first, then the latent transformer.
-            for read_blk, kv in zip(self.read_blocks, kv_per_read):
-                registers = read(registers, read_blk, kv)
+            for i, (read_blk, kv) in enumerate(zip(self.read_blocks, kv_per_read)):
+                registers = read(registers, i, read_blk, kv)
             for latent_blk in self.latent_blocks:
                 registers = latent_blk(x=registers, rope_positions=register_positions)
         return self.norm(registers), register_positions
@@ -1635,6 +1655,7 @@ class Encoder(FlexiVitBase):
         register_interleave: bool = False,
         register_read_layers: list[int] | None = None,
         register_per_depth_read_proj: bool = False,
+        register_learned_read_weighting: bool = False,
         register_contrastive_source: str = "registers",
     ):
         """Initialize the encoder.
@@ -1715,6 +1736,11 @@ class Encoder(FlexiVitBase):
                 interleaved single-source reads (each block gets its own lens on the final
                 layer). Requires more than one read block. Defaults to False (shared norm +
                 projection, backwards compatible).
+            register_learned_read_weighting: If True, give each read block a learnable scalar
+                gate on its residual contribution (``z + g_d * (read_d(z) - z)``), so the
+                model can weight how much each (multi-depth) read contributes. Gates init to
+                1.0 (no-op at init); exposed as ``register_bottleneck.read_gates``. Defaults
+                to False.
             register_contrastive_source: Where the contrastive (project-and-aggregate)
                 head reads from when the bottleneck is active: ``"registers"`` (default,
                 project from the register latents at ``register_dim``) or
@@ -1826,6 +1852,7 @@ class Encoder(FlexiVitBase):
                 interleave=register_interleave,
                 read_layers=register_read_layers,
                 per_depth_read_proj=register_per_depth_read_proj,
+                learned_read_weighting=register_learned_read_weighting,
             )
 
         if register_contrastive_source not in ("registers", "encoder_tokens"):
@@ -2970,6 +2997,10 @@ class EncoderConfig(Config):
     # pair (multi-depth: per-depth stats; interleave: a distinct lens per re-read). Needs
     # >1 read block. False -> shared (backwards compatible).
     register_per_depth_read_proj: bool = False
+    # Learnable per-read residual gate (z + g_d * (read_d(z) - z)), letting the model weight
+    # how much each (multi-depth) read contributes. Gates init to 1.0 (no-op at init).
+    # False -> ungated reads (backwards compatible).
+    register_learned_read_weighting: bool = False
     # Where the contrastive head reads when the bottleneck is on: "registers" (default,
     # project from the register latents) or "encoder_tokens" (project from the encoder
     # patch-token output, as before the bottleneck existed). Ignored when bottleneck off.
