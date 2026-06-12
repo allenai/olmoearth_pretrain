@@ -1,14 +1,10 @@
 """Integration tests for the contrastive latent MIM Training Module."""
 
 import logging
-from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 from olmo_core.optim.adamw import AdamWConfig
-from olmo_core.train.config import TrainerConfig
 
 from olmoearth_pretrain.data.collate import collate_double_masked_batched
 from olmoearth_pretrain.data.transform import TransformConfig
@@ -22,21 +18,10 @@ from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModuleConfig,
 )
 
-from .helper import check_loss_is_a_reasonable_value
+from .helper import attached_train_module, check_loss_is_a_reasonable_value
 
 torch.set_default_device("cpu")
 logger = logging.getLogger(__name__)
-
-
-@pytest.fixture
-def supported_modality_names() -> list[str]:
-    """Return the supported modality names for the test."""
-    return [
-        Modality.SENTINEL2_L2A.name,
-        Modality.SENTINEL1.name,
-        Modality.WORLDCOVER.name,
-        Modality.LATLON.name,
-    ]
 
 
 @pytest.fixture
@@ -82,17 +67,6 @@ def latent_mim_model(
 
 
 @pytest.fixture
-def optim_config() -> AdamWConfig:
-    """Create an AdamWConfig for testing."""
-    return AdamWConfig(
-        lr=1e-4,
-        weight_decay=0.0,
-        betas=(0.9, 0.999),
-        eps=1e-8,
-    )
-
-
-@pytest.fixture
 def train_module_config(
     optim_config: AdamWConfig,
 ) -> ContrastiveLatentMIMTrainModuleConfig:
@@ -123,42 +97,6 @@ def train_module_config(
     return config
 
 
-@pytest.fixture
-def trainer_config(tmp_path: Path) -> TrainerConfig:
-    """Create a TrainerConfig for testing."""
-    return TrainerConfig(
-        work_dir=tmp_path,
-        save_folder=tmp_path,
-    )
-
-
-class MockTrainer:
-    """Mock trainer class for testing."""
-
-    def __init__(self) -> None:
-        """Initialize the mock trainer."""
-        self._metrics: dict[str, float] = {}
-        self.global_step = 0
-        self.max_steps = 100
-
-    def record_metric(
-        self,
-        name: str,
-        value: float,
-        reduce_type: str,
-        namespace: str | None = None,
-    ) -> None:
-        """Record a metric in the mock trainer.
-
-        Args:
-            name: Name of the metric
-            value: Value of the metric
-            reduce_type: Type of reduction to apply
-            namespace: Optional namespace for the metric
-        """
-        self._metrics[name] = value
-
-
 def test_train_batch_without_missing_modalities(
     samples_without_missing_modalities: list[tuple[int, OlmoEarthSample]],
     latent_mim_model: LatentMIM,
@@ -175,14 +113,7 @@ def test_train_batch_without_missing_modalities(
         masking_strategy_b=None,  # Use same strategy for both views
     )
     train_module = train_module_config.build(latent_mim_model, device="cpu")
-    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
-        # Mock the trainer property
-        mock_trainer = MockTrainer()
-        # Create a MagicMock for on_attach
-        on_attach_mock = MagicMock(return_value=None)
-        # Patch the on_attach method
-        train_module.on_attach = on_attach_mock  # type: ignore
-        train_module._attach_trainer(mock_trainer)
+    with attached_train_module(train_module) as mock_trainer:
         train_module.train_batch(batch)
         logger.info(mock_trainer._metrics)
         check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc"])
@@ -205,135 +136,8 @@ def test_train_batch_with_missing_modalities(
         masking_strategy_b=None,  # Use same strategy for both views
     )
     train_module = train_module_config.build(latent_mim_model, device="cpu")
-    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
-        # Mock the trainer property
-        mock_trainer = MockTrainer()
-        # Create a MagicMock for on_attach
-        on_attach_mock = MagicMock(return_value=None)
-        # Patch the on_attach method
-        train_module.on_attach = on_attach_mock  # type: ignore
-        train_module._attach_trainer(mock_trainer)
+    with attached_train_module(train_module) as mock_trainer:
         train_module.train_batch(batch)
         logger.info(mock_trainer._metrics)
         check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc"])
         check_loss_is_a_reasonable_value(mock_trainer._metrics["train/InfoNCE"])
-
-
-def _run_train_batch_and_get_loss(
-    model: LatentMIM,
-    config: ContrastiveLatentMIMTrainModuleConfig,
-    batch: Any,
-) -> float:
-    """Run a single train_batch and return the ModalityPatchDisc loss value.
-
-    Saves and restores model weights so successive calls see identical parameters.
-    """
-    import copy
-
-    saved_state = copy.deepcopy(model.state_dict())
-    torch.manual_seed(42)
-    try:
-        train_module = config.build(model, device="cpu")
-        with patch(
-            "olmoearth_pretrain.train.train_module.train_module.build_world_mesh"
-        ):
-            mock_trainer = MockTrainer()
-            on_attach_mock = MagicMock(return_value=None)
-            train_module.on_attach = on_attach_mock  # type: ignore
-            train_module._attach_trainer(mock_trainer)
-            train_module.train_batch(batch)
-        patch_disc_key = [k for k in mock_trainer._metrics if "PatchDisc" in k]
-        assert patch_disc_key, (
-            f"No PatchDisc metric found in {list(mock_trainer._metrics.keys())}"
-        )
-        return mock_trainer._metrics[patch_disc_key[0]]
-    finally:
-        model.load_state_dict(saved_state)
-
-
-def test_new_vs_vec_loss_through_train_module(
-    samples_without_missing_modalities: list[tuple[int, OlmoEarthSample]],
-    latent_mim_model: LatentMIM,
-    optim_config: AdamWConfig,
-    set_random_seeds: None,
-) -> None:
-    """End-to-end: modality_patch_discrimination_new and vec produce same loss through train module."""
-    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
-    batch = collate_double_masked_batched(
-        samples_without_missing_modalities,
-        transform=None,
-        masking_strategy=masking_strategy,
-        masking_strategy_b=None,
-    )
-
-    token_exit_cfg = {modality: 0 for modality in Modality.names()}
-
-    def _make_config(loss_type: str) -> ContrastiveLatentMIMTrainModuleConfig:
-        return ContrastiveLatentMIMTrainModuleConfig(
-            optim_config=optim_config,
-            rank_microbatch_size=3,
-            loss_config=LossConfig(loss_config={"type": loss_type, "tau": 0.1}),
-            contrastive_config=LossConfig(
-                loss_config={"type": "InfoNCE", "weight": 0.1}
-            ),
-            masking_config=MaskingConfig(strategy_config={"type": "random"}),
-            token_exit_cfg=token_exit_cfg,
-            ema_decay=(0.996, 1.0),
-            max_grad_norm=1.0,
-        )
-
-    loss_new = _run_train_batch_and_get_loss(
-        latent_mim_model, _make_config("modality_patch_discrimination_new"), batch
-    )
-    loss_vec = _run_train_batch_and_get_loss(
-        latent_mim_model, _make_config("modality_patch_discrimination_vec"), batch
-    )
-
-    logger.info(f"loss_new={loss_new}, loss_vec={loss_vec}")
-    assert abs(loss_new - loss_vec) < 1e-4, (
-        f"Loss mismatch through train module: new={loss_new}, vec={loss_vec}"
-    )
-
-
-def test_new_vs_vec_loss_with_missing_modalities(
-    samples_with_missing_modalities: list[tuple[int, OlmoEarthSample]],
-    latent_mim_model: LatentMIM,
-    optim_config: AdamWConfig,
-    set_random_seeds: None,
-) -> None:
-    """End-to-end with missing modalities: new and vec losses must match."""
-    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
-    batch = collate_double_masked_batched(
-        samples_with_missing_modalities,
-        transform=None,
-        masking_strategy=masking_strategy,
-        masking_strategy_b=None,
-    )
-
-    token_exit_cfg = {modality: 0 for modality in Modality.names()}
-
-    def _make_config(loss_type: str) -> ContrastiveLatentMIMTrainModuleConfig:
-        return ContrastiveLatentMIMTrainModuleConfig(
-            optim_config=optim_config,
-            rank_microbatch_size=3,
-            loss_config=LossConfig(loss_config={"type": loss_type, "tau": 0.1}),
-            contrastive_config=LossConfig(
-                loss_config={"type": "InfoNCE", "weight": 0.1}
-            ),
-            masking_config=MaskingConfig(strategy_config={"type": "random"}),
-            token_exit_cfg=token_exit_cfg,
-            ema_decay=(0.996, 1.0),
-            max_grad_norm=1.0,
-        )
-
-    loss_new = _run_train_batch_and_get_loss(
-        latent_mim_model, _make_config("modality_patch_discrimination_new"), batch
-    )
-    loss_vec = _run_train_batch_and_get_loss(
-        latent_mim_model, _make_config("modality_patch_discrimination_vec"), batch
-    )
-
-    logger.info(f"loss_new={loss_new}, loss_vec={loss_vec}")
-    assert abs(loss_new - loss_vec) < 1e-4, (
-        f"Loss mismatch with missing modalities: new={loss_new}, vec={loss_vec}"
-    )

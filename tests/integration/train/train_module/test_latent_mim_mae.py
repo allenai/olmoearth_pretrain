@@ -1,13 +1,10 @@
 """Integration tests for the latent MIM Training Module."""
 
 import logging
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 from olmo_core.optim.adamw import AdamWConfig
-from olmo_core.train.config import TrainerConfig
 
 from olmoearth_pretrain.data.collate import collate_single_masked_batched
 from olmoearth_pretrain.data.transform import TransformConfig
@@ -23,21 +20,10 @@ from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
 from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
-from .helper import check_loss_is_a_reasonable_value
+from .helper import attached_train_module, check_loss_is_a_reasonable_value
 
 torch.set_default_device("cpu")
 logger = logging.getLogger(__name__)
-
-
-@pytest.fixture
-def supported_modality_names() -> list[str]:
-    """Return the supported modality names for the test."""
-    return [
-        Modality.SENTINEL2_L2A.name,
-        Modality.SENTINEL1.name,
-        Modality.WORLDCOVER.name,
-        Modality.LATLON.name,
-    ]
 
 
 @pytest.fixture
@@ -92,17 +78,6 @@ def latent_mim_model(
 
 
 @pytest.fixture
-def optim_config() -> AdamWConfig:
-    """Create an AdamWConfig for testing."""
-    return AdamWConfig(
-        lr=1e-4,
-        weight_decay=0.0,
-        betas=(0.9, 0.999),
-        eps=1e-8,
-    )
-
-
-@pytest.fixture
 def train_module_config(
     optim_config: AdamWConfig,
 ) -> LatentMIMTrainModuleConfig:
@@ -129,42 +104,6 @@ def train_module_config(
     return config
 
 
-@pytest.fixture
-def trainer_config(tmp_path: Path) -> TrainerConfig:
-    """Create a TrainerConfig for testing."""
-    return TrainerConfig(
-        work_dir=tmp_path,
-        save_folder=tmp_path,
-    )
-
-
-class MockTrainer:
-    """Mock trainer class for testing."""
-
-    def __init__(self) -> None:
-        """Initialize the mock trainer."""
-        self._metrics: dict[str, float] = {}
-        self.global_step = 0
-        self.max_steps = 100
-
-    def record_metric(
-        self,
-        name: str,
-        value: float,
-        reduce_type: str,
-        namespace: str | None = None,
-    ) -> None:
-        """Record a metric in the mock trainer.
-
-        Args:
-            name: Name of the metric
-            value: Value of the metric
-            reduce_type: Type of reduction to apply
-            namespace: Optional namespace for the metric
-        """
-        self._metrics[name] = value
-
-
 def test_train_batch_without_missing_modalities(
     samples_without_missing_modalities: list[tuple[int, OlmoEarthSample]],
     latent_mim_model: LatentMIM,
@@ -180,14 +119,7 @@ def test_train_batch_without_missing_modalities(
         masking_strategy=masking_strategy,
     )
     train_module = train_module_config.build(latent_mim_model, device="cpu")
-    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
-        # Mock the trainer property
-        mock_trainer = MockTrainer()
-        # Create a MagicMock for on_attach
-        on_attach_mock = MagicMock(return_value=None)
-        # Patch the on_attach method
-        train_module.on_attach = on_attach_mock  # type: ignore
-        train_module._attach_trainer(mock_trainer)
+    with attached_train_module(train_module) as mock_trainer:
         train_module.train_batch(batch)
         logger.info(mock_trainer._metrics)
         check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc+MAE"])
@@ -208,14 +140,7 @@ def test_train_batch_with_missing_modalities(
         masking_strategy=masking_strategy,
     )
     train_module = train_module_config.build(latent_mim_model, device="cpu")
-    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
-        # Mock the trainer property
-        mock_trainer = MockTrainer()
-        # Create a MagicMock for on_attach
-        on_attach_mock = MagicMock(return_value=None)
-        # Patch the on_attach method
-        train_module.on_attach = on_attach_mock  # type: ignore
-        train_module._attach_trainer(mock_trainer)
+    with attached_train_module(train_module) as mock_trainer:
         train_module.train_batch(batch)
         logger.info(mock_trainer._metrics)
         check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc+MAE"])

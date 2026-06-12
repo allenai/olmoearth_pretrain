@@ -2,35 +2,16 @@
 
 import logging
 
-import pytest
 import torch
 
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.modalities import Modality, ModalitySpec
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.nn.flexi_vit import Encoder, Predictor
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import PatchDiscriminationLoss
 
 logger = logging.getLogger(__name__)
-
-
-@pytest.fixture
-def modality_band_set_len_and_total_bands(
-    supported_modalities: list[ModalitySpec],
-) -> dict[str, tuple[int, int]]:
-    """Get the number of band sets and total bands for each modality.
-
-    Returns:
-        Dictionary mapping modality name to tuple of (num_band_sets, total_bands)
-    """
-    return {
-        modality.name: (
-            len(modality.band_sets),
-            modality.num_bands,
-        )
-        for modality in supported_modalities
-    }
 
 
 def test_latentmim_with_loss(
