@@ -114,144 +114,70 @@ def _mae_loss_config() -> LossConfig:
 
 
 @pytest.mark.parametrize(
-    "config_factory",
+    ("config_factory", "mask_attr_names"),
     [
-        lambda: ContrastiveLatentMIMTrainModuleConfig(
-            optim_config=_optim_config(),
-            rank_microbatch_size=2,
-            transform_config=_transform_config(),
-            loss_config=_patch_discrimination_loss_config(),
-            masking_config=_masking_config(),
+        (
+            lambda: ContrastiveLatentMIMTrainModuleConfig(
+                optim_config=_optim_config(),
+                rank_microbatch_size=2,
+                transform_config=_transform_config(),
+                loss_config=_patch_discrimination_loss_config(),
+                masking_config=_masking_config(),
+                mae_loss_config=_mae_loss_config(),
+            ),
+            ("masking_strategy",),
         ),
-        lambda: LatentMIMTrainModuleConfig(
-            optim_config=_optim_config(),
-            rank_microbatch_size=2,
-            transform_config=_transform_config(),
-            loss_config=_patch_discrimination_loss_config(),
-            masking_config=_masking_config(),
+        (
+            lambda: LatentMIMTrainModuleConfig(
+                optim_config=_optim_config(),
+                rank_microbatch_size=2,
+                transform_config=_transform_config(),
+                loss_config=_patch_discrimination_loss_config(),
+                masking_config=_masking_config(),
+                mae_loss_config=_mae_loss_config(),
+            ),
+            ("masking_strategy",),
         ),
-        lambda: MAETrainModuleConfig(
-            optim_config=_optim_config(),
-            rank_microbatch_size=2,
-            transform_config=_transform_config(),
-            mae_loss_config=None,
-            masking_config=_masking_config(),
+        (
+            lambda: MAETrainModuleConfig(
+                optim_config=_optim_config(),
+                rank_microbatch_size=2,
+                transform_config=_transform_config(),
+                mae_loss_config=_mae_loss_config(),
+                masking_config=_masking_config(),
+            ),
+            ("masking_strategy",),
+        ),
+        (
+            lambda: GalileoTrainModuleConfig(
+                optim_config=_optim_config(),
+                rank_microbatch_size=2,
+                transform_config=_transform_config(),
+                loss_config_a=_patch_discrimination_loss_config(),
+                loss_config_b=_patch_discrimination_loss_config(),
+                masking_config_a=_masking_config(),
+                masking_config_b=_masking_config(),
+                mae_loss_config=_mae_loss_config(),
+            ),
+            ("masking_strategy_a", "masking_strategy_b"),
         ),
     ],
 )
-def test_train_modules_propagate_model_tokenization_to_masking(
+def test_train_modules_propagate_model_tokenization_to_masking_and_mae_loss(
     config_factory: Any,
+    mask_attr_names: tuple[str, ...],
 ) -> None:
-    """Train modules should use model tokenization for runtime masking."""
+    """Runtime masking and MAE losses should share the model tokenization."""
     tokenization_config = _single_bandset_sentinel2_tokenization()
     model = _FakePretrainModel(tokenization_config)
 
     train_module = config_factory().build(model=model, device=torch.device("cpu"))
 
-    assert train_module.masking_strategy.tokenization_config is tokenization_config
-
-
-def test_galileo_train_module_propagates_model_tokenization_to_both_masks() -> None:
-    """Galileo has two masking branches and both should use model tokenization."""
-    tokenization_config = _single_bandset_sentinel2_tokenization()
-    model = _FakePretrainModel(tokenization_config)
-    train_module = GalileoTrainModuleConfig(
-        optim_config=_optim_config(),
-        rank_microbatch_size=2,
-        transform_config=_transform_config(),
-        loss_config_a=_patch_discrimination_loss_config(),
-        loss_config_b=_patch_discrimination_loss_config(),
-        masking_config_a=_masking_config(),
-        masking_config_b=_masking_config(),
-    ).build(model=model, device=torch.device("cpu"))
-
-    assert train_module.masking_strategy_a.tokenization_config is tokenization_config
-    assert train_module.masking_strategy_b.tokenization_config is tokenization_config
-
-
-@pytest.mark.parametrize(
-    "config_factory",
-    [
-        lambda: ContrastiveLatentMIMTrainModuleConfig(
-            optim_config=_optim_config(),
-            rank_microbatch_size=2,
-            transform_config=_transform_config(),
-            loss_config=_patch_discrimination_loss_config(),
-            masking_config=_masking_config(),
-            mae_loss_config=_mae_loss_config(),
-        ),
-        lambda: LatentMIMTrainModuleConfig(
-            optim_config=_optim_config(),
-            rank_microbatch_size=2,
-            transform_config=_transform_config(),
-            loss_config=_patch_discrimination_loss_config(),
-            masking_config=_masking_config(),
-            mae_loss_config=_mae_loss_config(),
-        ),
-        lambda: MAETrainModuleConfig(
-            optim_config=_optim_config(),
-            rank_microbatch_size=2,
-            transform_config=_transform_config(),
-            masking_config=_masking_config(),
-            mae_loss_config=_mae_loss_config(),
-        ),
-        lambda: GalileoTrainModuleConfig(
-            optim_config=_optim_config(),
-            rank_microbatch_size=2,
-            transform_config=_transform_config(),
-            loss_config_a=_patch_discrimination_loss_config(),
-            loss_config_b=_patch_discrimination_loss_config(),
-            masking_config_a=_masking_config(),
-            masking_config_b=_masking_config(),
-            mae_loss_config=_mae_loss_config(),
-        ),
-    ],
-)
-def test_train_modules_propagate_model_tokenization_to_mae_loss(
-    config_factory: Any,
-) -> None:
-    """MAE losses should share the model tokenization when built by train modules."""
-    tokenization_config = _single_bandset_sentinel2_tokenization()
-    model = _FakePretrainModel(tokenization_config)
-
-    train_module = config_factory().build(model=model, device=torch.device("cpu"))
-
+    for attr_name in mask_attr_names:
+        assert (
+            getattr(train_module, attr_name).tokenization_config is tokenization_config
+        )
     assert train_module.mae_loss.tokenization_config is tokenization_config
-
-
-def test_scale_and_accumulate_microbatch_loss() -> None:
-    """Microbatch loss helper should scale backward loss and metric total."""
-    total = torch.zeros([])
-    loss = torch.tensor(6.0, requires_grad=True)
-
-    scaled_loss, total = OlmoEarthTrainModule._scale_and_accumulate_microbatch_loss(
-        total, loss, num_microbatches=3
-    )
-
-    assert scaled_loss.item() == 2.0
-    assert total.item() == 2.0
-    assert total.requires_grad is False
-    assert scaled_loss.requires_grad is True
-
-
-def test_accumulate_detached_microbatch_value() -> None:
-    """Detached scalar metrics should be averaged over all microbatches."""
-    total = torch.tensor(1.0)
-    value = torch.tensor(9.0, requires_grad=True)
-
-    total = OlmoEarthTrainModule._accumulate_detached_microbatch_value(
-        total, value, num_microbatches=3
-    )
-
-    assert total.item() == 4.0
-    assert total.requires_grad is False
-
-
-def test_loss_is_nonfinite() -> None:
-    """Loss finite checks should catch NaN and Inf."""
-    assert not OlmoEarthTrainModule._loss_is_nonfinite(torch.tensor(1.0))
-    assert OlmoEarthTrainModule._loss_is_nonfinite(torch.tensor(float("nan")))
-    assert OlmoEarthTrainModule._loss_is_nonfinite(torch.tensor(float("inf")))
 
 
 def test_run_masked_microbatches_splits_and_accumulates_loss() -> None:

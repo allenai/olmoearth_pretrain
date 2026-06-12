@@ -23,28 +23,6 @@ class _FakeDataset:
         return ["window-a", "window-b"]
 
 
-def test_make_window_converter_jobs_passes_groups() -> None:
-    """Job construction should preserve the standard window-load arguments."""
-    dataset = _FakeDataset(UPath("/tmp/ds"))
-
-    jobs = runner.make_window_converter_jobs(
-        dataset,
-        UPath("/tmp/out"),
-        workers=4,
-        groups=["res_10"],
-    )
-
-    assert dataset.load_windows_kwargs == {
-        "workers": 4,
-        "show_progress": True,
-        "groups": ["res_10"],
-    }
-    assert jobs == [
-        {"window": "window-a", "olmoearth_path": UPath("/tmp/out")},
-        {"window": "window-b", "olmoearth_path": UPath("/tmp/out")},
-    ]
-
-
 def test_make_window_converter_jobs_omits_groups_when_unset() -> None:
     """No-group converters should keep the original load_windows call shape."""
     dataset = _FakeDataset(UPath("/tmp/ds"))

@@ -51,24 +51,14 @@ class _RecordingAdapter(nn.Module):
         TesseraEvalWrapper,
     ],
 )
-@pytest.mark.parametrize(
-    ("task_type", "expected_spatial_pool"),
-    [
-        (TaskType.CLASSIFICATION, False),
-        (TaskType.SEGMENTATION, True),
-        (TaskType.REGRESSION, True),
-    ],
-)
 def test_simple_adapter_wrappers_forward_pooling_arguments(
     wrapper_class: type[EvalWrapper],
-    task_type: TaskType,
-    expected_spatial_pool: bool,
 ) -> None:
     """Simple adapter wrappers should share the same embedding-call contract."""
     model = _RecordingAdapter()
     wrapper = wrapper_class(
         model=model,
-        task_type=task_type,
+        task_type=TaskType.CLASSIFICATION,
         patch_size=8,
         pooling_type=PoolingType.MEAN,
     )
@@ -79,4 +69,30 @@ def test_simple_adapter_wrappers_forward_pooling_arguments(
 
     assert embeddings is model.embeddings
     assert returned_labels is labels
-    assert model.calls == [(sample, PoolingType.MEAN, expected_spatial_pool)]
+    assert model.calls == [(sample, PoolingType.MEAN, False)]
+
+
+@pytest.mark.parametrize(
+    ("task_type", "expected_spatial_pool"),
+    [
+        (TaskType.CLASSIFICATION, False),
+        (TaskType.SEGMENTATION, True),
+        (TaskType.REGRESSION, True),
+    ],
+)
+def test_adapter_wrapper_spatial_pool_follows_task_type(
+    task_type: TaskType,
+    expected_spatial_pool: bool,
+) -> None:
+    """Spatial pooling is a base wrapper decision, not per-adapter behavior."""
+    model = _RecordingAdapter()
+    wrapper = TerramindEvalWrapper(
+        model=model,
+        task_type=task_type,
+        patch_size=8,
+        pooling_type=PoolingType.MEAN,
+    )
+
+    wrapper(object(), torch.arange(2))
+
+    assert model.calls[0][2] is expected_spatial_pool

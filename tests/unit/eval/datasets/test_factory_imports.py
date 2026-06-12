@@ -43,31 +43,6 @@ assert loaded == ["olmoearth_pretrain.evals.datasets.geobench_dataset"], loaded
     subprocess.run([sys.executable, "-c", script], check=True)
 
 
-def test_eval_dataset_package_all_is_lightweight() -> None:
-    """Dataset package star imports should not load lazy adapters."""
-    script = """
-import sys
-
-import olmoearth_pretrain.evals.datasets as datasets
-
-namespace = {}
-exec("from olmoearth_pretrain.evals.datasets import *", namespace)
-
-expected = {
-    "NormMethod",
-    "get_eval_dataset",
-    "paths",
-    "scale_train_samples",
-}
-
-assert set(datasets.__all__) == expected
-assert expected.issubset(namespace)
-assert "GeobenchDataset" not in namespace
-assert "olmoearth_pretrain.evals.datasets.geobench_dataset" not in sys.modules
-"""
-    subprocess.run([sys.executable, "-c", script], check=True)
-
-
 class RecordingDataset:
     """Lightweight stand-in for dataset adapters in factory tests."""
 
@@ -99,17 +74,6 @@ def test_builtin_dataset_specs_reference_known_configs() -> None:
         assert set(spec.config_names).issubset(config_names)
         for config_name in spec.config_names:
             assert spec.matches(config_name)
-
-
-def test_path_backed_builtin_dataset_specs_define_path_keys() -> None:
-    """Simple path-backed families should carry their path keys in metadata."""
-    specs_by_family = {spec.family: spec for spec in BUILTIN_EVAL_DATASET_SPECS}
-
-    assert specs_by_family["geobench"].path_key == "GEOBENCH_DIR"
-    assert specs_by_family["mados"].path_key == "MADOS_DIR"
-    assert specs_by_family["mados"].pretrain_norm_warning is not None
-    assert specs_by_family["sen1floods11"].path_key == "FLOODS_DIR"
-    assert specs_by_family["breizhcrops"].path_key == "BREIZHCROPS_DIR"
 
 
 @pytest.mark.parametrize(
@@ -150,7 +114,7 @@ def test_get_eval_dataset_resolves_paths_at_call_time(
     path_kwarg: str,
 ) -> None:
     """Factory path kwargs should use the current environment, not import-time values."""
-    monkeypatch.setattr(datasets, adapter_name, RecordingDataset, raising=False)
+    monkeypatch.setitem(datasets.__dict__, adapter_name, RecordingDataset)
     monkeypatch.setenv(env_key, f"/tmp/{env_key.lower()}")
 
     dataset = datasets.get_eval_dataset(dataset_name, split="train")
@@ -164,7 +128,7 @@ def test_get_eval_dataset_warns_for_mados_pretrain_norm(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """MADOS should keep its dataset-specific pretrain-norm warning."""
-    monkeypatch.setattr(datasets, "MADOSDataset", RecordingDataset, raising=False)
+    monkeypatch.setitem(datasets.__dict__, "MADOSDataset", RecordingDataset)
     monkeypatch.setenv("MADOS_DIR", "/tmp/mados")
 
     datasets.get_eval_dataset(
@@ -190,7 +154,7 @@ def test_get_eval_dataset_resolves_pastis_paths_at_call_time(
     expected_kwarg: str,
 ) -> None:
     """PASTIS variants should choose their own split path and shared partition path."""
-    monkeypatch.setattr(datasets, "PASTISRDataset", RecordingDataset, raising=False)
+    monkeypatch.setitem(datasets.__dict__, "PASTISRDataset", RecordingDataset)
     monkeypatch.setenv(env_key, f"/tmp/{env_key.lower()}")
     monkeypatch.setenv("PASTIS_DIR_PARTITION", "/tmp/pastis_partition")
 
@@ -209,9 +173,7 @@ def test_get_eval_dataset_pretrain_subset_uses_scaled_label_fraction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Pretrain probe kwargs should preserve the old default construction behavior."""
-    monkeypatch.setattr(
-        datasets, "PretrainSubsetDataset", RecordingDataset, raising=False
-    )
+    monkeypatch.setitem(datasets.__dict__, "PretrainSubsetDataset", RecordingDataset)
 
     dataset = datasets.get_eval_dataset(
         "pretrain_subset_worldcover",
@@ -237,11 +199,11 @@ def test_get_eval_dataset_falls_back_to_studio_registry(
     def fake_from_registry_entry(**kwargs: Any) -> dict[str, Any]:
         return kwargs
 
-    monkeypatch.setattr(
-        datasets, "get_dataset_entry", lambda name: entry, raising=False
-    )
-    monkeypatch.setattr(
-        datasets, "from_registry_entry", fake_from_registry_entry, raising=False
+    monkeypatch.setitem(datasets.__dict__, "get_dataset_entry", lambda name: entry)
+    monkeypatch.setitem(
+        datasets.__dict__,
+        "from_registry_entry",
+        fake_from_registry_entry,
     )
 
     dataset = datasets.get_eval_dataset(

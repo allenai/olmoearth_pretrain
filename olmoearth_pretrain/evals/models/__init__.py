@@ -38,8 +38,6 @@ __all__ = [
     "BASELINE_MODEL_SPECS_BY_NAME",
     "BaselineModelSpec",
     "BaselineModelName",
-    "DinoV3Models",
-    "PrithviV2Models",
     "build_registered_model_config",
     "make_registered_build_model_config",
     "get_launch_script_path",

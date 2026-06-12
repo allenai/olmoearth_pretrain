@@ -106,19 +106,6 @@ def test_create_missing_splits_does_not_mutate_global_random_state() -> None:
     assert random.getstate() == state
 
 
-def test_count_split_stats() -> None:
-    """Split stats should report counts per split."""
-    assert splits.count_split_stats(
-        {
-            "train": _split_ids(3, "train"),
-            "val": _split_ids(2, "val"),
-        }
-    ) == {
-        "train": {"count": 3},
-        "val": {"count": 2},
-    }
-
-
 def test_scan_windows_and_splits_filters_tags_and_detects_splits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

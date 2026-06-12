@@ -11,7 +11,6 @@ from importlib import import_module
 from typing import Any
 
 from olmoearth_pretrain.evals.models.dinov3.constants import DinoV3Models
-from olmoearth_pretrain.evals.models.prithviv2.constants import PrithviV2Models
 
 
 class BaselineModelName(StrEnum):
@@ -137,11 +136,11 @@ BASELINE_MODEL_SPECS: tuple[BaselineModelSpec, ...] = (
         wrapper_class_name="PrithviV2EvalWrapper",
         launch_script_path="olmoearth_pretrain/evals/models/prithviv2/prithviv2_launch.py",
         module_prefix="olmoearth_pretrain.evals.models.prithviv2",
-        size_names=tuple(model.value for model in PrithviV2Models),
+        size_names=("Prithvi-EO-2.0-300M", "Prithvi-EO-2.0-600M"),
         extra_lazy_exports=(
             (
                 "PrithviV2Models",
-                "olmoearth_pretrain.evals.models.prithviv2.constants",
+                "olmoearth_pretrain.evals.models.prithviv2.prithviv2",
             ),
         ),
     ),

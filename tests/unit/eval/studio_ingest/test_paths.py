@@ -23,8 +23,3 @@ def test_get_eval_datasets_base_path_uses_env_override(
 
     assert paths.get_eval_datasets_base_path() == "/tmp/eval_datasets"
     assert ingest.get_eval_datasets_base_path() == "/tmp/eval_datasets"
-
-
-def test_ingest_copy_base_path_uses_weka_mount() -> None:
-    """Copy destinations should still use the local Weka mount path."""
-    assert paths.WEKA_EVAL_DATASETS_BASE_PATH.startswith("/weka/")

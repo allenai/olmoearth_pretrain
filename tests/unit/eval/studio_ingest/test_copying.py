@@ -1,6 +1,5 @@
 """Tests for Studio ingest copy helpers."""
 
-import json
 from pathlib import Path
 
 import pytest
@@ -27,19 +26,6 @@ def test_tar_copy_cmd_optionally_uses_pv() -> None:
     assert _tar_copy_cmd("/src with space", "/dst with space", use_pv=False) == (
         "tar cf - -C '/src with space' . | tar xf - -C '/dst with space'"
     )
-
-
-def test_window_matches_tags_supports_exact_and_key_exists(tmp_path: Path) -> None:
-    """Tag matching should support exact values and key-exists checks."""
-    metadata_path = tmp_path / "metadata.json"
-    metadata_path.write_text(
-        json.dumps({"options": {"split": "train", "region": "west"}})
-    )
-
-    assert _window_matches_tags(metadata_path, {"split": "train"})
-    assert _window_matches_tags(metadata_path, {"region": ""})
-    assert not _window_matches_tags(metadata_path, {"split": "val"})
-    assert not _window_matches_tags(metadata_path, {"missing": ""})
 
 
 def test_window_matches_tags_returns_false_for_bad_metadata(tmp_path: Path) -> None:

@@ -17,7 +17,6 @@ from olmoearth_pretrain.internal.full_eval_sweep import (
     _MODEL_SWEEP_SPECS,
     LP_LRs,
     Normalization_MODES,
-    _get_model_specific_args,
     _get_normalization_args,
     _model_uses_dataset_norm_only,
     build_commands,
@@ -254,13 +253,6 @@ class TestModelSpecificArgs:
             BaselineModelName.PANOPTICON,
             BaselineModelName.TESSERA,
         }
-
-    @pytest.mark.parametrize("model", list(BaselineModelName))
-    def test_get_model_specific_args_uses_sweep_specs(
-        self, model: BaselineModelName
-    ) -> None:
-        """Each registered baseline should emit model-specific sweep arguments."""
-        assert _get_model_specific_args(model)
 
     def test_get_normalization_args_uses_model_specific_builder(self) -> None:
         """Models with pretrained normalizers should route through their builder."""

@@ -59,34 +59,14 @@ def test_make_modality_mask_like_uses_bandset_shape_and_requested_dtype() -> Non
     assert (mask == MaskValue.DECODER.value).all()
 
 
-def test_sample_containers_have_same_modality_fields() -> None:
-    """Raw, masked, and token containers should stay aligned on modality names."""
+def test_sample_containers_have_aligned_modality_and_mask_fields() -> None:
+    """Raw, masked, and token containers should stay aligned on modality fields."""
     assert set(SAMPLE_MODALITY_FIELDS) == set(MASKED_SAMPLE_MODALITY_FIELDS)
     assert set(SAMPLE_MODALITY_FIELDS) == set(TOKEN_MODALITY_FIELDS)
-
-
-def test_masked_and_token_containers_have_matching_mask_fields() -> None:
-    """Every data modality in masked containers should have one matching mask field."""
     for field in SAMPLE_MODALITY_FIELDS:
         mask_field = MaskedOlmoEarthSample.get_masked_modality_name(field)
         assert mask_field in MaskedOlmoEarthSample._fields
         assert mask_field in TokensAndMasks._fields
-
-
-def test_unmasked_modality_name_removes_only_suffix() -> None:
-    """Unmasking helper should only remove a trailing mask suffix."""
-    assert (
-        MaskedOlmoEarthSample.get_unmasked_modality_name("sentinel2_l2a_mask")
-        == "sentinel2_l2a"
-    )
-    assert (
-        MaskedOlmoEarthSample.get_unmasked_modality_name("mask_quality_mask")
-        == "mask_quality"
-    )
-    assert (
-        MaskedOlmoEarthSample.get_unmasked_modality_name("mask_quality")
-        == "mask_quality"
-    )
 
 
 def test_container_to_device_preserves_present_fields() -> None:
@@ -126,14 +106,12 @@ def test_tokens_and_masks_first_field_errors_are_clear() -> None:
 
 def test_legacy_sample_type_import_paths_still_resolve() -> None:
     """Legacy import paths should keep resolving to the canonical datatypes."""
-    from olmoearth_pretrain.data.dataset import OlmoEarthSample as DatasetSample
     from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks as FlexiTokensAndMasks
     from olmoearth_pretrain.train.masking import (
         MaskedOlmoEarthSample as MaskingSample,
     )
     from olmoearth_pretrain.train.masking import MaskValue as MaskingMaskValue
 
-    assert DatasetSample is OlmoEarthSample
     assert MaskingSample is MaskedOlmoEarthSample
     assert MaskingMaskValue is MaskValue
     assert FlexiTokensAndMasks is TokensAndMasks

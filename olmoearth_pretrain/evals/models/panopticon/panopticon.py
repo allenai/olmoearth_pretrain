@@ -12,9 +12,9 @@ from einops import rearrange, repeat
 from torch import nn
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.modalities import Modality
+from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.nn.pooling import PoolingType
+from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +114,7 @@ class Panopticon(nn.Module):
         ) as f:
             sensor_config = yaml.safe_load(f)
         modality_spec = Modality.get(modality)
-        # Data is prepared in OlmoEarth band order, so we need to tell Panopticon which band it is.
+        # Data is prepared in helios band order so we need to tell panopticon whcich band it is
         chn_ids = []
         for band in modality_spec.band_order:
             if band == "B10" and modality == "sentinel2_l2a":

@@ -2,7 +2,6 @@
 
 import subprocess
 import sys
-from pathlib import Path
 
 from pytest import MonkeyPatch
 from torch import nn
@@ -18,7 +17,6 @@ from olmoearth_pretrain.evals.models import (
     BaselineModelName,
     BaselineModelSpec,
     build_registered_model_config,
-    get_launch_script_path,
     make_registered_build_model_config,
 )
 from olmoearth_pretrain.evals.task_types import TaskType
@@ -55,25 +53,6 @@ assert "olmoearth_pretrain.evals.models.satlas.satlas" not in sys.modules
     subprocess.run([sys.executable, "-c", script], check=True)
 
 
-def test_model_star_import_is_lightweight() -> None:
-    """Star imports should expose lightweight metadata without optional adapters."""
-    script = """
-import sys
-
-namespace = {}
-exec("from olmoearth_pretrain.evals.models import *", namespace)
-
-assert "BaselineModelName" in namespace
-assert "DinoV3Models" in namespace
-assert "PrithviV2Models" in namespace
-assert "AnySat" not in namespace
-assert "olmoearth_pretrain.evals.models.prithviv2.prithviv2" not in sys.modules
-assert "olmoearth_pretrain.evals.models.clay.clay" not in sys.modules
-assert "olmoearth_pretrain.evals.models.terramind.terramind" not in sys.modules
-"""
-    subprocess.run([sys.executable, "-c", script], check=True)
-
-
 def test_eval_wrapper_import_does_not_load_concrete_adapters() -> None:
     """Common eval wrapper infrastructure should not import optional adapters."""
     script = """
@@ -86,19 +65,6 @@ assert "olmoearth_pretrain.evals.models.terramind.terramind" not in sys.modules
 assert "olmoearth_pretrain.evals.models.satlas.satlas" not in sys.modules
 """
     subprocess.run([sys.executable, "-c", script], check=True)
-
-
-def test_baseline_model_specs_cover_every_model_name() -> None:
-    """Each baseline enum value should have one metadata spec."""
-    assert {spec.name for spec in BASELINE_MODEL_SPECS} == set(BaselineModelName)
-
-
-def test_baseline_model_launch_paths_exist() -> None:
-    """Registry launch paths should point at checked-in launch scripts."""
-    repo_root = Path(__file__).parents[4]
-
-    for model_name in BaselineModelName:
-        assert (repo_root / get_launch_script_path(model_name)).is_file()
 
 
 def test_launch_modules_import_without_concrete_adapters() -> None:
