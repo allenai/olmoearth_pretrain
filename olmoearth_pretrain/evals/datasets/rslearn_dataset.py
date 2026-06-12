@@ -19,10 +19,10 @@ from rslearn.train.dataset import ModelDataset as RsModelDataset
 from rslearn.train.model_context import RasterImage
 from torch.utils.data import Dataset, IterableDataset, Subset
 
-from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS, Modality
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 from olmoearth_pretrain.data.utils import convert_to_db
-from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, OlmoEarthSample
+from olmoearth_pretrain.evals.constants import resolve_rslearn_modality
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.datasets.rslearn_builder import (
     build_model_dataset,
@@ -32,7 +32,7 @@ from olmoearth_pretrain.evals.datasets.rslearn_builder import (
 )
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 from olmoearth_pretrain.evals.task_types import TaskType
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, OlmoEarthSample
+from olmoearth_pretrain.modalities import YEAR_NUM_TIMESTEPS, Modality
 
 from .normalize import normalize_bands
 
@@ -250,19 +250,10 @@ class RslearnToOlmoEarthDataset(Dataset):
             layers = get_modality_layers(model_config)
             input_modalities = []
             for layer in layers:
-                resolved = layer
-                if layer not in RSLEARN_TO_OLMOEARTH:
-                    for prefix in ("pre_", "post_"):
-                        if (
-                            layer.startswith(prefix)
-                            and layer[len(prefix) :] in RSLEARN_TO_OLMOEARTH
-                        ):
-                            resolved = layer[len(prefix) :]
-                            break
-                if resolved in RSLEARN_TO_OLMOEARTH:
-                    input_modalities.append(RSLEARN_TO_OLMOEARTH[resolved].name)
-                else:
-                    input_modalities.append(layer)
+                modality = resolve_rslearn_modality(layer)
+                input_modalities.append(
+                    modality.name if modality is not None else layer
+                )
 
         task_info = get_task_info(model_config)
 

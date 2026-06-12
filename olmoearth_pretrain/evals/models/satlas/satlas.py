@@ -12,9 +12,9 @@ from satlaspretrain_models.utils import Backbone
 from upath import UPath
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.nn.pooling import PoolingType
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 

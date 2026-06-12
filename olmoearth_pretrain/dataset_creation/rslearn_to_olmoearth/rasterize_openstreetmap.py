@@ -16,8 +16,8 @@ from rslearn.utils.mp import star_imap_unordered
 from rslearn.utils.raster_array import RasterArray
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import Modality, TimeSpan
 from olmoearth_pretrain.dataset.utils import get_modality_dir
+from olmoearth_pretrain.modalities import Modality, TimeSpan
 
 from ..constants import GEOTIFF_RASTER_FORMAT
 

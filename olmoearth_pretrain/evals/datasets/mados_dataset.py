@@ -1,6 +1,5 @@
 """MADOS dataset class."""
 
-import json
 import os
 from pathlib import Path
 
@@ -11,27 +10,18 @@ from einops import repeat
 from PIL import Image
 from torch.utils.data import Dataset
 
-from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.modalities import Modality
 
 from .constants import EVAL_S2_BAND_NAMES, EVAL_TO_OLMOEARTH_S2_BANDS
 from .normalize import normalize_bands
-from .utils import load_min_max_stats
-
-# Map low-label fractions to the precomputed partition-file basename shipped
-# alongside the train tensors (e.g. ``0.01x_train_partition.json``). 1.0 means
-# "use everything", i.e. no partition file.
-_LABEL_FRACTION_TO_PARTITION = {
-    0.01: "0.01x_train",
-    0.02: "0.02x_train",
-    0.05: "0.05x_train",
-    0.10: "0.10x_train",
-    0.20: "0.20x_train",
-    0.50: "0.50x_train",
-    1.00: None,
-}
-
+from .utils import (
+    build_band_stat_arrays,
+    build_masked_eval_sample,
+    load_label_fraction_partition_indices,
+    load_min_max_stats,
+    resolve_label_fraction_partition,
+)
 
 BAND_STATS = {
     "01 - Coastal aerosol": {
@@ -271,19 +261,11 @@ class MADOSDataset(Dataset):
         self.images = torch_obj["images"]
         self.labels = torch_obj["labels"]
 
-        if label_fraction not in _LABEL_FRACTION_TO_PARTITION:
-            valid = ", ".join(
-                f"{value:g}" for value in sorted(_LABEL_FRACTION_TO_PARTITION)
-            )
-            raise ValueError(
-                f"Unsupported label_fraction {label_fraction}. Supported values "
-                f"are: {valid}"
-            )
-        partition = _LABEL_FRACTION_TO_PARTITION[label_fraction]
+        partition = resolve_label_fraction_partition(label_fraction)
         if partition is not None and split == "train":
-            with open(path_to_splits / f"{partition}_partition.json") as json_file:
-                subset_indices = json.load(json_file)
-
+            subset_indices = load_label_fraction_partition_indices(
+                path_to_splits, partition
+            )
             self.images = self.images[subset_indices]
             self.labels = self.labels[subset_indices]
 
@@ -291,17 +273,7 @@ class MADOSDataset(Dataset):
     def _get_norm_stats(
         imputed_band_info: dict[str, dict[str, float]],
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        means = []
-        stds = []
-        mins = []
-        maxs = []
-        for band_name in EVAL_S2_BAND_NAMES:
-            assert band_name in imputed_band_info, f"{band_name} not found in band_info"
-            means.append(imputed_band_info[band_name]["mean"])  # type: ignore
-            stds.append(imputed_band_info[band_name]["std"])  # type: ignore
-            mins.append(imputed_band_info[band_name]["min"])  # type: ignore
-            maxs.append(imputed_band_info[band_name]["max"])  # type: ignore
-        return np.array(means), np.array(stds), np.array(mins), np.array(maxs)
+        return build_band_stat_arrays(imputed_band_info, EVAL_S2_BAND_NAMES)
 
     def __len__(self) -> int:
         """Lenth of the dataset."""
@@ -332,9 +304,7 @@ class MADOSDataset(Dataset):
             image = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, image)
 
         timestamp = repeat(torch.tensor(self.default_day_month_year), "d -> t d", t=1)
-        masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(
-            OlmoEarthSample(
-                sentinel2_l2a=torch.tensor(image).float(), timestamps=timestamp.long()
-            )
+        masked_sample = build_masked_eval_sample(
+            {Modality.SENTINEL2_L2A.name: torch.tensor(image).float()}, timestamp
         )
         return masked_sample, label

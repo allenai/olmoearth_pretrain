@@ -6,11 +6,20 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.evals.models import BaselineModelName
-from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
+from olmoearth_pretrain.internal.all_evals import (
+    EVAL_TASKS,
+    _eval_task,
+    _studio_linear_probe_task,
+)
 from olmoearth_pretrain.internal.full_eval_sweep import (
+    _MODEL_SWEEP_SPECS,
     LP_LRs,
     Normalization_MODES,
+    _get_model_specific_args,
+    _get_normalization_args,
+    _model_uses_dataset_norm_only,
     build_commands,
     create_linear_probe_arg,
     get_dino_v3_args,
@@ -19,6 +28,9 @@ from olmoearth_pretrain.internal.full_eval_sweep import (
     loop_through_params,
     pooling_types,
 )
+from olmoearth_pretrain.modalities import Modality
+from olmoearth_pretrain.nn.pooling import PoolingType
+from olmoearth_pretrain.train.callbacks.evaluator_callback import EvalMode
 
 
 # Fixtures for reusable test data
@@ -81,6 +93,63 @@ def minimal_args() -> argparse.Namespace:
 
 
 # Unit tests for helper functions
+def test_eval_task_helper_derives_single_modality_metadata() -> None:
+    """Eval task helper should materialize stable dataset metadata."""
+    task = _eval_task(dataset="m-eurosat")
+
+    assert task.input_modalities == [Modality.SENTINEL2_L2A.name]
+    assert task.eval_mode == EvalMode.KNN
+
+
+def test_eval_task_helper_requires_explicit_multimodal_input() -> None:
+    """Ambiguous multimodal datasets should keep explicit task modalities."""
+    with pytest.raises(ValueError, match="input_modalities must be set explicitly"):
+        _eval_task(dataset="pastis")
+
+
+def test_eval_task_helper_preserves_manual_overrides() -> None:
+    """Manual task choices should remain explicit over derived metadata."""
+    task = _eval_task(
+        dataset="pastis",
+        input_modalities=[Modality.SENTINEL1.name],
+        primary_metric=EvalMetric.MIOU,
+        pooling_type=PoolingType.MAX,
+    )
+
+    assert task.input_modalities == [Modality.SENTINEL1.name]
+    assert task.eval_mode == EvalMode.LINEAR_PROBE
+    assert task.primary_metric == EvalMetric.MIOU
+    assert task.pooling_type == PoolingType.MAX
+
+
+def test_studio_linear_probe_task_derives_registry_defaults() -> None:
+    """Studio helper should derive modalities while applying LP defaults."""
+    task = _studio_linear_probe_task(
+        dataset="tolbi_crop",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=4,
+    )
+
+    assert task.input_modalities == [Modality.SENTINEL2_L2A.name]
+    assert task.eval_mode == EvalMode.LINEAR_PROBE
+    assert task.pooling_type == PoolingType.MEAN
+    assert task.norm_stats_from_pretrained is True
+
+
+def test_eval_tasks_materialize_derived_fields() -> None:
+    """Public eval tasks should still expose concrete mode and modality fields."""
+    assert EVAL_TASKS["m_eurosat"].eval_mode == EvalMode.KNN
+    assert EVAL_TASKS["m_eurosat"].input_modalities == [Modality.SENTINEL2_L2A.name]
+    assert EVAL_TASKS["m_bigearthnet"].primary_metric == EvalMetric.MACRO_F1
+    assert EVAL_TASKS["pastis_sentinel1"].eval_mode == EvalMode.LINEAR_PROBE
+    assert EVAL_TASKS["pastis_sentinel1"].input_modalities == [Modality.SENTINEL1.name]
+    assert EVAL_TASKS["forest_loss_driver"].eval_mode == EvalMode.LINEAR_PROBE
+    assert EVAL_TASKS["forest_loss_driver"].input_modalities == [
+        Modality.SENTINEL2_L2A.name
+    ]
+
+
 class TestCreateLinearProbeArg:
     """Test create_linear_probe_arg function."""
 
@@ -169,6 +238,42 @@ class TestLoopThroughParamsNoNorm:
 
 class TestModelSpecificArgs:
     """Test model-specific argument generation functions."""
+
+    def test_model_sweep_specs_cover_registered_baselines(self) -> None:
+        """Every registered baseline should have explicit full-sweep policy."""
+        assert set(_MODEL_SWEEP_SPECS) == set(BaselineModelName)
+
+    def test_dataset_norm_only_models_are_explicit(self) -> None:
+        """The reduced normalization sweep should come from model sweep specs."""
+        dataset_norm_only_models = {
+            model for model in BaselineModelName if _model_uses_dataset_norm_only(model)
+        }
+
+        assert dataset_norm_only_models == {
+            BaselineModelName.DINO_V3,
+            BaselineModelName.PANOPTICON,
+            BaselineModelName.TESSERA,
+        }
+
+    @pytest.mark.parametrize("model", list(BaselineModelName))
+    def test_get_model_specific_args_uses_sweep_specs(
+        self, model: BaselineModelName
+    ) -> None:
+        """Each registered baseline should emit model-specific sweep arguments."""
+        assert _get_model_specific_args(model)
+
+    def test_get_normalization_args_uses_model_specific_builder(self) -> None:
+        """Models with pretrained normalizers should route through their builder."""
+        pre_trained_args = _get_normalization_args(
+            BaselineModelName.GALILEO,
+            "pre_trained",
+        )
+        dataset_args = _get_normalization_args(BaselineModelName.GALILEO, "dataset")
+
+        assert "norm_method=NormMethod.NO_NORM" in pre_trained_args
+        assert "use_pretrained_normalizer=True" in pre_trained_args
+        assert "norm_method=NormMethod.NORM_NO_CLIP_2_STD" in dataset_args
+        assert "use_pretrained_normalizer=False" in dataset_args
 
     def test_get_dino_v3_args(self) -> None:
         """Test DinoV3 argument generation."""

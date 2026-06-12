@@ -31,14 +31,14 @@ from einops import rearrange
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from olmoearth_pretrain.data.constants import Modality as DataModality
 from olmoearth_pretrain.data.utils import convert_to_db
-from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
+from olmoearth_pretrain.evals.constants import resolve_rslearn_modality
 from olmoearth_pretrain.evals.datasets.rslearn_builder import (
     build_model_dataset,
     get_modality_layers,
     parse_model_config,
 )
+from olmoearth_pretrain.modalities import Modality as DataModality
 
 logger = logging.getLogger(__name__)
 # Default to 0 (no multiprocessing), but allow override via env var
@@ -52,22 +52,6 @@ def _collate_inputs_only(batch: list) -> list:
     This handles variable-shaped tensors by not attempting to stack them.
     """
     return batch
-
-
-def _resolve_layer_name(layer: str) -> str | None:
-    """Resolve an rslearn layer name to a key in RSLEARN_TO_OLMOEARTH.
-
-    Also handles layer names prefixed with "pre_" or "post_" to make
-    compatible with older datasets that use these prefixed layer names.
-    """
-    if layer in RSLEARN_TO_OLMOEARTH:
-        return layer
-    for prefix in ("pre_", "post_"):
-        if layer.startswith(prefix):
-            stripped = layer[len(prefix) :]
-            if stripped in RSLEARN_TO_OLMOEARTH:
-                return stripped
-    return None
 
 
 def _get_bands_by_modality(
@@ -85,9 +69,8 @@ def _get_bands_by_modality(
     modality_layers = get_modality_layers(model_config)
 
     for layer in modality_layers:
-        resolved = _resolve_layer_name(layer)
-        if resolved is not None:
-            modality = RSLEARN_TO_OLMOEARTH[resolved]
+        modality = resolve_rslearn_modality(layer)
+        if modality is not None:
             bands_by_modality[modality.name] = modality.band_order
 
     return bands_by_modality
@@ -292,7 +275,7 @@ def compute_band_stats_from_model_config(
     Returns:
         Nested dict of band statistics per modality.
     """
-    random.seed(seed)
+    rng = random.Random(seed)
 
     model_config = parse_model_config(model_config_path)
     if not model_config:
@@ -315,7 +298,7 @@ def compute_band_stats_from_model_config(
         print(
             f"Sampling {num_samples} of {total_samples} samples for stats computation"
         )
-        indices = random.sample(range(total_samples), num_samples)
+        indices = rng.sample(range(total_samples), num_samples)
         model_ds = torch.utils.data.Subset(model_ds, indices)
     else:
         print(f"Processing all {total_samples} samples")

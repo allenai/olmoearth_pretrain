@@ -6,7 +6,8 @@ import pytest
 import torch
 from einops import repeat
 
-from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.datatypes import MaskValue
+from olmoearth_pretrain.modalities import Modality, ModalitySpec
 from olmoearth_pretrain.nn.flexi_vit import (
     CompositeEncodings,
     Encoder,
@@ -20,7 +21,6 @@ from olmoearth_pretrain.nn.flexi_vit import (
     TokensAndMasks,
 )
 from olmoearth_pretrain.nn.pooling import pool_unmasked_tokens
-from olmoearth_pretrain.train.masking import MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -438,6 +438,7 @@ class TestPredictor:
         # Add some missing tokens (value MISSING)
         mask[0, 0] = MaskValue.MISSING.value  # First token in first batch is missing
         mask[1, 1] = MaskValue.MISSING.value  # Second token in second batch is missing
+        original_mask = mask.clone()
 
         (
             tokens_to_decode,
@@ -450,6 +451,8 @@ class TestPredictor:
             max_length_of_decoded_tokens,
             max_length_of_unmasked_tokens,
         ) = Predictor.split_x_y(tokens, mask)
+
+        assert torch.equal(mask, original_mask)
         # Check shapes
         assert unmasked_tokens.shape == (2, 6, 1)
         assert tokens_to_decode.shape == (2, 3, 1)

@@ -3,8 +3,8 @@
 from rslearn.dataset import Window
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import ModalitySpec, TimeSpan
 from olmoearth_pretrain.dataset.utils import WindowMetadata, get_modality_dir
+from olmoearth_pretrain.modalities import ModalitySpec, TimeSpan
 
 from .constants import WINDOW_DURATION
 

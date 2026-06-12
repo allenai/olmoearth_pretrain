@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import functools
 import types
 import warnings
-from collections.abc import Callable
-from typing import Any, TypeVar, no_type_check
+from typing import TypeVar, no_type_check
 
 T = TypeVar("T", bound=type)
-F = TypeVar("F", bound=Callable[..., Any])
 
 
 @no_type_check
@@ -61,30 +58,4 @@ def deprecated_class_alias(new_class: T, old_qualname: str) -> T:
     return alias  # type: ignore[return-value]
 
 
-@no_type_check
-def deprecated_function_alias(new_function: F, old_qualname: str) -> F:
-    """Create a deprecated alias for ``new_function`` that warns on call."""
-    module_name, _, func_name = old_qualname.rpartition(".")
-    if not func_name:
-        func_name = old_qualname
-
-    warning_message = (
-        f"'{old_qualname}' is deprecated and will be removed in a future release. "
-        f"Please update your code to use '{new_function.__module__}.{new_function.__name__}'."
-    )
-
-    @functools.wraps(new_function)
-    def wrapper(*args: Any, **kwargs: Any):
-        warnings.warn(warning_message, DeprecationWarning, stacklevel=2)
-        return new_function(*args, **kwargs)
-
-    wrapper.__name__ = func_name
-    wrapper.__qualname__ = func_name
-    wrapper.__module__ = module_name or new_function.__module__.replace(
-        "olmoearth_pretrain", "helios"
-    )
-    wrapper.__deprecated_target__ = new_function  # type: ignore[attr-defined]
-    return wrapper  # type: ignore[return-value]
-
-
-__all__ = ["deprecated_class_alias", "deprecated_function_alias"]
+__all__ = ["deprecated_class_alias"]

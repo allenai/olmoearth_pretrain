@@ -14,14 +14,6 @@ import torch
 from rasterio.transform import from_origin
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import (
-    MISSING_VALUE,
-    BandSet,
-    Modality,
-    ModalitySpec,
-)
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
-from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
 from olmoearth_pretrain.dataset.parse import (
     GridTile,
     ModalityImage,
@@ -29,7 +21,17 @@ from olmoearth_pretrain.dataset.parse import (
     TimeSpan,
 )
 from olmoearth_pretrain.dataset.sample import SampleInformation
-from olmoearth_pretrain.train.masking import MaskValue
+from olmoearth_pretrain.datatypes import (
+    MaskValue,
+    OlmoEarthSample,
+    make_modality_mask_like,
+)
+from olmoearth_pretrain.modalities import (
+    MISSING_VALUE,
+    BandSet,
+    Modality,
+    ModalitySpec,
+)
 
 # Avoid triton imports from olmo-core during tests
 # sys.modules["triton"] = types.SimpleNamespace(
@@ -235,6 +237,8 @@ def setup_h5py_dir(
     session_tmp_path: Path, prepare_samples_and_supported_modalities: tuple
 ) -> UPath:
     """Setup the h5py directory."""
+    from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
+
     prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
     prepared_samples = prepare_samples(session_tmp_path)
     convert_to_h5py = ConvertToH5py(
@@ -254,6 +258,8 @@ def prepare_h5py_dir_n_samples(
     tmp_path: Path, prepare_samples_and_supported_modalities: tuple, n: int
 ) -> UPath:
     """Setup the h5py directory with n samples."""
+    from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
+
     prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
     prepared_samples = prepare_samples(tmp_path)
     convert_to_h5py = ConvertToH5py(
@@ -303,13 +309,19 @@ def masked_sample_dict(
     # Create dummy sentinel2_l2a data: shape (B, H, W, T, C)
     sentinel2_l2a = torch.randn(B, H, W, T, C, requires_grad=True)
     # Here we assume 0 (ONLINE_ENCODER) means the token is visible.
-    sentinel2_l2a_mask = torch.full(
-        (B, H, W, T, C), fill_value=MaskValue.ONLINE_ENCODER.value, dtype=torch.long
+    sentinel2_l2a_mask = make_modality_mask_like(
+        sentinel2_l2a,
+        Modality.SENTINEL2_L2A,
+        fill_value=MaskValue.ONLINE_ENCODER.value,
+        dtype=torch.long,
     )
     # Dummy latitude-longitude data.
     latlon = torch.randn(B, latlon_num_bands, requires_grad=True)
-    latlon_mask = torch.full(
-        (B, latlon_num_bands), fill_value=MaskValue.DECODER.value, dtype=torch.float32
+    latlon_mask = make_modality_mask_like(
+        latlon,
+        Modality.LATLON,
+        fill_value=MaskValue.DECODER.value,
+        dtype=torch.float32,
     )
     worldcover = torch.randn(B, H, W, 1, 1, requires_grad=True)
     worldcover_mask = torch.full(

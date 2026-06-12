@@ -12,23 +12,27 @@ from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.constants import (
+from olmoearth_pretrain.datatypes import (
+    MaskedOlmoEarthSample,
+    MaskValue,
+    TokensAndMasks,
+)
+from olmoearth_pretrain.decorators import experimental
+from olmoearth_pretrain.modalities import (
     Modality,
     ModalitySpec,
     get_modality_specs_from_names,
 )
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
-from olmoearth_pretrain.decorators import experimental
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.flexi_vit import (
     BASE_GSD,
     CompositeEncodings,
     MultiModalPatchEmbeddings,
     ProjectAndAggregate,
-    TokensAndMasks,
     get_modalities_to_process,
     return_modalities_from_dict,
 )
+from olmoearth_pretrain.nn.token_split import combine_split_tokens, split_tokens_by_mask
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 
 logger = logging.getLogger(__name__)
@@ -145,8 +149,7 @@ class STBase(nn.Module):
             return self.collapse_and_combine_temporal(x)
         elif mode == AttentionMode.WINDOWED:
             return self.collapse_and_combine_windowed(x, block_idx)
-        # Should not be possible.
-        assert False
+        raise ValueError(f"Unsupported attention mode: {mode}")
 
     def collapse_and_combine_full(self, x: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
         """Collapse the tokens and masks, respectively, into two tensors.
@@ -494,8 +497,7 @@ class STBase(nn.Module):
             return self.split_and_expand_per_modality_windowed(
                 x, modalities_to_dims_dict, self.windowed_attention_size, block_idx
             )
-        # Should not be possible.
-        assert False
+        raise ValueError(f"Unsupported attention mode: {mode}")
 
     @staticmethod
     def split_and_expand_per_modality_full(
@@ -1319,20 +1321,18 @@ class STPredictor(STBase):
 
         return output_dict
 
-    # TODO: These are duplicated static methods maybe they should just be utils functions if they are shared or in some base class
-    # TODO: GIVE more explicit function names
     @staticmethod
     def split_x_y(
         tokens: Tensor, mask: Tensor
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-        """Splits tokens into three groups based on mask values.
+        """Split tokens into decode and online-encoder groups based on mask values.
 
         This function:
         1. Sorts tokens according to the mask and gathers them in order.
         2. Chooses tokens to be decoded (x) based on the mask value DECODER.
         3. Chooses tokens to be used as context (y) based on the mask value ONLINE_ENCODER.
-        4. Identifies missing tokens (z) based on the mask value MISSING.
-        5. Returns boolean masks for x, y, and z along with indices to revert to the original ordering.
+        4. Treats missing tokens as unused without mutating the input mask.
+        5. Returns masks and indices to revert to the original ordering.
 
         Args:
             tokens: Tokens to split of shape [B, T, D].
@@ -1345,46 +1345,14 @@ class STPredictor(STBase):
             unmasked_tokens_mask: Binary mask for y tokens of shape [B, Y_len].
             indices: Indices for restoring the original token ordering of shape [B, T].
         """
-        # Set Missing Masks to Target Encoder ONLY so that we can have all unused tokens in the middle
-        org_mask_dtype = mask.dtype
-        missing_mask = mask == MaskValue.MISSING.value
-        mask[missing_mask] = MaskValue.TARGET_ENCODER_ONLY.value
-
-        # Sort tokens by mask value (descending order)
-        sorted_mask, indices = torch.sort(
-            mask.int(), dim=1, descending=True, stable=True
-        )
-        tokens = tokens.gather(1, indices[:, :, None].expand_as(tokens))
-
-        # Create binary masks for Encoder and Decoder
-        binarized_decoder_mask = sorted_mask == MaskValue.DECODER.value
-        binarized_online_encoder_mask = sorted_mask == MaskValue.ONLINE_ENCODER.value
-
-        max_length_of_unmasked_tokens = binarized_online_encoder_mask.sum(dim=-1).max()
-        max_length_of_decoded_tokens = binarized_decoder_mask.sum(dim=-1).max()
-
-        # the y mask is going to be used to determine which of the y values take. True values
-        # take part in the attention (we don't take the inverse here, unlike in the decoder)
-        tokens_to_decode = tokens[:, :max_length_of_decoded_tokens]
-        tokens_to_decode_mask = binarized_decoder_mask[
-            :, :max_length_of_decoded_tokens
-        ].to(org_mask_dtype)
-
-        unmasked_tokens = tokens[:, -max_length_of_unmasked_tokens:]
-        # the x_mask is just going to be used in the reconstruction, to know which
-        # x tokens to add back into the token list. TODO is this even necessary? it could
-        # get padded with noise tokens since we don't care about reconstruction at all
-        # for a whole bunch of tokens
-        unmasked_tokens_mask = binarized_online_encoder_mask[
-            :, -max_length_of_unmasked_tokens:
-        ].to(org_mask_dtype)
+        split = split_tokens_by_mask(tokens, mask)
 
         return (
-            tokens_to_decode,
-            unmasked_tokens,
-            tokens_to_decode_mask,
-            unmasked_tokens_mask,
-            indices,
+            split.tokens_to_decode,
+            split.unmasked_tokens,
+            split.tokens_to_decode_mask,
+            split.unmasked_tokens_mask,
+            split.indices,
         )
 
     @staticmethod
@@ -1395,7 +1363,7 @@ class STPredictor(STBase):
         unmasked_tokens_mask: Tensor,
         indices: Tensor,
     ) -> Tensor:
-        """Reintegrate the separated token sequences into their original order.
+        """Recombine separated token sequences into their original order.
 
         The token masks zero out positions which are not used/needed,
         and the final scatter step re-applies the original ordering tracked in 'indices'.
@@ -1411,20 +1379,13 @@ class STPredictor(STBase):
             A merged tokens tensor of shape [B, T, D] with all tokens in their
             original positions.
         """
-        # Get dimensions
-        B, T = indices.shape[0], indices.shape[1]
-        D = tokens_to_decode.shape[-1]
-        tokens = torch.zeros(
-            (B, T, D), dtype=tokens_to_decode.dtype, device=tokens_to_decode.device
+        return combine_split_tokens(
+            tokens_to_decode=tokens_to_decode,
+            unmasked_tokens=unmasked_tokens,
+            tokens_to_decode_mask=tokens_to_decode_mask,
+            unmasked_tokens_mask=unmasked_tokens_mask,
+            indices=indices,
         )
-        tokens[:, -unmasked_tokens.shape[1] :] = (
-            unmasked_tokens * unmasked_tokens_mask.unsqueeze(-1)
-        )
-        tokens[:, : tokens_to_decode.shape[1]] += (
-            tokens_to_decode * tokens_to_decode_mask.unsqueeze(-1)
-        )
-        tokens = tokens.scatter(1, indices[:, :, None].expand_as(tokens), tokens)
-        return tokens
 
     def apply_attn(
         self,

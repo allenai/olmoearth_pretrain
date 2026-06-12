@@ -1,6 +1,14 @@
 """Test configs are properly constructed."""
 
-from olmoearth_pretrain.evals.datasets.configs import DATASET_TO_CONFIG, TaskType
+import pytest
+
+from olmoearth_pretrain.evals.datasets.configs import (
+    DATASET_TO_CONFIG,
+    EvalDatasetConfig,
+    TaskType,
+    dataset_to_config,
+)
+from olmoearth_pretrain.evals.studio_ingest import registry
 from olmoearth_pretrain.evals.studio_ingest.schema import EvalDatasetEntry
 
 
@@ -55,3 +63,37 @@ def test_eval_dataset_entry_classification_no_height_width() -> None:
 
     assert config.task_type == TaskType.CLASSIFICATION
     assert config.height_width is None  # classification doesn't use height_width
+
+
+def test_dataset_to_config_hardcoded_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hardcoded legacy configs should win without consulting the registry."""
+    monkeypatch.setattr(
+        registry,
+        "get_dataset_entry",
+        lambda name: (_ for _ in ()).throw(AssertionError(name)),
+    )
+
+    assert dataset_to_config("mados") is DATASET_TO_CONFIG["mados"]
+
+
+def test_dataset_to_config_falls_back_to_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unknown dataset configs should come from the external registry."""
+    expected = EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[],
+        num_classes=2,
+        is_multilabel=False,
+        supported_modalities=["sentinel2_l2a"],
+    )
+
+    class FakeEntry:
+        def to_eval_config(self) -> EvalDatasetConfig:
+            return expected
+
+    monkeypatch.setattr(registry, "get_dataset_entry", lambda name: FakeEntry())
+
+    assert dataset_to_config("registry-dataset") is expected

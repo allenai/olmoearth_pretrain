@@ -11,14 +11,15 @@ from olmoearth_pretrain.data.collate import (
     collate_double_masked_batched,
     collate_single_masked_batched,
 )
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import (
     OlmoEarthDataLoader,
     OlmoEarthDataLoaderConfig,
     _IterableDatasetWrapper,
+    _valid_sampled_hw_p_array,
 )
-from olmoearth_pretrain.data.dataset import OlmoEarthDataset, OlmoEarthSample
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.data.dataset import OlmoEarthDataset
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, OlmoEarthSample
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.train.masking import MaskingConfig
 
 
@@ -116,6 +117,25 @@ def test_get_batch_item_params_iterator(tmp_path: Path, setup_h5py_dir: Path) ->
         third_sampled_hw_p = third_batch[0][2]
         assert all(item[1] == third_patch_size for item in third_batch)
         assert all(item[2] == third_sampled_hw_p for item in third_batch)
+
+
+def test_valid_sampled_hw_p_array_filters_for_patch_size() -> None:
+    """Patch-size sampling should keep only positive values that fit the tile."""
+    valid = _valid_sampled_hw_p_array(
+        patch_size=64,
+        hw_p_to_sample_array=np.array([0, 1, 2, 4, 8]),
+    )
+
+    assert valid.tolist() == [1, 2, 4]
+
+
+def test_valid_sampled_hw_p_array_errors_when_no_values_fit() -> None:
+    """Patch-size sampling should fail clearly instead of sampling an empty array."""
+    with pytest.raises(ValueError, match="No sampled_hw_p_list values are valid"):
+        _valid_sampled_hw_p_array(
+            patch_size=128,
+            hw_p_to_sample_array=np.array([0, 3, 4]),
+        )
 
 
 def _create_test_dataloader(
@@ -272,6 +292,67 @@ def test_build_global_indices_properties_validation(tmp_path: Path) -> None:
     # Length should be divisible by global batch size (due to cropping)
     assert len(indices) % dataloader.global_batch_size == 0, (
         "Indices length should be divisible by global batch size"
+    )
+
+
+def test_fast_forward_returns_batch_slice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fast-forward should return the batch at the step offset."""
+    dataloader = _create_test_dataloader(tmp_path, shuffle=False, global_batch_size=4)
+    global_indices = np.array(
+        [7, 3, 10, 1, 6, 0, 4, 2, 9, 8, 5, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+        dtype=np.uint32,
+    )
+    dataloader._global_indices = global_indices
+    reshuffle_epochs = []
+
+    def fake_reshuffle(epoch: int, in_memory: bool = False) -> None:
+        del in_memory
+        reshuffle_epochs.append(epoch)
+
+    monkeypatch.setattr("olmoearth_pretrain.data.dataloader.get_world_size", lambda: 1)
+    monkeypatch.setattr(dataloader, "reshuffle", fake_reshuffle)
+
+    np.testing.assert_array_equal(dataloader.fast_forward(1), global_indices[4:8])
+    np.testing.assert_array_equal(
+        dataloader.fast_forward(dataloader.total_batches), global_indices[:4]
+    )
+    assert reshuffle_epochs == [1, 2]
+
+
+def test_get_mock_sample_uses_modality_specs(tmp_path: Path) -> None:
+    """Mock samples should be generated from ModalitySpec."""
+    dataloader = _create_test_dataloader(tmp_path, global_batch_size=2)
+    dataloader.dataset.training_modalities = [
+        Modality.WORLDCEREAL.name,
+        Modality.NDVI.name,
+        Modality.NAIP_10.name,
+        Modality.ERA5_10.name,
+        Modality.LATLON.name,
+    ]
+
+    sample = dataloader._get_mock_sample(np.random.default_rng(0))
+
+    assert sample.worldcereal is not None
+    assert sample.worldcereal.shape == OlmoEarthSample.compute_expected_shape(
+        Modality.WORLDCEREAL.name, height=64, width=64, time=12
+    )
+    assert sample.ndvi is not None
+    assert sample.ndvi.shape == OlmoEarthSample.compute_expected_shape(
+        Modality.NDVI.name, height=64, width=64, time=12
+    )
+    assert sample.naip_10 is not None
+    assert sample.naip_10.shape == OlmoEarthSample.compute_expected_shape(
+        Modality.NAIP_10.name, height=64, width=64, time=12
+    )
+    assert sample.era5_10 is not None
+    assert sample.era5_10.shape == OlmoEarthSample.compute_expected_shape(
+        Modality.ERA5_10.name, height=None, width=None, time=12
+    )
+    assert sample.latlon is not None
+    assert sample.latlon.shape == OlmoEarthSample.compute_expected_shape(
+        Modality.LATLON.name, height=None, width=None, time=12
     )
 
 

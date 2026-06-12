@@ -14,7 +14,7 @@ from base_band_dropout_no_s1_drop_random_time import (
 
 from olmoearth_pretrain.internal.experiment import CommonComponents, main
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
-from olmoearth_pretrain.nn.flexihelios import (
+from olmoearth_pretrain.nn.flexi_vit import (
     EncoderConfig,
     PredictorConfig,
 )

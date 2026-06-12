@@ -8,10 +8,10 @@ This verifies model loading works regardless of whether olmo-core is installed.
 
 To run locally:
     # Minimal deps (no olmo-core)
-    uv run --group dev pytest -v tests_minimal_deps/
+    uv run --extra dev pytest -v tests_minimal_deps/
 
     # Full deps (with olmo-core)
-    uv run pytest -v tests_minimal_deps/
+    uv run --extra all-no-flash pytest -v tests_minimal_deps/
 """
 
 import json

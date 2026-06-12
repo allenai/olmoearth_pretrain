@@ -12,8 +12,8 @@ from rslearn.utils.geometry import PixelBounds, Projection
 from rslearn.utils.raster_array import RasterArray
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import BandSet, ModalitySpec, TimeSpan
 from olmoearth_pretrain.dataset.utils import get_modality_fname
+from olmoearth_pretrain.modalities import BandSet, ModalitySpec, TimeSpan
 
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata

@@ -36,11 +36,11 @@ from olmo_core.distributed.parallel.data_parallel import (
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
 from olmoearth_pretrain.internal.experiment import CommonComponents, SubCmd, main
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
-from olmoearth_pretrain.nn.flexihelios import EncoderConfig, PredictorConfig
+from olmoearth_pretrain.modalities import Modality
+from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.loss import LossConfig

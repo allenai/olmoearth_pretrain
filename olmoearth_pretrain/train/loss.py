@@ -14,10 +14,13 @@ from einops import rearrange, repeat
 from torch import Tensor
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.datatypes import (
+    MaskedOlmoEarthSample,
+    MaskValue,
+    TokensAndMasks,
+)
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +229,7 @@ class PatchDiscriminationLoss(Loss):
         all_targets = targets.flatten_all_tokens_and_masks()[0]
 
         # Samples may have different number of tokens
-        # TODO: Skip unqueeze and the for loop when mask_other_samples is True
+        # TODO: Skip unsqueeze and the for loop when mask_other_samples is True.
         pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
         target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
         bs, nt, _ = pred.shape
@@ -323,7 +326,7 @@ class ModalityPatchDiscriminationLoss(Loss):
             modality_preds, modality_masks, modality_targets, targets.modalities
         ):
             # Samples may have different number of tokens
-            # TODO: Skip unqueeze and the for loop when mask_other_samples is True
+            # TODO: Skip unsqueeze and the for loop when mask_other_samples is True.
             pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
             target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
             bs, nt, _ = pred.shape

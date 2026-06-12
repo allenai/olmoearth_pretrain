@@ -1,6 +1,5 @@
 """PASTIS-R (S2+S1) dataset class."""
 
-import json
 import logging
 from pathlib import Path
 
@@ -9,8 +8,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.evals.datasets.constants import (
     EVAL_S1_BAND_NAMES,
     EVAL_S2_BAND_NAMES,
@@ -18,8 +16,14 @@ from olmoearth_pretrain.evals.datasets.constants import (
     EVAL_TO_OLMOEARTH_S2_BANDS,
 )
 from olmoearth_pretrain.evals.datasets.normalize import normalize_bands
-from olmoearth_pretrain.evals.datasets.utils import load_min_max_stats
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
+from olmoearth_pretrain.evals.datasets.utils import (
+    build_band_stat_arrays,
+    build_masked_eval_sample,
+    load_label_fraction_partition_indices,
+    load_min_max_stats,
+    resolve_label_fraction_partition,
+)
+from olmoearth_pretrain.modalities import Modality
 
 logger = logging.getLogger(__name__)
 
@@ -45,19 +49,6 @@ S1_BAND_STATS = {
     "vh": {"mean": -17.3257, "std": 2.8106},
 }
 
-# Map low-label fractions to the precomputed partition-file basename shipped
-# alongside the PASTIS partitions (e.g. ``0.01x_train_partition.json``). 1.0
-# means "use everything", i.e. no partition file.
-_LABEL_FRACTION_TO_PARTITION = {
-    0.01: "0.01x_train",
-    0.02: "0.02x_train",
-    0.05: "0.05x_train",
-    0.10: "0.10x_train",
-    0.20: "0.20x_train",
-    0.50: "0.50x_train",
-    1.00: None,
-}
-
 
 class PASTISRDataset(Dataset):
     """PASTIS-R dataset class."""
@@ -74,7 +65,7 @@ class PASTISRDataset(Dataset):
         # Default to 2std no clip - this matches what our model sees in pretraining,
         # so when using dataset stats (e.g. for MADOS) consistency is important.
         norm_method: str = "norm_no_clip_2_std",
-        input_modalities: list[str] = [],
+        input_modalities: list[str] | None = None,
     ):
         """Init PASTIS-R dataset.
 
@@ -89,6 +80,7 @@ class PASTISRDataset(Dataset):
         """
         assert split in ["train", "valid", "test"]
 
+        input_modalities = list(input_modalities or [])
         assert len(input_modalities) > 0, "input_modalities must be set"
         assert all(
             modality in self.allowed_modalities for modality in input_modalities
@@ -152,20 +144,13 @@ class PASTISRDataset(Dataset):
         self.s1_images_dir = path_to_splits / f"pastis_r_{split}" / "s1_images"
         self.labels = torch.load(path_to_splits / f"pastis_r_{split}" / "targets.pt")
         self.months = torch.load(path_to_splits / f"pastis_r_{split}" / "months.pt")
-        if label_fraction not in _LABEL_FRACTION_TO_PARTITION:
-            valid = ", ".join(
-                f"{value:g}" for value in sorted(_LABEL_FRACTION_TO_PARTITION)
-            )
-            raise ValueError(
-                f"Unsupported label_fraction {label_fraction}. Supported values "
-                f"are: {valid}"
-            )
-        partition = _LABEL_FRACTION_TO_PARTITION[label_fraction]
+        partition = resolve_label_fraction_partition(label_fraction)
         if partition is not None and split == "train":
             assert dir_partition is not None, "dir_partition must be set"
             # PASTIS and PASTIS-R share the same partitions so we just use PASTIS Partitions
-            with open(dir_partition / f"{partition}_partition.json") as json_file:
-                subset_indices = json.load(json_file)
+            subset_indices = load_label_fraction_partition_indices(
+                dir_partition, partition
+            )
             self.months = self.months[subset_indices]
             self.labels = self.labels[subset_indices]
             self.indices = subset_indices
@@ -177,17 +162,7 @@ class PASTISRDataset(Dataset):
         imputed_band_info: dict[str, dict[str, float]],
         band_names: list[str],
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        means = []
-        stds = []
-        mins = []
-        maxs = []
-        for band_name in band_names:
-            assert band_name in imputed_band_info, f"{band_name} not found in band_info"
-            means.append(imputed_band_info[band_name]["mean"])  # type: ignore
-            stds.append(imputed_band_info[band_name]["std"])  # type: ignore
-            mins.append(imputed_band_info[band_name]["min"])  # type: ignore
-            maxs.append(imputed_band_info[band_name]["max"])  # type: ignore
-        return np.array(means), np.array(stds), np.array(mins), np.array(maxs)
+        return build_band_stat_arrays(imputed_band_info, band_names)
 
     def __len__(self) -> int:
         """Length of the dataset."""
@@ -247,7 +222,7 @@ class PASTISRDataset(Dataset):
         timestamps = torch.stack(timestamps)
 
         # Build sample dict based on requested modalities
-        sample_dict = {"timestamps": timestamps}
+        sample_dict = {}
 
         if Modality.SENTINEL1.name in self.input_modalities:
             sample_dict[Modality.SENTINEL1.name] = torch.from_numpy(s1_image).float()
@@ -256,11 +231,11 @@ class PASTISRDataset(Dataset):
                 s2_image
             ).float()
 
-        if not sample_dict:
-            raise ValueError(f"No valid modalities found in: {self.input_modalities}")
-
-        masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(
-            OlmoEarthSample(**sample_dict)
-        )
+        try:
+            masked_sample = build_masked_eval_sample(sample_dict, timestamps)
+        except ValueError as exc:
+            raise ValueError(
+                f"No valid modalities found in: {self.input_modalities}"
+            ) from exc
 
         return masked_sample, labels.long()

@@ -2,7 +2,6 @@
 
 import functools
 import logging
-import math
 import multiprocessing as mp
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
@@ -27,20 +26,20 @@ from upath import UPath
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.collate import (
+    MaskingStrategyLike,
     collate_double_masked_batched,
     collate_single_masked_batched,
 )
 from olmoearth_pretrain.data.concat import OlmoEarthConcatDataset
-from olmoearth_pretrain.data.constants import IMAGE_TILE_SIZE, Modality
 from olmoearth_pretrain.data.dataset import (
     GetItemArgs,
     OlmoEarthDataset,
-    OlmoEarthSample,
     subset_sample_default,
 )
 from olmoearth_pretrain.data.transform import Transform, TransformConfig
+from olmoearth_pretrain.datatypes import OlmoEarthSample
+from olmoearth_pretrain.modalities import IMAGE_TILE_SIZE, Modality
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
-from olmoearth_pretrain.train.masking import MaskingConfig, MaskingStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +75,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
         num_dataset_repeats_per_epoch: int = 1,
         # Dataloader-side masking
         transform: Transform | None = None,
-        masking_strategy: MaskingStrategy | None = None,
-        masking_strategy_b: MaskingStrategy | None = None,
+        masking_strategy: MaskingStrategyLike | None = None,
+        masking_strategy_b: MaskingStrategyLike | None = None,
         num_masked_views: int = 1,
         tokenization_config: TokenizationConfig | None = None,
     ):
@@ -229,7 +228,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
                     with memmap_to_write(
                         self._global_indices_file,
                         shape=global_indices.shape,
-                        dtype=np.int32,
+                        dtype=np.uint32,
                     ) as global_indices_mmap:
                         global_indices_mmap[:] = global_indices
                     logger.info(
@@ -356,81 +355,27 @@ class OlmoEarthDataLoader(DataLoaderBase):
         return "_".join(parts)
 
     def _get_mock_sample(self, rng: np.random.Generator) -> OlmoEarthSample:
-        output_dict = {}
+        output_dict: dict[str, np.ndarray] = {}
         standard_hw = 64
-        if Modality.SENTINEL2_L2A.name in self.dataset.training_modalities:
-            mock_sentinel2_l2a = rng.random(
-                (standard_hw, standard_hw, 12, 12), dtype=np.float32
-            )
-            output_dict["sentinel2_l2a"] = mock_sentinel2_l2a
-        if Modality.NAIP_10.name in self.dataset.training_modalities:
-            mock_naip_10 = rng.random((1024, 1024, 1, 4), dtype=np.float32)
-            output_dict["naip_10"] = mock_naip_10
-        if Modality.SENTINEL1.name in self.dataset.training_modalities:
-            mock_sentinel1 = rng.random(
-                (standard_hw, standard_hw, 12, 2), dtype=np.float32
-            )
-            output_dict[Modality.SENTINEL1.name] = mock_sentinel1
-        if Modality.WORLDCOVER.name in self.dataset.training_modalities:
-            mock_worldcover = rng.random(
-                (standard_hw, standard_hw, 1, 1), dtype=np.float32
-            )
-            output_dict["worldcover"] = mock_worldcover
-        if Modality.LATLON.name in self.dataset.training_modalities:
-            mock_latlon = rng.random((2,), dtype=np.float32)
-            output_dict["latlon"] = mock_latlon
-        if Modality.OPENSTREETMAP_RASTER.name in self.dataset.training_modalities:
-            mock_openstreetmap_raster = rng.random(
-                (standard_hw, standard_hw, 1, 30), dtype=np.float32
-            )
-            output_dict["openstreetmap_raster"] = mock_openstreetmap_raster
-        if Modality.SRTM.name in self.dataset.training_modalities:
-            mock_srtm = rng.random((standard_hw, standard_hw, 1, 1), dtype=np.float32)
-            output_dict["srtm"] = mock_srtm
-        if Modality.LANDSAT.name in self.dataset.training_modalities:
-            mock_landsat = rng.random(
-                (standard_hw, standard_hw, 12, Modality.LANDSAT.num_bands),
+        num_timesteps = 12
+        for modality_name in self.dataset.training_modalities:
+            if modality_name not in OlmoEarthSample._fields:
+                raise ValueError(f"Unsupported mock modality: {modality_name}")
+            modality = Modality.get(modality_name)
+            output_dict[modality_name] = rng.random(
+                OlmoEarthSample.compute_expected_shape(
+                    modality_name,
+                    height=standard_hw if modality.is_spatial else None,
+                    width=standard_hw if modality.is_spatial else None,
+                    time=num_timesteps,
+                ),
                 dtype=np.float32,
             )
-            output_dict["landsat"] = mock_landsat
-        if Modality.GSE.name in self.dataset.training_modalities:
-            mock_gse = rng.random(
-                (standard_hw, standard_hw, 1, Modality.GSE.num_bands), dtype=np.float32
-            )
-            output_dict["gse"] = mock_gse
-        if Modality.CDL.name in self.dataset.training_modalities:
-            mock_cdl = rng.random(
-                (standard_hw, standard_hw, 1, Modality.CDL.num_bands), dtype=np.float32
-            )
-            output_dict["cdl"] = mock_cdl
-        if Modality.WORLDPOP.name in self.dataset.training_modalities:
-            mock_worldpop = rng.random(
-                (standard_hw, standard_hw, 1, Modality.WORLDPOP.num_bands),
-                dtype=np.float32,
-            )
-            output_dict["worldpop"] = mock_worldpop
-        if Modality.WRI_CANOPY_HEIGHT_MAP.name in self.dataset.training_modalities:
-            mock_wri_canopy_height_map = rng.random(
-                (standard_hw, standard_hw, 1, Modality.WRI_CANOPY_HEIGHT_MAP.num_bands),
-                dtype=np.float32,
-            )
-            output_dict["wri_canopy_height_map"] = mock_wri_canopy_height_map
-        if Modality.ERA5_10.name in self.dataset.training_modalities:
-            mock_era5_10 = rng.random(
-                (12, Modality.ERA5_10.num_bands), dtype=np.float32
-            )
-            output_dict["era5_10"] = mock_era5_10
-        if Modality.EUROCROPS.name in self.dataset.training_modalities:
-            mock_eurocrops = rng.random(
-                (standard_hw, standard_hw, 1, Modality.EUROCROPS.num_bands),
-                dtype=np.float32,
-            )
-            output_dict["eurocrops"] = mock_eurocrops
 
-        days = rng.integers(0, 25, (12, 1))
-        months = rng.integers(0, 12, (12, 1))
-        years = rng.integers(2018, 2020, (12, 1))
-        timestamps = np.concatenate([days, months, years], axis=1)  # shape: (12, 3)
+        days = rng.integers(0, 25, (num_timesteps, 1))
+        months = rng.integers(0, 12, (num_timesteps, 1))
+        years = rng.integers(2018, 2020, (num_timesteps, 1))
+        timestamps = np.concatenate([days, months, years], axis=1)
 
         output_dict["timestamps"] = timestamps
         return OlmoEarthSample(**output_dict)
@@ -478,13 +423,13 @@ class OlmoEarthDataLoader(DataLoaderBase):
             raise NotImplementedError("Fast forward is not supported in DDP")
         # If the model was trained with multiple GPUS, this logic must be updated so that we grab from where all the ranks started
         self.batches_processed = global_step
-        epoch = math.ceil(global_step / self.total_batches)
+        epoch = global_step // self.total_batches + 1
         step_in_epoch = global_step % self.total_batches
         logger.info(f"epoch: {epoch}, step in epoch: {step_in_epoch}")
         self.reshuffle(epoch=epoch)
-        batch_start = int(self.get_global_indices()[step_in_epoch])
+        batch_start = step_in_epoch * self.global_batch_size
         batch_end = batch_start + self.global_batch_size
-        sample_indices = np.arange(batch_start, batch_end)
+        sample_indices = self.get_global_indices()[batch_start:batch_end]
         return sample_indices
 
 
@@ -564,13 +509,10 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         for idx in indices:
             if instances_processed % rank_batch_size == 0:
                 patch_size = rng.choice(patch_size_array)
-                max_height_width_tokens = int(IMAGE_TILE_SIZE / patch_size)
-                filtered_hw_p_to_sample_array = hw_p_to_sample_array[
-                    hw_p_to_sample_array <= max_height_width_tokens
-                ]
-                filtered_hw_p_to_sample_array = filtered_hw_p_to_sample_array[
-                    filtered_hw_p_to_sample_array > 0
-                ]
+                filtered_hw_p_to_sample_array = _valid_sampled_hw_p_array(
+                    patch_size=int(patch_size),
+                    hw_p_to_sample_array=hw_p_to_sample_array,
+                )
                 sampled_hw_p = rng.choice(filtered_hw_p_to_sample_array)
             yield idx, int(patch_size), int(sampled_hw_p)
             instances_processed += 1
@@ -618,6 +560,24 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         )
 
 
+def _valid_sampled_hw_p_array(
+    *,
+    patch_size: int,
+    hw_p_to_sample_array: np.ndarray,
+) -> np.ndarray:
+    """Return valid sampled height/width patch counts for a patch size."""
+    max_height_width_tokens = int(IMAGE_TILE_SIZE / patch_size)
+    valid = hw_p_to_sample_array[
+        (hw_p_to_sample_array <= max_height_width_tokens) & (hw_p_to_sample_array > 0)
+    ]
+    if valid.size == 0:
+        raise ValueError(
+            f"No sampled_hw_p_list values are valid for patch_size={patch_size}. "
+            f"Expected at least one value in [1, {max_height_width_tokens}]."
+        )
+    return valid
+
+
 @dataclass
 class OlmoEarthDataLoaderConfig(Config):
     """Configuration for the OlmoEarthDataLoader."""
@@ -637,8 +597,8 @@ class OlmoEarthDataLoaderConfig(Config):
     num_dataset_repeats_per_epoch: int = 1
     # New fields for dataloader-side masking
     transform_config: TransformConfig | None = None
-    masking_config: MaskingConfig | None = None
-    masking_config_b: MaskingConfig | None = None
+    masking_config: Any | None = None
+    masking_config_b: Any | None = None
     num_masked_views: int = 1  # 1 = single, 2 = double
     tokenization_config: TokenizationConfig | None = None
 

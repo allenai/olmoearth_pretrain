@@ -95,7 +95,7 @@ folder is in the working directory.
 import glob
 import numpy as np
 import rasterio
-from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.modalities import Modality
 from rasterio.vrt import WarpedVRT
 from rasterio.enums import Resampling
 

@@ -5,40 +5,31 @@ import argparse
 import pandas as pd
 import torch
 
-from helios.data.constants import Modality
-from helios.data.dataset import HeliosSample
+from olmoearth_pretrain.data.dataset import _get_max_t_within_token_budget
+from olmoearth_pretrain.datatypes import OlmoEarthSample
+from olmoearth_pretrain.modalities import Modality
 
 
-def create_dummy_sample(modalities: list[str], H: int, W: int, T: int) -> HeliosSample:
-    """Creates a dummy HeliosSample for testing."""
+def create_dummy_sample(
+    modalities: list[str], height: int, width: int, time: int
+) -> OlmoEarthSample:
+    """Create a dummy OlmoEarth sample for token-budget checks."""
     sample_data = {}
 
-    # We always need timestamps for self.time
-    sample_data["timestamps"] = torch.zeros((T, 3))
+    sample_data["timestamps"] = torch.zeros((time, 3))
 
     for modality_name in modalities:
         modality_spec = Modality.get(modality_name)
-        shape = []
-        if modality_spec.is_spatial:
-            shape.extend([H, W])
-        if modality_spec.is_multitemporal:
-            shape.append(T)
-        else:
-            # for space-only varying, T is 1
-            if modality_spec.is_spatial:
-                shape.append(1)
+        sample_data[modality_name] = torch.zeros(
+            OlmoEarthSample.compute_expected_shape(
+                modality_name,
+                height=height if modality_spec.is_spatial else None,
+                width=width if modality_spec.is_spatial else None,
+                time=time,
+            )
+        )
 
-        shape.append(modality_spec.num_bands)
-
-        # Adjust for unbatched sample shape expectations.
-        # subset() expects unbatched data, e.g., (H, W, T, C) or (H, W, C)
-        # For space-only, the time dim is squeezed out if it is 1.
-        if modality_spec.is_space_only_varying:
-            shape = (H, W, modality_spec.num_bands)
-
-        sample_data[modality_name] = torch.zeros(shape)
-
-    return HeliosSample(**sample_data)
+    return OlmoEarthSample(**sample_data)
 
 
 def main():
@@ -88,8 +79,10 @@ def main():
         max_t_values = []
         for budget in token_budgets:
             try:
-                max_t = sample._get_max_t_within_token_budget(
-                    h_w_p=h_w_p, max_tokens_per_instance=budget
+                max_t = _get_max_t_within_token_budget(
+                    sample=sample,
+                    h_w_p=h_w_p,
+                    max_tokens_per_instance=budget,
                 )
                 max_t_values.append(max_t)
             except ValueError as e:

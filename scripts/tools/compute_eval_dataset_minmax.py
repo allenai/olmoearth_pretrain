@@ -21,21 +21,22 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from breizhcrops import BreizhCrops
 from einops import rearrange
 from tqdm import tqdm
 from upath import UPath
 
-from helios.evals.datasets import (
+from olmoearth_pretrain.evals.datasets.breizhcrops import LEVEL
+from olmoearth_pretrain.evals.datasets.constants import (
+    EVAL_S1_BAND_NAMES,
+    EVAL_S2_BAND_NAMES,
+)
+from olmoearth_pretrain.evals.datasets.paths import (
     BREIZHCROPS_DIR,
     FLOODS_DIR,
     MADOS_DIR,
     PASTIS_DIR,
     PASTIS_DIR_ORIG,
-)
-from helios.evals.datasets.breizhcrops import LEVEL, BreizhCrops
-from helios.evals.datasets.constants import (
-    EVAL_S1_BAND_NAMES,
-    EVAL_S2_BAND_NAMES,
 )
 
 
@@ -295,7 +296,7 @@ def main():
         "--output",
         type=str,
         default=None,
-        help="Output JSON file path. Default: helios/evals/datasets/minmax_stats.json",
+        help="Output JSON file path. Default: olmoearth_pretrain/evals/datasets/minmax_stats.json",
     )
     args = parser.parse_args()
 
@@ -353,13 +354,17 @@ def main():
         print(f"ERROR processing BreizhCrops: {e}")
         traceback.print_exc()
 
-    project_root = Path(__file__).parent.parent
+    project_root = Path(__file__).parents[2]
     # Save to JSON
     if args.output is not None:
         output_file = Path(args.output)
     else:
         output_file = (
-            project_root / "helios" / "evals" / "datasets" / "minmax_stats.json"
+            project_root
+            / "olmoearth_pretrain"
+            / "evals"
+            / "datasets"
+            / "minmax_stats.json"
         )
 
     print("\n" + "=" * 80)

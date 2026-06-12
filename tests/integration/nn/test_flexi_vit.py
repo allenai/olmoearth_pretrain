@@ -9,7 +9,12 @@ import pytest
 import torch
 from einops import rearrange
 
-from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.datatypes import (
+    MaskedOlmoEarthSample,
+    MaskValue,
+    make_modality_mask_like,
+)
+from olmoearth_pretrain.modalities import Modality, ModalitySpec
 from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     MultiModalPatchEmbeddings,
@@ -17,7 +22,6 @@ from olmoearth_pretrain.nn.flexi_vit import (
     TokensAndMasks,
 )
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +83,15 @@ class TestMultiModalPatchEmbeddings:
         ]
         B, H, W, T, num_bands = 1, 16, 16, 3, sentinel_2_num_bands
         sentinel2_l2a = torch.randn((B, H, W, T, num_bands))
-        sentinel2_l2a_mask = torch.zeros((B, H, W, T, num_bands), dtype=torch.long)
+        sentinel2_l2a_mask = make_modality_mask_like(
+            sentinel2_l2a, Modality.SENTINEL2_L2A, dtype=torch.long
+        )
         patch_size = 4
 
         latlon = torch.randn(B, latlon_num_bands)
-        latlon_mask = torch.randint(0, 2, (B, latlon_num_bands), dtype=torch.float32)
+        latlon_mask = make_modality_mask_like(
+            latlon, Modality.LATLON, dtype=torch.float32
+        )
         days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
         months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
         years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
@@ -135,12 +143,19 @@ class TestMultiModalPatchEmbeddings:
         ]
         B, H, W, T, num_bands = 1, 16, 16, 3, sentinel_2_num_bands
         sentinel2_l2a = torch.randn((B, H, W, T, num_bands))
-        sentinel2_l2a_mask = torch.zeros((B, H, W, T, num_bands), dtype=torch.long)
+        sentinel2_l2a_mask = make_modality_mask_like(
+            sentinel2_l2a, Modality.SENTINEL2_L2A, dtype=torch.long
+        )
         patch_size = 4
 
         latlon = torch.randn(B, latlon_num_bands)
         # ones means it should all be masked out from the perspective of the patch embeddings
-        latlon_mask = torch.ones((B, latlon_num_bands), dtype=torch.float32)
+        latlon_mask = make_modality_mask_like(
+            latlon,
+            Modality.LATLON,
+            fill_value=MaskValue.TARGET_ENCODER_ONLY.value,
+            dtype=torch.float32,
+        )
         days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
         months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
         years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
@@ -346,9 +361,13 @@ class TestEncoder:
         ]
         B, H, W, T, C = 1, 8, 8, 4, sentinel2_l2a_num_bands
         sentinel2_l2a = torch.randn(B, H, W, T, C)
-        sentinel2_l2a_mask = torch.zeros(B, H, W, T, C, dtype=torch.long)
+        sentinel2_l2a_mask = make_modality_mask_like(
+            sentinel2_l2a, Modality.SENTINEL2_L2A, dtype=torch.long
+        )
         latlon = torch.randn(B, latlon_num_bands)
-        latlon_mask = torch.zeros(B, latlon_num_bands, dtype=torch.float32)
+        latlon_mask = make_modality_mask_like(
+            latlon, Modality.LATLON, dtype=torch.float32
+        )
         days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
         months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
         years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
@@ -446,9 +465,13 @@ class TestEncoder:
         ]
         B, H, W, T, C = 1, 2, 2, 1, sentinel2_l2a_num_bands
         sentinel2_l2a = torch.randn(B, H, W, T, C)
-        sentinel2_l2a_mask = torch.zeros(B, H, W, T, C, dtype=torch.long)
+        sentinel2_l2a_mask = make_modality_mask_like(
+            sentinel2_l2a, Modality.SENTINEL2_L2A, dtype=torch.long
+        )
         latlon = torch.randn(B, latlon_num_bands)
-        latlon_mask = torch.zeros((B, latlon_num_bands), dtype=torch.float32)
+        latlon_mask = make_modality_mask_like(
+            latlon, Modality.LATLON, dtype=torch.float32
+        )
         # Generate valid timestamps with month in [1, 12]
         days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
         months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
@@ -547,10 +570,20 @@ class TestEncoder:
         sentinel2_l2a = torch.randn(B, H, W, T, C)
         latlon = torch.randn(B, latlon_num_bands)
         # Mask the entirety of each modality
-        sentinel2_l2a_mask = torch.ones(B, H, W, T, C, dtype=torch.long)
+        sentinel2_l2a_mask = make_modality_mask_like(
+            sentinel2_l2a,
+            Modality.SENTINEL2_L2A,
+            fill_value=MaskValue.TARGET_ENCODER_ONLY.value,
+            dtype=torch.long,
+        )
         # Make 1 token in all S2 channel groups
         sentinel2_l2a_mask[0, 0, 0, 0, :] = 0
-        latlon_mask = torch.ones(B, 2, dtype=torch.float32)
+        latlon_mask = make_modality_mask_like(
+            latlon,
+            Modality.LATLON,
+            fill_value=MaskValue.TARGET_ENCODER_ONLY.value,
+            dtype=torch.float32,
+        )
         days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
         months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
         years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
@@ -646,9 +679,13 @@ class TestEncoder:
         ]
         B, H, W, T, C = 1, 8, 8, 4, sentinel2_l2a_num_bands
         sentinel2_l2a = torch.randn(B, H, W, T, C)
-        sentinel2_l2a_mask = torch.zeros(B, H, W, T, C, dtype=torch.long)
+        sentinel2_l2a_mask = make_modality_mask_like(
+            sentinel2_l2a, Modality.SENTINEL2_L2A, dtype=torch.long
+        )
         latlon = torch.randn(B, latlon_num_bands)
-        latlon_mask = torch.zeros(B, latlon_num_bands, dtype=torch.float32)
+        latlon_mask = make_modality_mask_like(
+            latlon, Modality.LATLON, dtype=torch.float32
+        )
         days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
         months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
         years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
@@ -753,9 +790,13 @@ class TestEncoder:
         ]
         B, H, W, T, C = 1, 8, 8, 4, sentinel2_l2a_num_bands
         sentinel2_l2a = torch.randn(B, H, W, T, C)
-        sentinel2_l2a_mask = torch.zeros(B, H, W, T, C, dtype=torch.long)
+        sentinel2_l2a_mask = make_modality_mask_like(
+            sentinel2_l2a, Modality.SENTINEL2_L2A, dtype=torch.long
+        )
         latlon = torch.randn(B, latlon_num_bands)
-        latlon_mask = torch.zeros(B, latlon_num_bands, dtype=torch.float32)
+        latlon_mask = make_modality_mask_like(
+            latlon, Modality.LATLON, dtype=torch.float32
+        )
         days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
         months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
         years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)

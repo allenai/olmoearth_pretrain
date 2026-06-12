@@ -19,7 +19,7 @@ from olmo_core.optim import AdamWConfig
 
 from olmoearth_pretrain.internal.experiment import CommonComponents, main
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
-from olmoearth_pretrain.nn.flexihelios import (
+from olmoearth_pretrain.nn.flexi_vit import (
     EncoderConfig,
     PredictorConfig,
 )

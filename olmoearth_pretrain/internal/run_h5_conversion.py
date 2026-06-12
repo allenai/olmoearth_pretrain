@@ -15,8 +15,8 @@ from typing import Any
 
 from olmo_core.utils import prepare_cli_environment
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5pyConfig
+from olmoearth_pretrain.modalities import Modality
 
 logger = logging.getLogger(__name__)
 

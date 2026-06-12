@@ -7,8 +7,8 @@ from collections.abc import Iterator
 import pytest
 import torch
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 

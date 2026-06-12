@@ -1,4 +1,4 @@
-"""Deprecated module. Please import from olmoearth_pretrain.nn.flexivit instead.
+"""Deprecated module. Please import from olmoearth_pretrain.nn.flexi_vit instead.
 
 Maintained for backwards compatibility with old checkpoints.
 """
@@ -11,8 +11,8 @@ import olmoearth_pretrain.nn.flexi_vit as flexivit
 from .flexi_vit import *  # noqa: F403
 
 warnings.warn(
-    "olmoearth_pretrain.nn.flexi_vit is deprecated. "
-    "Please import from olmoearth_pretrain.nn.flexivit instead.",
+    "olmoearth_pretrain.nn.flexihelios is deprecated. "
+    "Please import from olmoearth_pretrain.nn.flexi_vit instead.",
     DeprecationWarning,
     stacklevel=2,
 )

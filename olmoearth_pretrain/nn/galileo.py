@@ -14,8 +14,7 @@ from torch.distributed.fsdp import (
 )
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, TokensAndMasks
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
 
 logger = logging.getLogger(__name__)
@@ -59,7 +58,7 @@ class Galileo(nn.Module, DistributedMixins):
             latent_projected_and_pooled: pooled tokens for contrastive loss
             reconstructed: MAE predictions if enabled
         """
-        # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
+        # TODO: Inputs and outputs are not consistent between encoder and decoder; this needs a richer TokensAndMasks type.
         output_dict = self.encoder(x, patch_size=patch_size)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict
@@ -83,7 +82,7 @@ class Galileo(nn.Module, DistributedMixins):
             latent_projected_and_pooled: pooled tokens for contrastive loss
             reconstructed: MAE predictions if enabled
         """
-        # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
+        # TODO: Inputs and outputs are not consistent between encoder and decoder; this needs a richer TokensAndMasks type.
         output_dict = self.encoder(x, patch_size=patch_size)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict

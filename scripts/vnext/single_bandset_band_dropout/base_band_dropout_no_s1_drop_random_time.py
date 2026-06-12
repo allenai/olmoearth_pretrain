@@ -28,7 +28,6 @@ from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
 from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
@@ -43,11 +42,10 @@ from olmoearth_pretrain.internal.experiment import (
     main,
 )
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.nn.flexi_vit import (
-    PoolingType,
-)
-from olmoearth_pretrain.nn.flexihelios import (
     EncoderConfig,
+    PoolingType,
     PredictorConfig,
 )
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig

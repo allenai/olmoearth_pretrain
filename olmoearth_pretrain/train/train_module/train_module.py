@@ -2,10 +2,10 @@
 
 import contextlib
 import json
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from logging import getLogger
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import torch
 import torch.distributed as dist
@@ -18,7 +18,7 @@ from olmo_core.distributed.parallel import (
     get_dp_mesh,
     get_dp_process_group,
 )
-from olmo_core.distributed.utils import get_world_size
+from olmo_core.distributed.utils import get_local_rank, get_local_tensor, get_world_size
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
@@ -35,11 +35,32 @@ from torch.optim import Optimizer
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.transform import TransformConfig
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, TokensAndMasks
 from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.train.loss import LossConfig
+from olmoearth_pretrain.train.utils import split_masked_batch
 
 logger = getLogger(__name__)
+
+NonfiniteMicrobatchBehavior = Literal["warn_continue", "warn_break", "ignore"]
+
+
+@dataclass
+class MicrobatchTrainOutput:
+    """Output from one device-local training microbatch."""
+
+    loss: torch.Tensor
+    regularizer_inputs: tuple[Any, ...] = ()
+    metrics: dict[str, torch.Tensor] = field(default_factory=dict)
+
+
+@dataclass
+class MicrobatchTrainTotals:
+    """Averaged metric totals from a train-batch microbatch loop."""
+
+    loss: torch.Tensor
+    regularizer: torch.Tensor
+    metrics: dict[str, torch.Tensor] = field(default_factory=dict)
 
 
 def _strip_unknown_fields(d: Any) -> Any:
@@ -273,7 +294,7 @@ class OlmoEarthTrainModule(TrainModule):
                     if dp_config.param_dtype is not None
                     else None
                 )
-                # TODO: MIXED PRecision is not yet supported
+                # TODO: Mixed precision is not yet supported.
                 self.model.apply_fsdp(
                     dp_mesh=dp_mesh,
                     param_dtype=param_dtype,
@@ -341,6 +362,30 @@ class OlmoEarthTrainModule(TrainModule):
     def local_rank(self) -> int:
         """Get the local rank."""
         return self.trainer.data_loader.dp_rank
+
+    def _get_encoder_tokenization_config(self) -> Any | None:
+        """Return the model encoder tokenization config when one is available."""
+        encoder = getattr(self.model, "encoder", None)
+        return getattr(encoder, "tokenization_config", None)
+
+    def _propagate_model_tokenization_config(self, *targets: Any | None) -> None:
+        """Attach the encoder tokenization config to runtime masking/loss objects."""
+        tokenization_config = self._get_encoder_tokenization_config()
+        if tokenization_config is None:
+            return
+
+        from olmoearth_pretrain.train.masking import (
+            MaskingStrategy,
+            propagate_tokenization_config,
+        )
+
+        for target in targets:
+            if target is None:
+                continue
+            if isinstance(target, MaskingStrategy):
+                propagate_tokenization_config(target, tokenization_config)
+            elif hasattr(target, "tokenization_config"):
+                target.tokenization_config = tokenization_config
 
     @property
     def logits_dtype(self) -> torch.dtype:
@@ -585,6 +630,137 @@ class OlmoEarthTrainModule(TrainModule):
         if regularizer is None:
             return None
         return regularizer.compute(latent, None)
+
+    @staticmethod
+    def _average_detached_microbatch_value(
+        value: torch.Tensor, num_microbatches: int
+    ) -> torch.Tensor:
+        """Detach a microbatch scalar and average it over the full batch."""
+        return get_local_tensor(value.detach()) / num_microbatches
+
+    @classmethod
+    def _accumulate_detached_microbatch_value(
+        cls, total: torch.Tensor, value: torch.Tensor, num_microbatches: int
+    ) -> torch.Tensor:
+        """Add a detached microbatch scalar to a full-batch metric total."""
+        return total + cls._average_detached_microbatch_value(value, num_microbatches)
+
+    @classmethod
+    def _scale_and_accumulate_microbatch_loss(
+        cls, total: torch.Tensor, loss: torch.Tensor, num_microbatches: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Scale a microbatch loss for backward and add its detached metric value."""
+        scaled_loss = loss / num_microbatches
+        return scaled_loss, total + get_local_tensor(scaled_loss.detach())
+
+    @staticmethod
+    def _loss_is_nonfinite(loss: torch.Tensor) -> bool:
+        """Return whether a scalar loss contains NaN or Inf."""
+        return bool(torch.isnan(loss).any() or torch.isinf(loss).any())
+
+    def _compute_regularization_for_inputs(
+        self, regularizer_inputs: tuple[Any, ...]
+    ) -> torch.Tensor | None:
+        """Compute one averaged regularizer term for a microbatch output."""
+        if not regularizer_inputs:
+            return None
+
+        reg_terms = [
+            reg_term
+            for regularizer_input in regularizer_inputs
+            if (reg_term := self.compute_regularization(regularizer_input)) is not None
+        ]
+        if not reg_terms:
+            return None
+        if len(reg_terms) != len(regularizer_inputs):
+            raise ValueError("Regularization must be computed for all inputs or none.")
+        return sum(reg_terms, torch.zeros_like(reg_terms[0])) / len(reg_terms)
+
+    def _run_masked_microbatches(
+        self,
+        batches: MaskedOlmoEarthSample | tuple[MaskedOlmoEarthSample, ...],
+        step: Callable[[tuple[MaskedOlmoEarthSample, ...], int], MicrobatchTrainOutput],
+        *,
+        nonfinite_behavior: NonfiniteMicrobatchBehavior,
+        log_rank_on_nonfinite: bool = False,
+    ) -> MicrobatchTrainTotals:
+        """Run a shared train-batch microbatch loop over masked samples."""
+        if isinstance(batches, MaskedOlmoEarthSample):
+            batches = (batches,)
+
+        split_batches = [
+            split_masked_batch(batch, self.rank_microbatch_size) for batch in batches
+        ]
+        num_microbatches = len(split_batches[0])
+        if any(len(microbatches) != num_microbatches for microbatches in split_batches):
+            raise ValueError("All microbatched inputs must split to the same length.")
+
+        total_loss = torch.zeros([], device=self.device)
+        total_regularizer = torch.zeros([], device=self.device)
+        total_metrics: dict[str, torch.Tensor] = {}
+
+        for microbatch_idx in range(num_microbatches):
+            with self._train_microbatch_context(microbatch_idx, num_microbatches):
+                microbatches = tuple(
+                    microbatch[microbatch_idx].to_device(self.device)
+                    for microbatch in split_batches
+                )
+                logger.info(
+                    "Training microbatch %s of %s with batch size %s",
+                    microbatch_idx,
+                    num_microbatches,
+                    microbatches[0].batch_size,
+                )
+
+                output = step(microbatches, microbatch_idx)
+                loss = output.loss
+
+                reg_term = self._compute_regularization_for_inputs(
+                    output.regularizer_inputs
+                )
+                if reg_term is not None:
+                    loss = loss + reg_term
+                    total_regularizer = self._accumulate_detached_microbatch_value(
+                        total_regularizer, reg_term, num_microbatches
+                    )
+
+                for name, value in output.metrics.items():
+                    if name not in total_metrics:
+                        total_metrics[name] = torch.zeros([], device=self.device)
+                    total_metrics[name] = self._accumulate_detached_microbatch_value(
+                        total_metrics[name], value, num_microbatches
+                    )
+
+                loss, total_loss = self._scale_and_accumulate_microbatch_loss(
+                    total_loss, loss, num_microbatches
+                )
+
+                if self._loss_is_nonfinite(loss):
+                    if nonfinite_behavior == "warn_break":
+                        logger.warning(
+                            "NaN or Inf detected in loss at microbatch %s, stopping training for this batch.",
+                            microbatch_idx,
+                        )
+                    elif nonfinite_behavior == "warn_continue":
+                        logger.warning(
+                            "NaN or Inf detected in loss at microbatch %s, skipping backward for this microbatch.",
+                            microbatch_idx,
+                        )
+                    if nonfinite_behavior in ("warn_continue", "warn_break"):
+                        if log_rank_on_nonfinite:
+                            print(f"rank {get_local_rank()} has nan or inf")
+                    if nonfinite_behavior == "warn_break":
+                        break
+                    if nonfinite_behavior == "warn_continue":
+                        continue
+
+                loss.backward()
+
+        return MicrobatchTrainTotals(
+            loss=total_loss,
+            regularizer=total_regularizer,
+            metrics=total_metrics,
+        )
 
     def log_regularization(self, total_batch_reg: torch.Tensor) -> None:
         """If a regularizer is present, log its values."""

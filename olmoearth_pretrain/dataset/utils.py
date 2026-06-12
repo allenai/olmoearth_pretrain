@@ -4,7 +4,7 @@ from datetime import datetime
 
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import (
+from olmoearth_pretrain.modalities import (
     BASE_RESOLUTION,
     ModalitySpec,
     TimeSpan,
@@ -48,7 +48,7 @@ class WindowMetadata:
     def get_resolution_factor(self) -> int:
         """Get the resolution factor.
 
-        See helios.data.constants.
+        See olmoearth_pretrain.modalities.
         """
         return round(self.resolution / BASE_RESOLUTION)
 

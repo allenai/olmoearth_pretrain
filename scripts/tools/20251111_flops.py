@@ -8,7 +8,11 @@ from pathlib import Path
 import torch
 from thop import clever_format, profile
 
-from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.datatypes import (
+    MaskedOlmoEarthSample,
+    MaskValue,
+    make_modality_mask_like,
+)
 from olmoearth_pretrain.evals.models import (
     AnySat,
     Clay,
@@ -21,10 +25,10 @@ from olmoearth_pretrain.evals.models import (
     Terramind,
 )
 from olmoearth_pretrain.evals.models.dinov3.dinov3 import DINOv3, DinoV3Models
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.nn.flexi_vit import Encoder
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 S2_SINGLE_BANDSET = ModalityTokenization(
     band_groups=[
@@ -106,10 +110,12 @@ def construct_eval_samples() -> list[tuple[MaskedOlmoEarthSample, int, bool]]:
                     sentinel2_l2a=torch.ones(
                         B, H, W, T, Modality.SENTINEL2_L2A.num_bands
                     ),
-                    sentinel2_l2a_mask=torch.ones(
-                        B, H, W, T, Modality.SENTINEL2_L2A.num_bands
-                    ).long()
-                    * MaskValue.ONLINE_ENCODER.value,
+                    sentinel2_l2a_mask=make_modality_mask_like(
+                        torch.ones(B, H, W, T, Modality.SENTINEL2_L2A.num_bands),
+                        Modality.SENTINEL2_L2A,
+                        fill_value=MaskValue.ONLINE_ENCODER.value,
+                        dtype=torch.long,
+                    ),
                 ),
                 multiplier,
                 spatial_pool,

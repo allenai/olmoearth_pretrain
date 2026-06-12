@@ -119,7 +119,7 @@ def run_eval_for_checkpoint(
     """Run eval for a specific checkpoint using full_eval_sweep.py."""
     cmd_parts = [
         "python3",
-        "helios/internal/full_eval_sweep.py",
+        "olmoearth_pretrain/internal/full_eval_sweep.py",
         f"--cluster={cluster}",
         f"--checkpoint_path={get_checkpoint_path_from_wandb_run_name_and_step(run_project, run_id, step)}",
         f"--module_path={get_module_path_from_wandb(run_project, run_id)}",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Protocol
+
 import torch
 
 from olmoearth_pretrain.data.transform import Transform
@@ -9,7 +11,16 @@ from olmoearth_pretrain.datatypes import (
     MaskedOlmoEarthSample,
     OlmoEarthSample,
 )
-from olmoearth_pretrain.train.masking import MaskingStrategy
+
+
+class MaskingStrategyLike(Protocol):
+    """Minimal masking interface needed by dataloader collators."""
+
+    def apply_mask(
+        self, batch: OlmoEarthSample, patch_size: int | None = None
+    ) -> MaskedOlmoEarthSample:
+        """Apply a mask to a batched sample."""
+        ...
 
 
 def collate_olmoearth_pretrain(
@@ -40,7 +51,7 @@ def collate_olmoearth_pretrain(
 def collate_single_masked_batched(
     batch: list[tuple[int, OlmoEarthSample]],
     transform: Transform | None,
-    masking_strategy: MaskingStrategy,
+    masking_strategy: MaskingStrategyLike,
 ) -> tuple[int, MaskedOlmoEarthSample]:
     """Collate function that applies transform and masking to the full batch.
 
@@ -72,8 +83,8 @@ def collate_single_masked_batched(
 def collate_double_masked_batched(
     batch: list[tuple[int, OlmoEarthSample]],
     transform: Transform | None,
-    masking_strategy: MaskingStrategy,
-    masking_strategy_b: MaskingStrategy | None,
+    masking_strategy: MaskingStrategyLike,
+    masking_strategy_b: MaskingStrategyLike | None,
 ) -> tuple[int, MaskedOlmoEarthSample, MaskedOlmoEarthSample]:
     """Collate function that applies transform and two masking strategies to the full batch.
 

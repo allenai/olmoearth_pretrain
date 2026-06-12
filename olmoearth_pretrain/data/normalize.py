@@ -7,9 +7,13 @@ from importlib.resources import files
 
 import numpy as np
 
-from olmoearth_pretrain.data.constants import ModalitySpec
+from olmoearth_pretrain.modalities import ModalitySpec
 
 logger = logging.getLogger(__name__)
+
+
+class NormalizationConfigError(ValueError):
+    """Raised when normalization stats do not cover a modality or band."""
 
 
 def load_predefined_config() -> dict[str, dict[str, dict[str, float]]]:
@@ -79,12 +83,16 @@ class Normalizer:
         """Normalize the data using predefined values."""
         # When using predefined values, we have the min and max values for each band
         modality_bands = modality.band_order
-        modality_norm_values = self.norm_config[modality.name]
+        modality_norm_values = self.norm_config.get(modality.name)
+        if modality_norm_values is None:
+            raise NormalizationConfigError(
+                f"Modality {modality.name} not found in config"
+            )
         min_vals = []
         max_vals = []
         for band in modality_bands:
             if band not in modality_norm_values:
-                raise ValueError(f"Band {band} not found in config")
+                raise NormalizationConfigError(f"Band {band} not found in config")
             min_val = modality_norm_values[band]["min"]
             max_val = modality_norm_values[band]["max"]
             min_vals.append(min_val)
@@ -99,12 +107,16 @@ class Normalizer:
         # When using computed values, we compute the mean and std of each band in advance
         # Then convert the values to min and max values that cover ~90% of the data
         modality_bands = modality.band_order
-        modality_norm_values = self.norm_config[modality.name]
+        modality_norm_values = self.norm_config.get(modality.name)
+        if modality_norm_values is None:
+            raise NormalizationConfigError(
+                f"Modality {modality.name} not found in config"
+            )
         mean_vals = []
         std_vals = []
         for band in modality_bands:
             if band not in modality_norm_values:
-                raise ValueError(f"Band {band} not found in config")
+                raise NormalizationConfigError(f"Band {band} not found in config")
             mean_val = modality_norm_values[band]["mean"]
             std_val = modality_norm_values[band]["std"]
             mean_vals.append(mean_val)

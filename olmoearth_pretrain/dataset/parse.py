@@ -7,7 +7,7 @@ from datetime import datetime
 
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import (
+from olmoearth_pretrain.modalities import (
     BASE_RESOLUTION,
     BandSet,
     Modality,

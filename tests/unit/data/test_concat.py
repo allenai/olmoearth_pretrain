@@ -4,8 +4,8 @@ import numpy as np
 from torch.utils.data import Dataset
 
 from olmoearth_pretrain.data.concat import OlmoEarthConcatDataset
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import GetItemArgs
+from olmoearth_pretrain.modalities import Modality
 
 MOCK_FINGERPRINT_VERSION = "mockversion"
 

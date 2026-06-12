@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
+from olmoearth_pretrain.modalities import Modality, ModalitySpec
 
 
 @pytest.fixture
@@ -30,6 +30,22 @@ def test_find_longest_timestamps_array(
     longest_array = converter._find_longest_timestamps_array(sample_timestamps_dict)
     assert len(longest_array) == 3
     assert np.array_equal(longest_array, sample_timestamps_dict[Modality.SENTINEL1])
+
+
+def test_required_modalities_are_instance_local() -> None:
+    """Required modalities should not share mutable constructor state."""
+    converter_a = ConvertToH5py(
+        tile_path=UPath("dummy_path"),
+        supported_modalities=[Modality.SENTINEL1],
+    )
+    converter_b = ConvertToH5py(
+        tile_path=UPath("dummy_path"),
+        supported_modalities=[Modality.SENTINEL1],
+    )
+
+    converter_a.required_modalities.append(Modality.SENTINEL1)
+
+    assert converter_b.required_modalities == []
 
 
 def test_find_longest_timestamps_array_equal_length() -> None:

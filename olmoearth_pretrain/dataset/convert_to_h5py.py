@@ -16,15 +16,6 @@ from tqdm import tqdm
 from upath import UPath
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.constants import (
-    IMAGE_TILE_SIZE,
-    SENTINEL1_NODATA,
-    YEAR_NUM_TIMESTEPS,
-    Modality,
-    ModalitySpec,
-    TimeSpan,
-    get_modality_specs_from_names,
-)
 from olmoearth_pretrain.data.utils import convert_to_db
 from olmoearth_pretrain.dataset.parse import parse_dataset
 from olmoearth_pretrain.dataset.sample import (
@@ -32,6 +23,15 @@ from olmoearth_pretrain.dataset.sample import (
     SampleInformation,
     image_tiles_to_samples,
     load_image_for_sample,
+)
+from olmoearth_pretrain.modalities import (
+    IMAGE_TILE_SIZE,
+    SENTINEL1_NODATA,
+    YEAR_NUM_TIMESTEPS,
+    Modality,
+    ModalitySpec,
+    TimeSpan,
+    get_modality_specs_from_names,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,7 @@ class ConvertToH5py:
         chunk_options: tuple | bool | None = None,
         tile_size: int = IMAGE_TILE_SIZE,
         reserved_cores: int = 10,
-        required_modalities: list[ModalitySpec] = [],
+        required_modalities: list[ModalitySpec] | None = None,
     ) -> None:
         """Initialize the ConvertToH5py object.
 
@@ -138,7 +138,7 @@ class ConvertToH5py:
         self.shuffle = shuffle
         self.chunk_options = chunk_options
         self.h5py_dir: UPath | None = None
-        self.required_modalities = required_modalities
+        self.required_modalities = list(required_modalities or [])
         if IMAGE_TILE_SIZE % tile_size != 0:
             raise ValueError(
                 f"Tile size {tile_size} must be a factor of {IMAGE_TILE_SIZE}"

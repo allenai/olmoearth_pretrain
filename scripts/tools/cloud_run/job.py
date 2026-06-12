@@ -14,8 +14,9 @@ from google.cloud import storage
 from torch.utils.data import DataLoader, Dataset
 
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, make_modality_mask_like
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.model_loader import ModelID, load_model_from_id
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, Modality
 
 GCLOUD_PROJECT = os.environ["GCLOUD_PROJECT"]
 IN_BUCKET = os.environ["IN_BUCKET"]
@@ -175,10 +176,26 @@ def run_inference_on_tile(tile, timestamps):
             sentinel1=gpu_batch["sentinel1"],
             landsat=gpu_batch["landsat"],
             latlon=gpu_batch["latlon"],
-            sentinel2_l2a_mask=torch.zeros_like(gpu_batch["sentinel2"], device=device),
-            sentinel1_mask=torch.zeros_like(gpu_batch["sentinel1"], device=device),
-            landsat_mask=torch.zeros_like(gpu_batch["landsat"], device=device),
-            latlon_mask=torch.zeros_like(gpu_batch["latlon"], device=device),
+            sentinel2_l2a_mask=make_modality_mask_like(
+                gpu_batch["sentinel2"],
+                Modality.SENTINEL2_L2A,
+                dtype=gpu_batch["sentinel2"].dtype,
+            ),
+            sentinel1_mask=make_modality_mask_like(
+                gpu_batch["sentinel1"],
+                Modality.SENTINEL1,
+                dtype=gpu_batch["sentinel1"].dtype,
+            ),
+            landsat_mask=make_modality_mask_like(
+                gpu_batch["landsat"],
+                Modality.LANDSAT,
+                dtype=gpu_batch["landsat"].dtype,
+            ),
+            latlon_mask=make_modality_mask_like(
+                gpu_batch["latlon"],
+                Modality.LATLON,
+                dtype=gpu_batch["latlon"].dtype,
+            ),
         )
 
         # Make predictions

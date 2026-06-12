@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 import torch
 
-from olmoearth_pretrain.data.constants import BandSet, Modality, ModalitySpec
 from olmoearth_pretrain.data.dataset import (
     OlmoEarthSample,
     _get_max_t_within_token_budget,
@@ -21,7 +20,12 @@ from olmoearth_pretrain.dataset.parse import (
     ModalityTile,
     TimeSpan,
 )
-from olmoearth_pretrain.dataset.sample import image_tiles_to_samples
+from olmoearth_pretrain.dataset.sample import (
+    _index_image_tiles,
+    _sample_keys_from_image_tile_index,
+    image_tiles_to_samples,
+)
+from olmoearth_pretrain.modalities import BandSet, Modality, ModalitySpec
 from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,
     TokenizationConfig,
@@ -147,6 +151,56 @@ def test_supporting_latlon(tmp_path: Path, create_image_tiles: Callable) -> None
     samples = image_tiles_to_samples(image_tiles, supported_modalities)
     assert len(samples) == 1
     assert samples[0].modalities.keys() == {Modality.SENTINEL2}
+
+
+def test_index_image_tiles_keys_by_modality_grid_and_time() -> None:
+    """Image tile index should make tile lookup explicit."""
+    tile = ModalityTile(
+        grid_tile=GridTile(crs=CRS, resolution_factor=1, col=2, row=3),
+        images=[],
+        center_time=datetime(2020, 1, 1),
+        band_sets={},
+        modality=Modality.NAIP,
+    )
+
+    index = _index_image_tiles({Modality.NAIP: {TimeSpan.STATIC: [tile]}})
+
+    assert index == {(Modality.NAIP, tile.grid_tile, TimeSpan.STATIC): tile}
+
+
+def test_sample_keys_from_image_tile_index_handles_static_tiles() -> None:
+    """Static base-resolution tiles should create both dynamic sample keys."""
+    base_tile = GridTile(crs=CRS, resolution_factor=1, col=2, row=3)
+    coarse_tile = GridTile(crs=CRS, resolution_factor=2, col=1, row=1)
+    index = {
+        (Modality.NAIP, base_tile, TimeSpan.STATIC): ModalityTile(
+            grid_tile=base_tile,
+            images=[],
+            center_time=datetime(2020, 1, 1),
+            band_sets={},
+            modality=Modality.NAIP,
+        ),
+        (Modality.WORLDCOVER, coarse_tile, TimeSpan.STATIC): ModalityTile(
+            grid_tile=coarse_tile,
+            images=[],
+            center_time=datetime(2020, 1, 1),
+            band_sets={},
+            modality=Modality.WORLDCOVER,
+        ),
+        (Modality.SENTINEL2, coarse_tile, TimeSpan.YEAR): ModalityTile(
+            grid_tile=coarse_tile,
+            images=[],
+            center_time=datetime(2020, 1, 1),
+            band_sets={},
+            modality=Modality.SENTINEL2,
+        ),
+    }
+
+    assert _sample_keys_from_image_tile_index(index) == {
+        (base_tile, TimeSpan.TWO_WEEK),
+        (base_tile, TimeSpan.YEAR),
+        (coarse_tile, TimeSpan.YEAR),
+    }
 
 
 def test_default_subsetting() -> None:

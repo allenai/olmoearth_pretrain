@@ -5,12 +5,13 @@ import logging
 import pytest
 import torch
 
-from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.datatypes import MaskValue
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.nn.flexi_vit import (
     get_modalities_to_process,
     return_modalities_from_dict,
 )
-from olmoearth_pretrain.nn.st_model import STBase
+from olmoearth_pretrain.nn.st_model import STBase, STPredictor
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,55 @@ class TestSTBase:
         assert (modality_tokens_dict["sentinel2_l2a"] == x["sentinel2_l2a"]).all()
         assert (modality_tokens_dict["worldcover"] == x["worldcover"]).all()
         assert (modality_tokens_dict["latlon"] == x["latlon"]).all()
+
+    def test_unsupported_attention_mode_errors(self, st_base: STBase) -> None:
+        """Unsupported attention modes should fail explicitly."""
+        with pytest.raises(ValueError, match="Unsupported attention mode"):
+            st_base.collapse_and_combine({}, mode="bad", block_idx=0)  # type: ignore[arg-type]
+
+        with pytest.raises(ValueError, match="Unsupported attention mode"):
+            st_base.split_and_expand_per_modality(
+                torch.empty(1, 0, 8),
+                {},
+                mode="bad",  # type: ignore[arg-type]
+                block_idx=0,
+            )
+
+    def test_split_x_y_does_not_mutate_mask(self) -> None:
+        """Test ST token splitting without mutating the caller's mask."""
+        tokens = torch.tensor([[1, 2, 3, 4], [5, 6, 7, 8]]).unsqueeze(-1)
+        mask = torch.tensor(
+            [
+                [
+                    MaskValue.MISSING.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                ],
+                [
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.MISSING.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                ],
+            ]
+        )
+        original_mask = mask.clone()
+
+        (
+            tokens_to_decode,
+            unmasked_tokens,
+            tokens_to_decode_mask,
+            unmasked_tokens_mask,
+            indices,
+        ) = STPredictor.split_x_y(tokens, mask)
+
+        assert torch.equal(mask, original_mask)
+        assert tokens_to_decode.shape == (2, 1, 1)
+        assert unmasked_tokens.shape == (2, 2, 1)
+        assert tokens_to_decode_mask.shape == (2, 1)
+        assert unmasked_tokens_mask.shape == (2, 2)
+        assert indices.shape == (2, 4)
 
     def test_collapse_and_split_temporal(
         self,

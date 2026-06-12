@@ -9,22 +9,19 @@ the coordinates actually match those of the 0.625 m/pixel tiles). This way we ca
 the data for training even at coarser resolution.
 """
 
-import argparse
 import csv
-import multiprocessing
 from datetime import UTC, datetime
 
-import tqdm
-from rslearn.dataset import Dataset, Window
-from rslearn.utils.mp import star_imap_unordered
+from rslearn.dataset import Window
 from rslearn.utils.vector_format import GeojsonCoordinateMode, GeojsonVectorFormat
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import Modality, TimeSpan
 from olmoearth_pretrain.dataset.utils import get_modality_fname
+from olmoearth_pretrain.modalities import Modality, TimeSpan
 
 from ..constants import METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
+from .runner import run_window_converter
 
 # Placeholder time range for OpenStreetMap.
 START_TIME = datetime(2020, 1, 1, tzinfo=UTC)
@@ -101,45 +98,4 @@ def convert_openstreetmap(window: Window, olmoearth_path: UPath) -> None:
 
 
 if __name__ == "__main__":
-    multiprocessing.set_start_method("forkserver")
-
-    parser = argparse.ArgumentParser(
-        description="Post-process OlmoEarth Pretrain data",
-    )
-    parser.add_argument(
-        "--ds_path",
-        type=str,
-        help="Source rslearn dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--olmoearth_path",
-        type=str,
-        help="Destination OlmoEarth Pretrain dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        help="Number of workers to use",
-        default=32,
-    )
-    args = parser.parse_args()
-
-    dataset = Dataset(UPath(args.ds_path))
-    olmoearth_path = UPath(args.olmoearth_path)
-
-    jobs = []
-    for window in dataset.load_windows(workers=args.workers, show_progress=True):
-        jobs.append(
-            dict(
-                window=window,
-                olmoearth_path=olmoearth_path,
-            )
-        )
-
-    p = multiprocessing.Pool(args.workers)
-    outputs = star_imap_unordered(p, convert_openstreetmap, jobs)
-    for _ in tqdm.tqdm(outputs, total=len(jobs)):
-        pass
-    p.close()
+    run_window_converter(convert_openstreetmap)

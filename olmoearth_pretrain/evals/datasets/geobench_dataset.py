@@ -13,9 +13,8 @@ from geobench.dataset import Stats
 from geobench.task import load_task_specs
 from torch.utils.data import Dataset
 
-from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.modalities import Modality
 
 from .configs import dataset_to_config
 from .constants import (
@@ -25,6 +24,11 @@ from .constants import (
     EVAL_TO_OLMOEARTH_S2_BANDS,
 )
 from .normalize import impute_normalization_stats, normalize_bands
+from .utils import (
+    STANDARD_LABEL_FRACTION_PARTITIONS,
+    build_masked_eval_sample,
+    resolve_label_fraction_partition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,15 +61,8 @@ GEOBENCH_L8_BAND_NAMES = [
 ]
 
 
-# Map low-label fractions to GeoBench's upstream ``partition_name`` strings.
-# ``"default"`` is the full-data partition used by GeoBench for 1.0.
-_LABEL_FRACTION_TO_PARTITION = {
-    0.01: "0.01x_train",
-    0.02: "0.02x_train",
-    0.05: "0.05x_train",
-    0.10: "0.10x_train",
-    0.20: "0.20x_train",
-    0.50: "0.50x_train",
+_GEOBENCH_LABEL_FRACTION_PARTITIONS = {
+    **STANDARD_LABEL_FRACTION_PARTITIONS,
     1.00: "default",
 }
 
@@ -98,15 +95,9 @@ class GeobenchDataset(Dataset):
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
             visualize_samples: Whether to visualize samples
         """
-        if label_fraction not in _LABEL_FRACTION_TO_PARTITION:
-            valid = ", ".join(
-                f"{value:g}" for value in sorted(_LABEL_FRACTION_TO_PARTITION)
-            )
-            raise ValueError(
-                f"Unsupported label_fraction {label_fraction}. Supported values "
-                f"are: {valid}"
-            )
-        partition = _LABEL_FRACTION_TO_PARTITION[label_fraction]
+        partition = resolve_label_fraction_partition(
+            label_fraction, _GEOBENCH_LABEL_FRACTION_PARTITIONS
+        )
         config = dataset_to_config(dataset)
         self.config = config
         self.num_classes = config.num_classes
@@ -317,9 +308,7 @@ class GeobenchDataset(Dataset):
             sample_dict["sentinel2_l2a"] = torch.tensor(s2).float()
 
         timestamp = repeat(torch.tensor(self.default_day_month_year), "d -> t d", t=1)
-        masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(
-            OlmoEarthSample(**sample_dict, timestamps=timestamp.long())
-        )
+        masked_sample = build_masked_eval_sample(sample_dict, timestamp)
         return masked_sample, target
 
     def __len__(self) -> int:

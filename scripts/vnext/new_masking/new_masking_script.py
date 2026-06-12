@@ -21,11 +21,11 @@ from script import (
     build_visualize_config,
 )
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
 from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
 )
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
 from olmoearth_pretrain.train.train_module.contrastive_latentmim import (

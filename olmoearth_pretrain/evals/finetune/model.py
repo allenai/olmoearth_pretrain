@@ -7,9 +7,9 @@ from typing import cast
 import torch
 import torch.nn as nn
 
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.evals.datasets.configs import TaskType
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 
 class BackboneWithHead(nn.Module):

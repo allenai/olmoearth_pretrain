@@ -9,15 +9,12 @@ import torch
 from einops import repeat
 from torch.utils.data import ConcatDataset, Dataset
 
-from olmoearth_pretrain.train.masking import (
-    MaskedOlmoEarthSample,
-    Modality,
-    OlmoEarthSample,
-)
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.modalities import Modality
 
 from .constants import EVAL_S2_BAND_NAMES, EVAL_TO_OLMOEARTH_S2_BANDS
 from .normalize import normalize_bands
-from .utils import load_min_max_stats
+from .utils import build_band_stat_arrays, build_masked_eval_sample, load_min_max_stats
 
 LEVEL = "L1C"
 
@@ -157,17 +154,7 @@ class BreizhCropsDataset(Dataset):
     def _get_norm_stats(
         imputed_band_info: dict[str, dict[str, float]],
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        means = []
-        stds = []
-        mins = []
-        maxs = []
-        for band_name in EVAL_S2_BAND_NAMES:
-            assert band_name in imputed_band_info, f"{band_name} not found in band_info"
-            means.append(imputed_band_info[band_name]["mean"])  # type: ignore
-            stds.append(imputed_band_info[band_name]["std"])  # type: ignore
-            mins.append(imputed_band_info[band_name]["min"])  # type: ignore
-            maxs.append(imputed_band_info[band_name]["max"])  # type: ignore
-        return np.array(means), np.array(stds), np.array(mins), np.array(maxs)
+        return build_band_stat_arrays(imputed_band_info, EVAL_S2_BAND_NAMES)
 
     def __len__(self) -> int:
         """Length of the dataset."""
@@ -199,10 +186,8 @@ class BreizhCropsDataset(Dataset):
         if self.norm_stats_from_pretrained:
             image = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, image)
 
-        masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(
-            OlmoEarthSample(
-                sentinel2_l2a=torch.tensor(image).float(), timestamps=timestamp.long()
-            )
+        masked_sample = build_masked_eval_sample(
+            {Modality.SENTINEL2_L2A.name: torch.tensor(image).float()}, timestamp
         )
         return masked_sample, y_true.long()
 

@@ -34,9 +34,9 @@ from pydantic import (
 if TYPE_CHECKING:
     from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
 
-from olmoearth_pretrain.data.constants import ModalitySpec
-from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
+from olmoearth_pretrain.evals.constants import resolve_rslearn_modality
 from olmoearth_pretrain.evals.task_types import TaskType
+from olmoearth_pretrain.modalities import ModalitySpec
 
 # =============================================================================
 # Config Instantiation
@@ -99,20 +99,13 @@ def instantiate_from_config(config: dict) -> Any:
 def rslearn_to_olmoearth(layer_name: str) -> ModalitySpec:
     """Map an rslearn layer name to an OlmoEarth ModalitySpec.
 
-    Uses RSLEARN_TO_OLMOEARTH from rslearn_dataset as the single source of truth.
-    Also handles layer names prefixed with "pre_" or "post_" (e.g.
+    Handles layer names prefixed with "pre_" or "post_" (e.g.
     "pre_sentinel2" -> Modality.SENTINEL2_L2A).
     """
-    if layer_name in RSLEARN_TO_OLMOEARTH:
-        return RSLEARN_TO_OLMOEARTH[layer_name]
-
-    for prefix in ("pre_", "post_"):
-        if layer_name.startswith(prefix):
-            stripped = layer_name[len(prefix) :]
-            if stripped in RSLEARN_TO_OLMOEARTH:
-                return RSLEARN_TO_OLMOEARTH[stripped]
-
-    raise KeyError(f"Unknown rslearn layer name: {layer_name!r}")
+    modality = resolve_rslearn_modality(layer_name)
+    if modality is None:
+        raise KeyError(f"Unknown rslearn layer name: {layer_name!r}")
+    return modality
 
 
 class EvalDatasetEntry(BaseModel):

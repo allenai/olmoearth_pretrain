@@ -1,6 +1,6 @@
 """Useful constants for evals."""
 
-from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.modalities import Modality
 
 EVAL_S2_BAND_NAMES = [
     "01 - Coastal aerosol",

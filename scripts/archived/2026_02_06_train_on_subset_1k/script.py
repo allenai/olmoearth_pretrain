@@ -22,7 +22,6 @@ from olmo_core.train.config import TrainerConfig
 from upath import UPath
 
 from olmoearth_pretrain.data.concat import OlmoEarthConcatDatasetConfig
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
 from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig
 from olmoearth_pretrain.internal.common import (
@@ -35,6 +34,7 @@ from olmoearth_pretrain.internal.experiment import (
     main,
 )
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.nn.flexi_vit import (
     EncoderConfig,
     PoolingType,

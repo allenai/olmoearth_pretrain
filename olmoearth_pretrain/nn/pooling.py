@@ -8,8 +8,8 @@ from enum import StrEnum
 import torch
 from torch import Tensor
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.datatypes import MaskValue, TokensAndMasks
+from olmoearth_pretrain.modalities import Modality
 
 logger = logging.getLogger(__name__)
 

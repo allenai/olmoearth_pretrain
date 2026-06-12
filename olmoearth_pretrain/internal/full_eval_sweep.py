@@ -8,7 +8,8 @@ import json
 import os
 import subprocess  # nosec
 import uuid
-from collections.abc import Generator
+from collections.abc import Callable, Generator
+from dataclasses import dataclass
 from logging import getLogger
 from typing import Any
 
@@ -370,6 +371,77 @@ def get_prithviv2_args(pretrained_normalizer: bool = True) -> str:
     return prithvi_args
 
 
+@dataclass(frozen=True)
+class _ModelSweepSpec:
+    """Command-argument policy for a registered eval baseline."""
+
+    model: BaselineModelName
+    model_args: Callable[[], str]
+    normalization_args: Callable[[bool], str] | None = None
+    dataset_norm_only: bool = False
+
+
+_MODEL_SWEEP_SPECS: dict[BaselineModelName, _ModelSweepSpec] = {
+    spec.model: spec
+    for spec in (
+        _ModelSweepSpec(
+            BaselineModelName.DINO_V3,
+            get_dino_v3_args,
+            dataset_norm_only=True,
+        ),
+        _ModelSweepSpec(
+            BaselineModelName.PANOPTICON,
+            get_panopticon_args,
+            dataset_norm_only=True,
+        ),
+        _ModelSweepSpec(
+            BaselineModelName.GALILEO,
+            get_galileo_args,
+            get_galileo_args,
+        ),
+        _ModelSweepSpec(
+            BaselineModelName.SATLAS,
+            get_satlas_args,
+            get_satlas_args,
+        ),
+        _ModelSweepSpec(
+            BaselineModelName.CROMA,
+            get_croma_args,
+        ),
+        _ModelSweepSpec(
+            BaselineModelName.PRESTO,
+            get_presto_args,
+            get_presto_args,
+        ),
+        _ModelSweepSpec(
+            BaselineModelName.ANYSAT,
+            get_anysat_args,
+        ),
+        _ModelSweepSpec(
+            BaselineModelName.TESSERA,
+            get_tessera_args,
+            get_tessera_args,
+            dataset_norm_only=True,
+        ),
+        _ModelSweepSpec(
+            BaselineModelName.PRITHVI_V2,
+            get_prithviv2_args,
+            get_prithviv2_args,
+        ),
+        _ModelSweepSpec(
+            BaselineModelName.TERRAMIND,
+            get_terramind_args,
+            get_terramind_args,
+        ),
+        _ModelSweepSpec(
+            BaselineModelName.CLAY,
+            get_clay_args,
+            get_clay_args,
+        ),
+    )
+}
+
+
 def _get_sub_command(args: argparse.Namespace) -> str:
     """Determine the sub command based on args and cluster."""
     if args.dry_run:
@@ -417,26 +489,12 @@ def _get_checkpoint_args(checkpoint_path: str) -> str:
     return ""
 
 
-# TODO: Explain why some models are not in the map
 def _get_model_specific_args(model: BaselineModelName | None) -> str:
     """Get model-specific command arguments."""
-    model_args_map = {
-        BaselineModelName.DINO_V3: get_dino_v3_args,
-        BaselineModelName.PANOPTICON: get_panopticon_args,
-        BaselineModelName.GALILEO: get_galileo_args,
-        BaselineModelName.SATLAS: get_satlas_args,
-        BaselineModelName.CROMA: get_croma_args,
-        BaselineModelName.PRESTO: get_presto_args,
-        BaselineModelName.ANYSAT: get_anysat_args,
-        BaselineModelName.TESSERA: get_tessera_args,
-        BaselineModelName.PRITHVI_V2: get_prithviv2_args,
-        BaselineModelName.TERRAMIND: get_terramind_args,
-        BaselineModelName.CLAY: get_clay_args,
-    }
-    if model is None or model not in model_args_map:
+    if model is None:
         return ""
 
-    return model_args_map[model]()  # type: ignore
+    return _MODEL_SWEEP_SPECS[model].model_args()
 
 
 def get_olmoearth_args(pretrained_normalizer: bool = True) -> str:
@@ -454,30 +512,30 @@ def get_olmoearth_args(pretrained_normalizer: bool = True) -> str:
         return olmoearth_dataset_args
 
 
-# TODO: Explain why some models are not in the map
 def _get_normalization_args(model: BaselineModelName | None, norm_mode: str) -> str:
     """Get normalization-specific command arguments."""
     if model is None:
         # If model is None, we want to use the olmoearth arguments
         return get_olmoearth_args(pretrained_normalizer=(norm_mode == "pre_trained"))
-    model_map = {
-        BaselineModelName.GALILEO: get_galileo_args,
-        BaselineModelName.TESSERA: get_tessera_args,
-        BaselineModelName.PRITHVI_V2: get_prithviv2_args,
-        BaselineModelName.SATLAS: get_satlas_args,
-        BaselineModelName.PRESTO: get_presto_args,
-        BaselineModelName.TERRAMIND: get_terramind_args,
-        BaselineModelName.CLAY: get_clay_args,
-    }
 
-    if model in model_map:
-        return model_map[model](pretrained_normalizer=(norm_mode == "pre_trained"))
+    spec = _MODEL_SWEEP_SPECS[model]
+    if spec.normalization_args is not None:
+        return spec.normalization_args(
+            pretrained_normalizer=(norm_mode == "pre_trained")
+        )
 
     if norm_mode == "dataset":
         return dataset_args
     if norm_mode == "pre_trained":
         return olmoearth_args
     return ""
+
+
+def _model_uses_dataset_norm_only(model: BaselineModelName | None) -> bool:
+    """Return whether full sweeps should skip pretrained-normalizer settings."""
+    if model is None:
+        return False
+    return _MODEL_SWEEP_SPECS[model].dataset_norm_only
 
 
 def _get_model_size_args(model: BaselineModelName | None, size: str | None) -> str:
@@ -988,12 +1046,6 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             models = [args.model]
         for model in models:
             args.model = model
-            # Models that only use dataset normalization or need dataset normalization to scale to 0 - 1 then always use pretrained
-            dataset_norm_only_models = {
-                BaselineModelName.DINO_V3,
-                BaselineModelName.PANOPTICON,
-                BaselineModelName.TESSERA,
-            }
             if args.size is not None:
                 model_sizes = [args.size]
             else:
@@ -1051,7 +1103,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                     continue
 
                 hp_params = loop_through_params(
-                    no_norm=(args.model in dataset_norm_only_models)
+                    no_norm=_model_uses_dataset_norm_only(args.model)
                 )
 
                 for params in hp_params:

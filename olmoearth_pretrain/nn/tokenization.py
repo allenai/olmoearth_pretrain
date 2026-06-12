@@ -6,7 +6,7 @@ spectral groupings, etc.).
 
 Example:
     >>> from olmoearth_pretrain.nn.tokenization import TokenizationConfig, ModalityTokenization
-    >>> from olmoearth_pretrain.data.constants import Modality
+    >>> from olmoearth_pretrain.modalities import Modality
     >>>
     >>> # Create config with per-band tokenization for Sentinel-2
     >>> s2_bands = Modality.SENTINEL2_L2A.band_order
@@ -25,7 +25,7 @@ Example:
 from dataclasses import dataclass, field
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.modalities import Modality, ModalitySpec
 
 
 @dataclass

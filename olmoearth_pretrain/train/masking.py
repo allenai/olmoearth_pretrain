@@ -11,13 +11,13 @@ from class_registry import ClassRegistry
 from einops import rearrange, repeat
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality, ModalitySpec
 from olmoearth_pretrain.datatypes import (
     MaskedOlmoEarthSample,
     MaskValue,
     OlmoEarthSample,
 )
 from olmoearth_pretrain.decorators import experimental
+from olmoearth_pretrain.modalities import MISSING_VALUE, Modality, ModalitySpec
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.types import ArrayTensor
 
@@ -607,7 +607,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         max_encoded_bandsets: int | None = None,
         min_decoded_bandsets: int | None = None,
         max_decoded_bandsets: int | None = None,
-        only_decode_modalities: list[str] = [],
+        only_decode_modalities: list[str] | None = None,
     ) -> None:
         """Initialize the masking strategy.
 
@@ -645,7 +645,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self.max_encoded_bandsets = max_encoded_bandsets
         self.min_decoded_bandsets = min_decoded_bandsets
         self.max_decoded_bandsets = max_decoded_bandsets
-        self.only_decode_modalities = only_decode_modalities
+        self.only_decode_modalities = list(only_decode_modalities or [])
 
     def get_sample_present_modalities_bandsets(
         self, batch: MaskedOlmoEarthSample
@@ -804,13 +804,17 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             )
         return encoded_decoded_bandsets
 
-    def overide_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
-        """Overide the mask for a modality depending on the strategy being modality cross masked.
+    def override_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
+        """Override the mask for a modality depending on the strategy being modality cross masked.
 
         e.g in time masking, static in time data is randomly masked but we want that data to be either used to predict temporally masked data or
         predicted from temporal data.
         """
         return False
+
+    def overide_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
+        """Deprecated misspelled alias for override_strategy_mask."""
+        return self.override_strategy_mask(modality_spec)
 
     def apply_bandset_mask_rules(
         self,
@@ -872,7 +876,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     # e.g static in time is randomly masked in time masking
                     # By setting to all encode or decode depending on the strategy,
                     # the modality the structure of the strategy is maintained
-                    if self.overide_strategy_mask(modality_spec):
+                    if self.override_strategy_mask(modality_spec):
                         if is_encoded:
                             forced_mask_value = MaskValue.ONLINE_ENCODER.value
                         elif is_decoded:
@@ -1012,7 +1016,7 @@ class ModalityCrossSpaceMaskingStrategy(ModalityCrossMaskingStrategy):
         max_encoded_bandsets: int | None = None,
         min_decoded_bandsets: int | None = None,
         max_decoded_bandsets: int | None = None,
-        only_decode_modalities: list[str] = [],
+        only_decode_modalities: list[str] | None = None,
     ) -> None:
         """Initialize the masking strategy."""
         space_strategy = SpaceMaskingStrategy(encode_ratio, decode_ratio)
@@ -1028,8 +1032,8 @@ class ModalityCrossSpaceMaskingStrategy(ModalityCrossMaskingStrategy):
             only_decode_modalities=only_decode_modalities,
         )
 
-    def overide_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
-        """Overide the random mask  for the given modality by the encoding and decoding bandsets."""
+    def override_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
+        """Override the random mask for the given modality by the encoding and decoding bandsets."""
         # For space masking non spatial data is randomly masked but we want to use the encoding and decoding bandsets
         # to determine the mask for the non spatial data
         return not modality_spec.is_spatial
@@ -1051,7 +1055,7 @@ class ModalityCrossTimeMaskingStrategy(ModalityCrossMaskingStrategy):
         max_encoded_bandsets: int | None = None,
         min_decoded_bandsets: int | None = None,
         max_decoded_bandsets: int | None = None,
-        only_decode_modalities: list[str] = [],
+        only_decode_modalities: list[str] | None = None,
     ) -> None:
         """Initialize the masking strategy."""
         space_strategy = SpaceMaskingStrategy(encode_ratio, decode_ratio)
@@ -1067,8 +1071,8 @@ class ModalityCrossTimeMaskingStrategy(ModalityCrossMaskingStrategy):
             only_decode_modalities=only_decode_modalities,
         )
 
-    def overide_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
-        """Overide the random mask  for the given modality by the encoding and decoding bandsets."""
+    def override_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
+        """Override the random mask for the given modality by the encoding and decoding bandsets."""
         # For time masking static data is randomly masked but we want to use the encoding and decoding bandsets
         # to determine the mask for the static data
         return not modality_spec.is_spatial
@@ -1090,7 +1094,7 @@ class ModalityCrossSpaceTimeMaskingStrategy(MaskingStrategy):
         max_encoded_bandsets: int | None = None,
         min_decoded_bandsets: int | None = None,
         max_decoded_bandsets: int | None = None,
-        only_decode_modalities: list[str] = [],
+        only_decode_modalities: list[str] | None = None,
     ) -> None:
         """Initialize the masking strategy."""
         self._encode_ratio = encode_ratio
@@ -1207,7 +1211,7 @@ class ModalityCrossRandomMaskingStrategy(ModalityCrossMaskingStrategy):
         max_encoded_bandsets: int | None = None,
         min_decoded_bandsets: int | None = None,
         max_decoded_bandsets: int | None = None,
-        only_decode_modalities: list[str] = [],
+        only_decode_modalities: list[str] | None = None,
     ) -> None:
         """Initialize the masking strategy."""
         random_strategy = RandomMaskingStrategy(encode_ratio, decode_ratio)
@@ -1509,7 +1513,7 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
         self,
         strategy: MaskingStrategy,
         decoded_modalities: list[str],
-        randomize_missing_modalities: list[str] = [],
+        randomize_missing_modalities: list[str] | None = None,
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
     ) -> None:
@@ -1518,7 +1522,7 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
         self._decode_ratio = decode_ratio
         self.strategy = strategy
         self.decoded_modalities = decoded_modalities
-        self.randomize_missing_modalities = randomize_missing_modalities
+        self.randomize_missing_modalities = list(randomize_missing_modalities or [])
 
     def apply_mask(
         self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
@@ -1587,7 +1591,7 @@ class RandomFixedModalityMaskingStrategy(FixedModalityMaskingStrategy):
     def __init__(
         self,
         decoded_modalities: list[str],
-        randomize_missing_modalities: list[str] = [],
+        randomize_missing_modalities: list[str] | None = None,
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
     ) -> None:
@@ -1623,12 +1627,12 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
         self,
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
-        only_decode_modalities: list[str] = [],
+        only_decode_modalities: list[str] | None = None,
     ):
         """Random masking strategy except for decode modalities, which only get decoded."""
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
-        self.only_decode_modalities = only_decode_modalities
+        self.only_decode_modalities = list(only_decode_modalities or [])
 
     def apply_mask(
         self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
@@ -1653,11 +1657,11 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
         if patch_size is None:
             raise ValueError("patch_size must be provided for random masking")
         output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
-        none_modalites: list[str] = []
+        none_modalities: list[str] = []
         for modality_name in batch.modalities:
             instance = getattr(batch, modality_name)
             if instance is None:
-                none_modalites.append(modality_name)
+                none_modalities.append(modality_name)
                 # set instance and mask to None
                 output_dict[modality_name] = None
                 output_dict[
@@ -1690,7 +1694,7 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
         encode_decode_modalities = [
             m
             for m in batch.modalities
-            if m not in self.only_decode_modalities + none_modalites
+            if m not in self.only_decode_modalities + none_modalities
         ]
         for i in range(batch.batch_size):
             encode_decode_bandsets: list[tuple[str, int]] = []
@@ -1787,7 +1791,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
         random_ratio: float = 0.5,
-        only_decode_modalities: list[str] = [],
+        only_decode_modalities: list[str] | None = None,
     ):
         """Random masking strategy except for decode modalities, which only get decoded.
 
@@ -1799,7 +1803,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         """
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
-        self.only_decode_modalities = only_decode_modalities
+        self.only_decode_modalities = list(only_decode_modalities or [])
         self.random_ratio = random_ratio
         if self.random_ratio > 1:
             raise ValueError(f"Random ratio must be <= 1, got {self.random_ratio}")
@@ -1846,11 +1850,11 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         if patch_size is None:
             raise ValueError("patch_size must be provided for random masking")
         output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
-        none_modalites: list[str] = []
+        none_modalities: list[str] = []
         for modality_name in batch.modalities:
             instance = getattr(batch, modality_name)
             if instance is None:
-                none_modalites.append(modality_name)
+                none_modalities.append(modality_name)
                 output_dict[modality_name] = None
                 output_dict[
                     MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
@@ -1879,7 +1883,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         encode_decode_modalities = [
             m
             for m in batch.modalities
-            if m not in self.only_decode_modalities + ["timestamps"] + none_modalites
+            if m not in self.only_decode_modalities + ["timestamps"] + none_modalities
         ]
         for i in range(batch.batch_size):
             encode_decode_bandsets: list[tuple[str, int]] = []

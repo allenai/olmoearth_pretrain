@@ -1,20 +1,17 @@
 """Post-process ingested WorldCover data into the OlmoEarth Pretrain dataset."""
 
-import argparse
 import csv
-import multiprocessing
 from datetime import UTC, datetime
 
-import tqdm
-from rslearn.dataset import Dataset, Window
-from rslearn.utils.mp import star_imap_unordered
+from rslearn.dataset import Window
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import Modality, TimeSpan
 from olmoearth_pretrain.dataset.utils import get_modality_fname
+from olmoearth_pretrain.modalities import Modality, TimeSpan
 
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
+from .runner import run_window_converter
 
 START_TIME = datetime(2021, 1, 1, tzinfo=UTC)
 END_TIME = datetime(2022, 1, 1, tzinfo=UTC)
@@ -77,45 +74,4 @@ def convert_worldcover(window: Window, olmoearth_path: UPath) -> None:
 
 
 if __name__ == "__main__":
-    multiprocessing.set_start_method("forkserver")
-
-    parser = argparse.ArgumentParser(
-        description="Post-process OlmoEarth Pretrain data",
-    )
-    parser.add_argument(
-        "--ds_path",
-        type=str,
-        help="Source rslearn dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--olmoearth_path",
-        type=str,
-        help="Destination OlmoEarth Pretrain dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        help="Number of workers to use",
-        default=32,
-    )
-    args = parser.parse_args()
-
-    dataset = Dataset(UPath(args.ds_path))
-    olmoearth_path = UPath(args.olmoearth_path)
-
-    jobs = []
-    for window in dataset.load_windows(workers=args.workers, show_progress=True):
-        jobs.append(
-            dict(
-                window=window,
-                olmoearth_path=olmoearth_path,
-            )
-        )
-
-    p = multiprocessing.Pool(args.workers)
-    outputs = star_imap_unordered(p, convert_worldcover, jobs)
-    for _ in tqdm.tqdm(outputs, total=len(jobs)):
-        pass
-    p.close()
+    run_window_converter(convert_worldcover)

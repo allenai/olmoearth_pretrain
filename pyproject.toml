@@ -32,7 +32,7 @@ include = ["olmoearth_pretrain*", "helios*"]
 "olmoearth_pretrain.evals.studio_ingest" = ["registry.json"]
 
 [tool.ruff]
-fix = true
+extend-exclude = ["scripts/archived"]
 
 [tool.ruff.lint]
 extend-select = ["D", "I", "UP"]

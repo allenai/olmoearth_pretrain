@@ -7,23 +7,22 @@ from typing import Any
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.distributed.parallel import DataParallelConfig
-from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.nn.mae import MAE
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
 from olmoearth_pretrain.train.train_module.train_module import (
+    MicrobatchTrainOutput,
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
 )
-from olmoearth_pretrain.train.utils import split_masked_batch
 
 logger = getLogger(__name__)
 
@@ -164,6 +163,7 @@ class MAETrainModule(OlmoEarthTrainModule):
         self.mae_loss = mae_loss_config and mae_loss_config.build()
         self.latent_mim_loss = latent_mim_loss_config and latent_mim_loss_config.build()
         self.regularizer = regularizer_config and regularizer_config.build()
+        self._propagate_model_tokenization_config(self.masking_strategy, self.mae_loss)
 
         loss_names = [
             loss.name
@@ -222,54 +222,27 @@ class MAETrainModule(OlmoEarthTrainModule):
         patch_size = patch_batch[0]
         batch = patch_batch[1]
         self.model.train()
-        # Set the maximum number of tokens
-        total_batch_loss = torch.zeros([], device=self.device)
-        total_batch_reg = torch.zeros([], device=self.device)
 
-        # Split batch into microbatches
-        masked_microbatches = split_masked_batch(batch, self.rank_microbatch_size)
-        num_microbatches = len(masked_microbatches)
+        def step(
+            microbatches: tuple[MaskedOlmoEarthSample, ...], microbatch_idx: int
+        ) -> MicrobatchTrainOutput:
+            loss, latent, _decoded = self.model_forward(microbatches[0], patch_size)
+            return MicrobatchTrainOutput(loss=loss, regularizer_inputs=(latent,))
 
-        for microbatch_idx in range(num_microbatches):
-            with self._train_microbatch_context(microbatch_idx, num_microbatches):
-                microbatch_masked = masked_microbatches[microbatch_idx]
-                logger.info(
-                    f"Training microbatch {microbatch_idx} of {num_microbatches} "
-                    f"with batch size {microbatch_masked.batch_size}"
-                )
-                masked_batch = microbatch_masked.to_device(self.device)
-
-                # Run Encoder and decoder on the augmented input
-                loss, latent, decoded = self.model_forward(masked_batch, patch_size)
-                reg_term = self.compute_regularization(latent)
-                if reg_term is not None:
-                    loss = loss + reg_term
-                    total_batch_reg += (
-                        get_local_tensor(reg_term.detach()) / num_microbatches
-                    )
-                # Scale loss by number of microbatches
-                loss = loss / num_microbatches
-                loss_val = get_local_tensor(loss.detach())
-                total_batch_loss += loss_val
-
-                # Skip bad batches
-                if torch.isnan(loss).any() or torch.isinf(loss).any():
-                    logger.warning(
-                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
-                    )
-                    break
-
-                loss.backward()
+        totals = self._run_masked_microbatches(
+            batch,
+            step,
+            nonfinite_behavior="warn_break",
+        )
 
         if dry_run:
             return
 
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
-            total_batch_loss,
+            totals.loss,
             ReduceType.mean,
         )
-        self.log_regularization(total_batch_reg)
+        self.log_regularization(totals.regularizer)
 
         del batch  # In case this helps with memory utilization.
-        del masked_batch

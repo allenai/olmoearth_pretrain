@@ -14,13 +14,13 @@ from olmo_core.train.callbacks.wandb import WANDB_API_KEY_ENV_VAR, WandBCallback
 from tqdm import tqdm
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
-from olmoearth_pretrain.data.constants import IMAGE_TILE_SIZE, Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoader
 from olmoearth_pretrain.data.dataset import GetItemArgs, OlmoEarthDataset
 from olmoearth_pretrain.data.utils import (
     plot_latlon_distribution,
     plot_modality_data_distribution,
 )
+from olmoearth_pretrain.modalities import IMAGE_TILE_SIZE, Modality
 
 logger = logging.getLogger(__name__)
 

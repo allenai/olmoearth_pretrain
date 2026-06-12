@@ -16,7 +16,6 @@ import torch
 from torch.utils.data import Dataset
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 from olmoearth_pretrain.data.dataset import GetItemArgs, OlmoEarthDataset
 from olmoearth_pretrain.datatypes import (
     MaskedOlmoEarthSample,
@@ -24,6 +23,7 @@ from olmoearth_pretrain.datatypes import (
     OlmoEarthSample,
 )
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
+from olmoearth_pretrain.modalities import MISSING_VALUE, Modality
 
 logger = logging.getLogger(__name__)
 

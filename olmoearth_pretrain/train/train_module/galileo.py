@@ -7,26 +7,24 @@ from typing import Any
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.distributed.parallel import DataParallelConfig
-from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
 
-from olmoearth_pretrain.data.constants import (
+from olmoearth_pretrain.data.transform import TransformConfig
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, TokensAndMasks
+from olmoearth_pretrain.modalities import (
     Modality,
 )
-from olmoearth_pretrain.data.transform import TransformConfig
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.galileo import Galileo
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
 from olmoearth_pretrain.train.train_module.train_module import (
+    MicrobatchTrainOutput,
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
 )
-from olmoearth_pretrain.train.utils import split_masked_batch
 
 logger = getLogger(__name__)
 
@@ -198,6 +196,11 @@ class GalileoTrainModule(OlmoEarthTrainModule):
         if self.regularizer is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.regularizer.name}"
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
+        self._propagate_model_tokenization_config(
+            self.masking_strategy_a,
+            self.masking_strategy_b,
+            self.mae_loss,
+        )
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
@@ -235,82 +238,57 @@ class GalileoTrainModule(OlmoEarthTrainModule):
         # Set the model to train mode
         self.model.train()
 
-        # Set the maximum number of tokens
-        total_mask_a_loss = torch.tensor(0.0, device=self.device)
-        total_mask_b_loss = torch.tensor(0.0, device=self.device)
-        total_batch_loss = torch.tensor(0.0, device=self.device)
-        total_batch_reg = torch.tensor(0.0, device=self.device)
-        total_batch_con = torch.tensor(0.0, device=self.device)
-
-        # Unpack batch
         patch_size = batch[0]
         batch_data_a = batch[1]
         batch_data_b = batch[2]
-        microbatches_a = split_masked_batch(batch_data_a, self.rank_microbatch_size)
-        microbatches_b = split_masked_batch(batch_data_b, self.rank_microbatch_size)
-        num_microbatches = len(microbatches_a)
 
-        for microbatch_idx in range(num_microbatches):
-            with self._train_microbatch_context(microbatch_idx, num_microbatches):
-                microbatch_a = microbatches_a[microbatch_idx]
-                microbatch_b = microbatches_b[microbatch_idx]
-                logger.info(
-                    f"Training microbatch {microbatch_idx} of {num_microbatches} "
-                    f"with batch size {microbatch_a.batch_size}"
+        def step(
+            microbatches: tuple[MaskedOlmoEarthSample, ...], microbatch_idx: int
+        ) -> MicrobatchTrainOutput:
+            masked_batch_a, masked_batch_b = microbatches
+            loss_a, _latent_a, pooled_a, loss_b, _latent_b, pooled_b = (
+                self.model_forward(
+                    masked_batch_a,
+                    masked_batch_b,
+                    patch_size,
+                    self.token_exit_cfg_a,
+                    self.token_exit_cfg_b,
                 )
-                masked_batch_a = microbatch_a.to_device(self.device)
-                masked_batch_b = microbatch_b.to_device(self.device)
+            )
+            loss = (loss_a + loss_b) / 2
+            metrics = {
+                "mask_a": loss_a,
+                "mask_b": loss_b,
+            }
+            if self.contrastive_loss is not None:
+                contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
+                logger.debug("contrastive loss: %s", contrastive_loss)
+                loss += contrastive_loss
+                metrics["contrastive"] = contrastive_loss
 
-                loss_a, latent_a, pooled_a, loss_b, latent_b, pooled_b = (
-                    self.model_forward(
-                        masked_batch_a,
-                        masked_batch_b,
-                        patch_size,
-                        self.token_exit_cfg_a,
-                        self.token_exit_cfg_b,
-                    )
-                )
-                loss = (loss_a + loss_b) / 2
-                total_mask_a_loss += (
-                    get_local_tensor(loss_a.detach()) / num_microbatches
-                )
-                total_mask_b_loss += (
-                    get_local_tensor(loss_b.detach()) / num_microbatches
-                )
+            return MicrobatchTrainOutput(
+                loss=loss,
+                regularizer_inputs=(pooled_a, pooled_b),
+                metrics=metrics,
+            )
 
-                # Scale loss by number of microbatches
-                reg_term_a = self.compute_regularization(pooled_a)
-                reg_term_b = self.compute_regularization(pooled_b)
-                if reg_term_a is not None:
-                    assert reg_term_b is not None
-                    loss = loss + (reg_term_a + reg_term_b) / 2
-                    total_batch_reg += (
-                        get_local_tensor(
-                            (reg_term_a.detach() + reg_term_b.detach()) / 2
-                        )
-                        / num_microbatches
-                    )
-                if self.contrastive_loss is not None:
-                    contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
-                    logger.debug("contrastive loss: %s", contrastive_loss)
-                    loss += contrastive_loss
-                    total_batch_con += (
-                        get_local_tensor(contrastive_loss.detach()) / num_microbatches
-                    )
-
-                loss = loss / num_microbatches
-                loss_val = get_local_tensor(loss.detach())
-                total_batch_loss += loss_val
-                loss.backward()
+        totals = self._run_masked_microbatches(
+            (batch_data_a, batch_data_b),
+            step,
+            nonfinite_behavior="ignore",
+        )
 
         if dry_run:
             return
 
-        total_batch_loss = torch.nan_to_num(total_batch_loss, nan=float("inf"))
-        total_batch_reg = torch.nan_to_num(total_batch_reg, nan=float("inf"))
-        total_batch_con = torch.nan_to_num(total_batch_con, nan=float("inf"))
-        total_mask_a_loss = torch.nan_to_num(total_mask_a_loss, nan=float("inf"))
-        total_mask_b_loss = torch.nan_to_num(total_mask_b_loss, nan=float("inf"))
+        total_batch_loss = torch.nan_to_num(totals.loss, nan=float("inf"))
+        total_batch_reg = torch.nan_to_num(totals.regularizer, nan=float("inf"))
+        total_batch_con = torch.nan_to_num(
+            totals.metrics.get("contrastive", torch.tensor(0.0, device=self.device)),
+            nan=float("inf"),
+        )
+        total_mask_a_loss = torch.nan_to_num(totals.metrics["mask_a"], nan=float("inf"))
+        total_mask_b_loss = torch.nan_to_num(totals.metrics["mask_b"], nan=float("inf"))
 
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
@@ -341,7 +319,6 @@ class GalileoTrainModule(OlmoEarthTrainModule):
                 ReduceType.mean,
             )
         del batch
-        del masked_batch_a, masked_batch_b
 
     def model_forward(
         self,

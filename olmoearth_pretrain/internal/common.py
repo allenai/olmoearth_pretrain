@@ -15,13 +15,13 @@ from olmo_core.launch.beaker import (
 from olmo_core.utils import generate_uuid
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
     OlmoEarthBeakerLaunchConfig,
     OlmoEarthVisualizeConfig,
     SubCmd,
 )
+from olmoearth_pretrain.modalities import Modality
 
 logger = logging.getLogger(__name__)
 BUDGET = "ai2/atec-olmoearth"

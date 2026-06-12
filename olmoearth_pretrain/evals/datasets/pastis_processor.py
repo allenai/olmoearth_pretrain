@@ -11,8 +11,8 @@ import numpy as np
 import torch
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
+from olmoearth_pretrain.modalities import Modality
 
 logger = logging.getLogger(__name__)
 

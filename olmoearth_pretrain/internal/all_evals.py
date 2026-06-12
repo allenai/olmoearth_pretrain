@@ -16,7 +16,11 @@ from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 
-from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.evals.datasets.configs import (
+    EvalDatasetConfig,
+    dataset_to_config,
+    get_eval_mode,
+)
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
@@ -24,6 +28,7 @@ from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
     main,
 )
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -63,8 +68,60 @@ def load_user_module(path: str) -> Any:
     return user_mod
 
 
+def _dedupe_modalities(modalities: list[str]) -> list[str]:
+    return list(dict.fromkeys(modalities))
+
+
+def _derive_single_input_modality(dataset: str, config: EvalDatasetConfig) -> list[str]:
+    modalities = _dedupe_modalities(config.supported_modalities)
+    if len(modalities) != 1:
+        raise ValueError(
+            f"Dataset {dataset!r} supports {modalities}; input_modalities must be set explicitly."
+        )
+    return modalities
+
+
+def _eval_task(
+    *,
+    dataset: str,
+    input_modalities: list[str] | None = None,
+    eval_mode: EvalMode | None = None,
+    **kwargs: Any,
+) -> DownstreamTaskConfig:
+    """Build an eval task, deriving stable dataset metadata when unambiguous."""
+    config = dataset_to_config(dataset)
+    return DownstreamTaskConfig(
+        dataset=dataset,
+        input_modalities=input_modalities
+        if input_modalities is not None
+        else _derive_single_input_modality(dataset, config),
+        eval_mode=eval_mode or EvalMode(get_eval_mode(config.task_type)),
+        **kwargs,
+    )
+
+
+def _studio_linear_probe_task(
+    *,
+    dataset: str,
+    input_modalities: list[str] | None = None,
+    **kwargs: Any,
+) -> DownstreamTaskConfig:
+    """Build a registry-backed Studio task with shared linear-probe defaults."""
+    return _eval_task(
+        dataset=dataset,
+        input_modalities=input_modalities,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        eval_interval=Duration.epochs(10),
+        epochs=50,
+        **kwargs,
+    )
+
+
 EVAL_TASKS = {
-    "m_eurosat": DownstreamTaskConfig(
+    "m_eurosat": _eval_task(
         dataset="m-eurosat",
         embedding_batch_size=128,
         num_workers=0,
@@ -72,11 +129,9 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         eval_interval=Duration.epochs(5),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        eval_mode=EvalMode.KNN,
         primary_metric=EvalMetric.ACCURACY,
     ),
-    "m_forestnet": DownstreamTaskConfig(
+    "m_forestnet": _eval_task(
         dataset="m-forestnet",
         embedding_batch_size=64,
         num_workers=4,
@@ -84,44 +139,36 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=False,
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         eval_interval=Duration.epochs(5),
-        input_modalities=[Modality.LANDSAT.name],
-        eval_mode=EvalMode.KNN,
         primary_metric=EvalMetric.ACCURACY,
     ),
-    "m_bigearthnet": DownstreamTaskConfig(
+    "m_bigearthnet": _eval_task(
         dataset="m-bigearthnet",
         embedding_batch_size=64,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        eval_mode=EvalMode.KNN,
         primary_metric=EvalMetric.MACRO_F1,
     ),
-    "m_so2sat": DownstreamTaskConfig(
+    "m_so2sat": _eval_task(
         dataset="m-so2sat",
         embedding_batch_size=128,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        eval_mode=EvalMode.KNN,
         primary_metric=EvalMetric.ACCURACY,
     ),
-    "m_brick_kiln": DownstreamTaskConfig(
+    "m_brick_kiln": _eval_task(
         dataset="m-brick-kiln",
         embedding_batch_size=128,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        eval_mode=EvalMode.KNN,
         primary_metric=EvalMetric.ACCURACY,
     ),
-    "m_sa_crop_type": DownstreamTaskConfig(
+    "m_sa_crop_type": _eval_task(
         dataset="m-sa-crop-type",
         embedding_batch_size=32,
         probe_batch_size=8,
@@ -131,11 +178,9 @@ EVAL_TASKS = {
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
-    "m_cashew_plant": DownstreamTaskConfig(
+    "m_cashew_plant": _eval_task(
         dataset="m-cashew-plant",
         embedding_batch_size=32,
         probe_batch_size=8,
@@ -145,11 +190,9 @@ EVAL_TASKS = {
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
-    "mados": DownstreamTaskConfig(
+    "mados": _eval_task(
         dataset="mados",
         embedding_batch_size=128,
         probe_batch_size=128,
@@ -159,11 +202,9 @@ EVAL_TASKS = {
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.01,
         eval_interval=Duration.epochs(10),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MICRO_F1,
     ),
-    "sen1floods11": DownstreamTaskConfig(
+    "sen1floods11": _eval_task(
         dataset="sen1floods11",
         embedding_batch_size=128,
         probe_batch_size=128,
@@ -172,11 +213,9 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
-        input_modalities=[Modality.SENTINEL1.name],
-        eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
-    "pastis_sentinel2": DownstreamTaskConfig(
+    "pastis_sentinel2": _eval_task(
         dataset="pastis",
         embedding_batch_size=32,
         probe_batch_size=8,
@@ -187,10 +226,9 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(50),
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
-    "pastis_sentinel1": DownstreamTaskConfig(
+    "pastis_sentinel1": _eval_task(
         dataset="pastis",
         embedding_batch_size=32,
         probe_batch_size=8,
@@ -201,10 +239,9 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(50),
         input_modalities=[Modality.SENTINEL1.name],
         epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
-    "pastis_sentinel1_sentinel2": DownstreamTaskConfig(
+    "pastis_sentinel1_sentinel2": _eval_task(
         dataset="pastis",
         embedding_batch_size=32,
         probe_batch_size=8,
@@ -215,10 +252,9 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(20),
         input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
-    "pastis128_sentinel2": DownstreamTaskConfig(
+    "pastis128_sentinel2": _eval_task(
         dataset="pastis128",
         embedding_batch_size=32,
         probe_batch_size=8,
@@ -229,10 +265,9 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(50),
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
-    "pastis128_sentinel1": DownstreamTaskConfig(
+    "pastis128_sentinel1": _eval_task(
         dataset="pastis128",
         embedding_batch_size=32,
         probe_batch_size=8,
@@ -243,10 +278,9 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(50),
         input_modalities=[Modality.SENTINEL1.name],
         epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
-    "pastis128_sentinel1_sentinel2": DownstreamTaskConfig(
+    "pastis128_sentinel1_sentinel2": _eval_task(
         dataset="pastis128",
         embedding_batch_size=32,
         probe_batch_size=8,
@@ -257,26 +291,14 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(20),
         input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
-    # TODO: Auto-generate EVAL_TASKS from registry entries. Most of this config
-    # (dataset name, task_type -> eval_mode, modalities) is not task-specific and
-    # can be derived from EvalDatasetEntry. Only batch sizes and learning rates
-    # need manual tuning. See: olmoearth_pretrain.evals.studio_ingest.registry
-    "tolbi_crop": DownstreamTaskConfig(
+    "tolbi_crop": _studio_linear_probe_task(
         dataset="tolbi_crop",
         embedding_batch_size=32,
         probe_batch_size=8,
         num_workers=16,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.1,
-        eval_interval=Duration.epochs(10),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
     ),
     # TODO: commenting out for now to avoid the errors.
     # "burnrisk_8d_nbac": DownstreamTaskConfig(
@@ -297,94 +319,48 @@ EVAL_TASKS = {
     #     primary_metric=EvalMetric.CLASS_F1,
     #     primary_metric_class=1,
     # ),
-    "yemen_crop": DownstreamTaskConfig(
+    "yemen_crop": _studio_linear_probe_task(
         dataset="yemen_crop",
         embedding_batch_size=32,
         probe_batch_size=8,
         num_workers=2,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
-        eval_interval=Duration.epochs(10),
         probe_lr=0.001,
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
     ),
-    "geo_ecosystem_annual_test": DownstreamTaskConfig(
+    "geo_ecosystem_annual_test": _studio_linear_probe_task(
         dataset="geo_ecosystem_annual_test",
         embedding_batch_size=32,
         probe_batch_size=8,
         num_workers=8,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.01,
-        eval_interval=Duration.epochs(10),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.OVERALL_ACC,
     ),
-    "forest_loss_driver": DownstreamTaskConfig(
+    "forest_loss_driver": _studio_linear_probe_task(
         dataset="forest_loss_driver",
         embedding_batch_size=32,
         probe_batch_size=8,
         num_workers=8,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.01,
-        eval_interval=Duration.epochs(10),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
     ),
-    "nigeria_settlement": DownstreamTaskConfig(
+    "nigeria_settlement": _studio_linear_probe_task(
         dataset="nigeria_settlement",
         embedding_batch_size=32,
         probe_batch_size=8,
         num_workers=8,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.01,
-        eval_interval=Duration.epochs(10),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
     ),
-    "nandi_crop_map": DownstreamTaskConfig(
+    "nandi_crop_map": _studio_linear_probe_task(
         dataset="nandi_crop_map",
         embedding_batch_size=32,
         probe_batch_size=8,
         num_workers=8,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.01,
-        eval_interval=Duration.epochs(10),
-        input_modalities=[
-            Modality.SENTINEL2_L2A.name,
-        ],
-        epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
     ),
-    "awf_lulc_map": DownstreamTaskConfig(
+    "awf_lulc_map": _studio_linear_probe_task(
         dataset="awf_lulc_map",
         embedding_batch_size=32,
         probe_batch_size=8,
         num_workers=8,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.01,
-        eval_interval=Duration.epochs(10),
-        input_modalities=[
-            Modality.SENTINEL2_L2A.name,
-        ],
-        epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
     ),
     # this eval is very large and can lead to
     # OOM errors. Skipping for now.

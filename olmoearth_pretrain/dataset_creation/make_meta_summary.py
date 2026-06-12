@@ -6,7 +6,7 @@ import csv
 import tqdm
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import Modality, ModalitySpec, TimeSpan
+from olmoearth_pretrain.modalities import Modality, ModalitySpec, TimeSpan
 
 from .util import get_modality_dir, get_modality_temp_meta_dir
 

@@ -12,7 +12,7 @@ from scipy.stats import entropy
 from tqdm import tqdm
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
+from olmoearth_pretrain.modalities import MISSING_VALUE, Modality
 
 # lets start with these two modalities for now
 MODALITIES = ["sentinel2_l2a", "worldcover"]

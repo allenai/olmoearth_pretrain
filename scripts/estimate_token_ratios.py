@@ -16,14 +16,17 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from olmoearth_pretrain.data.constants import (
+from olmoearth_pretrain.datatypes import (
+    MaskedOlmoEarthSample,
+    MaskValue,
+    OlmoEarthSample,
+)
+from olmoearth_pretrain.modalities import (
     IMAGE_TILE_SIZE,
     MISSING_VALUE,
     Modality,
     ModalitySpec,
 )
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
 

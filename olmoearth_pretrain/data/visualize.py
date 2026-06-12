@@ -13,9 +13,9 @@ from einops import rearrange
 from matplotlib.figure import Figure
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import GetItemArgs, OlmoEarthDataset
 from olmoearth_pretrain.data.utils import convert_to_db
+from olmoearth_pretrain.modalities import Modality
 
 logger = logging.getLogger(__name__)
 

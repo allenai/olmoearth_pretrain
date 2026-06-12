@@ -23,16 +23,20 @@ from olmoearth_pretrain._compat import (
     deprecated_class_alias as _deprecated_class_alias,
 )
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.constants import (
+from olmoearth_pretrain.data.normalize import (
+    NormalizationConfigError,
+    Normalizer,
+    Strategy,
+)
+from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
+from olmoearth_pretrain.datatypes import (
+    OlmoEarthSample,
+)
+from olmoearth_pretrain.modalities import (
     MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
     Modality,
     ModalitySpec,
-)
-from olmoearth_pretrain.data.normalize import Normalizer, Strategy
-from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
-from olmoearth_pretrain.datatypes import (
-    OlmoEarthSample,
 )
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.types import ArrayTensor
@@ -541,7 +545,7 @@ class OlmoEarthDataset(Dataset):
         # TODO: we can also make modality norm strategy configurable later
         try:
             return self.normalizer_computed.normalize(modality, image)
-        except Exception:
+        except NormalizationConfigError:
             return self.normalizer_predefined.normalize(modality, image)
 
     def _compute_ndvi(
@@ -576,6 +580,48 @@ class OlmoEarthDataset(Dataset):
         # Remove "ndvi" from missing_modalities since we computed it
         updated_missing = [m for m in missing_modalities if m != "ndvi"]
         return ndvi[..., np.newaxis].astype(self.dtype), updated_missing
+
+    def _apply_derived_modalities(
+        self, sample_dict: dict[str, Any], missing_modalities: list[str]
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Compute requested derived modalities from raw, unnormalized inputs."""
+        if (
+            "ndvi" in sample_dict
+            and "sentinel2_l2a" in sample_dict
+            and "sentinel2_l2a" not in missing_modalities
+        ):
+            sample_dict["ndvi"], missing_modalities = self._compute_ndvi(
+                sample_dict["sentinel2_l2a"], missing_modalities
+            )
+        return sample_dict, missing_modalities
+
+    def _normalize_sample_dict(
+        self, sample_dict: dict[str, Any], missing_modalities: list[str]
+    ) -> dict[str, Any]:
+        """Normalize present modalities while preserving missing-value sentinels."""
+        if not self.normalize:
+            return sample_dict
+
+        for modality_name in sample_dict:
+            if modality_name == "timestamps":
+                continue
+            # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
+            if modality_name in missing_modalities:
+                logger.debug(
+                    f"Skipping normalization for {modality_name} because it is in missing_modalities"
+                )
+                continue
+            logger.debug(f"Normalizing {modality_name}")
+            modality_data = sample_dict[modality_name]
+            missing_mask = modality_data == MISSING_VALUE
+            normalized_data = self.normalize_image(
+                Modality.get(modality_name), modality_data
+            )
+            # Sentinel values must be reset after normalization so they can be recognized by missing masks.
+            sample_dict[modality_name] = np.where(
+                missing_mask, modality_data, normalized_data
+            ).astype(self.dtype)
+        return sample_dict
 
     def _fill_missing_timesteps(
         self,
@@ -827,36 +873,10 @@ class OlmoEarthDataset(Dataset):
 
         sample_dict = subset_sample.as_dict()
 
-        # Compute NDVI from raw (un-normalized) S2 L2A bands if requested
-        if (
-            "ndvi" in sample_dict
-            and "sentinel2_l2a" in sample_dict
-            and "sentinel2_l2a" not in missing_modalities
-        ):
-            sample_dict["ndvi"], missing_modalities = self._compute_ndvi(
-                sample_dict["sentinel2_l2a"], missing_modalities
-            )
-
-        if self.normalize:
-            for modality_name in sample_dict.keys():
-                if modality_name == "timestamps":
-                    continue
-                # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
-                if modality_name in missing_modalities:
-                    logger.debug(
-                        f"Skipping normalization for {modality_name} because it is in missing_modalities"
-                    )
-                    continue
-                logger.debug(f"Normalizing {modality_name}")
-                modality_data = sample_dict[modality_name]
-                missing_mask = modality_data == MISSING_VALUE
-                normalized_data = self.normalize_image(
-                    Modality.get(modality_name), modality_data
-                )
-                # Sentinel Values must be reset after normalization so they can be recognized by missing mask
-                sample_dict[modality_name] = np.where(
-                    missing_mask, modality_data, normalized_data
-                ).astype(self.dtype)
+        sample_dict, missing_modalities = self._apply_derived_modalities(
+            sample_dict, missing_modalities
+        )
+        sample_dict = self._normalize_sample_dict(sample_dict, missing_modalities)
 
         return args.patch_size, OlmoEarthSample(**sample_dict)
 

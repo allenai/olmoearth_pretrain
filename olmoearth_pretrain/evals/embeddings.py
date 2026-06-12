@@ -5,9 +5,9 @@ import logging
 import torch
 from torch.utils.data import DataLoader
 
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.evals.embedding_transforms import quantize_embeddings
 from olmoearth_pretrain.evals.eval_wrapper import EvalWrapper
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 

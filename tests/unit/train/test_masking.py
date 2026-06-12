@@ -5,8 +5,8 @@ import random
 
 import torch
 
-from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
+from olmoearth_pretrain.datatypes import OlmoEarthSample
+from olmoearth_pretrain.modalities import MISSING_VALUE, Modality
 from olmoearth_pretrain.train.masking import (
     MaskedOlmoEarthSample,
     MaskValue,

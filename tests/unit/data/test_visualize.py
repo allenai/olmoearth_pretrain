@@ -5,9 +5,9 @@ from pathlib import Path
 
 import numpy as np
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthDataset
 from olmoearth_pretrain.data.visualize import visualize_sample
+from olmoearth_pretrain.modalities import Modality
 
 
 def test_visualize_sample(

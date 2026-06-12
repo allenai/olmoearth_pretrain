@@ -29,10 +29,10 @@ from new_masking_script import (
     get_masking_config as get_masking_config_base,
 )
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.internal.experiment import CommonComponents, SubCmd, main
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
-from olmoearth_pretrain.nn.flexihelios import (
+from olmoearth_pretrain.modalities import Modality
+from olmoearth_pretrain.nn.flexi_vit import (
     EncoderConfig,
     PredictorConfig,
 )

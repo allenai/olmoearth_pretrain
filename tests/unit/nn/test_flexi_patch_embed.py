@@ -4,7 +4,7 @@ import pytest
 import torch
 from einops import rearrange
 
-from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.modalities import Modality, ModalitySpec
 from olmoearth_pretrain.nn.flexi_patch_embed import FlexiPatchEmbed
 from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
 

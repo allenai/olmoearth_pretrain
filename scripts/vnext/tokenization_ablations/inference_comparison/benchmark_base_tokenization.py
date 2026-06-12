@@ -21,12 +21,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "official"))
 
 from script import build_common_components
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.inference_benchmarking.data_models import RunParams
 from olmoearth_pretrain.inference_benchmarking.run_throughput_benchmark import (
     ThroughputBenchmarkRunnerConfig,
 )
 from olmoearth_pretrain.internal.experiment import CommonComponents, main
+from olmoearth_pretrain.modalities import Modality
 
 
 def build_inference_benchmarking_config(

@@ -4,7 +4,7 @@ import logging
 
 import torch
 
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.datatypes import MaskValue, TokensAndMasks
 from olmoearth_pretrain.train.loss import (
     AdjustedPatchDiscriminationLoss,
     CrossEntropyLoss,
@@ -19,7 +19,6 @@ from olmoearth_pretrain.train.loss import (
     PatchDiscriminationLoss,
     PatchDiscriminationLossNew,
 )
-from olmoearth_pretrain.train.masking import MaskValue
 
 logger = logging.getLogger(__name__)
 

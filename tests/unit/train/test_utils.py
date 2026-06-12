@@ -3,8 +3,7 @@
 import pytest
 import torch
 
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.train.masking import MaskValue
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.train.utils import split_masked_batch
 
 

@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 import torch
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.pastis_dataset import PASTISRDataset
+from olmoearth_pretrain.modalities import Modality
 
 
 @pytest.fixture

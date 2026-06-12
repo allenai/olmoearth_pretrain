@@ -1,9 +1,15 @@
 """Test the normalizer."""
 
 import numpy as np
+import pytest
 
-from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.data.normalize import Normalizer, Strategy
+from olmoearth_pretrain.data.dataset import OlmoEarthDataset
+from olmoearth_pretrain.data.normalize import (
+    NormalizationConfigError,
+    Normalizer,
+    Strategy,
+)
+from olmoearth_pretrain.modalities import Modality
 
 
 def test_normalize_predefined() -> None:
@@ -32,3 +38,47 @@ def test_normalize_computed() -> None:
     normalized_data = normalizer.normalize(modality, data)
     assert normalized_data.shape == data.shape
     assert normalized_data.dtype == np.float64
+
+
+def test_normalize_missing_config_raises_specific_error() -> None:
+    """Missing normalization stats should raise a dedicated config error."""
+    data = np.random.randint(0, 10000, (16, 16, 12), dtype=np.uint16)
+    normalizer = Normalizer(Strategy.COMPUTED)
+    normalizer.norm_config = {}
+
+    with pytest.raises(NormalizationConfigError):
+        normalizer.normalize(Modality.SENTINEL2_L2A, data)
+
+
+class _FakeNormalizer:
+    def __init__(self, result: np.ndarray | None = None, exc: Exception | None = None):
+        self.result = result
+        self.exc = exc
+
+    def normalize(self, modality: Modality, image: np.ndarray) -> np.ndarray:
+        if self.exc is not None:
+            raise self.exc
+        assert self.result is not None
+        return self.result
+
+
+def test_dataset_normalize_image_falls_back_only_for_config_errors() -> None:
+    """Dataset normalization fallback should not hide non-config failures."""
+    image = np.zeros((1, 1, 12), dtype=np.float32)
+    fallback_result = np.ones_like(image)
+    dataset = object.__new__(OlmoEarthDataset)
+
+    dataset.normalizer_computed = _FakeNormalizer(
+        exc=NormalizationConfigError("missing stats")
+    )
+    dataset.normalizer_predefined = _FakeNormalizer(result=fallback_result)
+
+    assert np.array_equal(
+        dataset.normalize_image(Modality.SENTINEL2_L2A, image), fallback_result
+    )
+
+    dataset.normalizer_computed = _FakeNormalizer(exc=ValueError("shape error"))
+    dataset.normalizer_predefined = _FakeNormalizer(result=fallback_result)
+
+    with pytest.raises(ValueError, match="shape error"):
+        dataset.normalize_image(Modality.SENTINEL2_L2A, image)

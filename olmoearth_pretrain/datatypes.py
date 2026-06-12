@@ -14,7 +14,12 @@ from torch import Tensor
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import distribute_tensor
 
-from olmoearth_pretrain.data.constants import MISSING_VALUE, TIMESTAMPS, Modality
+from olmoearth_pretrain.modalities import (
+    MISSING_VALUE,
+    TIMESTAMPS,
+    Modality,
+    ModalitySpec,
+)
 from olmoearth_pretrain.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
@@ -33,6 +38,25 @@ class MaskValue(Enum):
     TARGET_ENCODER_ONLY = 1
     DECODER = 2
     MISSING = 3
+
+
+def make_modality_mask_like(
+    tensor: ArrayTensor,
+    modality: ModalitySpec,
+    fill_value: int = MaskValue.ONLINE_ENCODER.value,
+    dtype: torch.dtype | None = None,
+) -> Tensor:
+    """Create a mask matching a modality tensor's dimensions and band-set count."""
+    kwargs: dict[str, Any] = {}
+    if isinstance(tensor, torch.Tensor):
+        kwargs["device"] = tensor.device
+    if dtype is not None:
+        kwargs["dtype"] = dtype
+    return torch.full(
+        (*tensor.shape[:-1], modality.num_band_sets),
+        fill_value,
+        **kwargs,
+    )
 
 
 # timestamps is never considered a "modality" - it's metadata about when samples were captured
@@ -70,7 +94,29 @@ def _get_masked_modality_name(modality: str) -> str:
 
 
 def _get_unmasked_modality_name(modality_mask_name: str) -> str:
-    return modality_mask_name.replace("_mask", "")
+    return modality_mask_name.removesuffix("_mask")
+
+
+def _to_device_dict(
+    obj: NamedTuple,
+    device: torch.device,
+    non_blocking: bool,
+) -> dict[str, Any]:
+    """Return non-None tensor-like fields moved to a device."""
+    return {
+        key: val.to(device, non_blocking=non_blocking)
+        for key, val in _as_dict(obj, include_nones=False).items()
+        if val is not None and hasattr(val, "to")
+    }
+
+
+def _first_present_field(obj: NamedTuple) -> Any:
+    """Return the first non-None field value in a NamedTuple container."""
+    for name in obj._fields:
+        val = getattr(obj, name)
+        if val is not None:
+            return val
+    raise ValueError("No data is present")
 
 
 class OlmoEarthSample(NamedTuple):
@@ -163,13 +209,7 @@ class OlmoEarthSample(NamedTuple):
         self, device: torch.device, non_blocking: bool = True
     ) -> OlmoEarthSample:
         """Move all tensors to the specified device."""
-        return OlmoEarthSample(
-            **{
-                key: val.to(device, non_blocking=non_blocking)
-                for key, val in self.as_dict(include_nones=False).items()
-                if val is not None
-            }
-        )
+        return OlmoEarthSample(**_to_device_dict(self, device, non_blocking))
 
     def distribute_tensors(self, device_mesh: DeviceMesh) -> OlmoEarthSample:
         """Distribute the tensors to the specified device mesh."""
@@ -418,13 +458,7 @@ class MaskedOlmoEarthSample(NamedTuple):
         self, device: torch.device, non_blocking: bool = True
     ) -> MaskedOlmoEarthSample:
         """Move all tensors to the specified device."""
-        return MaskedOlmoEarthSample(
-            **{
-                key: val.to(device, non_blocking=non_blocking)
-                for key, val in self.as_dict(include_nones=False).items()
-                if val is not None and hasattr(val, "to")
-            }
-        )
+        return MaskedOlmoEarthSample(**_to_device_dict(self, device, non_blocking))
 
     def unmask(self) -> MaskedOlmoEarthSample:
         """Return an unmasked MaskedOlmoEarthSample.
@@ -458,9 +492,13 @@ class MaskedOlmoEarthSample(NamedTuple):
                     masked_sample_dict[cls.get_masked_modality_name(key)] = None
                 else:
                     masked_sample_dict[key] = t
+                    modality = Modality.get(key)
                     masked_sample_dict[cls.get_masked_modality_name(key)] = (
-                        torch.ones(sample.shape(key, mask=False))
-                        * MaskValue.ONLINE_ENCODER.value
+                        make_modality_mask_like(
+                            t,
+                            modality,
+                            fill_value=MaskValue.ONLINE_ENCODER.value,
+                        )
                     )
 
         return MaskedOlmoEarthSample(**masked_sample_dict)
@@ -552,32 +590,18 @@ class TokensAndMasks(NamedTuple):
     @property
     def batch_size(self) -> int:
         """Get the batch size."""
-        for name in self._fields:
-            val = getattr(self, name)
-            if val is not None:
-                return val.shape[0]
-        raise ValueError("No data to get batch size from")
+        return _first_present_field(self).shape[0]
 
     def to_device(
         self, device: torch.device, non_blocking: bool = True
     ) -> TokensAndMasks:
         """Move all tensors to the specified device."""
-        return TokensAndMasks(
-            **{
-                key: val.to(device, non_blocking=non_blocking)
-                for key, val in self.as_dict(include_nones=False).items()
-                if val is not None and hasattr(val, "to")
-            }
-        )
+        return TokensAndMasks(**_to_device_dict(self, device, non_blocking))
 
     @property
     def device(self) -> torch.device:
         """Get the device of the tokens and masks."""
-        for name in self._fields:
-            val = getattr(self, name)
-            if val is not None:
-                return val.device
-        raise ValueError("No data to get device from")
+        return _first_present_field(self).device
 
     def get_shape_dict(self) -> dict[str, tuple]:
         """Return a dictionary of the shapes of the fields."""
@@ -628,3 +652,16 @@ class TokensAndMasks(NamedTuple):
         x = torch.cat(flattened_x, dim=1)
         masks = torch.cat(flattened_masks, dim=1)
         return x, masks
+
+
+SAMPLE_MODALITY_FIELDS: tuple[str, ...] = tuple(
+    field for field in OlmoEarthSample._fields if field != TIMESTAMPS_FIELD
+)
+MASKED_SAMPLE_MODALITY_FIELDS: tuple[str, ...] = tuple(
+    field
+    for field in MaskedOlmoEarthSample._fields
+    if field != TIMESTAMPS_FIELD and not field.endswith("_mask")
+)
+TOKEN_MODALITY_FIELDS: tuple[str, ...] = tuple(
+    field for field in TokensAndMasks._fields if not field.endswith("_mask")
+)

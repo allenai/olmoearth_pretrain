@@ -1,37 +1,38 @@
 """Eval wrapper contract to be able to run evals on a model."""
 
 from logging import getLogger
-from typing import Any
+from typing import Any, NamedTuple
 
 import torch
 from einops import rearrange, reduce
 from torch import nn
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
-from olmoearth_pretrain.evals.datasets.configs import TaskType
-from olmoearth_pretrain.evals.models import (
-    AnySat,
-    Clay,
-    Croma,
-    DINOv3,
-    GalileoWrapper,
-    Panopticon,
-    PrestoWrapper,
-    PrithviV2,
-    Satlas,
-    Terramind,
-    Tessera,
-)
-from olmoearth_pretrain.nn.flexi_vit import (
-    FlexiVitBase,
+from olmoearth_pretrain.datatypes import (
+    MaskedOlmoEarthSample,
+    MaskValue,
     TokensAndMasks,
 )
+from olmoearth_pretrain.evals.datasets.configs import TaskType
+from olmoearth_pretrain.evals.models.registry import BASELINE_MODEL_SPECS
+from olmoearth_pretrain.nn.flexi_vit import FlexiVitBase
 from olmoearth_pretrain.nn.pooled_modality_predictor import EncodeEarlyAttnPool
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.st_model import STBase
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = getLogger(__name__)
+
+
+def _model_inherits_from(model: nn.Module, class_name: str, module_prefix: str) -> bool:
+    """Return True when a model inherits from a lazily identified adapter class."""
+    return any(
+        cls.__name__ == class_name
+        and (
+            cls.__module__ == module_prefix
+            or cls.__module__.startswith(f"{module_prefix}.")
+        )
+        for cls in model.__class__.mro()
+    )
 
 
 class EvalWrapper:
@@ -91,6 +92,17 @@ class EvalWrapper:
         """Delegate attribute access to the underlying model if the attribute is not found on the wrapper."""
         return getattr(self.model, name)
 
+    def _call_model_with_pooling(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+    ) -> torch.Tensor:
+        """Call adapters that accept pooling and spatial-pooling controls."""
+        return self.model(
+            masked_olmoearth_sample,
+            pooling=self.pooling_type,
+            spatial_pool=self.spatial_pool,
+        )
+
     def __call__(
         self,
         masked_olmoearth_sample: MaskedOlmoEarthSample,
@@ -149,7 +161,7 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                     pooled_tokens, "b h w ... d -> b h w d", self.pooling_type
                 )
             else:
-                # Take the mean of all dims excetp the first and last
+                # Take the mean of all dims except the first and last.
                 pooled_tokens = reduce(
                     pooled_tokens, "b ... d -> b d", self.pooling_type
                 )
@@ -162,8 +174,8 @@ HeliosEvalWrapper = _deprecated_class_alias(
 )
 
 
-class TerramindEvalWrapper(EvalWrapper):
-    """Wrapper for Terramind models."""
+class _PooledAdapterEvalWrapper(EvalWrapper):
+    """Base wrapper for adapters that expose the shared eval embedding call."""
 
     def __call__(
         self,
@@ -172,12 +184,11 @@ class TerramindEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
-        batch_embeddings = self.model(
-            masked_olmoearth_sample,
-            pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
-        )
-        return batch_embeddings, labels
+        return self._call_model_with_pooling(masked_olmoearth_sample), labels
+
+
+class TerramindEvalWrapper(_PooledAdapterEvalWrapper):
+    """Wrapper for Terramind models."""
 
 
 class PanopticonEvalWrapper(EvalWrapper):
@@ -202,22 +213,8 @@ class PanopticonEvalWrapper(EvalWrapper):
         return batch_embeddings, labels
 
 
-class GalileoEvalWrapper(EvalWrapper):
+class GalileoEvalWrapper(_PooledAdapterEvalWrapper):
     """Wrapper for Galileo models."""
-
-    def __call__(
-        self,
-        masked_olmoearth_sample: MaskedOlmoEarthSample,
-        labels: torch.Tensor,
-        is_train: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass through the model produces the embedding specified by initialization."""
-        embeddings = self.model(
-            masked_olmoearth_sample,
-            pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
-        )
-        return embeddings, labels
 
 
 class AnySatEvalWrapper(EvalWrapper):
@@ -230,11 +227,7 @@ class AnySatEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
-        embeddings = self.model(
-            masked_olmoearth_sample,
-            pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
-        )
+        embeddings = self._call_model_with_pooling(masked_olmoearth_sample)
         if is_train and (self.task_type == TaskType.SEGMENTATION):
             # this is a special case for AnySat. Since it outputs per-pixel embeddings,
             # we subsample training pixels to keep the memory requirements reasonable.
@@ -267,76 +260,20 @@ class AnySatEvalWrapper(EvalWrapper):
         return embeddings, labels
 
 
-class PrithviV2EvalWrapper(EvalWrapper):
+class PrithviV2EvalWrapper(_PooledAdapterEvalWrapper):
     """Wrapper for PrithviV2 model."""
 
-    def __call__(
-        self,
-        masked_olmoearth_sample: MaskedOlmoEarthSample,
-        labels: torch.Tensor,
-        is_train: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass through the model produces the embedding specified by initialization."""
-        embeddings = self.model(
-            masked_olmoearth_sample,
-            pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
-        )
-        return embeddings, labels
 
-
-class ClayEvalWrapper(EvalWrapper):
+class ClayEvalWrapper(_PooledAdapterEvalWrapper):
     """Wrapper for Clay models."""
 
-    def __call__(
-        self,
-        masked_olmoearth_sample: MaskedOlmoEarthSample,
-        labels: torch.Tensor,
-        is_train: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass through the model produces the embedding specified by initialization."""
-        batch_embeddings = self.model(
-            masked_olmoearth_sample,
-            pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
-        )
-        return batch_embeddings, labels
 
-
-class CromaEvalWrapper(EvalWrapper):
+class CromaEvalWrapper(_PooledAdapterEvalWrapper):
     """Wrapper for Croma models."""
 
-    def __call__(
-        self,
-        masked_olmoearth_sample: MaskedOlmoEarthSample,
-        labels: torch.Tensor,
-        is_train: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass through the model produces the embedding specified by initialization."""
-        batch_embeddings = self.model(
-            masked_olmoearth_sample,
-            pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
-        )
-        return batch_embeddings, labels
 
-
-class PrestoEvalWrapper(EvalWrapper):
+class PrestoEvalWrapper(_PooledAdapterEvalWrapper):
     """Wrapper for Presto model."""
-
-    def __call__(
-        self,
-        masked_olmoearth_sample: MaskedOlmoEarthSample,
-        labels: torch.Tensor,
-        is_train: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass through the model produces the embedding specified by initialization."""
-        batch_embeddings = self.model(
-            masked_olmoearth_sample,
-            pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
-        )
-        return batch_embeddings, labels
 
 
 class DINOv3EvalWrapper(EvalWrapper):
@@ -357,7 +294,7 @@ class DINOv3EvalWrapper(EvalWrapper):
                 pooling=self.pooling_type,
             )
         else:
-            # should this call model ditectly
+            # Should this call the model directly?
             batch_embeddings = self.model(
                 masked_olmoearth_sample,
                 pooling=self.pooling_type,
@@ -365,40 +302,47 @@ class DINOv3EvalWrapper(EvalWrapper):
         return batch_embeddings, labels
 
 
-class SatlasEvalWrapper(EvalWrapper):
+class SatlasEvalWrapper(_PooledAdapterEvalWrapper):
     """Wrapper for Satlas models."""
 
-    def __call__(
-        self,
-        masked_olmoearth_sample: MaskedOlmoEarthSample,
-        labels: torch.Tensor,
-        is_train: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass through the model produces the embedding specified by initialization."""
-        batch_embeddings = self.model(
-            masked_olmoearth_sample,
-            pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
-        )
-        return batch_embeddings, labels
 
-
-class TesseraEvalWrapper(EvalWrapper):
+class TesseraEvalWrapper(_PooledAdapterEvalWrapper):
     """Wrapper for Tessera models."""
 
-    def __call__(
-        self,
-        masked_olmoearth_sample: MaskedOlmoEarthSample,
-        labels: torch.Tensor,
-        is_train: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass through the model produces the embedding specified by initialization."""
-        batch_embeddings = self.model(
-            masked_olmoearth_sample,
-            pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
-        )
-        return batch_embeddings, labels
+
+class _AdapterWrapperRegistration(NamedTuple):
+    """Lazy adapter identity and the wrapper used for matching models."""
+
+    class_name: str
+    module_prefix: str
+    wrapper_class: type[EvalWrapper]
+
+
+_WRAPPER_CLASSES_BY_NAME: dict[str, type[EvalWrapper]] = {
+    cls.__name__: cls
+    for cls in (
+        AnySatEvalWrapper,
+        ClayEvalWrapper,
+        CromaEvalWrapper,
+        DINOv3EvalWrapper,
+        GalileoEvalWrapper,
+        PanopticonEvalWrapper,
+        PrestoEvalWrapper,
+        PrithviV2EvalWrapper,
+        SatlasEvalWrapper,
+        TerramindEvalWrapper,
+        TesseraEvalWrapper,
+    )
+}
+
+_ADAPTER_WRAPPERS: tuple[_AdapterWrapperRegistration, ...] = tuple(
+    _AdapterWrapperRegistration(
+        spec.adapter_class_name,
+        spec.module_prefix,
+        _WRAPPER_CLASSES_BY_NAME[spec.wrapper_class_name],
+    )
+    for spec in BASELINE_MODEL_SPECS
+)
 
 
 def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
@@ -414,38 +358,14 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     if isinstance(model, FlexiVitBase) or isinstance(model, STBase):
         logger.info("Using OlmoEarthEvalWrapper")
         return OlmoEarthEvalWrapper(model=model, **kwargs)
-    elif isinstance(model, Panopticon):
-        logger.info("Using PanopticonEvalWrapper")
-        return PanopticonEvalWrapper(model=model, **kwargs)
-    elif isinstance(model, DINOv3):
-        logger.info("Using DINOv3EvalWrapper")
-        return DINOv3EvalWrapper(model=model, **kwargs)
-    elif isinstance(model, Croma):
-        logger.info("Using CromaEvalWrapper")
-        return CromaEvalWrapper(model=model, **kwargs)
-    elif isinstance(model, Clay):
-        logger.info("Using ClayEvalWrapper")
-        return ClayEvalWrapper(model=model, **kwargs)
-    elif isinstance(model, GalileoWrapper):
-        logger.info("Using GalileoEvalWrapper")
-        return GalileoEvalWrapper(model=model, **kwargs)
-    elif isinstance(model, Terramind):
-        logger.info("Using TerramindEvalWrapper")
-        return TerramindEvalWrapper(model=model, **kwargs)
-    elif isinstance(model, PrestoWrapper):
-        logger.info("Using PrestoEvalWrapper")
-        return PrestoEvalWrapper(model=model, **kwargs)
-    elif isinstance(model, AnySat):
-        logger.info("Using AnySatEvalWrapper")
-        return AnySatEvalWrapper(model=model, **kwargs)
-    elif isinstance(model, Satlas):
-        logger.info("Using SatlasEvalWrapper")
-        return SatlasEvalWrapper(model=model, **kwargs)
-    elif isinstance(model, Tessera):
-        logger.info("Using TesseraEvalWrapper")
-        return TesseraEvalWrapper(model=model, **kwargs)
-    elif isinstance(model, PrithviV2):
-        logger.info("Using PrithviEvalWrapper")
-        return PrithviV2EvalWrapper(model=model, **kwargs)
-    else:
-        raise NotImplementedError(f"No EvalWrapper for model type {type(model)}")
+
+    for registration in _ADAPTER_WRAPPERS:
+        if _model_inherits_from(
+            model,
+            registration.class_name,
+            registration.module_prefix,
+        ):
+            logger.info(f"Using {registration.wrapper_class.__name__}")
+            return registration.wrapper_class(model=model, **kwargs)
+
+    raise NotImplementedError(f"No EvalWrapper for model type {type(model)}")

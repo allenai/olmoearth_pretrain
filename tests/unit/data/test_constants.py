@@ -1,6 +1,24 @@
-"""Test data constants."""
+"""Test modality constants."""
 
-from olmoearth_pretrain.data.constants import Modality
+import olmoearth_pretrain.data.constants as legacy_constants
+import olmoearth_pretrain.modalities as modalities
+from olmoearth_pretrain.modalities import Modality
+
+
+def test_data_constants_reexports_modalities() -> None:
+    """The historical constants module should re-export the canonical objects."""
+    object_names = [
+        "BandSet",
+        "Modality",
+        "ModalitySpec",
+        "TimeSpan",
+        "get_modality_specs_from_names",
+        "get_resolution",
+    ]
+    for name in object_names:
+        assert getattr(legacy_constants, name) is getattr(modalities, name)
+    for name in legacy_constants.__all__:
+        assert getattr(legacy_constants, name) == getattr(modalities, name)
 
 
 def test_modality_spec_band_order() -> None:

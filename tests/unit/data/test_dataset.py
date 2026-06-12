@@ -10,13 +10,13 @@ import torch
 from upath import UPath
 
 from olmoearth_pretrain.data.collate import collate_olmoearth_pretrain
-from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 from olmoearth_pretrain.data.dataset import (
     OlmoEarthDataset,
     OlmoEarthSample,
     get_valid_start_ts,
     subset_sample_default,
 )
+from olmoearth_pretrain.modalities import MISSING_VALUE, Modality
 
 logger = getLogger(__name__)
 
@@ -421,6 +421,72 @@ class TestComputeNDVI:
         ndvi, _ = dataset._compute_ndvi(s2_data, [])
         assert np.all(ndvi >= -1.0)
         assert np.all(ndvi <= 1.0)
+
+    def test_apply_derived_modalities_computes_requested_ndvi(
+        self, dataset: OlmoEarthDataset
+    ) -> None:
+        """Derived modalities should be computed from raw available inputs."""
+        h, w, t = 2, 2, 1
+        s2_data = np.ones((h, w, t, Modality.SENTINEL2_L2A.num_bands), dtype=np.float32)
+        s2_data[..., 2] = 0.2
+        s2_data[..., 3] = 0.6
+        sample_dict = {
+            "sentinel2_l2a": s2_data,
+            "ndvi": np.full((h, w, t, 1), MISSING_VALUE, dtype=np.float32),
+            "timestamps": np.ones((t, 3), dtype=np.int64),
+        }
+
+        sample_dict, missing_modalities = dataset._apply_derived_modalities(
+            sample_dict, ["ndvi"]
+        )
+
+        assert "ndvi" not in missing_modalities
+        np.testing.assert_allclose(sample_dict["ndvi"], 0.5, atol=1e-6)
+
+    def test_apply_derived_modalities_skips_missing_source(
+        self, dataset: OlmoEarthDataset
+    ) -> None:
+        """Derived modalities should stay missing when source data is missing."""
+        ndvi = np.full((2, 2, 1, 1), MISSING_VALUE, dtype=np.float32)
+        sample_dict = {
+            "sentinel2_l2a": np.ones(
+                (2, 2, 1, Modality.SENTINEL2_L2A.num_bands), dtype=np.float32
+            ),
+            "ndvi": ndvi,
+            "timestamps": np.ones((1, 3), dtype=np.int64),
+        }
+
+        sample_dict, missing_modalities = dataset._apply_derived_modalities(
+            sample_dict, ["sentinel2_l2a", "ndvi"]
+        )
+
+        assert missing_modalities == ["sentinel2_l2a", "ndvi"]
+        assert np.array_equal(sample_dict["ndvi"], ndvi)
+
+    def test_normalize_sample_dict_preserves_missing_values(
+        self, dataset: OlmoEarthDataset, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Normalization should skip missing modalities and preserve sentinel values."""
+        dataset.normalize = True
+        sentinel2 = np.array([[[[1.0, MISSING_VALUE]]]], dtype=np.float32)
+        sentinel1 = np.full((1, 1, 1, Modality.SENTINEL1.num_bands), MISSING_VALUE)
+        sample_dict = {
+            "sentinel2_l2a": sentinel2.copy(),
+            "sentinel1": sentinel1.copy(),
+            "timestamps": np.ones((1, 3), dtype=np.int64),
+        }
+
+        monkeypatch.setattr(
+            dataset,
+            "normalize_image",
+            lambda modality, image: image + 10,
+        )
+
+        normalized = dataset._normalize_sample_dict(sample_dict, ["sentinel1"])
+
+        assert normalized["sentinel2_l2a"][0, 0, 0, 0] == 11.0
+        assert normalized["sentinel2_l2a"][0, 0, 0, 1] == MISSING_VALUE
+        assert np.array_equal(normalized["sentinel1"], sentinel1)
 
 
 def test_helios_dataset_config_deprecation_warning(tmp_path: Path) -> None:

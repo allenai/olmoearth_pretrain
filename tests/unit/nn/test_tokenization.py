@@ -2,7 +2,7 @@
 
 import pytest
 
-from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,
     TokenizationConfig,

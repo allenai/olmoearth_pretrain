@@ -17,21 +17,25 @@ from olmo_core.train.callbacks import ProfilerCallback, WandBCallback
 from olmo_core.train.trainer import PathOrStr
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.constants import BASE_GSD, Modality
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+from olmoearth_pretrain.datatypes import (
+    MaskedOlmoEarthSample,
+    MaskValue,
+    TokensAndMasks,
+    make_modality_mask_like,
+)
 from olmoearth_pretrain.inference_benchmarking import constants
 from olmoearth_pretrain.inference_benchmarking.data_models import RunParams
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
+from olmoearth_pretrain.modalities import BASE_GSD, Modality
 from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     EncoderConfig,
     PredictorConfig,
-    TokensAndMasks,
 )
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 
 NUM_S1_BANDS = Modality.SENTINEL1.num_bands
-NUM_S2_BANDS = Modality.SENTINEL2.num_bands
+NUM_S2_BANDS = Modality.SENTINEL2_L2A.num_bands
 NUM_LANDSAT_BANDS = Modality.LANDSAT.num_bands
 
 NUM_SQUARE_KM_LAND_IN_WORLD = 149_000_000
@@ -211,7 +215,7 @@ class ThroughputBenchmarkRunner:
         training_modalities: list[str],
         work_dir: Path,
         save_folder: Path | None = None,
-        sweep_dict: dict[str, Any] = {},
+        sweep_dict: dict[str, Any] | None = None,
         cross_product_sweep: bool = False,
         model_config: Any | None = None,
     ):
@@ -235,7 +239,7 @@ class ThroughputBenchmarkRunner:
         self.work_dir = work_dir
         self.work_dir.mkdir(exist_ok=True)
         self.save_folder = save_folder
-        self.sweep_dict = sweep_dict
+        self.sweep_dict = dict(sweep_dict or {})
         self.cross_product_sweep = cross_product_sweep
         self.model_config = model_config
         uuid_str = str(uuid.uuid4())[:6]
@@ -355,7 +359,7 @@ class ThroughputBenchmarkRunner:
             s1_tensor = None
 
         if run_params.use_s2:
-            # dims: (B, H, W, T, len(S2_BANDS)]
+            # dims: (B, H, W, T, len(S2_L2A_BANDS)]
             s2_tensor = torch.rand(
                 batch_size,
                 run_params.image_size,
@@ -387,28 +391,28 @@ class ThroughputBenchmarkRunner:
             batch_size, run_params.num_timesteps, 3, dtype=torch.int32, device=device
         )  # dims: (B, T, D=3)
 
-        def maybe_make_mask(maybe_t: torch.Tensor | None) -> torch.Tensor | None:
+        def maybe_make_mask(
+            maybe_t: torch.Tensor | None, modality: Modality
+        ) -> torch.Tensor | None:
             if maybe_t is not None:
-                return (
-                    torch.ones(
-                        maybe_t.shape,
-                        dtype=dtype,
-                        device=device,
-                    )
-                    * MaskValue.ONLINE_ENCODER.value
+                return make_modality_mask_like(
+                    maybe_t,
+                    modality,
+                    fill_value=MaskValue.ONLINE_ENCODER.value,
+                    dtype=dtype,
                 )
             return None
 
         masked_sample = MaskedOlmoEarthSample(
             timestamps=timestamps,
             sentinel2_l2a=s2_tensor,
-            sentinel2_l2a_mask=maybe_make_mask(s2_tensor),
+            sentinel2_l2a_mask=maybe_make_mask(s2_tensor, Modality.SENTINEL2_L2A),
             sentinel1=s1_tensor,
-            sentinel1_mask=maybe_make_mask(s1_tensor),
+            sentinel1_mask=maybe_make_mask(s1_tensor, Modality.SENTINEL1),
             landsat=landsat_tensor,
-            landsat_mask=maybe_make_mask(landsat_tensor),
+            landsat_mask=maybe_make_mask(landsat_tensor, Modality.LANDSAT),
             latlon=latlon,
-            latlon_mask=maybe_make_mask(latlon),
+            latlon_mask=maybe_make_mask(latlon, Modality.LATLON),
         )
 
         tokens_processed_per_batch: list[int] = []

@@ -6,13 +6,13 @@ from pathlib import Path
 import numpy as np
 from numpy.random import default_rng
 
-from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 from olmoearth_pretrain.data.dataset import (
     GetItemArgs,
     OlmoEarthDataset,
     OlmoEarthSample,
     subset_sample_default,
 )
+from olmoearth_pretrain.modalities import MISSING_VALUE, Modality
 
 logger = logging.getLogger(__name__)
 

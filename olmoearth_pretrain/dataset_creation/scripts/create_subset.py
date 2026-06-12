@@ -18,9 +18,9 @@ import shutil
 
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import Modality, ModalitySpec, TimeSpan
 from olmoearth_pretrain.dataset.parse import GridTile, ModalityTile, parse_modality_csv
 from olmoearth_pretrain.dataset.utils import get_modality_dir
+from olmoearth_pretrain.modalities import Modality, ModalitySpec, TimeSpan
 
 
 def discover_modality_csvs(

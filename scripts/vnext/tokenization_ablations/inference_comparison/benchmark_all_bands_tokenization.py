@@ -21,13 +21,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "official"))
 
 from script import build_common_components
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.inference_benchmarking.data_models import RunParams
 from olmoearth_pretrain.inference_benchmarking.run_throughput_benchmark import (
     ThroughputBenchmarkRunnerConfig,
 )
 from olmoearth_pretrain.internal.experiment import CommonComponents, main
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.nn.tokenization import (

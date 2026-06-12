@@ -3,8 +3,8 @@
 import pytest
 import torch
 
-from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
+from olmoearth_pretrain.datatypes import OlmoEarthSample
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
 from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,

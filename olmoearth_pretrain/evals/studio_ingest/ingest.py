@@ -45,22 +45,22 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import shutil
-import subprocess  # nosec B404
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 from rslearn.config import DatasetConfig
-from rslearn.dataset.dataset import Dataset as RslearnDataset
-from tqdm import tqdm
 from upath import UPath
 
 from olmoearth_pretrain.evals.datasets.rslearn_builder import parse_model_config
+from olmoearth_pretrain.evals.studio_ingest import paths
 from olmoearth_pretrain.evals.studio_ingest.band_stats import (
     compute_band_stats_from_model_config,
+)
+from olmoearth_pretrain.evals.studio_ingest.copying import (
+    copy_dataset,
+    prepare_copied_dataset_config,
 )
 from olmoearth_pretrain.evals.studio_ingest.schema import (
     EvalDatasetEntry,
@@ -68,7 +68,14 @@ from olmoearth_pretrain.evals.studio_ingest.schema import (
     rslearn_task_type_to_olmoearth_task_type,
     rslearn_to_olmoearth,
 )
-from olmoearth_pretrain.evals.task_types import SplitName
+from olmoearth_pretrain.evals.studio_ingest.splits import (
+    EVAL_SPLIT_TAG_KEY,
+    count_split_stats,
+    create_missing_splits,
+    scan_windows_and_splits,
+    write_split_tags,
+)
+from olmoearth_pretrain.evals.task_types import SplitName, TaskType
 
 logger = logging.getLogger(__name__)
 
@@ -103,16 +110,10 @@ def _infer_window_size(dataset_path: str) -> int | None:
 
 # Environment variable for dataset root path
 # This allows external users to download datasets from HF and point to their local copy
-EVAL_DATASETS_ENV_VAR = "OLMOEARTH_EVAL_DATASETS"
+EVAL_DATASETS_ENV_VAR = paths.EVAL_DATASETS_ENV_VAR
 
 # Default base path on Weka where all eval datasets are stored (internal)
-DEFAULT_WEKA_BASE_PATH = "weka://dfive-default/olmoearth/eval_datasets"
-
-# Environment variable for number of workers
-# Defaults to cpu_count - 1, capped at 32 for thread pools
-_default_workers = (os.cpu_count() or 1) - 1
-NUM_WORKERS = int(os.environ.get("OLMOEARTH_INGEST_WORKERS", _default_workers))
-MAX_THREAD_WORKERS = int(os.environ.get("OLMOEARTH_INGEST_MAX_THREADS", 32))
+DEFAULT_WEKA_BASE_PATH = paths.DEFAULT_WEKA_BASE_PATH
 
 
 def get_eval_datasets_base_path() -> str:
@@ -124,7 +125,7 @@ def get_eval_datasets_base_path() -> str:
     Returns:
         Base path string (either from env var or default Weka path)
     """
-    return os.environ.get(EVAL_DATASETS_ENV_VAR, DEFAULT_WEKA_BASE_PATH)
+    return paths.get_eval_datasets_base_path()
 
 
 # =============================================================================
@@ -183,836 +184,146 @@ class IngestConfig:
     untar_source: bool = False
 
 
-# =============================================================================
-# Dataset Copy Utilities
-# =============================================================================
-
-# Base path for eval datasets on Weka
-EVAL_DATASETS_BASE_PATH = "/weka/dfive-default/olmoearth/eval_datasets"
-
-# Tag key for eval splits (we use our own key to avoid overwriting original split info)
-EVAL_SPLIT_TAG_KEY = "eval_split"
+@dataclass(frozen=True)
+class _ModalityMetadata:
+    modalities: list[str]
+    timeseries: bool
+    num_timesteps: int
 
 
-def _check_weka_exists() -> bool:
-    """Check if Weka filesystem path exists.
-
-    Returns:
-        True if /weka exists.
-    """
-    return Path("/weka").exists()
+@dataclass(frozen=True)
+class _TaskMetadata:
+    task_type: TaskType
+    num_classes: int
+    label_values: list[str]
 
 
-def _try_copy_config_json(source_path: str, dest_path: str) -> None:
-    """Copy config.json from source to destination if it exists."""
-    src = UPath(source_path) / "config.json"
-    if not src.exists():
-        logger.info("  config.json not found in source, skipping")
-        return
-    dst = UPath(dest_path) / "config.json"
-    with src.open("rb") as f:
-        data = f.read()
-    with dst.open("wb") as f:
-        f.write(data)
-    logger.info("  Copied config.json")
+def _load_dataset_config(dataset_path: str) -> DatasetConfig:
+    """Load and patch rslearn dataset config from the copied dataset path."""
+    config_json_path = UPath(dataset_path) / "config.json"
+    with config_json_path.open() as f:
+        dataset_dict = json.load(f)
+
+    # Strip the "output" layer before pydantic parsing — its deprecated format
+    # field ({'name': 'geojson'}) triggers a pydantic ValidationError.
+    # The output layer has no data_source and is unused during ingest.
+    if "layers" in dataset_dict and "output" in dataset_dict["layers"]:
+        del dataset_dict["layers"]["output"]
+        logger.info("[Step 0a] Stripped 'output' layer (not needed for ingest)")
+        with config_json_path.open("w") as f:
+            json.dump(dataset_dict, f, indent=2)
+        logger.info("[Step 0a] Wrote patched config.json back to disk")
+
+    return DatasetConfig.model_validate(dataset_dict)
 
 
-def _ensure_config_json(dataset_path: str, model_config_dir: str) -> None:
-    """Ensure config.json exists in the dataset folder.
-
-    If config.json is missing or is a broken symlink, copy dataset.json from
-    the model config folder as config.json. dataset.json and config.json
-    contain the same rslearn dataset config.
-
-    This avoids needing to pass the config path around — rslearn and all
-    downstream eval code can just read config.json from the dataset folder.
-    """
-    config_json = Path(dataset_path) / "config.json"
-
-    # A broken symlink reports exists()=False but is_symlink()=True
-    if config_json.exists() and not config_json.is_symlink():
-        return
-
-    dataset_json = UPath(model_config_dir) / "dataset.json"
-    if not dataset_json.exists():
-        raise FileNotFoundError(
-            f"config.json missing from {dataset_path} and no dataset.json "
-            f"found in {model_config_dir}"
-        )
-
-    # Remove broken symlink if present
-    if config_json.is_symlink():
-        logger.info(f"  Removing broken config.json symlink in {dataset_path}")
-        config_json.unlink()
-
-    logger.info(f"  config.json missing, copying dataset.json from {model_config_dir}")
-    with dataset_json.open("rb") as f:
-        data = f.read()
-    with open(config_json, "wb") as f:
-        f.write(data)
-    logger.info("  Wrote config.json to dataset folder")
+def _load_model_config(dataset_path: str) -> tuple[dict[str, Any], Path]:
+    """Load model.yaml from the copied dataset path and validate rslearn parsing."""
+    model_yaml_path = Path(dataset_path) / "model.yaml"
+    with open(model_yaml_path) as f:
+        model_config = yaml.safe_load(f)
+    parse_model_config(str(model_yaml_path))
+    return model_config, model_yaml_path
 
 
-def _copy_model_yaml(dataset_path: str, model_config_dir: str) -> None:
-    """Copy model.yaml into the dataset folder for canonical access at eval time.
+def _extract_modality_metadata(dataset_config: DatasetConfig) -> _ModalityMetadata:
+    """Extract OlmoEarth modality names and time-series metadata."""
+    modalities = []
+    max_timesteps_modalities = []
 
-    Skips if model.yaml already exists in the dataset folder.
-    """
-    dest = Path(dataset_path) / "model.yaml"
-    if dest.exists():
-        logger.info("  model.yaml already exists in dataset folder, skipping copy")
-        return
-
-    src = UPath(model_config_dir) / "model.yaml"
-    if not src.exists():
-        raise FileNotFoundError(f"model.yaml not found at {model_config_dir}")
-
-    logger.info(f"  Copying model.yaml from {model_config_dir} to dataset folder")
-    with src.open("rb") as f:
-        data = f.read()
-    with open(dest, "wb") as f:
-        f.write(data)
-    logger.info("  Wrote model.yaml to dataset folder")
-
-
-def _copy_from_gcs(
-    source_path: str,
-    dest_path: str,
-    source_groups: list[str] | None = None,
-    source_tags: dict[str, str] | None = None,
-) -> str:
-    """Copy dataset from GCS using gsutil with parallel transfers.
-
-    Uses gsutil -m for multi-threaded/multi-processing transfers.
-    Streams output directly to console for progress visibility.
-
-    Note: *source_tags* filtering is not supported for GCS sources.
-    If tags are specified a ``NotImplementedError`` is raised — download
-    the dataset locally first or use a local source.
-
-    Args:
-        source_path: GCS path (gs://bucket/path)
-        dest_path: Local destination path
-        source_groups: If specified, only copy these groups (subdirs under windows/)
-        source_tags: Not supported for GCS (raises NotImplementedError).
-
-    Returns:
-        Destination path
-    """
-    if source_tags:
-        raise NotImplementedError(
-            "Tag-filtered copy is not supported for GCS sources. "
-            "Download the dataset locally first, then ingest from a local path."
-        )
-    logger.info("  Copy method: gsutil (parallel GCS transfer)")
-
-    # Create destination directory
-    Path(dest_path).mkdir(parents=True, exist_ok=True)
-
-    _try_copy_config_json(source_path, dest_path)
-
-    if source_groups:
-        # Copy only specified groups
-        logger.info(f"  Copying only groups: {source_groups}")
-        for group in source_groups:
-            group_src = f"{source_path}/windows/{group}"
-            group_dst_parent = f"{dest_path}/windows"
-            Path(group_dst_parent).mkdir(parents=True, exist_ok=True)
-            logger.info(f"  Running: gsutil -m cp -r {group_src} {group_dst_parent}")
-            subprocess.run(  # nosec B603 B607
-                ["gsutil", "-m", "cp", "-r", group_src, group_dst_parent], check=True
-            )
-    else:
-        # Copy entire windows directory
-        windows_src = f"{source_path}/windows"
-        logger.info(f"  Running: gsutil -m cp -r {windows_src} {dest_path}")
-        subprocess.run(["gsutil", "-m", "cp", "-r", windows_src, dest_path], check=True)  # nosec B603 B607
-
-    logger.info("  gsutil copy complete")
-    return dest_path
-
-
-def _copy_from_gcs_tar(
-    source_path: str,
-    dest_path: str,
-) -> str:
-    """Download a .tar.gz archive from GCS and extract it to dest_path.
-
-    Downloads the archive to dest_path first, then extracts in place and
-    removes the archive file. If the archive contains a single top-level
-    directory, returns the path to that directory (e.g. dest_path/dataset/).
-
-    Args:
-        source_path: GCS path to a .tar.gz archive (gs://bucket/dataset.tar.gz)
-        dest_path: Local destination path to extract into
-
-    Returns:
-        Path to the extracted dataset directory
-    """
-    logger.info("  Copy method: gsutil download + tar extract")
-
-    Path(dest_path).mkdir(parents=True, exist_ok=True)
-
-    archive_name = Path(source_path).name
-    local_archive = Path(dest_path) / archive_name
-
-    logger.info(f"  Downloading {source_path} -> {local_archive}")
-    subprocess.run(["gsutil", "cp", source_path, str(local_archive)], check=True)  # nosec B603 B607
-
-    logger.info(f"  Extracting {local_archive} -> {dest_path}")
-    subprocess.run(["tar", "xzf", str(local_archive), "-C", dest_path], check=True)  # nosec B603 B607
-
-    logger.info(f"  Removing archive {local_archive}")
-    local_archive.unlink()
-
-    # If the archive extracted into a single subdirectory, use that as the
-    # dataset path (e.g. dataset.tar.gz -> dest_path/dataset/)
-    entries = [p for p in Path(dest_path).iterdir() if p.name != archive_name]
-    if len(entries) == 1 and entries[0].is_dir():
-        dataset_path = str(entries[0])
-        logger.info(f"  Extracted dataset directory: {dataset_path}")
-        return dataset_path
-
-    logger.info("  tar extract complete")
-    return dest_path
-
-
-def _tar_copy_cmd(src: str, dst: str, use_pv: bool) -> str:
-    """Build a streaming tar copy command, optionally with pv progress.
-
-    TODO: remove this helper once pv progress bar is no longer needed.
-    """
-    if use_pv:
-        return f"tar cf - -C {src} . | pv | tar xf - -C {dst}"
-    return f"tar cf - -C {src} . | tar xf - -C {dst}"
-
-
-def _window_matches_tags(
-    window_metadata_path: Path,
-    source_tags: dict[str, str],
-) -> bool:
-    """Check whether a window's metadata.json matches all required tags.
-
-    Args:
-        window_metadata_path: Path to the window's metadata.json
-        source_tags: Tags to match. Empty string value means "key exists".
-
-    Returns:
-        True if all tags match.
-    """
-    try:
-        with open(window_metadata_path) as f:
-            meta = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return False
-
-    options = meta.get("options", {})
-    for key, value in source_tags.items():
-        if key not in options:
-            return False
-        if value and options[key] != value:
-            return False
-    return True
-
-
-def _collect_matching_windows(
-    source_path: str,
-    source_groups: list[str] | None,
-    source_tags: dict[str, str],
-) -> list[tuple[str, str]]:
-    """Scan source windows and return (group, window_name) pairs matching tags.
-
-    Args:
-        source_path: Path to rslearn dataset
-        source_groups: If set, only scan these groups
-        source_tags: Tags each window must have
-
-    Returns:
-        List of (group_name, window_name) tuples that match.
-    """
-    windows_dir = Path(source_path) / "windows"
-    if not windows_dir.exists():
-        return []
-
-    groups = source_groups or [d.name for d in windows_dir.iterdir() if d.is_dir()]
-    logger.info("  Scanning groups: %s", groups)
-
-    all_window_dirs: list[tuple[str, Path]] = []
-    for group in groups:
-        group_dir = windows_dir / group
-        if not group_dir.is_dir():
+    for layer_name, layer_config in dataset_config.layers.items():
+        if layer_config.data_source is None:
             continue
-        for window_dir in group_dir.iterdir():
-            if window_dir.is_dir():
-                all_window_dirs.append((group, window_dir))
-
-    matched: list[tuple[str, str]] = []
-    pbar = tqdm(all_window_dirs, desc="Scanning windows for tags", unit="win")
-    for group, window_dir in pbar:
-        meta_path = window_dir / "metadata.json"
-        if meta_path.exists() and _window_matches_tags(meta_path, source_tags):
-            matched.append((group, window_dir.name))
-        pbar.set_postfix(matched=len(matched))
-    pbar.close()
-
-    logger.info(
-        "  Tag scan complete: %d/%d windows matched tags %s",
-        len(matched),
-        len(all_window_dirs),
-        source_tags,
-    )
-    return matched
-
-
-def _copy_filtered_windows(
-    source_path: str,
-    dest_path: str,
-    matched_windows: list[tuple[str, str]],
-) -> None:
-    """Copy only the matched windows from source to destination.
-
-    Uses shutil.copytree per window for simplicity and correctness on Weka.
-
-    Args:
-        source_path: Source dataset path
-        dest_path: Destination dataset path
-        matched_windows: List of (group, window_name) to copy
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    num_workers = int(os.environ.get("OLMOEARTH_INGEST_WORKERS", "8"))
-    total = len(matched_windows)
-    logger.info("  Copying %d matched windows (workers=%d)...", total, num_workers)
-
-    def _copy_one(group: str, wname: str) -> str:
-        src = Path(source_path) / "windows" / group / wname
-        dst = Path(dest_path) / "windows" / group / wname
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(str(src), str(dst))
-        return wname
-
-    pbar = tqdm(total=total, desc="Copying windows", unit="win")
-    with ThreadPoolExecutor(max_workers=num_workers) as pool:
-        futures = [
-            pool.submit(_copy_one, group, wname) for group, wname in matched_windows
-        ]
-        for future in as_completed(futures):
-            future.result()
-            pbar.update(1)
-    pbar.close()
-
-    logger.info("  Finished copying %d windows", total)
-
-
-def _copy_local(
-    source_path: str,
-    dest_path: str,
-    source_groups: list[str] | None = None,
-    source_tags: dict[str, str] | None = None,
-) -> str:
-    """Copy dataset locally using streaming tar pipe.
-
-    Uses ``tar cf - | tar xf -`` to stream data directly from source to
-    destination without intermediate files. This avoids per-file overhead
-    and is faster than rsync for bulk local copies.  Directory structure
-    is preserved because tar archives relative paths from the source and
-    recreates them at the destination.
-
-    When *source_tags* is provided the bulk tar copy is replaced by a
-    per-window copy that only transfers windows whose ``metadata.json``
-    matches the requested tags.
-
-    Args:
-        source_path: Local source path
-        dest_path: Local destination path
-        source_groups: If specified, only copy these groups (subdirs under windows/)
-        source_tags: If specified, only copy windows matching these tags.
-
-    Returns:
-        Destination path
-
-    Raises:
-        RuntimeError: If destination is on Weka but Weka path doesn't exist.
-    """
-    # Verify Weka path exists if destination is on Weka
-    if dest_path.startswith("/weka") and not _check_weka_exists():
-        raise RuntimeError(
-            "Weka filesystem path /weka does not exist. "
-            "Cannot copy dataset. Ensure Weka is available before running ingestion."
-        )
-
-    # Create destination directory
-    Path(dest_path).mkdir(parents=True, exist_ok=True)
-
-    _try_copy_config_json(source_path, dest_path)
-
-    if source_tags:
-        logger.info("  Copy method: tag-filtered per-window copy")
-        matched = _collect_matching_windows(source_path, source_groups, source_tags)
-        if not matched:
-            raise ValueError(
-                f"No windows in {source_path} matched tags {source_tags}. "
-                "Check that the tag key/values are correct."
+        try:
+            olmoearth_modality = rslearn_to_olmoearth(layer_name)
+        except KeyError:
+            logger.warning(
+                f"  Skipping layer {layer_name!r}: no OlmoEarth modality mapping"
             )
-        _copy_filtered_windows(source_path, dest_path, matched)
-    elif source_groups:
-        has_pv = shutil.which("pv") is not None
-        logger.info(
-            "  Copy method: streaming tar pipe%s",
-            " (with pv progress)" if has_pv else "",
+            continue
+        modalities.append(olmoearth_modality.name)
+        query_config = layer_config.data_source.query_config
+        max_timesteps_modalities.append(query_config.max_matches)
+
+    num_timesteps = max(max_timesteps_modalities) if max_timesteps_modalities else 1
+    return _ModalityMetadata(
+        modalities=modalities,
+        timeseries=num_timesteps > 1,
+        num_timesteps=num_timesteps,
+    )
+
+
+def _select_task_config(model_config: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Select the single rslearn task config supported by Studio ingest."""
+    task_wrapper_config = model_config["data"]["init_args"]["task"]
+    task_init_args = task_wrapper_config.get("init_args", {})
+
+    if "tasks" not in task_init_args:
+        return "task", task_wrapper_config
+
+    tasks_dict = task_init_args["tasks"]
+    if len(tasks_dict) != 1:
+        raise NotImplementedError(
+            "Multiple tasks not supported in this workflow; found: "
+            + ", ".join(tasks_dict)
         )
-        logger.info(f"  Copying only groups: {source_groups}")
-        for group in source_groups:
-            group_src = f"{source_path}/windows/{group}"
-            group_dst = f"{dest_path}/windows/{group}"
-            Path(group_dst).mkdir(parents=True, exist_ok=True)
-
-            cmd = _tar_copy_cmd(group_src, group_dst, has_pv)
-            logger.info(f"  Running: {cmd}")
-            subprocess.run(cmd, shell=True, check=True)  # nosec B602
-            logger.info(f"  Copied group '{group}'")
-    else:
-        has_pv = shutil.which("pv") is not None
-        logger.info(
-            "  Copy method: streaming tar pipe%s",
-            " (with pv progress)" if has_pv else "",
-        )
-        cmd = _tar_copy_cmd(source_path, dest_path, has_pv)
-        logger.info(f"  Running: {cmd}")
-        subprocess.run(cmd, shell=True, check=True)  # nosec B602
-        logger.info("  Copy complete")
-
-    return dest_path
+    return next(iter(tasks_dict.items()))
 
 
-def _copy_generic(
-    source_path: str,
-    dest_path: str,
-    source_groups: list[str] | None = None,
-    source_tags: dict[str, str] | None = None,
-) -> str:
-    """Fallback copy using UPath for unknown storage backends.
+def _num_classes_from_task_config(
+    task_name: str,
+    task_config: dict[str, Any],
+) -> int:
+    """Extract class count from supported rslearn task config shapes."""
+    task_init_args = task_config.get("init_args", {})
+    task_class_path = task_config.get("class_path", "")
 
-    Sequential file-by-file copy. Slower but works for any storage.
+    if "num_classes" in task_init_args:
+        return task_init_args["num_classes"]
+    if "classes" in task_init_args:
+        return len(task_init_args["classes"])
 
-    Args:
-        source_path: Source path (any UPath-compatible)
-        dest_path: Destination path
-        source_groups: If specified, only copy these groups (subdirs under windows/)
-        source_tags: If specified, only copy windows matching these tags.
+    raise ValueError(
+        f"Could not determine num_classes from task config '{task_name}' "
+        f"(class_path: {task_class_path}). "
+        "Expected 'num_classes' or 'classes' in init_args."
+    )
 
-    Returns:
-        Destination path
-    """
-    logger.info("  Copy method: UPath (generic, sequential)")
 
-    source = UPath(source_path)
-    dest = UPath(dest_path)
+def _extract_task_metadata(model_config: dict[str, Any]) -> _TaskMetadata:
+    """Instantiate the configured rslearn task and extract class metadata."""
+    task_name, task_config = _select_task_config(model_config)
 
-    dest.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        f"[Step 0d] Instantiating task '{task_name}': {task_config['class_path']}"
+    )
+    rslearn_task = instantiate_from_config(task_config)
 
-    _try_copy_config_json(source_path, dest_path)
+    num_classes = _num_classes_from_task_config(task_name, task_config)
+    return _TaskMetadata(
+        task_type=rslearn_task_type_to_olmoearth_task_type(rslearn_task),
+        num_classes=num_classes,
+        label_values=[str(i) for i in range(num_classes)],
+    )
 
-    # Tag-filtered copy: only works when source is local-like (metadata readable)
-    if source_tags:
-        logger.info("  Using tag-filtered copy (generic)")
-        matched = _collect_matching_windows(source_path, source_groups, source_tags)
-        if not matched:
-            raise ValueError(f"No windows in {source_path} matched tags {source_tags}.")
-        for group, wname in matched:
-            _copy_directory_recursive(
-                source / "windows" / group / wname,
-                dest / "windows" / group / wname,
+
+def _extract_window_size(model_config: dict[str, Any], dataset_path: str) -> int | None:
+    """Extract crop size from model config, falling back to actual window metadata."""
+    data_init_args = model_config["data"]["init_args"]
+    default_config = data_init_args.get("default_config", {})
+    window_size = default_config.get("crop_size")
+
+    if window_size is None:
+        window_size = _infer_window_size(dataset_path)
+        if window_size is not None:
+            logger.info(
+                "No crop_size in config, inferred window_size=%d from data",
+                window_size,
             )
-        logger.info("  Copied %d matched windows", len(matched))
-        return dest_path
-
-    # Copy windows directory (filtered by groups if specified)
-    windows_src = source / "windows"
-    windows_dst = dest / "windows"
-    if windows_src.exists():
-        if source_groups:
-            logger.info(f"    Copying only groups: {source_groups}")
-            for group in source_groups:
-                group_src = windows_src / group
-                group_dst = windows_dst / group
-                if group_src.exists():
-                    _copy_directory_recursive(group_src, group_dst)
-                    logger.info(f"    Copied group '{group}'")
         else:
-            _copy_directory_recursive(windows_src, windows_dst)
-            logger.info("    Copied windows directory")
+            logger.warning("No windows found to infer window_size, leaving as None")
 
-    return dest_path
-
-
-def _copy_directory_recursive(src: UPath, dst: UPath) -> None:
-    """Recursively copy a directory using UPath (fallback method)."""
-    dst.mkdir(parents=True, exist_ok=True)
-
-    for item in src.iterdir():
-        if item.is_dir():
-            _copy_directory_recursive(item, dst / item.name)
-        else:
-            with item.open("rb") as f:
-                data = f.read()
-            with (dst / item.name).open("wb") as f:
-                f.write(data)
-
-
-def _resolve_dataset_root(path: str) -> str:
-    """Find the actual rslearn dataset root within a directory.
-
-    If path itself contains a windows/ dir, return it. Otherwise check if
-    there's a single subdirectory that contains windows/ (happens when a tar
-    archive extracts with a top-level wrapper directory).
-    """
-    p = Path(path)
-    if (p / "windows").exists():
-        return path
-    # Check for a single nested directory containing windows/
-    subdirs = [
-        d for d in p.iterdir() if d.is_dir() and d.name != ".rslearn_dataset_index"
-    ]
-    if len(subdirs) == 1 and (subdirs[0] / "windows").exists():
-        resolved = str(subdirs[0])
-        logger.info(f"  Resolved dataset root to nested directory: {resolved}")
-        return resolved
-    return path
-
-
-def copy_dataset(
-    source_path: str,
-    name: str,
-    source_groups: list[str] | None = None,
-    source_tags: dict[str, str] | None = None,
-    untar_source: bool = False,
-) -> str:
-    """Copy an rslearn dataset to our Weka location.
-
-    Dispatches to the fastest available copy method based on source path:
-    - GCS tar.gz (gs://, untar_source=True) -> gsutil stream + tar extract
-    - GCS (gs://) -> gsutil -m cp -r (parallel transfers)
-    - Local/Weka (/weka, /) -> find + xargs -P (parallel local copy)
-    - Other -> UPath generic copy (fallback)
-
-    When *source_tags* is provided, the copy is filtered so that only
-    windows whose ``metadata.json`` contains the requested tag key/values
-    are transferred. This avoids copying entire large datasets when only a
-    subset is needed for evaluation.
-
-    Args:
-        source_path: Path to source rslearn dataset
-        name: Name for the copied dataset
-        source_groups: If specified, only copy these groups (subdirs under windows/).
-            If None, copies everything.
-        source_tags: If specified, only copy windows matching these tags.
-        untar_source: If True, source_path is a .tar.gz archive on GCS that
-            will be streamed and extracted directly to the destination.
-
-    Returns:
-        Path to the copied dataset on Weka
-    """
-    dest_path = f"{EVAL_DATASETS_BASE_PATH}/{name}"
-
-    logger.info("=== Dataset Copy ===")
-    logger.info(f"  Source: {source_path}")
-    logger.info(f"  Destination: {dest_path}")
-    if source_tags:
-        logger.info(f"  Filtering to tags: {source_tags}")
-    if source_groups:
-        logger.info(f"  Filtering to groups: {source_groups}")
-    if not source_groups and not source_tags:
-        logger.info("  Copying all groups (no tag/group filter)")
-
-    # Check if destination already exists
-    if Path(dest_path).exists():
-        logger.warning("  Destination already exists, skipping copy...")
-        # For tar extracts, the actual dataset may be in a subdirectory
-        return _resolve_dataset_root(dest_path)
-
-    # Dispatch to appropriate copy method based on source
-    if untar_source and source_path.startswith("gs://"):
-        actual_path = _copy_from_gcs_tar(source_path, dest_path)
-    elif source_path.startswith("gs://"):
-        actual_path = _copy_from_gcs(source_path, dest_path, source_groups, source_tags)
-    elif source_path.startswith("/weka") or source_path.startswith("/"):
-        actual_path = _copy_local(source_path, dest_path, source_groups, source_tags)
-    else:
-        actual_path = _copy_generic(source_path, dest_path, source_groups, source_tags)
-
-    logger.info(f"  Dataset copy complete: {actual_path}")
-    return actual_path
-
-
-# =============================================================================
-# Split Management Utilities
-# =============================================================================
-
-
-def scan_windows_and_splits(
-    dataset_path: str,
-    source_groups: list[str] | None = None,
-    source_tags: dict[str, str] | None = None,
-) -> dict[str, list[tuple[str, str]]]:
-    """Scan windows using rslearn's native load_windows and determine splits.
-
-    Args:
-        dataset_path: Path to rslearn dataset
-        source_groups: Filter to these groups only
-        source_tags: Filter windows by tags. Dict of {key: value}.
-            Empty string value means "key exists" (any value).
-
-    Returns:
-        Dict mapping split name -> list of (group, window_name) tuples
-        e.g., {"train": [("train", "w1"), ("train", "w2")], "val": [...], "test": [...]}
-    """
-    logger.info(f"  Opening dataset at {dataset_path}...")
-    dataset = RslearnDataset(UPath(dataset_path))
-
-    # Use rslearn's native load_windows with parallel loading
-    logger.info(f"  Loading windows (groups={source_groups}, workers={NUM_WORKERS})...")
-    windows = dataset.load_windows(groups=source_groups, workers=NUM_WORKERS)
-    logger.info(f"  Loaded {len(windows)} windows from dataset")
-
-    # Filter by tags if specified
-    if source_tags:
-        filtered_windows = []
-        for window in windows:
-            if not window.options:
-                continue
-            match = True
-            for key, value in source_tags.items():
-                if key not in window.options:
-                    match = False
-                    break
-                # Empty value means "key exists" (any value is ok)
-                if value and window.options[key] != value:
-                    match = False
-                    break
-            if match:
-                filtered_windows.append(window)
-        logger.info(
-            f"  Filtered to {len(filtered_windows)} windows matching tags {source_tags}"
-        )
-        windows = filtered_windows
-
-    # Use string keys for consistency
-    splits: dict[str, list[tuple[str, str]]] = {
-        SplitName.TRAIN: [],
-        SplitName.VAL: [],
-        SplitName.TEST: [],
-    }
-
-    for window in windows:
-        # Tags are in window.options (rslearn native)
-        split_val = window.options.get("split") if window.options else None
-
-        if split_val in splits:
-            splits[split_val].append((window.group, window.name))
-        elif window.group in ("train",):
-            splits[SplitName.TRAIN].append((window.group, window.name))
-        elif window.group in ("val", "valid", "validation"):
-            splits[SplitName.VAL].append((window.group, window.name))
-        elif window.group in ("test", "test_hard"):
-            splits[SplitName.TEST].append((window.group, window.name))
-        else:
-            splits[SplitName.TRAIN].append((window.group, window.name))
-
-    return splits
-
-
-def create_missing_splits(
-    splits: dict[str, list[tuple[str, str]]],
-    val_test_ratio: float = 0.5,
-    train_val_ratio: float = 0.8,
-    seed: int = 42,
-) -> dict[str, list[tuple[str, str]]]:
-    """Create missing splits using one of four strategies.
-
-    Paths:
-    1. All splits present (train, val, test) - no action needed
-    2. Train and val exist, no test - split val into val+test
-    3. Train and test exist, no val - split test into val+test
-    4. Any other case - pool all windows and resplit randomly into train/val/test
-
-    Args:
-        splits: Current split assignments (split_name -> list of (group, window_name) tuples)
-        val_test_ratio: Ratio of val to keep when splitting val into val+test
-        train_val_ratio: Ratio of train to keep (rest goes to val, then val splits for test)
-        seed: Random seed
-
-    Returns:
-        Updated splits dict with string keys
-    """
-    import random
-
-    random.seed(seed)
-
-    # Make a copy to avoid mutating input, ensure string keys
-    splits = {str(k): list(v) for k, v in splits.items()}
-
-    has_train = bool(splits["train"])
-    has_val = bool(splits["val"])
-    has_test = bool(splits["test"])
-
-    logger.info(
-        f"Split detection: train={has_train} ({len(splits['train'])}), "
-        f"val={has_val} ({len(splits['val'])}), "
-        f"test={has_test} ({len(splits['test'])})"
-    )
-
-    # PATH 1: All splits present - no action needed
-    if has_train and has_val and has_test:
-        logger.info("PATH 1: All splits present - no splitting needed")
-        return splits
-
-    # PATH 2: Train and val exist, no test - split val into val+test
-    if has_train and has_val and not has_test:
-        logger.info(
-            "PATH 2: Have train+val, missing test - splitting val into val+test"
-        )
-        val_windows = splits["val"]
-        random.shuffle(val_windows)
-        split_idx = int(len(val_windows) * val_test_ratio)
-        splits["val"] = val_windows[:split_idx]
-        splits["test"] = val_windows[split_idx:]
-        logger.info(
-            f"  Split val: {len(splits['val'])} val, {len(splits['test'])} test"
-        )
-        return splits
-
-    # PATH 3: Train and test exist, no val - split test into val+test
-    if has_train and has_test and not has_val:
-        logger.info(
-            "PATH 3: Have train+test, missing val - splitting test into val+test"
-        )
-        test_windows = splits["test"]
-        random.shuffle(test_windows)
-        split_idx = int(len(test_windows) * val_test_ratio)
-        splits["val"] = test_windows[:split_idx]
-        splits["test"] = test_windows[split_idx:]
-        logger.info(
-            f"  Split test: {len(splits['val'])} val, {len(splits['test'])} test"
-        )
-        return splits
-
-    # PATH 4: Any other case - pool all windows and resplit randomly
-    logger.info("PATH 4: Resplitting all windows randomly into train/val/test")
-
-    # Pool all windows from all splits
-    all_windows = []
-    for split_name in ["train", "val", "test"]:
-        all_windows.extend(splits[split_name])
-        splits[split_name] = []
-
-    if not all_windows:
-        logger.warning("No windows found to split!")
-        return splits
-
-    random.shuffle(all_windows)
-    total = len(all_windows)
-
-    # Split: train_ratio for train, then split remainder into val/test
-    train_end = int(total * train_val_ratio)
-    remaining = all_windows[train_end:]
-    val_end = int(len(remaining) * val_test_ratio)
-
-    splits["train"] = all_windows[:train_end]
-    splits["val"] = remaining[:val_end]
-    splits["test"] = remaining[val_end:]
-
-    logger.info(
-        f"  Resplit {total} windows: "
-        f"train={len(splits['train'])}, "
-        f"val={len(splits['val'])}, "
-        f"test={len(splits['test'])}"
-    )
-
-    return splits
-
-
-def write_split_tags(
-    dataset_path: str,
-    splits: dict[str, list[tuple[str, str]]],
-) -> None:
-    """Write split tags to window metadata using rslearn's native Window.save().
-
-    Args:
-        dataset_path: Path to rslearn dataset
-        splits: Dict mapping split name -> list of (group, window_name) tuples
-    """
-    logger.info(f"  Opening dataset at {dataset_path}...")
-    dataset = RslearnDataset(UPath(dataset_path))
-
-    # Load all windows and build a lookup map
-    total_windows = sum(len(v) for v in splits.values())
-    logger.info(f"  Loading windows for tag writing (workers={NUM_WORKERS})...")
-    all_windows = dataset.load_windows(workers=NUM_WORKERS)
-    window_map = {(w.group, w.name): w for w in all_windows}
-    logger.info(
-        f"  Loaded {len(all_windows)} windows, will update {total_windows} with split tags"
-    )
-
-    updated_count = 0
-    for split_name, window_ids in splits.items():
-        logger.info(f"  Writing '{split_name}' tag to {len(window_ids)} windows...")
-        for group_name, window_name in window_ids:
-            window = window_map.get((group_name, window_name))
-            if window is None:
-                logger.warning(f"Window not found: {group_name}/{window_name}")
-                continue
-
-            # Update options with our eval split tag (don't overwrite original "split")
-            if window.options is None:
-                window.options = {}
-            window.options[EVAL_SPLIT_TAG_KEY] = str(split_name)
-
-            # Use rslearn's native save method
-            window.save()
-
-            # Verify the tag persisted by re-reading metadata.json from disk
-            metadata_path = (
-                Path(dataset_path)
-                / "windows"
-                / group_name
-                / window_name
-                / "metadata.json"
-            )
-            with open(metadata_path) as f:
-                saved_meta = json.load(f)
-            saved_tag = saved_meta.get("options", {}).get(EVAL_SPLIT_TAG_KEY)
-            if saved_tag != str(split_name):
-                raise RuntimeError(
-                    f"write_split_tags: window.save() did not persist "
-                    f"{EVAL_SPLIT_TAG_KEY}={split_name} for "
-                    f"{group_name}/{window_name}. "
-                    f"Got: {saved_tag}"
-                )
-            updated_count += 1
-
-    logger.info(f"Wrote split tags for {updated_count} windows")
-
-
-def count_split_stats(
-    splits: dict[str, list[tuple[str, str]]],
-) -> dict[str, dict[str, Any]]:
-    """Count samples per split.
-
-    Args:
-        splits: Dict mapping split name -> list of (group, window_name) tuples
-
-    Returns:
-        Dict like {"train": {"count": 100}, "val": {"count": 50}, ...}
-    """
-    stats = {}
-
-    for split_name, window_ids in splits.items():
-        stats[split_name] = {
-            "count": len(window_ids),
-        }
-
-    return stats
+    return window_size
 
 
 # =============================================================================
@@ -1067,114 +378,35 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     )
     logger.info(f"[Step 1/6] Copy complete: {weka_path}")
 
-    # Ensure config.json exists in the dataset folder (copy dataset.json
-    # from model config dir if missing — they have the same content)
-    _ensure_config_json(weka_path, config.olmoearth_run_config_path)
-
-    # Copy model.yaml to the dataset folder so it's canonically accessible
-    # at eval time without depending on the original source location
-    _copy_model_yaml(weka_path, config.olmoearth_run_config_path)
+    # Ensure config.json and model.yaml are canonically available from the
+    # copied dataset, independent of the original source location.
+    prepare_copied_dataset_config(weka_path, config.olmoearth_run_config_path)
 
     # Step 0a: Load dataset config from the dataset folder
     logger.info("[Step 0a] Loading dataset config...")
-    config_json_path = UPath(weka_path) / "config.json"
-    with config_json_path.open() as f:
-        dataset_dict = json.load(f)
-    # Strip the "output" layer before pydantic parsing — its deprecated format
-    # field ({'name': 'geojson'}) triggers a pydantic ValidationError:
-    #   layers.output.format: Extra inputs are not permitted
-    # The output layer has no data_source and is unused during ingest.
-    if "layers" in dataset_dict and "output" in dataset_dict["layers"]:
-        del dataset_dict["layers"]["output"]
-        logger.info("[Step 0a] Stripped 'output' layer (not needed for ingest)")
-        with config_json_path.open("w") as f:
-            json.dump(dataset_dict, f, indent=2)
-        logger.info("[Step 0a] Wrote patched config.json back to disk")
-    logger.info("[Step 0a] Parsing dataset config...")
-    dataset_config = DatasetConfig.model_validate(dataset_dict)
+    dataset_config = _load_dataset_config(weka_path)
     logger.info("[Step 0a] Dataset config loaded successfully")
 
     # Step 0b: Load and validate model config from the canonical weka location
     logger.info("[Step 0b] Loading and validating model.yaml with rslearn...")
-    model_yaml_path = Path(weka_path) / "model.yaml"
-    with open(model_yaml_path) as f:
-        model_config = yaml.safe_load(f)
-    # Validate that rslearn can parse the model config
-    parse_model_config(str(model_yaml_path))
+    model_config, model_yaml_path = _load_model_config(weka_path)
     logger.info("[Step 0b] Model config loaded and validated successfully")
 
     # Step 0c: Extract modalities from dataset config
     logger.info("[Step 0c] Extracting modalities from dataset config...")
-    modalities = []
-    modality_layer_names = []
-    max_timesteps_modalities = []
-    for layer_name, layer_config in dataset_config.layers.items():
-        if layer_config.data_source is None:
-            continue
-        try:
-            olmoearth_modality = rslearn_to_olmoearth(layer_name)
-        except KeyError:
-            logger.warning(
-                f"  Skipping layer {layer_name!r}: no OlmoEarth modality mapping"
-            )
-            continue
-        modalities.append(olmoearth_modality.name)
-        modality_layer_names.append(layer_name)
-        query_config = layer_config.data_source.query_config
-        max_timesteps_modalities.append(query_config.max_matches)
-
-    num_timesteps = max(max_timesteps_modalities) if max_timesteps_modalities else 1
-    timeseries = num_timesteps > 1
+    modality_metadata = _extract_modality_metadata(dataset_config)
     logger.info(
-        f"[Step 0c] Modalities: {modalities}, timeseries: {timeseries}, num_timesteps: {num_timesteps}"
+        f"[Step 0c] Modalities: {modality_metadata.modalities}, "
+        f"timeseries: {modality_metadata.timeseries}, "
+        f"num_timesteps: {modality_metadata.num_timesteps}"
     )
 
     # Step 0d: Extract and instantiate the rslearn task from model config
     logger.info("[Step 0d] Extracting task from model config...")
-    task_wrapper_config = model_config["data"]["init_args"]["task"]
-    task_init_args = task_wrapper_config.get("init_args", {})
-
-    if "tasks" in task_init_args:
-        # Multi-task: data.init_args.task.init_args.tasks.{task_name}
-        tasks_dict = task_init_args["tasks"]
-        if len(tasks_dict) != 1:
-            raise NotImplementedError(
-                "Multiple tasks not supported in this workflow; found: "
-                + ", ".join(tasks_dict)
-            )
-        task_name, task_config = next(iter(tasks_dict.items()))
-    else:
-        # Single task: data.init_args.task is the task directly
-        task_name = "task"
-        task_config = task_wrapper_config
-
+    task_metadata = _extract_task_metadata(model_config)
     logger.info(
-        f"[Step 0d] Instantiating task '{task_name}': {task_config['class_path']}"
+        f"[Step 0d] Task: {task_metadata.task_type}, num_classes: {task_metadata.num_classes}"
     )
-    rslearn_task = instantiate_from_config(task_config)
-
-    # Get num_classes from the task config based on task type
-    task_init_args = task_config.get("init_args", {})
-    task_class_path = task_config.get("class_path", "")
-
-    num_classes: int | None = None
-    if "num_classes" in task_init_args:
-        # SegmentationTask, PerPixelRegressionTask with classes
-        num_classes = task_init_args["num_classes"]
-    elif "classes" in task_init_args:
-        # ClassificationTask, DetectionTask use a 'classes' list
-        num_classes = len(task_init_args["classes"])
-
-    if num_classes is None:
-        raise ValueError(
-            f"Could not determine num_classes from task config '{task_name}' "
-            f"(class_path: {task_class_path}). "
-            "Expected 'num_classes' or 'classes' in init_args."
-        )
-
-    # Assume 0-indexed consecutive labels (0 to num_classes-1)
-    label_values = [str(i) for i in range(num_classes)]
-    logger.info(f"[Step 0d] Task: {task_name}, num_classes: {num_classes}")
 
     # Step 2: Scan windows and determine existing splits
     logger.info("[Step 2/6] Scanning windows and determining splits...")
@@ -1224,36 +456,22 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         f"[Step 6/6] Normalization stats computed for {len(norm_stats)} modalities"
     )
 
-    task_type = rslearn_task_type_to_olmoearth_task_type(rslearn_task)
-
     # Extract window_size: prefer crop_size from config, fall back to actual
     # window dimensions from the dataset.
-    data_init_args = model_config["data"]["init_args"]
-    default_config = data_init_args.get("default_config", {})
-    window_size = default_config.get("crop_size")
-
-    if window_size is None:
-        window_size = _infer_window_size(weka_path)
-        if window_size is not None:
-            logger.info(
-                "No crop_size in config, inferred window_size=%d from data",
-                window_size,
-            )
-        else:
-            logger.warning("No windows found to infer window_size, leaving as None")
+    window_size = _extract_window_size(model_config, weka_path)
 
     logger.info("Creating EvalDatasetEntry...")
     entry = EvalDatasetEntry(
         name=config.name,
         source_path=config.source_path,
         weka_path=weka_path,
-        task_type=task_type,
-        num_classes=num_classes,
-        classes=label_values,
-        modalities=modalities,
+        task_type=task_metadata.task_type,
+        num_classes=task_metadata.num_classes,
+        classes=task_metadata.label_values,
+        modalities=modality_metadata.modalities,
         window_size=window_size,
-        timeseries=timeseries,
-        num_timesteps=num_timesteps,
+        timeseries=modality_metadata.timeseries,
+        num_timesteps=modality_metadata.num_timesteps,
         split_tag_key=EVAL_SPLIT_TAG_KEY,
         split_stats=split_stats,
         norm_stats=norm_stats,
@@ -1263,7 +481,9 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     logger.info(f"INGEST COMPLETE: {config.name}")
     logger.info(f"{'=' * 60}")
     logger.info(f"  Weka path: {weka_path}")
-    logger.info(f"  Task: {task_type}, classes: {num_classes}")
+    logger.info(
+        f"  Task: {task_metadata.task_type}, classes: {task_metadata.num_classes}"
+    )
     logger.info(
         f"  Splits: train={split_stats.get('train', {}).get('count', 0)}, "
         f"val={split_stats.get('val', {}).get('count', 0)}, "

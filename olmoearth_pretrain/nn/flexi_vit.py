@@ -11,16 +11,16 @@ from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.constants import (
-    BASE_GSD,
-    Modality,
-    ModalitySpec,
-    get_modality_specs_from_names,
-)
 from olmoearth_pretrain.datatypes import (
     MaskedOlmoEarthSample,
     MaskValue,
     TokensAndMasks,
+)
+from olmoearth_pretrain.modalities import (
+    BASE_GSD,
+    Modality,
+    ModalitySpec,
+    get_modality_specs_from_names,
 )
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
@@ -33,6 +33,7 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchReconstruction,
 )
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
+from olmoearth_pretrain.nn.token_split import combine_split_tokens, split_tokens_by_mask
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
@@ -520,7 +521,7 @@ class Reconstructor(nn.Module):
                 }
             )
 
-    # TODO: Likely we want a single object that stores all the data related configuration etc per modality including channel grous bands patch size etc
+    # TODO: Add a single object for per-modality data configuration, including channel groups, bands, and patch sizes.
     def apply_reconstruction_to_modality(
         self, modality: str, input_data: TokensAndMasks, patch_size: int
     ) -> tuple[Tensor, Tensor]:
@@ -1808,17 +1809,16 @@ class PredictorBase(FlexiVitBase):
 
         return output_dict
 
-    # TODO: GIVE more explicit function names
     @staticmethod
     def split_x_y(tokens: Tensor, mask: Tensor) -> tuple[Tensor, ...]:
-        """Splits tokens into three groups based on mask values.
+        """Split tokens into decode and online-encoder groups based on mask values.
 
         This function:
         1. Sorts tokens according to the mask and gathers them in order.
         2. Chooses tokens to be decoded (x) based on the mask value DECODER.
         3. Chooses tokens to be used as context (y) based on the mask value ONLINE_ENCODER.
-        4. Identifies missing tokens (z) based on the mask value MISSING.
-        5. Returns boolean masks for x, y, and z along with indices to revert to the original ordering.
+        4. Treats missing tokens as unused without mutating the input mask.
+        5. Returns masks, sequence lengths, and indices to revert to the original ordering.
 
         Args:
             tokens: Tokens to split of shape [B, T, D].
@@ -1835,52 +1835,18 @@ class PredictorBase(FlexiVitBase):
             max_length_of_decoded_tokens: Maximum length of decoded tokens of shape [1].
             max_length_of_unmasked_tokens: Maximum length of unmasked tokens of shape [1].
         """
-        # Set Missing Masks to Target Encoder ONLY so that we can have all unused tokens in the middle
-        org_mask_dtype = mask.dtype
-        missing_mask = mask == MaskValue.MISSING.value
-        mask[missing_mask] = MaskValue.TARGET_ENCODER_ONLY.value
-
-        # Sort tokens by mask value (descending order)
-        sorted_mask, indices = torch.sort(
-            mask.int(), dim=1, descending=True, stable=True
-        )
-        tokens = tokens.gather(1, indices[:, :, None].expand_as(tokens))
-
-        # Create binary masks for Encoder and Decoder
-        binarized_decoder_mask = sorted_mask == MaskValue.DECODER.value
-        binarized_online_encoder_mask = sorted_mask == MaskValue.ONLINE_ENCODER.value
-
-        seqlens_unmasked_tokens = binarized_online_encoder_mask.sum(dim=-1)
-        max_length_of_unmasked_tokens = seqlens_unmasked_tokens.max()
-        seqlens_tokens_to_decode = binarized_decoder_mask.sum(dim=-1)
-        max_length_of_decoded_tokens = seqlens_tokens_to_decode.max()
-
-        # the y mask is going to be used to determine which of the y values take. True values
-        # take part in the attention (we don't take the inverse here, unlike in the decoder)
-        tokens_to_decode = tokens[:, :max_length_of_decoded_tokens]
-        tokens_to_decode_mask = binarized_decoder_mask[
-            :, :max_length_of_decoded_tokens
-        ].to(org_mask_dtype)
-
-        unmasked_tokens = tokens[:, -max_length_of_unmasked_tokens:]
-        # the x_mask is just going to be used in the reconstruction, to know which
-        # x tokens to add back into the token list. TODO is this even necessary? it could
-        # get padded with noise tokens since we don't care about reconstruction at all
-        # for a whole bunch of tokens
-        unmasked_tokens_mask = binarized_online_encoder_mask[
-            :, -max_length_of_unmasked_tokens:
-        ].to(org_mask_dtype)
+        split = split_tokens_by_mask(tokens, mask)
 
         return (
-            tokens_to_decode,
-            unmasked_tokens,
-            tokens_to_decode_mask,
-            unmasked_tokens_mask,
-            indices,
-            seqlens_tokens_to_decode,
-            seqlens_unmasked_tokens,
-            max_length_of_decoded_tokens,
-            max_length_of_unmasked_tokens,
+            split.tokens_to_decode,
+            split.unmasked_tokens,
+            split.tokens_to_decode_mask,
+            split.unmasked_tokens_mask,
+            split.indices,
+            split.seqlens_tokens_to_decode,
+            split.seqlens_unmasked_tokens,
+            split.max_length_of_decoded_tokens,
+            split.max_length_of_unmasked_tokens,
         )
 
     @staticmethod
@@ -1891,7 +1857,7 @@ class PredictorBase(FlexiVitBase):
         unmasked_tokens_mask: Tensor,
         indices: Tensor,
     ) -> Tensor:
-        """Reintegrate the separated token sequences into their original order.
+        """Recombine separated token sequences into their original order.
 
         The token masks zero out positions which are not used/needed,
         and the final scatter step re-applies the original ordering tracked in 'indices'.
@@ -1907,20 +1873,13 @@ class PredictorBase(FlexiVitBase):
             A merged tokens tensor of shape [B, T, D] with all tokens in their
             original positions.
         """
-        # Get dimensions
-        B, T = indices.shape[0], indices.shape[1]
-        D = tokens_to_decode.shape[-1]
-        tokens = torch.zeros(
-            (B, T, D), dtype=tokens_to_decode.dtype, device=tokens_to_decode.device
+        return combine_split_tokens(
+            tokens_to_decode=tokens_to_decode,
+            unmasked_tokens=unmasked_tokens,
+            tokens_to_decode_mask=tokens_to_decode_mask,
+            unmasked_tokens_mask=unmasked_tokens_mask,
+            indices=indices,
         )
-        tokens[:, -unmasked_tokens.shape[1] :] = (
-            unmasked_tokens * unmasked_tokens_mask.unsqueeze(-1)
-        )
-        tokens[:, : tokens_to_decode.shape[1]] += (
-            tokens_to_decode * tokens_to_decode_mask.unsqueeze(-1)
-        )
-        tokens = tokens.scatter(1, indices[:, :, None].expand_as(tokens), tokens)
-        return tokens
 
     def is_any_data_to_be_decoded(self, modality_mask: Tensor) -> bool:
         """Check if any data is to be decoded for a given modality."""

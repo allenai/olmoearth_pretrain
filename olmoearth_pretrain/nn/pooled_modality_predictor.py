@@ -11,16 +11,19 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor
 
-from olmoearth_pretrain.data.constants import BASE_GSD, Modality
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+from olmoearth_pretrain.datatypes import (
+    MaskedOlmoEarthSample,
+    MaskValue,
+    TokensAndMasks,
+)
 from olmoearth_pretrain.decorators import experimental
+from olmoearth_pretrain.modalities import BASE_GSD, Modality
 from olmoearth_pretrain.nn.attention import Mlp
 from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     EncoderConfig,
     PredictorBase,
     PredictorConfig,
-    TokensAndMasks,
     get_modalities_to_process,
     return_modalities_from_dict,
 )
@@ -721,7 +724,7 @@ class PooledModalityPredictor(PredictorBase):
             raise NotImplementedError("Flash attn not implemented")
 
     def _which_encodings_to_use(self) -> dict[str, bool]:
-        # TODO: Not great probably should jsut compute bools that we pass instead of this
+        # TODO: Compute explicit booleans and pass them instead of deriving behavior here.
         if self.dims_to_pool == DimsToPool.MODALITY:
             return {"use_modality_encodings": False, "use_temporal_encodings": True}
         elif self.dims_to_pool == DimsToPool.TEMPORAL:

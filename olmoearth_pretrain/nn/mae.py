@@ -11,12 +11,11 @@ from torch.distributed.fsdp import (
 )
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, TokensAndMasks
 from olmoearth_pretrain.nn.flexi_vit import (
     EncoderConfig,
     PredictorConfig,
     ReconstructorConfig,
-    TokensAndMasks,
 )
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
 
@@ -87,7 +86,7 @@ class MAE(nn.Module, DistributedMixins):
             self.decoder.apply_compile()
         if self.reconstructor is not None:
             self.reconstructor.apply_compile()
-        # TODO: add aaply for constructor
+        # TODO: Add apply for constructor.
 
 
 @dataclass

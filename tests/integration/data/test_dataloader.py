@@ -8,12 +8,12 @@ import pytest
 
 from olmoearth_pretrain.data.collate import collate_single_masked_batched
 from olmoearth_pretrain.data.concat import OlmoEarthConcatDatasetConfig
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import (
     OlmoEarthDataLoader,
     OlmoEarthDataLoaderConfig,
 )
 from olmoearth_pretrain.data.dataset import OlmoEarthDataset, OlmoEarthDatasetConfig
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.train.masking import MaskingConfig
 
 

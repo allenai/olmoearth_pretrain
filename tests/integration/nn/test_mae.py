@@ -5,12 +5,12 @@ import logging
 import pytest
 import torch
 
-from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+from olmoearth_pretrain.modalities import Modality, ModalitySpec
 from olmoearth_pretrain.nn.flexi_vit import Encoder, Predictor, Reconstructor
 from olmoearth_pretrain.nn.mae import MAE
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import MAELoss, PatchDiscriminationLoss
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 

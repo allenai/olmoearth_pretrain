@@ -13,17 +13,17 @@ from typing import Any
 from olmo_core.utils import prepare_cli_environment
 from tqdm import tqdm
 
-from olmoearth_pretrain.data.constants import (
-    IMAGE_TILE_SIZE,
-    MISSING_VALUE,
-    Modality,
-)
 from olmoearth_pretrain.data.dataset import (
     GetItemArgs,
     OlmoEarthDataset,
     OlmoEarthDatasetConfig,
 )
 from olmoearth_pretrain.data.utils import update_streaming_stats
+from olmoearth_pretrain.modalities import (
+    IMAGE_TILE_SIZE,
+    MISSING_VALUE,
+    Modality,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -3,9 +3,19 @@
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.evals.studio_ingest import get_dataset_entry
 from olmoearth_pretrain.evals.task_types import TaskType
+from olmoearth_pretrain.modalities import Modality
+
+S2_MODALITIES = (Modality.SENTINEL2_L2A.name,)
+S1_MODALITIES = (Modality.SENTINEL1.name,)
+S2_S1_MODALITIES = (Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name)
+PRETRAIN_SUBSET_MODALITIES = (
+    Modality.SENTINEL2_L2A.name,
+    Modality.SENTINEL1.name,
+    Modality.LANDSAT.name,
+)
+S2_CIRRUS_IMPUTE = ("11 - SWIR", "10 - SWIR - Cirrus")
+S2_WATER_VAPOUR_IMPUTE = ("08A - Vegetation Red Edge", "09 - Water vapour")
 
 
 def get_eval_mode(task_type: TaskType) -> str:
@@ -56,11 +66,7 @@ DATASET_TO_CONFIG = {
         imputes=[],
         num_classes=1,
         is_multilabel=False,
-        supported_modalities=[
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.LANDSAT.name,
-        ],
+        supported_modalities=list(PRETRAIN_SUBSET_MODALITIES),
     ),
     "pretrain_subset_worldcover": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -68,11 +74,7 @@ DATASET_TO_CONFIG = {
         num_classes=11,
         is_multilabel=False,
         height_width=32,
-        supported_modalities=[
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.LANDSAT.name,
-        ],
+        supported_modalities=list(PRETRAIN_SUBSET_MODALITIES),
     ),
     "pretrain_subset_osm": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -80,11 +82,7 @@ DATASET_TO_CONFIG = {
         num_classes=30,
         is_multilabel=False,
         height_width=32,
-        supported_modalities=[
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.LANDSAT.name,
-        ],
+        supported_modalities=list(PRETRAIN_SUBSET_MODALITIES),
     ),
     "pretrain_subset_srtm": EvalDatasetConfig(
         task_type=TaskType.REGRESSION,
@@ -92,11 +90,7 @@ DATASET_TO_CONFIG = {
         num_classes=1,
         is_multilabel=False,
         height_width=32,
-        supported_modalities=[
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.LANDSAT.name,
-        ],
+        supported_modalities=list(PRETRAIN_SUBSET_MODALITIES),
     ),
     "pretrain_subset_canopy": EvalDatasetConfig(
         task_type=TaskType.REGRESSION,
@@ -104,11 +98,7 @@ DATASET_TO_CONFIG = {
         num_classes=1,
         is_multilabel=False,
         height_width=32,
-        supported_modalities=[
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.LANDSAT.name,
-        ],
+        supported_modalities=list(PRETRAIN_SUBSET_MODALITIES),
     ),
     "pretrain_subset_cdl": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -118,11 +108,7 @@ DATASET_TO_CONFIG = {
         num_classes=256,
         is_multilabel=False,
         height_width=32,
-        supported_modalities=[
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.LANDSAT.name,
-        ],
+        supported_modalities=list(PRETRAIN_SUBSET_MODALITIES),
     ),
     "pretrain_subset_worldcereal": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -131,59 +117,55 @@ DATASET_TO_CONFIG = {
         num_classes=2,
         is_multilabel=False,
         height_width=32,
-        supported_modalities=[
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.LANDSAT.name,
-        ],
+        supported_modalities=list(PRETRAIN_SUBSET_MODALITIES),
     ),
     "m-eurosat": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
         imputes=[],
         num_classes=10,
         is_multilabel=False,
-        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        supported_modalities=list(S2_MODALITIES),
     ),
     "m-bigearthnet": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
-        imputes=[("11 - SWIR", "10 - SWIR - Cirrus")],
+        imputes=[S2_CIRRUS_IMPUTE],
         num_classes=43,
         is_multilabel=True,
-        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        supported_modalities=list(S2_MODALITIES),
     ),
     "m-so2sat": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
         imputes=[
             ("02 - Blue", "01 - Coastal aerosol"),
-            ("08A - Vegetation Red Edge", "09 - Water vapour"),
-            ("11 - SWIR", "10 - SWIR - Cirrus"),
+            S2_WATER_VAPOUR_IMPUTE,
+            S2_CIRRUS_IMPUTE,
         ],
         num_classes=17,
         is_multilabel=False,
-        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        supported_modalities=list(S2_MODALITIES),
     ),
     "m-brick-kiln": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
         imputes=[],
         num_classes=2,
         is_multilabel=False,
-        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        supported_modalities=list(S2_MODALITIES),
     ),
     "m-sa-crop-type": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
-        imputes=[("11 - SWIR", "10 - SWIR - Cirrus")],
+        imputes=[S2_CIRRUS_IMPUTE],
         num_classes=10,
         is_multilabel=False,
         height_width=256,
-        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        supported_modalities=list(S2_MODALITIES),
     ),
     "m-cashew-plant": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
-        imputes=[("11 - SWIR", "10 - SWIR - Cirrus")],
+        imputes=[S2_CIRRUS_IMPUTE],
         num_classes=7,
         is_multilabel=False,
         height_width=256,
-        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        supported_modalities=list(S2_MODALITIES),
     ),
     "m-forestnet": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
@@ -202,13 +184,13 @@ DATASET_TO_CONFIG = {
         task_type=TaskType.SEGMENTATION,
         imputes=[
             ("05 - Vegetation Red Edge", "06 - Vegetation Red Edge"),
-            ("08A - Vegetation Red Edge", "09 - Water vapour"),
-            ("11 - SWIR", "10 - SWIR - Cirrus"),
+            S2_WATER_VAPOUR_IMPUTE,
+            S2_CIRRUS_IMPUTE,
         ],
         num_classes=15,
         is_multilabel=False,
         height_width=80,
-        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        supported_modalities=list(S2_MODALITIES),
     ),
     "sen1floods11": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -216,7 +198,7 @@ DATASET_TO_CONFIG = {
         num_classes=2,
         is_multilabel=False,
         height_width=64,
-        supported_modalities=[Modality.SENTINEL1.name],
+        supported_modalities=list(S1_MODALITIES),
     ),
     "pastis": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -224,7 +206,7 @@ DATASET_TO_CONFIG = {
         num_classes=19,
         is_multilabel=False,
         height_width=64,
-        supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        supported_modalities=list(S2_S1_MODALITIES),
         timeseries=True,
     ),
     "pastis128": EvalDatasetConfig(
@@ -233,7 +215,7 @@ DATASET_TO_CONFIG = {
         num_classes=19,
         is_multilabel=False,
         height_width=128,
-        supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        supported_modalities=list(S2_S1_MODALITIES),
         timeseries=True,
     ),
     "breizhcrops": EvalDatasetConfig(
@@ -242,7 +224,7 @@ DATASET_TO_CONFIG = {
         num_classes=9,
         is_multilabel=False,
         height_width=1,
-        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        supported_modalities=list(S2_MODALITIES),
         timeseries=True,
     ),
     "nandi": EvalDatasetConfig(
@@ -250,11 +232,7 @@ DATASET_TO_CONFIG = {
         imputes=[],
         num_classes=6,
         is_multilabel=False,
-        supported_modalities=[
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.LANDSAT.name,
-        ],
+        supported_modalities=list(PRETRAIN_SUBSET_MODALITIES),
         timeseries=True,
     ),
     "awf": EvalDatasetConfig(
@@ -262,11 +240,7 @@ DATASET_TO_CONFIG = {
         imputes=[],
         num_classes=9,
         is_multilabel=False,
-        supported_modalities=[
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.LANDSAT.name,
-        ],
+        supported_modalities=list(PRETRAIN_SUBSET_MODALITIES),
         timeseries=True,
     ),
 }
@@ -288,6 +262,8 @@ def dataset_to_config(dataset: str) -> EvalDatasetConfig:
     """
     if dataset in DATASET_TO_CONFIG:
         return DATASET_TO_CONFIG[dataset]
+
+    from olmoearth_pretrain.evals.studio_ingest.registry import get_dataset_entry
 
     entry = get_dataset_entry(dataset)
     return entry.to_eval_config()

@@ -10,7 +10,7 @@ import rasterio
 import rasterio.windows
 from pyproj import Transformer
 
-from olmoearth_pretrain.data.constants import (
+from olmoearth_pretrain.modalities import (
     BASE_RESOLUTION,
     IMAGE_TILE_SIZE,
     PROJECTION_CRS,
@@ -22,6 +22,8 @@ from olmoearth_pretrain.data.constants import (
 from .parse import GridTile, ModalityTile
 
 logger = logging.getLogger(__name__)
+
+ImageTileIndex = dict[tuple[ModalitySpec, GridTile, TimeSpan], ModalityTile]
 
 
 @dataclass
@@ -89,37 +91,8 @@ def image_tiles_to_samples(
     Returns:
         a list of training examples (SampleInformation objects).
     """
-    # TODO: make into separate function
-    # Convert from (modality -> time_span -> tile list) to
-    # (modality, grid_tile, time_span) -> tile).
-    image_tile_index: dict[tuple[ModalitySpec, GridTile, TimeSpan], ModalityTile] = {}
-    for modality, modality_tiles in image_tiles.items():
-        for time_span, time_span_tiles in modality_tiles.items():
-            for tile in time_span_tiles:
-                index_key = (modality, tile.grid_tile, time_span)
-                image_tile_index[index_key] = tile
-
-    # Enumerate all the (grid_tile, time_span) tuples present in the dataset.
-    # Each of these identifies a training example.
-    # We ignore static time span here, unless it is at the base resolution, in which
-    # case we add it as both year and two-week, since currently all data at the base
-    # resolution is static. (The intention here is to avoid adding a two-week tile
-    # based on WorldCover being available if Sentinel-2 and others are only available
-    # for one-year, but to still add NAIP or Maxar tiles.)
-    unique_image_tiles: set[tuple[GridTile, TimeSpan]] = set()
-    for modality, grid_tile, time_span in image_tile_index.keys():
-        if time_span == TimeSpan.STATIC:
-            if grid_tile.resolution_factor > 1:
-                logger.debug(
-                    f"ignoring static tile {grid_tile.resolution_factor} "
-                    f"because it is coarser than the base resolution for modality {modality.name}"
-                )
-                continue
-            else:
-                unique_image_tiles.add((grid_tile, TimeSpan.TWO_WEEK))  # type: ignore
-                unique_image_tiles.add((grid_tile, TimeSpan.YEAR))  # type: ignore
-        else:
-            unique_image_tiles.add((grid_tile, time_span))  # type: ignore
+    image_tile_index = _index_image_tiles(image_tiles)
+    unique_image_tiles = _sample_keys_from_image_tile_index(image_tile_index)
 
     # Now for each (grid_tile, time_span), construct the Sample object.
     # We also skip if not all modalities are available.
@@ -184,6 +157,44 @@ def image_tiles_to_samples(
 
         samples.append(sample)
     return samples
+
+
+def _index_image_tiles(
+    image_tiles: dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]],
+) -> ImageTileIndex:
+    """Build lookup index keyed by modality, grid tile, and time span."""
+    image_tile_index: ImageTileIndex = {}
+    for modality, modality_tiles in image_tiles.items():
+        for time_span, time_span_tiles in modality_tiles.items():
+            for tile in time_span_tiles:
+                image_tile_index[(modality, tile.grid_tile, time_span)] = tile
+    return image_tile_index
+
+
+def _sample_keys_from_image_tile_index(
+    image_tile_index: ImageTileIndex,
+) -> set[tuple[GridTile, TimeSpan]]:
+    """Return sample grid/time keys present in an image tile index."""
+    unique_image_tiles: set[tuple[GridTile, TimeSpan]] = set()
+    for modality, grid_tile, time_span in image_tile_index.keys():
+        if time_span != TimeSpan.STATIC:
+            unique_image_tiles.add((grid_tile, time_span))
+            continue
+
+        # Static coarse tiles should only support samples created by dynamic
+        # modalities. Static base-resolution tiles can stand alone, so expose
+        # both dynamic time spans for downstream sample construction.
+        if grid_tile.resolution_factor > 1:
+            logger.debug(
+                f"ignoring static tile {grid_tile.resolution_factor} "
+                f"because it is coarser than the base resolution for modality {modality.name}"
+            )
+            continue
+
+        unique_image_tiles.add((grid_tile, TimeSpan.TWO_WEEK))
+        unique_image_tiles.add((grid_tile, TimeSpan.YEAR))
+
+    return unique_image_tiles
 
 
 def load_image_for_sample(

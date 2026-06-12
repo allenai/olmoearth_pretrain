@@ -7,24 +7,22 @@ from typing import Any
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.distributed.parallel import DataParallelConfig
-from olmo_core.distributed.utils import get_local_rank, get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
 
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.transform import TransformConfig
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, TokensAndMasks
+from olmoearth_pretrain.modalities import Modality
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
 from olmoearth_pretrain.train.train_module.train_module import (
+    MicrobatchTrainOutput,
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
 )
-from olmoearth_pretrain.train.utils import split_masked_batch
 
 logger = getLogger(__name__)
 
@@ -174,6 +172,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             self.total_loss_name = f"{self.base_loss.name}+{self.regularizer.name}"
 
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
+        self._propagate_model_tokenization_config(self.masking_strategy, self.mae_loss)
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
@@ -204,64 +203,36 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         """
         if not dry_run:
             self.update_target_encoder()
-        # Set the model to train mode
         self.model.train()
-        total_batch_loss = torch.zeros([], device=self.device)
-        total_batch_reg = torch.zeros([], device=self.device)
         patch_size = batch[0]
         batch_data = batch[1]
 
-        # Split batch into microbatches
-        masked_microbatches = split_masked_batch(batch_data, self.rank_microbatch_size)
-        num_microbatches = len(masked_microbatches)
+        def step(
+            microbatches: tuple[MaskedOlmoEarthSample, ...], microbatch_idx: int
+        ) -> MicrobatchTrainOutput:
+            loss, latent, _decoded, _target_output = self.model_forward(
+                microbatches[0], patch_size, self.token_exit_cfg
+            )
+            return MicrobatchTrainOutput(loss=loss, regularizer_inputs=(latent,))
 
-        for microbatch_idx in range(num_microbatches):
-            with self._train_microbatch_context(microbatch_idx, num_microbatches):
-                microbatch_masked = masked_microbatches[microbatch_idx]
-                logger.info(
-                    f"Training microbatch {microbatch_idx} of {num_microbatches} "
-                    f"with batch size {microbatch_masked.batch_size} on rank {get_local_rank()}"
-                )
-                masked_batch = microbatch_masked.to_device(self.device)
-
-                # Run Encoder and decoder on the augmented input
-                loss, latent, decoded, target_output = self.model_forward(
-                    masked_batch, patch_size, self.token_exit_cfg
-                )
-                reg_term = self.compute_regularization(latent)
-                if reg_term is not None:
-                    loss = loss + reg_term
-                    total_batch_reg += (
-                        get_local_tensor(reg_term.detach()) / num_microbatches
-                    )
-                # Scale loss by number of microbatches
-                loss = loss / num_microbatches
-
-                loss_val = get_local_tensor(loss.detach())
-                total_batch_loss += loss_val
-
-                # Skip bad batches
-                if torch.isnan(loss).any() or torch.isinf(loss).any():
-                    logger.warning(
-                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
-                    )
-                    print(f"rank {get_local_rank()} has nan or inf")
-
-                loss.backward()
+        totals = self._run_masked_microbatches(
+            batch_data,
+            step,
+            nonfinite_behavior="warn_continue",
+            log_rank_on_nonfinite=True,
+        )
 
         if dry_run:
             return
 
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
-            total_batch_loss,
+            totals.loss,
             ReduceType.mean,
         )
-        self.log_regularization(total_batch_reg)
+        self.log_regularization(totals.regularizer)
 
         del batch, batch_data  # In case this helps with memory utilization.
-        del masked_batch
-        del latent, decoded, target_output
 
     def model_forward(
         self,
