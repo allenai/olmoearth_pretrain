@@ -16,6 +16,7 @@ from olmo_core.train.callbacks.callback import Callback, CallbackConfig
 from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader, IterableDataset
+from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets import get_eval_dataset
@@ -957,6 +958,15 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     f"Skipping {evaluation_name} because it is not in the filter_for_eval_mode list"
                 )
                 continue
+
+            if task.h5py_dir is not None and not UPath(task.h5py_dir).exists():
+                raise FileNotFoundError(
+                    f"h5py_dir for eval task '{evaluation_name}' does not exist: "
+                    f"{task.h5py_dir}. Pretrain-subset eval snapshots are created "
+                    f"by scripts/tools/20260611_snapshot_pretrain_eval_subset.py "
+                    f"and must match the path constants in "
+                    f"olmoearth_pretrain/internal/all_evals.py."
+                )
 
             config = dataset_to_config(task.dataset)
             if (
