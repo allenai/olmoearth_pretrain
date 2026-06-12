@@ -7,7 +7,9 @@ from logging import getLogger
 from typing import Any
 
 import torch
+import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
+import torch.nn.functional as F
 from olmo_core.distributed.parallel import DataParallelConfig
 from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
@@ -62,6 +64,11 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     # Clamp for the model's learned log logit_scale (CLIP temperature):
     # exp(4.6) ~ 99.5, matching CLIP's max scale of 100.
     max_logit_scale: float = 4.6
+    # Separate (lower) clamp for the instance loss temperature: its 64-way
+    # cross-sample softmax saturates far earlier than the token loss's, and
+    # the effective class-token gradient scales with weight x temperature —
+    # exp(3.4) ~ 30 bounds that drift.
+    max_instance_logit_scale: float = 3.4
 
     def build(
         self,
@@ -113,6 +120,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         find_unused_parameters: bool = True,
         reinit_targets: bool = False,
         max_logit_scale: float = 4.6,
+        max_instance_logit_scale: float = 3.4,
     ):
         """Initialize the training module.
 
@@ -142,6 +150,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             reinit_targets: Whether or not to reinitialize the target encoder.
             max_logit_scale: Clamp (in log space) for the model's learned CLIP
                 temperature; the exp'd scale is passed to the base loss.
+            max_instance_logit_scale: Clamp (in log space) for the instance
+                loss temperature (lower than the token loss's).
         """
         super().__init__(
             model=model,
@@ -162,6 +172,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.start_ema, self.end_ema = ema_decay
         self.token_exit_cfg = token_exit_cfg
         self.max_logit_scale = max_logit_scale
+        self.max_instance_logit_scale = max_instance_logit_scale
         self.base_loss = loss_config.build()
         self.masking_strategy = masking_config.build()
         tokenization_config = getattr(self.model.encoder, "tokenization_config", None)
@@ -313,10 +324,15 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             # Bisection probe: fixed scale, no parameter read, no DTensor
             # collective in the loss graph.
             return torch.tensor(1.0 / 0.07, device=self.device)
+        max_scale = (
+            self.max_instance_logit_scale
+            if param_name == "instance_logit_scale"
+            else self.max_logit_scale
+        )
         logit_scale = getattr(self.model, param_name)
         if isinstance(logit_scale, DTensor):
             logit_scale = logit_scale.full_tensor()
-        return logit_scale.clamp(max=self.max_logit_scale).exp()
+        return logit_scale.clamp(max=max_scale).exp()
 
     def train_batch(
         self,
@@ -347,13 +363,15 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         with torch.no_grad():
             get_local_tensor(self.model.logit_scale).clamp_(max=self.max_logit_scale)
             get_local_tensor(self.model.instance_logit_scale).clamp_(
-                max=self.max_logit_scale
+                max=self.max_instance_logit_scale
             )
         # Set the model to train mode
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_con = torch.zeros([], device=self.device)
+        total_batch_con_raw = torch.zeros([], device=self.device)
+        total_batch_acc = torch.zeros([], device=self.device)
 
         # Unpack batch
         patch_size = batch[0]
@@ -406,18 +424,48 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     total_batch_con += (
                         get_local_tensor(contrastive_loss.detach()) / num_microbatches
                     )
+                    with torch.no_grad():
+                        # Diagnostics for the instance objective: 64-way
+                        # retrieval accuracy of the cross-view softmax and the
+                        # raw (unweighted) CE, which the 0.05 weight obscures.
+                        a_n = F.normalize(pooled_a.detach().float(), dim=-1)
+                        b_n = F.normalize(pooled_b.detach().float(), dim=-1)
+                        match = (a_n @ b_n.T).argmax(dim=1) == torch.arange(
+                            a_n.shape[0], device=a_n.device
+                        )
+                        total_batch_acc += match.float().mean() / num_microbatches
+                        weight = getattr(self.contrastive_loss, "weight", 1.0)
+                        total_batch_con_raw += (
+                            get_local_tensor(contrastive_loss.detach())
+                            / max(weight, 1e-8)
+                            / num_microbatches
+                        )
 
                 loss = loss / num_microbatches
-                loss_val = get_local_tensor(loss.detach())
-                total_batch_loss += loss_val
 
-                # Skip bad batches
-                if torch.isnan(loss).any() or torch.isinf(loss).any():
+                # Skip bad batches — synchronized across ranks: a rank-local
+                # break desyncs FSDP collectives (the broken rank issues fewer
+                # reduce-scatters and never finalizes grad reduction) and the
+                # subsequent optim step would consume partial gradients.
+                bad = (torch.isnan(loss) | torch.isinf(loss)).any()
+                if dist.is_initialized():
+                    bad_flag = bad.detach().float()
+                    dist.all_reduce(bad_flag, op=dist.ReduceOp.MAX)
+                    bad = bad_flag > 0
+                if bad:
                     logger.warning(
-                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
+                        "Non-finite loss at microbatch %s on some rank; zeroing "
+                        "gradients and skipping the rest of this batch on all ranks.",
+                        microbatch_idx,
                     )
+                    for p in self.model.parameters():
+                        if p.grad is not None:
+                            p.grad.detach().zero_()
                     del latent_a, latent_b
                     break
+
+                loss_val = get_local_tensor(loss.detach())
+                total_batch_loss += loss_val
 
                 del latent_a, latent_b
                 loss.backward()
@@ -444,6 +492,16 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             self.trainer.record_metric(
                 f"train/{self.contrastive_loss.name}",
                 total_batch_con,
+                ReduceType.mean,
+            )
+            self.trainer.record_metric(
+                f"train/{self.contrastive_loss.name}_raw_CE",
+                total_batch_con_raw,
+                ReduceType.mean,
+            )
+            self.trainer.record_metric(
+                "train/instance_top1_acc",
+                total_batch_acc,
                 ReduceType.mean,
             )
         # The effective CLIP temperatures are the best early-warning signal

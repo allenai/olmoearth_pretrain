@@ -114,7 +114,10 @@ def get_modalities_to_process(
     modalities_to_process = set(supported_modality_names).intersection(
         set(available_modalities)
     )
-    return list(modalities_to_process)
+    # Sorted: set iteration order is hash-dependent, and downstream code
+    # relies on tokens/masks/positions being collapsed in the SAME order
+    # across separate calls (and ideally across processes/runs).
+    return sorted(modalities_to_process)
 
 
 def return_modalities_from_dict(
@@ -1422,6 +1425,19 @@ class FlexiVitBase(nn.Module):
             CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
             * self.rope_coordinate_scale
         )
+        if gsd_ratio > math.pi and not getattr(self, "_warned_rope_aliasing", False):
+            # Adjacent tokens then differ by more than pi radians in the top
+            # RoPE band: positions alias and relative geometry degrades.
+            logger.warning(
+                "RoPE top-band phase per token is %.2f rad (> pi): input_res=%s "
+                "patch_size=%s rope_coordinate_scale=%s will alias adjacent "
+                "positions.",
+                gsd_ratio,
+                input_res,
+                patch_size,
+                self.rope_coordinate_scale,
+            )
+            self._warned_rope_aliasing = True
         for modality_name in modalities_to_process:
             tokens = tokens_only_dict[modality_name]
             modality = Modality.get(modality_name)
@@ -1433,6 +1449,17 @@ class FlexiVitBase(nn.Module):
                     device=tokens.device,
                 )
                 continue
+            if modality.tile_resolution_factor != 16:
+                # The shared gsd_ratio assumes every spatial modality covers
+                # the same ground extent with the same token grid (true for
+                # all production modalities, tile_resolution_factor=16). A
+                # different factor would need per-modality coordinate scaling
+                # for co-located tokens to share physical positions.
+                raise ValueError(
+                    f"RoPE positions assume tile_resolution_factor=16; modality "
+                    f"{modality_name} has {modality.tile_resolution_factor}. "
+                    "Add per-modality coordinate scaling before using it."
+                )
 
             if tokens.ndim not in (5, 6):
                 raise ValueError(
@@ -1441,8 +1468,18 @@ class FlexiVitBase(nn.Module):
                 )
 
             b, h, w = tokens.shape[:3]
-            grid_row = torch.arange(h, device=tokens.device, dtype=torch.float32)
-            grid_col = torch.arange(w, device=tokens.device, dtype=torch.float32)
+            # Centered grid: metadata tokens (class token, latlon, registers,
+            # padded slots) all carry coordinate (0, 0); centering puts them
+            # at the tile center instead of aliasing them with the top-left
+            # patch, while preserving all relative geometry.
+            grid_row = (
+                torch.arange(h, device=tokens.device, dtype=torch.float32)
+                - (h - 1) / 2.0
+            )
+            grid_col = (
+                torch.arange(w, device=tokens.device, dtype=torch.float32)
+                - (w - 1) / 2.0
+            )
             grid_row, grid_col = torch.meshgrid(grid_row, grid_col, indexing="ij")
             grid = torch.stack([grid_row, grid_col], dim=-1) * gsd_ratio
 
@@ -1961,11 +1998,17 @@ class Encoder(FlexiVitBase):
         new_mask: Tensor,
         fast_pass: bool,
     ) -> Tensor | None:
-        """Get the attention mask or None if we should pass None to the transformer."""
-        if fast_pass or not self.training:
+        """Get the attention mask or None if we should pass None to the transformer.
+
+        The padding mask applies in eval mode too: after remove_masked_tokens
+        pads sequences to the batch max, the padded slots are zero-content
+        tokens at RoPE position (0, 0) — without the mask they participate in
+        attention and contaminate real tokens (including the class token,
+        which is the eval embedding) on any batch with MISSING tokens.
+        """
+        if fast_pass:
             return None
-        else:
-            return new_mask
+        return new_mask
 
     def add_register_tokens_and_masks(
         self,

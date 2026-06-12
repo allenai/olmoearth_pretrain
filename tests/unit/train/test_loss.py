@@ -1506,20 +1506,20 @@ def test_clip_patch_disc_bf16_inputs_give_finite_float32_loss() -> None:
 
 
 def test_clip_patch_disc_all_grouping_variants_run() -> None:
-    """Smoke test: every grouping variant runs on current token shapes."""
-    b, t_h, t_w, t, d = 3, 4, 4, 2, 8
+    """Smoke test: every grouping variant runs on rank-6 token shapes."""
+    b, t_h, t_w, t, bs, d = 3, 4, 4, 2, 2, 8
     torch.manual_seed(3)
-    s2_mask = torch.randint(0, 3, (b, t_h, t_w, t))
+    s2_mask = torch.randint(0, 3, (b, t_h, t_w, t, bs))
     ll_mask = torch.ones((b, 1)) * MaskValue.DECODER.value
 
     preds = TokensAndMasks(
-        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, bs, d)),
         sentinel2_l2a_mask=s2_mask,
         latlon=torch.randn((b, 1, d)),
         latlon_mask=ll_mask,
     )
     targets = TokensAndMasks(
-        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, bs, d)),
         sentinel2_l2a_mask=s2_mask,
         latlon=torch.randn((b, 1, d)),
         latlon_mask=ll_mask,
@@ -1534,6 +1534,33 @@ def test_clip_patch_disc_all_grouping_variants_run() -> None:
     value = loss.compute(preds, targets, logit_scale=CLIP_LOGIT_SCALE)
     assert torch.isfinite(value)
     assert value > 0
+
+
+def test_clip_patch_disc_bandset_falls_back_on_rank5() -> None:
+    """bandset_loss on rank-5 tokens falls back to the modality grouping.
+
+    The '... bs' pattern would otherwise mis-bind time as bandsets.
+    """
+    b, t_h, t_w, t, d = 2, 2, 2, 2, 8
+    torch.manual_seed(5)
+    mask = torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)), sentinel2_l2a_mask=mask
+    )
+    targs = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)), sentinel2_l2a_mask=mask
+    )
+    bandset = ClipPatchDiscriminationLoss(modality_loss=False, bandset_loss=True)
+    modality = ClipPatchDiscriminationLoss(modality_loss=True)
+    a = bandset.compute(preds, targs, logit_scale=CLIP_LOGIT_SCALE)
+    b_ = modality.compute(preds, targs, logit_scale=CLIP_LOGIT_SCALE)
+    assert torch.isclose(a, b_, rtol=RTOL, atol=ATOL)
+
+
+def test_clip_patch_disc_label_smoothing_with_masking_rejected() -> None:
+    """label_smoothing + column masking yields inf loss: rejected at init."""
+    with pytest.raises(ValueError, match="label_smoothing"):
+        ClipPatchDiscriminationLoss(label_smoothing=0.1, decode_only=True)
 
 
 def test_clip_patch_disc_weight() -> None:

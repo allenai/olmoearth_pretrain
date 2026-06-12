@@ -6,16 +6,17 @@ Combines, on top of the v1.1 base recipe:
   predictions and the static randomly-initialized target encoder's patch
   embeddings, with a learned temperature (``LatentMIM.logit_scale``, clamped
   at 4.6 in log space, excluded from weight decay). Same-target negative
-  masking (cosine > 0.999) is kept for the map modalities. Negatives stay
-  microbatch-local — no cross-GPU gathering.
+  masking (cosine > 0.999) applies to ALL modalities — homogeneous patches
+  produce near-identical random patch-embed targets in the imaging
+  modalities too. Negatives stay microbatch-local — no cross-GPU gathering.
 - **CLIP instance loss** on the projected class token: symmetric InfoNCE
   with its own learned temperature (``instance_logit_scale`` — separate
   parameter, since within-sample token negatives and cross-sample instance
   negatives have very different similarity distributions).
 - **Spatial RoPE** (axial, base 10000, coordinate scale 0.25 — the winning
   sweep setting) with ``encoding_mode='separate'``.
-- **Simple temporal encoding** (4 numbers): ``[frac_year/10, sin, cos,
-  year_valid]`` with epoch 2020. ``year == 0`` is the "year unknown"
+- **Simple temporal encoding** (4 numbers): ``[frac_year, sin, cos,
+  year_valid]`` — direct years since 2020. ``year == 0`` is the "year unknown"
   sentinel; batch-level year dropout (collator) zeroes the year for a whole
   rank batch at a time, and eval tasks with fabricated dates present year 0.
 - **Latlon token**: latlon joins the training modalities and is embedded via
@@ -44,7 +45,6 @@ at the cost of metadata-invariance pressure. See MetadataDropout).
 import logging
 
 from base import (
-    ONLY_DECODE_MODALITIES,
     _masking_config,
     build_dataset_config,
     build_trainer_config,
@@ -93,7 +93,8 @@ YEAR_DROPOUT_RATE = 0.5
 LATLON_DROPOUT_RATE = 0.5
 METADATA_DROPOUT_VIEW_MODE = "shared"  # see module docstring re 'decorrelated'
 
-MAX_LOGIT_SCALE = 4.6  # exp(4.6) ~ 99.5, CLIP's clamp
+MAX_LOGIT_SCALE = 4.6  # exp(4.6) ~ 99.5, CLIP's clamp (token loss)
+MAX_INSTANCE_LOGIT_SCALE = 3.4  # exp(3.4) ~ 30: bounds class-token grad drift
 
 
 def _apply_shared(cfg) -> None:
@@ -152,9 +153,12 @@ def build_train_module_config(
             loss_config={
                 "type": "clip_patch_discrimination",
                 # L2-normalized scores (defaults), learned temperature via
-                # logit_scale threaded from the train module.
+                # logit_scale threaded from the train module. Same-target
+                # masking applies to ALL modalities: homogeneous patches
+                # (ocean/desert/snow) in the imaging modalities produce
+                # near-identical random patch-embed targets — unmaskable
+                # false negatives whose gradient grows with the temperature.
                 "same_target_threshold": 0.999,
-                "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
             }
         ),
         # CLIP-style instance loss on the projected class token: symmetric,
@@ -170,6 +174,7 @@ def build_train_module_config(
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
         max_logit_scale=MAX_LOGIT_SCALE,
+        max_instance_logit_scale=MAX_INSTANCE_LOGIT_SCALE,
         scheduler=CosWithWarmup(warmup_steps=8000),
         # Static randomly-initialized target encoder (no EMA), per design.
         ema_decay=(1.0, 1.0),

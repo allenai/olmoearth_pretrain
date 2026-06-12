@@ -49,6 +49,16 @@ class Loss(ABC):
 
 LOSS_REGISTRY = ClassRegistry[Loss]()
 
+# Floor for L2 normalization in the CLIP losses: F.normalize's backward
+# scales as 1/||x|| (eps=1e-12), so a small-norm embedding amplifies its
+# incoming gradient by up to 1e12. Norms >= the floor normalize exactly.
+NORMALIZE_FLOOR = 1e-3
+
+
+def _normalize_floored(x: Tensor) -> Tensor:
+    """L2-normalize with a bounded backward at small norms."""
+    return x / x.norm(p=2, dim=-1, keepdim=True).clamp(min=NORMALIZE_FLOOR)
+
 
 @LOSS_REGISTRY.register("clip_patch_discrimination")
 class ClipPatchDiscriminationLoss(Loss):
@@ -142,6 +152,13 @@ class ClipPatchDiscriminationLoss(Loss):
                 "same_target_threshold is only supported with the "
                 "modality_loss grouping; disable batch_loss/bandset_loss/"
                 "spatial_loss/time_loss or set same_target_threshold=None."
+            )
+        if label_smoothing > 0.0 and (decode_only or same_target_threshold is not None):
+            # Smoothing places target mass on -finfo.max masked columns,
+            # which makes the cross-entropy infinite.
+            raise ValueError(
+                "label_smoothing > 0 is incompatible with decode_only or "
+                "same_target_threshold column masking (yields inf loss)."
             )
         self.label_smoothing = label_smoothing
         self.weight = weight
@@ -257,7 +274,17 @@ class ClipPatchDiscriminationLoss(Loss):
         logit_scale: Tensor,
         invalid_negatives: Tensor | None = None,
     ) -> Tensor:
-        """Contrast within (sample, band-set) groups."""
+        """Contrast within (sample, band-set) groups.
+
+        Only rank-6 (B, H, W, T, BS, D) tokens have an unambiguous bandset
+        axis here; anything else falls back to the modality grouping
+        (mirroring the spatial/time variants) — on rank-5 tokens the
+        '... bs' pattern would silently bind the TIME dimension as bandsets.
+        """
+        if rows.ndim != 6:
+            return self._calculate_modality_loss(
+                rows, cols, masks, logit_scale, invalid_negatives
+            )
         return self._grouped_loss(
             rearrange(rows, "b ... bs d -> (b bs) (...) d"),
             rearrange(cols, "b ... bs d -> (b bs) (...) d"),
@@ -401,9 +428,9 @@ class ClipPatchDiscriminationLoss(Loss):
                 predictions, predictions.get_masked_modality_name(modality_name)
             )
             if self.target_norm is not None:
-                targs = self.target_norm * F.normalize(targs, p=2, dim=-1)
+                targs = self.target_norm * _normalize_floored(targs)
             if self.prediction_norm is not None:
-                preds = self.prediction_norm * F.normalize(preds, p=2, dim=-1)
+                preds = self.prediction_norm * _normalize_floored(preds)
 
             invalid_negatives = None
             if self.same_target_threshold is not None and (
@@ -1663,8 +1690,8 @@ class ClipInfoNCELoss(Loss):
             "ClipInfoNCELoss requires logit_scale — the final multiplicative "
             "scale, post clamp().exp() — passed by the train module."
         )
-        predictions = F.normalize(predictions.float(), p=2, dim=-1)
-        targets = F.normalize(targets.float(), p=2, dim=-1)
+        predictions = _normalize_floored(predictions.float())
+        targets = _normalize_floored(targets.float())
         logits = logit_scale.float() * (predictions @ targets.transpose(-2, -1))
 
         labels = torch.arange(len(predictions), device=predictions.device)
