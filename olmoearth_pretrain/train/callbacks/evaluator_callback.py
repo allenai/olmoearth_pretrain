@@ -19,6 +19,11 @@ from torch.utils.data import DataLoader, IterableDataset
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.evals.class_support import (
+    EvalLabeledClassMode,
+    labeled_classes_for_split,
+    load_class_support,
+)
 from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
     EvalDatasetConfig,
@@ -27,6 +32,7 @@ from olmoearth_pretrain.evals.datasets.configs import (
     get_eval_mode,
 )
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.datasets.pretrain_subset import PretrainSplitStrategy
 from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn_variable_time
 from olmoearth_pretrain.evals.embedding_diagnostics import (
     compute_embedding_diagnostics,
@@ -130,11 +136,16 @@ class DownstreamTaskConfig:
     pretrain_train_samples: int = 512
     pretrain_valid_samples: int = 512
     pretrain_test_samples: int = 512
-    # Geographic vs random index selection for pretrain subset auxiliary probes.
-    # "random" picks indices uniformly; "geographic" buckets samples into
-    # latlon-bin holdouts so train/val/test are spatially disjoint.
-    pretrain_split_strategy: str = "random"
+    # Sample selection strategy for pretrain subset auxiliary probes.
+    pretrain_split_strategy: PretrainSplitStrategy = PretrainSplitStrategy.RANDOM
     pretrain_geographic_bin_size_deg: float = 5.0
+    # Optional directory with train/valid/test CSVs containing H5 sample_index values.
+    pretrain_split_dir: str | None = None
+    # Precomputed labeled-class lists for macro metrics live in
+    # ``{pretrain_split_dir}/class_support.json``. This selects which list to use.
+    eval_labeled_class_mode: EvalLabeledClassMode = EvalLabeledClassMode.PIXELS
+    # Optional explicit override for all splits when no class_support.json exists.
+    eval_labeled_classes: list[int] | None = None
 
 
 class DownstreamEvaluator:
@@ -202,8 +213,26 @@ class DownstreamEvaluator:
         self.pretrain_train_samples = task.pretrain_train_samples
         self.pretrain_valid_samples = task.pretrain_valid_samples
         self.pretrain_test_samples = task.pretrain_test_samples
-        self.pretrain_split_strategy = task.pretrain_split_strategy
+        self.pretrain_split_strategy = PretrainSplitStrategy(
+            task.pretrain_split_strategy
+        )
         self.pretrain_geographic_bin_size_deg = task.pretrain_geographic_bin_size_deg
+        self.pretrain_split_dir = task.pretrain_split_dir
+        self.eval_labeled_class_mode = EvalLabeledClassMode(
+            task.eval_labeled_class_mode
+        )
+        self.eval_labeled_classes = task.eval_labeled_classes
+        self._class_support = (
+            load_class_support(task.pretrain_split_dir)
+            if task.pretrain_split_dir is not None
+            else None
+        )
+        if self._class_support is not None:
+            logger.info(
+                "Loaded class support for %s from %s/class_support.json",
+                evaluation_name,
+                task.pretrain_split_dir,
+            )
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -218,6 +247,11 @@ class DownstreamEvaluator:
             self.eval_mode = EvalMode(self.eval_mode)
 
         assert self.eval_mode in EvalMode, f"Unexpected eval mode {self.eval_mode}"
+
+        macro_class_kwargs = {
+            "val_macro_class_ids": self._labeled_classes_for_split("valid"),
+            "test_macro_class_ids": self._labeled_classes_for_split("test"),
+        }
 
         if self.eval_mode == EvalMode.LINEAR_PROBE:
             if self.probe_lr is None:
@@ -248,6 +282,7 @@ class DownstreamEvaluator:
                 run_knn,
                 primary_metric=self.primary_metric,
                 primary_metric_class=self.primary_metric_class,
+                **macro_class_kwargs,
             )
             if self.eval_mode == EvalMode.KNN
             else (
@@ -262,10 +297,20 @@ class DownstreamEvaluator:
                     use_dice_loss=self.use_dice_loss,
                     primary_metric=self.primary_metric,
                     primary_metric_class=self.primary_metric_class,
+                    **macro_class_kwargs,
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
                 else None
             )  # "finetune" handled explictly below in .val()
+        )
+
+    def _labeled_classes_for_split(self, split: str) -> list[int] | None:
+        """Return precomputed labeled classes for one eval split."""
+        return labeled_classes_for_split(
+            class_support=self._class_support,
+            split=split,
+            mode=self.eval_labeled_class_mode,
+            override=self.eval_labeled_classes,
         )
 
     def _get_data_loader(
@@ -293,13 +338,19 @@ class DownstreamEvaluator:
             extra_kwargs["target_modality"] = self.pretrain_target_modality
             extra_kwargs["pretrain_split"] = split
             extra_kwargs["pretrain_label_seed"] = self.pretrain_label_seed
-            extra_kwargs["pretrain_train_samples"] = self.pretrain_train_samples
+            pretrain_train_samples = self.pretrain_train_samples
+            if split == "train" and self.max_train_samples is not None:
+                pretrain_train_samples = min(
+                    pretrain_train_samples, self.max_train_samples
+                )
+            extra_kwargs["pretrain_train_samples"] = pretrain_train_samples
             extra_kwargs["pretrain_valid_samples"] = self.pretrain_valid_samples
             extra_kwargs["pretrain_test_samples"] = self.pretrain_test_samples
             extra_kwargs["pretrain_split_strategy"] = self.pretrain_split_strategy
             extra_kwargs["pretrain_geographic_bin_size_deg"] = (
                 self.pretrain_geographic_bin_size_deg
             )
+            extra_kwargs["pretrain_split_dir"] = self.pretrain_split_dir
         eval_ds = get_eval_dataset(
             eval_dataset=self.dataset,
             split=split,

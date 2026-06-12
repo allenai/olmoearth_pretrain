@@ -28,7 +28,13 @@ include = ["olmoearth_pretrain*", "helios*"]
 [tool.setuptools.package-data]
 "olmoearth_pretrain" = ["py.typed"]
 "olmoearth_pretrain.data.norm_configs" = ["*.json"]
-"olmoearth_pretrain.evals.datasets.config" = ["*.json"]
+"olmoearth_pretrain.evals.datasets" = [
+    "config/*.json",
+    "splits/presto_osm_balanced/*.md",
+    "splits/presto_osm_balanced/*.json",
+    "splits/presto_osm_balanced/*/*.csv",
+    "splits/presto_osm_balanced/*/*.json",
+]
 "olmoearth_pretrain.evals.studio_ingest" = ["registry.json"]
 
 [tool.ruff]

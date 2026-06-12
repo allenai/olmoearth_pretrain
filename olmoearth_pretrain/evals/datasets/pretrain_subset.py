@@ -8,6 +8,7 @@ tasks such as WorldCover, OSM, SRTM, CDL, canopy height, and WorldCereal.
 from __future__ import annotations
 
 import logging
+from enum import StrEnum
 from functools import cache
 
 import numpy as np
@@ -32,6 +33,9 @@ DEFAULT_HW_P = 8
 DEFAULT_MAX_SAMPLES = 512
 WORLDCOVER_CLASSES = torch.tensor([10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100])
 OSM_TARGET_MODALITY = "openstreetmap_raster"
+OSM_NUM_CLASSES = 30
+OSM_POPULOUS_12_CLASS_IDS = [1, 3, 4, 12, 13, 17, 19, 20, 21, 22, 23, 29]
+OSM_RARE_4_CLASS_IDS = [9, 10, 26, 27]
 SRTM_TARGET_MODALITY = "srtm"
 WORLDCOVER_TARGET_MODALITY = "worldcover"
 CDL_TARGET_MODALITY = "cdl"
@@ -41,6 +45,21 @@ WRI_CANOPY_TARGET_MODALITY = "wri_canopy_height_map"
 WORLDCEREAL_PRIMARY_CHANNEL = 0
 # CDL uses 0 to mark no-data / background.
 CDL_IGNORE_CODE = 0
+
+
+class PretrainSplitStrategy(StrEnum):
+    """Sample-selection strategies for pretrain-derived eval probes."""
+
+    RANDOM = "random"
+    GEOGRAPHIC = "geographic"
+
+
+class OsmLabelMode(StrEnum):
+    """How to derive OSM labels for pretrain-derived probe tasks."""
+
+    SEGMENTATION = "segmentation"
+    TILE_ANCHOR_CLASS = "tile_anchor_class"
+    TILE_PRESENCE = "tile_presence"
 
 
 @cache
@@ -78,8 +97,11 @@ class PretrainSubsetDataset(Dataset):
         train_samples: int = DEFAULT_MAX_SAMPLES,
         valid_samples: int = DEFAULT_MAX_SAMPLES,
         test_samples: int = DEFAULT_MAX_SAMPLES,
-        split_strategy: str = "random",
+        split_strategy: str | PretrainSplitStrategy = PretrainSplitStrategy.RANDOM,
         geographic_bin_size_deg: float = 5.0,
+        split_dir: str | None = None,
+        osm_label_mode: str | OsmLabelMode = OsmLabelMode.SEGMENTATION,
+        osm_class_ids: list[int] | None = None,
     ) -> None:
         """Initialize a deterministic pretrain eval subset.
 
@@ -97,14 +119,26 @@ class PretrainSubsetDataset(Dataset):
             train_samples: Maximum train samples after split assignment.
             valid_samples: Maximum validation samples after split assignment.
             test_samples: Maximum test samples after split assignment.
-            split_strategy: ``random`` for shuffled 80/10/10 sample splits or
-                ``geographic`` for shuffled 80/10/10 lat/lon-bin splits.
+            split_strategy: Strategy for assigning and selecting split samples.
             geographic_bin_size_deg: Geographic bin size for spatial holdouts.
+            split_dir: Optional directory containing train/valid/test CSVs with
+                H5 ``sample_index`` values to use directly.
+            osm_label_mode: For OSM probes, ``segmentation`` returns per-pixel
+                argmax labels; ``tile_anchor_class`` returns the split CSV's
+                ``anchor_class_id`` as a single class label per tile; and
+                ``tile_presence`` returns a multi-hot class-presence vector.
+            osm_class_ids: Optional raw OSM class ids to keep for segmentation
+                labels. Kept classes are remapped to contiguous ids in list order;
+                all other labeled pixels become ignore labels.
         """
         self.patch_size = patch_size
         self.hw_p = hw_p
         self.max_samples = max_samples
         self.target_modality = target_modality
+        self.osm_label_mode = OsmLabelMode(osm_label_mode)
+        self.osm_class_ids = osm_class_ids
+        self._tile_class_labels: list[int] | None = None
+        self._tile_presence_labels: list[torch.Tensor] | None = None
 
         self._dataset = OlmoEarthDataset(
             h5py_dir=UPath(h5py_dir),
@@ -114,7 +148,12 @@ class PretrainSubsetDataset(Dataset):
         )
         self._dataset.prepare()
         self._label_dataset = None
-        if target_modality is not None:
+        use_raster_labels = (
+            target_modality is not None
+            and self.osm_label_mode == OsmLabelMode.SEGMENTATION
+        )
+        if use_raster_labels:
+            assert target_modality is not None
             # Include the input modalities so extract_hwt_from_sample_dict has a
             # spatially-present modality to read H/W/T from even when the
             # (often non-multitemporal) target is missing for a given sample.
@@ -138,10 +177,46 @@ class PretrainSubsetDataset(Dataset):
             rng = np.random.RandomState(seed)
             self._indices = rng.choice(total, size=n, replace=False).tolist()
         else:
+            split_strategy = PretrainSplitStrategy(split_strategy)
+            if split_dir is not None:
+                positions, split_rows = self._split_rows_from_split_csv(
+                    dataset=self._dataset,
+                    split_dir=split_dir,
+                    split=split,
+                )
+                target_size = self._target_size_for_split(
+                    split=split,
+                    train_samples=train_samples,
+                    valid_samples=valid_samples,
+                    test_samples=test_samples,
+                )
+                positions = positions[:target_size]
+                split_rows = split_rows.iloc[:target_size].reset_index(drop=True)
+                self._indices = positions.tolist()
+                if self.osm_label_mode == OsmLabelMode.TILE_ANCHOR_CLASS:
+                    if "anchor_class_id" not in split_rows.columns:
+                        raise ValueError(
+                            f"Split CSV for {split_dir}/{split} must contain "
+                            "anchor_class_id when osm_label_mode is tile_anchor_class"
+                        )
+                    self._tile_class_labels = (
+                        split_rows["anchor_class_id"].astype(int).tolist()
+                    )
+                elif self.osm_label_mode == OsmLabelMode.TILE_PRESENCE:
+                    if "labels" not in split_rows.columns:
+                        raise ValueError(
+                            f"Split CSV for {split_dir}/{split} must contain "
+                            "labels when osm_label_mode is tile_presence"
+                        )
+                    self._tile_presence_labels = [
+                        self._multi_hot_osm_presence(label_ids)
+                        for label_ids in split_rows["labels"].astype(str).tolist()
+                    ]
+                return
             eligible_positions = self._positions_with_target_present(
                 self._dataset, target_modality
             )
-            if split_strategy == "random":
+            if split_strategy == PretrainSplitStrategy.RANDOM:
                 selected = self._select_split_indices(
                     total=len(eligible_positions),
                     split=split,
@@ -151,7 +226,7 @@ class PretrainSubsetDataset(Dataset):
                     test_samples=test_samples,
                 )
                 self._indices = eligible_positions[selected].tolist()
-            elif split_strategy == "geographic":
+            elif split_strategy == PretrainSplitStrategy.GEOGRAPHIC:
                 self._indices = self._geographic_split_positions(
                     latlons=self._dataset.latlon_distribution,
                     candidate_positions=eligible_positions,
@@ -164,8 +239,8 @@ class PretrainSubsetDataset(Dataset):
                 ).tolist()
             else:
                 raise ValueError(
-                    f"Unsupported split_strategy '{split_strategy}'. "
-                    f"Expected 'random' or 'geographic'."
+                    f"Unsupported split_strategy '{split_strategy}'. Expected one of "
+                    f"{[strategy.value for strategy in PretrainSplitStrategy]}."
                 )
 
     @staticmethod
@@ -190,6 +265,63 @@ class PretrainSubsetDataset(Dataset):
         return eligible_positions
 
     @staticmethod
+    def _split_rows_from_split_csv(
+        dataset: OlmoEarthDataset,
+        split_dir: str,
+        split: str,
+    ) -> tuple[np.ndarray, pd.DataFrame]:
+        """Load split rows from a CSV of H5 sample indices."""
+        if dataset.sample_indices is None:
+            raise ValueError("Dataset must be prepared before loading split CSVs")
+        normalized_split = "valid" if split == "val" else split
+        if normalized_split not in {"train", "valid", "test"}:
+            raise ValueError(f"Unsupported pretrain subset split: {split}")
+
+        split_path = UPath(split_dir) / f"{normalized_split}.csv"
+        split_df = pd.read_csv(str(split_path))
+        if "sample_index" not in split_df.columns:
+            raise ValueError(f"Split CSV {split_path} must contain sample_index")
+
+        position_by_h5_idx = {
+            int(h5_idx): position
+            for position, h5_idx in enumerate(dataset.sample_indices.tolist())
+        }
+        positions: list[int] = []
+        matched_rows: list[pd.Series] = []
+        for _, row in split_df.iterrows():
+            sample_index = int(row["sample_index"])
+            if sample_index not in position_by_h5_idx:
+                continue
+            positions.append(position_by_h5_idx[sample_index])
+            matched_rows.append(row)
+        if not positions:
+            raise ValueError(f"Split CSV {split_path} produced no usable samples")
+        skipped = len(split_df) - len(positions)
+        if skipped:
+            logger.warning(
+                "Split CSV %s: skipped %d/%d rows whose sample_index is absent "
+                "from the dataset after input-modality filtering.",
+                split_path,
+                skipped,
+                len(split_df),
+            )
+        return np.asarray(positions, dtype=np.int64), pd.DataFrame(matched_rows)
+
+    @staticmethod
+    def _positions_from_split_csv(
+        dataset: OlmoEarthDataset,
+        split_dir: str,
+        split: str,
+    ) -> np.ndarray:
+        """Load split positions from a CSV of H5 sample indices."""
+        positions, _ = PretrainSubsetDataset._split_rows_from_split_csv(
+            dataset=dataset,
+            split_dir=split_dir,
+            split=split,
+        )
+        return positions
+
+    @staticmethod
     def _geographic_split_positions(
         latlons: np.ndarray,
         candidate_positions: np.ndarray,
@@ -208,17 +340,44 @@ class PretrainSubsetDataset(Dataset):
         shuffles the bins once before slicing them 80/10/10 into train/valid/test.
         This guarantees split disjointness while preserving geographic holdouts.
         """
-        if latlons is None:
-            raise ValueError(
-                "Dataset has no latlon_distribution; geographic split is unavailable."
-            )
+        split_positions = PretrainSubsetDataset._geographic_split_pool_positions(
+            latlons=latlons,
+            candidate_positions=candidate_positions,
+            split=split,
+            seed=seed,
+            bin_size_deg=bin_size_deg,
+            train_frac=train_frac,
+            valid_frac=valid_frac,
+        )
         split_sizes = {
             "train": train_samples,
             "valid": valid_samples,
             "val": valid_samples,
             "test": test_samples,
         }
-        if split not in split_sizes:
+        n_target = split_sizes[split]
+        if split_positions.size > n_target:
+            split_positions = np.random.RandomState(seed).permutation(split_positions)[
+                :n_target
+            ]
+        return np.asarray(split_positions, dtype=np.int64)
+
+    @staticmethod
+    def _geographic_split_pool_positions(
+        latlons: np.ndarray,
+        candidate_positions: np.ndarray,
+        split: str,
+        seed: int,
+        bin_size_deg: float = 5.0,
+        train_frac: float = 0.80,
+        valid_frac: float = 0.10,
+    ) -> np.ndarray:
+        """Assign candidates to geographic split buckets without sample caps."""
+        if latlons is None:
+            raise ValueError(
+                "Dataset has no latlon_distribution; geographic split is unavailable."
+            )
+        if split not in {"train", "valid", "val", "test"}:
             raise ValueError(f"Unsupported split for geographic strategy: {split}")
         if not (0.0 < train_frac < 1.0 and 0.0 < valid_frac < 1.0 - train_frac):
             raise ValueError(
@@ -249,9 +408,6 @@ class PretrainSubsetDataset(Dataset):
                 f"bin_size_deg or check latlon coverage."
             )
 
-        n_target = split_sizes[split]
-        if split_positions.size > n_target:
-            split_positions = bin_rng.permutation(split_positions)[:n_target]
         return np.asarray(split_positions, dtype=np.int64)
 
     @staticmethod
@@ -293,6 +449,69 @@ class PretrainSubsetDataset(Dataset):
         return selected.tolist()
 
     @staticmethod
+    def _random_split_pool_positions(
+        candidate_positions: np.ndarray,
+        split: str,
+        seed: int,
+        train_frac: float = 0.80,
+        valid_frac: float = 0.10,
+    ) -> np.ndarray:
+        """Assign candidates to random split buckets without sample caps."""
+        if split not in {"train", "valid", "val", "test"}:
+            raise ValueError(f"Unsupported pretrain subset split: {split}")
+        if not (0.0 < train_frac < 1.0 and 0.0 < valid_frac < 1.0 - train_frac):
+            raise ValueError(
+                f"Invalid bucket fractions train={train_frac}, valid={valid_frac}"
+            )
+
+        shuffled = np.random.RandomState(seed).permutation(candidate_positions)
+        train_end = int(len(shuffled) * train_frac)
+        valid_end = train_end + int(len(shuffled) * valid_frac)
+        normalized_split = "valid" if split == "val" else split
+        split_to_slice = {
+            "train": slice(0, train_end),
+            "valid": slice(train_end, valid_end),
+            "test": slice(valid_end, len(shuffled)),
+        }
+        split_positions = shuffled[split_to_slice[normalized_split]]
+        if split_positions.size == 0:
+            raise ValueError(
+                f"Random split '{split}' produced no samples; total={len(shuffled)}"
+            )
+        return np.asarray(split_positions, dtype=np.int64)
+
+    @staticmethod
+    def _target_size_for_split(
+        split: str,
+        train_samples: int,
+        valid_samples: int,
+        test_samples: int,
+    ) -> int:
+        """Return the configured sample cap for a split name."""
+        split_sizes = {
+            "train": train_samples,
+            "valid": valid_samples,
+            "val": valid_samples,
+            "test": test_samples,
+        }
+        if split not in split_sizes:
+            raise ValueError(f"Unsupported pretrain subset split: {split}")
+        return split_sizes[split]
+
+    @staticmethod
+    def _multi_hot_osm_presence(label_ids: str) -> torch.Tensor:
+        """Convert a split CSV label-id string into a multi-hot OSM target."""
+        target = torch.zeros(OSM_NUM_CLASSES, dtype=torch.long)
+        for label_id in label_ids.split():
+            class_id = int(label_id)
+            if not 0 <= class_id < OSM_NUM_CLASSES:
+                raise ValueError(
+                    f"OSM class id {class_id} outside [0, {OSM_NUM_CLASSES})"
+                )
+            target[class_id] = 1
+        return target
+
+    @staticmethod
     def _squeeze_label(label: torch.Tensor) -> torch.Tensor:
         """Remove singleton batch/time/channel axes from pretrain target arrays."""
         label = label.squeeze()
@@ -317,7 +536,9 @@ class PretrainSubsetDataset(Dataset):
         return mapped
 
     @staticmethod
-    def _osm_label(label: torch.Tensor) -> torch.Tensor:
+    def _osm_label(
+        label: torch.Tensor, class_ids: list[int] | None = None
+    ) -> torch.Tensor:
         """Convert multi-channel OSM raster labels to a single class id per pixel."""
         label = label.float().squeeze()
         if label.ndim != 3:
@@ -330,7 +551,14 @@ class PretrainSubsetDataset(Dataset):
             channels_last = label
         valid = channels_last.sum(dim=-1) > 0
         classes = channels_last.argmax(dim=-1).long()
-        return classes.masked_fill(~valid, -1)
+        classes = classes.masked_fill(~valid, SEGMENTATION_IGNORE_LABEL)
+        if class_ids is None:
+            return classes
+
+        remapped = torch.full_like(classes, SEGMENTATION_IGNORE_LABEL)
+        for new_class_id, raw_class_id in enumerate(class_ids):
+            remapped[classes == raw_class_id] = new_class_id
+        return remapped
 
     @staticmethod
     def _srtm_label(label: torch.Tensor) -> torch.Tensor:
@@ -383,7 +611,7 @@ class PretrainSubsetDataset(Dataset):
         if self.target_modality == WORLDCOVER_TARGET_MODALITY:
             return self._worldcover_label(label)
         if self.target_modality == OSM_TARGET_MODALITY:
-            return self._osm_label(label)
+            return self._osm_label(label, self.osm_class_ids)
         if self.target_modality == SRTM_TARGET_MODALITY:
             return self._srtm_label(label)
         if self.target_modality == WRI_CANOPY_TARGET_MODALITY:
@@ -445,4 +673,8 @@ class PretrainSubsetDataset(Dataset):
         )
         _, sample = self._dataset[args]
         masked = self._missing_aware_masked_sample(sample)
+        if self._tile_class_labels is not None:
+            return masked, torch.tensor(self._tile_class_labels[idx], dtype=torch.long)
+        if self._tile_presence_labels is not None:
+            return masked, self._tile_presence_labels[idx]
         return masked, self._get_label(args)

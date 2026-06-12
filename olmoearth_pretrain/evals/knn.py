@@ -36,6 +36,8 @@ def run_knn(
     bootstrap_seed: int = 42,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    val_macro_class_ids: list[int] | None = None,
+    test_macro_class_ids: list[int] | None = None,
 ) -> EvalTaskResult:
     """Run KNN on the OlmoEarth Pretrain model.
 
@@ -54,6 +56,10 @@ def run_knn(
         bootstrap_seed: Random seed for bootstrap sampling
         primary_metric: Override the default primary metric (None = task default)
         primary_metric_class: Class index for CLASS_F1 primary metric
+        val_macro_class_ids: Optional class ids to average for validation macro
+            metrics. When None, falls back to classes present in val_labels.
+        test_macro_class_ids: Optional class ids to average for test macro
+            metrics. When None, falls back to classes present in test_labels.
 
     Returns:
         Dictionary with keys:
@@ -78,8 +84,10 @@ def run_knn(
             predictions=val_predictions,
             labels=val_labels,
             is_multilabel=False,
+            num_classes=config.num_classes,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
+            macro_class_ids=val_macro_class_ids,
         )
 
         if test_embeddings is not None:
@@ -98,8 +106,10 @@ def run_knn(
                 predictions=test_predictions,
                 labels=test_labels,
                 is_multilabel=False,
+                num_classes=config.num_classes,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
+                macro_class_ids=test_macro_class_ids,
             )
 
             # Perform bootstrap sampling if requested
@@ -166,8 +176,10 @@ def run_knn(
             predictions=val_predictions,
             labels=val_labels,
             is_multilabel=True,
+            num_classes=config.num_classes,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
+            macro_class_ids=val_macro_class_ids,
         )
 
         if len(test_predictions) > 0:
@@ -178,8 +190,10 @@ def run_knn(
                 predictions=test_predictions,
                 labels=test_labels,
                 is_multilabel=True,
+                num_classes=config.num_classes,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
+                macro_class_ids=test_macro_class_ids,
             )
 
             # Perform bootstrap sampling if requested

@@ -283,6 +283,40 @@ class TestSegmentationMetrics:
             assert isinstance(result.metrics[key], float)
             assert 0.0 <= result.metrics[key] <= 1.0
 
+    def test_macro_class_ids_exclude_unlabeled_classes(self) -> None:
+        """Configured classes should define macro-F1 averaging and logged F1s."""
+        preds = torch.tensor([[[0, 0], [0, 0]]], dtype=torch.long)
+        labels = torch.tensor([[[0, 0], [0, 0]]], dtype=torch.long)
+        result = segmentation_metrics(
+            preds,
+            labels,
+            num_classes=3,
+            macro_class_ids=[0],
+        )
+
+        assert result.metrics["macro_f1"] == pytest.approx(1.0)
+        assert result.metrics["f1_class_0"] == pytest.approx(1.0)
+        assert "f1_class_1" not in result.metrics
+
+    def test_macro_class_ids_apply_to_miou(self) -> None:
+        """Miou should average over the configured class set, like macro_f1."""
+        # Class 0 perfect, class 1 absent (iou 0), class 2 perfect.
+        preds = torch.tensor([[[0, 2], [0, 2]]], dtype=torch.long)
+        labels = torch.tensor([[[0, 2], [0, 2]]], dtype=torch.long)
+
+        # Default: only classes with support (0, 2) -> miou 1.0
+        default_result = segmentation_metrics(preds, labels, num_classes=3)
+        assert default_result.metrics["miou"] == pytest.approx(1.0)
+
+        # Configured over {0, 1, 2}: class 1 has iou 0 -> miou 2/3.
+        configured_result = segmentation_metrics(
+            preds,
+            labels,
+            num_classes=3,
+            macro_class_ids=[0, 1, 2],
+        )
+        assert configured_result.metrics["miou"] == pytest.approx(2.0 / 3.0)
+
 
 class TestClassificationMetrics:
     """Tests for classification_metrics function."""
@@ -298,6 +332,23 @@ class TestClassificationMetrics:
         assert "macro_f1" in result.metrics
         assert "f1_class_0" in result.metrics
         assert "f1_class_1" in result.metrics
+
+    def test_single_label_classification_with_missing_classes(self) -> None:
+        """Configured macro classes define averaging and logged F1s."""
+        preds = torch.tensor([0, 0, 0, 0], dtype=torch.long)
+        labels = torch.tensor([0, 0, 0, 0], dtype=torch.long)
+        result = classification_metrics(
+            preds,
+            labels,
+            is_multilabel=False,
+            num_classes=3,
+            macro_class_ids=[0, 1],
+        )
+
+        assert result.metrics["macro_f1"] == pytest.approx(0.5)
+        assert result.metrics["f1_class_0"] == pytest.approx(1.0)
+        assert result.metrics["f1_class_1"] == pytest.approx(0.0)
+        assert "f1_class_2" not in result.metrics
 
     def test_multilabel_classification(self) -> None:
         """Multilabel metrics should include exact-match accuracy and micro F1."""

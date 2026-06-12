@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import sys
+from importlib.resources import files
 from logging import getLogger
 from typing import Any
 
@@ -17,7 +18,9 @@ from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.evals.class_support import EvalLabeledClassMode
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.datasets.pretrain_subset import PretrainSplitStrategy
 from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
 from olmoearth_pretrain.internal.experiment import (
@@ -418,6 +421,26 @@ PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset
 # osmbig keeps WorldCover/OSM/SRTM probes out-of-sample. The other map
 # modalities (CDL, WORLDCEREAL, WRI canopy) aren't present in osmbig, so their
 # probes fall back to PRETRAIN_SUBSET_H5PY_DIR (in-distribution).
+PRESTO_OSM_EVAL_H5PY_DIR = "/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/469728"
+PRESTO_OSM_BALANCED_SPLITS_DIR = str(
+    files("olmoearth_pretrain.evals.datasets").joinpath("splits/presto_osm_balanced")
+)
+PRESTO_OSM_DIVERSE_CONTEXT_CLASS_IDS = [
+    1,
+    3,
+    4,
+    12,
+    13,
+    17,
+    19,
+    20,
+    21,
+    22,
+    23,
+    26,
+    27,
+    29,
+]
 PRETRAIN_AUX_EVAL_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/65536"
 
 MAP_MODALITY_PROBE_INPUTS = [
@@ -439,8 +462,12 @@ def _map_modality_probe(
     target_modality: str,
     primary_metric: EvalMetric,
     h5py_dir: str,
-    split_strategy: str = "random",
+    split_strategy: PretrainSplitStrategy = PretrainSplitStrategy.RANDOM,
     input_modalities: list[str] | None = None,
+    split_dir: str | None = None,
+    eval_labeled_class_mode: EvalLabeledClassMode = EvalLabeledClassMode.PIXELS,
+    eval_labeled_classes: list[int] | None = None,
+    eval_mode: EvalMode = EvalMode.LINEAR_PROBE,
 ) -> DownstreamTaskConfig:
     """Build a uniform DownstreamTaskConfig for a decode-only map modality probe."""
     return DownstreamTaskConfig(
@@ -455,7 +482,7 @@ def _map_modality_probe(
         if input_modalities is not None
         else MAP_MODALITY_PROBE_INPUTS,
         epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
+        eval_mode=eval_mode,
         probe_lr=0.01,
         primary_metric=primary_metric,
         h5py_dir=h5py_dir,
@@ -464,6 +491,9 @@ def _map_modality_probe(
         pretrain_valid_samples=3072,
         pretrain_test_samples=3072,
         pretrain_split_strategy=split_strategy,
+        pretrain_split_dir=split_dir,
+        eval_labeled_class_mode=eval_labeled_class_mode,
+        eval_labeled_classes=eval_labeled_classes,
     )
 
 
@@ -514,42 +544,42 @@ EVAL_TASKS.update(
             target_modality=Modality.WORLDCOVER.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
-            split_strategy="geographic",
+            split_strategy=PretrainSplitStrategy.GEOGRAPHIC,
         ),
         f"pretrain_osm_probe_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_osm",
             target_modality=Modality.OPENSTREETMAP_RASTER.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
-            split_strategy="geographic",
+            split_strategy=PretrainSplitStrategy.GEOGRAPHIC,
         ),
         f"pretrain_srtm_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_srtm",
             target_modality=Modality.SRTM.name,
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
-            split_strategy="geographic",
+            split_strategy=PretrainSplitStrategy.GEOGRAPHIC,
         ),
         f"pretrain_canopy_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_canopy",
             target_modality=Modality.WRI_CANOPY_HEIGHT_MAP.name,
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
-            split_strategy="geographic",
+            split_strategy=PretrainSplitStrategy.GEOGRAPHIC,
         ),
         f"pretrain_cdl_probe_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_cdl",
             target_modality=Modality.CDL.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
-            split_strategy="geographic",
+            split_strategy=PretrainSplitStrategy.GEOGRAPHIC,
         ),
         f"pretrain_worldcereal_probe_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_worldcereal",
             target_modality=Modality.WORLDCEREAL.name,
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
-            split_strategy="geographic",
+            split_strategy=PretrainSplitStrategy.GEOGRAPHIC,
         ),
         # SRTM elevation regression from S1-only and S2+S1 inputs, so we can
         # compare elevation signal across modality combinations.
@@ -569,11 +599,42 @@ EVAL_TASKS.update(
                 target_modality=Modality.SRTM.name,
                 primary_metric=EvalMetric.NEG_RMSE,
                 h5py_dir=PRETRAIN_AUX_EVAL_H5PY_DIR,
-                split_strategy="geographic",
+                split_strategy=PretrainSplitStrategy.GEOGRAPHIC,
                 input_modalities=inputs,
             )
             for inputs in SRTM_PROBE_INPUT_VARIANTS
         },
+        # Class-balanced OSM raster probes built from cached Presto label
+        # metadata. Tile selection is label-aware (base / diverse-context /
+        # rare-class variants); filter to these with tasks_to_run when desired.
+        # base_balanced and rare_class_focused use per-pixel segmentation;
+        # diverse_context uses tile-level multi-label classification from split CSVs.
+        "presto_osm_populous12_seg_probe_sentinel2_l2a": _map_modality_probe(
+            dataset="pretrain_subset_osm_populous12",
+            target_modality=Modality.OPENSTREETMAP_RASTER.name,
+            primary_metric=EvalMetric.MACRO_F1,
+            h5py_dir=PRESTO_OSM_EVAL_H5PY_DIR,
+            split_dir=f"{PRESTO_OSM_BALANCED_SPLITS_DIR}/osm_base_balanced",
+            eval_labeled_classes=list(range(12)),
+        ),
+        "presto_osm_diverse_context_probe_sentinel2_l2a": _map_modality_probe(
+            dataset="pretrain_subset_osm_tile_presence",
+            target_modality=Modality.OPENSTREETMAP_RASTER.name,
+            primary_metric=EvalMetric.MACRO_F1,
+            h5py_dir=PRESTO_OSM_EVAL_H5PY_DIR,
+            split_dir=f"{PRESTO_OSM_BALANCED_SPLITS_DIR}/osm_diverse_context",
+            eval_labeled_class_mode=EvalLabeledClassMode.TILE_PRESENCE,
+            eval_labeled_classes=PRESTO_OSM_DIVERSE_CONTEXT_CLASS_IDS,
+            eval_mode=EvalMode.KNN,
+        ),
+        "presto_osm_rare4_seg_probe_sentinel2_l2a": _map_modality_probe(
+            dataset="pretrain_subset_osm_rare4",
+            target_modality=Modality.OPENSTREETMAP_RASTER.name,
+            primary_metric=EvalMetric.MACRO_F1,
+            h5py_dir=PRESTO_OSM_EVAL_H5PY_DIR,
+            split_dir=f"{PRESTO_OSM_BALANCED_SPLITS_DIR}/osm_rare_class_focused",
+            eval_labeled_classes=list(range(4)),
+        ),
         # Embedding diagnostics on standard downstream datasets, so we can track
         # representation quality (effective rank / norm / cosine stats) on real
         # eval distributions alongside the probe metrics.
