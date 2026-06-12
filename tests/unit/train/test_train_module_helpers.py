@@ -266,11 +266,16 @@ def test_run_masked_microbatches_warn_break_skips_nonfinite_backward() -> None:
 
 def test_run_masked_microbatches_warn_continue_logs_skip_message(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Warn-continue mode should skip one backward pass without stopping the batch."""
     module = _module(rank_microbatch_size=2)
     param = torch.nn.Parameter(torch.tensor(1.0))
     seen: list[int] = []
+    monkeypatch.setattr(
+        "olmoearth_pretrain.train.train_module.train_module.get_local_rank",
+        lambda: 7,
+    )
 
     def step(
         microbatches: tuple[MaskedOlmoEarthSample, ...], microbatch_idx: int
@@ -285,6 +290,7 @@ def test_run_masked_microbatches_warn_continue_logs_skip_message(
             _sample(6),
             step,
             nonfinite_behavior="warn_continue",
+            log_rank_on_nonfinite=True,
         )
 
     assert seen == [0, 1, 2]
@@ -292,6 +298,7 @@ def test_run_masked_microbatches_warn_continue_logs_skip_message(
     assert param.grad is not None
     assert param.grad.item() == pytest.approx(4.0)
     assert "skipping backward for this microbatch" in caplog.text
+    assert "Rank 7 has NaN or Inf loss" in caplog.text
     assert "stopping training for this batch" not in caplog.text
 
 

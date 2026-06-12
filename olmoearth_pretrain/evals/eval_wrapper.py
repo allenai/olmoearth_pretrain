@@ -191,8 +191,8 @@ class TerramindEvalWrapper(_PooledAdapterEvalWrapper):
     """Wrapper for Terramind models."""
 
 
-class PanopticonEvalWrapper(EvalWrapper):
-    """Wrapper for Panopticon models."""
+class _ForwardFeaturesWhenSpatialEvalWrapper(EvalWrapper):
+    """Base wrapper for adapters that expose dense features separately."""
 
     def __call__(
         self,
@@ -202,7 +202,6 @@ class PanopticonEvalWrapper(EvalWrapper):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         if self.spatial_pool:
-            # Intermediate features are not yet working because of some bug internal to the model
             batch_embeddings = self.model.forward_features(
                 masked_olmoearth_sample, pooling=self.pooling_type
             )
@@ -211,6 +210,10 @@ class PanopticonEvalWrapper(EvalWrapper):
                 masked_olmoearth_sample, pooling=self.pooling_type
             )
         return batch_embeddings, labels
+
+
+class PanopticonEvalWrapper(_ForwardFeaturesWhenSpatialEvalWrapper):
+    """Wrapper for Panopticon models."""
 
 
 class GalileoEvalWrapper(_PooledAdapterEvalWrapper):
@@ -276,30 +279,8 @@ class PrestoEvalWrapper(_PooledAdapterEvalWrapper):
     """Wrapper for Presto model."""
 
 
-class DINOv3EvalWrapper(EvalWrapper):
+class DINOv3EvalWrapper(_ForwardFeaturesWhenSpatialEvalWrapper):
     """Wrapper for DINOv3 models."""
-
-    def __call__(
-        self,
-        masked_olmoearth_sample: MaskedOlmoEarthSample,
-        labels: torch.Tensor,
-        is_train: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass through the model produces the embedding specified by initialization."""
-        # i need to do the apply imagenet normalizer thing in here
-        if self.spatial_pool:
-            # Intermediate features are not yet working because of some bug internal to the model
-            batch_embeddings = self.model.forward_features(
-                masked_olmoearth_sample,
-                pooling=self.pooling_type,
-            )
-        else:
-            # Should this call the model directly?
-            batch_embeddings = self.model(
-                masked_olmoearth_sample,
-                pooling=self.pooling_type,
-            )
-        return batch_embeddings, labels
 
 
 class SatlasEvalWrapper(_PooledAdapterEvalWrapper):

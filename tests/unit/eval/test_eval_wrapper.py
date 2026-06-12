@@ -8,8 +8,10 @@ from olmoearth_pretrain.evals.datasets.configs import TaskType
 from olmoearth_pretrain.evals.eval_wrapper import (
     ClayEvalWrapper,
     CromaEvalWrapper,
+    DINOv3EvalWrapper,
     EvalWrapper,
     GalileoEvalWrapper,
+    PanopticonEvalWrapper,
     PrestoEvalWrapper,
     PrithviV2EvalWrapper,
     SatlasEvalWrapper,
@@ -35,6 +37,28 @@ class _RecordingAdapter(nn.Module):
         spatial_pool: bool,
     ) -> torch.Tensor:
         self.calls.append((sample, pooling, spatial_pool))
+        return self.embeddings
+
+
+class _ForwardFeaturesAdapter(nn.Module):
+    """Minimal adapter that records which embedding method was called."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.embeddings = torch.ones(2, 3)
+        self.calls: list[tuple[str, object, PoolingType]] = []
+
+    def forward(self, sample: object, *, pooling: PoolingType) -> torch.Tensor:
+        self.calls.append(("forward", sample, pooling))
+        return self.embeddings
+
+    def forward_features(
+        self,
+        sample: object,
+        *,
+        pooling: PoolingType,
+    ) -> torch.Tensor:
+        self.calls.append(("forward_features", sample, pooling))
         return self.embeddings
 
 
@@ -96,3 +120,34 @@ def test_adapter_wrapper_spatial_pool_follows_task_type(
     wrapper(object(), torch.arange(2))
 
     assert model.calls[0][2] is expected_spatial_pool
+
+
+@pytest.mark.parametrize("wrapper_class", [PanopticonEvalWrapper, DINOv3EvalWrapper])
+@pytest.mark.parametrize(
+    ("task_type", "expected_call"),
+    [
+        (TaskType.CLASSIFICATION, "forward"),
+        (TaskType.SEGMENTATION, "forward_features"),
+    ],
+)
+def test_forward_features_wrappers_use_dense_features_for_spatial_tasks(
+    wrapper_class: type[EvalWrapper],
+    task_type: TaskType,
+    expected_call: str,
+) -> None:
+    """Some adapters use a separate dense-feature path for spatial tasks."""
+    model = _ForwardFeaturesAdapter()
+    wrapper = wrapper_class(
+        model=model,
+        task_type=task_type,
+        patch_size=8,
+        pooling_type=PoolingType.MEAN,
+    )
+    sample = object()
+    labels = torch.arange(2)
+
+    embeddings, returned_labels = wrapper(sample, labels)
+
+    assert embeddings is model.embeddings
+    assert returned_labels is labels
+    assert model.calls == [(expected_call, sample, PoolingType.MEAN)]

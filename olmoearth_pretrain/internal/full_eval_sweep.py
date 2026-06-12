@@ -546,6 +546,19 @@ def _get_model_size_args(model: BaselineModelName | None, size: str | None) -> s
     return ""
 
 
+def _get_model_sizes(
+    model: BaselineModelName | None,
+    requested_size: str | None,
+    all_sizes: bool,
+) -> list[str | None]:
+    """Return the model sizes that should be swept."""
+    if requested_size is not None:
+        return [requested_size]
+    if all_sizes and model in MODELS_WITH_MULTIPLE_SIZES:
+        return list(MODELS_WITH_MULTIPLE_SIZES[model])
+    return [None]
+
+
 def _get_load_checkpoints_args(model: BaselineModelName | None) -> str:
     """Get the no checkpoints arguments."""
     if model is None:
@@ -1046,17 +1059,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             models = [args.model]
         for model in models:
             args.model = model
-            if args.size is not None:
-                model_sizes = [args.size]
-            else:
-                model_sizes = (
-                    MODELS_WITH_MULTIPLE_SIZES.get(
-                        args.model,
-                        [None],  # type: ignore # TODO: Fix this
-                    )
-                    if args.all_sizes
-                    else [None]
-                )
+            model_sizes = _get_model_sizes(args.model, args.size, args.all_sizes)
 
             for size in model_sizes:
                 base_run_name = _get_base_run_name(args, size)

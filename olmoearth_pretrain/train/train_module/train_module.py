@@ -748,7 +748,10 @@ class OlmoEarthTrainModule(TrainModule):
                         )
                     if nonfinite_behavior in ("warn_continue", "warn_break"):
                         if log_rank_on_nonfinite:
-                            print(f"rank {get_local_rank()} has nan or inf")
+                            logger.warning(
+                                "Rank %s has NaN or Inf loss in this microbatch.",
+                                get_local_rank(),
+                            )
                     if nonfinite_behavior == "warn_break":
                         break
                     if nonfinite_behavior == "warn_continue":

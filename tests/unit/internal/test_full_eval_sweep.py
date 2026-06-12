@@ -17,6 +17,7 @@ from olmoearth_pretrain.internal.full_eval_sweep import (
     _MODEL_SWEEP_SPECS,
     LP_LRs,
     Normalization_MODES,
+    _get_model_sizes,
     _get_normalization_args,
     _model_uses_dataset_norm_only,
     build_commands,
@@ -266,6 +267,15 @@ class TestModelSpecificArgs:
         assert "use_pretrained_normalizer=True" in pre_trained_args
         assert "norm_method=NormMethod.NORM_NO_CLIP_2_STD" in dataset_args
         assert "use_pretrained_normalizer=False" in dataset_args
+
+    def test_get_model_sizes_prefers_requested_size_then_all_sizes(self) -> None:
+        """Model-size selection should be explicit and type-stable."""
+        assert _get_model_sizes(BaselineModelName.CROMA, "large", True) == ["large"]
+        assert _get_model_sizes(BaselineModelName.CROMA, None, True) == [
+            "base",
+            "large",
+        ]
+        assert _get_model_sizes(BaselineModelName.CROMA, None, False) == [None]
 
     def test_get_dino_v3_args(self) -> None:
         """Test DinoV3 argument generation."""
