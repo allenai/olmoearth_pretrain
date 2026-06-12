@@ -684,16 +684,16 @@
       "norm_stats": {
         "sentinel1": {
           "vh": {
-            "max": null,
-            "mean": null,
-            "min": null,
-            "std": null
+            "max": 2.366774082183838,
+            "mean": -17.61262012209996,
+            "min": -100.0,
+            "std": 4.988398732848629
           },
           "vv": {
-            "max": null,
-            "mean": null,
-            "min": null,
-            "std": null
+            "max": 16.83840560913086,
+            "mean": -11.275455541266524,
+            "min": -100.0,
+            "std": 5.033590648648933
           }
         },
         "sentinel2_l2a": {
