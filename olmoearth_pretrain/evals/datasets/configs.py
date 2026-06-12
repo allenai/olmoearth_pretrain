@@ -355,8 +355,9 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         num_classes=3,
         is_multilabel=False,
         height_width=512,
-        supported_modalities=[Modality.SENTINEL2_L2A.name],
-        source_imagery=[SourceImagery.GRAYSCALE_AERIAL],
+        # CaFFe is SAR (primarily Sentinel-1) glacier imagery, not optical.
+        supported_modalities=[Modality.SENTINEL1.name],
+        source_imagery=[SourceImagery.SENTINEL1],
     ),
     "gb2-cloudsen12": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,

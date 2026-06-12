@@ -165,13 +165,16 @@ def _sample_to_olmoearth(
     device = next(iter(sample.values())).device
 
     if slug == Slug.CAFFE:
-        # Grayscale aerial [0–255]; broadcast to all 12 S2 channels and rescale
-        # to S2 DN range so the OlmoEarth normalizer (mean ~1188) sees valid signal.
-        filled = sample["image"].float()[:1].repeat(len(_S2_ORDER), 1, 1)
-        filled = filled * (_S2_DN_MAX / _UINT8_MAX)
-        hwtc = _bchw_to_hwtc(filled)
+        # CaFFe is SAR imagery (primarily Sentinel-1), single-channel amplitude in
+        # [0–255]. Treat it as Sentinel-1: grayscale -> VV, with VH left as a zero
+        # (dropped) channel that is re-zeroed after normalization. The 0–255 scale
+        # is reconciled by normalization (OlmoEarth S1 stats, or the dataset's own
+        # stats when norm_stats_from_pretrained=False).
+        gray = sample["image"].float()[:1]  # (1, H, W)
+        s1 = torch.cat([gray, torch.zeros_like(gray)], dim=0)  # (2, H, W) = [vv, vh]
+        hwtc = _bchw_to_hwtc(s1)
         return OlmoEarthSample(
-            sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device)
+            sentinel1=hwtc, timestamps=_timestamps(hwtc.shape[2], device)
         )
 
     if slug in (Slug.BURN_SCARS, Slug.CLOUDSEN12, Slug.SPACENET7):
