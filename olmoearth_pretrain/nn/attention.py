@@ -10,6 +10,17 @@ from einops import rearrange
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
 
+from olmoearth_pretrain.nn.encodings import (
+    SpatialPosEncoding,
+    apply_2d_axial_rope,
+    apply_2d_mixed_rope,
+    apply_3d_axial_rope,
+    apply_3d_mixed_rope,
+    axial_3d_dim_split,
+    init_2d_mixed_rope_freqs,
+    init_3d_mixed_rope_freqs,
+)
+
 try:
     import flash_attn
 except ImportError:
@@ -110,6 +121,11 @@ class Attention(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
+        spatial_pos_encoding: str = SpatialPosEncoding.ABSOLUTE,
+        rope_base: float = 10000.0,
+        rope_mixed_base: float = 10.0,
+        temporal_rope_dim_frac: float = 0.25,
+        rope_temporal_base: float | None = None,
     ) -> None:
         """Initialize the attention module.
 
@@ -123,15 +139,66 @@ class Attention(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Enable cross-attention
             use_flash_attn: Use flash attention
+            spatial_pos_encoding: Spatial position encoding mode. RoPE is applied
+                to queries/keys for the ``rope``, ``rope_mixed``, ``rope_3d``, and
+                ``rope_3d_mixed`` modes; other modes leave q/k unrotated.
+            rope_base: RoPE frequency base (axial; spatial axes for 3D)
+            rope_mixed_base: Frequency base used to initialize the learnable
+                RoPE-Mixed frequencies.
+            temporal_rope_dim_frac: Fraction of head_dim allocated to the
+                temporal chunk in axial 3D RoPE (default 0.25, matching the
+                additive 1/4 split used by absolute encodings).
+            rope_temporal_base: Optional separate frequency base for the
+                temporal axis in axial 3D RoPE. ``None`` reuses ``rope_base``.
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
+        if (
+            SpatialPosEncoding.is_2d_rope(spatial_pos_encoding)
+            and self.head_dim % 4 != 0
+        ):
+            raise ValueError(
+                f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "
+                f"got {self.head_dim}"
+            )
+        if spatial_pos_encoding == SpatialPosEncoding.AXIAL_3D_ROPE:
+            # Validate the split is feasible at construction time.
+            axial_3d_dim_split(self.head_dim, temporal_rope_dim_frac)
+        if (
+            spatial_pos_encoding == SpatialPosEncoding.MIXED_3D_ROPE
+            and self.head_dim % 4 != 0
+        ):
+            raise ValueError(
+                f"3D RoPE-Mixed requires head_dim divisible by 4, got {self.head_dim}"
+            )
         self.scale = self.head_dim**-0.5
 
         self.cross_attn = cross_attn
         self.use_flash_attn = use_flash_attn
+        self.spatial_pos_encoding = spatial_pos_encoding
+        self.rope_base = rope_base
+        self.rope_mixed_base = rope_mixed_base
+        self.temporal_rope_dim_frac = temporal_rope_dim_frac
+        self.rope_temporal_base = rope_temporal_base
+        self.rope_mixed_freqs: nn.Parameter | None = None
+        if spatial_pos_encoding == SpatialPosEncoding.MIXED_2D_ROPE:
+            self.rope_mixed_freqs = nn.Parameter(
+                init_2d_mixed_rope_freqs(
+                    head_dim=self.head_dim,
+                    num_heads=self.num_heads,
+                    base=self.rope_mixed_base,
+                )
+            )
+        elif spatial_pos_encoding == SpatialPosEncoding.MIXED_3D_ROPE:
+            self.rope_mixed_freqs = nn.Parameter(
+                init_3d_mixed_rope_freqs(
+                    head_dim=self.head_dim,
+                    num_heads=self.num_heads,
+                    base=self.rope_mixed_base,
+                )
+            )
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
         self.q = nn.Linear(dim, dim, bias=qkv_bias)
         self.k = nn.Linear(dim, dim, bias=qkv_bias)
@@ -171,7 +238,6 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
-
         Returns:
             Output tensor of shape (B, H, N, D)
         """
@@ -227,6 +293,8 @@ class Attention(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
+        rope_positions: torch.Tensor | None = None,
+        rope_positions_y: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -240,6 +308,10 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
+            rope_positions: Optional RoPE coordinates for x/query tokens:
+                ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
+            rope_positions_y: Optional RoPE coordinates for y/key tokens:
+                ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
 
         Returns:
             Output tensor of shape (B, N, C) or (B* N , C) if packed
@@ -268,6 +340,38 @@ class Attention(nn.Module):
         # logger.info(f"q shape: {q.shape} k shape: {k.shape} v shape: {v.shape}")
 
         q, k = self.q_norm(q), self.k_norm(k)
+        if SpatialPosEncoding.is_rope(self.spatial_pos_encoding):
+            if rope_positions is None:
+                raise ValueError("rope_positions must be provided when RoPE is enabled")
+            k_positions = rope_positions if y is None else rope_positions_y
+            if k_positions is None:
+                raise ValueError(
+                    "rope_positions_y must be provided for cross attention with RoPE"
+                )
+            if self.spatial_pos_encoding == SpatialPosEncoding.AXIAL_2D_ROPE:
+                q = apply_2d_axial_rope(q, rope_positions, base=self.rope_base)
+                k = apply_2d_axial_rope(k, k_positions, base=self.rope_base)
+            elif self.spatial_pos_encoding == SpatialPosEncoding.MIXED_2D_ROPE:
+                q = apply_2d_mixed_rope(q, rope_positions, self.rope_mixed_freqs)
+                k = apply_2d_mixed_rope(k, k_positions, self.rope_mixed_freqs)
+            elif self.spatial_pos_encoding == SpatialPosEncoding.AXIAL_3D_ROPE:
+                q = apply_3d_axial_rope(
+                    q,
+                    rope_positions,
+                    base=self.rope_base,
+                    temporal_dim_frac=self.temporal_rope_dim_frac,
+                    temporal_base=self.rope_temporal_base,
+                )
+                k = apply_3d_axial_rope(
+                    k,
+                    k_positions,
+                    base=self.rope_base,
+                    temporal_dim_frac=self.temporal_rope_dim_frac,
+                    temporal_base=self.rope_temporal_base,
+                )
+            else:
+                q = apply_3d_mixed_rope(q, rope_positions, self.rope_mixed_freqs)
+                k = apply_3d_mixed_rope(k, k_positions, self.rope_mixed_freqs)
         x = self.sdpa(
             q,
             k,
@@ -456,6 +560,11 @@ class Block(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
+        spatial_pos_encoding: str = SpatialPosEncoding.ABSOLUTE,
+        rope_base: float = 10000.0,
+        rope_mixed_base: float = 10.0,
+        temporal_rope_dim_frac: float = 0.25,
+        rope_temporal_base: float | None = None,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -473,6 +582,14 @@ class Block(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Whether to use cross attention
             use_flash_attn: Whether to use flash attention
+            spatial_pos_encoding: Spatial position encoding mode passed through
+                to attention, which applies the matching RoPE variant to q/k.
+            rope_base: RoPE frequency base (axial)
+            rope_mixed_base: Frequency base for RoPE-Mixed initialization.
+            temporal_rope_dim_frac: Fraction of head_dim allocated to the
+                temporal chunk in axial 3D RoPE.
+            rope_temporal_base: Optional separate frequency base for the
+                temporal axis in axial 3D RoPE. ``None`` reuses ``rope_base``.
         """
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -486,6 +603,11 @@ class Block(nn.Module):
             norm_layer=norm_layer,
             cross_attn=cross_attn,
             use_flash_attn=use_flash_attn,
+            spatial_pos_encoding=spatial_pos_encoding,
+            rope_base=rope_base,
+            rope_mixed_base=rope_mixed_base,
+            temporal_rope_dim_frac=temporal_rope_dim_frac,
+            rope_temporal_base=rope_temporal_base,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -514,6 +636,8 @@ class Block(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
+        rope_positions: torch.Tensor | None = None,
+        rope_positions_y: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -527,6 +651,10 @@ class Block(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
+            rope_positions: Optional RoPE coordinates for x/query tokens:
+                ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
+            rope_positions_y: Optional RoPE coordinates for y/key tokens:
+                ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
 
         Returns:
             Output tensor of shape (B, N, C)
@@ -543,6 +671,8 @@ class Block(nn.Module):
                     max_seqlen_q=max_seqlen_q,
                     max_seqlen_k=max_seqlen_k,
                     attn_mask=attn_mask,
+                    rope_positions=rope_positions,
+                    rope_positions_y=rope_positions_y,
                 )
             )
         )
