@@ -210,7 +210,7 @@ class PASTISRProcessor:
                 else:
                     doesnt_have_twelve += 1
 
-        print(f"doesnt_have_twelve: {doesnt_have_twelve}")  # We got 0!
+        logger.info("PASTIS samples without twelve months: %s", doesnt_have_twelve)
 
         for fold_idx in range(1, 6):
             fold_key = f"fold_{fold_idx}"
@@ -246,8 +246,8 @@ class PASTISRProcessor:
 
             torch.save(data["months"], split_dir / "months.pt")
             torch.save(data["targets"], split_dir / "targets.pt")
-            print(data["s2_images"].shape)
-            print(data["s1_images"].shape)
+            logger.info("PASTIS %s S2 images shape: %s", split, data["s2_images"].shape)
+            logger.info("PASTIS %s S1 images shape: %s", split, data["s1_images"].shape)
 
             s2_dir = split_dir / "s2_images"
             s1_dir = split_dir / "s1_images"
@@ -255,31 +255,52 @@ class PASTISRProcessor:
             os.makedirs(s1_dir, exist_ok=True)
 
             for idx in range(data["s2_images"].shape[0]):
-                print(data["s2_images"][idx, :, :, :, :].shape)
+                logger.debug(
+                    "PASTIS %s S2 sample %s shape: %s",
+                    split,
+                    idx,
+                    data["s2_images"][idx, :, :, :, :].shape,
+                )
                 torch.save(data["s2_images"][idx].clone(), s2_dir / f"{idx}.pt")
 
             for idx in range(data["s1_images"].shape[0]):
-                print(data["s1_images"][idx, :, :, :, :].shape)
+                logger.debug(
+                    "PASTIS %s S1 sample %s shape: %s",
+                    split,
+                    idx,
+                    data["s1_images"][idx, :, :, :, :].shape,
+                )
                 torch.save(data["s1_images"][idx].clone(), s1_dir / f"{idx}.pt")
 
         for split in ["train", "valid", "test"]:
             for key in ["s2_images", "s1_images", "months", "targets"]:
-                print(f"{split} {key}: {all_data_splits[split][key].shape}")
+                logger.info(
+                    "PASTIS %s %s shape: %s",
+                    split,
+                    key,
+                    all_data_splits[split][key].shape,
+                )
 
         for channel_idx in range(13):
             channel_data = all_data_splits["train"]["s2_images"][
                 :, :, channel_idx, :, :
             ]
-            print(
-                f"S2 Channel {channel_idx}: Mean {channel_data.mean().item():.4f}, Std {channel_data.std().item():.4f}"
+            logger.info(
+                "PASTIS S2 channel %s: mean %.4f, std %.4f",
+                channel_idx,
+                channel_data.mean().item(),
+                channel_data.std().item(),
             )
 
         for channel_idx in range(2):
             channel_data = all_data_splits["train"]["s1_images"][
                 :, :, channel_idx, :, :
             ]
-            print(
-                f"S1 Channel {channel_idx}: Mean {channel_data.mean().item():.4f}, Std {channel_data.std().item():.4f}"
+            logger.info(
+                "PASTIS S1 channel %s: mean %.4f, std %.4f",
+                channel_idx,
+                channel_data.mean().item(),
+                channel_data.std().item(),
             )
 
 
