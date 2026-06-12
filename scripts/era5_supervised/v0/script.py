@@ -173,7 +173,6 @@ class Era5SupervisedCommonComponents(CommonComponents):
     recon_num_time_masks: int = 3
     recon_time_mask_min_len: int = 7
     recon_time_mask_max_len: int = 30
-    recon_num_variable_group_masks: int = 1
     # ------------------------------------------------------------------
     # Downstream evaluation (linear probe).  Runs for A-only, B-only,
     # and A+B — this is the primary encoder-quality signal for B-only.
@@ -494,7 +493,6 @@ def build_model_config(
             num_time_masks=common.recon_num_time_masks,
             time_mask_min_len=common.recon_time_mask_min_len,
             time_mask_max_len=common.recon_time_mask_max_len,
-            num_variable_group_masks=common.recon_num_variable_group_masks,
         )
         reconstruction_objective = ReconstructionObjectiveConfig(
             name="reconstruction",

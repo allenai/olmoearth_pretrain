@@ -174,20 +174,32 @@ def _get_encoder(trainer: Trainer) -> torch.nn.Module:
     return model
 
 
+def _get_wandb_callback(trainer: Trainer) -> OlmoEarthWandBCallback | None:
+    """Return the (enabled) wandb callback attached to the trainer, if any."""
+    for callback in trainer._iter_callbacks():
+        if isinstance(callback, OlmoEarthWandBCallback) and callback.enabled:
+            return callback
+    return None
+
+
 def _log_to_wandb(
     trainer: Trainer,
     prefix: str,
     name: str,
     result: EvalResult,
+    step: int,
 ) -> None:
-    """Log an EvalResult to wandb if available."""
-    wandb_callback = None
-    for callback in trainer._iter_callbacks():
-        if isinstance(callback, OlmoEarthWandBCallback):
-            wandb_callback = callback
-            break
-    if wandb_callback is not None and wandb_callback.enabled:
-        wandb_callback.wandb.log(eval_result_log_dict(prefix, name, result))
+    """Log an EvalResult to wandb at an explicit trainer step.
+
+    The step is passed explicitly so eval metrics land on the same step axis as
+    the training metrics. Without it, ``wandb.log`` falls back to its internal
+    auto-incrementing counter, which races with the trainer's step-keyed logging
+    and causes wandb to drop out-of-order points ("Steps must be monotonically
+    increasing, so this data will be ignored").
+    """
+    wandb_callback = _get_wandb_callback(trainer)
+    if wandb_callback is not None:
+        wandb_callback.wandb.log(eval_result_log_dict(prefix, name, result), step=step)
 
 
 class Era5DownstreamEvaluatorCallback(Callback):
@@ -208,6 +220,9 @@ class Era5DownstreamEvaluatorCallback(Callback):
         self.eval_on_startup = eval_on_startup
         self.run_on_test = run_on_test
         self.num_workers = num_workers
+        # Step at which we last evaluated, so the end-of-training eval doesn't
+        # redundantly re-run when training happens to stop on an interval.
+        self._last_eval_step = -1
 
     def pre_train(self) -> None:
         """Run an evaluation on startup if configured."""
@@ -224,6 +239,18 @@ class Era5DownstreamEvaluatorCallback(Callback):
             if self.step <= 1 or self.step % eval_interval_steps != 0:
                 continue
             self._run_eval(task)
+
+    def post_train(self) -> None:
+        """Always run a final eval when training finishes.
+
+        Without this, a run whose final step never lands on an ``eval_interval``
+        multiple (e.g. short runs where total steps < ``eval_interval``) would
+        finish without ever logging a single eval result.
+        """
+        if self.step == self._last_eval_step:
+            return
+        logger.info("Running final ERA5 linear-probe eval at step %d.", self.step)
+        self._run_all_evals()
 
     def _run_all_evals(self) -> None:
         for task in self.tasks:
@@ -303,11 +330,13 @@ class Era5DownstreamEvaluatorCallback(Callback):
         )
 
         eval_time = time.monotonic() - start_time
+        step = self.step
+        self._last_eval_step = step
         self.trainer.record_metric(f"eval_time/{task.name}", eval_time)
 
         if result.val_result is not None:
             _record_eval_result(self.trainer, "eval", task.name, result.val_result)
-            _log_to_wandb(self.trainer, "eval", task.name, result.val_result)
+            _log_to_wandb(self.trainer, "eval", task.name, result.val_result, step)
             logger.info(
                 "ERA5 probe %s val: %.4f (%.1fs)",
                 task.name,
@@ -319,21 +348,19 @@ class Era5DownstreamEvaluatorCallback(Callback):
             _record_eval_result(
                 self.trainer, "eval/test", task.name, result.test_result
             )
-            _log_to_wandb(self.trainer, "eval/test", task.name, result.test_result)
+            _log_to_wandb(
+                self.trainer, "eval/test", task.name, result.test_result, step
+            )
             logger.info(
                 "ERA5 probe %s test: %.4f",
                 task.name,
                 result.test_result.primary,
             )
 
-        # Log eval time to wandb
-        wandb_callback = None
-        for callback in self.trainer._iter_callbacks():
-            if isinstance(callback, OlmoEarthWandBCallback):
-                wandb_callback = callback
-                break
-        if wandb_callback is not None and wandb_callback.enabled:
-            wandb_callback.wandb.log({f"eval_time/{task.name}": eval_time})
+        # Log eval time to wandb at the same explicit step as the eval metrics.
+        wandb_callback = _get_wandb_callback(self.trainer)
+        if wandb_callback is not None:
+            wandb_callback.wandb.log({f"eval_time/{task.name}": eval_time}, step=step)
 
         del train_embeddings, train_labels, val_embeddings, val_labels
         del test_embeddings, test_labels

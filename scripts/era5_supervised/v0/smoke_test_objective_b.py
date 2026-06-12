@@ -71,7 +71,6 @@ def test_corruption():
         num_time_masks=2,
         time_mask_min_len=5,
         time_mask_max_len=20,
-        num_variable_group_masks=1,
     )
     x_c, mask = corrupt_era5(batch.era5, batch.ignore_mask, config)
     assert x_c.shape == (B, T, V), f"Bad shape: {x_c.shape}"
