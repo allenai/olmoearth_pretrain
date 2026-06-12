@@ -288,11 +288,11 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 # # discrimination (JEPA) loss and low-weight register supervision are unchanged. No code
 # # change needed: contrastive_config is Optional and the train module no-ops when it's None.
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_noic" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-#     --model.encoder_config.register_interleave=true \
-#     --train_module.contrastive_config=null
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_noic" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true \
+    --train_module.contrastive_config=null
 
 # # ===== interleaved reads + per-depth read norms/projections: il_pdproj (2) =====
 # # Final-layer-only reads (register_interleave=true, NO register_read_layers), but each of
@@ -309,18 +309,18 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 # # input_norms.i/kv_projs.i), so these start fresh; existing il checkpoints (shared pair)
 # # are unaffected and load unchanged.
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_pdproj" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-#     --model.encoder_config.register_interleave=true \
-#     --model.encoder_config.register_per_depth_read_proj=true
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_pdproj" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true \
+    --model.encoder_config.register_per_depth_read_proj=true
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_pdproj_noic" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-#     --model.encoder_config.register_interleave=true \
-#     --model.encoder_config.register_per_depth_read_proj=true \
-#     --train_module.contrastive_config=null
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_pdproj_noic" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true \
+    --model.encoder_config.register_per_depth_read_proj=true \
+    --train_module.contrastive_config=null
 
 # ============ learned per-read residual gates on the mdr3 frontier (2) ============
 # The mdr3_ictok_pdproj frontier (dynamic grid, d768, read_layers=[3,6,9,12],
@@ -414,16 +414,16 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 # Dynamic grid, d768, supervised only (nosup consistently underperforms here). The il
 # baseline keeps the default contrastive source/IC loss, so these do too.
 
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_fsum" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-    --model.encoder_config.register_interleave=true \
-    '--model.encoder_config.register_read_layers=[3,6,9,12]' \
-    --model.encoder_config.register_fused_read=uniform
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_fsum" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_interleave=true \
+#     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+#     --model.encoder_config.register_fused_read=uniform
 
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_fsum_lrn" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-    --model.encoder_config.register_interleave=true \
-    '--model.encoder_config.register_read_layers=[3,6,9,12]' \
-    --model.encoder_config.register_fused_read=learned
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_fsum_lrn" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_interleave=true \
+#     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+#     --model.encoder_config.register_fused_read=learned
