@@ -296,6 +296,15 @@ class PretrainSubsetDataset(Dataset):
             matched_rows.append(row)
         if not positions:
             raise ValueError(f"Split CSV {split_path} produced no usable samples")
+        skipped = len(split_df) - len(positions)
+        if skipped:
+            logger.warning(
+                "Split CSV %s: skipped %d/%d rows whose sample_index is absent "
+                "from the dataset after input-modality filtering.",
+                split_path,
+                skipped,
+                len(split_df),
+            )
         return np.asarray(positions, dtype=np.int64), pd.DataFrame(matched_rows)
 
     @staticmethod

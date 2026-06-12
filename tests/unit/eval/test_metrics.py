@@ -298,6 +298,25 @@ class TestSegmentationMetrics:
         assert result.metrics["f1_class_0"] == pytest.approx(1.0)
         assert "f1_class_1" not in result.metrics
 
+    def test_macro_class_ids_apply_to_miou(self) -> None:
+        """Miou should average over the configured class set, like macro_f1."""
+        # Class 0 perfect, class 1 absent (iou 0), class 2 perfect.
+        preds = torch.tensor([[[0, 2], [0, 2]]], dtype=torch.long)
+        labels = torch.tensor([[[0, 2], [0, 2]]], dtype=torch.long)
+
+        # Default: only classes with support (0, 2) -> miou 1.0
+        default_result = segmentation_metrics(preds, labels, num_classes=3)
+        assert default_result.metrics["miou"] == pytest.approx(1.0)
+
+        # Configured over {0, 1, 2}: class 1 has iou 0 -> miou 2/3.
+        configured_result = segmentation_metrics(
+            preds,
+            labels,
+            num_classes=3,
+            macro_class_ids=[0, 1, 2],
+        )
+        assert configured_result.metrics["miou"] == pytest.approx(2.0 / 3.0)
+
 
 class TestClassificationMetrics:
     """Tests for classification_metrics function."""

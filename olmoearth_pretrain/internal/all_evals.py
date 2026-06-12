@@ -425,7 +425,6 @@ PRESTO_OSM_EVAL_H5PY_DIR = "/weka/dfive-default/helios/dataset/presto/h5py_data_
 PRESTO_OSM_BALANCED_SPLITS_DIR = str(
     files("olmoearth_pretrain.evals.datasets").joinpath("splits/presto_osm_balanced")
 )
-PRESTO_OSM_RARE_FOCUS_CLASS_IDS = [9, 10, 26, 27]
 PRESTO_OSM_DIVERSE_CONTEXT_CLASS_IDS = [
     1,
     3,

@@ -208,22 +208,29 @@ class EvalResult:
         )
 
 
-def _macro_f1_over_classes(
-    per_class_f1: list[float],
+def _macro_mean_over_classes(
+    per_class_scores: list[float],
     macro_class_ids: list[int] | None,
-    fallback_support: torch.Tensor | None = None,
+    fallback_support: torch.Tensor | np.ndarray | None = None,
 ) -> float:
-    """Average per-class F1 over configured labeled classes."""
+    """Average per-class scores over configured labeled classes.
+
+    Used for both macro-F1 and macro-accuracy. ``fallback_support`` may be a
+    torch tensor (segmentation paths) or a numpy array (classification paths).
+    """
     if macro_class_ids is not None:
         class_ids = macro_class_ids
     elif fallback_support is not None:
-        support = fallback_support.detach().cpu().numpy()
+        if isinstance(fallback_support, torch.Tensor):
+            support = fallback_support.detach().cpu().numpy()
+        else:
+            support = np.asarray(fallback_support)
         class_ids = [i for i, count in enumerate(support) if count > 0]
     else:
-        class_ids = list(range(len(per_class_f1)))
+        class_ids = list(range(len(per_class_scores)))
     if not class_ids:
         return 0.0
-    scores = [per_class_f1[i] for i in class_ids if i < len(per_class_f1)]
+    scores = [per_class_scores[i] for i in class_ids if i < len(per_class_scores)]
     if not scores:
         return 0.0
     return float(sum(scores) / len(scores))
@@ -317,11 +324,16 @@ def segmentation_metrics(
     fp = confusion.sum(dim=0).float() - tp  # False positives per class
     fn = confusion.sum(dim=1).float() - tp  # False negatives per class
 
-    # IoU per class
+    # IoU per class. When macro_class_ids is configured, average over exactly
+    # those classes so miou is reported over the same class set as macro_f1 /
+    # macro_acc. Otherwise fall back to all classes present in pred or GT.
     union = tp + fp + fn
     iou = tp / (union + 1e-8)
-    valid_classes = union > 0
-    miou = iou[valid_classes].mean().item()
+    if macro_class_ids is not None:
+        miou = _macro_mean_over_classes(iou.tolist(), macro_class_ids)
+    else:
+        valid_classes = union > 0
+        miou = iou[valid_classes].mean().item()
 
     # Overall accuracy: total correct / total pixels
     total_correct = tp.sum()
@@ -332,7 +344,7 @@ def segmentation_metrics(
     class_totals = tp + fn  # Total pixels per class (ground truth)
     per_class_acc = tp / (class_totals + 1e-8)
     if macro_class_ids is not None:
-        macro_acc = _macro_f1_over_classes(per_class_acc.tolist(), macro_class_ids)
+        macro_acc = _macro_mean_over_classes(per_class_acc.tolist(), macro_class_ids)
     else:
         valid_acc_classes = class_totals > 0
         macro_acc = per_class_acc[valid_acc_classes].mean().item()
@@ -346,7 +358,7 @@ def segmentation_metrics(
         * per_class_recall
         / (per_class_precision + per_class_recall + 1e-8)
     )
-    macro_f1 = _macro_f1_over_classes(
+    macro_f1 = _macro_mean_over_classes(
         per_class_f1.tolist(), macro_class_ids, fallback_support=class_totals
     )
 
@@ -394,7 +406,7 @@ def classification_metrics(
             labels_np, preds_np, average=None, zero_division=0
         ).tolist()
         gt_support = labels_np.sum(axis=0).astype(int)
-        macro_f1 = _macro_f1_over_classes(
+        macro_f1 = _macro_mean_over_classes(
             per_class_f1, macro_class_ids, fallback_support=gt_support
         )
         logged_per_class_f1, logged_class_ids = _per_class_scores_to_log(
@@ -422,7 +434,7 @@ def classification_metrics(
             zero_division=0,
             labels=np.arange(num_classes),
         ).tolist()
-        macro_f1 = _macro_f1_over_classes(
+        macro_f1 = _macro_mean_over_classes(
             per_class_f1, macro_class_ids, fallback_support=gt_support
         )
     else:
