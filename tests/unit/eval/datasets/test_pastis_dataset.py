@@ -7,6 +7,7 @@ import pytest
 import torch
 
 from olmoearth_pretrain.evals.datasets.pastis_dataset import PASTISRDataset
+from olmoearth_pretrain.evals.datasets.pastis_processor import PASTISRProcessor
 from olmoearth_pretrain.modalities import Modality
 
 
@@ -90,3 +91,39 @@ def test_pastis_dataset_initialization(mock_pastis_data: Path) -> None:
     sample_s2, label_s2 = dataset_s2_only[0]
     assert sample_s2.sentinel1 is None  # Should not have S1 data
     assert sample_s2.sentinel2_l2a is not None  # Should have S2 data
+
+
+def test_pastis_processor_imputes_s2_bands(tmp_path: Path) -> None:
+    """PASTIS S2 band imputation expands the source 10 bands to eval S2 order."""
+    processor = PASTISRProcessor(str(tmp_path), str(tmp_path / "out"))
+    image = torch.arange(10 * 2 * 3, dtype=torch.float32).reshape(10, 2, 3)
+
+    imputed = processor.impute(image)
+
+    assert imputed.shape == (13, 2, 3)
+    assert imputed[0].equal(image[0])
+    assert imputed[1].equal(image[0])
+    assert imputed[9].equal(image[7])
+    assert imputed[10].equal(image[8])
+    assert imputed[12].equal(image[9])
+
+
+def test_pastis_processor_aggregates_months(tmp_path: Path) -> None:
+    """Monthly aggregation averages repeated months and preserves chronological order."""
+    processor = PASTISRProcessor(str(tmp_path), str(tmp_path / "out"))
+    images = torch.stack(
+        [
+            torch.ones((2, 2, 2)),
+            3 * torch.ones((2, 2, 2)),
+            5 * torch.ones((2, 2, 2)),
+        ]
+    )
+    dates = {"0": 20180901, "1": 20180920, "2": 20181001}
+
+    aggregated, months = processor.aggregate_months(
+        Modality.SENTINEL1.name, images, dates
+    )
+
+    assert months.equal(torch.tensor([201809, 201810], dtype=torch.long))
+    assert torch.equal(aggregated[0], 2 * torch.ones((2, 2, 2)))
+    assert torch.equal(aggregated[1], 5 * torch.ones((2, 2, 2)))
