@@ -2,98 +2,70 @@
   "metadata": "analysis/pretrain_eval_label_metadata/presto_openstreetmap_raster_label_metadata.npz",
   "variants": {
     "osm_base_balanced": {
+      "class_support_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_base_balanced/class_support.json",
       "config": {
+        "cap_exempt_classes": [],
         "min_anchor_tile_presence": 500,
         "min_classes_present": 1,
         "min_normalized_entropy": 0.0,
         "presence_caps": {},
         "required_presence_by_split": {
           "power_tower": {
+            "test": 900,
             "train": 2000,
-            "valid": 900,
-            "test": 900
+            "valid": 900
           }
-        },
-        "cap_exempt_classes": []
-      },
-      "splits": {
-        "train": {
-          "samples": 6144,
-          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_base_balanced/train.csv",
-          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_base_balanced/train_class_summary.csv"
-        },
-        "valid": {
-          "samples": 3072,
-          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_base_balanced/valid.csv",
-          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_base_balanced/valid_class_summary.csv"
-        },
-        "test": {
-          "samples": 3072,
-          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_base_balanced/test.csv",
-          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_base_balanced/test_class_summary.csv"
         }
       },
-      "class_support_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_base_balanced/class_support.json"
+      "splits": {
+        "test": {
+          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_base_balanced/test_class_summary.csv",
+          "samples": 3072,
+          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_base_balanced/test.csv"
+        },
+        "train": {
+          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_base_balanced/train_class_summary.csv",
+          "samples": 6144,
+          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_base_balanced/train.csv"
+        },
+        "valid": {
+          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_base_balanced/valid_class_summary.csv",
+          "samples": 3072,
+          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_base_balanced/valid.csv"
+        }
+      }
     },
     "osm_diverse_context": {
+      "class_support_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_diverse_context/class_support.json",
       "config": {
+        "cap_exempt_classes": [],
         "min_anchor_tile_presence": 500,
         "min_classes_present": 3,
         "min_normalized_entropy": 0.5,
         "presence_caps": {},
-        "required_presence_by_split": {},
-        "cap_exempt_classes": []
+        "required_presence_by_split": {}
       },
       "splits": {
+        "test": {
+          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_diverse_context/test_class_summary.csv",
+          "samples": 2089,
+          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_diverse_context/test.csv"
+        },
         "train": {
+          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_diverse_context/train_class_summary.csv",
           "samples": 6144,
-          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_diverse_context/train.csv",
-          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_diverse_context/train_class_summary.csv"
+          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_diverse_context/train.csv"
         },
         "valid": {
+          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_diverse_context/valid_class_summary.csv",
           "samples": 2093,
-          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_diverse_context/valid.csv",
-          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_diverse_context/valid_class_summary.csv"
-        },
-        "test": {
-          "samples": 2089,
-          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_diverse_context/test.csv",
-          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_diverse_context/test_class_summary.csv"
+          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_diverse_context/valid.csv"
         }
-      },
-      "class_support_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_diverse_context/class_support.json"
+      }
     },
     "osm_rare_class_focused": {
+      "class_support_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_rare_class_focused/class_support.json",
       "config": {
-        "min_anchor_tile_presence": 51,
-        "min_classes_present": 1,
-        "min_normalized_entropy": 0.0,
-        "presence_caps": {
-          "highway": 0.8,
-          "building": 0.7
-        },
-        "required_presence_by_split": {
-          "fountain": {
-            "train": 70,
-            "valid": 20,
-            "test": 20
-          },
-          "generator_wind": {
-            "train": 70,
-            "valid": 20,
-            "test": 20
-          },
-          "storage_tank": {
-            "train": 70,
-            "valid": 20,
-            "test": 20
-          },
-          "taxiway": {
-            "train": 70,
-            "valid": 20,
-            "test": 20
-          }
-        },
         "cap_exempt_classes": [
           "chimney",
           "fountain",
@@ -102,26 +74,54 @@
           "petroleum_well",
           "storage_tank",
           "taxiway"
-        ]
-      },
-      "splits": {
-        "train": {
-          "samples": 1227,
-          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_rare_class_focused/train.csv",
-          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_rare_class_focused/train_class_summary.csv"
+        ],
+        "min_anchor_tile_presence": 51,
+        "min_classes_present": 1,
+        "min_normalized_entropy": 0.0,
+        "presence_caps": {
+          "building": 0.7,
+          "highway": 0.8
         },
-        "valid": {
-          "samples": 200,
-          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_rare_class_focused/valid.csv",
-          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_rare_class_focused/valid_class_summary.csv"
-        },
-        "test": {
-          "samples": 175,
-          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_rare_class_focused/test.csv",
-          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_rare_class_focused/test_class_summary.csv"
+        "required_presence_by_split": {
+          "fountain": {
+            "test": 20,
+            "train": 70,
+            "valid": 20
+          },
+          "generator_wind": {
+            "test": 20,
+            "train": 70,
+            "valid": 20
+          },
+          "storage_tank": {
+            "test": 20,
+            "train": 70,
+            "valid": 20
+          },
+          "taxiway": {
+            "test": 20,
+            "train": 70,
+            "valid": 20
+          }
         }
       },
-      "class_support_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_rare_class_focused/class_support.json"
+      "splits": {
+        "test": {
+          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_rare_class_focused/test_class_summary.csv",
+          "samples": 175,
+          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_rare_class_focused/test.csv"
+        },
+        "train": {
+          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_rare_class_focused/train_class_summary.csv",
+          "samples": 1227,
+          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_rare_class_focused/train.csv"
+        },
+        "valid": {
+          "class_summary_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_rare_class_focused/valid_class_summary.csv",
+          "samples": 200,
+          "split_path": "olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced/osm_rare_class_focused/valid.csv"
+        }
+      }
     }
   }
 }

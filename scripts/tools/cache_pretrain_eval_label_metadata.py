@@ -156,7 +156,9 @@ def transform_label(raw: np.ndarray, target: str) -> np.ndarray:
             mapped[label == class_code] = class_idx
         return mapped
     if target == "openstreetmap_raster":
-        channels_last = np.moveaxis(label, 0, -1) if label.shape[0] in (29, 30) else label
+        channels_last = (
+            np.moveaxis(label, 0, -1) if label.shape[0] in (29, 30) else label
+        )
         valid = channels_last.sum(axis=-1) > 0
         classes = channels_last.argmax(axis=-1).astype(np.int64)
         classes[~valid] = -1
@@ -216,7 +218,9 @@ def summarize_classification(label: np.ndarray) -> SampleSummary:
 def summarize_sample(args: tuple[str, str, int]) -> SampleSummary:
     """Pickle-friendly worker for one sample."""
     h5py_dir_str, target, sample_index = args
-    label = transform_label(read_raw_label(Path(h5py_dir_str), sample_index, target), target)
+    label = transform_label(
+        read_raw_label(Path(h5py_dir_str), sample_index, target), target
+    )
     if target in REGRESSION_TARGETS:
         summary = summarize_regression(label, target)
     else:
@@ -233,7 +237,9 @@ def summarize_sample(args: tuple[str, str, int]) -> SampleSummary:
     )
 
 
-def write_cache(path: Path, dataset: DatasetSpec, target: str, summaries: list[SampleSummary]) -> None:
+def write_cache(
+    path: Path, dataset: DatasetSpec, target: str, summaries: list[SampleSummary]
+) -> None:
     """Write sparse sample summaries to compressed NPZ."""
     sample_indices: list[int] = []
     row_offsets = [0]

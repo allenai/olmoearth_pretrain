@@ -56,6 +56,10 @@ def run_knn(
         bootstrap_seed: Random seed for bootstrap sampling
         primary_metric: Override the default primary metric (None = task default)
         primary_metric_class: Class index for CLASS_F1 primary metric
+        val_macro_class_ids: Optional class ids to average for validation macro
+            metrics. When None, falls back to classes present in val_labels.
+        test_macro_class_ids: Optional class ids to average for test macro
+            metrics. When None, falls back to classes present in test_labels.
 
     Returns:
         Dictionary with keys:

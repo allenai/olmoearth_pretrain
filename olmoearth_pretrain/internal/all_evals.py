@@ -423,9 +423,7 @@ PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset
 # probes fall back to PRETRAIN_SUBSET_H5PY_DIR (in-distribution).
 PRESTO_OSM_EVAL_H5PY_DIR = "/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/469728"
 PRESTO_OSM_BALANCED_SPLITS_DIR = str(
-    files("olmoearth_pretrain.evals.datasets").joinpath(
-        "splits/presto_osm_balanced"
-    )
+    files("olmoearth_pretrain.evals.datasets").joinpath("splits/presto_osm_balanced")
 )
 PRESTO_OSM_RARE_FOCUS_CLASS_IDS = [9, 10, 26, 27]
 PRESTO_OSM_DIVERSE_CONTEXT_CLASS_IDS = [

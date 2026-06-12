@@ -147,7 +147,9 @@ def tile_records(metadata: OsmMetadata, global_presence: np.ndarray) -> pd.DataF
     """Build per-tile diversity and rare-class metadata."""
     rows = []
     rare_cutoff = np.quantile(global_presence[global_presence > 0], 0.25)
-    rare_ids = set(np.where((global_presence > 0) & (global_presence <= rare_cutoff))[0])
+    rare_ids = set(
+        np.where((global_presence > 0) & (global_presence <= rare_cutoff))[0]
+    )
 
     for row_idx, sample_index in enumerate(metadata.sample_indices.tolist()):
         labels, counts = metadata.row_labels_counts(row_idx)
@@ -217,7 +219,9 @@ def cap_exempt_classes(global_presence: np.ndarray, variant: VariantConfig) -> s
     )
 
 
-def choose_anchor(labels: np.ndarray, anchors: set[int], global_presence: np.ndarray) -> int | None:
+def choose_anchor(
+    labels: np.ndarray, anchors: set[int], global_presence: np.ndarray
+) -> int | None:
     """Assign a tile to the rarest eligible class present."""
     eligible = [int(label) for label in labels.tolist() if int(label) in anchors]
     if not eligible:
@@ -313,7 +317,9 @@ def required_presence_limits_for_split(
             for row in pool.itertuples()
             if class_id in row_labels_by_idx[int(row.row_idx)]
         )
-        future_required = sum(split_targets.get(future_split, 0) for future_split in future_splits)
+        future_required = sum(
+            split_targets.get(future_split, 0) for future_split in future_splits
+        )
         limits[class_id] = max(current_required[class_id], available - future_required)
     return limits
 
@@ -371,8 +377,8 @@ def add_required_presence_rows(
             for row_idx in rows_by_class[class_id]:
                 if row_idx in selected_set:
                     continue
-                row_required_classes = (
-                    row_labels_by_idx[row_idx] & set(variant.required_presence_by_split)
+                row_required_classes = row_labels_by_idx[row_idx] & set(
+                    variant.required_presence_by_split
                 )
                 over_limit = any(
                     selected_presence.get(other_class_id, 0)
@@ -451,7 +457,9 @@ def trim_to_fraction_caps(
         ]
         if not removable:
             break
-        row_to_remove = min(removable, key=lambda row_idx: score_by_row.get(row_idx, 0.0))
+        row_to_remove = min(
+            removable, key=lambda row_idx: score_by_row.get(row_idx, 0.0)
+        )
         selected_set.remove(row_to_remove)
 
     return [row_idx for row_idx in selected if row_idx in selected_set]
@@ -505,17 +513,14 @@ def select_variant_split(
         for anchor in anchor_order:
             rows = anchor_rows[anchor]
             cursor = cursors[anchor]
-            while (
-                cursor < len(rows)
-                and (
-                    rows[cursor] in selected_set
-                    or not fits_presence_caps(
-                        row_labels=row_labels_by_idx[rows[cursor]],
-                        selected_presence=selected_presence,
-                        presence_caps=variant.presence_caps,
-                        exempt_classes=exempt_classes,
-                        target_size=target_size,
-                    )
+            while cursor < len(rows) and (
+                rows[cursor] in selected_set
+                or not fits_presence_caps(
+                    row_labels=row_labels_by_idx[rows[cursor]],
+                    selected_presence=selected_presence,
+                    presence_caps=variant.presence_caps,
+                    exempt_classes=exempt_classes,
+                    target_size=target_size,
                 )
             ):
                 cursor += 1
@@ -661,8 +666,7 @@ def ensure_required_presence_by_replacement(
         for row_idx in selected["row_idx"].astype(int).tolist()
     }
     records_by_row = {
-        int(row.row_idx): row._asdict()
-        for row in records.itertuples(index=False)
+        int(row.row_idx): row._asdict() for row in records.itertuples(index=False)
     }
 
     for split in SPLIT_SIZES:
@@ -747,8 +751,8 @@ def ensure_required_presence_by_replacement(
                 }
                 split_counts = split_presence_counts(selected, row_labels_by_idx)
 
-        selected_by_split[split] = (
-            selected.sort_values("sample_index").reset_index(drop=True)
+        selected_by_split[split] = selected.sort_values("sample_index").reset_index(
+            drop=True
         )
 
     return selected_by_split

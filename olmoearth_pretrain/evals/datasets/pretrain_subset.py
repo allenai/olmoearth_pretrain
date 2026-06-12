@@ -153,6 +153,7 @@ class PretrainSubsetDataset(Dataset):
             and self.osm_label_mode == OsmLabelMode.SEGMENTATION
         )
         if use_raster_labels:
+            assert target_modality is not None
             # Include the input modalities so extract_hwt_from_sample_dict has a
             # spatially-present modality to read H/W/T from even when the
             # (often non-multitemporal) target is missing for a given sample.

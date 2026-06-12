@@ -223,7 +223,9 @@ def main() -> None:
         metadata = LabelMetadata(path)
         target = metadata.target
         counts_df = aggregate_counts(metadata)
-        counts_path = args.output_dir / f"{args.dataset}_{target}_global_distribution.csv"
+        counts_path = (
+            args.output_dir / f"{args.dataset}_{target}_global_distribution.csv"
+        )
         counts_df.to_csv(counts_path, index=False)
         plot_distribution(
             target=target,

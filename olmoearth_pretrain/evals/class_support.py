@@ -21,9 +21,9 @@ class EvalLabeledClassMode(StrEnum):
 
 def labeled_classes_from_summary(summary: pd.DataFrame) -> dict[str, list[int]]:
     """Derive labeled-class ids from a split class summary table."""
-    tile_presence = summary.loc[
-        summary["tile_presence_count"] > 0, "class_id"
-    ].astype(int)
+    tile_presence = summary.loc[summary["tile_presence_count"] > 0, "class_id"].astype(
+        int
+    )
     pixels = summary.loc[summary["pixel_count"] > 0, "class_id"].astype(int)
     result = {
         EvalLabeledClassMode.TILE_PRESENCE.value: tile_presence.tolist(),

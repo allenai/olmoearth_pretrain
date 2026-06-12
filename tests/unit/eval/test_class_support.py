@@ -13,6 +13,7 @@ from olmoearth_pretrain.evals.class_support import (
 
 
 def test_labeled_classes_from_summary(tmp_path: Path) -> None:
+    """Class-summary CSVs should produce per-mode labeled-class lists."""
     summary = pd.DataFrame(
         {
             "class_id": [0, 1, 2],
@@ -34,6 +35,7 @@ def test_labeled_classes_from_summary(tmp_path: Path) -> None:
 
 
 def test_write_and_load_class_support(tmp_path: Path) -> None:
+    """write_class_support should round-trip through build_class_support_from_split_dir."""
     split_dir = tmp_path / "split"
     split_dir.mkdir()
     summary = pd.DataFrame(

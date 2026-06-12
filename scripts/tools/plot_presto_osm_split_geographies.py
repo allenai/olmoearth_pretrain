@@ -56,7 +56,9 @@ def split_csvs(variant_dir: Path) -> list[Path]:
     return paths
 
 
-def add_geography(df: pd.DataFrame, latlons: np.ndarray, bin_size_deg: float) -> pd.DataFrame:
+def add_geography(
+    df: pd.DataFrame, latlons: np.ndarray, bin_size_deg: float
+) -> pd.DataFrame:
     """Add lat/lon and coarse geographic bins to selected samples."""
     out = df.copy()
     out["lat"] = latlons[out["sample_index"].to_numpy(dtype=np.int64), 0]
@@ -98,7 +100,9 @@ def summarize_geography(df: pd.DataFrame) -> dict:
     }
 
 
-def plot_variant(variant: str, split_to_df: dict[str, pd.DataFrame], output_path: Path) -> None:
+def plot_variant(
+    variant: str, split_to_df: dict[str, pd.DataFrame], output_path: Path
+) -> None:
     """Plot split sample geographies."""
     fig, ax = plt.subplots(figsize=(11, 5.5))
     colors = {"train": "tab:blue", "valid": "tab:orange", "test": "tab:green"}

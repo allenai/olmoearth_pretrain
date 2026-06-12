@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import argparse
 import csv
-from importlib.resources import files
 from dataclasses import dataclass
+from importlib.resources import files
 from typing import Any
 
 import pandas as pd
@@ -138,7 +138,9 @@ def other_key(task: str, metric: str, split: str) -> str:
     raise ValueError(f"Unsupported split: {split}")
 
 
-def class_f1(summary: dict[str, Any], task: str, class_id: int, split: str) -> float | None:
+def class_f1(
+    summary: dict[str, Any], task: str, class_id: int, split: str
+) -> float | None:
     """Read a per-class F1 value from W&B summary."""
     return summary_metric(summary, other_key(task, f"f1_class_{class_id}", split))
 
@@ -256,7 +258,9 @@ def rows_for_task(
     return rows
 
 
-def print_task_summary(task: str, run: wandb.apis.public.Run, rows: list[dict[str, Any]]) -> None:
+def print_task_summary(
+    task: str, run: wandb.apis.public.Run, rows: list[dict[str, Any]]
+) -> None:
     """Print a concise per-task summary."""
     val_primary = summary_metric(run.summary, primary_key(task, "val"))
     test_primary = summary_metric(run.summary, primary_key(task, "test"))

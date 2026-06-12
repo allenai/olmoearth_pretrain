@@ -1,10 +1,13 @@
 """Tests for pretrain-subset eval labels."""
 
+from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import numpy as np
 import torch
 
+from olmoearth_pretrain.data.dataset import OlmoEarthDataset
 from olmoearth_pretrain.evals.datasets.pretrain_subset import (
     OSM_POPULOUS_12_CLASS_IDS,
     OSM_RARE_4_CLASS_IDS,
@@ -70,12 +73,17 @@ def test_split_indices_are_disjoint_and_deterministic() -> None:
     assert test == shuffled[18:24]
 
 
-def test_positions_from_split_csv_maps_h5_indices_to_dataset_positions(tmp_path) -> None:
+def test_positions_from_split_csv_maps_h5_indices_to_dataset_positions(
+    tmp_path: Path,
+) -> None:
     """Split CSVs store H5 indices, which need mapping through sample_indices."""
     split_dir = tmp_path / "splits"
     split_dir.mkdir()
     (split_dir / "train.csv").write_text("sample_index\n30\n10\n999\n")
-    dataset = SimpleNamespace(sample_indices=np.asarray([10, 20, 30]))
+    dataset = cast(
+        OlmoEarthDataset,
+        SimpleNamespace(sample_indices=np.asarray([10, 20, 30])),
+    )
 
     positions = PretrainSubsetDataset._positions_from_split_csv(
         dataset=dataset,
@@ -86,7 +94,7 @@ def test_positions_from_split_csv_maps_h5_indices_to_dataset_positions(tmp_path)
     assert positions.tolist() == [2, 0]
 
 
-def test_split_rows_from_split_csv_returns_matched_rows(tmp_path) -> None:
+def test_split_rows_from_split_csv_returns_matched_rows(tmp_path: Path) -> None:
     """Split CSV loading should preserve matched rows for tile-level labels."""
     split_dir = tmp_path / "splits"
     split_dir.mkdir()
@@ -96,7 +104,10 @@ def test_split_rows_from_split_csv_returns_matched_rows(tmp_path) -> None:
         "10,4,building\n"
         "999,1,aerodrome\n"
     )
-    dataset = SimpleNamespace(sample_indices=np.asarray([10, 20, 30]))
+    dataset = cast(
+        OlmoEarthDataset,
+        SimpleNamespace(sample_indices=np.asarray([10, 20, 30])),
+    )
 
     positions, rows = PretrainSubsetDataset._split_rows_from_split_csv(
         dataset=dataset,

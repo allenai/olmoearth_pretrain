@@ -213,10 +213,14 @@ class DownstreamEvaluator:
         self.pretrain_train_samples = task.pretrain_train_samples
         self.pretrain_valid_samples = task.pretrain_valid_samples
         self.pretrain_test_samples = task.pretrain_test_samples
-        self.pretrain_split_strategy = PretrainSplitStrategy(task.pretrain_split_strategy)
+        self.pretrain_split_strategy = PretrainSplitStrategy(
+            task.pretrain_split_strategy
+        )
         self.pretrain_geographic_bin_size_deg = task.pretrain_geographic_bin_size_deg
         self.pretrain_split_dir = task.pretrain_split_dir
-        self.eval_labeled_class_mode = EvalLabeledClassMode(task.eval_labeled_class_mode)
+        self.eval_labeled_class_mode = EvalLabeledClassMode(
+            task.eval_labeled_class_mode
+        )
         self.eval_labeled_classes = task.eval_labeled_classes
         self._class_support = (
             load_class_support(task.pretrain_split_dir)

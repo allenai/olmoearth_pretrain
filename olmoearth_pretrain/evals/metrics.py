@@ -211,15 +211,14 @@ class EvalResult:
 def _macro_f1_over_classes(
     per_class_f1: list[float],
     macro_class_ids: list[int] | None,
-    fallback_support=None,
+    fallback_support: torch.Tensor | None = None,
 ) -> float:
     """Average per-class F1 over configured labeled classes."""
     if macro_class_ids is not None:
         class_ids = macro_class_ids
     elif fallback_support is not None:
-        if isinstance(fallback_support, torch.Tensor):
-            fallback_support = fallback_support.detach().cpu().numpy()
-        class_ids = [i for i, count in enumerate(fallback_support) if count > 0]
+        support = fallback_support.detach().cpu().numpy()
+        class_ids = [i for i, count in enumerate(support) if count > 0]
     else:
         class_ids = list(range(len(per_class_f1)))
     if not class_ids:
@@ -237,7 +236,9 @@ def _per_class_scores_to_log(
     """Return per-class F1 scores that should be exposed as logged metrics."""
     if macro_class_ids is None:
         return per_class_f1, None
-    class_ids = [class_id for class_id in macro_class_ids if class_id < len(per_class_f1)]
+    class_ids = [
+        class_id for class_id in macro_class_ids if class_id < len(per_class_f1)
+    ]
     return [per_class_f1[class_id] for class_id in class_ids], class_ids
 
 
@@ -302,6 +303,8 @@ def segmentation_metrics(
         ignore_label: Label value to ignore (default: -1)
         primary_metric: Override the default primary metric (None = MIOU)
         primary_metric_class: Class index for CLASS_F1 primary metric
+        macro_class_ids: Optional class ids to average for macro metrics. When
+            None, falls back to classes with non-zero ground-truth support.
 
     Returns:
         EvalResult with metrics: miou, overall_acc, macro_acc, macro_f1
@@ -329,9 +332,7 @@ def segmentation_metrics(
     class_totals = tp + fn  # Total pixels per class (ground truth)
     per_class_acc = tp / (class_totals + 1e-8)
     if macro_class_ids is not None:
-        macro_acc = _macro_f1_over_classes(
-            per_class_acc.tolist(), macro_class_ids
-        )
+        macro_acc = _macro_f1_over_classes(per_class_acc.tolist(), macro_class_ids)
     else:
         valid_acc_classes = class_totals > 0
         macro_acc = per_class_acc[valid_acc_classes].mean().item()
