@@ -44,7 +44,12 @@ from olmoearth_pretrain.evals.finetune.model import (
     to_device,
 )
 from olmoearth_pretrain.evals.linear_probe import weighted_dice_loss
-from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
+from olmoearth_pretrain.evals.metrics import (
+    EvalMetric,
+    EvalResult,
+    EvalTaskResult,
+    metric_higher_is_better,
+)
 
 
 def _primary_metric_higher_is_better(
@@ -52,7 +57,9 @@ def _primary_metric_higher_is_better(
 ) -> bool:
     """Whether validation primary should be maximized (scheduler / best checkpoint)."""
     if task_type == TaskType.REGRESSION:
-        return primary_metric == EvalMetric.R2
+        # Regression defaults to NEG_RMSE (higher is better); respect explicit overrides.
+        metric = primary_metric or EvalMetric.NEG_RMSE
+        return metric_higher_is_better(metric)
     return True
 
 
