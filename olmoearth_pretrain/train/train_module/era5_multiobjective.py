@@ -713,7 +713,7 @@ class MultiObjectiveEra5TrainModule(OlmoEarthTrainModule):
         for mb_idx, micro in enumerate(microbatches):
             micro = self._to_device(micro)
             with self._train_microbatch_context(mb_idx, num_micro):
-                mb_losses: list[Tensor] = []
+                mb_obj_losses: list[Tensor] = []
                 for objective in applicable:
                     with self._model_forward_context():
                         loss, metrics = objective.compute(encoder, micro)
@@ -729,11 +729,11 @@ class MultiObjectiveEra5TrainModule(OlmoEarthTrainModule):
                     per_obj_totals[objective.name] = (
                         per_obj_totals[objective.name] + scaled.detach()
                     )
-                    mb_losses.append(scaled)
+                    mb_obj_losses.append(scaled)
                     for key, value in metrics.items():
                         agg_metrics.setdefault(key, []).append(value)
-                if mb_losses:
-                    combined = torch.stack(mb_losses).sum()
+                if mb_obj_losses:
+                    combined = torch.stack(mb_obj_losses).sum()
                     combined.backward()
 
         if dry_run:

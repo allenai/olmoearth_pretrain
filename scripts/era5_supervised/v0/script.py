@@ -161,7 +161,7 @@ class Era5SupervisedCommonComponents(CommonComponents):
     # Reconstruction objective (B) knobs.
     # ------------------------------------------------------------------
     recon_weight: float = 1.0
-    recon_decoder_depth: int = 2
+    recon_decoder_depth: int = 1
     recon_decoder_num_heads: int = 6
     recon_decoder_dropout: float = 0.0
     recon_huber_delta: float = 1.0
