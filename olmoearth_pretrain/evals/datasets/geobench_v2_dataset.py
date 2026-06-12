@@ -368,9 +368,7 @@ def _load_geobench_norm_stats() -> dict[str, dict[str, dict[str, dict[str, float
     dict if the file is absent, so callers transparently fall back to OlmoEarth
     stats for datasets we don't have stats for.
     """
-    resource = (
-        files("olmoearth_pretrain.evals.datasets.config") / "geobench2_norm_stats.json"
-    )
+resource = files("olmoearth_pretrain.evals.datasets") / "config" / "geobench2_norm_stats.json"
     if not resource.is_file():
         return {}
     with resource.open() as f:
