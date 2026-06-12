@@ -471,37 +471,74 @@ def _copy_filtered_windows(
 ) -> None:
     """Copy only the matched windows from source to destination.
 
-    Uses shutil.copytree per window for simplicity and correctness on Weka.
+    Copies the matched windows using several ``tar | tar`` pipes running in
+    parallel, each handling a shard of the window list (via ``--files-from``).
+
+    rslearn windows are many tiny files, so this copy is latency-bound on
+    networked filesystems (e.g. Weka): a single serial reader spends almost all
+    its time blocked on per-file ``open()`` round-trips. Sharding across several
+    concurrent tar pipes keeps many reads in flight at once, which hides that
+    latency and is far faster than either a single tar pipe or a per-window
+    Python copy. tar also keeps per-file overhead low and runs in subprocesses
+    that fully release the GIL.
 
     Args:
         source_path: Source dataset path
         dest_path: Destination dataset path
         matched_windows: List of (group, window_name) to copy
     """
+    import tempfile
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    num_workers = int(os.environ.get("OLMOEARTH_INGEST_WORKERS", "8"))
     total = len(matched_windows)
-    logger.info("  Copying %d matched windows (workers=%d)...", total, num_workers)
+    src_windows = Path(source_path) / "windows"
+    dst_windows = Path(dest_path) / "windows"
+    dst_windows.mkdir(parents=True, exist_ok=True)
 
-    def _copy_one(group: str, wname: str) -> str:
-        src = Path(source_path) / "windows" / group / wname
-        dst = Path(dest_path) / "windows" / group / wname
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(str(src), str(dst))
-        return wname
+    # Pre-create all group subdirs so parallel tar extractors don't race on mkdir.
+    groups_seen = {group for group, _ in matched_windows}
+    for group in groups_seen:
+        (dst_windows / group).mkdir(parents=True, exist_ok=True)
 
+    num_shards = int(os.environ.get("OLMOEARTH_INGEST_WORKERS", "32"))
+    num_shards = max(1, min(num_shards, total))
+    logger.info(
+        "  Copying %d matched windows via %d parallel tar pipes...",
+        total,
+        num_shards,
+    )
+
+    # Round-robin windows into shards so each tar pipe gets a similar load.
+    shards: list[list[tuple[str, str]]] = [[] for _ in range(num_shards)]
+    for i, win in enumerate(matched_windows):
+        shards[i % num_shards].append(win)
+
+    def _copy_shard(shard: list[tuple[str, str]]) -> int:
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:
+            for group, wname in shard:
+                fh.write(f"{group}/{wname}\n")
+            filelist = fh.name
+        try:
+            cmd = (
+                f"tar -C {src_windows} -cf - -T {filelist} "
+                f"| tar -C {dst_windows} -xf -"
+            )
+            subprocess.run(cmd, shell=True, check=True)  # nosec B602
+        finally:
+            os.unlink(filelist)
+        return len(shard)
+
+    copied = 0
     pbar = tqdm(total=total, desc="Copying windows", unit="win")
-    with ThreadPoolExecutor(max_workers=num_workers) as pool:
-        futures = [
-            pool.submit(_copy_one, group, wname) for group, wname in matched_windows
-        ]
+    with ThreadPoolExecutor(max_workers=num_shards) as pool:
+        futures = [pool.submit(_copy_shard, shard) for shard in shards if shard]
         for future in as_completed(futures):
-            future.result()
-            pbar.update(1)
+            n = future.result()
+            copied += n
+            pbar.update(n)
     pbar.close()
 
-    logger.info("  Finished copying %d windows", total)
+    logger.info("  Finished copying %d windows", copied)
 
 
 def _copy_local(

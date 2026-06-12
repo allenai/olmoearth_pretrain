@@ -776,13 +776,13 @@
       "source_path": "/weka/dfive-default/rslearn-eai/datasets/lfmc/20251023/woody/scratch/dataset",
       "split_stats": {
         "test": {
-          "count": 445
+          "count": 1000
         },
         "train": {
-          "count": 2933
+          "count": 3000
         },
         "val": {
-          "count": 747
+          "count": 1000
         }
       },
       "split_tag_key": "eval_split",
