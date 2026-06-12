@@ -70,30 +70,50 @@ quantize_args = " ".join(
 
 def get_embedding_dim_args(dim: int) -> str:
     """Get embedding dim args for all tasks."""
-    return " ".join(
-        [" "]
-        + [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_dim={dim}"
-            for task_name in EVAL_TASKS.keys()
-        ]
+    return _task_args("embedding_dim", str(dim), leading_space=True)
+
+
+def _task_arg(task_name: str, field_name: str, value: str) -> str:
+    """Create a downstream evaluator task override."""
+    return f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.{field_name}={value}"
+
+
+def _task_args(field_name: str, value: str, leading_space: bool = False) -> str:
+    """Create the same downstream evaluator override for every task."""
+    args = [_task_arg(task_name, field_name, value) for task_name in EVAL_TASKS.keys()]
+    if leading_space:
+        args = [" "] + args
+    return " ".join(args)
+
+
+def _dataset_norm_args(norm_method: str) -> str:
+    """Use dataset normalization stats with a per-task normalization method."""
+    return f"{dataset_args} {_task_args('norm_method', norm_method)}"
+
+
+def _pretrained_normalizer_args(
+    *,
+    pretrained_normalizer: bool,
+    dataset_norm_method: str,
+) -> str:
+    """Build args for wrappers that can use their own pretrained normalizer."""
+    norm_method = "NormMethod.NO_NORM" if pretrained_normalizer else dataset_norm_method
+    normalizer_arg = (
+        "--model.use_pretrained_normalizer=True"
+        if pretrained_normalizer
+        else "--model.use_pretrained_normalizer=False"
     )
+    return f"{_dataset_norm_args(norm_method)} {normalizer_arg}"
 
 
-dataset_args = " ".join(
-    [" "]
-    + [
-        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_stats_from_pretrained=False"
-        for task_name in EVAL_TASKS.keys()
-    ]
-)
+def _embedding_batch_size_args(batch_size: int) -> str:
+    """Set embedding batch size on every eval task."""
+    return _task_args("embedding_batch_size", str(batch_size))
 
-olmoearth_args = " ".join(
-    [""]
-    + [
-        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_stats_from_pretrained=True"
-        for task_name in EVAL_TASKS.keys()
-    ]
-)
+
+dataset_args = _task_args("norm_stats_from_pretrained", "False", leading_space=True)
+
+olmoearth_args = _task_args("norm_stats_from_pretrained", "True", leading_space=True)
 
 
 def loop_through_params(no_norm: bool = False) -> Generator[dict[str, Any], None, None]:
@@ -137,238 +157,78 @@ def get_dino_v3_args() -> str:
     """Get the dino v3 arguments."""
     # Normalization strategy is to scale with min max to 0 - 256 and then scale back to 0 - 1
     # Normalization is then applied by the eval wrapper by default
-    dino_v3_args = dataset_args
-    dino_v3_args += " " + " ".join(
-        [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_MIN_MAX_INT"
-            for task_name in EVAL_TASKS.keys()
-        ]
-    )
-    return dino_v3_args
+    return _dataset_norm_args("NormMethod.NORM_YES_CLIP_MIN_MAX_INT")
 
 
 def get_croma_args() -> str:
     """Get the croma arguments."""
-    croma_args = dataset_args
-    croma_args += " " + " ".join(
-        [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_2_STD"
-            for task_name in EVAL_TASKS.keys()
-        ]
-    )
-    return croma_args
+    return _dataset_norm_args("NormMethod.NORM_YES_CLIP_2_STD")
 
 
 def get_tessera_args(pretrained_normalizer: bool = True) -> str:
     """Get the tessera arguments."""
-    tessera_args = dataset_args
-    if pretrained_normalizer:
-        tessera_args = dataset_args
-        tessera_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-
-        tessera_args += " " + "--model.use_pretrained_normalizer=True"
-    else:
-        tessera_args += " " + "--model.use_pretrained_normalizer=False"
-        tessera_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-    return tessera_args
+    return _pretrained_normalizer_args(
+        pretrained_normalizer=pretrained_normalizer,
+        dataset_norm_method="NormMethod.STANDARDIZE",
+    )
 
 
 def get_panopticon_args() -> str:
     """Get the panopticon arguments."""
-    panopticon_args = dataset_args
-    panopticon_args += " " + " ".join(
-        [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-            for task_name in EVAL_TASKS.keys()
-        ]
-    )
-    return panopticon_args
+    return _dataset_norm_args("NormMethod.STANDARDIZE")
 
 
 def get_terramind_args(pretrained_normalizer: bool = True) -> str:
     """Get the terramind arguments."""
-    terramind_args = dataset_args
-    if pretrained_normalizer:
-        # To use terramind pretrained normalizer we want to leave normalization to the terramind wrapper
-        terramind_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-        terramind_args += " " + "--model.use_pretrained_normalizer=True"
-    else:
-        # IF we use dataset stats we want to turn off the pretrained normalizer
-        terramind_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-        terramind_args += " " + "--model.use_pretrained_normalizer=False"
-    return terramind_args
+    return _pretrained_normalizer_args(
+        pretrained_normalizer=pretrained_normalizer,
+        dataset_norm_method="NormMethod.STANDARDIZE",
+    )
 
 
 def get_clay_args(pretrained_normalizer: bool = True) -> str:
     """Get the clay arguments."""
-    clay_args = dataset_args
-    if pretrained_normalizer:
-        # To use clay pretrained normalizer we want to leave normalization to the clay wrapper
-        clay_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-        clay_args += " " + "--model.use_pretrained_normalizer=True"
-    else:
-        # IF we use dataset stats we want to turn off the pretrained normalizer
-        clay_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-        clay_args += " " + "--model.use_pretrained_normalizer=False"
-    return clay_args
+    return _pretrained_normalizer_args(
+        pretrained_normalizer=pretrained_normalizer,
+        dataset_norm_method="NormMethod.STANDARDIZE",
+    )
 
 
 def get_anysat_args() -> str:
     """Get the anysat arguments."""
-    anysat_args = dataset_args
-    anysat_args += " " + " ".join(
-        [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-            for task_name in EVAL_TASKS.keys()
-        ]
-    )
-    anysat_args += " " + " ".join(
-        [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=2"
-            for task_name in EVAL_TASKS.keys()
-        ]
-    )
-    return anysat_args
+    return f"{_dataset_norm_args('NormMethod.STANDARDIZE')} {_embedding_batch_size_args(2)}"
 
 
 def get_galileo_args(pretrained_normalizer: bool = True) -> str:
     """Get the galileo arguments."""
-    galileo_args = dataset_args
-    if pretrained_normalizer:
-        # To use galileo pretrained normalizer we want to leave normalization to the galileo wrapper
-        galileo_args = dataset_args
-        galileo_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-
-        galileo_args += " " + "--model.use_pretrained_normalizer=True"
-    else:
-        # IF we use dataset stats we want to turn off the pretrained normalizer
-        galileo_args += " " + "--model.use_pretrained_normalizer=False"
-        galileo_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_NO_CLIP_2_STD"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-    galileo_args += " " + " ".join(
-        [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=8"
-            for task_name in EVAL_TASKS.keys()
-        ]
+    return (
+        f"{_pretrained_normalizer_args(pretrained_normalizer=pretrained_normalizer, dataset_norm_method='NormMethod.NORM_NO_CLIP_2_STD')} "
+        f"{_embedding_batch_size_args(8)}"
     )
-    return galileo_args
 
 
 def get_satlas_args(pretrained_normalizer: bool = True) -> str:
     """Get the satlas arguments."""
-    satlas_args = dataset_args
-    if pretrained_normalizer:
-        # To use satlas pretrained normalizer we want to leave normalization to the satlas wrapper
-        satlas_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-
-        satlas_args += " " + "--model.use_pretrained_normalizer=True"
-    else:
-        satlas_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-        # IF we use dataset stats we want to turn off the pretrained normalizer
-        satlas_args += " " + "--model.use_pretrained_normalizer=False"
-    return satlas_args
+    return _pretrained_normalizer_args(
+        pretrained_normalizer=pretrained_normalizer,
+        dataset_norm_method="NormMethod.NORM_YES_CLIP",
+    )
 
 
 def get_presto_args(pretrained_normalizer: bool = True) -> str:
     """Get the presto arguments."""
-    presto_args = dataset_args
-    if pretrained_normalizer:
-        # To use presto pretrained normalizer we want to leave normalization to the presto wrapper
-        presto_args = dataset_args
-        presto_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-
-        presto_args += " " + "--model.use_pretrained_normalizer=True"
-    else:
-        # IF we use dataset stats we want to turn off the pretrained normalizer
-        presto_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-        presto_args += " " + "--model.use_pretrained_normalizer=False"
-    return presto_args
+    return _pretrained_normalizer_args(
+        pretrained_normalizer=pretrained_normalizer,
+        dataset_norm_method="NormMethod.STANDARDIZE",
+    )
 
 
 def get_prithviv2_args(pretrained_normalizer: bool = True) -> str:
     """Get the Prithvi arguments."""
-    prithvi_args = dataset_args
-    if pretrained_normalizer:
-        # To use Prithvi pretrained normalizer we want to leave normalization to the Prithvi wrapper
-        prithvi_args = dataset_args
-        prithvi_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-
-        prithvi_args += " " + "--model.use_pretrained_normalizer=True"
-    else:
-        prithvi_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-        # IF we use dataset stats we want to turn off the pretrained normalizer
-        prithvi_args += " " + "--model.use_pretrained_normalizer=False"
-
-    return prithvi_args
+    return _pretrained_normalizer_args(
+        pretrained_normalizer=pretrained_normalizer,
+        dataset_norm_method="NormMethod.STANDARDIZE",
+    )
 
 
 @dataclass(frozen=True)

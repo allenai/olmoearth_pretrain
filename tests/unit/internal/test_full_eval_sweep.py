@@ -1,7 +1,6 @@
 """Comprehensive test suite for the full eval sweep command builder."""
 
 import argparse
-from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -176,64 +175,33 @@ class TestCreateLinearProbeArg:
         assert result == expected
 
 
-class TestLoopThroughParams:
-    """Test loop_through_params function."""
+def test_loop_through_params_generates_expected_grid() -> None:
+    """The default sweep should cover every lr, normalization, and pooling pair."""
+    params = {
+        (item["lr"], item["norm_mode"], item["pooling_type"])
+        for item in loop_through_params()
+    }
+    expected = {
+        (lr, norm_mode, pooling_type)
+        for lr in LP_LRs
+        for norm_mode in Normalization_MODES
+        for pooling_type in pooling_types
+    }
 
-    def test_generates_all_combinations(self) -> None:
-        """Test that all parameter combinations are generated."""
-        params_list: list[dict[str, float | str]] = list(loop_through_params())
-
-        # Should generate len(LP_LRs) * len(Normalization_MODES) * len(pooling_types) combinations
-        expected_count: int = (
-            len(LP_LRs) * len(Normalization_MODES) * len(pooling_types)
-        )
-        assert len(params_list) == expected_count
-
-    def test_parameter_structure(self) -> None:
-        """Test that each parameter dict has the correct structure."""
-        params_list: list[dict[str, float | str]] = list(loop_through_params())
-
-        for params in params_list:
-            assert "lr" in params
-            assert "norm_mode" in params
-            assert "pooling_type" in params
-            assert params["lr"] in LP_LRs
-            assert params["norm_mode"] in Normalization_MODES
-            assert params["pooling_type"] in pooling_types
-
-    def test_all_learning_rates_included(self) -> None:
-        """Test that all learning rates are included in the sweep."""
-        params_list: list[dict[str, float | str]] = list(loop_through_params())
-        lrs_found = {params["lr"] for params in params_list}
-        assert lrs_found == set(LP_LRs)
+    assert params == expected
 
 
-class TestLoopThroughParamsNoNorm:
-    """Test loop_through_params function with no_norm=True."""
+def test_loop_through_params_can_skip_pretrained_norm() -> None:
+    """Dataset-norm-only sweeps should keep the lr/pooling grid."""
+    params = {
+        (item["lr"], item["norm_mode"], item["pooling_type"])
+        for item in loop_through_params(no_norm=True)
+    }
+    expected = {
+        (lr, "dataset", pooling_type) for lr in LP_LRs for pooling_type in pooling_types
+    }
 
-    def test_generates_correct_combinations(self) -> None:
-        """Test that loop_through_params(no_norm=True) generates the right combinations."""
-        params_list: list[dict[str, float | str]] = list(
-            loop_through_params(no_norm=True)
-        )
-
-        # Should generate len(pooling_types) * len(LP_LRs) combinations (only dataset norm mode)
-        expected_count: int = len(pooling_types) * len(LP_LRs)
-        assert len(params_list) == expected_count
-
-    def test_parameter_structure(self) -> None:
-        """Test parameter structure for loop_through_params(no_norm=True)."""
-        params_list: list[dict[str, float | str]] = list(
-            loop_through_params(no_norm=True)
-        )
-
-        for params in params_list:
-            assert "lr" in params
-            assert "pooling_type" in params
-            assert "norm_mode" in params
-            assert params["norm_mode"] == "dataset"  # Should only be dataset mode
-            assert params["lr"] in LP_LRs
-            assert params["pooling_type"] in pooling_types
+    assert params == expected
 
 
 class TestModelSpecificArgs:
@@ -611,23 +579,6 @@ class TestParametrizedTests:
 
         assert len(commands) == 1
         assert expected_args in commands[0]
-
-    @pytest.mark.parametrize("lr", LP_LRs)
-    @pytest.mark.parametrize("norm_mode", Normalization_MODES)
-    @pytest.mark.parametrize("pooling_type", pooling_types)
-    def test_parameter_combinations(
-        self, lr: float, norm_mode: str, pooling_type: Any
-    ) -> None:
-        """Test that all parameter combinations are valid."""
-        params_list: list[dict[str, float | str]] = list(loop_through_params())
-
-        # Check that this specific combination exists
-        target_combo: dict[str, float | str] = {
-            "lr": lr,
-            "norm_mode": norm_mode,
-            "pooling_type": pooling_type,
-        }
-        assert target_combo in params_list
 
 
 class TestIntegration:
