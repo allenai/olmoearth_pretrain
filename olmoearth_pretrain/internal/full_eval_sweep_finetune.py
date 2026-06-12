@@ -31,6 +31,7 @@ Each FT eval task's normalization is defined in all_evals.py.
 """
 
 import argparse
+import json
 import os
 import subprocess  # nosec
 import uuid
@@ -409,6 +410,18 @@ def build_commands(
                 seed_args=seed_args,
             )
         )
+
+    if args.task_skip_names:
+        skip_names = [name.strip() for name in args.task_skip_names.split(",")]
+        tasks_to_run = [task for task in FT_EVAL_TASKS.keys() if task not in skip_names]
+        tasks_to_run_arg = f" --trainer.callbacks.downstream_evaluator.tasks_to_run='{json.dumps(tasks_to_run)}'"
+        commands_new = []
+        for cmd in commands:
+            logger.info(f"Adding tasks_to_run filter to {cmd}")
+            cmd += tasks_to_run_arg
+            commands_new.append(cmd)
+        commands = commands_new
+
     return commands
 
 
@@ -479,6 +492,16 @@ def main() -> None:
             "config.json instead of the training module's defaults. Lets you eval "
             "runs whose architecture was set via train-time CLI overrides without "
             "re-passing those overrides here."
+        ),
+    )
+    parser.add_argument(
+        "--task-skip-names",
+        type=str,
+        required=False,
+        help=(
+            "Comma-separated FT eval task keys to skip (intersected with FT_EVAL_TASKS; "
+            "other names are ignored). If no FT tasks would remain, all FT tasks are run "
+            "with a warning."
         ),
     )
 
