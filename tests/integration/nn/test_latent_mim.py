@@ -11,6 +11,8 @@ from olmoearth_pretrain.nn.latent_mim import LatentMIM
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import PatchDiscriminationLoss
 
+from .helper import assert_has_parameter_grad
+
 logger = logging.getLogger(__name__)
 
 
@@ -129,31 +131,7 @@ def test_latentmim_with_loss(
         target_output, _, _ = unpack_encoder_output(output_dict)
     loss_fn.compute(output, target_output).backward()
 
-    for name, param in latentmim.encoder.named_parameters():
-        # worldcover and latlons are masked from the encoder
-        if not any(
-            ignore_param in name
-            for ignore_param in [
-                "pos_embed",
-                "month_embed",
-                "composite_encodings.per_modality_channel_embeddings.latlon",
-                "composite_encodings.per_modality_channel_embeddings.worldcover",
-                "patch_embeddings.per_modality_embeddings.latlon",
-                "patch_embeddings.per_modality_embeddings.worldcover",
-                "project_and_aggregate",
-            ]
-        ):
-            assert param.grad is not None, name
-    for name, param in latentmim.decoder.named_parameters():
-        # sentinel2_l2a is "masked" from the decoder
-        if not any(
-            ignore_param in name
-            for ignore_param in [
-                "pos_embed",
-                "month_embed",
-                "composite_encodings.per_modality_channel_embeddings.latlon",
-            ]
-        ):
-            assert param.grad is not None, name
+    assert_has_parameter_grad(latentmim.encoder)
+    assert_has_parameter_grad(latentmim.decoder)
     for name, param in latentmim.target_encoder.named_parameters():
         assert param.grad is None, name

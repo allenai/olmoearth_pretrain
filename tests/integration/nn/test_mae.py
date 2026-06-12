@@ -11,6 +11,8 @@ from olmoearth_pretrain.nn.mae import MAE
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import MAELoss, PatchDiscriminationLoss
 
+from .helper import assert_has_parameter_grad
+
 logger = logging.getLogger(__name__)
 
 
@@ -156,38 +158,8 @@ def test_mae_with_loss(
 
     loss.backward()
 
-    for name, param in mae.encoder.named_parameters():
-        # worldcover and latlons are masked from the encoder
-        if not any(
-            ignore_param in name
-            for ignore_param in [
-                "pos_embed",
-                "month_embed",
-                "composite_encodings.per_modality_channel_embeddings.worldcover",
-                "patch_embeddings.per_modality_embeddings.worldcover",
-                "project_and_aggregate",
-            ]
-        ):
-            assert param.grad is not None, name
+    assert_has_parameter_grad(mae.encoder)
     if mae.decoder is not None:
-        for name, param in mae.decoder.named_parameters():
-            # sentinel2_l2a is "masked" from the decoder
-            if not any(
-                ignore_param in name
-                for ignore_param in [
-                    "pos_embed",
-                    "month_embed",
-                ]
-            ):
-                assert param.grad is not None, name
+        assert_has_parameter_grad(mae.decoder)
     if mae.reconstructor is not None:
-        for name, param in mae.reconstructor.named_parameters():
-            # sentinel2_l2a is "masked" from the decoder
-            if not any(
-                ignore_param in name
-                for ignore_param in [
-                    "pos_embed",
-                    "month_embed",
-                ]
-            ):
-                assert param.grad is not None, name
+        assert_has_parameter_grad(mae.reconstructor)

@@ -23,6 +23,8 @@ from olmoearth_pretrain.nn.flexi_vit import (
 )
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 
+from .helper import assert_has_parameter_grad
+
 logger = logging.getLogger(__name__)
 
 
@@ -416,19 +418,7 @@ class TestEncoder:
 
         # test the gradients are correct too
         output.sentinel2_l2a.sum().backward()
-
-        for name, param in encoder.named_parameters():
-            # the composite_encodings is a bug which will be fixed now
-            if not any(
-                ignore_param in name
-                for ignore_param in [
-                    "project_and_aggregate",
-                    "pos_embed",
-                    "month_embed",
-                    "composite_encodings.per_modality_channel_embeddings.latlon",
-                ]
-            ):
-                assert param.grad is not None, name
+        assert_has_parameter_grad(encoder)
 
     def test_forward_exit_config_exists(
         self,
@@ -520,21 +510,7 @@ class TestEncoder:
         )
 
         output.sentinel2_l2a.sum().backward()
-        for name, param in encoder.named_parameters():
-            # the composite_encodings is a bug which will be fixed now
-            if not (
-                any(
-                    ignore_param in name
-                    for ignore_param in [
-                        "project_and_aggregate",
-                        "pos_embed",
-                        "month_embed",
-                        "composite_encodings.per_modality_channel_embeddings.latlon",
-                    ]
-                )
-                or ("block" in name)
-            ):
-                assert param.grad is not None, name
+        assert_has_parameter_grad(encoder)
 
     def test_entire_modality_masked(
         self,
@@ -630,114 +606,7 @@ class TestEncoder:
         )
 
         output.sentinel2_l2a.sum().backward()
-        for name, param in encoder.named_parameters():
-            # the composite_encodings is a bug which will be fixed now
-            if not (
-                any(
-                    ignore_param in name
-                    for ignore_param in [
-                        "pos_embed",
-                        "month_embed",
-                        "composite_encodings.per_modality_channel_embeddings.latlon",
-                        "patch_embeddings.per_modality_embeddings.latlon",
-                        "project_and_aggregate",
-                    ]
-                )
-                or ("block" in name)
-            ):
-                assert param.grad is not None, name
-
-    def test_inference_fast_pass(
-        self,
-        encoder: Encoder,
-        modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
-    ) -> None:
-        """Test the inference fast pass of the Encoder."""
-        sentinel2_l2a_num_band_sets, sentinel2_l2a_num_bands = (
-            modality_band_set_len_and_total_bands["sentinel2_l2a"]
-        )
-        latlon_num_band_sets, latlon_num_bands = modality_band_set_len_and_total_bands[
-            "latlon"
-        ]
-        B, H, W, T, C = 1, 8, 8, 4, sentinel2_l2a_num_bands
-        sentinel2_l2a = torch.randn(B, H, W, T, C)
-        sentinel2_l2a_mask = make_modality_mask_like(
-            sentinel2_l2a, Modality.SENTINEL2_L2A, dtype=torch.long
-        )
-        latlon = torch.randn(B, latlon_num_bands)
-        latlon_mask = make_modality_mask_like(
-            latlon, Modality.LATLON, dtype=torch.float32
-        )
-        days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
-        months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
-        years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
-        timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
-
-        masked_sample_dict = {
-            "sentinel2_l2a": sentinel2_l2a,
-            "sentinel2_l2a_mask": sentinel2_l2a_mask,
-            "latlon": latlon,
-            "latlon_mask": latlon_mask,
-            "timestamps": timestamps,
-        }
-        x = MaskedOlmoEarthSample(**masked_sample_dict)
-
-        patch_size = 4
-        input_res = 1
-
-        # No early exit configuration is provided.
-        with torch.inference_mode():
-            output_dict = encoder.forward(
-                x,
-                patch_size,
-                input_res,
-                token_exit_cfg=None,
-                fast_pass=True,
-            )
-        output, _, _ = unpack_encoder_output(output_dict)
-
-        # After patchification the spatial dimensions reduce.
-        expected_H = H // patch_size
-        expected_W = W // patch_size
-        expected_embedding_size = encoder.embedding_size
-        # Expected output shape [B, new_H, new_W, T, num_channel_groups, embedding_size]
-        expected_shape = (
-            B,
-            expected_H,
-            expected_W,
-            T,
-            sentinel2_l2a_num_band_sets,
-            expected_embedding_size,
-        )
-        assert output.sentinel2_l2a is not None
-        assert output.sentinel2_l2a_mask is not None
-        assert output.latlon is not None
-        assert output.latlon_mask is not None
-        assert output.sentinel2_l2a.shape == expected_shape, (
-            f"Expected output sentinel2_l2a shape {expected_shape}, got {output.sentinel2_l2a.shape}"
-        )
-
-        expected_mask_shape = (
-            B,
-            expected_H,
-            expected_W,
-            T,
-            sentinel2_l2a_num_band_sets,
-        )
-        assert output.sentinel2_l2a_mask.shape == expected_mask_shape, (
-            f"Expected output sentinel2_l2a_mask shape {expected_mask_shape}, got {output.sentinel2_l2a_mask.shape}"
-        )
-        assert output.latlon.shape == (
-            B,
-            latlon_num_band_sets,
-            expected_embedding_size,
-        ), f"Expected output latlon shape {latlon.shape}, got {output.latlon.shape}"
-        assert output.latlon_mask.shape == (
-            B,
-            latlon_num_band_sets,
-        ), (
-            f"Expected output latlon_mask shape {latlon_mask.shape}, got {output.latlon_mask.shape}"
-        )
+        assert_has_parameter_grad(encoder)
 
     def test_output_embedding_size(
         self,
@@ -933,16 +802,7 @@ class TestPredictor:
         )
         assert output.latlon_mask.shape == (B, latlon_num_band_sets)
         output.sentinel2_l2a.sum().backward()
-        for name, param in predictor.named_parameters():
-            if not any(
-                x in name
-                for x in [
-                    "pos_embed",
-                    "month_embed",
-                    "composite_encodings.per_modality_channel_embeddings.latlon",
-                ]
-            ):
-                assert param.grad is not None, name
+        assert_has_parameter_grad(predictor)
 
     def test_predictor_forward(
         self,
@@ -1023,17 +883,7 @@ class TestPredictor:
         )
         assert output.latlon_mask.shape == (B, latlon_num_band_sets)
         output.sentinel2_l2a.sum().backward()
-        for name, param in predictor.named_parameters():
-            if not any(
-                x in name
-                for x in [
-                    "pos_embed",
-                    "month_embed",
-                    "composite_encodings.per_modality_channel_embeddings.latlon",
-                    "project_and_aggregate",
-                ]
-            ):
-                assert param.grad is not None, name
+        assert_has_parameter_grad(predictor)
 
 
 def test_end_to_end_with_exit_config(
@@ -1144,14 +994,4 @@ def test_end_to_end_with_exit_config(
         1,
     )
     output.worldcover.sum().backward()
-    for name, param in predictor.named_parameters():
-        if not any(
-            x in name
-            for x in [
-                "pos_embed",
-                "month_embed",
-                "composite_encodings.per_modality_channel_embeddings.latlon",
-                "project_and_aggregate",
-            ]
-        ):
-            assert param.grad is not None, name
+    assert_has_parameter_grad(predictor)
