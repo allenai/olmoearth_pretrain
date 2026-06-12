@@ -44,11 +44,13 @@ def test_run_window_converter_uses_standard_cli_and_pool(
     class FakePool:
         def __init__(self, workers: int) -> None:
             calls["pool_workers"] = workers
-            self.closed = False
 
-        def close(self) -> None:
-            self.closed = True
-            calls["pool_closed"] = True
+        def __enter__(self) -> "FakePool":
+            calls["pool_entered"] = True
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            calls["pool_exited"] = True
 
     def fake_star_imap_unordered(
         pool: FakePool,
@@ -95,7 +97,8 @@ def test_run_window_converter_uses_standard_cli_and_pool(
 
     assert calls["start_method"] == "forkserver"
     assert calls["pool_workers"] == 3
-    assert calls["pool_closed"] is True
+    assert calls["pool_entered"] is True
+    assert calls["pool_exited"] is True
     assert calls["converter"] is converter
     assert calls["tqdm_total"] == 2
     assert calls["jobs"] == [

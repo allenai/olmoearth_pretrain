@@ -76,8 +76,7 @@ def run_window_converter(
         groups=groups,
     )
 
-    pool = multiprocessing.Pool(args.workers)
-    outputs = star_imap_unordered(pool, converter, jobs)
-    for _ in tqdm.tqdm(outputs, total=len(jobs)):
-        pass
-    pool.close()
+    with multiprocessing.Pool(args.workers) as pool:
+        outputs = star_imap_unordered(pool, converter, jobs)
+        for _ in tqdm.tqdm(outputs, total=len(jobs)):
+            pass
