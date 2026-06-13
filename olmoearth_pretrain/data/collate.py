@@ -12,7 +12,7 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.train.masking import MaskingStrategy
 
-METADATA_DROPOUT_VIEW_MODES = ("shared", "decorrelated")
+METADATA_DROPOUT_VIEW_MODES = ("shared", "decorrelated", "opposite")
 
 
 class MetadataDropout:
@@ -40,6 +40,12 @@ class MetadataDropout:
         metadata-matching shortcut in the instance contrastive loss (views of
         one sample share identical latlon/year, unique within a microbatch)
         at the cost of pressure toward metadata-invariant class tokens.
+      - "opposite": the two views get field-wise OPPOSITE drop status — for
+        each enabled field (rate > 0), exactly one view has it and the other
+        has it dropped (coin flip on which view). The instance-contrastive
+        positive pair is then always (present, absent) for that field, so the
+        class token cannot match views by copying metadata and is forced to
+        be metadata-invariant. The rate acts only as an enable flag here.
     """
 
     def __init__(
@@ -82,6 +88,19 @@ class MetadataDropout:
             torch.rand(()) < self.latlon_dropout_rate
         )
         return drop_year, drop_latlon
+
+    def draw_opposite(self) -> tuple[tuple[bool, bool], tuple[bool, bool]]:
+        """Two field-wise OPPOSITE (drop_year, drop_latlon) view conditions.
+
+        For each enabled field, exactly one of the two views drops it (coin
+        flip on which); disabled fields (rate == 0) are dropped in neither.
+        Returns ((year_a, latlon_a), (year_b, latlon_b)).
+        """
+        year_a = self.year_dropout_rate > 0.0 and bool(torch.rand(()) < 0.5)
+        latlon_a = self.latlon_dropout_rate > 0.0 and bool(torch.rand(()) < 0.5)
+        year_b = self.year_dropout_rate > 0.0 and not year_a
+        latlon_b = self.latlon_dropout_rate > 0.0 and not latlon_a
+        return (year_a, latlon_a), (year_b, latlon_b)
 
     @staticmethod
     def apply_year(sample: OlmoEarthSample, drop_year: bool) -> OlmoEarthSample:
@@ -227,12 +246,14 @@ def collate_double_masked_batched(
 
     drop_a = drop_b = (False, False)
     if metadata_dropout is not None:
-        drop_a = metadata_dropout.draw()
-        drop_b = (
-            metadata_dropout.draw()
-            if metadata_dropout.view_mode == "decorrelated"
-            else drop_a
-        )
+        if metadata_dropout.view_mode == "opposite":
+            drop_a, drop_b = metadata_dropout.draw_opposite()
+        elif metadata_dropout.view_mode == "decorrelated":
+            drop_a = metadata_dropout.draw()
+            drop_b = metadata_dropout.draw()
+        else:  # "shared"
+            drop_a = metadata_dropout.draw()
+            drop_b = drop_a
     stacked_sample_a = (
         metadata_dropout.apply_year(stacked_sample, drop_a[0])
         if metadata_dropout is not None

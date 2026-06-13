@@ -202,6 +202,33 @@ def test_combined_recipe_metadata_dropped(
     _assert_finite_positive(metrics["train/ClipInfoNCE"])
 
 
+def test_combined_recipe_opposite_metadata_views(
+    samples_without_missing_modalities: list[tuple[int, OlmoEarthSample]],
+    combined_model: LatentMIM,
+    set_random_seeds: None,
+) -> None:
+    """Opposite mode: the two views have field-wise anti-correlated metadata."""
+    dropout = MetadataDropout(
+        year_dropout_rate=1.0, latlon_dropout_rate=1.0, view_mode="opposite"
+    )
+    _, view_a, view_b = _collate(
+        samples_without_missing_modalities, metadata_dropout=dropout
+    )
+    # latlon: exactly one view MISSING-masked, the other encoder-visible.
+    a_latlon_dropped = bool((view_a.latlon_mask == MaskValue.MISSING.value).all())
+    b_latlon_dropped = bool((view_b.latlon_mask == MaskValue.MISSING.value).all())
+    assert a_latlon_dropped != b_latlon_dropped
+    # year: exactly one view carries the year-0 sentinel.
+    a_year_dropped = bool((view_a.timestamps[..., 2] == 0).all())
+    b_year_dropped = bool((view_b.timestamps[..., 2] == 0).all())
+    assert a_year_dropped != b_year_dropped
+    # Both views still carry the latlon field (module participates every step).
+    assert view_a.latlon is not None and view_b.latlon is not None
+    metrics = _run_train_batch(combined_model, (1, view_a, view_b))
+    _assert_finite_positive(metrics["train/ClipPatchDisc"])
+    _assert_finite_positive(metrics["train/ClipInfoNCE"])
+
+
 def test_combined_recipe_missing_modalities(
     samples_with_missing_modalities: list[tuple[int, OlmoEarthSample]],
     combined_model: LatentMIM,
