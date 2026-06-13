@@ -80,6 +80,7 @@ class PretrainSubsetDataset(Dataset):
         test_samples: int = DEFAULT_MAX_SAMPLES,
         split_strategy: str = "random",
         geographic_bin_size_deg: float = 5.0,
+        filter_idx_file: str | None = None,
     ) -> None:
         """Initialize a deterministic pretrain eval subset.
 
@@ -100,6 +101,11 @@ class PretrainSubsetDataset(Dataset):
             split_strategy: ``random`` for shuffled 80/10/10 sample splits or
                 ``geographic`` for shuffled 80/10/10 lat/lon-bin splits.
             geographic_bin_size_deg: Geographic bin size for spatial holdouts.
+            filter_idx_file: Optional path to a ``.npy`` file of int positions
+                into the prepared dataset. When set, these indices are used
+                verbatim and the random / split / target-modality selection
+                logic is skipped — useful for pinning the subset to a curated
+                list (e.g. all water-dominant samples for tiling diagnostics).
         """
         self.patch_size = patch_size
         self.hw_p = hw_p
@@ -132,7 +138,26 @@ class PretrainSubsetDataset(Dataset):
             )
             self._label_dataset.sample_indices = self._dataset.sample_indices.copy()
 
-        if target_modality is None:
+        if filter_idx_file is not None:
+            forced = np.load(filter_idx_file)
+            if not isinstance(forced, np.ndarray):
+                raise TypeError(
+                    f"Expected filter_idx_file to point to a np.ndarray, got "
+                    f"{type(forced).__name__}"
+                )
+            total = len(self._dataset)
+            out_of_range = forced[(forced < 0) | (forced >= total)]
+            if out_of_range.size:
+                raise ValueError(
+                    f"filter_idx_file {filter_idx_file} has {out_of_range.size} "
+                    f"indices outside [0, {total}); first bad: {out_of_range[:5]}"
+                )
+            if forced.size > max_samples:
+                rng = np.random.RandomState(seed)
+                forced = rng.choice(forced, size=max_samples, replace=False)
+                forced.sort()
+            self._indices = forced.tolist()
+        elif target_modality is None:
             total = len(self._dataset)
             n = min(max_samples, total)
             rng = np.random.RandomState(seed)
@@ -445,4 +470,8 @@ class PretrainSubsetDataset(Dataset):
         )
         _, sample = self._dataset[args]
         masked = self._missing_aware_masked_sample(sample)
+        if self.target_modality is None:
+            pixel_size = self.hw_p * self.patch_size
+            dummy_label = torch.zeros(pixel_size, pixel_size, dtype=torch.long)
+            return masked, dummy_label
         return masked, self._get_label(args)

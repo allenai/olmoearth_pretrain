@@ -66,7 +66,11 @@ class EvalWrapper:
         self.patch_size = patch_size
         self.pooling_type = pooling_type
         self.concat_features = concat_features
-        self.spatial_pool = task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION)
+        self.spatial_pool = task_type in (
+            TaskType.SEGMENTATION,
+            TaskType.DIAGNOSTIC,
+            TaskType.REGRESSION,
+        )
         self.use_pooled_tokens = use_pooled_tokens
         if self.use_pooled_tokens:
             assert isinstance(self.model, EncodeEarlyAttnPool), (
