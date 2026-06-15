@@ -253,6 +253,10 @@ class Era5TaskSpec:
             weka_path: Optional overrides for non-registry usage.
         norm_stats_from_pretrained: Use the pretrain `computed.json` stats.
             When False, the registry entry's per-task stats are used.
+        target_mean: Mean of regression targets (for z-score normalization in
+            the supervised head). Only used for regression tasks.
+        target_std: Std of regression targets (for z-score normalization in
+            the supervised head). Only used for regression tasks.
     """
 
     name: str
@@ -270,6 +274,8 @@ class Era5TaskSpec:
     weka_path: str | None = None
     model_yaml_path: str | None = None
     max_samples: int | None = None
+    target_mean: float | None = None
+    target_std: float | None = None
 
     def get_label_extractor(self) -> LabelExtractor:
         """Resolve the `LabelExtractor` to use for this task."""

@@ -45,6 +45,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 108.38952,
+      "target_std": 36.616698,
       "task_type": "regression",
       "test_groups": [
         "spatial_split"
@@ -72,6 +74,8 @@
         "oep_eval": "",
         "split": "train"
       },
+      "target_mean": 108.38952,
+      "target_std": 36.616698,
       "task_type": "regression",
       "test_groups": [
         "spatial_split"

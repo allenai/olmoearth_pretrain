@@ -345,6 +345,8 @@ def _spec_from_direct_entry(
         norm_stats_from_pretrained=entry.norm_stats_from_pretrained,
         label_extractor_name=label_extractor_name,
         max_samples=entry.max_samples,
+        target_mean=entry.target_mean,
+        target_std=entry.target_std,
     )
 
 
@@ -499,6 +501,8 @@ def build_model_config(
                     num_classes=spec.num_classes,
                     is_multilabel=spec.is_multilabel,
                     weight=spec.weight,
+                    target_mean=spec.target_mean,
+                    target_std=spec.target_std,
                 )
                 for spec in specs
             ],

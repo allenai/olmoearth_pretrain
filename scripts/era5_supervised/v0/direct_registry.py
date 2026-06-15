@@ -94,6 +94,8 @@ class DirectRslearnTaskEntry(BaseModel):
     test_tags: dict[str, str] = Field(default_factory=dict)
     norm_stats_from_pretrained: bool = True
     max_samples: int | None = None
+    target_mean: float | None = None
+    target_std: float | None = None
     notes: str | None = None
 
 

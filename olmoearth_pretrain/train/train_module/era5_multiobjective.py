@@ -221,6 +221,8 @@ class SupervisedTaskConfig(Config):
     is_multilabel: bool = False
     regression_loss: str = "l2"
     weight: float = 1.0
+    target_mean: float | None = None
+    target_std: float | None = None
 
 
 @dataclass
@@ -243,6 +245,8 @@ class SupervisedObjectiveConfig(Config):
                 num_classes=task.num_classes,
                 is_multilabel=task.is_multilabel,
                 regression_loss=task.regression_loss,
+                target_mean=task.target_mean,
+                target_std=task.target_std,
             )
             registry.register(task.name, head)
             task_weights[task.name] = task.weight

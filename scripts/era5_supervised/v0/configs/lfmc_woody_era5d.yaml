@@ -30,8 +30,6 @@ data:
         metrics:
         - rmse
         - r2
-        target_mean: 108.389520
-        target_std: 36.616698
     batch_size: 64
     num_workers: 16
     default_config:

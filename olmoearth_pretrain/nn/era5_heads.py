@@ -81,16 +81,44 @@ class SupervisedHead(_LazyLinearHead, ABC):
 
 
 class RegressionHead(SupervisedHead):
-    """Per-sample scalar / multi-output regression head."""
+    """Per-sample scalar / multi-output regression head.
+
+    When ``target_mean`` and ``target_std`` are provided, labels are z-scored
+    before computing the loss so that the gradient magnitude is independent of
+    the raw target scale.  Auxiliary ``mse_raw`` / ``mae_raw`` metrics are
+    reported in the original target units for interpretability.
+    """
 
     task_type = TaskType.REGRESSION
 
-    def __init__(self, num_outputs: int = 1, loss: str = "l2") -> None:
-        """Initialize with output dimension and loss type ('l1' or 'l2')."""
+    def __init__(
+        self,
+        num_outputs: int = 1,
+        loss: str = "l2",
+        target_mean: float | None = None,
+        target_std: float | None = None,
+    ) -> None:
+        """Initialize with output dimension, loss type, and optional target stats."""
         super().__init__(num_outputs=num_outputs)
         if loss not in {"l1", "l2"}:
             raise ValueError(f"Unsupported regression loss: {loss}")
         self.loss = loss
+        self.register_buffer(
+            "_target_mean",
+            torch.tensor(target_mean, dtype=torch.float32)
+            if target_mean is not None
+            else None,
+        )
+        self.register_buffer(
+            "_target_std",
+            torch.tensor(target_std, dtype=torch.float32)
+            if target_std is not None
+            else None,
+        )
+
+    @property
+    def _normalizes_targets(self) -> bool:
+        return self._target_mean is not None and self._target_std is not None
 
     def compute_loss(
         self, pooled: Tensor, labels: Tensor
@@ -109,17 +137,27 @@ class RegressionHead(SupervisedHead):
         if not valid.any():
             zero = torch.zeros((), device=preds.device, dtype=preds.dtype)
             return zero, {"valid_fraction": zero.detach()}
+
+        if self._normalizes_targets:
+            labels = (labels - self._target_mean) / self._target_std
+
         diff = (preds - labels)[valid]
         if self.loss == "l1":
             loss = diff.abs().mean()
         else:
             loss = (diff**2).mean()
+
         with torch.no_grad():
-            metrics = {
+            metrics: dict[str, Tensor] = {
                 "mse": (diff**2).mean().detach(),
                 "mae": diff.abs().mean().detach(),
                 "valid_fraction": valid.float().mean().detach(),
             }
+            if self._normalizes_targets:
+                raw_diff = diff * self._target_std
+                metrics["mse_raw"] = (raw_diff**2).mean().detach()
+                metrics["mae_raw"] = raw_diff.abs().mean().detach()
+
         return loss, metrics
 
 
@@ -214,12 +252,19 @@ def build_head(
     num_classes: int | None,
     is_multilabel: bool = False,
     regression_loss: str = "l2",
+    target_mean: float | None = None,
+    target_std: float | None = None,
 ) -> SupervisedHead:
     """Construct the right head for a given (task_type, is_multilabel) pair."""
     task_type = TaskType(task_type)
     if task_type == TaskType.REGRESSION:
         num_outputs = num_classes or 1
-        return RegressionHead(num_outputs=num_outputs, loss=regression_loss)
+        return RegressionHead(
+            num_outputs=num_outputs,
+            loss=regression_loss,
+            target_mean=target_mean,
+            target_std=target_std,
+        )
     if task_type == TaskType.CLASSIFICATION:
         if num_classes is None:
             raise ValueError("ClassificationHead requires num_classes")
