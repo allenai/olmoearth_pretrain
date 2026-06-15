@@ -520,8 +520,7 @@ def _copy_filtered_windows(
             filelist = fh.name
         try:
             cmd = (
-                f"tar -C {src_windows} -cf - -T {filelist} "
-                f"| tar -C {dst_windows} -xf -"
+                f"tar -C {src_windows} -cf - -T {filelist} | tar -C {dst_windows} -xf -"
             )
             subprocess.run(cmd, shell=True, check=True)  # nosec B602
         finally:
