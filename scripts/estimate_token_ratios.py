@@ -444,7 +444,7 @@ def estimate_token_ratios_real(
         tokenization_config=tokenization_config,
         token_budget=token_budget,
     ).build(dataset)
-    dataloader.reshuffle(epoch=0)
+    dataloader.reshuffle(epoch=1)
 
     results: list[TokenRatioResult] = []
     for batch in tqdm(dataloader, desc="Sampling (real)", total=num_samples):
