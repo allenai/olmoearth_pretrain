@@ -10,6 +10,7 @@ Example usage:
 
 import argparse
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
 
 import numpy as np
@@ -589,6 +590,52 @@ def print_statistics(
     print("=" * 60)
 
 
+def summarize_encode_modality_counts(results: list[TokenRatioResult]) -> None:
+    """Distribution over samples of how many distinct modalities the encoder sees.
+
+    "Seen by the encoder" = the modality has at least one ONLINE_ENCODER token in the
+    sample. Decode-only modalities never get encoded tokens, so they are naturally
+    excluded. A modality that is entirely missing in a sample also doesn't count. This
+    directly answers "how often does the model encode only a single modality?".
+    """
+    counts = []
+    per_modality_present: dict[str, int] = defaultdict(int)
+    for r in results:
+        if not r.per_modality_stats:
+            continue
+        encoded_mods = [
+            m for m, s in r.per_modality_stats.items() if s.get("encoded", 0) > 0
+        ]
+        counts.append(len(encoded_mods))
+        for m in encoded_mods:
+            per_modality_present[m] += 1
+    if not counts:
+        print("\nNo per-modality stats available for the encode-modality histogram.")
+        return
+
+    counts_arr = np.array(counts)
+    n = len(counts_arr)
+    print("\n" + "=" * 60)
+    print("NUMBER OF DISTINCT ENCODE MODALITIES SEEN PER SAMPLE")
+    print("=" * 60)
+    print(f"\n  Samples:                        {n}")
+    print(f"  Mean encode modalities/sample:  {counts_arr.mean():.2f}")
+    print(f"  Median:                         {int(np.median(counts_arr))}")
+    print("\n  Distribution:")
+    for k in range(0, int(counts_arr.max()) + 1):
+        mask = counts_arr == k
+        print(
+            f"    {k} encode modality(ies): {mask.mean() * 100:5.1f}%  ({mask.sum()})"
+        )
+    print(f"\n  == 1 encode modality:  {(counts_arr == 1).mean() * 100:.1f}%")
+    print(f"  <= 1 encode modality:  {(counts_arr <= 1).mean() * 100:.1f}%")
+    print(f"  >= 2 encode modalities:{(counts_arr >= 2).mean() * 100:.1f}%")
+    print("\n  Fraction of samples where each modality is among the encoded:")
+    for m in sorted(per_modality_present):
+        print(f"    {m:<28} {per_modality_present[m] / n * 100:5.1f}%")
+    print("=" * 60)
+
+
 def main() -> None:
     """Main entry point for the token ratio estimation script."""
     parser = argparse.ArgumentParser(
@@ -711,11 +758,12 @@ def main() -> None:
         token_budget=args.token_budget,
         missing_prob=args.missing_prob,
         seed=args.seed,
-        track_per_modality=args.per_modality,
+        track_per_modality=True,  # needed for the encode-modality histogram (cheap)
         tokenization_config=tokenization_config,
     )
 
     print_statistics(results, show_per_modality=args.per_modality)
+    summarize_encode_modality_counts(results)
 
 
 if __name__ == "__main__":

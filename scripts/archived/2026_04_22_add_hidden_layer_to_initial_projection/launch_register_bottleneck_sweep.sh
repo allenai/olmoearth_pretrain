@@ -288,39 +288,39 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 # # discrimination (JEPA) loss and low-weight register supervision are unchanged. No code
 # # change needed: contrastive_config is Optional and the train module no-ops when it's None.
 
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_noic" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-    --model.encoder_config.register_interleave=true \
-    --train_module.contrastive_config=null
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_noic" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_interleave=true \
+#     --train_module.contrastive_config=null
 
-# # ===== interleaved reads + per-depth read norms/projections: il_pdproj (2) =====
-# # Final-layer-only reads (register_interleave=true, NO register_read_layers), but each of
-# # the register_latent_depth read blocks gets its OWN input LayerNorm + K/V down-projection
-# # (register_per_depth_read_proj=true) instead of sharing one pair. The reads all re-query
-# # the SAME final encoder layer, so per-block projections let successive reads extract a
-# # different view of it through their own lens, rather than being forced through one shared
-# # projection. Generalizes per_depth_read_proj (previously multi-depth only) to the il
-# # schedule. Dynamic grid, d768. Tagged "il_pdproj".
-# #   - with instance (InfoNCE) contrastive loss   -> il_pdproj
-# #   - without it (contrastive_config -> null)     -> il_pdproj_noic
-# # A/Bs against regbtl_base10k_scale0.25_gdyn_d768_il (shared proj) and ..._il_noic above.
-# # NOTE: per-depth norms/projs change the parameter set (input_norm/kv_proj ->
-# # input_norms.i/kv_projs.i), so these start fresh; existing il checkpoints (shared pair)
-# # are unaffected and load unchanged.
+# # # ===== interleaved reads + per-depth read norms/projections: il_pdproj (2) =====
+# # # Final-layer-only reads (register_interleave=true, NO register_read_layers), but each of
+# # # the register_latent_depth read blocks gets its OWN input LayerNorm + K/V down-projection
+# # # (register_per_depth_read_proj=true) instead of sharing one pair. The reads all re-query
+# # # the SAME final encoder layer, so per-block projections let successive reads extract a
+# # # different view of it through their own lens, rather than being forced through one shared
+# # # projection. Generalizes per_depth_read_proj (previously multi-depth only) to the il
+# # # schedule. Dynamic grid, d768. Tagged "il_pdproj".
+# # #   - with instance (InfoNCE) contrastive loss   -> il_pdproj
+# # #   - without it (contrastive_config -> null)     -> il_pdproj_noic
+# # # A/Bs against regbtl_base10k_scale0.25_gdyn_d768_il (shared proj) and ..._il_noic above.
+# # # NOTE: per-depth norms/projs change the parameter set (input_norm/kv_proj ->
+# # # input_norms.i/kv_projs.i), so these start fresh; existing il checkpoints (shared pair)
+# # # are unaffected and load unchanged.
 
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_pdproj" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-    --model.encoder_config.register_interleave=true \
-    --model.encoder_config.register_per_depth_read_proj=true
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_pdproj" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_interleave=true \
+#     --model.encoder_config.register_per_depth_read_proj=true
 
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_pdproj_noic" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-    --model.encoder_config.register_interleave=true \
-    --model.encoder_config.register_per_depth_read_proj=true \
-    --train_module.contrastive_config=null
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_pdproj_noic" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_interleave=true \
+#     --model.encoder_config.register_per_depth_read_proj=true \
+#     --train_module.contrastive_config=null
 
 # ============ learned per-read residual gates on the mdr3 frontier (2) ============
 # The mdr3_ictok_pdproj frontier (dynamic grid, d768, read_layers=[3,6,9,12],
@@ -427,3 +427,33 @@ python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_pdproj_noic" "$CL
 #     --model.encoder_config.register_interleave=true \
 #     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
 #     --model.encoder_config.register_fused_read=learned
+
+# ============ NEW MASKING: sampled 1/2/3 encode modalities (3) ============
+# Re-run of the anchor set under the masking change in commit 551ad3e1b
+# (RandomTimeWithDecodeMaskingStrategy now samples num_encode ~ Uniform{1..k} instead of
+# the deterministic ceil(n*encode_ratio), so the encoder sees 1, 2, OR 3 of {S2,S1,Landsat}
+# ~uniformly instead of always exactly 2). The masking is shared data-side code, so these
+# launch from current HEAD with NO config change vs their old-masking counterparts -- only
+# the run name differs (tag "m123"). Purpose: cleanly A/B the masking change against the
+# existing old-masking knn/lp baselines, across the architecture axis (no bottleneck /
+# single-read / multi-depth). Watch the SRTM S1 / S2 / S1+S2 split (does S1+S2 - S2 go
+# positive?) and the unimodal S1 evals.
+#   1. rope baseline (NO bottleneck) -- control: does the masking help fusion on its own?
+#      Uses the rope.py launcher, same project/args; $ROPE already sets base10k + scale0.25.
+#   2. gdyn_d768_il               -- in-domain frontier (single final-layer read).
+#   3. gdyn_d768_mdr3_ictok_pdproj -- external-transfer frontier (multi-depth read).
+
+python "scripts/official/v1_1/rope.py" launch "rope_base10k_scale0.25_m123" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE
+
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_m123" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    --model.encoder_config.register_interleave=true
+
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_m123" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+    --model.encoder_config.register_contrastive_source=encoder_tokens \
+    --model.encoder_config.register_per_depth_read_proj=true

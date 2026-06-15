@@ -56,7 +56,14 @@ def get_run_group_name(run_name: str, keep_steps_separate: bool = False) -> str:
 
     Default: 'exp_step300000_dataset_lr0.001_ptmean' -> 'exp'
     keep_steps_separate: 'exp_step300000_dataset_lr0.001_ptmean' -> 'exp_step300000'
+
+    The `_average_token` marker (evals run on pooled encoder tokens instead of the
+    register-bottleneck latents) is appended *after* the step/hyperparam suffix, so
+    the step-stripping below would otherwise discard it and collapse encoder-token
+    runs with their register-latent counterparts. It is carried onto the group key
+    so the two variants stay distinct.
     """
+    suffix = "_average_token" if "_average_token" in run_name else ""
     if keep_steps_separate:
         # Greedy match up to and including _step{N}: "exp_step300000_lr..." -> "exp_step300000"
         pattern = r"(.+_step\d+)"
@@ -65,12 +72,12 @@ def get_run_group_name(run_name: str, keep_steps_separate: bool = False) -> str:
         pattern = r"(.+?)_step\d+"
     match = re.match(pattern, run_name)
     if match:
-        return match.group(1)
+        return match.group(1) + suffix
     # Runs without _step: strip from the norm mode + lr suffix onwards
     # e.g. "model_dataset_lr0.001_ptmean" -> "model"
     match = re.match(r"(.+?)_(dataset|pre_trained|df)_lr", run_name)
     if match:
-        return match.group(1)
+        return match.group(1) + suffix
     raise ValueError(f"unexpected run name {run_name}")
 
 
