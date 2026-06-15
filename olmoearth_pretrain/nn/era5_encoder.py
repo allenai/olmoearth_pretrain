@@ -154,6 +154,13 @@ class Era5DailyEncoderConfig(Config):
         drop_path_rate: Stochastic depth rate (linearly increased per layer).
         add_day_of_year_features: Add sin/cos day-of-year features to tokens.
         add_relative_position_features: Add sin/cos relative index features.
+        use_mask_embed: When True, create a learned per-band mask embedding
+            ``[1, 1, V]`` and accept an optional ``corruption_mask`` in
+            ``forward()``.  Masked positions are replaced with the learned
+            embedding instead of being zeroed.
+        use_conv_stem: When True, replace the single Conv1D patch embedding
+            with a two-layer stem (Conv1D + GroupNorm + GELU + 1x1 Conv1D)
+            that has enough nonlinear capacity to gate out masked channels.
         extras: Reserved for objective C plumbing.
     """
 
@@ -171,6 +178,8 @@ class Era5DailyEncoderConfig(Config):
     drop_path_rate: float = 0.0
     add_day_of_year_features: bool = True
     add_relative_position_features: bool = False
+    use_mask_embed: bool = False
+    use_conv_stem: bool = False
     extras: dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
@@ -225,13 +234,34 @@ class Era5DailyEncoder(nn.Module):
         self.add_day_of_year_features = config.add_day_of_year_features
         self.add_relative_position_features = config.add_relative_position_features
 
-        # Conv1D patch embedding: [B, C, T] -> [B, d_model, N]
-        self.patch_embed = nn.Conv1d(
-            in_channels=in_channels,
-            out_channels=d_model,
-            kernel_size=config.patch_kernel_size,
-            stride=config.patch_stride,
-        )
+        # Learned per-band mask embedding for reconstruction masking
+        if config.use_mask_embed:
+            self.mask_embed = nn.Parameter(torch.zeros(1, 1, in_channels))
+            nn.init.trunc_normal_(self.mask_embed, std=0.02)
+        else:
+            self.mask_embed = None
+
+        # Patch embedding: [B, C, T] -> [B, d_model, N]
+        if config.use_conv_stem:
+            mid = d_model // 2
+            self.patch_embed: nn.Module = nn.Sequential(
+                nn.Conv1d(
+                    in_channels,
+                    mid,
+                    kernel_size=config.patch_kernel_size,
+                    stride=config.patch_stride,
+                ),
+                nn.GroupNorm(1, mid),
+                nn.GELU(),
+                nn.Conv1d(mid, d_model, kernel_size=1),
+            )
+        else:
+            self.patch_embed = nn.Conv1d(
+                in_channels=in_channels,
+                out_channels=d_model,
+                kernel_size=config.patch_kernel_size,
+                stride=config.patch_stride,
+            )
         self.token_dropout = nn.Dropout(config.dropout)
 
         # Time features (day-of-year sin/cos, optional relative pos sin/cos)
@@ -294,6 +324,7 @@ class Era5DailyEncoder(nn.Module):
         timestamps: Tensor,
         ignore_mask: Tensor,
         prior_tokens: Tensor | None = None,
+        corruption_mask: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Encode a batch of daily ERA5 sequences.
 
@@ -305,6 +336,10 @@ class Era5DailyEncoder(nn.Module):
             prior_tokens: Optional ``[B, K, D]`` prior tokens prepended to
                 the sequence (used by objective C). They are always
                 considered valid (never ignored).
+            corruption_mask: Optional ``[B, T, C]`` boolean tensor. ``True``
+                positions are replaced with the learned ``mask_embed``
+                before patchifying.  Only effective when ``use_mask_embed``
+                is enabled.
 
         Returns:
             Dict with keys:
@@ -333,6 +368,10 @@ class Era5DailyEncoder(nn.Module):
                 f"ignore_mask shape {tuple(ignore_mask.shape)} does not "
                 f"match era5 (B, T) = ({b}, {t})"
             )
+
+        # Replace corrupted positions with learned mask embedding
+        if corruption_mask is not None and self.mask_embed is not None:
+            era5 = torch.where(corruption_mask, self.mask_embed.expand_as(era5), era5)
 
         # valid_mask: True = real data (used internally)
         valid_mask = ~ignore_mask

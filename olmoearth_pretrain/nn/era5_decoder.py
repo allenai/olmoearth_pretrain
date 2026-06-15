@@ -116,7 +116,7 @@ class Era5TimeQueryDecoderConfig(Config):
         dropout: Dropout in FFN and attention.
     """
 
-    embedding_size: int = 384
+    embedding_size: int = 128
     depth: int = 2
     num_heads: int = 6
     mlp_ratio: float = 4.0

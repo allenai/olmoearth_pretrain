@@ -154,6 +154,8 @@ def test_b_only():
             num_heads=4,
             max_sequence_length=T,
             modality_name=Modality.ERA5L_DAY_10.name.lower(),
+            use_mask_embed=True,
+            use_conv_stem=True,
         ),
         supervised_objective=None,
         reconstruction_objective=ReconstructionObjectiveConfig(
@@ -203,6 +205,8 @@ def test_a_plus_b():
             num_heads=4,
             max_sequence_length=T,
             modality_name=Modality.ERA5L_DAY_10.name.lower(),
+            use_mask_embed=True,
+            use_conv_stem=True,
         ),
         supervised_objective=SupervisedObjectiveConfig(
             tasks=[

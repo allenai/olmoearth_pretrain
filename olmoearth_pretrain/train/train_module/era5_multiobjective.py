@@ -425,14 +425,17 @@ class ReconstructionObjective(_Objective):
         x = batch.era5  # [B, T, V]
         ignore_mask = batch.ignore_mask  # [B, T]
 
-        # 1. Corrupt
-        x_corrupted, mask = corrupt_era5(x, ignore_mask, self.corruption_config)
+        # 1. Generate corruption mask
+        _, mask = corrupt_era5(x, ignore_mask, self.corruption_config)
 
-        # 2. Encode the corrupted input
+        # 2. Encode with corruption mask (encoder applies learned mask
+        #    embedding when use_mask_embed is enabled; otherwise falls
+        #    back to the original zero-fill from corrupt_era5).
         out = encoder(
-            era5=x_corrupted,
+            era5=x,
             timestamps=batch.timestamps,
             ignore_mask=ignore_mask,
+            corruption_mask=mask,
         )
 
         # 3. Decode
