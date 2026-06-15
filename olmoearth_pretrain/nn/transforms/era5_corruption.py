@@ -3,7 +3,7 @@
 Masking operates on normalized ERA5 input ``[B, T, V]`` and combines:
 
 * **Short time masks** — contiguous spans of timesteps where *all* V
-  variables are zeroed (forces the encoder to interpolate across time).
+  variables are masked (forces the encoder to interpolate across time).
 * **Policy-driven variable masks** — a configurable mask *policy* that,
   per sample, samples one masking strategy from a weighted menu (see
   :data:`MASK_POLICY_V1`).  Strategies range from dropping a single
@@ -16,8 +16,12 @@ Note: ERA5L_DAY_10 has one timestep per day, so span lengths expressed
 in *days* map directly onto timesteps.
 
 Everything is applied on-the-fly on the GPU and respects the existing
-``ignore_mask`` (padding).  Masked positions are set to 0 (the
-post-normalization mean).
+``ignore_mask`` (padding).
+
+:func:`corrupt_era5` returns a boolean corruption mask.  The encoder
+replaces masked positions with a learned per-band embedding before
+patchifying (see ``use_mask_embed`` in
+:class:`~olmoearth_pretrain.nn.era5_encoder.Era5DailyEncoder`).
 """
 
 from __future__ import annotations
@@ -275,18 +279,20 @@ def corrupt_era5(
     era5: Tensor,
     ignore_mask: Tensor,
     config: CorruptionConfig,
-) -> tuple[Tensor, Tensor]:
-    """Apply corruption to a batch of ERA5 sequences.
+) -> Tensor:
+    """Generate a corruption mask for a batch of ERA5 sequences.
+
+    The mask indicates which ``(batch, timestep, variable)`` positions
+    should be treated as corrupted.  The encoder applies a learned
+    per-band embedding at masked positions (see ``use_mask_embed``).
 
     Args:
-        era5: ``[B, T, V]`` normalized input.
+        era5: ``[B, T, V]`` normalized input (used only for shape/device).
         ignore_mask: ``[B, T]`` bool, True = padded / invalid timestep.
         config: Corruption settings.
 
     Returns:
-        ``(era5_corrupted, mask)`` where *mask* is ``[B, T, V]`` bool
-        (True = corrupted / zeroed position).  The corrupted tensor has
-        masked positions set to 0.
+        ``mask`` — ``[B, T, V]`` bool (True = corrupted position).
     """
     b, t, v = era5.shape
     device = era5.device
@@ -317,11 +323,7 @@ def corrupt_era5(
         )
     _apply_mask_policy(mask, valid, config.mask_policy, config.variable_groups)
 
-    # Apply mask: zero out corrupted positions
-    era5_corrupted = era5.clone()
-    era5_corrupted[mask] = 0.0
-
-    return era5_corrupted, mask
+    return mask
 
 
 # ---------------------------------------------------------------------------

@@ -72,11 +72,9 @@ def test_corruption():
         time_mask_min_len=5,
         time_mask_max_len=20,
     )
-    x_c, mask = corrupt_era5(batch.era5, batch.ignore_mask, config)
-    assert x_c.shape == (B, T, V), f"Bad shape: {x_c.shape}"
+    mask = corrupt_era5(batch.era5, batch.ignore_mask, config)
     assert mask.shape == (B, T, V), f"Bad mask shape: {mask.shape}"
     assert mask.any(), "Nothing was masked"
-    assert (x_c[mask] == 0).all(), "Masked positions should be zero"
     frac = mask.float().mean().item()
     print(f"  Masked fraction: {frac:.3f}")
     print("  PASS")

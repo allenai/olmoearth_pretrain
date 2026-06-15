@@ -426,11 +426,10 @@ class ReconstructionObjective(_Objective):
         ignore_mask = batch.ignore_mask  # [B, T]
 
         # 1. Generate corruption mask
-        _, mask = corrupt_era5(x, ignore_mask, self.corruption_config)
+        mask = corrupt_era5(x, ignore_mask, self.corruption_config)
 
-        # 2. Encode with corruption mask (encoder applies learned mask
-        #    embedding when use_mask_embed is enabled; otherwise falls
-        #    back to the original zero-fill from corrupt_era5).
+        # 2. Encode with corruption mask (encoder replaces masked
+        #    positions with learned per-band embeddings).
         out = encoder(
             era5=x,
             timestamps=batch.timestamps,
