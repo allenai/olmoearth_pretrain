@@ -48,6 +48,7 @@ class EvalWrapper:
         pooling_type: PoolingType,
         concat_features: bool = False,
         use_pooled_tokens: bool = False,
+        eval_on_encoder_tokens: bool = False,
     ):
         """Initialize the eval wrapper.
 
@@ -58,6 +59,10 @@ class EvalWrapper:
             pooling_type: The pooling type to use for the model.
             concat_features: Whether to concatenate features across modalities.
             use_pooled_tokens: Whether to use pooled tokens.
+            eval_on_encoder_tokens: If True and the model has a register bottleneck,
+                probe the pooled encoder patch tokens instead of the register latents.
+                No effect when the model has no register bottleneck (encoder tokens are
+                always used in that case).
             is_train: whether this is being used on the training data.
         """
         super().__init__()
@@ -68,6 +73,7 @@ class EvalWrapper:
         self.concat_features = concat_features
         self.spatial_pool = task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION)
         self.use_pooled_tokens = use_pooled_tokens
+        self.eval_on_encoder_tokens = eval_on_encoder_tokens
         if self.use_pooled_tokens:
             assert isinstance(self.model, EncodeEarlyAttnPool), (
                 "Pooled tokens are only supported for EncodeEarlyAttnPool"
@@ -138,11 +144,13 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                 masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=fast_pass
             )
             if (
-                getattr(self.model, "use_register_bottleneck", False)
+                not self.eval_on_encoder_tokens
+                and getattr(self.model, "use_register_bottleneck", False)
                 and "registers" in encoder_output
             ):
                 # Register bottleneck: probe the register grid (the model's compressed,
                 # spatially-anchored representation), not the per-modality patch tokens.
+                # Opt out with eval_on_encoder_tokens to fall through to the patch tokens.
                 batch_embeddings = self._pool_registers(encoder_output)
             else:
                 tokens_and_masks: TokensAndMasks = encoder_output[

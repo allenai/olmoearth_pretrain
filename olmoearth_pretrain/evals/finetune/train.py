@@ -140,6 +140,7 @@ def run_finetune_eval(
     patch_size: int,
     pooling_type: str,
     use_pooled_tokens: bool,
+    eval_on_encoder_tokens: bool,
     train_loader: DataLoader,
     val_loader: DataLoader,
     test_loader: DataLoader | None,
@@ -165,6 +166,7 @@ def run_finetune_eval(
         pooling_type=pooling_type,
         num_classes=task_config.num_classes,
         use_pooled_tokens=use_pooled_tokens,
+        eval_on_encoder_tokens=eval_on_encoder_tokens,
     ).to(device)
 
     # Trigger _init_head once with a tiny dry pass which initializes the head with the correct dimension.

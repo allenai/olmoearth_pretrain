@@ -95,6 +95,9 @@ class DownstreamTaskConfig:
     eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
+    # If the model has a register bottleneck, probe the pooled encoder patch tokens
+    # instead of the register latents. No effect without a register bottleneck.
+    eval_on_encoder_tokens: bool = False
     # Fraction of training labels to use for low-label evals. Dataset-specific
     # code translates this into fixed partitions or deterministic subsamples.
     label_fraction: float = 1.0
@@ -189,6 +192,7 @@ class DownstreamEvaluator:
         self.label_fraction = task.label_fraction
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
+        self.eval_on_encoder_tokens = task.eval_on_encoder_tokens
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
         self.embedding_dim = task.embedding_dim
@@ -350,6 +354,7 @@ class DownstreamEvaluator:
             "pooling_type": self.pooling_type,
             "concat_features": (self.probe_type == "attn_pool"),
             "use_pooled_tokens": self.use_pooled_tokens,
+            "eval_on_encoder_tokens": self.eval_on_encoder_tokens,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(
@@ -557,6 +562,7 @@ class DownstreamEvaluator:
             patch_size=self.patch_size,
             pooling_type=self.pooling_type,
             use_pooled_tokens=self.use_pooled_tokens,
+            eval_on_encoder_tokens=self.eval_on_encoder_tokens,
             train_loader=train_loader,
             val_loader=val_loader,
             test_loader=test_loader,
