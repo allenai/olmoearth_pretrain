@@ -485,6 +485,17 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # ESA CCI above-ground biomass (Mg/ha): a SAR-derived (Sentinel-1 + ALOS PALSAR)
+    # continuous map, stored on the 10 m grid like worldpop/cdl. Used as a decode-only
+    # target to encourage the encoder to use SAR.
+    CCI_BIOMASS = ModalitySpec(
+        name="cci_biomass",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["agb"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     NDVI = ModalitySpec(
         name="ndvi",
         tile_resolution_factor=16,

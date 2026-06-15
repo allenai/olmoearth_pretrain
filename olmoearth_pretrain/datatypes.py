@@ -97,6 +97,7 @@ class OlmoEarthSample(NamedTuple):
     worldpop: ArrayTensor | None = None  # [B, H, W, 1, len(WORLDPOP_bands)]
     worldcereal: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
     wri_canopy_height_map: ArrayTensor | None = None  # [B, H, W, 1, 1]
+    cci_biomass: ArrayTensor | None = None  # [B, H, W, 1, 1]
     # era5_10 is not spatially varying, so it has no height/width dimensions.
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
     # ndvi is computed from S2 L2A bands B04 (Red) and B08 (NIR), not loaded from file.
@@ -379,6 +380,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     worldcereal_mask: Tensor | None = None
     wri_canopy_height_map: Tensor | None = None
     wri_canopy_height_map_mask: Tensor | None = None
+    cci_biomass: Tensor | None = None
+    cci_biomass_mask: Tensor | None = None
     era5_10: Tensor | None = None
     era5_10_mask: Tensor | None = None
     ndvi: Tensor | None = None
@@ -517,6 +520,8 @@ class TokensAndMasks(NamedTuple):
     worldcereal_mask: Tensor | None = None
     wri_canopy_height_map: Tensor | None = None
     wri_canopy_height_map_mask: Tensor | None = None
+    cci_biomass: Tensor | None = None
+    cci_biomass_mask: Tensor | None = None
     era5_10: Tensor | None = None
     era5_10_mask: Tensor | None = None
     ndvi: Tensor | None = None

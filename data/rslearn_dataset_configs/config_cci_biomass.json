@@ -1,0 +1,22 @@
+{
+  "layers": {
+    "cci_biomass": {
+      "band_sets": [
+        {
+          "bands": [
+            "agb"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "rslearn.data_sources.cci_biomass.CCIBiomass",
+        "query_config": {
+          "max_matches": 4
+        }
+      },
+      "resampling_method": "bilinear",
+      "type": "raster"
+    }
+  }
+}
