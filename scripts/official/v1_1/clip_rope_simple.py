@@ -125,6 +125,10 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     config.encoder_config.channel_encoding_dim = ENCODER_CHANNEL_ENCODING_DIM
     config.decoder_config.channel_encoding_dim = DECODER_CHANNEL_ENCODING_DIM
     config.encoder_config.use_class_token = True
+    # Condition every decoder query on the class token so the (non-saturated)
+    # token loss keeps shaping it after the instance loss saturates (~step 50k
+    # at 64 in-batch negatives, observed in v4/oppmeta).
+    config.decoder_config.use_class_token = True
     return config
 
 

@@ -205,3 +205,68 @@ def test_class_token_with_register_tokens() -> None:
     out = encoder(x, patch_size=4)
     assert out["class_token"].shape == (2, EMBEDDING_SIZE)
     assert torch.isfinite(out["class_token"]).all()
+
+
+def test_decoder_query_conditioning_routes_token_loss_gradient() -> None:
+    """Token-loss backprop reaches class_token_query_proj and the class token.
+
+    use_class_token decoder, no instance loss involved.
+    """
+    encoder = _build_encoder()
+    decoder = Predictor(
+        supported_modalities=SUPPORTED_MODALITIES,
+        encoder_embedding_size=EMBEDDING_SIZE,
+        decoder_embedding_size=DECODER_EMBEDDING_SIZE,
+        depth=2,
+        mlp_ratio=2.0,
+        num_heads=2,
+        max_sequence_length=12,
+        use_class_token=True,
+    )
+    assert hasattr(decoder, "class_token_query_proj")
+    model = LatentMIM(encoder=encoder, decoder=decoder)
+    x = _masked_sample()
+    out = model.encoder(x, patch_size=4)
+    latent, _, decoder_kwargs = unpack_encoder_output(out)
+    assert "class_token" in decoder_kwargs
+    decoded = model.decoder(
+        latent, timestamps=x.timestamps, patch_size=4, **decoder_kwargs
+    )
+    model.encoder.class_token.grad = None
+    decoded.worldcover.sum().backward()
+    assert decoder.class_token_query_proj.weight.grad is not None
+    assert decoder.class_token_query_proj.weight.grad.abs().sum() > 0
+    # The encoder class token gets gradient purely from decoder reconstruction.
+    assert model.encoder.class_token.grad is not None
+    assert model.encoder.class_token.grad.abs().sum() > 0
+
+
+def test_decoder_query_conditioning_changes_predictions() -> None:
+    """Conditioning queries on the class token actually changes the decoder output."""
+    torch.manual_seed(0)
+    encoder = _build_encoder()
+    decoder = Predictor(
+        supported_modalities=SUPPORTED_MODALITIES,
+        encoder_embedding_size=EMBEDDING_SIZE,
+        decoder_embedding_size=DECODER_EMBEDDING_SIZE,
+        depth=2,
+        mlp_ratio=2.0,
+        num_heads=2,
+        max_sequence_length=12,
+        use_class_token=True,
+    )
+    # Make the conditioning non-trivial (default init could be near-zero-ish).
+    with torch.no_grad():
+        decoder.class_token_query_proj.weight.mul_(5.0)
+        decoder.class_token_query_proj.bias.add_(1.0)
+    x = _masked_sample()
+    out = encoder(x, patch_size=4)
+    latent, _, dk = unpack_encoder_output(out)
+    decoded_with = decoder(latent, timestamps=x.timestamps, patch_size=4, **dk)
+    dk_no_cls = {k: v for k, v in dk.items() if k != "class_token"}
+    decoded_without = decoder(
+        latent, timestamps=x.timestamps, patch_size=4, **dk_no_cls
+    )
+    assert not torch.allclose(
+        decoded_with.worldcover, decoded_without.worldcover, atol=1e-4
+    )

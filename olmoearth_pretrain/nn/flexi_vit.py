@@ -2423,6 +2423,7 @@ class PredictorBase(FlexiVitBase):
         latlon_dropout_rate: float = 0.0,
         temporal_encoding_type: str = "multifreq",
         latlon_encoding_type: str = "multifreq",
+        use_class_token: bool = False,
     ):
         """Initialize the predictor.
 
@@ -2430,6 +2431,12 @@ class PredictorBase(FlexiVitBase):
             supported_modalities: modalities this model instantiation supports
             encoder_embedding_size: Size of encoder embeddings
             decoder_embedding_size: Size of decoder embeddings
+            use_class_token: If True, condition every decoder query on the
+                encoder's class token (query += class_token_query_proj(cls)).
+                Routes the (non-saturated) token-loss gradient densely into
+                the class token so it keeps learning after the instance loss
+                saturates. The class token is also still available as
+                cross-attention context.
             depth: Number of transformer layers
             mlp_ratio: Ratio for MLP hidden dimension
             num_heads: Number of attention heads
@@ -2498,6 +2505,13 @@ class PredictorBase(FlexiVitBase):
         )
         # THIS is the learnable mask token
         self.mask_token = nn.Parameter(torch.zeros(decoder_embedding_size))
+
+        self.use_class_token = use_class_token
+        if use_class_token:
+            # Conditions every decoder query on the (decoder-dim) class token.
+            self.class_token_query_proj = nn.Linear(
+                decoder_embedding_size, decoder_embedding_size
+            )
 
         self.input_norm = nn.LayerNorm(encoder_embedding_size)
         self.norm = nn.LayerNorm(decoder_embedding_size)
@@ -2715,6 +2729,16 @@ class Predictor(PredictorBase):
             max_length_of_tokens_to_decode,
             max_length_of_unmasked_tokens,
         ) = self.split_x_y(all_tokens, mask)
+        if self.use_class_token and class_token is not None:
+            # Condition every decoder query on the class token. Each masked
+            # query must now reconstruct its target partly from the global
+            # class token, so the (non-saturated) token loss backpropagates
+            # densely into it — its main learning signal once the instance
+            # loss saturates. Added before flash-attn packing so the [B, X, D]
+            # broadcast is valid.
+            tokens_to_decode = tokens_to_decode + self.class_token_query_proj(
+                class_token
+            ).unsqueeze(1)
         if positions is not None:
             positions_to_decode, unmasked_positions = self.split_x_y_positions(
                 positions,
@@ -3046,6 +3070,7 @@ class PredictorConfig(Config):
     latlon_dropout_rate: float = 0.0
     temporal_encoding_type: str = "multifreq"
     latlon_encoding_type: str = "multifreq"
+    use_class_token: bool = False
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
