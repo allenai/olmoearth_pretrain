@@ -4,6 +4,7 @@
       "groups": [
         "train"
       ],
+      "label_extractor_name": "segmentation_to_scalar",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "/weka/dfive-default/hadriens/olmoearth_pretrain/scripts/era5_supervised/v0/configs/burnrisk_canada_nbac_era5d.yaml",
       "notes": "Canada NBAC wildfire burn-risk, full rslearn dataset. rslearn segmentation target reduced to a scalar 2-class label.",
@@ -21,6 +22,7 @@
       "groups": [
         "train"
       ],
+      "label_extractor_name": "segmentation_to_scalar",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "/weka/dfive-default/hadriens/olmoearth_pretrain/scripts/era5_supervised/v0/configs/burnrisk_canada_nbac_era5d.yaml",
       "notes": "Canada NBAC wildfire burn-risk, full rslearn dataset. rslearn segmentation target reduced to a scalar 2-class label.",
@@ -44,6 +46,7 @@
       "groups": [
         "train"
       ],
+      "label_extractor_name": "segmentation_to_scalar",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "/weka/dfive-default/hadriens/olmoearth_pretrain/scripts/era5_supervised/v0/configs/burnrisk_canada_nbac_era5d.yaml",
       "notes": "Small Canada NBAC subset for local smoke tests.",
@@ -61,6 +64,7 @@
       "groups": [
         "spatial_split"
       ],
+      "label_extractor_name": "per_pixel_regression_to_scalar",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "/weka/dfive-default/hadriens/olmoearth_pretrain/scripts/era5_supervised/v0/configs/lfmc_woody_era5d.yaml",
       "notes": "LFMC woody per-pixel regression, full rslearn dataset.",
@@ -89,6 +93,7 @@
       "groups": [
         "spatial_split"
       ],
+      "label_extractor_name": "per_pixel_regression_to_scalar",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "/weka/dfive-default/hadriens/olmoearth_pretrain/scripts/era5_supervised/v0/configs/lfmc_woody_era5d.yaml",
       "notes": "LFMC woody per-pixel regression, 3k subsample (oep_eval tag filter).",
