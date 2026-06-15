@@ -10,6 +10,7 @@ Example usage:
 
 import argparse
 import logging
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -23,10 +24,19 @@ from olmoearth_pretrain.data.constants import (
     Modality,
     ModalitySpec,
 )
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
+from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
+from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig, OlmoEarthSample
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
+
+# Default pretrain dataset on weka (same as the attention-analysis script).
+DEFAULT_H5PY_DIR = (
+    "/weka/dfive-default/helios/dataset/osm_sampling/"
+    "h5py_data_w_missing_timesteps_zstd_3_128_x_4/"
+    "cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_"
+    "worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -380,6 +390,76 @@ def estimate_token_ratios(
     return results
 
 
+def estimate_token_ratios_real(
+    num_samples: int,
+    training_modalities: list[str],
+    masking_config: dict,
+    h5py_dir: str,
+    min_patch_size: int = 1,
+    max_patch_size: int = 8,
+    sampled_hw_p_list: list[int] | None = None,
+    token_budget: int | None = 2250,
+    seed: int = 42,
+    track_per_modality: bool = False,
+    tokenization_config: TokenizationConfig | None = None,
+) -> list[TokenRatioResult]:
+    """Same analysis as ``estimate_token_ratios`` but on REAL tiles from a weka h5py_dir.
+
+    Instead of synthetic samples with a uniform ``missing_prob``, this pulls real samples
+    through the actual dataloader, which applies the given masking strategy to real data
+    (so the real, non-uniform, modality-correlated missingness is captured). The masked
+    samples are then analysed with the same ``analyze_masked_sample``.
+
+    Args mirror ``estimate_token_ratios``; ``h5py_dir`` points at the pretrain dataset.
+    """
+    if sampled_hw_p_list is None:
+        sampled_hw_p_list = list(range(1, 13))
+
+    dataset = OlmoEarthDatasetConfig(
+        h5py_dir=h5py_dir,
+        training_modalities=training_modalities,
+        dtype="float32",
+        normalize=True,
+    ).build()
+    dataset.prepare()
+
+    work_dir = tempfile.mkdtemp(prefix="token_ratio_real_")
+    masking = MaskingConfig(
+        strategy_config=masking_config.copy(),
+        tokenization_config=tokenization_config,
+    )
+    dataloader = OlmoEarthDataLoaderConfig(
+        work_dir=work_dir,
+        global_batch_size=1,
+        min_patch_size=min_patch_size,
+        max_patch_size=max_patch_size,
+        sampled_hw_p_list=sampled_hw_p_list,
+        seed=seed,
+        shuffle=True,
+        num_workers=0,
+        drop_last=False,
+        target_device_type="cpu",
+        masking_config=masking,
+        num_masked_views=1,
+        tokenization_config=tokenization_config,
+        token_budget=token_budget,
+    ).build(dataset)
+    dataloader.reshuffle(epoch=0)
+
+    results: list[TokenRatioResult] = []
+    for batch in tqdm(dataloader, desc="Sampling (real)", total=num_samples):
+        if len(results) >= num_samples:
+            break
+        patch_size, masked_sample = int(batch[0]), batch[1]
+        # The dataloader emits a batched, already-masked sample; drop the batch dim so the
+        # per-modality token counting matches the synthetic (unbatched) path.
+        masked_sample = remove_batch_dimension(masked_sample)
+        results.append(
+            analyze_masked_sample(masked_sample, patch_size, track_per_modality)
+        )
+    return results
+
+
 def _get_num_bandsets(
     modality_name: str,
     modality_spec: ModalitySpec,
@@ -705,6 +785,20 @@ def main() -> None:
         action="store_true",
         help="Use single bandset tokenization for S2 and Landsat",
     )
+    parser.add_argument(
+        "--real_data",
+        action="store_true",
+        help=(
+            "Pull real tiles from --h5py_dir and apply the masking via the dataloader, "
+            "instead of generating synthetic samples (captures real missingness)."
+        ),
+    )
+    parser.add_argument(
+        "--h5py_dir",
+        type=str,
+        default=DEFAULT_H5PY_DIR,
+        help="Pretrain dataset h5py_dir on weka (only used with --real_data).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
@@ -746,21 +840,39 @@ def main() -> None:
     print(f"Training modalities: {DEFAULT_TRAINING_MODALITIES}")
     if tokenization_config is not None:
         print(f"Tokenization overrides: {list(tokenization_config.overrides.keys())}")
+    print(
+        f"Data source: {'REAL (' + args.h5py_dir + ')' if args.real_data else 'synthetic'}"
+    )
     print(f"Sampling {args.num_samples} configurations...")
 
-    results = estimate_token_ratios(
-        num_samples=args.num_samples,
-        training_modalities=DEFAULT_TRAINING_MODALITIES,
-        masking_config=masking_config,
-        min_patch_size=args.min_patch_size,
-        max_patch_size=args.max_patch_size,
-        sampled_hw_p_list=list(range(1, 13)),
-        token_budget=args.token_budget,
-        missing_prob=args.missing_prob,
-        seed=args.seed,
-        track_per_modality=True,  # needed for the encode-modality histogram (cheap)
-        tokenization_config=tokenization_config,
-    )
+    if args.real_data:
+        results = estimate_token_ratios_real(
+            num_samples=args.num_samples,
+            training_modalities=DEFAULT_TRAINING_MODALITIES,
+            masking_config=masking_config,
+            h5py_dir=args.h5py_dir,
+            min_patch_size=args.min_patch_size,
+            max_patch_size=args.max_patch_size,
+            sampled_hw_p_list=list(range(1, 13)),
+            token_budget=args.token_budget,
+            seed=args.seed,
+            track_per_modality=True,  # needed for the encode-modality histogram (cheap)
+            tokenization_config=tokenization_config,
+        )
+    else:
+        results = estimate_token_ratios(
+            num_samples=args.num_samples,
+            training_modalities=DEFAULT_TRAINING_MODALITIES,
+            masking_config=masking_config,
+            min_patch_size=args.min_patch_size,
+            max_patch_size=args.max_patch_size,
+            sampled_hw_p_list=list(range(1, 13)),
+            token_budget=args.token_budget,
+            missing_prob=args.missing_prob,
+            seed=args.seed,
+            track_per_modality=True,  # needed for the encode-modality histogram (cheap)
+            tokenization_config=tokenization_config,
+        )
 
     print_statistics(results, show_per_modality=args.per_modality)
     summarize_encode_modality_counts(results)
