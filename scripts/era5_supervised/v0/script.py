@@ -228,29 +228,54 @@ def _require_supervised_task_type(task_type: TaskType, who: str) -> None:
         )
 
 
+def _rslearn_task_class_path(model_yaml_path: str) -> str:
+    """Return the ``class_path`` of the rslearn task in ``model.yaml``.
+
+    For ``MultiTask``, returns the class_path of the first sub-task.
+    """
+    model_config = parse_model_config(model_yaml_path)
+    task_cfg = model_config.get("data", {}).get("init_args", {}).get("task", {})
+    class_path = task_cfg.get("class_path", "")
+    if class_path.endswith("MultiTask"):
+        sub_tasks = task_cfg.get("init_args", {}).get("tasks", {})
+        if sub_tasks:
+            first = next(iter(sub_tasks.values()))
+            class_path = first.get("class_path", class_path)
+    return class_path
+
+
 def _auto_label_extractor(
     task_type: TaskType, model_yaml_path: str, task_name: str | None
 ) -> str | None:
     """Pick a `LabelExtractor` name based on the rslearn task in model.yaml.
 
-    Only reduce a segmentation target to a scalar when the rslearn dataset is
-    genuinely a segmentation task *and* we want classification out of it.
-    Otherwise return ``None`` so the spec falls back to its default extractor
-    (which expects a real classification / regression target dict). The name is
-    passed (rather than a callable) so the spec stays serializable inside the
-    olmo_core `Config` tree.
+    When the olmoearth task type (classification / regression) differs from
+    the rslearn task type (segmentation / per-pixel regression), a dedicated
+    extractor is needed to reduce the spatial target to a scalar.  The name
+    is passed (rather than a callable) so the spec stays serializable inside
+    the olmo_core `Config` tree.
     """
-    if task_type != TaskType.CLASSIFICATION:
+    class_path = _rslearn_task_class_path(model_yaml_path)
+
+    if task_type == TaskType.CLASSIFICATION:
+        rslearn_task_type = get_task_info(parse_model_config(model_yaml_path))[
+            "task_type"
+        ]
+        if rslearn_task_type == "segmentation":
+            return "segmentation_to_scalar"
+        logger.info(
+            "Classification task %r: rslearn task_type=%r (not segmentation) "
+            "— using the default classification label extractor.",
+            task_name,
+            rslearn_task_type,
+        )
         return None
-    rslearn_task_type = get_task_info(parse_model_config(model_yaml_path))["task_type"]
-    if rslearn_task_type == "segmentation":
-        return "segmentation_to_scalar"
-    logger.info(
-        "Classification task %r: rslearn task_type=%r (not segmentation) — "
-        "using the default classification label extractor.",
-        task_name,
-        rslearn_task_type,
-    )
+
+    if task_type == TaskType.REGRESSION:
+        if "PerPixelRegression" in class_path:
+            return "per_pixel_regression_to_scalar"
+        return None
+
     return None
 
 

@@ -33,6 +33,61 @@
         "val"
       ],
       "weka_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_nbac_test"
+    },
+    "lfmc_woody": {
+      "groups": [
+        "spatial_split"
+      ],
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "/weka/dfive-default/hadriens/olmoearth_pretrain/scripts/era5_supervised/v0/configs/lfmc_woody_era5d.yaml",
+      "notes": "LFMC woody per-pixel regression, full rslearn dataset.",
+      "num_classes": 1,
+      "tags": {
+        "split": "train"
+      },
+      "task_type": "regression",
+      "test_groups": [
+        "spatial_split"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "spatial_split"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/lfmc/20251023/woody/scratch/dataset"
+    },
+    "lfmc_woody_eval": {
+      "groups": [
+        "spatial_split"
+      ],
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "/weka/dfive-default/hadriens/olmoearth_pretrain/scripts/era5_supervised/v0/configs/lfmc_woody_era5d.yaml",
+      "notes": "LFMC woody per-pixel regression, 3k subsample (oep_eval tag filter).",
+      "num_classes": 1,
+      "tags": {
+        "oep_eval": "",
+        "split": "train"
+      },
+      "task_type": "regression",
+      "test_groups": [
+        "spatial_split"
+      ],
+      "test_tags": {
+        "oep_eval": "",
+        "split": "test"
+      },
+      "val_groups": [
+        "spatial_split"
+      ],
+      "val_tags": {
+        "oep_eval": "",
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/lfmc/20251023/woody/scratch/dataset"
     }
   },
   "version": "1.0"

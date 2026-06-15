@@ -175,6 +175,49 @@ def segmentation_to_scalar_label(target: Any) -> Tensor:
     return classes.max().reshape(())
 
 
+def per_pixel_regression_to_scalar(target: Any) -> Tensor:
+    """Reduce a per-pixel regression target to a scalar via mean of valid pixels.
+
+    rslearn's ``PerPixelRegressionTask`` returns
+    ``{"values": RasterImage, "valid": RasterImage}`` where each ``RasterImage``
+    wraps a CTHW tensor. We collapse the spatial regression map to a single
+    scalar by averaging over pixels whose ``valid`` mask is positive.
+
+    Returns ``NaN`` when no pixel is valid so that the downstream
+    ``RegressionHead`` (which filters on ``torch.isfinite``) silently
+    skips the sample.
+    """
+
+    def _to_flat(value: Any) -> Tensor:
+        if hasattr(value, "get_hw_tensor"):
+            return value.get_hw_tensor().reshape(-1)
+        if hasattr(value, "image"):
+            return value.image.reshape(-1)
+        return torch.as_tensor(value).reshape(-1)
+
+    reg = target
+    if isinstance(target, dict) and "values" not in target:
+        # Possibly wrapped by MultiTask — unwrap the first sub-task.
+        for val in target.values():
+            if isinstance(val, dict) and "values" in val:
+                reg = val
+                break
+    if not isinstance(reg, dict) or "values" not in reg:
+        raise KeyError(
+            "Expected a per-pixel regression target dict with a 'values' "
+            f"entry, got keys={sorted(reg.keys()) if isinstance(reg, dict) else type(reg)}"
+        )
+
+    values = _to_flat(reg["values"]).float()
+    valid = reg.get("valid")
+    if valid is not None:
+        valid_mask = _to_flat(valid) > 0
+        if not valid_mask.any():
+            return torch.tensor(float("nan"), dtype=torch.float32)
+        return values[valid_mask].mean().reshape(())
+    return values.mean().reshape(())
+
+
 # Named label extractors that take no constructor args. Referenced by name from
 # ``Era5TaskSpec.label_extractor_name`` so that the (non-serializable) callable
 # never has to live on a field that is part of an olmo_core ``Config`` tree
@@ -182,6 +225,7 @@ def segmentation_to_scalar_label(target: Any) -> Tensor:
 LABEL_EXTRACTORS: dict[str, LabelExtractor] = {
     "default_classification": default_classification_label,
     "segmentation_to_scalar": segmentation_to_scalar_label,
+    "per_pixel_regression_to_scalar": per_pixel_regression_to_scalar,
 }
 
 

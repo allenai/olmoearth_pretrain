@@ -14,9 +14,6 @@ Architecture::
                        ↓ MLP
     Reconstruction  X̂ ∈ R^{B × T × V}
 
-The decoder is intentionally simple so the encoder bears the
-representational burden.  If it underfits, increase ``depth`` or
-``mlp_ratio``.
 """
 
 from __future__ import annotations
