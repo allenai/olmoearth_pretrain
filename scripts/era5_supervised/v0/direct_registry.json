@@ -17,6 +17,29 @@
       ],
       "weka_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_nbac"
     },
+    "burnrisk_canada_nbac_eval": {
+      "groups": [
+        "train"
+      ],
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "/weka/dfive-default/hadriens/olmoearth_pretrain/scripts/era5_supervised/v0/configs/burnrisk_canada_nbac_era5d.yaml",
+      "notes": "Canada NBAC wildfire burn-risk, full rslearn dataset. rslearn segmentation target reduced to a scalar 2-class label.",
+      "num_classes": 2,
+      "task_type": "classification",
+      "test_groups": [
+        "test"
+      ],
+      "test_tags": {
+        "oep_eval": ""
+      },
+      "val_groups": [
+        "val"
+      ],
+      "val_tags": {
+        "oep_eval": ""
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_nbac"
+    },
     "burnrisk_canada_nbac_test": {
       "groups": [
         "train"
