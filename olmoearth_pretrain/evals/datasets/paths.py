@@ -13,6 +13,8 @@ _DEFAULTS = {
     "PASTIS_DIR": "/weka/dfive-default/presto_eval_sets/pastis_r",
     "PASTIS_DIR_ORIG": "/weka/dfive-default/presto_eval_sets/pastis_r_origsize",
     "PASTIS_DIR_PARTITION": "/weka/dfive-default/presto_eval_sets/pastis",
+    # ImageFolder-style ImageNet-1k with train/ and val/ class subfolders.
+    "IMAGENET_DIR": "/weka/dfive-default/joer/imagenet",
 }
 
 GEOBENCH_DIR = UPath(os.getenv("GEOBENCH_DIR", _DEFAULTS["GEOBENCH_DIR"]))
@@ -24,3 +26,4 @@ PASTIS_DIR_ORIG = UPath(os.getenv("PASTIS_DIR_ORIG", _DEFAULTS["PASTIS_DIR_ORIG"
 PASTIS_DIR_PARTITION = UPath(
     os.getenv("PASTIS_DIR_PARTITION", _DEFAULTS["PASTIS_DIR_PARTITION"])
 )
+IMAGENET_DIR = UPath(os.getenv("IMAGENET_DIR", _DEFAULTS["IMAGENET_DIR"]))

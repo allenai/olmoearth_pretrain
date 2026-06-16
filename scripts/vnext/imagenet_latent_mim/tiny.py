@@ -4,6 +4,7 @@ import logging
 
 from base import (
     MAX_PATCH_SIZE,
+    MIN_PATCH_SIZE,
     PATCH_EMBED_HIDDEN_SIZES,
     build_common_components,
     build_dataloader_config,
@@ -49,6 +50,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         depth=model_size["encoder_depth"],
         mlp_ratio=model_size["mlp_ratio"],
         supported_modality_names=common.training_modalities,
+        min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         drop_path=0.1,
         max_sequence_length=12,

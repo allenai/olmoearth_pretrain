@@ -57,6 +57,15 @@ DATASET_TO_CONFIG = {
         is_multilabel=False,
         supported_modalities=[Modality.IMAGENET.name],
     ),
+    # EuroSAT evaluated through the RGB-only ``imagenet`` modality, so an
+    # ImageNet-pretrained encoder can be probed on satellite RGB.
+    "eurosat_rgb": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[],
+        num_classes=10,
+        is_multilabel=False,
+        supported_modalities=[Modality.IMAGENET.name],
+    ),
     # Dummy config — only used for embedding diagnostics, not actual classification.
     "pretrain_subset": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,

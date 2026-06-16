@@ -55,7 +55,7 @@ from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
 
 logger = logging.getLogger(__name__)
 
-IMAGENET_TRAIN_ROOT = "/weka/dfive-default/olmoearth/dataset/imagenet/train"
+IMAGENET_TRAIN_ROOT = "/weka/dfive-default/joer/imagenet/train"
 WANDB_PROJECT = "2026_06_09_imagenet_latent_mim"
 
 MAX_PATCH_SIZE = 8
@@ -163,8 +163,21 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             input_modalities=[Modality.IMAGENET.name],
             eval_mode=EvalMode.KNN,
             primary_metric=EvalMetric.ACCURACY,
-            eval_interval=Duration.steps(5000),
-        )
+            eval_interval=Duration.steps(20000),
+        ),
+        # Transfer check: probe the ImageNet-pretrained encoder on EuroSAT RGB.
+        "eurosat_rgb": DownstreamTaskConfig(
+            dataset="eurosat_rgb",
+            embedding_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+            input_modalities=[Modality.IMAGENET.name],
+            eval_mode=EvalMode.KNN,
+            primary_metric=EvalMetric.ACCURACY,
+            eval_interval=Duration.steps(20000),
+        ),
     }
     trainer_config = (
         TrainerConfig(
@@ -206,6 +219,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         depth=model_size["encoder_depth"],
         mlp_ratio=model_size["mlp_ratio"],
         supported_modality_names=common.training_modalities,
+        min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         drop_path=0.1,
         max_sequence_length=12,

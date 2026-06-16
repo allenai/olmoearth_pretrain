@@ -9,8 +9,10 @@ import olmoearth_pretrain.evals.datasets.paths as paths
 from olmoearth_pretrain.evals.studio_ingest.registry import get_dataset_entry
 
 from .breizhcrops import BreizhCropsDataset
+from .eurosat_rgb_dataset import EuroSatRGBDataset
 from .floods_dataset import Sen1Floods11Dataset
 from .geobench_dataset import GeobenchDataset
+from .imagenet_dataset import ImageNetEvalDataset
 from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset
@@ -124,6 +126,19 @@ def get_eval_dataset(
             label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
+        )
+    elif eval_dataset == "imagenet":
+        return ImageNetEvalDataset(
+            root_dir=paths.IMAGENET_DIR,
+            split=split,
+            normalize=True,
+            label_fraction=label_fraction,
+        )
+    elif eval_dataset == "eurosat_rgb":
+        return EuroSatRGBDataset(
+            geobench_dir=paths.GEOBENCH_DIR,
+            split=split,
+            label_fraction=label_fraction,
         )
     else:
         eval_dataset_entry = get_dataset_entry(eval_dataset)
