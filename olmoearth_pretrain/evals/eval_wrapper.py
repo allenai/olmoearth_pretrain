@@ -81,7 +81,11 @@ class EvalWrapper:
         self.patch_size = patch_size
         self.pooling_type = pooling_type
         self.concat_features = concat_features
-        self.spatial_pool = task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION)
+        self.spatial_pool = task_type in (
+            TaskType.SEGMENTATION,
+            TaskType.DIAGNOSTIC,
+            TaskType.REGRESSION,
+        )
         self.use_pooled_tokens = use_pooled_tokens
         if instance_embedding not in INSTANCE_EMBEDDING_OPTIONS:
             raise ValueError(
