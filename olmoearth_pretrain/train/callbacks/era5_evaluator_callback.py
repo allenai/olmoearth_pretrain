@@ -127,6 +127,11 @@ def _extract_embeddings(
     num_workers: int = 4,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Extract frozen mean-pooled embeddings from the encoder for all samples."""
+    if len(dataset) == 0:
+        raise ValueError(
+            "Cannot extract embeddings from an empty dataset "
+            f"(task={dataset.task_spec.name!r}, split={dataset.task_spec.split!r})."
+        )
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -269,6 +274,16 @@ class Era5DownstreamEvaluatorCallback(Callback):
         except Exception:
             logger.exception(
                 "Failed to build eval datasets for %s, skipping.", task.name
+            )
+            return
+
+        if len(train_ds) == 0 or len(val_ds) == 0:
+            logger.warning(
+                "Skipping eval %s: empty split(s) (train=%d, val=%d). Check the "
+                "task's group/tag filters in the direct registry.",
+                task.name,
+                len(train_ds),
+                len(val_ds),
             )
             return
 

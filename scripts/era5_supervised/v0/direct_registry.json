@@ -96,7 +96,7 @@
       "label_extractor_name": "per_pixel_regression_to_scalar",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "/weka/dfive-default/hadriens/olmoearth_pretrain/scripts/era5_supervised/v0/configs/lfmc_woody_era5d.yaml",
-      "notes": "LFMC woody per-pixel regression, 3k subsample (oep_eval tag filter).",
+      "notes": "LFMC woody per-pixel regression, 3k subsample for train (oep_eval tag filter).",
       "num_classes": 1,
       "tags": {
         "oep_eval": "",

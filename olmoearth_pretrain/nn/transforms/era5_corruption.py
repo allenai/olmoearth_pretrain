@@ -4,13 +4,11 @@ Masking operates on normalized ERA5 input ``[B, T, V]`` and combines:
 
 * **Short time masks** — contiguous spans of timesteps where *all* V
   variables are masked (forces the encoder to interpolate across time).
-* **Policy-driven variable masks** — a configurable mask *policy* that,
-  per sample, samples one masking strategy from a weighted menu (see
-  :data:`MASK_POLICY_V1`).  Strategies range from dropping a single
-  variable within a group to dropping a whole physical group across a
-  span of days or the full sequence.  This replaces the older fixed
-  "drop N whole groups for all T" behaviour (still available as a legacy
-  fallback when ``mask_policy`` is ``None``).
+* **Policy-driven variable masks** — a configurable :class:`MaskPolicy`
+  that, per sample, samples one masking strategy from a weighted menu.
+  Strategies range from dropping a single variable within a group to
+  dropping a whole physical group across a span of days or the full
+  sequence.
 
 Note: ERA5L_DAY_10 has one timestep per day, so span lengths expressed
 in *days* map directly onto timesteps.
@@ -27,7 +25,6 @@ patchifying (see ``use_mask_embed`` in
 from __future__ import annotations
 
 import logging
-from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -103,7 +100,7 @@ DEFAULT_VARIABLE_GROUPS: dict[str, list[int]] = {
 #
 # These tables describe, for each variable group, *how* it should be
 # reconstructed and *how* it is allowed to be masked.  They are the single
-# source of truth that :data:`MASK_POLICY_V1` is assembled from.
+# source of truth that the :class:`MaskPolicy` defaults are assembled from.
 GROUP_RECON_MODE: dict[str, str] = {
     "thermo": "raw_plus_wavelet",
     "wind": "raw_plus_wavelet",
@@ -115,18 +112,23 @@ GROUP_RECON_MODE: dict[str, str] = {
     "pressure": "slow_wavelet",
 }
 
-# Groups that may be masked across the *entire* sequence (all T).  These are
-# slow / persistent or strongly cross-correlated signals where dropping the
-# whole record still leaves a learnable cross-variable reconstruction task.
-FULL_T_GROUP_MASK_ALLOWED: set[str] = {
+# Groups where a *single variable* may be masked across the entire sequence
+# (all T) while the remaining group member(s) stay visible.  This is safe for
+# highly redundant pairs (ssr/ssrd, swvl1/swvl2, e/pev) because the visible
+# partner carries strong signal about the hidden one.
+SINGLE_VAR_ALL_T_ALLOWED: set[str] = {
     "shortwave_radiation",
-    "longwave_radiation",
     "soil_moisture",
     "evaporation",
-    "pressure",
 }
 
-WITHIN_GROUP_SINGLE_VAR_GROUPS = {
+# Groups where the *entire* group may be masked across all T.  Much riskier
+# than single-var masking because no within-group signal remains — the model
+# must reconstruct purely from cross-group context.  Start empty; consider
+# adding "soil_moisture" later as a low-weight robustness signal.
+WHOLE_GROUP_ALL_T_ALLOWED: set[str] = set()
+
+GROUPS_WITH_MULT_VARIABLES = {
     group for group, vars_ in DEFAULT_VARIABLE_GROUPS.items() if len(vars_) >= 2
 }
 
@@ -141,13 +143,13 @@ SPAN_ONLY_GROUP_MASK: set[str] = {
 # Span length range (in days == timesteps for ERA5L_DAY_10) per group.
 GROUP_SPAN_DAYS: dict[str, tuple[int, int]] = {
     "thermo": (1, 7),
-    "wind": (3, 30),
+    "wind": (1, 3),
     "shortwave_radiation": (3, 30),
     "longwave_radiation": (3, 30),
     "soil_moisture": (7, 90),
     "evaporation": (7, 30),
     "hydro_flux": (1, 7),
-    "pressure": (7, 90),
+    "pressure": (3, 30),
 }
 
 # Long-span length range (in days) used by the single-variable masking
@@ -158,7 +160,7 @@ GROUP_SPAN_DAYS: dict[str, tuple[int, int]] = {
 # as tp from ro or u10 from v10, so those get shorter windows.
 WITHIN_GROUP_LONG_SPAN_DAYS: dict[str, tuple[int, int]] = {
     "thermo": (7, 60),
-    "wind": (3, 30),
+    "wind": (1, 3),
     "shortwave_radiation": (30, 180),
     "soil_moisture": (30, 180),
     "evaporation": (14, 90),
@@ -167,79 +169,107 @@ WITHIN_GROUP_LONG_SPAN_DAYS: dict[str, tuple[int, int]] = {
 
 
 # ---------------------------------------------------------------------------
-# Mask policy
+# Mask policy — per-strategy dataclasses
 # ---------------------------------------------------------------------------
-#
-# A *mask policy* is a weighted menu of masking strategies.  For every
-# sample in the batch we draw exactly one strategy (according to ``prob``)
-# and apply it.  ``prob`` values are normalized, so they need not sum to 1.
-#
-# Supported strategies (keyed by name) and the fields they read:
-#
-#   within_group_single_var
-#       Drop a single variable inside a randomly chosen group.  If the
-#       group is in ``full_t_allowed`` then, with probability
-#       ``all_T_prob``, the variable is masked across *all* timesteps;
-#       otherwise (or for span-only groups) it is masked across a
-#       contiguous span.  Full-T-allowed groups use ``long_span_days``;
-#       span-only groups use their per-group ``span_days`` range.
-#
-#   whole_group_span
-#       Drop an entire group across a contiguous span.  The span length
-#       (in days) is sampled from the per-group ``span_days`` range.  The
-#       group is chosen uniformly from the keys of ``span_days``.
-#
-#   whole_group_all_T
-#       Drop an entire group across *all* timesteps.  The group is chosen
-#       uniformly from ``allowed_groups`` (the full-T-allowed groups).
-#
-#   random_channel_time_mask
-#       Drop a random set of channels (count sampled uniformly from
-#       ``num_channels``) across a contiguous span sampled from
-#       ``span_days``.  Channels are picked irrespective of group.
-#
-# Span lengths are clamped to the sequence length and masking always
-# respects padding (never masks invalid timesteps).  The per-group tables
-# above (``GROUP_SPAN_DAYS``, ``FULL_T_GROUP_MASK_ALLOWED``,
-# ``SPAN_ONLY_GROUP_MASK``) are the source of truth referenced here.
-MASK_POLICY_V1: dict = {
-    "within_group_single_var": {
-        "prob": 0.5,
-        # "all_T_or_long_span": full sequence (full-T-allowed groups only)
-        # or a group-specific long span.
-        "all_T_prob": 0.25,
-        # Candidate groups for single-variable masking: only multi-variable
-        # groups (a single-var "subset" of a 1-var group is the whole group).
-        "groups": sorted(WITHIN_GROUP_SINGLE_VAR_GROUPS),
-        # Of those candidates, the ones that may also be masked across all T.
-        "full_t_allowed": sorted(
-            FULL_T_GROUP_MASK_ALLOWED & WITHIN_GROUP_SINGLE_VAR_GROUPS
-        ),
-        # Group-specific long-span ranges for the span branch.
-        "long_span_days": dict(WITHIN_GROUP_LONG_SPAN_DAYS),
-    },
-    "whole_group_span": {
-        "prob": 0.4,
-        "span_days": dict(GROUP_SPAN_DAYS),
-    },
-    "whole_group_all_T": {
-        "prob": 0.05,
-        "allowed_groups": sorted(FULL_T_GROUP_MASK_ALLOWED),
-    },
-    "random_channel_time_mask": {
-        "prob": 0.10,
-        "span_days": (1, 7),
-        "num_channels": (1, 4),
-    },
-}
 
-# Fixed iteration order over strategies so multinomial indices are stable.
-_POLICY_ORDER: list[str] = [
-    "within_group_single_var",
-    "whole_group_span",
-    "whole_group_all_T",
-    "random_channel_time_mask",
-]
+
+@dataclass
+class WithinGroupSingleVarStrategy:
+    """Drop a single variable inside a randomly chosen multi-variable group.
+
+    If the group is in ``full_t_allowed``, the variable is masked across
+    *all* timesteps with probability ``all_T_prob``; otherwise it is masked
+    across a contiguous span drawn from ``long_span_days``.
+    """
+
+    prob: float = 0.5
+    all_T_prob: float = 0.25
+    groups: list[str] = field(
+        default_factory=lambda: sorted(GROUPS_WITH_MULT_VARIABLES)
+    )
+    full_t_allowed: list[str] = field(
+        default_factory=lambda: sorted(
+            SINGLE_VAR_ALL_T_ALLOWED & GROUPS_WITH_MULT_VARIABLES
+        )
+    )
+    long_span_days: dict[str, tuple[int, int]] = field(
+        default_factory=lambda: dict(WITHIN_GROUP_LONG_SPAN_DAYS)
+    )
+
+
+@dataclass
+class WholeGroupSpanStrategy:
+    """Drop an entire group across a contiguous span.
+
+    The span length (in days) is sampled from the per-group ``span_days``
+    range.  The group is chosen uniformly from groups that have both a
+    span range and exist in the variable groups.
+    """
+
+    prob: float = 0.4
+    span_days: dict[str, tuple[int, int]] = field(
+        default_factory=lambda: dict(GROUP_SPAN_DAYS)
+    )
+
+
+@dataclass
+class WholeGroupAllTStrategy:
+    """Drop an entire group across *all* timesteps.
+
+    Much riskier than single-var masking — no within-group signal remains.
+    The group is chosen uniformly from ``allowed_groups``.  Disabled by
+    default (prob=0.0, empty allowed list).
+    """
+
+    prob: float = 0.0
+    allowed_groups: list[str] = field(
+        default_factory=lambda: sorted(WHOLE_GROUP_ALL_T_ALLOWED)
+    )
+
+
+@dataclass
+class RandomChannelTimeMaskStrategy:
+    """Drop a random set of channels across a contiguous span.
+
+    Channel count is sampled uniformly from ``num_channels``; channels are
+    picked irrespective of group boundaries.
+    """
+
+    prob: float = 0.10
+    span_days: tuple[int, int] = (1, 7)
+    num_channels: tuple[int, int] = (1, 4)
+
+
+@dataclass
+class MaskPolicy:
+    """Weighted menu of variable-masking strategies.
+
+    For every sample in the batch, exactly one strategy is drawn (according
+    to its ``prob``).  Probabilities are normalized so they need not sum
+    to 1.  Strategies with ``prob=0`` are skipped.
+    """
+
+    within_group_single_var: WithinGroupSingleVarStrategy = field(
+        default_factory=WithinGroupSingleVarStrategy
+    )
+    whole_group_span: WholeGroupSpanStrategy = field(
+        default_factory=WholeGroupSpanStrategy
+    )
+    whole_group_all_T: WholeGroupAllTStrategy = field(
+        default_factory=WholeGroupAllTStrategy
+    )
+    random_channel_time_mask: RandomChannelTimeMaskStrategy = field(
+        default_factory=RandomChannelTimeMaskStrategy
+    )
+
+    def strategies(self) -> list[tuple[str, Any]]:
+        """Return ``(name, strategy)`` pairs in fixed iteration order."""
+        return [
+            ("within_group_single_var", self.within_group_single_var),
+            ("whole_group_span", self.whole_group_span),
+            ("whole_group_all_T", self.whole_group_all_T),
+            ("random_channel_time_mask", self.random_channel_time_mask),
+        ]
 
 
 @dataclass
@@ -251,13 +281,8 @@ class CorruptionConfig:
         time_mask_min_len: Minimum span length (in timesteps).
         time_mask_max_len: Maximum span length (in timesteps).
         variable_groups: Mapping from group name to list of band indices.
-        mask_policy: Weighted menu of variable-masking strategies (see
-            :data:`MASK_POLICY_V1`).  One strategy is sampled per sample.
-            Required: :func:`corrupt_era5` raises if it is ``None``.
-        group_recon_mode: Per-group reconstruction mode (see
-            :data:`GROUP_RECON_MODE`).  Not used by :func:`corrupt_era5`;
-            it is carried here as the single source of truth consumed by
-            the reconstruction loss to weight per-group target terms.
+        mask_policy: Weighted menu of variable-masking strategies.  One
+            strategy is sampled per sample.
         min_mask_ratio: Ensure at least this fraction of (T*V) cells are
             masked (repeat time-mask sampling if needed).
     """
@@ -268,10 +293,7 @@ class CorruptionConfig:
     variable_groups: dict[str, list[int]] = field(
         default_factory=lambda: dict(DEFAULT_VARIABLE_GROUPS)
     )
-    mask_policy: dict | None = field(default_factory=lambda: deepcopy(MASK_POLICY_V1))
-    group_recon_mode: dict[str, str] = field(
-        default_factory=lambda: dict(GROUP_RECON_MODE)
-    )
+    mask_policy: MaskPolicy = field(default_factory=MaskPolicy)
     min_mask_ratio: float = 0.15
 
 
@@ -309,18 +331,12 @@ def corrupt_era5(
         )
         max_start = (t - lengths).clamp(min=0)
         starts = (torch.rand(b, device=device) * (max_start.float() + 1)).long()
-        # Build per-sample time ranges
         idx = torch.arange(t, device=device).unsqueeze(0)  # [1, T]
         span = (idx >= starts.unsqueeze(1)) & (idx < (starts + lengths).unsqueeze(1))
-        span = span & valid  # don't mask padding
+        span = span & valid
         mask = mask | span.unsqueeze(-1).expand_as(mask)
 
     # --- Policy-driven variable masks ---
-    if config.mask_policy is None:
-        raise ValueError(
-            "CorruptionConfig.mask_policy must be set (e.g. to MASK_POLICY_V1); "
-            "no masking policy was provided."
-        )
     _apply_mask_policy(mask, valid, config.mask_policy, config.variable_groups)
 
     return mask
@@ -365,7 +381,7 @@ def _random_span(span_days: tuple[int, int], t: int, device: torch.device) -> Te
 def _apply_mask_policy(
     mask: Tensor,
     valid: Tensor,
-    policy: dict,
+    policy: MaskPolicy,
     variable_groups: dict[str, list[int]],
 ) -> None:
     """Sample and apply one masking strategy per sample (in place).
@@ -373,7 +389,7 @@ def _apply_mask_policy(
     Args:
         mask: ``[B, T, V]`` bool mask to update in place.
         valid: ``[B, T]`` bool, True = real (non-padded) timestep.
-        policy: Mask policy dict (see :data:`MASK_POLICY_V1`).
+        policy: :class:`MaskPolicy` instance.
         variable_groups: Group name -> band-index mapping.
     """
     b, t, v = mask.shape
@@ -382,11 +398,9 @@ def _apply_mask_policy(
     if not group_names:
         return
 
-    strat_names = [k for k in _POLICY_ORDER if k in policy]
-    if not strat_names:
-        return
+    strategies = policy.strategies()
     probs = torch.tensor(
-        [float(policy[k].get("prob", 0.0)) for k in strat_names],
+        [s.prob for _, s in strategies],
         dtype=torch.float,
         device=device,
     )
@@ -397,52 +411,42 @@ def _apply_mask_policy(
 
     for i in range(b):
         valid_i = valid[i]  # [T]
-        strat = strat_names[int(choices[i])]
-        spec = policy[strat]
+        strat_name, strat = strategies[int(choices[i])]
 
-        if strat == "within_group_single_var":
-            group = _random_choice(spec.get("groups") or group_names, device)
+        if isinstance(strat, WithinGroupSingleVarStrategy):
+            group = _random_choice(strat.groups or group_names, device)
             bi = _random_choice(variable_groups[group], device)
-            full_t_allowed = set(spec.get("full_t_allowed", []))
-            long_span_days = spec.get("long_span_days", {})
-            all_t_prob = float(spec.get("all_T_prob", 0.5))
+            full_t_allowed = set(strat.full_t_allowed)
             if (
                 group in full_t_allowed
-                and float(torch.rand(1, device=device)) < all_t_prob
+                and float(torch.rand(1, device=device)) < strat.all_T_prob
             ):
-                # Full-record drop, only for full-T-allowed groups.
                 mask[i, :, bi] |= valid_i
             else:
-                # Span drop with a group-specific long-span range.
-                span_days = long_span_days.get(group, (30, 180))
+                span_days = strat.long_span_days.get(group, (30, 180))
                 seg = _random_span(_as_span(span_days), t, device)
                 mask[i, :, bi] |= seg & valid_i
 
-        elif strat == "whole_group_span":
-            span_days = spec["span_days"]
-            # Only consider groups that both have a span range and exist.
-            candidates = [g for g in span_days if g in variable_groups]
+        elif isinstance(strat, WholeGroupSpanStrategy):
+            candidates = [g for g in strat.span_days if g in variable_groups]
             if not candidates:
                 continue
             group = _random_choice(candidates, device)
-            seg = _random_span(_as_span(span_days[group]), t, device) & valid_i
+            seg = _random_span(_as_span(strat.span_days[group]), t, device) & valid_i
             for bi in variable_groups[group]:
                 mask[i, :, bi] |= seg
 
-        elif strat == "whole_group_all_T":
-            candidates = [
-                g for g in spec.get("allowed_groups", []) if g in variable_groups
-            ]
+        elif isinstance(strat, WholeGroupAllTStrategy):
+            candidates = [g for g in strat.allowed_groups if g in variable_groups]
             if not candidates:
                 continue
             group = _random_choice(candidates, device)
             for bi in variable_groups[group]:
                 mask[i, :, bi] |= valid_i
 
-        elif strat == "random_channel_time_mask":
-            nc_range = spec.get("num_channels", (1, max(1, v // 4)))
-            nc = min(_randint(nc_range[0], nc_range[1], device), v)
+        elif isinstance(strat, RandomChannelTimeMaskStrategy):
+            nc = min(_randint(strat.num_channels[0], strat.num_channels[1], device), v)
             channels = torch.randperm(v, device=device)[:nc]
-            seg = _random_span(_as_span(spec["span_days"]), t, device) & valid_i
+            seg = _random_span(_as_span(strat.span_days), t, device) & valid_i
             for bi in channels.tolist():
                 mask[i, :, bi] |= seg

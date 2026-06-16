@@ -37,6 +37,7 @@ from olmoearth_pretrain.train.train_module.era5_multiobjective import (
     ReconstructionObjectiveConfig,
     SupervisedObjectiveConfig,
     SupervisedTaskConfig,
+    _parse_recon_mode,
 )
 
 T = MAX_ERA5L_DAY_10_SEQUENCE_LENGTH  # 365
@@ -293,6 +294,68 @@ def test_a_only():
     print("  PASS")
 
 
+def test_recon_mode_gating():
+    """Test that group_recon_mode correctly gates raw and SWT loss channels."""
+    print("--- test_recon_mode_gating ---")
+    swt_levels = [0, 1, 2]
+
+    # _parse_recon_mode unit tests
+    inc_raw, lvls = _parse_recon_mode("raw_plus_wavelet", swt_levels)
+    assert inc_raw is True and lvls == [0, 1, 2], f"raw_plus_wavelet: {inc_raw}, {lvls}"
+
+    inc_raw, lvls = _parse_recon_mode("raw_plus_slow_wavelet", swt_levels)
+    assert inc_raw is True and lvls == [1, 2], (
+        f"raw_plus_slow_wavelet: {inc_raw}, {lvls}"
+    )
+
+    inc_raw, lvls = _parse_recon_mode("slow_wavelet", swt_levels)
+    assert inc_raw is False and lvls == [1, 2], f"slow_wavelet: {inc_raw}, {lvls}"
+
+    inc_raw, lvls = _parse_recon_mode("short_raw_plus_slow_wavelet", swt_levels)
+    assert inc_raw is True and lvls == [1, 2], (
+        f"short_raw_plus_slow_wavelet: {inc_raw}, {lvls}"
+    )
+    print("  _parse_recon_mode: OK")
+
+    # End-to-end: B-only with default recon modes produces finite loss
+    model_cfg = Era5MultiObjectiveModelConfig(
+        encoder_config=Era5DailyEncoderConfig(
+            embedding_size=D,
+            depth=2,
+            num_heads=4,
+            max_sequence_length=T,
+            modality_name=Modality.ERA5L_DAY_10.name.lower(),
+            use_mask_embed=True,
+            use_conv_stem=True,
+        ),
+        reconstruction_objective=ReconstructionObjectiveConfig(
+            decoder=Era5TimeQueryDecoderConfig(
+                embedding_size=D,
+                depth=1,
+                num_heads=4,
+                max_sequence_length=T,
+                num_output_channels=V,
+            ),
+            swt_levels=[0, 1, 2],
+            swt_lambda=0.1,
+        ),
+    )
+    model = model_cfg.build()
+    obj = model.objective_list[0]
+    batch = _make_batch()
+    loss, metrics = obj.compute(model.encoder, batch)
+    assert torch.isfinite(loss), f"Loss not finite: {loss.item()}"
+    assert "reconstruction/raw_loss" in metrics
+    assert "reconstruction/swt_level_0_loss" in metrics
+    assert "reconstruction/swt_level_1_loss" in metrics
+    assert "reconstruction/swt_level_2_loss" in metrics
+    loss.backward()
+    print(f"  End-to-end loss: {loss.item():.6f}")
+    for k, v in sorted(metrics.items()):
+        print(f"  {k}: {v.item():.6f}")
+    print("  PASS")
+
+
 if __name__ == "__main__":
     print(f"PyTorch {torch.__version__}")
     print(f"T={T}, V={V}, D={D}, B={B}\n")
@@ -304,6 +367,7 @@ if __name__ == "__main__":
         test_b_only,
         test_a_plus_b,
         test_a_only,
+        test_recon_mode_gating,
     ]
     failed = []
     for test_fn in tests:

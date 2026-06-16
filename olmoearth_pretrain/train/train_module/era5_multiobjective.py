@@ -48,13 +48,11 @@ from olmoearth_pretrain.nn.era5_encoder import (
 )
 from olmoearth_pretrain.nn.era5_heads import SupervisedHeadRegistry, build_head
 from olmoearth_pretrain.nn.transforms.era5_corruption import (
+    GROUP_RECON_MODE,
     CorruptionConfig,
     corrupt_era5,
 )
-from olmoearth_pretrain.nn.transforms.era5_swt import (
-    StationaryWaveletTransform1d,
-    multiscale_swt_loss,
-)
+from olmoearth_pretrain.nn.transforms.era5_swt import StationaryWaveletTransform1d
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
@@ -351,6 +349,10 @@ class ReconstructionObjectiveConfig(Config):
         swt_lambda: Weight of the wavelet multiscale loss term.
         swt_levels: Which SWT decomposition levels to use.
         swt_wavelet: Wavelet family for the SWT (``db2`` or ``haar``).
+        group_recon_mode: Per-group reconstruction mode (see
+            :data:`~olmoearth_pretrain.nn.transforms.era5_corruption.GROUP_RECON_MODE`).
+            Controls how each variable group's reconstruction loss is
+            weighted across raw vs. wavelet bands.
     """
 
     name: str = "reconstruction"
@@ -364,6 +366,9 @@ class ReconstructionObjectiveConfig(Config):
     swt_lambda: float = 0.1
     swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2])
     swt_wavelet: str = "db2"
+    group_recon_mode: dict[str, str] = field(
+        default_factory=lambda: dict(GROUP_RECON_MODE)
+    )
 
     def build(self) -> ReconstructionObjective:
         """Instantiate decoder, SWT, and the objective."""
@@ -381,11 +386,33 @@ class ReconstructionObjectiveConfig(Config):
             weight=self.weight,
             module=module,
             corruption_config=self.corruption,
+            group_recon_mode=dict(self.group_recon_mode),
             huber_delta=self.huber_delta,
             raw_loss_on_masked_only=self.raw_loss_on_masked_only,
             swt_lambda=self.swt_lambda,
             swt_levels=self.swt_levels,
         )
+
+
+# SWT levels with index >= this threshold are considered "slow" (low-frequency).
+# Level 0 captures ~1-day oscillations; level 1 ~2-day; level 2 ~4-day, etc.
+# Modes like "slow_wavelet" restrict the loss to these slower bands.
+_SLOW_SWT_LEVEL_MIN: int = 1
+
+
+def _parse_recon_mode(mode: str, all_swt_levels: list[int]) -> tuple[bool, list[int]]:
+    """Parse a ``group_recon_mode`` string into ``(include_raw, swt_levels)``."""
+    slow = [level for level in all_swt_levels if level >= _SLOW_SWT_LEVEL_MIN]
+    if mode == "raw_plus_wavelet":
+        return True, list(all_swt_levels)
+    if mode in ("raw_plus_slow_wavelet", "short_raw_plus_slow_wavelet"):
+        # "short_raw" is treated identically for now — hydro_flux only
+        # receives short spans anyway due to SPAN_ONLY_GROUP_MASK.
+        return True, slow
+    if mode == "slow_wavelet":
+        return False, slow
+    logger.warning("Unknown group_recon_mode %r, falling back to raw+wavelet", mode)
+    return True, list(all_swt_levels)
 
 
 class ReconstructionObjective(_Objective):
@@ -397,6 +424,7 @@ class ReconstructionObjective(_Objective):
         weight: float,
         module: _ReconstructionModule,
         corruption_config: CorruptionConfig,
+        group_recon_mode: dict[str, str],
         huber_delta: float = 1.0,
         raw_loss_on_masked_only: bool = True,
         swt_lambda: float = 0.1,
@@ -407,6 +435,7 @@ class ReconstructionObjective(_Objective):
         self.weight = weight
         self._module = module
         self.corruption_config = corruption_config
+        self.group_recon_mode = group_recon_mode
         self.huber_delta = huber_delta
         self.raw_loss_on_masked_only = raw_loss_on_masked_only
         self.swt_lambda = swt_lambda
@@ -420,20 +449,38 @@ class ReconstructionObjective(_Objective):
         """Return the decoder module owned by this objective."""
         return self._module
 
+    def _group_huber(
+        self,
+        pred: Tensor,
+        targ: Tensor,
+        group_mask: Tensor | None,
+    ) -> Tensor:
+        """Huber loss over a channel subset, optionally masked to corrupted positions."""
+        if group_mask is not None:
+            fp = pred[group_mask]
+            ft = targ[group_mask]
+        else:
+            fp, ft = pred, targ
+        if fp.numel() == 0:
+            return torch.zeros((), device=pred.device, dtype=pred.dtype)
+        return F.huber_loss(fp, ft, reduction="mean", delta=self.huber_delta)
+
     def compute(
         self,
         encoder: Era5DailyEncoder,
         batch: Era5SupervisedBatch,
     ) -> tuple[Tensor, dict[str, Tensor]]:
-        """Corrupt → encode → decode → loss."""
+        """Corrupt → encode → decode → per-group loss.
+
+        Loss terms are gated per variable group by ``group_recon_mode``
+        """
         x = batch.era5  # [B, T, V]
         ignore_mask = batch.ignore_mask  # [B, T]
 
         # 1. Generate corruption mask
         mask = corrupt_era5(x, ignore_mask, self.corruption_config)
 
-        # 2. Encode with corruption mask (encoder replaces masked
-        #    positions with learned per-band embeddings).
+        # 2. Encode with corruption mask
         out = encoder(
             era5=x,
             timestamps=batch.timestamps,
@@ -449,35 +496,76 @@ class ReconstructionObjective(_Objective):
             timestamps=batch.timestamps,
         )
 
-        # 4. Raw Huber loss
-        if self.raw_loss_on_masked_only:
-            flat_pred = x_hat[mask]
-            flat_targ = x[mask]
-            if flat_pred.numel() == 0:
-                raw_loss = torch.zeros((), device=x.device, dtype=x.dtype)
-            else:
-                raw_loss = F.huber_loss(
-                    flat_pred, flat_targ, reduction="mean", delta=self.huber_delta
-                )
-        else:
-            raw_loss = F.huber_loss(x_hat, x, reduction="mean", delta=self.huber_delta)
-
-        # 5. Multiscale SWT loss
-        swt_loss: Tensor
-        swt_metrics: dict[str, Tensor]
+        # 4. Compute SWT bands once for all channels
+        pred_bands: list | None = None
+        targ_bands: list | None = None
         if self.swt_lambda > 0 and self.swt_levels:
-            swt_loss, swt_metrics = multiscale_swt_loss(
-                x_hat=x_hat,
-                x=x,
-                swt=self._module.swt,
-                levels=self.swt_levels,
-                huber_delta=self.huber_delta,
-                mask=mask if self.raw_loss_on_masked_only else None,
-            )
-            swt_loss = self.swt_lambda * swt_loss
-        else:
-            swt_loss = torch.zeros((), device=x.device, dtype=x.dtype)
-            swt_metrics = {}
+            swt_mod = self._module.swt
+            pred_bands = swt_mod(x_hat.transpose(1, 2), levels=self.swt_levels)
+            targ_bands = swt_mod(x.transpose(1, 2), levels=self.swt_levels)
+
+        variable_groups = self.corruption_config.variable_groups
+        n_groups = len(variable_groups)
+
+        # 5. Per-group loss accumulation
+        raw_loss = torch.zeros((), device=x.device, dtype=x.dtype)
+        swt_loss = torch.zeros((), device=x.device, dtype=x.dtype)
+        # Per-level accumulators for metrics (sum + count for averaging)
+        level_loss_sums: dict[int, Tensor] = {}
+        level_loss_counts: dict[int, int] = {}
+
+        for group_name, bi in variable_groups.items():
+            mode = self.group_recon_mode.get(group_name, "raw_plus_wavelet")
+            include_raw, allowed_levels = _parse_recon_mode(mode, self.swt_levels)
+
+            # Slice to this group's channels
+            g_pred = x_hat[:, :, bi]  # [B, T, |bi|]
+            g_targ = x[:, :, bi]
+            g_mask = mask[:, :, bi] if self.raw_loss_on_masked_only else None
+
+            # Raw Huber (band-normalized like the SWT path)
+            if include_raw:
+                with torch.no_grad():
+                    raw_std = g_targ.std(dim=(0, 1)).clamp(min=1e-6)  # [|bi|]
+                g_pred_n = g_pred / raw_std[None, None, :]
+                g_targ_n = g_targ / raw_std[None, None, :]
+                raw_loss = raw_loss + self._group_huber(g_pred_n, g_targ_n, g_mask)
+
+            # SWT wavelet loss at allowed levels
+            if pred_bands is not None and targ_bands is not None and allowed_levels:
+                g_mask_vt = (
+                    mask[:, :, bi].transpose(1, 2)
+                    if self.raw_loss_on_masked_only
+                    else None
+                )
+                for level_idx, level in enumerate(self.swt_levels):
+                    if level not in allowed_levels:
+                        continue
+                    _, d_pred = pred_bands[level_idx]  # [B, V, T]
+                    _, d_targ = targ_bands[level_idx]
+                    d_pred_g = d_pred[:, bi, :]  # [B, |bi|, T]
+                    d_targ_g = d_targ[:, bi, :]
+
+                    with torch.no_grad():
+                        std = d_targ_g.std(dim=(0, 2)).clamp(min=1e-6)
+                    d_pred_n = d_pred_g / std[None, :, None]
+                    d_targ_n = d_targ_g / std[None, :, None]
+
+                    lvl = self._group_huber(d_pred_n, d_targ_n, g_mask_vt)
+                    swt_loss = swt_loss + lvl
+                    level_loss_sums[level] = (
+                        level_loss_sums.get(
+                            level, torch.zeros((), device=x.device, dtype=x.dtype)
+                        )
+                        + lvl
+                    )
+                    level_loss_counts[level] = level_loss_counts.get(level, 0) + 1
+
+        # Average across groups so the scale doesn't depend on group count
+        if n_groups > 0:
+            raw_loss = raw_loss / n_groups
+            swt_loss = swt_loss / n_groups
+        swt_loss = self.swt_lambda * swt_loss
 
         total_loss = raw_loss + swt_loss
 
@@ -486,8 +574,16 @@ class ReconstructionObjective(_Objective):
             f"{self.name}/swt_loss": swt_loss.detach(),
             f"{self.name}/masked_fraction": mask.float().mean().detach(),
         }
-        for k, v in swt_metrics.items():
-            metrics[f"{self.name}/{k}"] = v
+        for level in self.swt_levels:
+            cnt = level_loss_counts.get(level, 0)
+            if cnt > 0:
+                metrics[f"{self.name}/swt_level_{level}_loss"] = (
+                    level_loss_sums[level].detach() / cnt
+                )
+            else:
+                metrics[f"{self.name}/swt_level_{level}_loss"] = torch.zeros(
+                    (), device=x.device, dtype=x.dtype
+                )
 
         return total_loss, metrics
 
