@@ -316,9 +316,9 @@ EVAL_TASKS = {
         primary_metric=EvalMetric.MIOU,
     ),
     # 50Cities: single-timestep S2+S1 land-cover segmentation, 64x64 tiles.
-    # Three split modes (random / by_city / by_continent), each with an S2-only
-    # and an S1+S2 task. The split mode is carried by the dataset name; the
-    # modality choice is the per-task input_modalities here.
+    # Three split modes (random / by_city / by_continent), each with an S2-only,
+    # an S1-only, and an S1+S2 task. The split mode is carried by the dataset
+    # name; the modality choice is the per-task input_modalities here.
     "fifty_cities_sentinel2": DownstreamTaskConfig(
         dataset="fifty_cities",
         embedding_batch_size=32,
@@ -329,6 +329,20 @@ EVAL_TASKS = {
         probe_lr=0.1,
         eval_interval=Duration.epochs(50),
         input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "fifty_cities_sentinel1": DownstreamTaskConfig(
+        dataset="fifty_cities",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL1.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
@@ -361,6 +375,20 @@ EVAL_TASKS = {
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
+    "fifty_cities_by_city_sentinel1": DownstreamTaskConfig(
+        dataset="fifty_cities_by_city",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL1.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
     "fifty_cities_by_city_sentinel1_sentinel2": DownstreamTaskConfig(
         dataset="fifty_cities_by_city",
         embedding_batch_size=32,
@@ -385,6 +413,20 @@ EVAL_TASKS = {
         probe_lr=0.1,
         eval_interval=Duration.epochs(50),
         input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "fifty_cities_by_continent_sentinel1": DownstreamTaskConfig(
+        dataset="fifty_cities_by_continent",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL1.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
