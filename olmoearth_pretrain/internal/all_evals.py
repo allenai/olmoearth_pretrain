@@ -561,6 +561,21 @@ EVAL_TASKS = {
         primary_metric=EvalMetric.MICRO_MAP,
         epochs=50,
     ),
+    "gb2_treesatai_aerial": DownstreamTaskConfig(
+        dataset="gb2-treesatai_aerial",
+        embedding_batch_size=16,
+        probe_batch_size=16,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.KNN,
+        # Multilabel: GeoBench-2 reports micro-averaged mAP (threshold-free).
+        primary_metric=EvalMetric.MICRO_MAP,
+        epochs=50,
+    ),
     # this eval is very large and can lead to
     # OOM errors. Skipping for now.
     # "oil_spill_detection": DownstreamTaskConfig(
@@ -1021,6 +1036,18 @@ FT_EVAL_TASKS = {
         epochs=50,
         # Multilabel: GeoBench-2 reports micro-averaged mAP (threshold-free),
         # not macro-F1 at a fixed 0.5 threshold.
+        primary_metric=EvalMetric.MICRO_MAP,
+    ),
+    "gb2_treesatai_aerial": DownstreamTaskConfig(
+        dataset="gb2-treesatai_aerial",
+        ft_batch_size=2,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        # Multilabel: GeoBench-2 reports micro-averaged mAP (threshold-free).
         primary_metric=EvalMetric.MICRO_MAP,
     ),
 }

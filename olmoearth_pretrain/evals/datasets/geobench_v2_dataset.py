@@ -56,6 +56,14 @@ class Slug(str, Enum):
     SPACENET2 = "spacenet2"
     SPACENET7 = "spacenet7"
     TREESATAI = "treesatai"
+    # TreeSatAI evaluated on its high-res (0.2m) aerial RGBN imagery instead of
+    # the heavily-upsampled ~6x6 Sentinel-2. Reads the same tortilla via a root
+    # alias (see GeobenchV2Dataset.__init__).
+    TREESATAI_AERIAL = "treesatai_aerial"
+
+
+# Slugs that reuse another dataset's tortilla directory on disk.
+_SLUG_DIR_ALIAS: dict[str, str] = {"treesatai_aerial": "treesatai"}
 
 
 def _s2_names(band_order: Any) -> list[str]:
@@ -223,6 +231,15 @@ def _sample_to_olmoearth(
 
     if slug == Slug.TREESATAI:
         return _s2_sample(sample["image_s2"].float(), _s2_names(band_order), device)
+
+    if slug == Slug.TREESATAI_AERIAL:
+        # High-res aerial RGBN uint8 [0-255]; rescale to S2 DN range and map to
+        # the S2 RGBN bands (B04,B03,B02,B08), padding the rest to 0 (same scheme
+        # as spacenet7/fotw). Uses the 0.2m aerial instead of the upsampled S2.
+        image = sample["image_aerial"].float() * (_S2_DN_MAX / _UINT8_MAX)
+        rgbn_to_s2 = {"red": "B04", "green": "B03", "blue": "B02", "nir": "B08"}
+        src = [rgbn_to_s2[b] for b in ("red", "green", "blue", "nir")]
+        return _s2_sample(image, src, device)
 
     if slug == Slug.BIOMASSTERS:
         x1 = sample["image_s1"].float()
@@ -506,7 +523,7 @@ class GeobenchV2Dataset(Dataset):
                 )
 
         loader_cls = SLUG_TO_DATASET[slug]
-        root = str(Path(paths.GEOBENCH2_DIR) / slug)
+        root = str(Path(paths.GEOBENCH2_DIR) / _SLUG_DIR_ALIAS.get(slug, slug))
         self._inner = loader_cls(root=root, split=split)
         self._band_order = loader_cls.band_order
 

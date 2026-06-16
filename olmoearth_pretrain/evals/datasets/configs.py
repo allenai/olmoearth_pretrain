@@ -403,6 +403,16 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         supported_modalities=[Modality.SENTINEL2_L2A.name],
         source_imagery=[SourceImagery.SENTINEL2],
     ),
+    # TreeSatAI on its 0.2m aerial RGBN imagery (fed through the S2 slot), as an
+    # alternative to the heavily-upsampled Sentinel-2 variant above.
+    "gb2-treesatai_aerial": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[],
+        num_classes=15,
+        is_multilabel=True,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        source_imagery=[SourceImagery.RGBNE_AERIAL],
+    ),
     "gb2-flair2": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
         imputes=[],

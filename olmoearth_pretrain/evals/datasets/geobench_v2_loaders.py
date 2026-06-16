@@ -407,4 +407,7 @@ SLUG_TO_DATASET: dict[str, type[_BaseGeobenchDataset]] = {
     "spacenet2": SpaceNet2Dataset,
     "spacenet7": SpaceNet7Dataset,
     "treesatai": TreeSatAIDataset,
+    # Same TreeSatAI tortilla, but the dataset wrapper feeds the high-res aerial
+    # bands instead of Sentinel-2 (see Slug.TREESATAI_AERIAL / root alias).
+    "treesatai_aerial": TreeSatAIDataset,
 }
