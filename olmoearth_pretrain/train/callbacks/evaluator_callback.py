@@ -5,7 +5,7 @@ import logging
 import os
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import partial
 from typing import Any
@@ -98,6 +98,12 @@ class DownstreamTaskConfig:
     # If the model has a register bottleneck, probe the pooled encoder patch tokens
     # instead of the register latents. No effect without a register bottleneck.
     eval_on_encoder_tokens: bool = False
+    # For geobench segmentation tasks: split each native image into
+    # (height_width // tile_size)**2 non-overlapping tile_size x tile_size windows
+    # (keeps every pixel, shrinks the token grid the model/register-read sees).
+    # Used to test whether the large-grid read dilution drives the register
+    # regressions on the 256px tasks (sa_crop_type, cashew_plant). None = native size.
+    tile_size: int | None = None
     # Fraction of training labels to use for low-label evals. Dataset-specific
     # code translates this into fixed partitions or deterministic subsamples.
     label_fraction: float = 1.0
@@ -167,6 +173,12 @@ class DownstreamEvaluator:
         """
         self.evaluation_name = evaluation_name
         self.config = dataset_to_config(task.dataset)
+        self.tile_size = task.tile_size
+        if self.tile_size is not None:
+            # dataset_to_config returns a shared instance, so copy rather than
+            # mutate: shrink the segmentation reshape target to the tiled window
+            # so the seg probe reshapes to the smaller (tiled) token grid.
+            self.config = replace(self.config, height_width=self.tile_size)
         self.trainer = trainer
         self.device = device
         # Add all task attributes to self
@@ -290,6 +302,8 @@ class DownstreamEvaluator:
             worker_init_fn = partial(_seed_worker, base_seed=split_seed)
 
         extra_kwargs: dict[str, Any] = {}
+        if self.tile_size is not None:
+            extra_kwargs["tile_size"] = self.tile_size
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities

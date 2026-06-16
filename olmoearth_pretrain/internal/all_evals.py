@@ -204,6 +204,42 @@ EVAL_TASKS = {
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
+    # 64x64-tiled variants of the two 256px segmentation tasks: each native
+    # 256x256 image becomes 16 non-overlapping 64x64 tiles, shrinking the token
+    # grid the register read sees (64/patch vs 256/patch). Used to test whether
+    # the large-grid read dilution drives the register regressions on these tasks.
+    # Not directly comparable in absolute terms to the 256px versions (less spatial
+    # context per window); the signal is the rope-vs-latents gap at 64 vs 256.
+    "m_sa_crop_type_64": DownstreamTaskConfig(
+        dataset="m-sa-crop-type",
+        tile_size=64,
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "m_cashew_plant_64": DownstreamTaskConfig(
+        dataset="m-cashew-plant",
+        tile_size=64,
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
     "mados": DownstreamTaskConfig(
         dataset="mados",
         embedding_batch_size=128,

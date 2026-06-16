@@ -82,6 +82,7 @@ def get_eval_dataset(
             label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
+            tile_size=kwargs.get("tile_size"),
         )
     elif eval_dataset == "mados":
         if norm_stats_from_pretrained:
