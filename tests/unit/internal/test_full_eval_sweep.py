@@ -460,7 +460,7 @@ class TestBuildCommandsExecution:
         assert "checkpoint_sweep_evals.py" in command
         assert (
             "--trainer.callbacks.downstream_evaluator.tasks_to_run="
-            '\'["m_eurosat", "m_bigearthnet"]\''
+            '\'["m_eurosat","m_bigearthnet"]\''
         ) in command
 
     def test_label_fraction_overrides(self, base_args: argparse.Namespace) -> None:
