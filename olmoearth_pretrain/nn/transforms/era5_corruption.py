@@ -1,14 +1,17 @@
 """Input corruption strategies for ERA5 reconstruction (objective B).
 
-Masking operates on normalized ERA5 input ``[B, T, V]`` and combines:
+Masking operates on normalized ERA5 input ``[B, T, V]`` via a two-stage
+:class:`MaskPolicy`:
 
-* **Short time masks** — contiguous spans of timesteps where *all* V
-  variables are masked (forces the encoder to interpolate across time).
-* **Policy-driven variable masks** — a configurable :class:`MaskPolicy`
-  that, per sample, samples one masking strategy from a weighted menu.
-  Strategies range from dropping a single variable within a group to
-  dropping a whole physical group across a span of days or the full
-  sequence.
+* **Stage 1 — Temporal interpolation** (:class:`TemporalInterpolationStrategy`):
+  mask short contiguous time spans for eligible groups, forcing the
+  encoder to interpolate across time.  Groups whose signals are too
+  noisy or event-driven for temporal infilling (e.g. wind, hydro_flux)
+  are excluded.
+
+* **Stage 2 — Cross-variable reconstruction**: a weighted menu of
+  strategies that, per sample, drops specific variables or groups to
+  force reconstruction from cross-variable context.
 
 Note: ERA5L_DAY_10 has one timestep per day, so span lengths expressed
 in *days* map directly onto timesteps.
@@ -141,15 +144,15 @@ SPAN_ONLY_GROUP_MASK: set[str] = {
 }
 
 # Span length range (in days == timesteps for ERA5L_DAY_10) per group.
-GROUP_SPAN_DAYS: dict[str, tuple[int, int]] = {
-    "thermo": (1, 7),
-    "wind": (1, 3),
-    "shortwave_radiation": (3, 30),
-    "longwave_radiation": (3, 30),
-    "soil_moisture": (7, 90),
-    "evaporation": (7, 30),
-    "hydro_flux": (1, 7),
-    "pressure": (3, 30),
+GROUP_SPAN_DAYS: dict[str, list[int]] = {
+    "thermo": [1, 7],
+    "wind": [1, 3],
+    "shortwave_radiation": [3, 30],
+    "longwave_radiation": [3, 30],
+    "soil_moisture": [7, 90],
+    "evaporation": [7, 30],
+    "hydro_flux": [1, 3],
+    "pressure": [3, 30],
 }
 
 # Long-span length range (in days) used by the single-variable masking
@@ -158,13 +161,13 @@ GROUP_SPAN_DAYS: dict[str, tuple[int, int]] = {
 # A global (30, 180) is fine for highly redundant pairs (ssr/ssrd, swvl1/
 # swvl2, e/pev) but far too hard for weakly mutually-predictive pairs such
 # as tp from ro or u10 from v10, so those get shorter windows.
-WITHIN_GROUP_LONG_SPAN_DAYS: dict[str, tuple[int, int]] = {
-    "thermo": (7, 60),
-    "wind": (1, 3),
-    "shortwave_radiation": (30, 180),
-    "soil_moisture": (30, 180),
-    "evaporation": (14, 90),
-    "hydro_flux": (1, 14),
+WITHIN_GROUP_LONG_SPAN_DAYS: dict[str, list[int]] = {
+    "thermo": [7, 60],
+    "wind": [1, 3],
+    "shortwave_radiation": [30, 180],
+    "soil_moisture": [30, 180],
+    "evaporation": [14, 90],
+    "hydro_flux": [1, 7],
 }
 
 
@@ -192,8 +195,10 @@ class WithinGroupSingleVarStrategy:
             SINGLE_VAR_ALL_T_ALLOWED & GROUPS_WITH_MULT_VARIABLES
         )
     )
-    long_span_days: dict[str, tuple[int, int]] = field(
-        default_factory=lambda: dict(WITHIN_GROUP_LONG_SPAN_DAYS)
+    long_span_days: dict[str, list[int]] = field(
+        default_factory=lambda: {
+            k: list(v) for k, v in WITHIN_GROUP_LONG_SPAN_DAYS.items()
+        }
     )
 
 
@@ -207,8 +212,8 @@ class WholeGroupSpanStrategy:
     """
 
     prob: float = 0.4
-    span_days: dict[str, tuple[int, int]] = field(
-        default_factory=lambda: dict(GROUP_SPAN_DAYS)
+    span_days: dict[str, list[int]] = field(
+        default_factory=lambda: {k: list(v) for k, v in GROUP_SPAN_DAYS.items()}
     )
 
 
@@ -228,27 +233,35 @@ class WholeGroupAllTStrategy:
 
 
 @dataclass
-class RandomChannelTimeMaskStrategy:
-    """Drop a random set of channels across a contiguous span.
+class TemporalInterpolationStrategy:
+    """Stage 1: mask short time spans for eligible groups.
 
-    Channel count is sampled uniformly from ``num_channels``; channels are
-    picked irrespective of group boundaries.
+    Groups like wind and hydro_flux are excluded by default because their
+    daily signals are too noisy or event-driven for meaningful temporal
+    infilling.
     """
 
-    prob: float = 0.10
-    span_days: tuple[int, int] = (1, 7)
-    num_channels: tuple[int, int] = (1, 4)
+    num_masks: int = 3
+    span_days: list[int] = field(default_factory=lambda: [1, 1])
+    excluded_groups: list[str] = field(default_factory=lambda: ["wind", "hydro_flux"])
 
 
 @dataclass
 class MaskPolicy:
-    """Weighted menu of variable-masking strategies.
+    """Two-stage masking policy with per-stage probabilities.
 
-    For every sample in the batch, exactly one strategy is drawn (according
-    to its ``prob``).  Probabilities are normalized so they need not sum
-    to 1.  Strategies with ``prob=0`` are skipped.
+    **Stage 1** — :attr:`temporal_interpolation`
+
+    **Stage 2** — cross-variable reconstruction: one strategy is drawn per
+    sample (according to ``prob``).
     """
 
+    temporal_interpolation_prob: float = 1.0
+    cross_variable_prob: float = 1.0
+
+    temporal_interpolation: TemporalInterpolationStrategy = field(
+        default_factory=TemporalInterpolationStrategy
+    )
     within_group_single_var: WithinGroupSingleVarStrategy = field(
         default_factory=WithinGroupSingleVarStrategy
     )
@@ -258,60 +271,34 @@ class MaskPolicy:
     whole_group_all_T: WholeGroupAllTStrategy = field(
         default_factory=WholeGroupAllTStrategy
     )
-    random_channel_time_mask: RandomChannelTimeMaskStrategy = field(
-        default_factory=RandomChannelTimeMaskStrategy
-    )
 
     def strategies(self) -> list[tuple[str, Any]]:
-        """Return ``(name, strategy)`` pairs in fixed iteration order."""
+        """Return stage 2 ``(name, strategy)`` pairs in fixed order."""
         return [
             ("within_group_single_var", self.within_group_single_var),
             ("whole_group_span", self.whole_group_span),
             ("whole_group_all_T", self.whole_group_all_T),
-            ("random_channel_time_mask", self.random_channel_time_mask),
         ]
-
-
-@dataclass
-class CorruptionConfig:
-    """Configuration for ERA5 input corruption.
-
-    Args:
-        num_time_masks: Number of contiguous time spans to mask per sample.
-        time_mask_min_len: Minimum span length (in timesteps).
-        time_mask_max_len: Maximum span length (in timesteps).
-        variable_groups: Mapping from group name to list of band indices.
-        mask_policy: Weighted menu of variable-masking strategies.  One
-            strategy is sampled per sample.
-        min_mask_ratio: Ensure at least this fraction of (T*V) cells are
-            masked (repeat time-mask sampling if needed).
-    """
-
-    num_time_masks: int = 3
-    time_mask_min_len: int = 7
-    time_mask_max_len: int = 30
-    variable_groups: dict[str, list[int]] = field(
-        default_factory=lambda: dict(DEFAULT_VARIABLE_GROUPS)
-    )
-    mask_policy: MaskPolicy = field(default_factory=MaskPolicy)
-    min_mask_ratio: float = 0.15
 
 
 def corrupt_era5(
     era5: Tensor,
     ignore_mask: Tensor,
-    config: CorruptionConfig,
+    policy: MaskPolicy,
+    variable_groups: dict[str, list[int]],
 ) -> Tensor:
     """Generate a corruption mask for a batch of ERA5 sequences.
 
-    The mask indicates which ``(batch, timestep, variable)`` positions
-    should be treated as corrupted.  The encoder applies a learned
-    per-band embedding at masked positions (see ``use_mask_embed``).
+    Applies the two-stage :class:`MaskPolicy`:
+
+    1. Temporal interpolation
+    2. Cross-variable reconstruction
 
     Args:
         era5: ``[B, T, V]`` normalized input (used only for shape/device).
         ignore_mask: ``[B, T]`` bool, True = padded / invalid timestep.
-        config: Corruption settings.
+        policy: Two-stage masking policy.
+        variable_groups: Group name -> band-index mapping.
 
     Returns:
         ``mask`` — ``[B, T, V]`` bool (True = corrupted position).
@@ -321,23 +308,34 @@ def corrupt_era5(
     mask = torch.zeros(b, t, v, dtype=torch.bool, device=device)
     valid = ~ignore_mask  # [B, T]
 
-    # --- Short time masks ---
-    for _ in range(config.num_time_masks):
-        lengths = torch.randint(
-            config.time_mask_min_len,
-            config.time_mask_max_len + 1,
-            (b,),
-            device=device,
-        )
-        max_start = (t - lengths).clamp(min=0)
-        starts = (torch.rand(b, device=device) * (max_start.float() + 1)).long()
-        idx = torch.arange(t, device=device).unsqueeze(0)  # [1, T]
-        span = (idx >= starts.unsqueeze(1)) & (idx < (starts + lengths).unsqueeze(1))
-        span = span & valid
-        mask = mask | span.unsqueeze(-1).expand_as(mask)
+    # Per-sample coin flips for each stage
+    do_stage1 = torch.rand(b, device=device) < policy.temporal_interpolation_prob
+    do_stage2 = torch.rand(b, device=device) < policy.cross_variable_prob
 
-    # --- Policy-driven variable masks ---
-    _apply_mask_policy(mask, valid, config.mask_policy, config.variable_groups)
+    # --- Stage 1: Temporal interpolation ---
+    ti = policy.temporal_interpolation
+    if ti.num_masks > 0 and do_stage1.any():
+        excluded = set(ti.excluded_groups)
+        eligible = torch.zeros(v, dtype=torch.bool, device=device)
+        for gname, gidx in variable_groups.items():
+            if gname not in excluded:
+                eligible[gidx] = True
+
+        if eligible.any():
+            lo, hi = _as_span(ti.span_days)
+            for _ in range(ti.num_masks):
+                lengths = torch.randint(lo, hi + 1, (b,), device=device)
+                max_start = (t - lengths).clamp(min=0)
+                starts = (torch.rand(b, device=device) * (max_start.float() + 1)).long()
+                idx = torch.arange(t, device=device).unsqueeze(0)  # [1, T]
+                span = (idx >= starts.unsqueeze(1)) & (
+                    idx < (starts + lengths).unsqueeze(1)
+                )
+                span = span & valid & do_stage1.unsqueeze(1)
+                mask = mask | (span.unsqueeze(-1) & eligible[None, None, :])
+
+    # --- Stage 2: Cross-variable reconstruction ---
+    _apply_stage2_mask_policy(mask, valid, policy, variable_groups, do_stage2)
 
     return mask
 
@@ -378,11 +376,12 @@ def _random_span(span_days: tuple[int, int], t: int, device: torch.device) -> Te
     return seg
 
 
-def _apply_mask_policy(
+def _apply_stage2_mask_policy(
     mask: Tensor,
     valid: Tensor,
     policy: MaskPolicy,
     variable_groups: dict[str, list[int]],
+    do_stage2: Tensor,
 ) -> None:
     """Sample and apply one masking strategy per sample (in place).
 
@@ -391,6 +390,7 @@ def _apply_mask_policy(
         valid: ``[B, T]`` bool, True = real (non-padded) timestep.
         policy: :class:`MaskPolicy` instance.
         variable_groups: Group name -> band-index mapping.
+        do_stage2: ``[B]`` bool, True = apply stage 2 to this sample.
     """
     b, t, v = mask.shape
     device = mask.device
@@ -410,6 +410,8 @@ def _apply_mask_policy(
     choices = torch.multinomial(probs, b, replacement=True)
 
     for i in range(b):
+        if not do_stage2[i]:
+            continue
         valid_i = valid[i]  # [T]
         strat_name, strat = strategies[int(choices[i])]
 
@@ -423,7 +425,7 @@ def _apply_mask_policy(
             ):
                 mask[i, :, bi] |= valid_i
             else:
-                span_days = strat.long_span_days.get(group, (30, 180))
+                span_days = strat.long_span_days.get(group, [30, 180])
                 seg = _random_span(_as_span(span_days), t, device)
                 mask[i, :, bi] |= seg & valid_i
 
@@ -443,10 +445,3 @@ def _apply_mask_policy(
             group = _random_choice(candidates, device)
             for bi in variable_groups[group]:
                 mask[i, :, bi] |= valid_i
-
-        elif isinstance(strat, RandomChannelTimeMaskStrategy):
-            nc = min(_randint(strat.num_channels[0], strat.num_channels[1], device), v)
-            channels = torch.randperm(v, device=device)[:nc]
-            seg = _random_span(_as_span(strat.span_days), t, device) & valid_i
-            for bi in channels.tolist():
-                mask[i, :, bi] |= seg

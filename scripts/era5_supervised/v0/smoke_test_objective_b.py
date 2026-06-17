@@ -25,7 +25,8 @@ from olmoearth_pretrain.data.multi_task_era5_dataset import Era5SupervisedBatch
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
 from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig
 from olmoearth_pretrain.nn.transforms.era5_corruption import (
-    CorruptionConfig,
+    DEFAULT_VARIABLE_GROUPS,
+    MaskPolicy,
     corrupt_era5,
 )
 from olmoearth_pretrain.nn.transforms.era5_swt import (
@@ -68,16 +69,21 @@ def test_corruption():
     """Test that corruption produces valid masks and shapes."""
     print("--- test_corruption ---")
     batch = _make_batch()
-    config = CorruptionConfig(
-        num_time_masks=2,
-        time_mask_min_len=5,
-        time_mask_max_len=20,
-    )
-    mask = corrupt_era5(batch.era5, batch.ignore_mask, config)
+    policy = MaskPolicy()
+    mask = corrupt_era5(batch.era5, batch.ignore_mask, policy, DEFAULT_VARIABLE_GROUPS)
     assert mask.shape == (B, T, V), f"Bad mask shape: {mask.shape}"
     assert mask.any(), "Nothing was masked"
     frac = mask.float().mean().item()
     print(f"  Masked fraction: {frac:.3f}")
+
+    # Verify stage 1 excludes wind (bands 12, 13) and hydro_flux (bands 3, 11)
+    excluded_bands = (
+        DEFAULT_VARIABLE_GROUPS["wind"] + DEFAULT_VARIABLE_GROUPS["hydro_flux"]
+    )
+    eligible_bands = [i for i in range(V) if i not in excluded_bands]
+    eligible_masked = mask[:, :, eligible_bands].any().item()
+    assert eligible_masked, "Eligible channels should have stage-1 masking"
+    print("  Stage-1 channel eligibility: OK")
     print("  PASS")
 
 

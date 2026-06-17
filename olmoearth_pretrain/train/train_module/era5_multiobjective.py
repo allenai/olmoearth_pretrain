@@ -48,8 +48,9 @@ from olmoearth_pretrain.nn.era5_encoder import (
 )
 from olmoearth_pretrain.nn.era5_heads import SupervisedHeadRegistry, build_head
 from olmoearth_pretrain.nn.transforms.era5_corruption import (
+    DEFAULT_VARIABLE_GROUPS,
     GROUP_RECON_MODE,
-    CorruptionConfig,
+    MaskPolicy,
     corrupt_era5,
 )
 from olmoearth_pretrain.nn.transforms.era5_swt import StationaryWaveletTransform1d
@@ -342,7 +343,9 @@ class ReconstructionObjectiveConfig(Config):
         name: Objective name used for metric keys.
         weight: Objective-level weight multiplied into the loss.
         decoder: Decoder config (cross-attention depth, heads, …).
-        corruption: Input corruption config (time masks, var-group masks).
+        mask_policy: Two-stage masking policy (temporal interpolation +
+            cross-variable reconstruction).
+        variable_groups: Mapping from group name to list of band indices.
         huber_delta: Delta for the raw Huber loss.
         raw_loss_on_masked_only: If True, compute raw Huber only over
             positions that were corrupted; otherwise over the full sequence.
@@ -360,7 +363,10 @@ class ReconstructionObjectiveConfig(Config):
     decoder: Era5TimeQueryDecoderConfig = field(
         default_factory=Era5TimeQueryDecoderConfig
     )
-    corruption: CorruptionConfig = field(default_factory=CorruptionConfig)
+    mask_policy: MaskPolicy = field(default_factory=MaskPolicy)
+    variable_groups: dict[str, list[int]] = field(
+        default_factory=lambda: dict(DEFAULT_VARIABLE_GROUPS)
+    )
     huber_delta: float = 1.0
     raw_loss_on_masked_only: bool = True
     swt_lambda: float = 0.1
@@ -385,7 +391,8 @@ class ReconstructionObjectiveConfig(Config):
             name=self.name,
             weight=self.weight,
             module=module,
-            corruption_config=self.corruption,
+            mask_policy=self.mask_policy,
+            variable_groups=dict(self.variable_groups),
             group_recon_mode=dict(self.group_recon_mode),
             huber_delta=self.huber_delta,
             raw_loss_on_masked_only=self.raw_loss_on_masked_only,
@@ -423,7 +430,8 @@ class ReconstructionObjective(_Objective):
         name: str,
         weight: float,
         module: _ReconstructionModule,
-        corruption_config: CorruptionConfig,
+        mask_policy: MaskPolicy,
+        variable_groups: dict[str, list[int]],
         group_recon_mode: dict[str, str],
         huber_delta: float = 1.0,
         raw_loss_on_masked_only: bool = True,
@@ -434,7 +442,8 @@ class ReconstructionObjective(_Objective):
         self.name = name
         self.weight = weight
         self._module = module
-        self.corruption_config = corruption_config
+        self.mask_policy = mask_policy
+        self.variable_groups = variable_groups
         self.group_recon_mode = group_recon_mode
         self.huber_delta = huber_delta
         self.raw_loss_on_masked_only = raw_loss_on_masked_only
@@ -478,7 +487,7 @@ class ReconstructionObjective(_Objective):
         ignore_mask = batch.ignore_mask  # [B, T]
 
         # 1. Generate corruption mask
-        mask = corrupt_era5(x, ignore_mask, self.corruption_config)
+        mask = corrupt_era5(x, ignore_mask, self.mask_policy, self.variable_groups)
 
         # 2. Encode with corruption mask
         out = encoder(
@@ -504,7 +513,7 @@ class ReconstructionObjective(_Objective):
             pred_bands = swt_mod(x_hat.transpose(1, 2), levels=self.swt_levels)
             targ_bands = swt_mod(x.transpose(1, 2), levels=self.swt_levels)
 
-        variable_groups = self.corruption_config.variable_groups
+        variable_groups = self.variable_groups
         n_groups = len(variable_groups)
 
         # 5. Per-group loss accumulation

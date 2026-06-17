@@ -62,7 +62,6 @@ from olmoearth_pretrain.internal.experiment import (
 )
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
 from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig, Era5Pooling
-from olmoearth_pretrain.nn.transforms.era5_corruption import CorruptionConfig
 from olmoearth_pretrain.train.callbacks import (
     OlmoEarthWandBCallback,
 )
@@ -171,10 +170,6 @@ class Era5SupervisedCommonComponents(CommonComponents):
     recon_swt_lambda: float = 0.1
     recon_swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2])
     recon_swt_wavelet: str = "db2"
-    # Corruption knobs
-    recon_num_time_masks: int = 3
-    recon_time_mask_min_len: int = 7
-    recon_time_mask_max_len: int = 30
     # ------------------------------------------------------------------
     # Downstream evaluation (linear probe).  Runs for A-only, B-only,
     # and A+B — this is the primary encoder-quality signal for B-only.
@@ -520,16 +515,10 @@ def build_model_config(
             add_day_of_year_features=True,
             dropout=common.recon_decoder_dropout,
         )
-        corruption_config = CorruptionConfig(
-            num_time_masks=common.recon_num_time_masks,
-            time_mask_min_len=common.recon_time_mask_min_len,
-            time_mask_max_len=common.recon_time_mask_max_len,
-        )
         reconstruction_objective = ReconstructionObjectiveConfig(
             name="reconstruction",
             weight=common.recon_weight,
             decoder=decoder_config,
-            corruption=corruption_config,
             huber_delta=common.recon_huber_delta,
             raw_loss_on_masked_only=common.recon_raw_loss_on_masked_only,
             swt_lambda=common.recon_swt_lambda,
