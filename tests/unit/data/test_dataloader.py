@@ -118,6 +118,75 @@ def test_get_batch_item_params_iterator(tmp_path: Path, setup_h5py_dir: Path) ->
         assert all(item[2] == third_sampled_hw_p for item in third_batch)
 
 
+@pytest.mark.parametrize(
+    "prob,expected", [(0.0, False), (1.0, True)], ids=["off", "always"]
+)
+def test_single_timestep_prob_is_batch_uniform(
+    tmp_path: Path, setup_h5py_dir: Path, prob: float, expected: bool
+) -> None:
+    """The single-timestep decision is per batch and respects the bounds 0/1."""
+    training_modalities = [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name]
+    dataset = OlmoEarthDataset(
+        h5py_dir=setup_h5py_dir,
+        training_modalities=training_modalities,
+        dtype=np.float32,
+    )
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    collator = functools.partial(
+        collate_single_masked_batched, transform=None, masking_strategy=masking_strategy
+    )
+    dataset.prepare()
+    dataloader = OlmoEarthDataLoader(
+        dataset=dataset,
+        work_dir=tmp_path,
+        global_batch_size=1,
+        seed=0,
+        num_workers=0,
+        collator=collator,
+        target_device_type="cpu",
+        token_budget=1000000,
+        min_patch_size=1,
+        max_patch_size=1,
+        sampled_hw_p_list=[256],
+        masking_strategy=masking_strategy,
+        num_masked_views=1,
+        single_timestep_prob=prob,
+    )
+    dataloader.reshuffle()
+    dw = _IterableDatasetWrapper(dataloader)
+
+    rank_batch_size = 3
+    items = list(
+        dw._get_batch_item_params_iterator(np.arange(1, 10), [1], [4], rank_batch_size)
+    )
+    # Each tuple is (idx, patch_size, sampled_hw_p, force_single_timestep).
+    flags = [item[3] for item in items]
+    # Bounds: prob 0 -> never, prob 1 -> always.
+    assert all(flag is expected for flag in flags)
+    # Uniform within every rank_batch_size block.
+    for start in range(0, len(flags), rank_batch_size):
+        block = flags[start : start + rank_batch_size]
+        assert len(set(block)) == 1
+
+
+def test_single_timestep_prob_validation() -> None:
+    """OlmoEarthDataLoaderConfig rejects out-of-range single_timestep_prob."""
+    from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
+
+    config = OlmoEarthDataLoaderConfig(
+        work_dir="/tmp/x",
+        global_batch_size=1,
+        min_patch_size=1,
+        max_patch_size=1,
+        sampled_hw_p_list=[4],
+        seed=0,
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        single_timestep_prob=1.5,
+    )
+    with pytest.raises(ValueError, match="single_timestep_prob"):
+        config.validate()
+
+
 def _create_test_dataloader(
     tmp_path: Path,
     seed: int = 42,

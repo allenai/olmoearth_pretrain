@@ -128,6 +128,7 @@ def subset_sample_default(
     current_length: int,
     missing_timesteps_masks: dict[str, Any] | None = None,
     tokenization_config: TokenizationConfig | None = None,
+    force_single_timestep: bool = False,
 ) -> OlmoEarthSample:
     """Subset a OlmoEarthSample using default rectangular cropping.
 
@@ -136,23 +137,33 @@ def subset_sample_default(
         patch_size: The patch size being applied to this sample.
         max_tokens_per_instance: The token budget when subsetting. This is used
             to determine the maximum number of timesteps possible for a given
-            height and width. If None, this operation is a no-op.
+            height and width. If None, this operation is a no-op (unless
+            force_single_timestep is set).
         sampled_hw_p: The number of tokens in the height and width dimensions.
         current_length: The current maximum sequence length of the sample.
         missing_timesteps_masks: A dictionary of missing timesteps masks.
         tokenization_config: Optional tokenization config for custom band groupings.
+        force_single_timestep: If True, keep only a single (randomly chosen,
+            present) timestep regardless of token budget or availability.
 
     Returns:
         A subsetted OlmoEarthSample with rectangular cropping applied.
     """
-    if max_tokens_per_instance is None:
+    if max_tokens_per_instance is None and not force_single_timestep:
         return sample
     if missing_timesteps_masks is None:
         missing_timesteps_masks = {}
 
-    max_t = _get_max_t_within_token_budget(
-        sample, sampled_hw_p, max_tokens_per_instance, tokenization_config
-    )
+    if force_single_timestep:
+        # Collapse to one timestep regardless of budget/availability;
+        # get_valid_start_ts restricts start_t to present (non-missing) timesteps.
+        max_t = 1
+    else:
+        # Only reachable with a real budget: the None case returned early above.
+        assert max_tokens_per_instance is not None
+        max_t = _get_max_t_within_token_budget(
+            sample, sampled_hw_p, max_tokens_per_instance, tokenization_config
+        )
     valid_start_ts = get_valid_start_ts(missing_timesteps_masks, max_t, current_length)
     start_t = np.random.choice(valid_start_ts)
     new_data_dict: dict[str, ArrayTensor] = {}
@@ -201,6 +212,7 @@ def subset_sample_cutmix(
     current_length: int,
     missing_timesteps_masks: dict[str, Any] | None = None,
     tokenization_config: TokenizationConfig | None = None,
+    force_single_timestep: bool = False,
 ) -> OlmoEarthSample:
     """Subset a OlmoEarthSample using CutMix patch sampling.
 
@@ -209,23 +221,33 @@ def subset_sample_cutmix(
         patch_size: The patch size being applied to this sample.
         max_tokens_per_instance: The token budget when subsetting. This is used
             to determine the maximum number of timesteps possible for a given
-            height and width. If None, this operation is a no-op.
+            height and width. If None, this operation is a no-op (unless
+            force_single_timestep is set).
         sampled_hw_p: The number of tokens in the height and width dimensions.
         current_length: The current maximum sequence length of the sample.
         missing_timesteps_masks: A dictionary of missing timesteps masks.
         tokenization_config: Optional tokenization config for custom band groupings.
+        force_single_timestep: If True, keep only a single (randomly chosen,
+            present) timestep regardless of token budget or availability.
 
     Returns:
         A subsetted OlmoEarthSample with CutMix patch sampling applied.
     """
-    if max_tokens_per_instance is None:
+    if max_tokens_per_instance is None and not force_single_timestep:
         return sample
     if missing_timesteps_masks is None:
         missing_timesteps_masks = {}
 
-    max_t = _get_max_t_within_token_budget(
-        sample, sampled_hw_p, max_tokens_per_instance, tokenization_config
-    )
+    if force_single_timestep:
+        # Collapse to one timestep regardless of budget/availability;
+        # get_valid_start_ts restricts start_t to present (non-missing) timesteps.
+        max_t = 1
+    else:
+        # Only reachable with a real budget: the None case returned early above.
+        assert max_tokens_per_instance is not None
+        max_t = _get_max_t_within_token_budget(
+            sample, sampled_hw_p, max_tokens_per_instance, tokenization_config
+        )
     valid_start_ts = get_valid_start_ts(missing_timesteps_masks, max_t, current_length)
     start_t = np.random.choice(valid_start_ts)
     new_data_dict: dict[str, ArrayTensor] = {}
@@ -281,6 +303,7 @@ class GetItemArgs(NamedTuple):
     sampled_hw_p: int
     token_budget: int | None = None
     tokenization_config: TokenizationConfig | None = None
+    force_single_timestep: bool = False
 
 
 # TODO should training modalities be str or modality_spec
@@ -813,6 +836,7 @@ class OlmoEarthDataset(Dataset):
                 current_length=current_length,
                 missing_timesteps_masks=missing_timesteps_masks,
                 tokenization_config=args.tokenization_config,
+                force_single_timestep=args.force_single_timestep,
             )
         else:
             subset_sample = subset_sample_default(
@@ -823,6 +847,7 @@ class OlmoEarthDataset(Dataset):
                 current_length=current_length,
                 missing_timesteps_masks=missing_timesteps_masks,
                 tokenization_config=args.tokenization_config,
+                force_single_timestep=args.force_single_timestep,
             )
 
         sample_dict = subset_sample.as_dict()

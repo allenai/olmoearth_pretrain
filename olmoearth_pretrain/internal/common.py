@@ -178,6 +178,17 @@ def build_launch_config(
                 name="EMBEDDING_DIAGNOSTICS_ONLY", value=embedding_diagnostics_only
             )
         )
+    # Propagate the CUDA allocator config if set. Useful for variable-shape
+    # workloads (e.g. mixed single/multi-timestep batches) where the default
+    # allocator fragments; expandable_segments:True avoids that.
+    cuda_alloc_conf = os.environ.get("PYTORCH_CUDA_ALLOC_CONF")
+    if cuda_alloc_conf is not None:
+        logger.info(
+            f"Propagating PYTORCH_CUDA_ALLOC_CONF to experiment: {cuda_alloc_conf}"
+        )
+        env_vars.append(
+            BeakerEnvVar(name="PYTORCH_CUDA_ALLOC_CONF", value=cuda_alloc_conf)
+        )
 
     return OlmoEarthBeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",

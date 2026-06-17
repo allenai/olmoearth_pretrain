@@ -82,6 +82,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         masking_strategy_b: MaskingStrategy | None = None,
         num_masked_views: int = 1,
         tokenization_config: TokenizationConfig | None = None,
+        single_timestep_prob: float = 0.0,
     ):
         """Initialize the OlmoEarthDataLoader.
 
@@ -111,7 +112,17 @@ class OlmoEarthDataLoader(DataLoaderBase):
             masking_strategy_b: Optional second masking strategy for Galileo-style training.
             num_masked_views: Number of masked views to return (1=single, 2=double).
             tokenization_config: Optional tokenization config for custom band groupings.
+            single_timestep_prob: Probability in [0, 1] that a batch is collapsed to
+                a single (randomly chosen, present) timestep per sample, regardless
+                of how many timesteps are available or fit in the token budget. The
+                decision is made per batch (not per sample) so the time dimension
+                stays uniform within a batch and the collator can stack. Improves
+                single-timestep downstream tasks. 0.0 disables it.
         """
+        if not 0.0 <= single_timestep_prob <= 1.0:
+            raise ValueError(
+                f"single_timestep_prob must be in [0, 1], got {single_timestep_prob}"
+            )
         super().__init__(
             work_dir=work_dir,
             global_batch_size=global_batch_size,
@@ -127,6 +138,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.token_budget = token_budget
         self.patch_sizes = np.arange(min_patch_size, max_patch_size + 1)
         self.sampled_hw_p_list = sampled_hw_p_list
+        self.single_timestep_prob = single_timestep_prob
         self.collator = collator
         self.seed = seed
         self.shuffle = shuffle
@@ -300,7 +312,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
         return indices
 
     def _get_dataset_item(
-        self, idx: int, patch_size: int, sampled_hw_p: int
+        self,
+        idx: int,
+        patch_size: int,
+        sampled_hw_p: int,
+        force_single_timestep: bool = False,
     ) -> tuple[int, OlmoEarthSample]:
         """Get a dataset item."""
         args = GetItemArgs(
@@ -309,6 +325,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
             sampled_hw_p=sampled_hw_p,
             token_budget=self.token_budget,
             tokenization_config=self.tokenization_config,
+            force_single_timestep=force_single_timestep,
         )
         item = self.dataset[args]
         return item
@@ -550,14 +567,19 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         patch_size_list: list[int],
         hw_p_to_sample: list[int],
         rank_batch_size: int,
-    ) -> Iterator[tuple[int, int, int]]:
-        """Get a generator that yields a tuple of (idx, patch_size, sampled_hw_p).
+    ) -> Iterator[tuple[int, int, int, bool]]:
+        """Yield a tuple of (idx, patch_size, sampled_hw_p, force_single_timestep).
 
-        Changes patch_size and sampled_hw_p every rank_batch_size.
+        patch_size, sampled_hw_p and the single-timestep decision all change
+        every rank_batch_size instances so they are constant within a batch.
+        Keeping them batch-uniform ensures every sample in a batch has the same
+        time dimension, which the collator requires when stacking.
         """
         patch_size_array = np.array(patch_size_list)
         hw_p_to_sample_array = np.array(hw_p_to_sample)
+        single_timestep_prob = self.data_loader.single_timestep_prob
         instances_processed = 0
+        force_single_timestep = False
 
         # TODO: We need to maintain state and reproducibility here
         worker_id = self.worker_info.id if self.worker_info is not None else 0
@@ -574,7 +596,10 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                     filtered_hw_p_to_sample_array > 0
                 ]
                 sampled_hw_p = rng.choice(filtered_hw_p_to_sample_array)
-            yield idx, int(patch_size), int(sampled_hw_p)
+                force_single_timestep = (
+                    single_timestep_prob > 0.0 and rng.random() < single_timestep_prob
+                )
+            yield idx, int(patch_size), int(sampled_hw_p), force_single_timestep
             instances_processed += 1
 
     @property
@@ -601,8 +626,10 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
 
         # Create iterator that fetches samples from the dataset
         instance_iterator = (
-            self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
-            for idx, patch_size, sampled_hw_p in self._get_batch_item_params_iterator(
+            self.data_loader._get_dataset_item(
+                int(idx), patch_size, sampled_hw_p, force_single_timestep
+            )
+            for idx, patch_size, sampled_hw_p, force_single_timestep in self._get_batch_item_params_iterator(
                 indices,
                 self.data_loader.patch_sizes,
                 self.data_loader.sampled_hw_p_list,
@@ -647,11 +674,17 @@ class OlmoEarthDataLoaderConfig(Config):
     year_dropout_rate: float = 0.0
     latlon_dropout_rate: float = 0.0
     metadata_dropout_view_mode: str = "shared"
+    # Per-batch single-timestep collapse (drawn once per rank batch).
+    single_timestep_prob: float = 0.0
 
     def validate(self) -> None:
         """Validate the configuration."""
         if self.work_dir is None:
             raise ValueError("Work directory is not set")
+        if not 0.0 <= self.single_timestep_prob <= 1.0:
+            raise ValueError(
+                f"single_timestep_prob must be in [0, 1], got {self.single_timestep_prob}"
+            )
         if self.min_patch_size > self.max_patch_size:
             raise ValueError("min_patch_size must be less than max_patch_size")
         if self.masking_config is None:
@@ -743,6 +776,7 @@ class OlmoEarthDataLoaderConfig(Config):
             masking_strategy_b=masking_strategy_b,
             num_masked_views=self.num_masked_views,
             tokenization_config=self.tokenization_config,
+            single_timestep_prob=self.single_timestep_prob,
         )
 
 

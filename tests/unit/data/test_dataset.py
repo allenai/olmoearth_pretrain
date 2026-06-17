@@ -81,6 +81,50 @@ class TestOlmoEarthSample:
         # Check that the missing modality masks are preserved
         assert (subset_sample.sentinel1[1] != MISSING_VALUE).sum() == 0
 
+    def test_subset_force_single_timestep(
+        self,
+        samples_with_missing_modalities: list[tuple[int, OlmoEarthSample]],
+    ) -> None:
+        """force_single_timestep collapses time to 1 regardless of token budget."""
+        sample: OlmoEarthSample = samples_with_missing_modalities[1][1]
+        # A large budget would otherwise keep many timesteps; forcing must win.
+        subset_sample = subset_sample_default(
+            sample,
+            patch_size=2,
+            max_tokens_per_instance=10_000,
+            sampled_hw_p=4,
+            current_length=12,
+            force_single_timestep=True,
+        )
+
+        assert subset_sample.sentinel2_l2a is not None
+        assert subset_sample.sentinel1 is not None
+        assert subset_sample.timestamps is not None
+        # Time is axis 2 for spacetime-varying modalities (H, W, T, C) and axis 0
+        # for timestamps; both must collapse to exactly 1.
+        assert subset_sample.sentinel2_l2a.shape[2] == 1
+        assert subset_sample.sentinel1.shape[2] == 1
+        assert subset_sample.timestamps.shape[0] == 1
+
+    def test_subset_force_single_timestep_ignores_none_budget(
+        self,
+        samples_with_missing_modalities: list[tuple[int, OlmoEarthSample]],
+    ) -> None:
+        """force_single_timestep still collapses even when token budget is None."""
+        sample: OlmoEarthSample = samples_with_missing_modalities[1][1]
+        subset_sample = subset_sample_default(
+            sample,
+            patch_size=2,
+            max_tokens_per_instance=None,
+            sampled_hw_p=4,
+            current_length=12,
+            force_single_timestep=True,
+        )
+        assert subset_sample.sentinel2_l2a is not None
+        assert subset_sample.timestamps is not None
+        assert subset_sample.sentinel2_l2a.shape[2] == 1
+        assert subset_sample.timestamps.shape[0] == 1
+
     def test_get_valid_start_ts_raises_if_timesteps_are_not_cropped(self) -> None:
         """Test the get_valid_start_ts function."""
         with pytest.raises(ValueError):
