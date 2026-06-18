@@ -419,10 +419,6 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
-    # MapBiomas 3k segmentation (registry datasets). Mirrors the rslearn frozen-
-    # backbone configs in rslearn_projects/data/helios/mapbiomas/*. primary_metric
-    # is MACRO_F1 so the headline eval/{name} is directly comparable to rslearn's
-    # val_segment/F1; miou and the other metrics are still logged under eval_other.
     "mapbiomas_3k_dense": DownstreamTaskConfig(
         dataset="mapbiomas_3k_dense",
         embedding_batch_size=32,
@@ -440,23 +436,23 @@ EVAL_TASKS = {
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MACRO_F1,
     ),
-    "mapbiomas_3k_sparse": DownstreamTaskConfig(
-        dataset="mapbiomas_3k_sparse",
-        embedding_batch_size=32,
-        probe_batch_size=8,
-        num_workers=8,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
-        probe_lr=0.0001,
-        eval_interval=Duration.epochs(10),
-        input_modalities=[
-            Modality.SENTINEL2_L2A.name,
-        ],
-        epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
-        primary_metric=EvalMetric.MACRO_F1,
-    ),
+    # "mapbiomas_3k_sparse": DownstreamTaskConfig(
+    #     dataset="mapbiomas_3k_sparse",
+    #     embedding_batch_size=32,
+    #     probe_batch_size=8,
+    #     num_workers=8,
+    #     pooling_type=PoolingType.MEAN,
+    #     norm_stats_from_pretrained=True,
+    #     norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+    #     probe_lr=0.0001,
+    #     eval_interval=Duration.epochs(10),
+    #     input_modalities=[
+    #         Modality.SENTINEL2_L2A.name,
+    #     ],
+    #     epochs=50,
+    #     eval_mode=EvalMode.LINEAR_PROBE,
+    #     primary_metric=EvalMetric.MACRO_F1,
+    # ),
 }
 
 PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"
