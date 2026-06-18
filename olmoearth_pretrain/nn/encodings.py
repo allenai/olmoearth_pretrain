@@ -197,3 +197,62 @@ def apply_2d_rope(
     x_row = apply_1d_rope(x_row, row_pos, base)
     x_col = apply_1d_rope(x_col, col_pos, base)
     return torch.cat([x_row, x_col], dim=-1)
+
+
+def build_window_mask(
+    q_positions: torch.Tensor,
+    k_positions: torch.Tensor,
+    half_extent: float,
+    q_is_global: torch.Tensor | None = None,
+    k_is_global: torch.Tensor | None = None,
+    key_valid: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Boolean sliding-window (local) spatial attention mask.
+
+    A query attends a key iff their ``(row, col)`` coordinates differ by at most
+    ``half_extent`` on *both* axes (a Chebyshev / square window centred on the
+    query), OR either token is flagged global. Global tokens (non-spatial
+    modalities, register tokens) sit at the coordinate origin and would otherwise
+    be trapped there, so they attend to / are attended by everything. The result
+    is AND-ed with ``key_valid`` so padded / masked keys never participate.
+
+    ``True`` means the pair takes part in attention, matching the convention of
+    ``torch.nn.functional.scaled_dot_product_attention``.
+
+    Args:
+        q_positions: ``(B, Nq, 2)`` GSD-scaled ``(row, col)`` query coordinates.
+        k_positions: ``(B, Nk, 2)`` GSD-scaled ``(row, col)`` key coordinates.
+        half_extent: Window half-width in the same coordinate units as the
+            positions (i.e. ``(window_size / 2) * per_patch_coordinate_step``).
+        q_is_global: Optional ``(B, Nq)`` bool, True where a query attends all keys.
+        k_is_global: Optional ``(B, Nk)`` bool, True where a key is attended by all.
+        key_valid: Optional ``(B, Nk)`` bool, True where a key may participate.
+
+    Returns:
+        ``(B, 1, Nq, Nk)`` bool mask (broadcast over attention heads).
+    """
+    if q_positions.shape[-1] != 2 or k_positions.shape[-1] != 2:
+        raise ValueError("window mask positions must end with size 2 (row, col)")
+    drow = (q_positions[:, :, None, 0] - k_positions[:, None, :, 0]).abs()
+    dcol = (q_positions[:, :, None, 1] - k_positions[:, None, :, 1]).abs()
+    # Relative tolerance guards float error on integer-grid * gsd_ratio coordinates.
+    thresh = half_extent * (1.0 + 1e-4) + 1e-6
+    mask = (drow <= thresh) & (dcol <= thresh)  # (B, Nq, Nk)
+    if q_is_global is not None:
+        mask = mask | q_is_global[:, :, None]
+    if k_is_global is not None:
+        mask = mask | k_is_global[:, None, :]
+    if key_valid is not None:
+        mask = mask & key_valid[:, None, :]
+    # Guarantee every query keeps >=1 valid key: a query whose window contains no valid
+    # key (heavy masking + a small window) would softmax over an empty row and produce
+    # NaNs that poison gradients even where the output is later discarded. Such starved
+    # queries fall back to attending all valid keys.
+    fallback = (
+        key_valid[:, None, :].expand_as(mask)
+        if key_valid is not None
+        else torch.ones_like(mask)
+    )
+    empty = ~mask.any(dim=-1, keepdim=True)  # (B, Nq, 1)
+    mask = torch.where(empty, fallback, mask)
+    return mask[:, None]  # (B, 1, Nq, Nk)

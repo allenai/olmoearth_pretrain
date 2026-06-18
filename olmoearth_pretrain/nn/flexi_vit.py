@@ -24,6 +24,7 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
+    build_window_mask,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
@@ -1077,6 +1078,35 @@ class FlexiVitBase(nn.Module):
         positions, _ = self.collapse_and_combine_hwtc(position_dict)
         return positions
 
+    def build_spatial_token_mask(
+        self,
+        tokens_only_dict: dict[str, Tensor],
+        original_masks_dict: dict[str, Tensor],
+    ) -> Tensor:
+        """Per-token spatial flag in the same collapsed order as positions.
+
+        ``True`` where a token belongs to a spatial modality (matching the order of
+        :meth:`build_spatial_positions`).
+
+        Tokens of non-spatial modalities have no meaningful ``(row, col)`` (they sit
+        at the coordinate origin), so windowed attention treats them as *global*:
+        this flag marks which tokens are spatial so the rest can be exempted.
+        """
+        flag_dict: dict[str, Tensor] = {}
+        available_modalities = return_modalities_from_dict(tokens_only_dict)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        for modality_name in modalities_to_process:
+            tokens = tokens_only_dict[modality_name]
+            is_spatial = float(Modality.get(modality_name).is_spatial)
+            flag_dict[modality_name] = tokens.new_full(
+                (*tokens.shape[:-1], 1), is_spatial
+            )
+        flag_dict.update(original_masks_dict)
+        flags, _ = self.collapse_and_combine_hwtc(flag_dict)
+        return flags.squeeze(-1) > 0.5
+
     def _patch_grid_hw(self, tokens_only_dict: dict[str, Tensor]) -> tuple[int, int]:
         """Spatial patch grid ``(h, w)`` of the (finest) spatial modality.
 
@@ -1586,6 +1616,8 @@ class SpatialRegisterBottleneck(nn.Module):
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
         spatial_grid: tuple[int, int] | None = None,
+        window_half_extent: float | None = None,
+        patch_is_global: Tensor | None = None,
     ) -> tuple[Tensor, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1598,6 +1630,13 @@ class SpatialRegisterBottleneck(nn.Module):
                 (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
             spatial_grid: ``(n_h, n_w)`` patch grid; required in dynamic mode (the single
                 latent is cloned to this many cells), ignored in fixed-grid mode.
+            window_half_extent: If set, restrict the read (register query vs patch key) and
+                the latent self-attention (register vs register) to a sliding window of this
+                half-width, in the same coordinate units as the positions. None -> the read
+                and latent transformer use full attention (backwards compatible).
+            patch_is_global: Optional ``[B, N]`` bool, True where a patch key is non-spatial
+                and should be readable from every register regardless of the window. Used
+                only when ``window_half_extent`` is set.
 
         Returns:
             registers: ``[B, num_registers, register_dim]``
@@ -1681,13 +1720,32 @@ class SpatialRegisterBottleneck(nn.Module):
             register_positions = self.build_register_positions(
                 patch_positions, register_grid
             )
-        attn_mask = visible_mask.bool() if visible_mask is not None else None
+        # Read mask: by default just the [B, N] key-visibility mask. With windowing it
+        # becomes a [B, 1, R, N] mask restricting each register to a spatial window of the
+        # patch tokens (non-spatial patches stay globally readable), AND-ed with visibility.
+        # Latent mask: None by default; windowed -> [B, 1, R, R] over the register grid.
+        read_attn_mask: Tensor | None = (
+            visible_mask.bool() if visible_mask is not None else None
+        )
+        latent_attn_mask: Tensor | None = None
+        if window_half_extent is not None and self.use_2d_rope:
+            assert register_positions is not None and patch_positions is not None
+            read_attn_mask = build_window_mask(
+                register_positions,
+                patch_positions,
+                window_half_extent,
+                k_is_global=patch_is_global,
+                key_valid=visible_mask.bool() if visible_mask is not None else None,
+            )
+            latent_attn_mask = build_window_mask(
+                register_positions, register_positions, window_half_extent
+            )
 
         def read(registers: Tensor, i: int, blk: nn.Module, kv: Tensor) -> Tensor:
             out = blk(
                 x=registers,
                 y=kv,
-                attn_mask=attn_mask,
+                attn_mask=read_attn_mask,
                 rope_positions=register_positions,
                 rope_positions_y=patch_positions,
             )
@@ -1705,13 +1763,21 @@ class SpatialRegisterBottleneck(nn.Module):
                 zip(self.read_blocks, self.latent_blocks, kv_per_read)
             ):
                 registers = read(registers, i, read_blk, kv)
-                registers = latent_blk(x=registers, rope_positions=register_positions)
+                registers = latent_blk(
+                    x=registers,
+                    attn_mask=latent_attn_mask,
+                    rope_positions=register_positions,
+                )
         else:
             # Legacy: all reads first, then the latent transformer.
             for i, (read_blk, kv) in enumerate(zip(self.read_blocks, kv_per_read)):
                 registers = read(registers, i, read_blk, kv)
             for latent_blk in self.latent_blocks:
-                registers = latent_blk(x=registers, rope_positions=register_positions)
+                registers = latent_blk(
+                    x=registers,
+                    attn_mask=latent_attn_mask,
+                    rope_positions=register_positions,
+                )
         return self.norm(registers), register_positions
 
 
@@ -1751,6 +1817,7 @@ class Encoder(FlexiVitBase):
         spatial_pos_encoding: str = "absolute",
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
+        attn_window_size: int | None = None,
         use_register_bottleneck: bool = False,
         register_grid_size: int | None = 0,
         register_dim: int | None = None,
@@ -1810,6 +1877,12 @@ class Encoder(FlexiVitBase):
             spatial_pos_encoding: Spatial encoding type: "absolute", "rope", or "none".
             rope_base: Frequency base for RoPE when spatial_pos_encoding is "rope".
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
+            attn_window_size: If set, restrict every attention block (encoder self-attention,
+                register read, register latent self-attention) to a square sliding window of
+                this side length (in patch cells) centred on each query. Requires
+                ``spatial_pos_encoding="rope"`` and ``use_flash_attn=False``. When the input
+                patch grid is no larger than the window in both dims, full attention is used.
+                None (default) -> full attention.
             use_register_bottleneck: If True, add a Perceiver-style spatial register
                 bottleneck that reads the encoded patch tokens into a fixed register grid.
             register_grid_size: Side length of the (square) register grid; the grid has
@@ -1884,6 +1957,7 @@ class Encoder(FlexiVitBase):
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
+        self.attn_window_size = attn_window_size
         self.log_token_norm_stats = log_token_norm_stats
         if self.has_register_tokens:
             self.register_tokens = nn.Parameter(
@@ -2291,6 +2365,31 @@ class Encoder(FlexiVitBase):
         # bottleneck read so registers attend over the encoded *visible* patch tokens
         # using their original coordinates (`positions` below is reduced/packed in place).
         register_kv_positions = positions
+
+        # Windowed (local) spatial attention setup. Active only when the patch grid is
+        # larger than the window in some dim; otherwise we leave the fast (full-attention)
+        # path untouched. `patch_spatial_flag` is in the full (pre-masking) collapsed order
+        # for the register read; `encoder_spatial_flag` is reduced alongside `positions`.
+        window_half_extent: float | None = None
+        patch_spatial_flag: Tensor | None = None
+        encoder_spatial_flag: Tensor | None = None
+        if self.attn_window_size is not None:
+            if positions is None:
+                raise ValueError(
+                    'attn_window_size requires spatial_pos_encoding="rope"'
+                )
+            grid_h, grid_w = self._patch_grid_hw(tokens_only_dict)
+            if grid_h > self.attn_window_size or grid_w > self.attn_window_size:
+                gsd_ratio = (
+                    CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
+                    * self.rope_coordinate_scale
+                )
+                window_half_extent = (self.attn_window_size / 2.0) * gsd_ratio
+                patch_spatial_flag = self.build_spatial_token_mask(
+                    tokens_only_dict, original_masks_dict
+                )
+                encoder_spatial_flag = patch_spatial_flag
+
         tokens_dict.update(original_masks_dict)
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -2300,6 +2399,11 @@ class Encoder(FlexiVitBase):
         )
         if positions is not None and bool_mask is not None:
             positions, _, _, _, _ = self.remove_masked_tokens(positions, bool_mask)
+            if encoder_spatial_flag is not None:
+                reduced_flag, _, _, _, _ = self.remove_masked_tokens(
+                    encoder_spatial_flag[..., None].float(), bool_mask
+                )
+                encoder_spatial_flag = reduced_flag.squeeze(-1) > 0.5
 
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
@@ -2329,6 +2433,38 @@ class Encoder(FlexiVitBase):
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
             if positions is not None:
                 positions = self.add_register_positions(positions)
+
+        if window_half_extent is not None:
+            # Now that positions include the prepended global register tokens, build the
+            # (B, 1, N, N) sliding-window mask. It encodes key validity itself, so it
+            # replaces the [B, N] key mask passed to every encoder block (in both training
+            # and eval). Register tokens are global (non-spatial); padded keys are excluded
+            # via the true padding mask (`new_mask`), independent of the train/eval path.
+            assert encoder_spatial_flag is not None
+            if self.has_register_tokens:
+                reg_flag = encoder_spatial_flag.new_zeros(
+                    encoder_spatial_flag.shape[0], self.num_register_tokens
+                )
+                encoder_spatial_flag = torch.cat(
+                    [reg_flag, encoder_spatial_flag], dim=1
+                )
+            key_valid: Tensor | None = None
+            if new_mask is not None:
+                key_valid = new_mask.bool()
+                if self.has_register_tokens:
+                    reg_valid = key_valid.new_ones(
+                        key_valid.shape[0], self.num_register_tokens
+                    )
+                    key_valid = torch.cat([reg_valid, key_valid], dim=1)
+            is_global = ~encoder_spatial_flag
+            attn_mask = build_window_mask(
+                positions,
+                positions,
+                window_half_extent,
+                q_is_global=is_global,
+                k_is_global=is_global,
+                key_valid=key_valid,
+            )
 
         # Multi-depth register reads: stash the (raw, in-loop) patch tokens at the
         # configured 1-indexed depths so the bottleneck can read each one. The patch stack
@@ -2449,6 +2585,12 @@ class Encoder(FlexiVitBase):
                 patch_positions=register_kv_positions,
                 visible_mask=bool_mask,
                 spatial_grid=spatial_grid,
+                window_half_extent=window_half_extent,
+                # `patch_spatial_flag` is in the full (pre-masking) order matching
+                # `register_kv_positions`; non-spatial patches read globally.
+                patch_is_global=(
+                    ~patch_spatial_flag if patch_spatial_flag is not None else None
+                ),
             )
             register_output = {
                 "registers": registers,
@@ -3091,6 +3233,13 @@ class EncoderConfig(Config):
     spatial_pos_encoding: str = "absolute"
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
+    # Windowed (local) spatial attention: each token attends only to tokens within a
+    # square window of side ``attn_window_size`` patch cells centred on it (sliding
+    # window), applied to encoder self-attention and the register read + latent
+    # self-attention. None -> full attention (backwards compatible). When the input
+    # patch grid is no larger than the window in both dims, full attention is used.
+    # Requires spatial_pos_encoding="rope" and is incompatible with use_flash_attn.
+    attn_window_size: int | None = None
     # Perceiver-style spatial register bottleneck (sweepable).
     use_register_bottleneck: bool = False
     # >0 -> fixed grid of distinct per-cell latents; 0 -> dynamic single cloned latent
@@ -3172,6 +3321,22 @@ class EncoderConfig(Config):
             if head_dim % 4 != 0:
                 raise ValueError(
                     f"2D RoPE requires head_dim divisible by 4, got {head_dim}"
+                )
+        if self.attn_window_size is not None:
+            if self.attn_window_size <= 0:
+                raise ValueError(
+                    f"attn_window_size must be positive, got {self.attn_window_size}"
+                )
+            if self.spatial_pos_encoding != "rope":
+                raise ValueError(
+                    'attn_window_size requires spatial_pos_encoding="rope" (the window '
+                    "is computed from per-token RoPE coordinates)"
+                )
+            if self.use_flash_attn:
+                raise ValueError(
+                    "attn_window_size is incompatible with use_flash_attn (the flash "
+                    "varlen path cannot express a 2D spatial mask); set "
+                    "use_flash_attn=False"
                 )
         if self.use_register_bottleneck:
             # Legacy None sentinel -> 0 (dynamic single-latent grid).

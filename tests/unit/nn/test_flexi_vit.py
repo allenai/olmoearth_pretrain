@@ -366,6 +366,52 @@ class TestEncoder:
         with pytest.raises(ValueError, match="head_dim divisible by 4"):
             config.build()
 
+    def test_encoder_config_windowed_attention(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """attn_window_size builds with rope and is threaded onto the encoder."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=16,
+            num_heads=2,
+            spatial_pos_encoding="rope",
+            attn_window_size=8,
+        )
+        encoder = config.build()
+        assert encoder.attn_window_size == 8
+
+    def test_encoder_config_windowed_requires_rope(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Windowed attention needs RoPE coordinates."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=16,
+            num_heads=2,
+            spatial_pos_encoding="absolute",
+            attn_window_size=8,
+        )
+        with pytest.raises(ValueError, match='requires spatial_pos_encoding="rope"'):
+            config.build()
+
+    def test_encoder_config_windowed_incompatible_with_flash(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """The flash varlen path cannot express a 2D spatial mask."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=16,
+            num_heads=2,
+            spatial_pos_encoding="rope",
+            attn_window_size=8,
+            use_flash_attn=True,
+        )
+        with pytest.raises(ValueError, match="incompatible with use_flash_attn"):
+            config.build()
+
 
 class TestPredictor:
     """Unit tests for the Predictor class."""

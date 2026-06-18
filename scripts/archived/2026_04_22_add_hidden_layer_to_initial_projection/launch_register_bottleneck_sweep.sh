@@ -443,17 +443,58 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 #   2. gdyn_d768_il               -- in-domain frontier (single final-layer read).
 #   3. gdyn_d768_mdr3_ictok_pdproj -- external-transfer frontier (multi-depth read).
 
-python "scripts/official/v1_1/rope.py" launch "rope_base10k_scale0.25_m123" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE
+# python "scripts/official/v1_1/rope.py" launch "rope_base10k_scale0.25_m123" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE
 
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_m123" "$CLUSTER" \
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_m123" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_interleave=true
+
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_m123" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+#     --model.encoder_config.register_contrastive_source=encoder_tokens \
+#     --model.encoder_config.register_per_depth_read_proj=true
+
+# ============ WINDOWED (local) SPATIAL ATTENTION: window in {4, 8, 16} (6) ============
+# Restricts every encoder + register attention block (encoder self-attention, the register
+# read, and the latent self-attention; the decoder is untouched) to a square sliding window
+# of side attn_window_size PATCH CELLS centred on each token. When the input patch grid is
+# no larger than the window in both dims the model falls back to full attention, so the
+# effect only kicks in once the grid exceeds the window. The window is a pure attention mask
+# computed from the existing 2D-RoPE coordinates -- it adds NO parameters, so it is
+# checkpoint-compatible and only changes which tokens attend to which.
+# Requires spatial_pos_encoding="rope" (set in the scripts) and use_flash_attn=false (the
+# flash varlen path cannot express a 2D spatial mask; all these runs are already non-flash).
+# Two runs per window size, tagged "w{N}":
+#   1. rope baseline (NO bottleneck) -- does local attention help fusion on its own?
+#   2. gdyn_d768_mdr3_ictok_pdproj   -- the external-transfer frontier (multi-depth read).
+# These launch from current HEAD (same sampled-1/2/3-encode masking as the m123 runs above).
+# Windows {4, 8} only -- the training patch grid maxes out at ~13, so a 16-cell window would
+# always fall back to full attention (no-op).
+
+python "scripts/official/v1_1/rope.py" launch "rope_base10k_scale0.25_w4" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-    --model.encoder_config.register_interleave=true
+    --model.encoder_config.attn_window_size=4
 
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_m123" "$CLUSTER" \
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_w4" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
     --model.encoder_config.register_contrastive_source=encoder_tokens \
-    --model.encoder_config.register_per_depth_read_proj=true
+    --model.encoder_config.register_per_depth_read_proj=true \
+    --model.encoder_config.attn_window_size=4
+
+python "scripts/official/v1_1/rope.py" launch "rope_base10k_scale0.25_w8" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.attn_window_size=8
+
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_w8" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+    --model.encoder_config.register_contrastive_source=encoder_tokens \
+    --model.encoder_config.register_per_depth_read_proj=true \
+    --model.encoder_config.attn_window_size=8

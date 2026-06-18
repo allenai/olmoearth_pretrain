@@ -205,8 +205,11 @@ class Attention(nn.Module):
             # matching the transpose of the other attention implementations that need to be transposed back
             x = x.transpose(1, 2)
         elif self.fast_attn:
-            if attn_mask is not None:
+            if attn_mask is not None and attn_mask.dim() == 2:
+                # A 1D-per-sample key mask (B, Nk): broadcast it over heads/queries.
                 attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, n, 1))
+            # A precomputed (B, 1, Nq, Nk) / (B, H, Nq, Nk) mask (e.g. windowed
+            # attention) is passed straight through and broadcast over heads.
             x = F.scaled_dot_product_attention(
                 q,
                 k,

@@ -4,6 +4,7 @@ Any methods that piece together multiple steps or are the entire forward pass fo
 """
 
 import logging
+from typing import Any
 
 import pytest
 import torch
@@ -1819,3 +1820,169 @@ def test_end_to_end_with_exit_config(
             ]
         ):
             assert param.grad is not None, name
+
+
+def _windowed_encoder(
+    supported_modalities: list[ModalitySpec],
+    attn_window_size: int | None,
+    **kwargs: Any,
+) -> Encoder:
+    """Small rope encoder configured for windowed-attention tests."""
+    return Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        spatial_pos_encoding="rope",
+        attn_window_size=attn_window_size,
+        **kwargs,
+    )
+
+
+def test_encoder_windowed_attention_forward(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Windowed encoder (window < grid) runs forward + backward with masking."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    s2_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    encoder = _windowed_encoder(supported_modalities, attn_window_size=2)
+    encoder.train()
+
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    s2_mask = torch.zeros(B, H, W, T, s2_bands, dtype=torch.long)
+    # Mask part of the grid out so the windowed key-validity path is exercised.
+    s2_mask[:, : H // 2] = MaskValue.DECODER.value
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_bands),
+        sentinel2_l2a_mask=s2_mask,
+        latlon=torch.randn(B, latlon_bands),
+        latlon_mask=torch.zeros(B, latlon_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    # patch_size=2 -> 4x4 patch grid, larger than the window (2) -> windowing active.
+    output_dict = encoder.forward(sample, patch_size=2, input_res=10)
+    output, _, _ = unpack_encoder_output(output_dict)
+    assert output.sentinel2_l2a is not None
+    assert torch.isfinite(output.sentinel2_l2a).all()
+    output.sentinel2_l2a.sum().backward()
+    assert encoder.blocks[0].attn.q.weight.grad is not None
+    assert torch.isfinite(encoder.blocks[0].attn.q.weight.grad).all()
+
+
+def test_encoder_windowed_matches_full_when_window_covers_grid(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Window >= grid must reproduce full (unwindowed) attention exactly."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    s2_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_bands = modality_band_set_len_and_total_bands["latlon"][1]
+
+    full = _windowed_encoder(supported_modalities, attn_window_size=None)
+    windowed = _windowed_encoder(supported_modalities, attn_window_size=8)
+    # No new parameters are introduced by windowing, so the state dicts are identical.
+    windowed.load_state_dict(full.state_dict())
+    full.eval()
+    windowed.eval()
+
+    B, H, W, T = 1, 8, 8, 2
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_bands),
+        sentinel2_l2a_mask=torch.zeros(B, H, W, T, s2_bands, dtype=torch.long),
+        latlon=torch.randn(B, latlon_bands),
+        latlon_mask=torch.zeros(B, latlon_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    # patch_size=2 -> 4x4 grid <= window 8 -> windowing inactive (full attention).
+    with torch.no_grad():
+        out_full, _, _ = unpack_encoder_output(
+            full.forward(sample, patch_size=2, input_res=10)
+        )
+        out_win, _, _ = unpack_encoder_output(
+            windowed.forward(sample, patch_size=2, input_res=10)
+        )
+    assert out_full.sentinel2_l2a is not None
+    torch.testing.assert_close(out_win.sentinel2_l2a, out_full.sentinel2_l2a)
+
+
+def test_encoder_windowed_changes_output_when_active(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """An active window (window < grid) must actually alter attention vs full."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    s2_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_bands = modality_band_set_len_and_total_bands["latlon"][1]
+
+    full = _windowed_encoder(supported_modalities, attn_window_size=None)
+    windowed = _windowed_encoder(supported_modalities, attn_window_size=2)
+    windowed.load_state_dict(full.state_dict())
+    full.eval()
+    windowed.eval()
+
+    B, H, W, T = 1, 8, 8, 2
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_bands),
+        sentinel2_l2a_mask=torch.zeros(B, H, W, T, s2_bands, dtype=torch.long),
+        latlon=torch.randn(B, latlon_bands),
+        latlon_mask=torch.zeros(B, latlon_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    # patch_size=1 -> 8x8 grid > window 2 -> windowing active, output must differ.
+    with torch.no_grad():
+        out_full, _, _ = unpack_encoder_output(
+            full.forward(sample, patch_size=1, input_res=10)
+        )
+        out_win, _, _ = unpack_encoder_output(
+            windowed.forward(sample, patch_size=1, input_res=10)
+        )
+    assert out_full.sentinel2_l2a is not None
+    assert not torch.allclose(out_win.sentinel2_l2a, out_full.sentinel2_l2a)
+
+
+def test_encoder_windowed_register_bottleneck(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Windowing the register read + latent self-attention runs forward + backward."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    s2_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    encoder = _windowed_encoder(
+        supported_modalities,
+        attn_window_size=2,
+        use_register_bottleneck=True,
+        register_grid_size=0,  # dynamic grid matches the patch grid
+        register_dim=8,
+        register_latent_depth=2,
+    )
+    encoder.train()
+
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    s2_mask = torch.zeros(B, H, W, T, s2_bands, dtype=torch.long)
+    s2_mask[:, : H // 2] = MaskValue.DECODER.value
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_bands),
+        sentinel2_l2a_mask=s2_mask,
+        latlon=torch.randn(B, latlon_bands),
+        latlon_mask=torch.zeros(B, latlon_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=2, input_res=10)
+    registers = output_dict["registers"]
+    assert torch.isfinite(registers).all()
+    registers.sum().backward()
+    assert encoder.register_bottleneck is not None
+    assert encoder.register_bottleneck.register.grad is not None
+    assert torch.isfinite(encoder.register_bottleneck.register.grad).all()
