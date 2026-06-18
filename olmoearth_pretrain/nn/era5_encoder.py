@@ -35,7 +35,7 @@ from torch import Tensor, nn
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
-    MAX_ERA5L_DAY_10_SEQUENCE_LENGTH,
+    ERA5_INPUT_SEQUENCE_LENGTH,
     Modality,
 )
 
@@ -168,7 +168,7 @@ class Era5DailyEncoderConfig(Config):
     depth: int = 8
     num_heads: int = 6
     mlp_ratio: float = 4.0
-    max_sequence_length: int = MAX_ERA5L_DAY_10_SEQUENCE_LENGTH
+    max_sequence_length: int = ERA5_INPUT_SEQUENCE_LENGTH
     modality_name: str = "era5l_day_10"
     pooling: str = Era5Pooling.MEAN.value
     patch_kernel_size: int = 14

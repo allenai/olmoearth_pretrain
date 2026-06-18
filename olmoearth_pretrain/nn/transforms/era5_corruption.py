@@ -77,6 +77,11 @@ logger = logging.getLogger(__name__)
 #    "hydro_flux": ["tp", "ro"],
 # }
 
+# TODO: for ablations
+# instead of reconstructing raw signals then swt transform to band signals,
+# we can decode bands directly, then reconstruct raw/time signal from inverse swt
+# This forces the reconstruction to pass through the multiscale representation
+
 DEFAULT_VARIABLE_GROUPS: dict[str, list[int]] = {
     # Near-surface thermodynamic state.
     "thermo": [0, 10],  # d2m, t2m
@@ -281,38 +286,98 @@ class MaskPolicy:
         ]
 
 
+@dataclass
+class NaiveMaskPolicy:
+    """Naive baseline: random contiguous spans x random channel subsets."""
+
+    max_num_masks: int = 5
+    span_days: tuple[int, int] = (1, 30)
+    num_channels: tuple[int, int] = (1, 7)
+
+
 def corrupt_era5(
     era5: Tensor,
     ignore_mask: Tensor,
-    policy: MaskPolicy,
+    policy: MaskPolicy | NaiveMaskPolicy,
     variable_groups: dict[str, list[int]],
+    target_start: int,
 ) -> Tensor:
     """Generate a corruption mask for a batch of ERA5 sequences.
 
-    Applies the two-stage :class:`MaskPolicy`:
+    Dispatches to the appropriate masking logic based on the policy type:
 
-    1. Temporal interpolation
-    2. Cross-variable reconstruction
+    * :class:`MaskPolicy` — two-stage physics-aware masking.
+    * :class:`NaiveMaskPolicy` — simple random span x channel baseline.
+
+    Only timesteps at index ``target_start`` and beyond are eligible for
+    masking; the buffer region ``[:target_start]`` is never corrupted.
 
     Args:
         era5: ``[B, T, V]`` normalized input (used only for shape/device).
         ignore_mask: ``[B, T]`` bool, True = padded / invalid timestep.
-        policy: Two-stage masking policy.
+        policy: Masking policy (:class:`MaskPolicy` or :class:`NaiveMaskPolicy`).
         variable_groups: Group name -> band-index mapping.
+        target_start: First index of the target window.  Indices before this
+            are treated as a causal buffer and are never masked.
 
     Returns:
         ``mask`` — ``[B, T, V]`` bool (True = corrupted position).
+    """
+    if isinstance(policy, NaiveMaskPolicy):
+        return _corrupt_naive(era5, ignore_mask, policy, target_start)
+    return _corrupt_two_stage(era5, ignore_mask, policy, variable_groups, target_start)
+
+
+def _corrupt_naive(
+    era5: Tensor,
+    ignore_mask: Tensor,
+    policy: NaiveMaskPolicy,
+    target_start: int,
+) -> Tensor:
+    """Naive masking: random spans x random channels, repeated ``num_masks`` times."""
+    b, t, v = era5.shape
+    device = era5.device
+    mask = torch.zeros(b, t, v, dtype=torch.bool, device=device)
+    valid = ~ignore_mask  # [B, T]
+    span_range = _as_span(policy.span_days)
+    t_win = t - target_start
+
+    for i in range(b):
+        n_masks = _randint(1, policy.max_num_masks, device)
+        for _ in range(n_masks):
+            seg = _random_span(span_range, t_win, device)  # [t_win]
+            seg = seg & valid[i, target_start:]
+            nc = _randint(
+                policy.num_channels[0], min(policy.num_channels[1], v), device
+            )
+            channels = torch.randperm(v, device=device)[:nc]
+            mask[i, target_start:, channels] |= seg.unsqueeze(1)
+
+    return mask
+
+
+def _corrupt_two_stage(
+    era5: Tensor,
+    ignore_mask: Tensor,
+    policy: MaskPolicy,
+    variable_groups: dict[str, list[int]],
+    target_start: int,
+) -> Tensor:
+    """Two-stage physics-aware masking (temporal interpolation + cross-variable).
+
+    All masking is restricted to the target window ``[target_start:]``.
     """
     b, t, v = era5.shape
     device = era5.device
     mask = torch.zeros(b, t, v, dtype=torch.bool, device=device)
     valid = ~ignore_mask  # [B, T]
+    t_win = t - target_start
 
     # Per-sample coin flips for each stage
     do_stage1 = torch.rand(b, device=device) < policy.temporal_interpolation_prob
     do_stage2 = torch.rand(b, device=device) < policy.cross_variable_prob
 
-    # --- Stage 1: Temporal interpolation ---
+    # --- Stage 1: Temporal interpolation (target window only) ---
     ti = policy.temporal_interpolation
     if ti.num_masks > 0 and do_stage1.any():
         excluded = set(ti.excluded_groups)
@@ -325,17 +390,21 @@ def corrupt_era5(
             lo, hi = _as_span(ti.span_days)
             for _ in range(ti.num_masks):
                 lengths = torch.randint(lo, hi + 1, (b,), device=device)
-                max_start = (t - lengths).clamp(min=0)
+                max_start = (t_win - lengths).clamp(min=0)
                 starts = (torch.rand(b, device=device) * (max_start.float() + 1)).long()
-                idx = torch.arange(t, device=device).unsqueeze(0)  # [1, T]
+                idx = torch.arange(t_win, device=device).unsqueeze(0)
                 span = (idx >= starts.unsqueeze(1)) & (
                     idx < (starts + lengths).unsqueeze(1)
                 )
-                span = span & valid & do_stage1.unsqueeze(1)
-                mask = mask | (span.unsqueeze(-1) & eligible[None, None, :])
+                span = span & valid[:, target_start:] & do_stage1.unsqueeze(1)
+                mask[:, target_start:, :] = mask[:, target_start:, :] | (
+                    span.unsqueeze(-1) & eligible[None, None, :]
+                )
 
-    # --- Stage 2: Cross-variable reconstruction ---
-    _apply_stage2_mask_policy(mask, valid, policy, variable_groups, do_stage2)
+    # --- Stage 2: Cross-variable reconstruction (target window only) ---
+    _apply_stage2_mask_policy(
+        mask, valid, policy, variable_groups, do_stage2, target_start
+    )
 
     return mask
 
@@ -382,8 +451,11 @@ def _apply_stage2_mask_policy(
     policy: MaskPolicy,
     variable_groups: dict[str, list[int]],
     do_stage2: Tensor,
+    target_start: int,
 ) -> None:
     """Sample and apply one masking strategy per sample (in place).
+
+    All masking is restricted to the target window ``[target_start:]``.
 
     Args:
         mask: ``[B, T, V]`` bool mask to update in place.
@@ -391,9 +463,11 @@ def _apply_stage2_mask_policy(
         policy: :class:`MaskPolicy` instance.
         variable_groups: Group name -> band-index mapping.
         do_stage2: ``[B]`` bool, True = apply stage 2 to this sample.
+        target_start: First index of the target window.
     """
     b, t, v = mask.shape
     device = mask.device
+    t_win = t - target_start
     group_names = list(variable_groups.keys())
     if not group_names:
         return
@@ -412,7 +486,7 @@ def _apply_stage2_mask_policy(
     for i in range(b):
         if not do_stage2[i]:
             continue
-        valid_i = valid[i]  # [T]
+        valid_win = valid[i, target_start:]  # [t_win]
         strat_name, strat = strategies[int(choices[i])]
 
         if isinstance(strat, WithinGroupSingleVarStrategy):
@@ -423,20 +497,23 @@ def _apply_stage2_mask_policy(
                 group in full_t_allowed
                 and float(torch.rand(1, device=device)) < strat.all_T_prob
             ):
-                mask[i, :, bi] |= valid_i
+                mask[i, target_start:, bi] |= valid_win
             else:
                 span_days = strat.long_span_days.get(group, [30, 180])
-                seg = _random_span(_as_span(span_days), t, device)
-                mask[i, :, bi] |= seg & valid_i
+                seg = _random_span(_as_span(span_days), t_win, device)
+                mask[i, target_start:, bi] |= seg & valid_win
 
         elif isinstance(strat, WholeGroupSpanStrategy):
             candidates = [g for g in strat.span_days if g in variable_groups]
             if not candidates:
                 continue
             group = _random_choice(candidates, device)
-            seg = _random_span(_as_span(strat.span_days[group]), t, device) & valid_i
+            seg = (
+                _random_span(_as_span(strat.span_days[group]), t_win, device)
+                & valid_win
+            )
             for bi in variable_groups[group]:
-                mask[i, :, bi] |= seg
+                mask[i, target_start:, bi] |= seg
 
         elif isinstance(strat, WholeGroupAllTStrategy):
             candidates = [g for g in strat.allowed_groups if g in variable_groups]
@@ -444,4 +521,4 @@ def _apply_stage2_mask_policy(
                 continue
             group = _random_choice(candidates, device)
             for bi in variable_groups[group]:
-                mask[i, :, bi] |= valid_i
+                mask[i, target_start:, bi] |= valid_win

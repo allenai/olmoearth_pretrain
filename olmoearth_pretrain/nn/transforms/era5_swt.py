@@ -66,17 +66,22 @@ def _get_filters(name: str) -> tuple[list[float], list[float]]:
 
 
 class StationaryWaveletTransform1d(nn.Module):
-    """Undecimated (stationary) wavelet transform along the time axis.
+    """Causal undecimated (stationary) wavelet transform along the time axis.
 
     Input shape ``[B, V, T]`` (channels-first, matching conv1d).
-    Output: list of ``(approx, detail)`` tuples per level, each ``[B, V, T]``.
+    Output: list of ``(approx, detail)`` tuples per level, each ``[B, V, T']``
+    where ``T' = T - target_start`` when cropping is active.
+
+    Uses causal (left-only) zero-padding. When a ``target_start`` buffer is provided
+    to :meth:`forward`, the first ``target_start`` coefficients are discarded
+    so that every returned coefficient is free of boundary artifacts.
     """
 
     def __init__(
         self,
         num_channels: int,
-        max_levels: int = 4,
-        wavelet: str = "db2",
+        max_levels: int = 6,
+        wavelet: str = "haar",
     ) -> None:
         """Initialize the stationary wavelet transform filters."""
         super().__init__()
@@ -98,17 +103,22 @@ class StationaryWaveletTransform1d(nn.Module):
         self,
         x: Tensor,
         levels: list[int] | None = None,
+        target_start: int = 83,
     ) -> list[tuple[Tensor, Tensor]]:
-        """Compute the undecimated SWT.
+        """Compute the causal undecimated SWT.
 
         Args:
             x: ``[B, V, T]`` input signal.
             levels: Which decomposition levels to return (0-indexed).
                 ``None`` returns all ``max_levels`` levels.
+            target_start: If > 0, crop the first ``target_start`` timesteps
+                from every returned band so that only the target window
+                (free of boundary effects) is returned.
 
         Returns:
             List of ``(approx, detail)`` pairs, one per requested level.
-            Each tensor has shape ``[B, V, T]``.
+            Each tensor has shape ``[B, V, T']`` where
+            ``T' = T - target_start``.
         """
         if levels is None:
             levels = list(range(self.max_levels))
@@ -117,8 +127,7 @@ class StationaryWaveletTransform1d(nn.Module):
         for j in range(max(levels) + 1):
             dilation = 2**j
             pad = dilation * (self.filter_len - 1)
-            # Circular padding along time
-            padded = F.pad(current, (pad, 0), mode="circular")
+            padded = F.pad(current, (pad, 0), mode="constant", value=0.0)
             approx = F.conv1d(
                 padded, self.lo_filter, groups=self.num_channels, dilation=dilation
             )
@@ -126,7 +135,12 @@ class StationaryWaveletTransform1d(nn.Module):
                 padded, self.hi_filter, groups=self.num_channels, dilation=dilation
             )
             if j in levels:
-                results.append((approx, detail))
+                if target_start > 0:
+                    results.append(
+                        (approx[:, :, target_start:], detail[:, :, target_start:])
+                    )
+                else:
+                    results.append((approx, detail))
             current = approx
         return results
 
@@ -171,19 +185,19 @@ def multiscale_swt_loss(
     total = torch.zeros((), device=x.device, dtype=x.dtype)
     metrics: dict[str, Tensor] = {}
 
-    for i, j in enumerate(levels):
-        _, d_pred = pred_bands[i]
-        _, d_targ = targ_bands[i]
+    deepest_idx = len(levels) - 1
 
-        # Band-normalize: divide by per-channel coeff std of the *target*
+    for i, j in enumerate(levels):
+        a_pred, d_pred = pred_bands[i]
+        a_targ, d_targ = targ_bands[i]
+
+        # --- Detail band loss (all levels) ---
         with torch.no_grad():
-            # std per channel [V] computed over B and T
             std = d_targ.std(dim=(0, 2)).clamp(min=1e-6)  # [V]
         d_pred_n = d_pred / std.unsqueeze(0).unsqueeze(2)
         d_targ_n = d_targ / std.unsqueeze(0).unsqueeze(2)
 
         if mask is not None:
-            # Flatten and select
             flat_pred = d_pred_n[mask_vt]
             flat_targ = d_targ_n[mask_vt]
             if flat_pred.numel() == 0:
@@ -199,5 +213,29 @@ def multiscale_swt_loss(
 
         total = total + level_loss
         metrics[f"swt_level_{j}_loss"] = level_loss.detach()
+
+        # --- Deepest-level approximation loss (low-frequency residual) ---
+        if i == deepest_idx:
+            with torch.no_grad():
+                a_std = a_targ.std(dim=(0, 2)).clamp(min=1e-6)
+            a_pred_n = a_pred / a_std.unsqueeze(0).unsqueeze(2)
+            a_targ_n = a_targ / a_std.unsqueeze(0).unsqueeze(2)
+
+            if mask is not None:
+                flat_a_pred = a_pred_n[mask_vt]
+                flat_a_targ = a_targ_n[mask_vt]
+                if flat_a_pred.numel() == 0:
+                    approx_loss = torch.zeros((), device=x.device, dtype=x.dtype)
+                else:
+                    approx_loss = F.huber_loss(
+                        flat_a_pred, flat_a_targ, reduction="mean", delta=huber_delta
+                    )
+            else:
+                approx_loss = F.huber_loss(
+                    a_pred_n, a_targ_n, reduction="mean", delta=huber_delta
+                )
+
+            total = total + approx_loss
+            metrics[f"swt_level_{j}_approx_loss"] = approx_loss.detach()
 
     return total, metrics

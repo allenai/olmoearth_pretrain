@@ -28,7 +28,7 @@ from torch import Tensor, nn
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
-    MAX_ERA5L_DAY_10_SEQUENCE_LENGTH,
+    ERA5_INPUT_SEQUENCE_LENGTH,
     Modality,
 )
 
@@ -120,7 +120,7 @@ class Era5TimeQueryDecoderConfig(Config):
     depth: int = 2
     num_heads: int = 6
     mlp_ratio: float = 4.0
-    max_sequence_length: int = MAX_ERA5L_DAY_10_SEQUENCE_LENGTH
+    max_sequence_length: int = ERA5_INPUT_SEQUENCE_LENGTH
     num_output_channels: int = Modality.ERA5L_DAY_10.num_bands
     add_day_of_year_features: bool = True
     dropout: float = 0.0

@@ -38,7 +38,7 @@ from olmo_core.train.config import TrainerConfig
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
-    MAX_ERA5L_DAY_10_SEQUENCE_LENGTH,
+    ERA5_INPUT_SEQUENCE_LENGTH,
     Modality,
 )
 from olmoearth_pretrain.data.multi_task_era5_dataset import (
@@ -62,6 +62,7 @@ from olmoearth_pretrain.internal.experiment import (
 )
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
 from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig, Era5Pooling
+from olmoearth_pretrain.nn.transforms.era5_corruption import NaiveMaskPolicy
 from olmoearth_pretrain.train.callbacks import (
     OlmoEarthWandBCallback,
 )
@@ -168,8 +169,9 @@ class Era5SupervisedCommonComponents(CommonComponents):
     recon_huber_delta: float = 1.0
     recon_raw_loss_on_masked_only: bool = True
     recon_swt_lambda: float = 0.1
-    recon_swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2])
-    recon_swt_wavelet: str = "db2"
+    recon_swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
+    recon_swt_wavelet: str = "haar"
+    recon_use_naive_masking: bool = False
     # ------------------------------------------------------------------
     # Downstream evaluation (linear probe).  Runs for A-only, B-only,
     # and A+B — this is the primary encoder-quality signal for B-only.
@@ -510,7 +512,7 @@ def build_model_config(
             embedding_size=common.encoder_embedding_size,
             depth=common.recon_decoder_depth,
             num_heads=common.recon_decoder_num_heads,
-            max_sequence_length=MAX_ERA5L_DAY_10_SEQUENCE_LENGTH,
+            max_sequence_length=ERA5_INPUT_SEQUENCE_LENGTH,
             num_output_channels=Modality.ERA5L_DAY_10.num_bands,
             add_day_of_year_features=True,
             dropout=common.recon_decoder_dropout,
@@ -524,6 +526,11 @@ def build_model_config(
             swt_lambda=common.recon_swt_lambda,
             swt_levels=common.recon_swt_levels,
             swt_wavelet=common.recon_swt_wavelet,
+            **(
+                {"mask_policy": NaiveMaskPolicy()}
+                if common.recon_use_naive_masking
+                else {}
+            ),
         )
 
     if not common.enable_supervised and not common.enable_reconstruction:
@@ -537,7 +544,7 @@ def build_model_config(
         embedding_size=common.encoder_embedding_size,
         depth=common.encoder_depth,
         num_heads=common.encoder_num_heads,
-        max_sequence_length=MAX_ERA5L_DAY_10_SEQUENCE_LENGTH,
+        max_sequence_length=ERA5_INPUT_SEQUENCE_LENGTH,
         modality_name=Modality.ERA5L_DAY_10.name.lower(),
         pooling=common.encoder_pooling,
         use_mask_embed=common.encoder_use_mask_embed,
@@ -575,7 +582,7 @@ def build_dataset_config(
     """Build the multi-task ERA5 dataset config."""
     return MultiTaskEra5DatasetConfig(
         tasks=_resolve_task_specs(common),
-        max_sequence_length=MAX_ERA5L_DAY_10_SEQUENCE_LENGTH,
+        max_sequence_length=ERA5_INPUT_SEQUENCE_LENGTH,
         registry_path=common.registry_path,
     )
 
@@ -639,7 +646,7 @@ def build_trainer_config(common: Era5SupervisedCommonComponents) -> TrainerConfi
                 eval_on_startup=common.eval_on_startup,
                 run_on_test=common.eval_run_on_test,
                 num_workers=common.num_workers,
-                max_sequence_length=MAX_ERA5L_DAY_10_SEQUENCE_LENGTH,
+                max_sequence_length=ERA5_INPUT_SEQUENCE_LENGTH,
             ),
         )
 

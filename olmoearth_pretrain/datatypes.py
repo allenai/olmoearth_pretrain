@@ -100,7 +100,7 @@ class OlmoEarthSample(NamedTuple):
     # era5_10 is not spatially varying, so it has no height/width dimensions.
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
     # era5l_day_10 is also not spatially varying. T can be up to
-    # MAX_ERA5L_DAY_10_SEQUENCE_LENGTH (one observation per day) — much
+    # ERA5_INPUT_SEQUENCE_LENGTH (one observation per day) — much
     # longer than era5_10 (monthly).
     era5l_day_10: ArrayTensor | None = None  # [B, T, len(ERA5L_DAY_10_bands)]
     # ndvi is computed from S2 L2A bands B04 (Red) and B08 (NIR), not loaded from file.

@@ -20,13 +20,14 @@ import sys
 
 import torch
 
-from olmoearth_pretrain.data.constants import MAX_ERA5L_DAY_10_SEQUENCE_LENGTH, Modality
+from olmoearth_pretrain.data.constants import ERA5_INPUT_SEQUENCE_LENGTH, Modality
 from olmoearth_pretrain.data.multi_task_era5_dataset import Era5SupervisedBatch
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
 from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig
 from olmoearth_pretrain.nn.transforms.era5_corruption import (
     DEFAULT_VARIABLE_GROUPS,
     MaskPolicy,
+    NaiveMaskPolicy,
     corrupt_era5,
 )
 from olmoearth_pretrain.nn.transforms.era5_swt import (
@@ -41,10 +42,11 @@ from olmoearth_pretrain.train.train_module.era5_multiobjective import (
     _parse_recon_mode,
 )
 
-T = MAX_ERA5L_DAY_10_SEQUENCE_LENGTH  # 365
+T = ERA5_INPUT_SEQUENCE_LENGTH  # 448
 V = Modality.ERA5L_DAY_10.num_bands  # 14
 D = 128  # small for smoke test
 B = 4
+SWT_BUFFER = 83
 
 
 def _make_batch(device: torch.device = torch.device("cpu")) -> Era5SupervisedBatch:
@@ -70,39 +72,65 @@ def test_corruption():
     print("--- test_corruption ---")
     batch = _make_batch()
     policy = MaskPolicy()
-    mask = corrupt_era5(batch.era5, batch.ignore_mask, policy, DEFAULT_VARIABLE_GROUPS)
+    ts = SWT_BUFFER
+    mask = corrupt_era5(
+        batch.era5, batch.ignore_mask, policy, DEFAULT_VARIABLE_GROUPS, ts
+    )
     assert mask.shape == (B, T, V), f"Bad mask shape: {mask.shape}"
     assert mask.any(), "Nothing was masked"
-    frac = mask.float().mean().item()
-    print(f"  Masked fraction: {frac:.3f}")
+    frac = mask[:, ts:, :].float().mean().item()
+    print(f"  Target-window masked fraction: {frac:.3f}")
+
+    # Buffer region must be completely unmasked
+    assert not mask[:, :ts, :].any(), "Buffer region should never be masked"
+    print("  Buffer region clean: OK")
 
     # Verify stage 1 excludes wind (bands 12, 13) and hydro_flux (bands 3, 11)
     excluded_bands = (
         DEFAULT_VARIABLE_GROUPS["wind"] + DEFAULT_VARIABLE_GROUPS["hydro_flux"]
     )
     eligible_bands = [i for i in range(V) if i not in excluded_bands]
-    eligible_masked = mask[:, :, eligible_bands].any().item()
+    eligible_masked = mask[:, ts:, eligible_bands].any().item()
     assert eligible_masked, "Eligible channels should have stage-1 masking"
     print("  Stage-1 channel eligibility: OK")
     print("  PASS")
 
 
 def test_swt():
-    """Test SWT forward + loss."""
+    """Test SWT forward + loss with Haar 6-level causal and target_start cropping."""
     print("--- test_swt ---")
     x = torch.randn(B, T, V)
     x_hat = x + 0.1 * torch.randn_like(x)
-    swt = StationaryWaveletTransform1d(num_channels=V, max_levels=3, wavelet="db2")
-    levels = [0, 1, 2]
+    swt = StationaryWaveletTransform1d(num_channels=V, max_levels=6, wavelet="haar")
+    levels = [0, 1, 2, 3, 4, 5]
+    ts = SWT_BUFFER
+    t_win = T - ts
 
-    # SWT forward
-    bands = swt(x.transpose(1, 2), levels=levels)
-    assert len(bands) == 3, f"Expected 3 levels, got {len(bands)}"
-    for i, (approx, detail) in enumerate(bands):
+    # Full-length SWT (no cropping)
+    bands_full = swt(x.transpose(1, 2), levels=levels)
+    assert len(bands_full) == 6, f"Expected 6 levels, got {len(bands_full)}"
+    for i, (approx, detail) in enumerate(bands_full):
         assert approx.shape == (B, V, T), f"Level {i} approx shape: {approx.shape}"
         assert detail.shape == (B, V, T), f"Level {i} detail shape: {detail.shape}"
 
-    # SWT loss
+    # Cropped SWT (target window only)
+    bands_crop = swt(x.transpose(1, 2), levels=levels, target_start=ts)
+    assert len(bands_crop) == 6
+    for i, (approx, detail) in enumerate(bands_crop):
+        assert approx.shape == (B, V, t_win), (
+            f"Level {i} cropped approx shape: {approx.shape}, expected [B,V,{t_win}]"
+        )
+        assert detail.shape == (B, V, t_win)
+        # Cropped output should match the tail of the full output
+        assert torch.allclose(approx, bands_full[i][0][:, :, ts:]), (
+            f"Level {i}: cropped approx does not match full[ts:]"
+        )
+        assert torch.allclose(detail, bands_full[i][1][:, :, ts:]), (
+            f"Level {i}: cropped detail does not match full[ts:]"
+        )
+    print("  Cropped SWT matches full SWT tail: OK")
+
+    # SWT loss (uses full sequence, no cropping -- standalone helper)
     loss, metrics = multiscale_swt_loss(x_hat, x, swt, levels=levels)
     assert loss.ndim == 0, f"Loss should be scalar, got {loss.shape}"
     assert torch.isfinite(loss), f"Loss not finite: {loss.item()}"
@@ -362,6 +390,67 @@ def test_recon_mode_gating():
     print("  PASS")
 
 
+def test_naive_masking():
+    """Test NaiveMaskPolicy produces valid masks and end-to-end loss."""
+    print("--- test_naive_masking ---")
+    batch = _make_batch()
+    policy = NaiveMaskPolicy()
+    ts = SWT_BUFFER
+    mask = corrupt_era5(
+        batch.era5, batch.ignore_mask, policy, DEFAULT_VARIABLE_GROUPS, ts
+    )
+    assert mask.shape == (B, T, V), f"Bad mask shape: {mask.shape}"
+    assert mask.any(), "Nothing was masked"
+    assert not mask[:, :ts, :].any(), "Buffer region should never be masked (naive)"
+    frac = mask[:, ts:, :].float().mean().item()
+    print(f"  Target-window masked fraction: {frac:.3f}")
+
+    if B > 1:
+        differs = not torch.equal(mask[0], mask[1])
+        print(f"  Samples differ: {differs}")
+
+    # End-to-end: B-only with naive policy produces finite loss + grads
+    model_cfg = Era5MultiObjectiveModelConfig(
+        encoder_config=Era5DailyEncoderConfig(
+            embedding_size=D,
+            depth=2,
+            num_heads=4,
+            max_sequence_length=T,
+            modality_name=Modality.ERA5L_DAY_10.name.lower(),
+            use_mask_embed=True,
+            use_conv_stem=True,
+        ),
+        reconstruction_objective=ReconstructionObjectiveConfig(
+            decoder=Era5TimeQueryDecoderConfig(
+                embedding_size=D,
+                depth=1,
+                num_heads=4,
+                max_sequence_length=T,
+                num_output_channels=V,
+            ),
+            mask_policy=NaiveMaskPolicy(),
+            swt_levels=[0, 1],
+            swt_lambda=0.1,
+        ),
+    )
+    model = model_cfg.build()
+    obj = model.objective_list[0]
+    loss, metrics = obj.compute(model.encoder, batch)
+    assert loss.ndim == 0, f"Loss should be scalar, got {loss.shape}"
+    assert torch.isfinite(loss), f"Loss not finite: {loss.item()}"
+    print(f"  Naive recon loss: {loss.item():.6f}")
+
+    loss.backward()
+    encoder_grad = sum(
+        p.grad.abs().sum().item()
+        for p in model.encoder.parameters()
+        if p.grad is not None
+    )
+    assert encoder_grad > 0, "No gradients flowed to encoder"
+    print(f"  Encoder grad norm (sum): {encoder_grad:.4f}")
+    print("  PASS")
+
+
 if __name__ == "__main__":
     print(f"PyTorch {torch.__version__}")
     print(f"T={T}, V={V}, D={D}, B={B}\n")
@@ -374,6 +463,7 @@ if __name__ == "__main__":
         test_a_plus_b,
         test_a_only,
         test_recon_mode_gating,
+        test_naive_masking,
     ]
     failed = []
     for test_fn in tests:

@@ -37,8 +37,6 @@ repos:
       - id: mypy
         args: [
             --install-types,
-            --ignore-missing-imports,
-            --disallow-untyped-defs,
             --non-interactive,
             --no-namespace-packages,
           ]

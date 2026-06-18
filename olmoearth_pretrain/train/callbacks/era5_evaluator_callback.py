@@ -27,7 +27,7 @@ from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader
 
 from olmoearth_pretrain.data.constants import (
-    MAX_ERA5L_DAY_10_SEQUENCE_LENGTH,
+    ERA5_INPUT_SEQUENCE_LENGTH,
     Modality,
 )
 from olmoearth_pretrain.data.multi_task_era5_dataset import (
@@ -213,7 +213,7 @@ class Era5DownstreamEvaluatorCallback(Callback):
     def __init__(
         self,
         tasks: list[Era5LinearProbeTaskConfig],
-        max_sequence_length: int = MAX_ERA5L_DAY_10_SEQUENCE_LENGTH,
+        max_sequence_length: int = ERA5_INPUT_SEQUENCE_LENGTH,
         eval_on_startup: bool = False,
         run_on_test: bool = False,
         num_workers: int = 4,
@@ -392,7 +392,7 @@ class Era5DownstreamEvaluatorCallbackConfig(CallbackConfig):
     eval_on_startup: bool = False
     run_on_test: bool = False
     num_workers: int = 4
-    max_sequence_length: int = MAX_ERA5L_DAY_10_SEQUENCE_LENGTH
+    max_sequence_length: int = ERA5_INPUT_SEQUENCE_LENGTH
 
     def build(self, trainer: Trainer) -> Callback | None:
         """Build the callback, or return None if disabled."""

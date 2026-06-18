@@ -41,7 +41,7 @@ from torch.utils.data import Dataset
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
-    MAX_ERA5L_DAY_10_SEQUENCE_LENGTH,
+    ERA5_INPUT_SEQUENCE_LENGTH,
     Modality,
 )
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
@@ -309,7 +309,7 @@ class Era5TaskDataset(Dataset):
         self,
         spec: Era5TaskSpec,
         model_dataset: RsModelDataset,
-        max_sequence_length: int = MAX_ERA5L_DAY_10_SEQUENCE_LENGTH,
+        max_sequence_length: int = ERA5_INPUT_SEQUENCE_LENGTH,
         normalizer: Normalizer | None = None,
     ) -> None:
         """Initialize from a task spec and its backing rslearn dataset."""
@@ -489,7 +489,7 @@ class MultiTaskEra5DatasetConfig(Config):
     """
 
     tasks: list[Era5TaskSpec] = field(default_factory=list)
-    max_sequence_length: int = MAX_ERA5L_DAY_10_SEQUENCE_LENGTH
+    max_sequence_length: int = ERA5_INPUT_SEQUENCE_LENGTH
     registry_path: str | None = None
 
     def validate(self) -> None:
@@ -754,7 +754,7 @@ class MultiTaskEra5DataLoader(DataLoaderBase):
         task_name = self._task_names[0]
         spec = self.dataset.task_specs[task_name]
         bsz = self.rank_batch_size
-        t_max = MAX_ERA5L_DAY_10_SEQUENCE_LENGTH
+        t_max = ERA5_INPUT_SEQUENCE_LENGTH
         c = _ERA5_MODALITY.num_bands
         era5 = torch.randn(bsz, t_max, c)
         timestamps = torch.zeros(bsz, t_max, 3, dtype=torch.long)

@@ -51,6 +51,7 @@ from olmoearth_pretrain.nn.transforms.era5_corruption import (
     DEFAULT_VARIABLE_GROUPS,
     GROUP_RECON_MODE,
     MaskPolicy,
+    NaiveMaskPolicy,
     corrupt_era5,
 )
 from olmoearth_pretrain.nn.transforms.era5_swt import StationaryWaveletTransform1d
@@ -363,15 +364,16 @@ class ReconstructionObjectiveConfig(Config):
     decoder: Era5TimeQueryDecoderConfig = field(
         default_factory=Era5TimeQueryDecoderConfig
     )
-    mask_policy: MaskPolicy = field(default_factory=MaskPolicy)
+    mask_policy: MaskPolicy | NaiveMaskPolicy = field(default_factory=MaskPolicy)
     variable_groups: dict[str, list[int]] = field(
         default_factory=lambda: dict(DEFAULT_VARIABLE_GROUPS)
     )
     huber_delta: float = 1.0
     raw_loss_on_masked_only: bool = True
     swt_lambda: float = 0.1
-    swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2])
-    swt_wavelet: str = "db2"
+    swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
+    swt_wavelet: str = "haar"
+    swt_buffer_days: int = 83
     group_recon_mode: dict[str, str] = field(
         default_factory=lambda: dict(GROUP_RECON_MODE)
     )
@@ -398,6 +400,7 @@ class ReconstructionObjectiveConfig(Config):
             raw_loss_on_masked_only=self.raw_loss_on_masked_only,
             swt_lambda=self.swt_lambda,
             swt_levels=self.swt_levels,
+            swt_buffer_days=self.swt_buffer_days,
         )
 
 
@@ -430,13 +433,14 @@ class ReconstructionObjective(_Objective):
         name: str,
         weight: float,
         module: _ReconstructionModule,
-        mask_policy: MaskPolicy,
+        mask_policy: MaskPolicy | NaiveMaskPolicy,
         variable_groups: dict[str, list[int]],
         group_recon_mode: dict[str, str],
         huber_delta: float = 1.0,
         raw_loss_on_masked_only: bool = True,
         swt_lambda: float = 0.1,
         swt_levels: list[int] | None = None,
+        swt_buffer_days: int = 83,
     ) -> None:
         """Initialize the reconstruction objective."""
         self.name = name
@@ -448,7 +452,8 @@ class ReconstructionObjective(_Objective):
         self.huber_delta = huber_delta
         self.raw_loss_on_masked_only = raw_loss_on_masked_only
         self.swt_lambda = swt_lambda
-        self.swt_levels = swt_levels or [0, 1, 2]
+        self.swt_levels = swt_levels or [0, 1, 2, 3, 4, 5]
+        self.swt_buffer_days = swt_buffer_days
 
     def applies_to(self, batch: Any) -> bool:
         """Fire on any batch that carries ERA5 data."""
@@ -481,13 +486,16 @@ class ReconstructionObjective(_Objective):
     ) -> tuple[Tensor, dict[str, Tensor]]:
         """Corrupt → encode → decode → per-group loss.
 
-        Loss terms are gated per variable group by ``group_recon_mode``
+        Loss terms are gated per variable group by ``group_recon_mode``.
+        All losses are computed only on the target window (after
+        ``swt_buffer_days``).
         """
         x = batch.era5  # [B, T, V]
         ignore_mask = batch.ignore_mask  # [B, T]
+        ts = self.swt_buffer_days  # target_start index
 
-        # 1. Generate corruption mask
-        mask = corrupt_era5(x, ignore_mask, self.mask_policy, self.variable_groups)
+        # 1. Generate corruption mask (only target window is masked)
+        mask = corrupt_era5(x, ignore_mask, self.mask_policy, self.variable_groups, ts)
 
         # 2. Encode with corruption mask
         out = encoder(
@@ -505,13 +513,22 @@ class ReconstructionObjective(_Objective):
             timestamps=batch.timestamps,
         )
 
-        # 4. Compute SWT bands once for all channels
+        # 4. Compute SWT bands on full sequence, crop to target window
         pred_bands: list | None = None
         targ_bands: list | None = None
         if self.swt_lambda > 0 and self.swt_levels:
             swt_mod = self._module.swt
-            pred_bands = swt_mod(x_hat.transpose(1, 2), levels=self.swt_levels)
-            targ_bands = swt_mod(x.transpose(1, 2), levels=self.swt_levels)
+            pred_bands = swt_mod(
+                x_hat.transpose(1, 2), levels=self.swt_levels, target_start=ts
+            )
+            targ_bands = swt_mod(
+                x.transpose(1, 2), levels=self.swt_levels, target_start=ts
+            )
+
+        # Slice to target window for raw loss
+        x_hat_tgt = x_hat[:, ts:, :]
+        x_tgt = x[:, ts:, :]
+        mask_tgt = mask[:, ts:, :]
 
         variable_groups = self.variable_groups
         n_groups = len(variable_groups)
@@ -519,7 +536,6 @@ class ReconstructionObjective(_Objective):
         # 5. Per-group loss accumulation
         raw_loss = torch.zeros((), device=x.device, dtype=x.dtype)
         swt_loss = torch.zeros((), device=x.device, dtype=x.dtype)
-        # Per-level accumulators for metrics (sum + count for averaging)
         level_loss_sums: dict[int, Tensor] = {}
         level_loss_counts: dict[int, int] = {}
 
@@ -527,32 +543,32 @@ class ReconstructionObjective(_Objective):
             mode = self.group_recon_mode.get(group_name, "raw_plus_wavelet")
             include_raw, allowed_levels = _parse_recon_mode(mode, self.swt_levels)
 
-            # Slice to this group's channels
-            g_pred = x_hat[:, :, bi]  # [B, T, |bi|]
-            g_targ = x[:, :, bi]
-            g_mask = mask[:, :, bi] if self.raw_loss_on_masked_only else None
+            g_pred = x_hat_tgt[:, :, bi]  # [B, T_win, |bi|]
+            g_targ = x_tgt[:, :, bi]
+            g_mask = mask_tgt[:, :, bi] if self.raw_loss_on_masked_only else None
 
             # Raw Huber (band-normalized like the SWT path)
             if include_raw:
                 with torch.no_grad():
-                    raw_std = g_targ.std(dim=(0, 1)).clamp(min=1e-6)  # [|bi|]
+                    raw_std = g_targ.std(dim=(0, 1)).clamp(min=1e-6)
                 g_pred_n = g_pred / raw_std[None, None, :]
                 g_targ_n = g_targ / raw_std[None, None, :]
                 raw_loss = raw_loss + self._group_huber(g_pred_n, g_targ_n, g_mask)
 
-            # SWT wavelet loss at allowed levels
+            # SWT wavelet loss (bands already cropped to target window)
             if pred_bands is not None and targ_bands is not None and allowed_levels:
                 g_mask_vt = (
-                    mask[:, :, bi].transpose(1, 2)
+                    mask_tgt[:, :, bi].transpose(1, 2)
                     if self.raw_loss_on_masked_only
                     else None
                 )
+                deepest_allowed = max(allowed_levels)
                 for level_idx, level in enumerate(self.swt_levels):
                     if level not in allowed_levels:
                         continue
-                    _, d_pred = pred_bands[level_idx]  # [B, V, T]
-                    _, d_targ = targ_bands[level_idx]
-                    d_pred_g = d_pred[:, bi, :]  # [B, |bi|, T]
+                    a_pred, d_pred = pred_bands[level_idx]  # [B, V, T_win]
+                    a_targ, d_targ = targ_bands[level_idx]
+                    d_pred_g = d_pred[:, bi, :]
                     d_targ_g = d_targ[:, bi, :]
 
                     with torch.no_grad():
@@ -570,6 +586,29 @@ class ReconstructionObjective(_Objective):
                     )
                     level_loss_counts[level] = level_loss_counts.get(level, 0) + 1
 
+                    # Deepest-level approximation loss (low-frequency residual)
+                    if level == deepest_allowed:
+                        a_pred_g = a_pred[:, bi, :]
+                        a_targ_g = a_targ[:, bi, :]
+                        with torch.no_grad():
+                            a_std = a_targ_g.std(dim=(0, 2)).clamp(min=1e-6)
+                        a_pred_n = a_pred_g / a_std[None, :, None]
+                        a_targ_n = a_targ_g / a_std[None, :, None]
+
+                        a_lvl = self._group_huber(a_pred_n, a_targ_n, g_mask_vt)
+                        swt_loss = swt_loss + a_lvl
+                        approx_key = -1  # sentinel for deepest approx
+                        level_loss_sums[approx_key] = (
+                            level_loss_sums.get(
+                                approx_key,
+                                torch.zeros((), device=x.device, dtype=x.dtype),
+                            )
+                            + a_lvl
+                        )
+                        level_loss_counts[approx_key] = (
+                            level_loss_counts.get(approx_key, 0) + 1
+                        )
+
         # Average across groups so the scale doesn't depend on group count
         if n_groups > 0:
             raw_loss = raw_loss / n_groups
@@ -581,7 +620,7 @@ class ReconstructionObjective(_Objective):
         metrics: dict[str, Tensor] = {
             f"{self.name}/raw_loss": raw_loss.detach(),
             f"{self.name}/swt_loss": swt_loss.detach(),
-            f"{self.name}/masked_fraction": mask.float().mean().detach(),
+            f"{self.name}/masked_fraction": mask_tgt.float().mean().detach(),
         }
         for level in self.swt_levels:
             cnt = level_loss_counts.get(level, 0)
@@ -593,6 +632,11 @@ class ReconstructionObjective(_Objective):
                 metrics[f"{self.name}/swt_level_{level}_loss"] = torch.zeros(
                     (), device=x.device, dtype=x.dtype
                 )
+        approx_cnt = level_loss_counts.get(-1, 0)
+        if approx_cnt > 0:
+            metrics[f"{self.name}/swt_deepest_approx_loss"] = (
+                level_loss_sums[-1].detach() / approx_cnt
+            )
 
         return total_loss, metrics
 
