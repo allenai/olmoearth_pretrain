@@ -419,6 +419,24 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
+    "lfmc_woody_3k_s1_s2": DownstreamTaskConfig(
+        dataset="lfmc_woody_3k",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.00005,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[
+            Modality.SENTINEL1.name,
+            Modality.SENTINEL2_L2A.name,
+        ],
+        patch_size=4,
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+    ),
     "mapbiomas_3k_dense": DownstreamTaskConfig(
         dataset="mapbiomas_3k_dense",
         embedding_batch_size=32,
@@ -455,14 +473,21 @@ EVAL_TASKS = {
     # ),
 }
 
-PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"
+# Pretrain-subset evals read from frozen snapshots under presto_eval_sets, NOT
+# from the live pretraining datasets: the live datasets are periodically
+# cleaned up and are not reproducible to the sample when recreated, which both
+# breaks these paths (the trailing dir name must equal the exact sample count)
+# and silently changes the seed-derived eval splits. Snapshots are created with
+# scripts/tools/20260611_snapshot_pretrain_eval_subset.py; the trailing count
+# here must match the --total the snapshot was built with.
+PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/98304"
 
 # Auxiliary probe eval set: drawn from the osmbig corpus, which is disjoint
 # from the osm_sampling pretraining corpus used in scripts/official/*. Using
 # osmbig keeps WorldCover/OSM/SRTM probes out-of-sample. The other map
 # modalities (CDL, WORLDCEREAL, WRI canopy) aren't present in osmbig, so their
 # probes fall back to PRETRAIN_SUBSET_H5PY_DIR (in-distribution).
-PRETRAIN_AUX_EVAL_H5PY_DIR = "/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928"
+PRETRAIN_AUX_EVAL_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/65536"
 
 MAP_MODALITY_PROBE_INPUTS = [
     Modality.SENTINEL2_L2A.name,

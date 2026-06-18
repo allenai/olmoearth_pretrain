@@ -677,10 +677,25 @@
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
+        "sentinel1",
         "sentinel2_l2a"
       ],
       "name": "lfmc_woody_3k",
       "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 2.366774082183838,
+            "mean": -17.61262012209996,
+            "min": -100.0,
+            "std": 4.988398732848629
+          },
+          "vv": {
+            "max": 16.83840560913086,
+            "mean": -11.275455541266524,
+            "min": -100.0,
+            "std": 5.033590648648933
+          }
+        },
         "sentinel2_l2a": {
           "B01": {
             "max": 19394.0,
@@ -761,13 +776,13 @@
       "source_path": "/weka/dfive-default/rslearn-eai/datasets/lfmc/20251023/woody/scratch/dataset",
       "split_stats": {
         "test": {
-          "count": 445
+          "count": 1000
         },
         "train": {
-          "count": 2933
+          "count": 3000
         },
         "val": {
-          "count": 747
+          "count": 1000
         }
       },
       "split_tag_key": "eval_split",
