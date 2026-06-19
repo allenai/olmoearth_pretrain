@@ -51,7 +51,6 @@ from olmoearth_pretrain.nn.transforms.era5_corruption import (
     DEFAULT_VARIABLE_GROUPS,
     GROUP_RECON_MODE,
     MaskPolicy,
-    NaiveMaskPolicy,
     corrupt_era5,
 )
 from olmoearth_pretrain.nn.transforms.era5_swt import StationaryWaveletTransform1d
@@ -364,7 +363,7 @@ class ReconstructionObjectiveConfig(Config):
     decoder: Era5TimeQueryDecoderConfig = field(
         default_factory=Era5TimeQueryDecoderConfig
     )
-    mask_policy: MaskPolicy | NaiveMaskPolicy = field(default_factory=MaskPolicy)
+    mask_policy: MaskPolicy = field(default_factory=MaskPolicy)
     variable_groups: dict[str, list[int]] = field(
         default_factory=lambda: dict(DEFAULT_VARIABLE_GROUPS)
     )
@@ -433,7 +432,7 @@ class ReconstructionObjective(_Objective):
         name: str,
         weight: float,
         module: _ReconstructionModule,
-        mask_policy: MaskPolicy | NaiveMaskPolicy,
+        mask_policy: MaskPolicy,
         variable_groups: dict[str, list[int]],
         group_recon_mode: dict[str, str],
         huber_delta: float = 1.0,

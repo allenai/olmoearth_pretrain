@@ -287,7 +287,7 @@ class MaskPolicy:
 
 
 @dataclass
-class NaiveMaskPolicy:
+class NaiveMaskPolicy(MaskPolicy):
     """Naive baseline: random contiguous spans x random channel subsets."""
 
     max_num_masks: int = 5
@@ -298,7 +298,7 @@ class NaiveMaskPolicy:
 def corrupt_era5(
     era5: Tensor,
     ignore_mask: Tensor,
-    policy: MaskPolicy | NaiveMaskPolicy,
+    policy: MaskPolicy,
     variable_groups: dict[str, list[int]],
     target_start: int,
 ) -> Tensor:
