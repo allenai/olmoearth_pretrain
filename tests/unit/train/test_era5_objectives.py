@@ -11,10 +11,12 @@ from __future__ import annotations
 import math
 from typing import Any
 
+import pytest
 import torch
 import torch.nn.functional as F
-from torch import Tensor
+from torch import Tensor, nn
 
+import olmoearth_pretrain.train.train_module.era5_multiobjective as era5_multiobjective
 from olmoearth_pretrain.data.constants import ERA5_INPUT_SEQUENCE_LENGTH, Modality
 from olmoearth_pretrain.data.multi_task_era5_dataset import Era5SupervisedBatch
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
@@ -96,6 +98,41 @@ def _small_decoder_cfg(**overrides: Any) -> Era5TimeQueryDecoderConfig:
     )
     defaults.update(overrides)
     return Era5TimeQueryDecoderConfig(**defaults)
+
+
+class _FixedEncoder:
+    """Tiny encoder double for deterministic reconstruction objective tests."""
+
+    def __call__(
+        self,
+        era5: Tensor,
+        timestamps: Tensor,
+        ignore_mask: Tensor,
+        corruption_mask: Tensor | None = None,
+    ) -> dict[str, Tensor]:
+        del timestamps, ignore_mask, corruption_mask
+        b = era5.shape[0]
+        return {
+            "tokens": torch.zeros(b, 1, D, device=era5.device, dtype=era5.dtype),
+            "ignore_mask": torch.zeros(b, 1, dtype=torch.bool, device=era5.device),
+        }
+
+
+class _FixedDecoder(nn.Module):
+    """Decoder double that returns a precomputed full-sequence prediction."""
+
+    def __init__(self, prediction: Tensor) -> None:
+        super().__init__()
+        self.register_buffer("prediction", prediction)
+
+    def forward(
+        self,
+        tokens: Tensor,
+        token_ignore_mask: Tensor,
+        timestamps: Tensor,
+    ) -> Tensor:
+        del token_ignore_mask, timestamps
+        return self.prediction.to(device=tokens.device, dtype=tokens.dtype)
 
 
 # ===================================================================
@@ -208,14 +245,9 @@ class TestSupervisedTaskRouting:
 
 
 class TestSupervisedInvalidLabels:
-    """Invalid labels produce zero loss and no head gradients."""
+    """All-invalid supervised labels fail loudly instead of producing no-op loss."""
 
     def test_classification_all_ignored(self):
-        """CE with ignore_index=-100 for all labels returns NaN (0/0).
-
-        This is standard PyTorch behavior: zero valid samples → NaN mean.
-        The key property is that no *finite* gradient reaches the head.
-        """
         model_cfg = Era5MultiObjectiveModelConfig(
             encoder_config=_small_encoder_cfg(),
             supervised_objective=SupervisedObjectiveConfig(
@@ -234,10 +266,8 @@ class TestSupervisedInvalidLabels:
         labels = torch.full((B,), -100, dtype=torch.long)
         batch = _make_batch(task_name="cls_task", labels=labels)
 
-        loss, _ = obj.compute(model.encoder, batch)
-        assert math.isnan(loss.item()), (
-            "CE with all-ignored labels should be NaN (0/0 reduction)"
-        )
+        with pytest.raises(ValueError, match="only ignore-index labels"):
+            obj.compute(model.encoder, batch)
 
     def test_regression_all_nan(self):
         model_cfg = Era5MultiObjectiveModelConfig(
@@ -257,15 +287,31 @@ class TestSupervisedInvalidLabels:
         labels = torch.full((B,), float("nan"))
         batch = _make_batch(task_name="reg_task", labels=labels)
 
-        loss, _ = obj.compute(model.encoder, batch)
-        assert loss.item() == 0.0
-        assert not loss.requires_grad, (
-            "Zero loss from all-NaN labels should have no grad_fn"
-        )
+        with pytest.raises(ValueError, match="no finite labels"):
+            obj.compute(model.encoder, batch)
 
-        head = obj.registry.heads["reg_task"]
-        for p in head.parameters():
-            assert p.grad is None, "No gradient should reach the head"
+    def test_multilabel_all_nan(self):
+        model_cfg = Era5MultiObjectiveModelConfig(
+            encoder_config=_small_encoder_cfg(),
+            supervised_objective=SupervisedObjectiveConfig(
+                tasks=[
+                    SupervisedTaskConfig(
+                        name="multilabel_task",
+                        task_type="classification",
+                        num_classes=3,
+                        is_multilabel=True,
+                    )
+                ],
+            ),
+        )
+        model = model_cfg.build()
+        obj = model.objective_list[0]
+
+        labels = torch.full((B, 3), float("nan"))
+        batch = _make_batch(task_name="multilabel_task", labels=labels)
+
+        with pytest.raises(ValueError, match="no rows with any finite"):
+            obj.compute(model.encoder, batch)
 
 
 # ===================================================================
@@ -385,25 +431,28 @@ class TestSwtTransform:
         )
 
     def test_multiscale_loss_includes_deepest_approx(self):
-        """multiscale_swt_loss penalizes the deepest-level approximation."""
+        """Deepest-level approximation is included in the returned total."""
         from olmoearth_pretrain.nn.transforms.era5_swt import multiscale_swt_loss
 
-        torch.manual_seed(0)
         swt = StationaryWaveletTransform1d(num_channels=4, max_levels=6, wavelet="haar")
-        x = torch.randn(2, T, 4)
-        x_hat = x + 0.1 * torch.randn_like(x)
+        x = torch.zeros(2, T, 4)
+        x_hat = torch.ones_like(x)
 
-        levels = [0, 1, 2, 3, 4, 5]
+        levels = [0, 1, 2]
         total, metrics = multiscale_swt_loss(x_hat, x, swt, levels)
         assert torch.isfinite(total) and total.item() > 0
 
         deepest = max(levels)
         assert f"swt_level_{deepest}_approx_loss" in metrics
-        assert metrics[f"swt_level_{deepest}_approx_loss"].item() > 0
+        approx = metrics[f"swt_level_{deepest}_approx_loss"]
+        assert approx.item() > 0
 
-        # Only the deepest level gets an approx metric
-        for lvl in levels[:-1]:
-            assert f"swt_level_{lvl}_approx_loss" not in metrics
+        # A constant offset leaves only tiny numerical detail terms after the
+        # target buffer.  The total must include those detail terms plus the
+        # deepest approximation term.
+        detail_total = sum(metrics[f"swt_level_{lvl}_loss"] for lvl in levels)
+        assert approx.item() > detail_total.item() * 1000
+        assert torch.allclose(total, detail_total + approx, rtol=1e-6, atol=1e-6)
 
 
 class TestMaskingInvariants:
@@ -433,6 +482,7 @@ class TestMaskingInvariants:
                 era5, ignore, NaiveMaskPolicy(), DEFAULT_VARIABLE_GROUPS, SWT_BUFFER
             )
             assert not mask[:, :SWT_BUFFER, :].any()
+            assert mask[:, SWT_BUFFER:, :].any(), f"Nothing masked at seed {seed}"
 
     def test_stage1_excludes_wind_hydro(self):
         """With Stage 2 disabled, wind and hydro_flux bands are never masked."""
@@ -443,6 +493,7 @@ class TestMaskingInvariants:
         wind_bands = DEFAULT_VARIABLE_GROUPS["wind"]
         hydro_bands = DEFAULT_VARIABLE_GROUPS["hydro_flux"]
         excluded = wind_bands + hydro_bands
+        eligible = [idx for idx in range(V) if idx not in excluded]
 
         for seed in range(30):
             torch.manual_seed(seed)
@@ -451,6 +502,9 @@ class TestMaskingInvariants:
             )
             assert not mask[:, :, excluded].any(), (
                 f"Excluded bands masked at seed {seed}"
+            )
+            assert mask[:, SWT_BUFFER:, eligible].any(), (
+                f"No eligible Stage 1 bands masked at seed {seed}"
             )
 
     def test_ignore_mask_respected(self):
@@ -496,44 +550,50 @@ class TestPerGroupLossGating:
         assert 0 not in lvls
         assert all(lv >= 1 for lv in lvls)
 
-    def test_overriding_all_groups_increases_raw_loss(self):
-        """Enabling raw for all groups (including pressure) increases raw loss."""
-        from olmoearth_pretrain.nn.transforms.era5_corruption import GROUP_RECON_MODE
+    def test_raw_loss_respects_group_recon_mode(self, monkeypatch):
+        """Pressure-only raw loss is zero unless the mode explicitly enables raw."""
+        target = torch.zeros(B, T, V)
+        pressure = torch.linspace(-1.0, 1.0, T)
+        target[:, :, 4] = pressure.unsqueeze(0)
+        prediction = target.clone()
+        prediction[:, SWT_BUFFER:, 4] += 0.5
 
-        torch.manual_seed(0)
-        batch = _make_batch()
+        mask = torch.zeros(B, T, V, dtype=torch.bool)
+        mask[:, SWT_BUFFER:, 4] = True
+        monkeypatch.setattr(
+            era5_multiobjective,
+            "corrupt_era5",
+            lambda era5, ignore_mask, policy, variable_groups, target_start: mask,
+        )
 
-        def _build_recon_obj(recon_mode):
-            return Era5MultiObjectiveModelConfig(
+        batch = _make_batch()._replace(era5=target)
+
+        def _build_obj(mode: str):
+            model = Era5MultiObjectiveModelConfig(
                 encoder_config=_small_encoder_cfg(),
                 reconstruction_objective=ReconstructionObjectiveConfig(
                     decoder=_small_decoder_cfg(),
-                    swt_levels=[0, 1],
-                    swt_lambda=0.1,
-                    group_recon_mode=recon_mode,
+                    variable_groups={"pressure": [4]},
+                    group_recon_mode={"pressure": mode},
+                    swt_lambda=0.0,
                 ),
-            )
+            ).build()
+            obj = model.objective_list[0]
+            assert isinstance(obj, era5_multiobjective.ReconstructionObjective)
+            obj._module.decoder = _FixedDecoder(prediction)
+            return obj
 
-        # Default modes (pressure = slow_wavelet, no raw)
-        torch.manual_seed(0)
-        model_default = _build_recon_obj(dict(GROUP_RECON_MODE)).build()
-        obj_default = model_default.objective_list[0]
-        loss_default, met_default = obj_default.compute(model_default.encoder, batch)
+        slow_wavelet = _build_obj("slow_wavelet")
+        raw_enabled = _build_obj("raw_plus_wavelet")
 
-        # All groups = raw_plus_wavelet
-        all_raw = {g: "raw_plus_wavelet" for g in GROUP_RECON_MODE}
-        torch.manual_seed(0)
-        model_all = _build_recon_obj(all_raw).build()
-        obj_all = model_all.objective_list[0]
-        loss_all, met_all = obj_all.compute(model_all.encoder, batch)
+        loss_slow, metrics_slow = slow_wavelet.compute(_FixedEncoder(), batch)
+        loss_raw, metrics_raw = raw_enabled.compute(_FixedEncoder(), batch)
 
-        assert torch.isfinite(loss_default) and torch.isfinite(loss_all)
-        raw_default = met_default["reconstruction/raw_loss"].item()
-        raw_all = met_all["reconstruction/raw_loss"].item()
-        assert raw_all > raw_default, (
-            f"Enabling raw for all groups should increase raw_loss: "
-            f"{raw_all} <= {raw_default}"
-        )
+        assert torch.isfinite(loss_slow) and torch.isfinite(loss_raw)
+        assert metrics_slow["reconstruction/raw_loss"].item() == 0.0
+        assert loss_slow.item() == 0.0
+        assert metrics_raw["reconstruction/raw_loss"].item() > 0.0
+        assert loss_raw.item() == metrics_raw["reconstruction/raw_loss"].item()
 
 
 class TestLossComputationCorrectness:
@@ -573,46 +633,69 @@ class TestLossComputationCorrectness:
         loss = obj._group_huber(pred, targ, mask)
         assert loss.item() == 0.0
 
-    def test_band_normalization_equalizes_channels(self):
-        """Per-channel std normalization prevents high-variance channels from dominating.
-
-        When prediction errors scale with the signal (e.g. 10% error),
-        the high-variance channel dominates without normalization.
-        After dividing by per-channel std, both channels contribute
-        roughly equally.
-        """
+    def test_raw_band_normalization_matches_production_loss(self, monkeypatch):
+        """Raw reconstruction loss uses per-channel std normalization."""
         torch.manual_seed(0)
         # Channel 0: std ~1, Channel 1: std ~100
-        ch0 = torch.randn(B, 50, 1)
-        ch1 = torch.randn(B, 50, 1) * 100.0
-        targ = torch.cat([ch0, ch1], dim=2)
+        target = torch.zeros(B, T, V)
+        target[:, :, 0] = torch.randn(B, T)
+        target[:, :, 1] = torch.randn(B, T) * 100.0
         # Error proportional to signal scale (~10%)
-        pred = targ * 1.1
+        prediction = target.clone()
+        prediction[:, :, [0, 1]] = target[:, :, [0, 1]] * 1.1
 
         # Without normalization: channel 1 dominates
         raw_loss_ch0 = F.huber_loss(
-            pred[:, :, 0], targ[:, :, 0], reduction="mean", delta=1.0
+            prediction[:, SWT_BUFFER:, 0],
+            target[:, SWT_BUFFER:, 0],
+            reduction="mean",
+            delta=1.0,
         )
         raw_loss_ch1 = F.huber_loss(
-            pred[:, :, 1], targ[:, :, 1], reduction="mean", delta=1.0
+            prediction[:, SWT_BUFFER:, 1],
+            target[:, SWT_BUFFER:, 1],
+            reduction="mean",
+            delta=1.0,
         )
         assert raw_loss_ch1 > raw_loss_ch0 * 5, "Channel 1 should dominate raw"
 
-        # With normalization: both contribute ~equally
+        mask = torch.zeros(B, T, V, dtype=torch.bool)
+        mask[:, SWT_BUFFER:, [0, 1]] = True
+        monkeypatch.setattr(
+            era5_multiobjective,
+            "corrupt_era5",
+            lambda era5, ignore_mask, policy, variable_groups, target_start: mask,
+        )
+
+        model = Era5MultiObjectiveModelConfig(
+            encoder_config=_small_encoder_cfg(),
+            reconstruction_objective=ReconstructionObjectiveConfig(
+                decoder=_small_decoder_cfg(),
+                variable_groups={"scaled": [0, 1]},
+                group_recon_mode={"scaled": "raw_plus_wavelet"},
+                swt_lambda=0.0,
+            ),
+        ).build()
+        obj = model.objective_list[0]
+        assert isinstance(obj, era5_multiobjective.ReconstructionObjective)
+        obj._module.decoder = _FixedDecoder(prediction)
+        batch = _make_batch()._replace(era5=target)
+
+        loss, metrics = obj.compute(_FixedEncoder(), batch)
+
+        g_pred = prediction[:, SWT_BUFFER:, [0, 1]]
+        g_targ = target[:, SWT_BUFFER:, [0, 1]]
         with torch.no_grad():
-            std = targ.std(dim=(0, 1)).clamp(min=1e-6)
-        pred_n = pred / std[None, None, :]
-        targ_n = targ / std[None, None, :]
-        norm_loss_ch0 = F.huber_loss(
-            pred_n[:, :, 0], targ_n[:, :, 0], reduction="mean", delta=1.0
+            std = g_targ.std(dim=(0, 1)).clamp(min=1e-6)
+        expected = F.huber_loss(
+            g_pred / std[None, None, :],
+            g_targ / std[None, None, :],
+            reduction="mean",
+            delta=1.0,
         )
-        norm_loss_ch1 = F.huber_loss(
-            pred_n[:, :, 1], targ_n[:, :, 1], reduction="mean", delta=1.0
-        )
-        ratio = norm_loss_ch0.item() / max(norm_loss_ch1.item(), 1e-10)
-        assert 0.5 < ratio < 2.0, (
-            f"After normalization, channels should contribute ~equally: "
-            f"ratio={ratio:.2f}"
+        assert torch.allclose(loss, expected, rtol=1e-6, atol=1e-6)
+        assert torch.allclose(
+            metrics["reconstruction/raw_loss"], expected.detach(), rtol=1e-6, atol=1e-6
         )
 
 
@@ -631,6 +714,7 @@ class TestReconstructionE2EBackward:
         )
         model = model_cfg.build()
         obj = model.objective_list[0]
+        assert isinstance(obj, era5_multiobjective.ReconstructionObjective)
         batch = _make_batch()
 
         loss, metrics = obj.compute(model.encoder, batch)

@@ -135,8 +135,10 @@ class RegressionHead(SupervisedHead):
         labels = labels.to(preds.dtype)
         valid = torch.isfinite(labels)
         if not valid.any():
-            zero = torch.zeros((), device=preds.device, dtype=preds.dtype)
-            return zero, {"valid_fraction": zero.detach()}
+            raise ValueError(
+                "RegressionHead received no finite labels; at least one label "
+                "must be finite to compute supervised loss."
+            )
 
         if self._normalizes_targets:
             labels = (labels - self._target_mean) / self._target_std
@@ -181,14 +183,17 @@ class ClassificationHead(SupervisedHead):
         if labels.ndim > 1:
             labels = labels.view(-1)
         labels = labels.long()
+        valid = labels != SEGMENTATION_IGNORE_LABEL
+        if not valid.any():
+            raise ValueError(
+                "ClassificationHead received only ignore-index labels "
+                f"({SEGMENTATION_IGNORE_LABEL}); at least one label must be "
+                "valid to compute supervised loss."
+            )
         loss = F.cross_entropy(logits, labels, ignore_index=SEGMENTATION_IGNORE_LABEL)
         with torch.no_grad():
-            valid = labels != SEGMENTATION_IGNORE_LABEL
-            if valid.any():
-                preds = logits.argmax(dim=-1)
-                acc = (preds[valid] == labels[valid]).float().mean().detach()
-            else:
-                acc = torch.zeros((), device=logits.device)
+            preds = logits.argmax(dim=-1)
+            acc = (preds[valid] == labels[valid]).float().mean().detach()
             metrics = {
                 "accuracy": acc,
                 "valid_fraction": valid.float().mean().detach(),
@@ -226,8 +231,11 @@ class MultiLabelClassificationHead(SupervisedHead):
         # A row is "valid" if at least one element is finite.
         row_valid = torch.isfinite(labels).any(dim=-1)
         if not row_valid.any():
-            zero = torch.zeros((), device=logits.device, dtype=logits.dtype)
-            return zero, {"valid_fraction": zero.detach()}
+            raise ValueError(
+                "MultiLabelClassificationHead received no rows with any finite "
+                "labels; at least one row must contain a finite label to "
+                "compute supervised loss."
+            )
         logits = logits[row_valid]
         labels = labels[row_valid]
         # Cells that are non-finite are replaced with 0 and masked out of the loss.
