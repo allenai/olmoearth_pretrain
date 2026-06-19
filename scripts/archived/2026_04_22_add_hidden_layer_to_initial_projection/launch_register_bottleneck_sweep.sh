@@ -443,20 +443,20 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 #   2. gdyn_d768_il               -- in-domain frontier (single final-layer read).
 #   3. gdyn_d768_mdr3_ictok_pdproj -- external-transfer frontier (multi-depth read).
 
-python "scripts/official/v1_1/rope.py" launch "rope_base10k_scale0.25_m12" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE
+# python "scripts/official/v1_1/rope.py" launch "rope_base10k_scale0.25_m12" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE
 
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_m12" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-    --model.encoder_config.register_interleave=true
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_il_m12" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     --model.encoder_config.register_interleave=true
 
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_m12" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-    '--model.encoder_config.register_read_layers=[3,6,9,12]' \
-    --model.encoder_config.register_contrastive_source=encoder_tokens \
-    --model.encoder_config.register_per_depth_read_proj=true
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_m12" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+#     --model.encoder_config.register_contrastive_source=encoder_tokens \
+#     --model.encoder_config.register_per_depth_read_proj=true
 
 # ============ WINDOWED (local) SPATIAL ATTENTION: window in {4, 8, 16} (6) ============
 # Restricts every encoder + register attention block (encoder self-attention, the register
@@ -479,22 +479,22 @@ python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_m1
 #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
 #     --model.encoder_config.attn_window_size=4
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_w4" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-#     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
-#     --model.encoder_config.register_contrastive_source=encoder_tokens \
-#     --model.encoder_config.register_per_depth_read_proj=true \
-#     --model.encoder_config.attn_window_size=4
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_w4" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+    --model.encoder_config.register_contrastive_source=encoder_tokens \
+    --model.encoder_config.register_per_depth_read_proj=true \
+    --model.encoder_config.attn_window_size=4
 
 # python "scripts/official/v1_1/rope.py" launch "rope_base10k_scale0.25_w8" "$CLUSTER" \
 #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
 #     --model.encoder_config.attn_window_size=8
 
-# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_w8" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-#     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
-#     --model.encoder_config.register_contrastive_source=encoder_tokens \
-#     --model.encoder_config.register_per_depth_read_proj=true \
-#     --model.encoder_config.attn_window_size=8
+python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_w8" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+    '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+    --model.encoder_config.register_contrastive_source=encoder_tokens \
+    --model.encoder_config.register_per_depth_read_proj=true \
+    --model.encoder_config.attn_window_size=8
