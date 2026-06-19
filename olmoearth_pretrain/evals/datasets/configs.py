@@ -243,6 +243,7 @@ DATASET_TO_CONFIG = {
     # mode is encoded in the dataset name and resolved in get_eval_dataset.
     # supported_modalities lists what the data provides; the actual S2-only vs
     # S1+S2 runs are separate EVAL_TASKS in all_evals.py.
+    # when we don't add a suffix "fifty_cities" its random.
     "fifty_cities": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
         imputes=[],
