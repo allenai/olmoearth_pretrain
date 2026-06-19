@@ -13,6 +13,7 @@ _DEFAULTS = {
     "PASTIS_DIR": "/weka/dfive-default/presto_eval_sets/pastis_r",
     "PASTIS_DIR_ORIG": "/weka/dfive-default/presto_eval_sets/pastis_r_origsize",
     "PASTIS_DIR_PARTITION": "/weka/dfive-default/presto_eval_sets/pastis",
+    "FIFTY_CITIES_DIR": "/weka/dfive-default/presto_eval_sets/fifty_cities",
 }
 
 GEOBENCH_DIR = UPath(os.getenv("GEOBENCH_DIR", _DEFAULTS["GEOBENCH_DIR"]))
@@ -24,3 +25,4 @@ PASTIS_DIR_ORIG = UPath(os.getenv("PASTIS_DIR_ORIG", _DEFAULTS["PASTIS_DIR_ORIG"
 PASTIS_DIR_PARTITION = UPath(
     os.getenv("PASTIS_DIR_PARTITION", _DEFAULTS["PASTIS_DIR_PARTITION"])
 )
+FIFTY_CITIES_DIR = UPath(os.getenv("FIFTY_CITIES_DIR", _DEFAULTS["FIFTY_CITIES_DIR"]))
