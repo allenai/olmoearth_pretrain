@@ -1949,6 +1949,45 @@ def test_encoder_windowed_changes_output_when_active(
     assert not torch.allclose(out_win.sentinel2_l2a, out_full.sentinel2_l2a)
 
 
+def test_encoder_windowed_chunked_matches_unchunked(
+    monkeypatch: pytest.MonkeyPatch,
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Chunking the windowed mask must not change the result.
+
+    The mask is built per query-chunk to bound memory; force 1-query chunks and
+    compare to the default single chunk.
+    """
+    import olmoearth_pretrain.nn.attention as attention_mod
+
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    s2_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    encoder = _windowed_encoder(supported_modalities, attn_window_size=2)
+    encoder.eval()
+
+    B, H, W, T = 1, 8, 8, 2
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_bands),
+        sentinel2_l2a_mask=torch.zeros(B, H, W, T, s2_bands, dtype=torch.long),
+        latlon=torch.randn(B, latlon_bands),
+        latlon_mask=torch.zeros(B, latlon_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    with torch.no_grad():
+        out_default, _, _ = unpack_encoder_output(
+            encoder.forward(sample, patch_size=1, input_res=10)
+        )
+        # 1 -> one query per chunk (maximal chunking).
+        monkeypatch.setattr(attention_mod, "WINDOW_MASK_CHUNK_ELEMENTS", 1)
+        out_chunked, _, _ = unpack_encoder_output(
+            encoder.forward(sample, patch_size=1, input_res=10)
+        )
+    assert out_default.sentinel2_l2a is not None
+    torch.testing.assert_close(out_chunked.sentinel2_l2a, out_default.sentinel2_l2a)
+
+
 def test_encoder_windowed_register_bottleneck(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:

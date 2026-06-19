@@ -9,6 +9,8 @@ They cover the following:
 - Month encoding (for temporal data)
 """
 
+from typing import NamedTuple
+
 import numpy as np
 import torch
 
@@ -256,3 +258,21 @@ def build_window_mask(
     empty = ~mask.any(dim=-1, keepdim=True)  # (B, Nq, 1)
     mask = torch.where(empty, fallback, mask)
     return mask[:, None]  # (B, 1, Nq, Nk)
+
+
+class WindowSpec(NamedTuple):
+    """Ingredients for a windowed-attention mask, built lazily per query-chunk.
+
+    Passing the ingredients (instead of a prebuilt ``(B, 1, Nq, Nk)`` mask) lets the
+    attention build the mask one query-chunk at a time via :func:`build_window_mask`, so
+    peak memory is bounded by the chunk rather than by ``Nq * Nk``. This matters at eval,
+    where the full unmasked sequence makes ``Nq * Nk`` large enough to OOM a dense mask.
+    Fields mirror :func:`build_window_mask`.
+    """
+
+    q_positions: torch.Tensor  # (B, Nq, 2) GSD-scaled (row, col)
+    k_positions: torch.Tensor  # (B, Nk, 2)
+    half_extent: float
+    q_is_global: torch.Tensor | None = None  # (B, Nq) bool
+    k_is_global: torch.Tensor | None = None  # (B, Nk) bool
+    key_valid: torch.Tensor | None = None  # (B, Nk) bool

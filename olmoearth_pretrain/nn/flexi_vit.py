@@ -24,7 +24,7 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
-    build_window_mask,
+    WindowSpec,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
@@ -1720,25 +1720,30 @@ class SpatialRegisterBottleneck(nn.Module):
             register_positions = self.build_register_positions(
                 patch_positions, register_grid
             )
-        # Read mask: by default just the [B, N] key-visibility mask. With windowing it
-        # becomes a [B, 1, R, N] mask restricting each register to a spatial window of the
-        # patch tokens (non-spatial patches stay globally readable), AND-ed with visibility.
-        # Latent mask: None by default; windowed -> [B, 1, R, R] over the register grid.
+        # Read mask: by default just the [B, N] key-visibility mask. With windowing the
+        # read instead restricts each register to a spatial window of the patch tokens
+        # (non-spatial patches stay globally readable), AND-ed with visibility; the latent
+        # transformer windows register-over-register. Both windowed masks are built lazily
+        # per query-chunk inside attention (via WindowSpec) to bound memory.
         read_attn_mask: Tensor | None = (
             visible_mask.bool() if visible_mask is not None else None
         )
-        latent_attn_mask: Tensor | None = None
+        read_window_spec: WindowSpec | None = None
+        latent_window_spec: WindowSpec | None = None
         if window_half_extent is not None and self.use_2d_rope:
             assert register_positions is not None and patch_positions is not None
-            read_attn_mask = build_window_mask(
-                register_positions,
-                patch_positions,
-                window_half_extent,
+            read_attn_mask = None  # validity carried by read_window_spec.key_valid
+            read_window_spec = WindowSpec(
+                q_positions=register_positions,
+                k_positions=patch_positions,
+                half_extent=window_half_extent,
                 k_is_global=patch_is_global,
                 key_valid=visible_mask.bool() if visible_mask is not None else None,
             )
-            latent_attn_mask = build_window_mask(
-                register_positions, register_positions, window_half_extent
+            latent_window_spec = WindowSpec(
+                q_positions=register_positions,
+                k_positions=register_positions,
+                half_extent=window_half_extent,
             )
 
         def read(registers: Tensor, i: int, blk: nn.Module, kv: Tensor) -> Tensor:
@@ -1748,6 +1753,7 @@ class SpatialRegisterBottleneck(nn.Module):
                 attn_mask=read_attn_mask,
                 rope_positions=register_positions,
                 rope_positions_y=patch_positions,
+                window_spec=read_window_spec,
             )
             if self.learned_read_weighting:
                 # Gate the read's residual contribution; g=1 reproduces the ungated read.
@@ -1765,8 +1771,8 @@ class SpatialRegisterBottleneck(nn.Module):
                 registers = read(registers, i, read_blk, kv)
                 registers = latent_blk(
                     x=registers,
-                    attn_mask=latent_attn_mask,
                     rope_positions=register_positions,
+                    window_spec=latent_window_spec,
                 )
         else:
             # Legacy: all reads first, then the latent transformer.
@@ -1775,8 +1781,8 @@ class SpatialRegisterBottleneck(nn.Module):
             for latent_blk in self.latent_blocks:
                 registers = latent_blk(
                     x=registers,
-                    attn_mask=latent_attn_mask,
                     rope_positions=register_positions,
+                    window_spec=latent_window_spec,
                 )
         return self.norm(registers), register_positions
 
@@ -2373,6 +2379,7 @@ class Encoder(FlexiVitBase):
         window_half_extent: float | None = None
         patch_spatial_flag: Tensor | None = None
         encoder_spatial_flag: Tensor | None = None
+        window_spec: WindowSpec | None = None
         if self.attn_window_size is not None:
             if positions is None:
                 raise ValueError(
@@ -2435,11 +2442,14 @@ class Encoder(FlexiVitBase):
                 positions = self.add_register_positions(positions)
 
         if window_half_extent is not None:
-            # Now that positions include the prepended global register tokens, build the
-            # (B, 1, N, N) sliding-window mask. It encodes key validity itself, so it
-            # replaces the [B, N] key mask passed to every encoder block (in both training
-            # and eval). Register tokens are global (non-spatial); padded keys are excluded
-            # via the true padding mask (`new_mask`), independent of the train/eval path.
+            # Now that positions include the prepended global register tokens, assemble the
+            # window ingredients. The per-block mask is built lazily, one query-chunk at a
+            # time inside attention (see WindowSpec / Attention._windowed_sdpa), so peak
+            # memory is bounded by the chunk rather than by N*N -- without this the full
+            # unmasked eval sequence (no MAE masking) would OOM a dense [B, N, N] mask. The
+            # spec carries key validity, so it replaces the [B, N] key mask for every block
+            # (train and eval alike). Register tokens are global (non-spatial); padded keys
+            # are excluded via the true padding mask (`new_mask`), independent of fast_pass.
             assert encoder_spatial_flag is not None
             if self.has_register_tokens:
                 reg_flag = encoder_spatial_flag.new_zeros(
@@ -2457,14 +2467,15 @@ class Encoder(FlexiVitBase):
                     )
                     key_valid = torch.cat([reg_valid, key_valid], dim=1)
             is_global = ~encoder_spatial_flag
-            attn_mask = build_window_mask(
-                positions,
-                positions,
-                window_half_extent,
+            window_spec = WindowSpec(
+                q_positions=positions,
+                k_positions=positions,
+                half_extent=window_half_extent,
                 q_is_global=is_global,
                 k_is_global=is_global,
                 key_valid=key_valid,
             )
+            attn_mask = None  # validity carried by window_spec.key_valid
 
         # Multi-depth register reads: stash the (raw, in-loop) patch tokens at the
         # configured 1-indexed depths so the bottleneck can read each one. The patch stack
@@ -2504,6 +2515,7 @@ class Encoder(FlexiVitBase):
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
                 rope_positions=positions,
+                window_spec=window_spec,
             )
             # Stash this depth's output for the multi-depth register read (1-indexed).
             if (i_blk + 1) in multi_depth_read_layers:

@@ -1961,7 +1961,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                 )
                 # todo / hack - this assumes we have 3 modalities which can be
                 # encode_decode in total (landsat, s2, s1)
-                max_encode = min(max_encode, 2)
+                # max_encode = min(max_encode, 2)
                 num_encode = np.random.choice(np.arange(1, max_encode + 1))
                 encode_bandsets = encode_decode_bandsets[:num_encode]
                 decode_bandsets = encode_decode_bandsets[num_encode:]

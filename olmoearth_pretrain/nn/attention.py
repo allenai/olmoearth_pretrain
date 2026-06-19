@@ -10,7 +10,16 @@ from einops import rearrange
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
 
-from olmoearth_pretrain.nn.encodings import apply_2d_rope
+from olmoearth_pretrain.nn.encodings import (
+    WindowSpec,
+    apply_2d_rope,
+    build_window_mask,
+)
+
+# Cap on (chunk_queries * batch * num_keys) elements when materializing a windowed
+# attention mask one query-chunk at a time. Bounds peak mask memory regardless of
+# sequence length (~a few hundred MB of bool/float working set per chunk).
+WINDOW_MASK_CHUNK_ELEMENTS = 256 * 1024 * 1024
 
 try:
     import flash_attn
@@ -155,6 +164,52 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
+    def _windowed_sdpa(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        spec: WindowSpec,
+    ) -> torch.Tensor:
+        """SDPA restricted to a sliding spatial window, built per query-chunk.
+
+        ``q, k, v`` are ``(B, H, N, D)``. The window mask depends only on positions, so it
+        is rebuilt for each query slice and applied with standard SDPA. This bounds the
+        mask working set to ``WINDOW_MASK_CHUNK_ELEMENTS`` while leaving the math identical
+        to a single full-mask SDPA call; short sequences run as a single chunk.
+        """
+        if not self.fast_attn:
+            raise NotImplementedError(
+                "windowed attention requires scaled_dot_product_attention"
+            )
+        b, _, nq, _ = q.shape
+        nk = k.shape[2]
+        chunk = max(1, min(nq, WINDOW_MASK_CHUNK_ELEMENTS // max(1, b * nk)))
+        outputs = []
+        for start in range(0, nq, chunk):
+            end = min(start + chunk, nq)
+            q_glob = (
+                spec.q_is_global[:, start:end] if spec.q_is_global is not None else None
+            )
+            chunk_mask = build_window_mask(
+                spec.q_positions[:, start:end],
+                spec.k_positions,
+                spec.half_extent,
+                q_is_global=q_glob,
+                k_is_global=spec.k_is_global,
+                key_valid=spec.key_valid,
+            )  # (B, 1, end - start, Nk)
+            outputs.append(
+                F.scaled_dot_product_attention(
+                    q[:, :, start:end],
+                    k,
+                    v,
+                    attn_mask=chunk_mask,
+                    dropout_p=self.attn_drop.p,
+                )
+            )
+        return torch.cat(outputs, dim=2)
+
     def sdpa(
         self,
         q: torch.Tensor,
@@ -168,6 +223,7 @@ class Attention(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
+        window_spec: WindowSpec | None = None,
     ) -> torch.Tensor:
         """Compute scaled dot product attention.
 
@@ -183,6 +239,9 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
+            window_spec: Optional windowed-attention ingredients; when set, attention is
+                restricted to a sliding spatial window built per query-chunk (bounds memory).
+
         Returns:
             Output tensor of shape (B, H, N, D)
         """
@@ -204,12 +263,16 @@ class Attention(nn.Module):
             # Output is (B, Nq, H, D), transpose back to (B, H, Nq, D)
             # matching the transpose of the other attention implementations that need to be transposed back
             x = x.transpose(1, 2)
+        elif window_spec is not None:
+            # Windowed (local) spatial attention: build the (B, 1, Cq, Nk) mask one
+            # query-chunk at a time so peak memory is bounded by the chunk, not Nq*Nk.
+            x = self._windowed_sdpa(q, k, v, window_spec)
         elif self.fast_attn:
             if attn_mask is not None and attn_mask.dim() == 2:
                 # A 1D-per-sample key mask (B, Nk): broadcast it over heads/queries.
                 attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, n, 1))
-            # A precomputed (B, 1, Nq, Nk) / (B, H, Nq, Nk) mask (e.g. windowed
-            # attention) is passed straight through and broadcast over heads.
+            # A precomputed (B, 1, Nq, Nk) / (B, H, Nq, Nk) mask is passed straight
+            # through and broadcast over heads.
             x = F.scaled_dot_product_attention(
                 q,
                 k,
@@ -243,6 +306,7 @@ class Attention(nn.Module):
         attn_mask: torch.Tensor | None = None,
         rope_positions: torch.Tensor | None = None,
         rope_positions_y: torch.Tensor | None = None,
+        window_spec: WindowSpec | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -258,6 +322,8 @@ class Attention(nn.Module):
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
             rope_positions: Optional 2D RoPE positions for x/query tokens
             rope_positions_y: Optional 2D RoPE positions for y/key tokens
+            window_spec: Optional windowed-attention ingredients; when set, attention is
+                restricted to a sliding spatial window built per query-chunk (bounds memory).
 
         Returns:
             Output tensor of shape (B, N, C) or (B* N , C) if packed
@@ -312,6 +378,7 @@ class Attention(nn.Module):
             max_seqlen_q=max_seqlen_q,
             max_seqlen_k=max_seqlen_k,
             attn_mask=attn_mask,
+            window_spec=window_spec,
         )
         x = x.transpose(1, 2).reshape(original_shape)
         x = self.proj(x)
@@ -552,6 +619,7 @@ class Block(nn.Module):
         attn_mask: torch.Tensor | None = None,
         rope_positions: torch.Tensor | None = None,
         rope_positions_y: torch.Tensor | None = None,
+        window_spec: WindowSpec | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -567,6 +635,8 @@ class Block(nn.Module):
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
             rope_positions: Optional 2D RoPE positions for x/query tokens
             rope_positions_y: Optional 2D RoPE positions for y/key tokens
+            window_spec: Optional windowed-attention ingredients; when set, attention is
+                restricted to a sliding spatial window built per query-chunk (bounds memory).
 
         Returns:
             Output tensor of shape (B, N, C)
@@ -585,6 +655,7 @@ class Block(nn.Module):
                     attn_mask=attn_mask,
                     rope_positions=rope_positions,
                     rope_positions_y=rope_positions_y,
+                    window_spec=window_spec,
                 )
             )
         )
