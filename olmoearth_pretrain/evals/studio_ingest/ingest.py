@@ -1140,10 +1140,12 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     logger.info("[Step 0b] Model config loaded and validated successfully")
 
     # Step 0c: Extract modalities from dataset config
+    # Multiple rslearn layers can map to the same OlmoEarth modality (e.g.
+    # sentinel2_l2a_feb, _may, _aug, _nov all resolve to sentinel2_l2a).
+    # We deduplicate and aggregate max_matches across temporal layers.
     logger.info("[Step 0c] Extracting modalities from dataset config...")
-    modalities = []
+    modality_max_timesteps: dict[str, int] = {}
     modality_layer_names = []
-    max_timesteps_modalities = []
     for layer_name, layer_config in dataset_config.layers.items():
         if layer_config.data_source is None:
             continue
@@ -1154,12 +1156,16 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
                 f"  Skipping layer {layer_name!r}: no OlmoEarth modality mapping"
             )
             continue
-        modalities.append(olmoearth_modality.name)
         modality_layer_names.append(layer_name)
         query_config = layer_config.data_source.query_config
-        max_timesteps_modalities.append(query_config.max_matches)
+        mod_name = olmoearth_modality.name
+        prev = modality_max_timesteps.get(mod_name, 0)
+        modality_max_timesteps[mod_name] = max(prev, query_config.max_matches)
 
-    num_timesteps = max(max_timesteps_modalities) if max_timesteps_modalities else 1
+    modalities = list(modality_max_timesteps.keys())
+    num_timesteps = (
+        max(modality_max_timesteps.values()) if modality_max_timesteps else 1
+    )
     timeseries = num_timesteps > 1
     logger.info(
         f"[Step 0c] Modalities: {modalities}, timeseries: {timeseries}, num_timesteps: {num_timesteps}"

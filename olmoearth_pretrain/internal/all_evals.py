@@ -567,6 +567,40 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
+    "mapbiomas_3k_dense": DownstreamTaskConfig(
+        dataset="mapbiomas_3k_dense",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.001,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[
+            Modality.SENTINEL2_L2A.name,
+        ],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MACRO_F1,
+    ),
+    # "mapbiomas_3k_sparse": DownstreamTaskConfig(
+    #     dataset="mapbiomas_3k_sparse",
+    #     embedding_batch_size=32,
+    #     probe_batch_size=8,
+    #     num_workers=8,
+    #     pooling_type=PoolingType.MEAN,
+    #     norm_stats_from_pretrained=True,
+    #     norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+    #     probe_lr=0.0001,
+    #     eval_interval=Duration.epochs(10),
+    #     input_modalities=[
+    #         Modality.SENTINEL2_L2A.name,
+    #     ],
+    #     epochs=50,
+    #     eval_mode=EvalMode.LINEAR_PROBE,
+    #     primary_metric=EvalMetric.MACRO_F1,
+    # ),
 }
 
 # Pretrain-subset evals read from frozen snapshots under presto_eval_sets, NOT
