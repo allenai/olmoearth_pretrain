@@ -1788,6 +1788,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         decode_ratio: float = 0.5,
         random_ratio: float = 0.5,
         only_decode_modalities: list[str] = [],
+        bandset_split_strategy: str = "original",
     ):
         """Random masking strategy except for decode modalities, which only get decoded.
 
@@ -1796,6 +1797,13 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         decode_ratio: how many encode-decode modalities get decode, **and** the random / time
                       decode ratio applied.
         random_ratio: how often to apply random masking vs time masking.
+        bandset_split_strategy: how to choose the number of encoded bandsets when splitting
+                      encode_decode_bandsets into encode-only and decode-only. One of:
+                      - "original": encode ceil(num_bandsets * encode_ratio) bandsets.
+                      - "m123": uniformly sample num_encode from [1, max_encode], where
+                        max_encode is the number of encode-decode bandsets (minus one if there
+                        are no decode-only modalities, so at least one is left for decoding).
+                      - "m12": as "m123", but cap max_encode at 2.
         """
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
@@ -1803,6 +1811,13 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         self.random_ratio = random_ratio
         if self.random_ratio > 1:
             raise ValueError(f"Random ratio must be <= 1, got {self.random_ratio}")
+        valid_split_strategies = ("original", "m123", "m12")
+        if bandset_split_strategy not in valid_split_strategies:
+            raise ValueError(
+                f"bandset_split_strategy must be one of {valid_split_strategies}, "
+                f"got {bandset_split_strategy}"
+            )
+        self.bandset_split_strategy = bandset_split_strategy
 
     @staticmethod
     def _bandset_has_data_at_timestamps(
@@ -1953,16 +1968,22 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                 )
             else:
                 np.random.shuffle(encode_decode_bandsets)
-                # if no decode, at least one modality must be saved for decoding
-                max_encode = (
-                    len(encode_decode_bandsets)
-                    if has_decode_only_modalities
-                    else len(encode_decode_bandsets) - 1
-                )
-                # todo / hack - this assumes we have 3 modalities which can be
-                # encode_decode in total (landsat, s2, s1)
-                # max_encode = min(max_encode, 2)
-                num_encode = np.random.choice(np.arange(1, max_encode + 1))
+                if self.bandset_split_strategy == "original":
+                    num_encode = math.ceil(
+                        len(encode_decode_bandsets) * self.encode_ratio
+                    )
+                else:
+                    # if no decode, at least one modality must be saved for decoding
+                    max_encode = (
+                        len(encode_decode_bandsets)
+                        if has_decode_only_modalities
+                        else len(encode_decode_bandsets) - 1
+                    )
+                    if self.bandset_split_strategy == "m12":
+                        # todo / hack - this assumes we have 3 modalities which can be
+                        # encode_decode in total (landsat, s2, s1)
+                        max_encode = min(max_encode, 2)
+                    num_encode = np.random.choice(np.arange(1, max_encode + 1))
                 encode_bandsets = encode_decode_bandsets[:num_encode]
                 decode_bandsets = encode_decode_bandsets[num_encode:]
 
