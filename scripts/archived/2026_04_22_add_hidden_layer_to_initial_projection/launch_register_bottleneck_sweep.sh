@@ -479,22 +479,38 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
 #     --model.encoder_config.attn_window_size=4
 
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_w4" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-    '--model.encoder_config.register_read_layers=[3,6,9,12]' \
-    --model.encoder_config.register_contrastive_source=encoder_tokens \
-    --model.encoder_config.register_per_depth_read_proj=true \
-    --model.encoder_config.attn_window_size=4
-
-# python "scripts/official/v1_1/rope.py" launch "rope_base10k_scale0.25_w8" "$CLUSTER" \
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_w4" "$CLUSTER" \
 #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+#     --model.encoder_config.register_contrastive_source=encoder_tokens \
+#     --model.encoder_config.register_per_depth_read_proj=true \
+#     --model.encoder_config.attn_window_size=4
+
+# # python "scripts/official/v1_1/rope.py" launch "rope_base10k_scale0.25_w8" "$CLUSTER" \
+# #     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+# #     --model.encoder_config.attn_window_size=8
+
+# python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_w8" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
+#     '--model.encoder_config.register_read_layers=[3,6,9,12]' \
+#     --model.encoder_config.register_contrastive_source=encoder_tokens \
+#     --model.encoder_config.register_per_depth_read_proj=true \
 #     --model.encoder_config.attn_window_size=8
 
-python "$SCRIPT" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_w8" "$CLUSTER" \
+# ============ ORIGINAL MASKING: rope baseline, no instance contrastive loss (1) ============
+# Plain rope baseline (NO bottleneck) under the ORIGINAL masking strategy and with the
+# instance-level InfoNCE contrastive loss removed (--train_module.contrastive_config=null).
+# RandomTimeWithDecodeMaskingStrategy now exposes bandset_split_strategy; the default
+# "original" restores the pre-change deterministic split (num_encode = ceil(n*encode_ratio),
+# i.e. always ~2 of {S2,S1,Landsat}), reverting the sampled-1/2/3 (m123) and capped (m12)
+# behaviors. base.py's _masking_config omits the field, so it picks up the "original" default
+# -- no masking override is needed here (and adding a new strategy_config key via CLI is not
+# reliably supported), so the original split comes from the data-side default. Tagged
+# "origmask_noic". A/Bs against rope_base10k_scale0.25_m12 (isolates the masking) and against
+# the IC-on rope baselines (isolates the contrastive loss).
+
+python "scripts/official/v1_1/rope.py" launch "rope_base10k_scale0.25_origmask_noic" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --model.encoder_config.register_grid_size=0 --model.encoder_config.register_dim=768 --model.decoder_config.register_dim=768 \
-    '--model.encoder_config.register_read_layers=[3,6,9,12]' \
-    --model.encoder_config.register_contrastive_source=encoder_tokens \
-    --model.encoder_config.register_per_depth_read_proj=true \
-    --model.encoder_config.attn_window_size=8
+    --train_module.contrastive_config=null
