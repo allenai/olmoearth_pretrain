@@ -236,6 +236,41 @@ DATASET_TO_CONFIG = {
         supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
         timeseries=True,
     ),
+    # 50Cities: single-timestep S2+S1 land-cover segmentation, 64x64 tiles.
+    # 13 semantic classes (the two nodata/background colors are mapped to the
+    # segmentation ignore label by FiftyCitiesProcessor; see colormap.json).
+    # One config per split mode (random / by_city / by_continent); the split
+    # mode is encoded in the dataset name and resolved in get_eval_dataset.
+    # supported_modalities lists what the data provides; the actual S2-only vs
+    # S1+S2 runs are separate EVAL_TASKS in all_evals.py.
+    # when we don't add a suffix "fifty_cities" its random.
+    "fifty_cities": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=13,
+        is_multilabel=False,
+        height_width=64,
+        supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        timeseries=False,
+    ),
+    "fifty_cities_by_city": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=13,
+        is_multilabel=False,
+        height_width=64,
+        supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        timeseries=False,
+    ),
+    "fifty_cities_by_continent": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=13,
+        is_multilabel=False,
+        height_width=64,
+        supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        timeseries=False,
+    ),
     "breizhcrops": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
         imputes=[],
