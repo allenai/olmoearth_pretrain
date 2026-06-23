@@ -544,11 +544,14 @@ class TestPerGroupLossGating:
     """group_recon_mode gates which groups contribute to raw vs SWT loss."""
 
     def test_pressure_excluded_from_raw(self):
-        """Pressure (slow_wavelet) contributes no raw loss."""
-        inc_raw, lvls = _parse_recon_mode("slow_wavelet", [0, 1, 2, 3, 4, 5])
+        """Pressure (lowpass_plus_slow_swt) contributes no raw loss."""
+        inc_raw, lvls, inc_lowpass = _parse_recon_mode(
+            "lowpass_plus_slow_swt", [0, 1, 2, 3, 4, 5]
+        )
         assert inc_raw is False
+        assert inc_lowpass is True
         assert 0 not in lvls
-        assert all(lv >= 1 for lv in lvls)
+        assert all(lv >= 2 for lv in lvls)
 
     def test_raw_loss_respects_group_recon_mode(self, monkeypatch):
         """Pressure-only raw loss is zero unless the mode explicitly enables raw."""
@@ -583,8 +586,8 @@ class TestPerGroupLossGating:
             obj._module.decoder = _FixedDecoder(prediction)
             return obj
 
-        slow_wavelet = _build_obj("slow_wavelet")
-        raw_enabled = _build_obj("raw_plus_wavelet")
+        slow_wavelet = _build_obj("lowpass_plus_slow_swt")
+        raw_enabled = _build_obj("raw_plus_slow_swt")
 
         loss_slow, metrics_slow = slow_wavelet.compute(_FixedEncoder(), batch)
         loss_raw, metrics_raw = raw_enabled.compute(_FixedEncoder(), batch)
@@ -708,7 +711,7 @@ class TestReconstructionE2EBackward:
             encoder_config=_small_encoder_cfg(),
             reconstruction_objective=ReconstructionObjectiveConfig(
                 decoder=_small_decoder_cfg(),
-                swt_levels=[0, 1],
+                swt_levels=[0, 1, 2],
                 swt_lambda=0.1,
             ),
         )
@@ -742,7 +745,7 @@ class TestReconstructionE2EBackward:
         assert "reconstruction/raw_loss" in metrics
         assert "reconstruction/swt_loss" in metrics
         assert "reconstruction/masked_fraction" in metrics
-        for lvl in [0, 1]:
+        for lvl in [0, 1, 2]:
             assert f"reconstruction/swt_level_{lvl}_loss" in metrics
         assert "reconstruction/swt_deepest_approx_loss" in metrics
         assert metrics["reconstruction/swt_deepest_approx_loss"].item() > 0
