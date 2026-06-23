@@ -109,17 +109,46 @@ DEFAULT_VARIABLE_GROUPS: dict[str, list[int]] = {
 # These tables describe, for each variable group, *how* it should be
 # reconstructed and *how* it is allowed to be masked.  They are the single
 # source of truth that the :class:`MaskPolicy` defaults are assembled from.
-GROUP_RECON_MODE: dict[str, str] = {
-    "thermo": "raw_plus_wavelet",
-    "wind": "raw_plus_wavelet",
-    "shortwave_radiation": "raw_plus_wavelet",
-    "longwave_radiation": "raw_plus_wavelet",
-    "soil_moisture": "raw_plus_slow_wavelet",
-    "evaporation": "raw_plus_wavelet",
-    "hydro_flux": "short_raw_plus_slow_wavelet",
-    "pressure": "slow_wavelet",
+
+SWT_DETAIL_LEVELS: list[int] = [0, 1, 2, 3, 4, 5]
+
+RECON_MODE_SPEC: dict[str, dict] = {
+    "raw_plus_all_swt": {
+        "include_raw": True,
+        "swt_detail_levels": [0, 1, 2, 3, 4, 5],
+        "include_lowpass": False,
+    },
+    "raw_plus_no_fast_swt": {
+        "include_raw": True,
+        "swt_detail_levels": [1, 2, 3, 4, 5],
+        "include_lowpass": False,
+    },
+    "raw_plus_slow_swt": {
+        "include_raw": True,
+        "swt_detail_levels": [2, 3, 4, 5],
+        "include_lowpass": False,
+    },
+    "lowpass_plus_slow_swt": {
+        "include_raw": False,
+        "swt_detail_levels": [2, 3, 4, 5],
+        "include_lowpass": True,
+    },
 }
 
+GROUP_RECON_MODE: dict[str, str] = {
+    # Exact weather state matters; fast variability is meaningful.
+    "thermo": "raw_plus_all_swt",
+    # Raw target useful, but no fastest detail band.
+    "wind": "raw_plus_no_fast_swt",
+    "shortwave_radiation": "raw_plus_no_fast_swt",
+    "longwave_radiation": "raw_plus_no_fast_swt",
+    "evaporation": "raw_plus_no_fast_swt",
+    # Long-memory variables / difficult fluxes.
+    "soil_moisture": "raw_plus_slow_swt",
+    "hydro_flux": "raw_plus_slow_swt",
+    # No pointwise reconstruction; only baseline + slow structure.
+    "pressure": "lowpass_plus_slow_swt",
+}
 # Groups where a *single variable* may be masked across the entire sequence
 # (all T) while the remaining group member(s) stay visible.  This is safe for
 # highly redundant pairs (ssr/ssrd, swvl1/swvl2, e/pev) because the visible
@@ -138,14 +167,6 @@ WHOLE_GROUP_ALL_T_ALLOWED: set[str] = set()
 
 GROUPS_WITH_MULT_VARIABLES = {
     group for group, vars_ in DEFAULT_VARIABLE_GROUPS.items() if len(vars_) >= 2
-}
-
-# Groups that may *only* be masked over a contiguous span (never all T).
-# These are fast / high-frequency signals (e.g. precipitation) where a
-# full-record drop would be ill-posed; we only ever hide short windows.
-SPAN_ONLY_GROUP_MASK: set[str] = {
-    "thermo",
-    "hydro_flux",
 }
 
 # Span length range (in days == timesteps for ERA5L_DAY_10) per group.
@@ -499,8 +520,14 @@ def _apply_stage2_mask_policy(
             ):
                 mask[i, target_start:, bi] |= valid_win
             else:
-                span_days = strat.long_span_days.get(group, [30, 180])
-                seg = _random_span(_as_span(span_days), t_win, device)
+                if group not in strat.long_span_days:
+                    raise ValueError(
+                        f"WithinGroupSingleVarStrategy: group {group!r} has no "
+                        f"entry in long_span_days. Add it to "
+                        f"WITHIN_GROUP_LONG_SPAN_DAYS to use single-var masking "
+                        f"for this group."
+                    )
+                seg = _random_span(_as_span(strat.long_span_days[group]), t_win, device)
                 mask[i, target_start:, bi] |= seg & valid_win
 
         elif isinstance(strat, WholeGroupSpanStrategy):

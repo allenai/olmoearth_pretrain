@@ -62,7 +62,7 @@ from olmoearth_pretrain.internal.experiment import (
 )
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
 from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig, Era5Pooling
-from olmoearth_pretrain.nn.transforms.era5_corruption import NaiveMaskPolicy
+from olmoearth_pretrain.nn.transforms.era5_corruption import MaskPolicy, NaiveMaskPolicy
 from olmoearth_pretrain.train.callbacks import (
     OlmoEarthWandBCallback,
 )
@@ -172,6 +172,8 @@ class Era5SupervisedCommonComponents(CommonComponents):
     recon_swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
     recon_swt_wavelet: str = "haar"
     recon_use_naive_masking: bool = False
+    recon_temporal_interpolation_prob: float = 1.0
+    recon_cross_variable_prob: float = 1.0
     # ------------------------------------------------------------------
     # Downstream evaluation (linear probe).  Runs for A-only, B-only,
     # and A+B — this is the primary encoder-quality signal for B-only.
@@ -529,7 +531,12 @@ def build_model_config(
             **(
                 {"mask_policy": NaiveMaskPolicy()}
                 if common.recon_use_naive_masking
-                else {}
+                else {
+                    "mask_policy": MaskPolicy(
+                        temporal_interpolation_prob=common.recon_temporal_interpolation_prob,
+                        cross_variable_prob=common.recon_cross_variable_prob,
+                    )
+                }
             ),
         )
 

@@ -50,6 +50,7 @@ from olmoearth_pretrain.nn.era5_heads import SupervisedHeadRegistry, build_head
 from olmoearth_pretrain.nn.transforms.era5_corruption import (
     DEFAULT_VARIABLE_GROUPS,
     GROUP_RECON_MODE,
+    RECON_MODE_SPEC,
     MaskPolicy,
     corrupt_era5,
 )
@@ -403,25 +404,23 @@ class ReconstructionObjectiveConfig(Config):
         )
 
 
-# SWT levels with index >= this threshold are considered "slow" (low-frequency).
-# Level 0 captures ~1-day oscillations; level 1 ~2-day; level 2 ~4-day, etc.
-# Modes like "slow_wavelet" restrict the loss to these slower bands.
-_SLOW_SWT_LEVEL_MIN: int = 1
+def _parse_recon_mode(
+    mode: str, all_swt_levels: list[int]
+) -> tuple[bool, list[int], bool]:
+    """Parse a ``group_recon_mode`` string into ``(include_raw, swt_detail_levels, include_lowpass)``.
 
-
-def _parse_recon_mode(mode: str, all_swt_levels: list[int]) -> tuple[bool, list[int]]:
-    """Parse a ``group_recon_mode`` string into ``(include_raw, swt_levels)``."""
-    slow = [level for level in all_swt_levels if level >= _SLOW_SWT_LEVEL_MIN]
-    if mode == "raw_plus_wavelet":
-        return True, list(all_swt_levels)
-    if mode in ("raw_plus_slow_wavelet", "short_raw_plus_slow_wavelet"):
-        # "short_raw" is treated identically for now — hydro_flux only
-        # receives short spans anyway due to SPAN_ONLY_GROUP_MASK.
-        return True, slow
-    if mode == "slow_wavelet":
-        return False, slow
-    logger.warning("Unknown group_recon_mode %r, falling back to raw+wavelet", mode)
-    return True, list(all_swt_levels)
+    Looks up *mode* in :data:`RECON_MODE_SPEC` and intersects the spec's
+    ``swt_detail_levels`` with *all_swt_levels* (the levels actually
+    computed by the SWT module).
+    """
+    spec = RECON_MODE_SPEC.get(mode)
+    if spec is None:
+        logger.warning(
+            "Unknown group_recon_mode %r, falling back to raw_plus_all_swt", mode
+        )
+        spec = RECON_MODE_SPEC["raw_plus_all_swt"]
+    detail_levels = [lv for lv in spec["swt_detail_levels"] if lv in all_swt_levels]
+    return spec["include_raw"], detail_levels, spec["include_lowpass"]
 
 
 class ReconstructionObjective(_Objective):
@@ -539,8 +538,10 @@ class ReconstructionObjective(_Objective):
         level_loss_counts: dict[int, int] = {}
 
         for group_name, bi in variable_groups.items():
-            mode = self.group_recon_mode.get(group_name, "raw_plus_wavelet")
-            include_raw, allowed_levels = _parse_recon_mode(mode, self.swt_levels)
+            mode = self.group_recon_mode.get(group_name, "raw_plus_all_swt")
+            include_raw, allowed_levels, include_lowpass = _parse_recon_mode(
+                mode, self.swt_levels
+            )
 
             g_pred = x_hat_tgt[:, :, bi]  # [B, T_win, |bi|]
             g_targ = x_tgt[:, :, bi]
@@ -585,8 +586,8 @@ class ReconstructionObjective(_Objective):
                     )
                     level_loss_counts[level] = level_loss_counts.get(level, 0) + 1
 
-                    # Deepest-level approximation loss (low-frequency residual)
-                    if level == deepest_allowed:
+                    # Deepest-level approximation (lowpass) loss
+                    if include_lowpass and level == deepest_allowed:
                         a_pred_g = a_pred[:, bi, :]
                         a_targ_g = a_targ[:, bi, :]
                         with torch.no_grad():
