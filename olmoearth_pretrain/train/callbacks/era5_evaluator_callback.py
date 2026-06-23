@@ -312,20 +312,22 @@ class Era5DownstreamEvaluatorCallback(Callback):
                     "Test split unavailable for %s, skipping test eval.", task.name
                 )
 
-        # ERA5 pooled embeddings are (N, D); the probe expects (N, H, W, D).
-        # Labels are scalar (N,); spatial regression expects (N, H, W).
-        if train_embeddings.ndim == 2:
+        task_type = TaskType(task.task_type)
+
+        # Spatial probes (segmentation / regression) expect (N, H, W, D)
+        # embeddings and (N, H, W) labels.  Classification uses a flat
+        # LinearProbe that needs (N, D) — don't unsqueeze for it.
+        _spatial = task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION)
+        if _spatial and train_embeddings.ndim == 2:
             train_embeddings = train_embeddings.unsqueeze(1).unsqueeze(1)
             val_embeddings = val_embeddings.unsqueeze(1).unsqueeze(1)
             if test_embeddings is not None:
                 test_embeddings = test_embeddings.unsqueeze(1).unsqueeze(1)
-        if train_labels.ndim == 1:
+        if _spatial and train_labels.ndim == 1:
             train_labels = train_labels.unsqueeze(-1).unsqueeze(-1)
             val_labels = val_labels.unsqueeze(-1).unsqueeze(-1)
             if test_labels is not None:
                 test_labels = test_labels.unsqueeze(-1).unsqueeze(-1)
-
-        task_type = TaskType(task.task_type)
         eval_config = EvalDatasetConfig(
             task_type=task_type,
             num_classes=task.num_classes or 2,

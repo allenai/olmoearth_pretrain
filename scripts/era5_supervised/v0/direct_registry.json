@@ -4,6 +4,7 @@
       "groups": [
         "train"
       ],
+      "height_width": 1,
       "label_extractor_name": "segmentation_to_scalar",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "configs/burnrisk_canada_nbac_era5d.yaml",
@@ -22,6 +23,7 @@
       "groups": [
         "train"
       ],
+      "height_width": 1,
       "label_extractor_name": "segmentation_to_scalar",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "configs/burnrisk_canada_nbac_era5d.yaml",
@@ -49,6 +51,7 @@
       "groups": [
         "train"
       ],
+      "height_width": 1,
       "label_extractor_name": "segmentation_to_scalar",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "configs/burnrisk_canada_nbac_era5d.yaml",
