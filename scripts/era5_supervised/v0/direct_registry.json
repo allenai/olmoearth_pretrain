@@ -64,6 +64,7 @@
       "groups": [
         "spatial_split"
       ],
+      "height_width": 1,
       "label_extractor_name": "per_pixel_regression_to_scalar",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "/weka/dfive-default/hadriens/olmoearth_pretrain/scripts/era5_supervised/v0/configs/lfmc_woody_era5d.yaml",
@@ -93,6 +94,7 @@
       "groups": [
         "spatial_split"
       ],
+      "height_width": 1,
       "label_extractor_name": "per_pixel_regression_to_scalar",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "/weka/dfive-default/hadriens/olmoearth_pretrain/scripts/era5_supervised/v0/configs/lfmc_woody_era5d.yaml",

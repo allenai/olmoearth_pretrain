@@ -471,6 +471,7 @@ def _resolve_eval_task_configs(
                 embedding_batch_size=common.eval_embedding_batch_size,
                 eval_interval=Duration.steps(common.eval_interval),
                 max_eval_samples=common.eval_max_samples,
+                height_width=entry.height_width,
             )
         )
     return configs

@@ -73,6 +73,7 @@ class Era5LinearProbeTaskConfig:
     embedding_batch_size: int = 128
     eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
     max_eval_samples: int | None = None
+    height_width: int | None = None
 
 
 def _build_eval_dataset(
@@ -311,6 +312,19 @@ class Era5DownstreamEvaluatorCallback(Callback):
                     "Test split unavailable for %s, skipping test eval.", task.name
                 )
 
+        # ERA5 pooled embeddings are (N, D); the probe expects (N, H, W, D).
+        # Labels are scalar (N,); spatial regression expects (N, H, W).
+        if train_embeddings.ndim == 2:
+            train_embeddings = train_embeddings.unsqueeze(1).unsqueeze(1)
+            val_embeddings = val_embeddings.unsqueeze(1).unsqueeze(1)
+            if test_embeddings is not None:
+                test_embeddings = test_embeddings.unsqueeze(1).unsqueeze(1)
+        if train_labels.ndim == 1:
+            train_labels = train_labels.unsqueeze(-1).unsqueeze(-1)
+            val_labels = val_labels.unsqueeze(-1).unsqueeze(-1)
+            if test_labels is not None:
+                test_labels = test_labels.unsqueeze(-1).unsqueeze(-1)
+
         task_type = TaskType(task.task_type)
         eval_config = EvalDatasetConfig(
             task_type=task_type,
@@ -318,6 +332,7 @@ class Era5DownstreamEvaluatorCallback(Callback):
             is_multilabel=task.is_multilabel,
             imputes=[],
             supported_modalities=[Modality.ERA5L_DAY_10.name],
+            height_width=task.height_width,
         )
 
         logger.info(

@@ -96,6 +96,7 @@ class DirectRslearnTaskEntry(BaseModel):
     max_samples: int | None = None
     target_mean: float | None = None
     target_std: float | None = None
+    height_width: int | None = None
     notes: str | None = None
 
 
