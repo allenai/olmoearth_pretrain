@@ -145,7 +145,7 @@ class Era5SupervisedCommonComponents(CommonComponents):
     encoder_use_mask_embed: bool = False
     encoder_use_conv_stem: bool = False
     global_batch_size: int = 64
-    rank_microbatch_size: int = 16
+    rank_microbatch_size: int = 32
     num_workers: int = 4
     learning_rate: float = 1.0e-4
     weight_decay: float = 0.02
@@ -566,6 +566,7 @@ def build_train_module_config(
             lr=common.learning_rate, weight_decay=common.weight_decay, fused=False
         ),
         rank_microbatch_size=common.rank_microbatch_size,
+        compile_model=True,
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(warmup_steps=common.warmup_steps),
         dp_config=DataParallelConfig(

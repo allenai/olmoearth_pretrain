@@ -500,9 +500,7 @@ class OlmoEarthTrainModule(TrainModule):
         model_state_dict = dist_cp_sd.get_model_state_dict(
             self.model, options=sd_options
         )
-        optim_state_dict = dist_cp_sd.get_optimizer_state_dict(
-            self.model, self.optimizer, options=sd_options
-        )
+        optim_state_dict = self.optimizer.state_dict()
         return {
             "model": model_state_dict,
             "optim": optim_state_dict,

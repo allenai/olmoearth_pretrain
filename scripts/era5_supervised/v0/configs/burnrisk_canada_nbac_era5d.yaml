@@ -14,7 +14,7 @@ data:
       era5_daily:
         data_type: raster
         layers:
-        - era5_365dhistory
+        - era5d_448d_historical
         use_all_bands_in_order_of_band_set_idx: 0
         passthrough: true
         dtype: FLOAT32
