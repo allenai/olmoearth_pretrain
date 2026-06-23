@@ -27,6 +27,9 @@
       "model_yaml_path": "/weka/dfive-default/hadriens/olmoearth_pretrain/scripts/era5_supervised/v0/configs/burnrisk_canada_nbac_era5d.yaml",
       "notes": "Canada NBAC wildfire burn-risk, full rslearn dataset. rslearn segmentation target reduced to a scalar 2-class label.",
       "num_classes": 2,
+      "tags": {
+        "oep_eval": ""
+      },
       "task_type": "classification",
       "test_groups": [
         "test"

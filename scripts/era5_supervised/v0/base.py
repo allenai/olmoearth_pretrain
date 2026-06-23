@@ -1,8 +1,15 @@
 """ERA5 supervised pretraining — objective A entry point (v0)."""
 
 import logging
+import warnings
 
-from script import (
+warnings.filterwarnings("ignore", module=r"pydantic\._internal")
+warnings.filterwarnings(
+    "ignore", message=r"pkg_resources is deprecated", category=UserWarning
+)
+logging.getLogger("albumentations.check_version").setLevel(logging.ERROR)
+
+from script import (  # noqa: E402
     build_common_components,
     build_dataloader_config,
     build_dataset_config,
@@ -12,7 +19,7 @@ from script import (
     build_visualize_config,
 )
 
-from olmoearth_pretrain.internal.experiment import main
+from olmoearth_pretrain.internal.experiment import main  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
