@@ -1,7 +1,16 @@
 # Presto OSM Balanced Eval Splits
 
-This directory is the canonical in-repo copy of the OpenStreetMap raster eval
-splits built from the Presto H5 corpus:
+The split CSVs and class-support metadata for the balanced OSM eval probes live
+on Weka at:
+
+```
+/weka/dfive-default/presto_eval_sets/presto_osm_balanced/
+├── osm_base_balanced/
+├── osm_diverse_context/
+└── osm_rare_class_focused/
+```
+
+They are built from the Presto H5 corpus:
 
 `/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/469728`
 
@@ -26,12 +35,21 @@ into `EVAL_TASKS` in `olmoearth_pretrain/internal/all_evals.py` as the three
   `storage_tank`, `taxiway`) to contiguous per-pixel segmentation labels and
   ignores all other OSM pixels.
 
-Each variant contains:
+Each variant directory on Weka contains:
 
 - `train.csv`, `valid.csv`, `test.csv`: selected H5 `sample_index` values.
 - `*_class_summary.csv`: class presence and pixel distribution for that split.
 - `class_support.json`: precomputed labeled-class ids per split for eval scoring.
   Uses `tile_presence` for tile-classification tasks and `pixels` for segmentation.
+
+## Regenerating Splits
+
+Use the split generation script to recreate splits and upload to Weka:
+
+```bash
+python scripts/tools/create_presto_osm_balanced_splits.py \
+  --output-dir /weka/dfive-default/presto_eval_sets/presto_osm_balanced
+```
 
 ## Eval Command
 

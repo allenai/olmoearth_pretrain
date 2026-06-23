@@ -30,10 +30,6 @@ include = ["olmoearth_pretrain*", "helios*"]
 "olmoearth_pretrain.data.norm_configs" = ["*.json"]
 "olmoearth_pretrain.evals.datasets" = [
     "config/*.json",
-    "splits/presto_osm_balanced/*.md",
-    "splits/presto_osm_balanced/*.json",
-    "splits/presto_osm_balanced/*/*.csv",
-    "splits/presto_osm_balanced/*/*.json",
 ]
 "olmoearth_pretrain.evals.studio_ingest" = ["registry.json"]
 

@@ -3,7 +3,6 @@
 import importlib.util
 import os
 import sys
-from importlib.resources import files
 from logging import getLogger
 from typing import Any
 
@@ -422,8 +421,8 @@ PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset
 # modalities (CDL, WORLDCEREAL, WRI canopy) aren't present in osmbig, so their
 # probes fall back to PRETRAIN_SUBSET_H5PY_DIR (in-distribution).
 PRESTO_OSM_EVAL_H5PY_DIR = "/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/469728"
-PRESTO_OSM_BALANCED_SPLITS_DIR = str(
-    files("olmoearth_pretrain.evals.datasets").joinpath("splits/presto_osm_balanced")
+PRESTO_OSM_BALANCED_SPLITS_DIR = (
+    "/weka/dfive-default/presto_eval_sets/presto_osm_balanced"
 )
 PRESTO_OSM_DIVERSE_CONTEXT_CLASS_IDS = [
     1,

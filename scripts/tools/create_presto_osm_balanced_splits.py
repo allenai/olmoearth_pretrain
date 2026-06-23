@@ -110,7 +110,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("olmoearth_pretrain/evals/datasets/splits/presto_osm_balanced"),
+        default=Path("/weka/dfive-default/presto_eval_sets/presto_osm_balanced"),
     )
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
