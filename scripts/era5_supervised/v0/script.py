@@ -15,7 +15,9 @@ By default nicknames resolve against the *direct rslearn* registry.
 from __future__ import annotations
 
 import logging
+import shutil
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from direct_registry import DirectRslearnRegistry, DirectRslearnTaskEntry
 from olmo_core.config import DType
@@ -280,6 +282,20 @@ def _auto_label_extractor(
     return None
 
 
+def _snapshot_yaml(src: str, save_folder: str, task_name: str) -> str:
+    """Copy a model YAML into the run's save_folder so it survives branch switches.
+
+    At launch time the YAML may live inside the git repo; snapshotting it to the
+    run's output directory (on Weka, outside git) ensures the running job keeps a
+    frozen copy even if the working tree changes.
+    """
+    dst = Path(save_folder) / "configs" / f"{task_name}.yaml"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    logger.info("Snapshotted model YAML %s → %s", src, dst)
+    return str(dst)
+
+
 def _resolve_direct_task_spec(
     common: Era5SupervisedCommonComponents,
 ) -> Era5TaskSpec:
@@ -289,20 +305,24 @@ def _resolve_direct_task_spec(
             "common.direct_weka_path is set but common.direct_model_yaml_path "
             "is not — both are required for direct-load."
         )
+    task_name = common.direct_task_name or "direct_task"
+    yaml_path = _snapshot_yaml(
+        common.direct_model_yaml_path, common.save_folder, task_name
+    )
     task_type = _task_type_from_str(common.direct_task_type)
     _require_supervised_task_type(task_type, f"direct task {common.direct_task_name!r}")
     label_extractor_name = _auto_label_extractor(
-        task_type, common.direct_model_yaml_path, common.direct_task_name
+        task_type, yaml_path, common.direct_task_name
     )
     return Era5TaskSpec(
-        name=common.direct_task_name or "direct_task",
+        name=task_name,
         weight=1.0,
         task_type=task_type,
         is_multilabel=common.direct_is_multilabel,
         num_classes=common.direct_num_classes,
         modality_layer_name=common.direct_modality_layer_name,
         weka_path=common.direct_weka_path,
-        model_yaml_path=common.direct_model_yaml_path,
+        model_yaml_path=yaml_path,
         groups_override=common.direct_train_groups,
         tags_override=common.direct_train_tags or None,
         norm_stats_from_pretrained=True,
@@ -313,6 +333,7 @@ def _resolve_direct_task_spec(
 
 def _spec_from_direct_entry(
     entry: DirectRslearnTaskEntry,
+    save_folder: str,
     weight_override: float | None,
     groups_override: list[str] | None,
     tags_override: dict[str, str] | None,
@@ -323,10 +344,11 @@ def _spec_from_direct_entry(
     (``None`` means "fall back to the registry entry"). They compose downstream:
     rslearn applies both the group AND the tag filter when both are set.
     """
+    yaml_path = _snapshot_yaml(entry.model_yaml_path, save_folder, entry.name)
     task_type = _task_type_from_str(entry.task_type)
     _require_supervised_task_type(task_type, f"task {entry.name!r}")
     label_extractor_name = entry.label_extractor_name or _auto_label_extractor(
-        task_type, entry.model_yaml_path, entry.name
+        task_type, yaml_path, entry.name
     )
     groups = groups_override if groups_override is not None else entry.groups
     tags = tags_override if tags_override is not None else entry.tags
@@ -338,7 +360,7 @@ def _spec_from_direct_entry(
         num_classes=entry.num_classes,
         modality_layer_name=entry.modality_layer_name,
         weka_path=entry.weka_path,
-        model_yaml_path=entry.model_yaml_path,
+        model_yaml_path=yaml_path,
         groups_override=groups or None,
         tags_override=tags or None,
         norm_stats_from_pretrained=entry.norm_stats_from_pretrained,
@@ -364,6 +386,7 @@ def _resolve_direct_registry_specs(
     return [
         _spec_from_direct_entry(
             registry.get(name),
+            common.save_folder,
             common.task_weights.get(name),
             common.task_groups.get(name),
             common.task_tags.get(name),
@@ -444,15 +467,18 @@ def _resolve_eval_task_configs(
     configs: list[Era5LinearProbeTaskConfig] = []
     for name in task_names:
         entry = registry.get(name)
+        yaml_path = _snapshot_yaml(
+            entry.model_yaml_path, common.save_folder, f"eval_{entry.name}"
+        )
         task_type = _task_type_from_str(entry.task_type)
         label_extractor_name = entry.label_extractor_name or _auto_label_extractor(
-            task_type, entry.model_yaml_path, entry.name
+            task_type, yaml_path, entry.name
         )
         configs.append(
             Era5LinearProbeTaskConfig(
                 name=entry.name,
                 weka_path=entry.weka_path,
-                model_yaml_path=entry.model_yaml_path,
+                model_yaml_path=yaml_path,
                 task_type=TaskType(task_type).value,
                 num_classes=entry.num_classes,
                 is_multilabel=entry.is_multilabel,

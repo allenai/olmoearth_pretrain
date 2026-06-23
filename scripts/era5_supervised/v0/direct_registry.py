@@ -125,10 +125,13 @@ class DirectRslearnRegistry:
         logger.info("Loading direct rslearn registry from %s", registry_path)
         with registry_path.open("r") as f:
             data = json.load(f)
-        tasks = {
-            name: DirectRslearnTaskEntry.model_validate({**entry, "name": name})
-            for name, entry in data.get("tasks", {}).items()
-        }
+        registry_dir = Path(registry_path).resolve().parent
+        tasks: dict[str, DirectRslearnTaskEntry] = {}
+        for name, entry in data.get("tasks", {}).items():
+            yaml_path = entry.get("model_yaml_path", "")
+            if yaml_path and not Path(yaml_path).is_absolute():
+                entry = {**entry, "model_yaml_path": str(registry_dir / yaml_path)}
+            tasks[name] = DirectRslearnTaskEntry.model_validate({**entry, "name": name})
         return cls(tasks)
 
     def get(self, name: str) -> DirectRslearnTaskEntry:
