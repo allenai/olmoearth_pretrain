@@ -24,11 +24,12 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
-    SpatialPosEncoding,
+    PositionEncoding,
     axial_3d_dim_split,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
+    resolve_position_encoding,
     timestamps_to_days,
 )
 from olmoearth_pretrain.nn.flexi_patch_embed import (
@@ -65,25 +66,25 @@ def return_modalities_from_dict(
 # See olmoearth_pretrain.datatypes.TokensAndMasks for the implementation
 
 
-def validate_spatial_pos_encoding(
-    spatial_pos_encoding: str,
+def validate_position_encoding(
+    position_encoding: str,
     head_dim: int,
     temporal_rope_dim_frac: float,
 ) -> None:
-    """Validate a spatial position encoding mode for a given attention head size."""
-    if spatial_pos_encoding not in SpatialPosEncoding.values():
+    """Validate a position encoding mode for a given attention head size."""
+    if position_encoding not in PositionEncoding.values():
         raise ValueError(
-            f"spatial_pos_encoding must be one of {SpatialPosEncoding.values()}, "
-            f"got {spatial_pos_encoding}"
+            f"position_encoding must be one of {PositionEncoding.values()}, "
+            f"got {position_encoding}"
         )
-    if SpatialPosEncoding.is_2d_rope(spatial_pos_encoding) and head_dim % 4 != 0:
+    if PositionEncoding.is_2d_rope(position_encoding) and head_dim % 4 != 0:
         raise ValueError(
             f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, got {head_dim}"
         )
-    if spatial_pos_encoding == SpatialPosEncoding.AXIAL_3D_ROPE:
+    if position_encoding == PositionEncoding.AXIAL_3D_ROPE:
         # Validates that head_dim splits cleanly into (d_t, d_x, d_y).
         axial_3d_dim_split(head_dim, temporal_rope_dim_frac)
-    if spatial_pos_encoding == SpatialPosEncoding.MIXED_3D_ROPE and head_dim % 4 != 0:
+    if position_encoding == PositionEncoding.MIXED_3D_ROPE and head_dim % 4 != 0:
         raise ValueError(
             f"3D RoPE-Mixed requires head_dim divisible by 4, got {head_dim}"
         )
@@ -666,7 +667,8 @@ class CompositeEncodings(nn.Module):
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         tokenization_config: TokenizationConfig | None = None,
-        spatial_pos_encoding: str = "absolute",
+        position_encoding: str = "absolute",
+        spatial_pos_encoding: str | None = None,
     ):
         """Initialize the composite encodings.
 
@@ -678,14 +680,18 @@ class CompositeEncodings(nn.Module):
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             tokenization_config: Optional config for custom band groupings
-            spatial_pos_encoding: Spatial encoding mode; one of the
-                ``SpatialPosEncoding`` values.
+            position_encoding: Position encoding mode; one of the
+                ``PositionEncoding`` values.
+            spatial_pos_encoding: Deprecated alias for ``position_encoding``.
         """
         super().__init__()
-        if spatial_pos_encoding not in SpatialPosEncoding.values():
+        position_encoding = resolve_position_encoding(
+            position_encoding, spatial_pos_encoding
+        )
+        if position_encoding not in PositionEncoding.values():
             raise ValueError(
-                f"spatial_pos_encoding must be one of {SpatialPosEncoding.values()}, "
-                f"got {spatial_pos_encoding}"
+                f"position_encoding must be one of {PositionEncoding.values()}, "
+                f"got {position_encoding}"
             )
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
@@ -693,7 +699,7 @@ class CompositeEncodings(nn.Module):
             modality.name for modality in supported_modalities
         ]
         self.tokenization_config = tokenization_config or TokenizationConfig()
-        self.spatial_pos_encoding = spatial_pos_encoding
+        self.position_encoding = position_encoding
         self.embedding_size = embedding_size
         self.max_sequence_length = (
             max_sequence_length  # This max sequence length is a time dim thing
@@ -848,7 +854,7 @@ class CompositeEncodings(nn.Module):
         if modality.is_multitemporal and use_temporal_encodings:
             # Slot-index temporal encoding (additive). Skipped when 3D RoPE
             # handles temporal position rotationally inside attention.
-            if not SpatialPosEncoding.is_3d_rope(self.spatial_pos_encoding):
+            if not PositionEncoding.is_3d_rope(self.position_encoding):
                 time_embed = repeat(
                     self.pos_embed[:t], f"t d -> {ein_string}", **ein_dict
                 )
@@ -861,10 +867,7 @@ class CompositeEncodings(nn.Module):
             month_embed = self.month_embed(months)
             month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
             modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
-        if (
-            modality.is_spatial
-            and self.spatial_pos_encoding == SpatialPosEncoding.ABSOLUTE
-        ):
+        if modality.is_spatial and self.position_encoding == PositionEncoding.ABSOLUTE:
             # Spatial encodings
             assert input_res is not None
             assert patch_size is not None
@@ -935,18 +938,22 @@ class FlexiVitBase(nn.Module):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
-        spatial_pos_encoding: str = "absolute",
+        position_encoding: str = "absolute",
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
         rope_temporal_coordinate_scale: float = 1.0,
+        spatial_pos_encoding: str | None = None,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
-        validate_spatial_pos_encoding(
-            spatial_pos_encoding=spatial_pos_encoding,
+        position_encoding = resolve_position_encoding(
+            position_encoding, spatial_pos_encoding
+        )
+        validate_position_encoding(
+            position_encoding=position_encoding,
             head_dim=embedding_size // num_heads,
             temporal_rope_dim_frac=temporal_rope_dim_frac,
         )
@@ -981,7 +988,7 @@ class FlexiVitBase(nn.Module):
         self._base_tokenization_config = tokenization_config or TokenizationConfig()
 
         self.use_flash_attn = use_flash_attn
-        self.spatial_pos_encoding = spatial_pos_encoding
+        self.position_encoding = position_encoding
         self.rope_base = rope_base
         self.rope_coordinate_scale = rope_coordinate_scale
         self.rope_mixed_base = rope_mixed_base
@@ -1002,7 +1009,7 @@ class FlexiVitBase(nn.Module):
                     cross_attn=self.cross_attn,
                     drop_path=drop_path,
                     use_flash_attn=self.use_flash_attn,
-                    spatial_pos_encoding=self.spatial_pos_encoding,
+                    position_encoding=self.position_encoding,
                     rope_base=self.rope_base,
                     rope_mixed_base=self.rope_mixed_base,
                     temporal_rope_dim_frac=self.temporal_rope_dim_frac,
@@ -1019,7 +1026,7 @@ class FlexiVitBase(nn.Module):
             learnable_channel_embeddings,
             random_channel_embeddings,
             tokenization_config=self._base_tokenization_config,
-            spatial_pos_encoding=self.spatial_pos_encoding,
+            position_encoding=self.position_encoding,
         )
         self.apply(self._init_weights)
 
@@ -1090,9 +1097,9 @@ class FlexiVitBase(nn.Module):
         scaled by ``self.rope_temporal_coordinate_scale``. Static modalities
         keep ``t=0`` (no temporal anchor).
         """
-        if not SpatialPosEncoding.is_rope(self.spatial_pos_encoding):
+        if not PositionEncoding.is_rope(self.position_encoding):
             return None
-        is_3d = SpatialPosEncoding.is_3d_rope(self.spatial_pos_encoding)
+        is_3d = PositionEncoding.is_3d_rope(self.position_encoding)
 
         available_modalities = return_modalities_from_dict(tokens_only_dict)
         modalities_to_process = get_modalities_to_process(
@@ -1469,13 +1476,14 @@ class Encoder(FlexiVitBase):
         band_dropout_modalities: list[str] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
-        spatial_pos_encoding: str = "absolute",
+        position_encoding: str = "absolute",
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
         rope_temporal_coordinate_scale: float = 1.0,
+        spatial_pos_encoding: str | None = None,
     ):
         """Initialize the encoder.
 
@@ -1520,8 +1528,8 @@ class Encoder(FlexiVitBase):
             post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm.
-            spatial_pos_encoding: Spatial encoding mode; one of the
-                ``SpatialPosEncoding`` values.
+            position_encoding: Position encoding mode; one of the
+                ``PositionEncoding`` values.
             rope_base: Frequency base for axial RoPE.
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
             rope_mixed_base: Frequency base used to initialize learnable
@@ -1533,6 +1541,7 @@ class Encoder(FlexiVitBase):
             rope_temporal_coordinate_scale: Multiplier applied to days-since-2000
                 temporal RoPE coordinates (default 1.0 = raw days). E.g. set to
                 1/30 for months.
+            spatial_pos_encoding: Deprecated alias for ``position_encoding``.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1548,6 +1557,7 @@ class Encoder(FlexiVitBase):
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
+            position_encoding=position_encoding,
             spatial_pos_encoding=spatial_pos_encoding,
             rope_base=rope_base,
             rope_coordinate_scale=rope_coordinate_scale,
@@ -2100,13 +2110,14 @@ class PredictorBase(FlexiVitBase):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
-        spatial_pos_encoding: str = "absolute",
+        position_encoding: str = "absolute",
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
         rope_mixed_base: float = 10.0,
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
         rope_temporal_coordinate_scale: float = 1.0,
+        spatial_pos_encoding: str | None = None,
     ):
         """Initialize the predictor.
 
@@ -2125,8 +2136,8 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn: Whether to use flash attention
             qk_norm: Whether to apply normalization to Q and K in attention
             tokenization_config: Optional config for custom band groupings
-            spatial_pos_encoding: Spatial encoding mode; one of the
-                ``SpatialPosEncoding`` values.
+            position_encoding: Position encoding mode; one of the
+                ``PositionEncoding`` values.
             rope_base: Frequency base for axial RoPE.
             rope_coordinate_scale: Multiplier applied to runtime GSD-scaled RoPE coordinates.
             rope_mixed_base: Frequency base used to initialize learnable
@@ -2138,6 +2149,7 @@ class PredictorBase(FlexiVitBase):
             rope_temporal_coordinate_scale: Multiplier applied to days-since-2000
                 temporal RoPE coordinates (default 1.0 = raw days). E.g. set to
                 1/30 for months.
+            spatial_pos_encoding: Deprecated alias for ``position_encoding``.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2153,6 +2165,7 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn=use_flash_attn,
             qk_norm=qk_norm,
             tokenization_config=self.tokenization_config,
+            position_encoding=position_encoding,
             spatial_pos_encoding=spatial_pos_encoding,
             rope_base=rope_base,
             rope_coordinate_scale=rope_coordinate_scale,
@@ -2555,18 +2568,26 @@ class EncoderConfig(Config):
     band_dropout_modalities: list[str] | None = None
     patch_embed_hidden_sizes: list[int] | None = None
     post_proj_hidden_sizes: list[int] | None = None
-    spatial_pos_encoding: str = "absolute"
+    position_encoding: str = "absolute"
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
     rope_mixed_base: float = 10.0
     temporal_rope_dim_frac: float = 0.25
     rope_temporal_base: float | None = None
     rope_temporal_coordinate_scale: float = 1.0
+    # Deprecated alias for ``position_encoding``. Kept as a field (not dropped)
+    # so old checkpoint configs deserialized via Config.from_dict still carry it
+    # through to __post_init__ for reconciliation.
+    spatial_pos_encoding: str | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
         if isinstance(self.tokenization_config, dict):
             self.tokenization_config = TokenizationConfig(**self.tokenization_config)
+        self.position_encoding = resolve_position_encoding(
+            self.position_encoding, self.spatial_pos_encoding
+        )
+        self.spatial_pos_encoding = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -2587,10 +2608,10 @@ class EncoderConfig(Config):
                 )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
-        if self.spatial_pos_encoding not in SpatialPosEncoding.values():
+        if self.position_encoding not in PositionEncoding.values():
             raise ValueError(
-                f"spatial_pos_encoding must be one of {SpatialPosEncoding.values()}, "
-                f"got {self.spatial_pos_encoding}"
+                f"position_encoding must be one of {PositionEncoding.values()}, "
+                f"got {self.position_encoding}"
             )
         if self.rope_base <= 0:
             raise ValueError(f"rope_base must be positive, got {self.rope_base}")
@@ -2616,8 +2637,8 @@ class EncoderConfig(Config):
                 "rope_temporal_coordinate_scale must be positive, got "
                 f"{self.rope_temporal_coordinate_scale}"
             )
-        validate_spatial_pos_encoding(
-            spatial_pos_encoding=self.spatial_pos_encoding,
+        validate_position_encoding(
+            position_encoding=self.position_encoding,
             head_dim=self.embedding_size // self.num_heads,
             temporal_rope_dim_frac=self.temporal_rope_dim_frac,
         )
@@ -2656,18 +2677,26 @@ class PredictorConfig(Config):
     use_flash_attn: bool = False
     qk_norm: bool = False
     tokenization_config: TokenizationConfig | None = None
-    spatial_pos_encoding: str = "absolute"
+    position_encoding: str = "absolute"
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
     rope_mixed_base: float = 10.0
     temporal_rope_dim_frac: float = 0.25
     rope_temporal_base: float | None = None
     rope_temporal_coordinate_scale: float = 1.0
+    # Deprecated alias for ``position_encoding``. Kept as a field (not dropped)
+    # so old checkpoint configs deserialized via Config.from_dict still carry it
+    # through to __post_init__ for reconciliation.
+    spatial_pos_encoding: str | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
         if isinstance(self.tokenization_config, dict):
             self.tokenization_config = TokenizationConfig(**self.tokenization_config)
+        self.position_encoding = resolve_position_encoding(
+            self.position_encoding, self.spatial_pos_encoding
+        )
+        self.spatial_pos_encoding = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -2679,10 +2708,10 @@ class PredictorConfig(Config):
                     raise ValueError(f"Modality {modality} is not supported")
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
-        if self.spatial_pos_encoding not in SpatialPosEncoding.values():
+        if self.position_encoding not in PositionEncoding.values():
             raise ValueError(
-                f"spatial_pos_encoding must be one of {SpatialPosEncoding.values()}, "
-                f"got {self.spatial_pos_encoding}"
+                f"position_encoding must be one of {PositionEncoding.values()}, "
+                f"got {self.position_encoding}"
             )
         if self.rope_base <= 0:
             raise ValueError(f"rope_base must be positive, got {self.rope_base}")
@@ -2708,8 +2737,8 @@ class PredictorConfig(Config):
                 "rope_temporal_coordinate_scale must be positive, got "
                 f"{self.rope_temporal_coordinate_scale}"
             )
-        validate_spatial_pos_encoding(
-            spatial_pos_encoding=self.spatial_pos_encoding,
+        validate_position_encoding(
+            position_encoding=self.position_encoding,
             head_dim=self.decoder_embedding_size // self.num_heads,
             temporal_rope_dim_frac=self.temporal_rope_dim_frac,
         )

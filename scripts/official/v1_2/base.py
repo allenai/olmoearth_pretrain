@@ -416,7 +416,7 @@ def build_size_model_config(
         random_band_dropout=True,
         band_dropout_modalities=BAND_DROPOUT_MODALITIES,
         patch_embed_hidden_sizes=patch_embed_hidden_sizes,
-        spatial_pos_encoding=SPATIAL_POS_ENCODING,
+        position_encoding=SPATIAL_POS_ENCODING,
         rope_mixed_base=ROPE_MIXED_BASE,
         rope_temporal_coordinate_scale=ROPE_TEMPORAL_COORDINATE_SCALE,
     )
@@ -429,7 +429,7 @@ def build_size_model_config(
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
         tokenization_config=common.tokenization_config,
-        spatial_pos_encoding=SPATIAL_POS_ENCODING,
+        position_encoding=SPATIAL_POS_ENCODING,
         rope_mixed_base=ROPE_MIXED_BASE,
         rope_temporal_coordinate_scale=ROPE_TEMPORAL_COORDINATE_SCALE,
     )

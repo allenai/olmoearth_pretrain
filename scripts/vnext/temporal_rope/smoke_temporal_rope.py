@@ -128,7 +128,7 @@ def check_encoder_rope_3d_uses_real_deltas() -> None:
         max_sequence_length=12,
         depth=2,
         drop_path=0.0,
-        spatial_pos_encoding="rope_3d",
+        position_encoding="rope_3d",
         rope_temporal_base=1000.0,
     )
     encoder.eval()
@@ -171,7 +171,7 @@ def check_encoder_rope_3d_mixed_grad_flow() -> None:
         max_sequence_length=12,
         depth=2,
         drop_path=0.0,
-        spatial_pos_encoding="rope_3d_mixed",
+        position_encoding="rope_3d_mixed",
         rope_temporal_coordinate_scale=1.0 / 30.0,
     )
     sample = _make_sample(
@@ -210,7 +210,7 @@ def check_predictor_rope_3d_cross_attn() -> None:
         num_heads=2,
         max_sequence_length=12,
         drop_path=0.0,
-        spatial_pos_encoding="rope_3d",
+        position_encoding="rope_3d",
         rope_temporal_base=1000.0,
     )
     s2_band_sets = len(Modality.SENTINEL2_L2A.band_sets)

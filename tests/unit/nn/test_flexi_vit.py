@@ -208,7 +208,7 @@ class TestFlexiVitBase:
             drop_path=0.0,
             supported_modalities=[Modality.SENTINEL2_L2A, Modality.LANDSAT],
             max_sequence_length=12,
-            spatial_pos_encoding="rope_3d",
+            position_encoding="rope_3d",
         )
         timestamps = torch.tensor(
             [[[1, 0, 2023], [1, 1, 2023], [1, 6, 2023]]], dtype=torch.long
@@ -381,12 +381,12 @@ class TestEncoder:
             supported_modality_names,
             embedding_size=16,
             num_heads=2,
-            spatial_pos_encoding="rope",
+            position_encoding="rope",
             rope_base=5000.0,
             rope_coordinate_scale=0.5,
         )
         encoder = config.build()
-        assert encoder.spatial_pos_encoding == "rope"
+        assert encoder.position_encoding == "rope"
         assert encoder.rope_base == 5000.0
         assert encoder.rope_coordinate_scale == 0.5
         assert encoder.blocks[0].attn.rope_base == 5000.0
@@ -400,7 +400,7 @@ class TestEncoder:
             supported_modality_names,
             embedding_size=12,
             num_heads=2,
-            spatial_pos_encoding="rope",
+            position_encoding="rope",
         )
         with pytest.raises(ValueError, match="head_dim divisible by 4"):
             config.build()
@@ -414,14 +414,14 @@ class TestEncoder:
             supported_modality_names,
             embedding_size=16,
             num_heads=2,
-            spatial_pos_encoding="rope_mixed",
+            position_encoding="rope_mixed",
             rope_mixed_base=5.0,
         )
         encoder = config.build()
-        assert encoder.spatial_pos_encoding == "rope_mixed"
+        assert encoder.position_encoding == "rope_mixed"
         assert encoder.rope_mixed_base == 5.0
         attn = encoder.blocks[0].attn
-        assert attn.spatial_pos_encoding == "rope_mixed"
+        assert attn.position_encoding == "rope_mixed"
         assert attn.rope_mixed_freqs is not None
         # (2, num_heads, head_dim // 2)
         assert attn.rope_mixed_freqs.shape == (2, 2, 4)
@@ -436,10 +436,52 @@ class TestEncoder:
             supported_modality_names,
             embedding_size=12,
             num_heads=2,
-            spatial_pos_encoding="rope_mixed",
+            position_encoding="rope_mixed",
         )
         with pytest.raises(ValueError, match="head_dim divisible by 4"):
             config.build()
+
+    def test_position_encoding_deprecated_alias(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """The legacy ``spatial_pos_encoding`` name still works but warns."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        with pytest.warns(DeprecationWarning, match="spatial_pos_encoding"):
+            config = EncoderConfig(
+                supported_modality_names,
+                embedding_size=16,
+                num_heads=2,
+                spatial_pos_encoding="rope",
+                rope_base=5000.0,
+            )
+        # Reconciled onto the canonical field; legacy field cleared.
+        assert config.position_encoding == "rope"
+        assert config.spatial_pos_encoding is None
+        encoder = config.build()
+        assert encoder.position_encoding == "rope"
+
+    def test_position_encoding_legacy_from_dict(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Old checkpoint configs carrying the legacy key still deserialize.
+
+        ``Config.from_dict`` drops keys that are not dataclass fields, so the
+        deprecated ``spatial_pos_encoding`` must remain a field for old
+        checkpoints to keep loading rather than silently falling back to the
+        ``absolute`` default.
+        """
+        supported_modality_names = [m.name for m in supported_modalities]
+        with pytest.warns(DeprecationWarning, match="spatial_pos_encoding"):
+            config = EncoderConfig.from_dict(
+                {
+                    "supported_modality_names": supported_modality_names,
+                    "embedding_size": 16,
+                    "num_heads": 2,
+                    "spatial_pos_encoding": "rope",
+                }
+            )
+        assert config.position_encoding == "rope"
+        assert config.spatial_pos_encoding is None
 
 
 class TestPredictor:
@@ -777,12 +819,12 @@ class TestPredictor:
             supported_modality_names,
             decoder_embedding_size=16,
             num_heads=2,
-            spatial_pos_encoding="rope",
+            position_encoding="rope",
             rope_base=5000.0,
             rope_coordinate_scale=0.5,
         )
         predictor = config.build()
-        assert predictor.spatial_pos_encoding == "rope"
+        assert predictor.position_encoding == "rope"
         assert predictor.rope_base == 5000.0
         assert predictor.rope_coordinate_scale == 0.5
         assert predictor.blocks[0].attn.rope_base == 5000.0
@@ -796,14 +838,14 @@ class TestPredictor:
             supported_modality_names,
             decoder_embedding_size=16,
             num_heads=2,
-            spatial_pos_encoding="rope_mixed",
+            position_encoding="rope_mixed",
             rope_mixed_base=5.0,
         )
         predictor = config.build()
-        assert predictor.spatial_pos_encoding == "rope_mixed"
+        assert predictor.position_encoding == "rope_mixed"
         assert predictor.rope_mixed_base == 5.0
         attn = predictor.blocks[0].attn
-        assert attn.spatial_pos_encoding == "rope_mixed"
+        assert attn.position_encoding == "rope_mixed"
         assert attn.rope_mixed_freqs.shape == (2, 2, 4)
 
 

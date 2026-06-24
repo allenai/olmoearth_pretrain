@@ -9,14 +9,20 @@ They cover the following:
 - Month encoding (for temporal data)
 """
 
+import warnings
 from enum import StrEnum
 
 import numpy as np
 import torch
 
 
-class SpatialPosEncoding(StrEnum):
-    """Supported spatial position encoding modes."""
+class PositionEncoding(StrEnum):
+    """Supported position encoding modes.
+
+    Covers both spatial-only encodings (``absolute``, the 2D RoPE variants) and
+    spatiotemporal encodings (the 3D RoPE variants rotate over time as well as
+    the two spatial axes).
+    """
 
     ABSOLUTE = "absolute"
     AXIAL_2D_ROPE = "rope"
@@ -27,7 +33,7 @@ class SpatialPosEncoding(StrEnum):
 
     @classmethod
     def values(cls) -> tuple[str, ...]:
-        """Return serialized config values accepted for spatial_pos_encoding."""
+        """Return serialized config values accepted for position_encoding."""
         return tuple(encoding.value for encoding in cls)
 
     @classmethod
@@ -44,6 +50,34 @@ class SpatialPosEncoding(StrEnum):
     def is_rope(cls, value: str) -> bool:
         """Return whether ``value`` selects any RoPE encoding."""
         return cls.is_2d_rope(value) or cls.is_3d_rope(value)
+
+
+def resolve_position_encoding(
+    position_encoding: str, spatial_pos_encoding: str | None
+) -> str:
+    """Reconcile ``position_encoding`` with the deprecated ``spatial_pos_encoding``.
+
+    ``spatial_pos_encoding`` is the old name for ``position_encoding`` (renamed
+    because the 3D RoPE variants encode time as well as space). It is still
+    accepted on init/config for backwards compatibility with old checkpoints and
+    callers, but emits a ``DeprecationWarning`` and takes precedence when set.
+
+    Args:
+        position_encoding: The canonical (new) value.
+        spatial_pos_encoding: The deprecated alias, or ``None`` if not supplied.
+
+    Returns:
+        The position encoding mode to use.
+    """
+    if spatial_pos_encoding is not None:
+        warnings.warn(
+            "`spatial_pos_encoding` is deprecated and will be removed in a future "
+            "release; use `position_encoding` instead.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return spatial_pos_encoding
+    return position_encoding
 
 
 # Cumulative days at the start of each month (non-leap year). Index by 0-based

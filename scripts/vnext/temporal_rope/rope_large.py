@@ -51,7 +51,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         random_band_dropout=True,
         band_dropout_modalities=BAND_DROPOUT_MODALITIES,
         patch_embed_hidden_sizes=PATCH_EMBED_HIDDEN_SIZES,
-        spatial_pos_encoding=SPATIAL_POS_ENCODING,
+        position_encoding=SPATIAL_POS_ENCODING,
         rope_base=ROPE_BASE,
         rope_coordinate_scale=ROPE_COORDINATE_SCALE,
     )
@@ -64,7 +64,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
         tokenization_config=common.tokenization_config,
-        spatial_pos_encoding=SPATIAL_POS_ENCODING,
+        position_encoding=SPATIAL_POS_ENCODING,
         rope_base=ROPE_BASE,
         rope_coordinate_scale=ROPE_COORDINATE_SCALE,
     )

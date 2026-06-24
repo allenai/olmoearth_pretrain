@@ -1030,7 +1030,7 @@ def test_encoder_rope_dynamic_patch_sizes(
         max_sequence_length=12,
         depth=2,
         drop_path=0.0,
-        spatial_pos_encoding="rope",
+        position_encoding="rope",
     )
 
     B, H, W, T = 1, 8, 8, 2
@@ -1076,7 +1076,7 @@ def test_encoder_rope_mixed_forward_and_learns_freqs(
         max_sequence_length=12,
         depth=2,
         drop_path=0.0,
-        spatial_pos_encoding="rope_mixed",
+        position_encoding="rope_mixed",
     )
 
     B, H, W, T = 1, 8, 8, 2
@@ -1119,7 +1119,7 @@ def test_predictor_forward_rope(
         num_heads=2,
         max_sequence_length=12,
         drop_path=0.0,
-        spatial_pos_encoding="rope",
+        position_encoding="rope",
     )
 
     B, H, W, T = 1, 2, 2, 2
@@ -1173,7 +1173,7 @@ def test_predictor_forward_rope_mixed(
         num_heads=2,
         max_sequence_length=12,
         drop_path=0.0,
-        spatial_pos_encoding="rope_mixed",
+        position_encoding="rope_mixed",
     )
 
     B, H, W, T = 1, 2, 2, 2
@@ -1229,7 +1229,7 @@ def test_encoder_rope_3d_forward_and_skips_slot_pos_embed(
         max_sequence_length=12,
         depth=2,
         drop_path=0.0,
-        spatial_pos_encoding="rope_3d",
+        position_encoding="rope_3d",
     )
 
     B, H, W, T = 1, 8, 8, 2
@@ -1269,7 +1269,7 @@ def test_encoder_rope_3d_mixed_forward_and_learns_freqs(
         max_sequence_length=12,
         depth=2,
         drop_path=0.0,
-        spatial_pos_encoding="rope_3d_mixed",
+        position_encoding="rope_3d_mixed",
     )
 
     B, H, W, T = 1, 8, 8, 2
@@ -1313,7 +1313,7 @@ def test_predictor_forward_rope_3d(
         num_heads=2,
         max_sequence_length=12,
         drop_path=0.0,
-        spatial_pos_encoding="rope_3d",
+        position_encoding="rope_3d",
     )
 
     B, H, W, T = 1, 2, 2, 2
@@ -1367,7 +1367,7 @@ def test_encoder_rope_3d_uses_real_timestamp_deltas(
         max_sequence_length=12,
         depth=2,
         drop_path=0.0,
-        spatial_pos_encoding="rope_3d",
+        position_encoding="rope_3d",
         rope_temporal_base=1000.0,
     )
     encoder.eval()
@@ -1428,7 +1428,7 @@ def test_predictor_forward_rope_3d_mixed(
         num_heads=2,
         max_sequence_length=12,
         drop_path=0.0,
-        spatial_pos_encoding="rope_3d_mixed",
+        position_encoding="rope_3d_mixed",
     )
 
     B, H, W, T = 1, 2, 2, 2
