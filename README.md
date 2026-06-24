@@ -55,7 +55,7 @@ We iteratively release improvements to our OlmoEarth models. These are recorded 
 <details>
 <summary>v1 </summary>
 
-The v1 models were trained using the scripts in [`scripts/official/v1`](scripts/official/v1/).
+The v1 models were trained using the scripts in [`scripts/official/v1`](scripts/official/v1/). We describe this model in the [original OlmoEarth report](arxiv.org/abs/2511.13655).
 
 | Model Size | Weights | Encoder Params | Decoder Params |
 | --- | --- | --- | --- |
@@ -68,7 +68,7 @@ The v1 models were trained using the scripts in [`scripts/official/v1`](scripts/
 <details open>
 <summary> v1.1 </summary>
 
-The v1.1 models were trained using the scripts in [`scripts/official/v1_1`](scripts/official/v1_1/).
+The v1.1 models were trained using the scripts in [`scripts/official/v1_1`](scripts/official/v1_1/). We describe this model in the [OlmoEarth v1.1 tech report](https://arxiv.org/abs/2605.20804).
 
 | Model Size | Weights | Encoder Params | Decoder Params |
 | --- | --- | --- | --- |
