@@ -1115,7 +1115,14 @@ class FlexiVitBase(nn.Module):
         # own slot count (we assume the first T entries align across modalities,
         # matching how additive temporal encodings already work).
         days_per_timestep: Tensor | None = None
-        if is_3d and timestamps is not None:
+        if is_3d:
+            if timestamps is None:
+                raise ValueError(
+                    "3D RoPE requires timestamps to build the temporal "
+                    "coordinate, but none were provided. The temporal axis is "
+                    "calendar days since the anchor year and cannot be derived "
+                    "from slot indices; pass timestamps on the input sample."
+                )
             days_per_timestep = timestamps_to_days(timestamps).to(torch.float32) * (
                 self.rope_temporal_coordinate_scale
             )
@@ -1144,23 +1151,6 @@ class FlexiVitBase(nn.Module):
         position_dict.update(original_masks_dict)
         positions, _ = self.collapse_and_combine_hwtc(position_dict)
         return positions
-
-    def build_spatial_positions(
-        self,
-        tokens_only_dict: dict[str, Tensor],
-        original_masks_dict: dict[str, Tensor],
-        patch_size: int,
-        input_res: int,
-        timestamps: Tensor | None = None,
-    ) -> Tensor | None:
-        """Backward-compatible alias for ``build_rope_positions``."""
-        return self.build_rope_positions(
-            tokens_only_dict=tokens_only_dict,
-            original_masks_dict=original_masks_dict,
-            patch_size=patch_size,
-            input_res=input_res,
-            timestamps=timestamps,
-        )
 
     @staticmethod
     def _zero_rope_positions(tokens: Tensor, coord_dim: int) -> Tensor:
@@ -1222,7 +1212,7 @@ class FlexiVitBase(nn.Module):
         modality: ModalitySpec,
         tokens: Tensor,
         gsd_ratio: float,
-        days_per_timestep: Tensor | None,
+        days_per_timestep: Tensor,
     ) -> Tensor:
         """Build ``(t, row, col)`` RoPE coordinates for one modality."""
         positions = self._zero_rope_positions(tokens, coord_dim=3)
@@ -1233,7 +1223,7 @@ class FlexiVitBase(nn.Module):
             # (b, t, b_s, d): temporal-only modality.
             batch_size, timesteps, bandsets, _ = tokens.shape
             t_values = self._select_t_values(
-                days_per_timestep, batch_size, timesteps, device=tokens.device
+                days_per_timestep, timesteps, device=tokens.device
             )
             positions[..., 0] = repeat(t_values, "b t -> b t b_s", b_s=bandsets)
             return positions
@@ -1258,7 +1248,7 @@ class FlexiVitBase(nn.Module):
             # (b, h, w, t, b_s, d): full spatiotemporal modality.
             timesteps, bandsets = tokens.shape[3], tokens.shape[4]
             t_values = self._select_t_values(
-                days_per_timestep, batch_size, timesteps, device=tokens.device
+                days_per_timestep, timesteps, device=tokens.device
             )
             positions[..., 0] = repeat(
                 t_values,
@@ -1281,22 +1271,11 @@ class FlexiVitBase(nn.Module):
 
     @staticmethod
     def _select_t_values(
-        days_per_timestep: Tensor | None,
-        batch_size: int,
+        days_per_timestep: Tensor,
         num_timesteps: int,
         device: torch.device,
     ) -> Tensor:
-        """Pick the first ``num_timesteps`` days for each sample.
-
-        Falls back to slot indices ``0..T-1`` when no timestamps were passed
-        (e.g. unit tests calling ``build_rope_positions`` directly).
-        """
-        if days_per_timestep is None:
-            return repeat(
-                torch.arange(num_timesteps, device=device, dtype=torch.float32),
-                "t -> b t",
-                b=batch_size,
-            )
+        """Pick the first ``num_timesteps`` days for each sample."""
         if days_per_timestep.shape[1] < num_timesteps:
             raise ValueError(
                 f"timestamps has {days_per_timestep.shape[1]} slots but modality "

@@ -236,6 +236,30 @@ class TestFlexiVitBase:
         assert torch.allclose(actual_days, torch.sort(expected_days).values)
         assert torch.equal(positions[0, :, 1:], torch.zeros_like(positions[0, :, 1:]))
 
+    def test_3d_rope_requires_timestamps(self) -> None:
+        """3D RoPE cannot build the temporal coordinate without timestamps."""
+        model = FlexiVitBase(
+            embedding_size=32,
+            num_heads=2,
+            mlp_ratio=2.0,
+            depth=1,
+            drop_path=0.0,
+            supported_modalities=[Modality.SENTINEL2_L2A],
+            max_sequence_length=12,
+            position_encoding="rope_3d",
+        )
+        tokens_only_dict = {"sentinel2_l2a": torch.zeros(1, 1, 1, 3, 1, 32)}
+        masks_dict = {"sentinel2_l2a_mask": torch.zeros(1, 1, 1, 3, 1)}
+
+        with pytest.raises(ValueError, match="3D RoPE requires timestamps"):
+            model.build_rope_positions(
+                tokens_only_dict=tokens_only_dict,
+                original_masks_dict=masks_dict,
+                patch_size=4,
+                input_res=10,
+                timestamps=None,
+            )
+
 
 class TestEncoder:
     """Unit tests for the Encoder class."""

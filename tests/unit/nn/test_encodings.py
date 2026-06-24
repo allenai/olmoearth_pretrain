@@ -169,6 +169,27 @@ def test_apply_2d_axial_rope_packed_shape() -> None:
     assert out.shape == x.shape
 
 
+def test_apply_2d_axial_rope_relative_position_invariance() -> None:
+    """q·k inner product should depend only on relative (row, col) offsets."""
+    head_dim, num_heads = 8, 2
+    q = torch.randn(num_heads, head_dim)
+    k = torch.randn(num_heads, head_dim)
+
+    p_a = torch.tensor([[0.0, 0.0], [3.0, 4.0]])  # (N=2, 2)
+    p_b = p_a + torch.tensor([[1.5, -2.0]])
+
+    # Pack as (N, H, D) so we can reuse the packed rope path.
+    def attn(p: torch.Tensor) -> torch.Tensor:
+        q_ = q.unsqueeze(0).expand(2, -1, -1).clone()  # (N, H, D)
+        k_ = k.unsqueeze(0).expand(2, -1, -1).clone()
+        q_rot = apply_2d_axial_rope(q_, p)
+        k_rot = apply_2d_axial_rope(k_, p)
+        # q[0] vs k[1] interaction per head
+        return (q_rot[0] * k_rot[1]).sum(dim=-1)
+
+    assert torch.allclose(attn(p_a), attn(p_b), atol=1e-5, rtol=1e-5)
+
+
 def test_init_2d_mixed_rope_freqs_shape_and_finiteness() -> None:
     """Init should produce (2, H, D/2) finite frequencies."""
     head_dim, num_heads = 16, 4
