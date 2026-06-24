@@ -434,6 +434,8 @@ EVAL_TASKS = {
         primary_metric=EvalMetric.MIOU,
         patch_size=4,
     ),
+    # Only 1 SAR amplitude band is provided, so we pass it in as a Sentinel1
+    # modality but only the "vv" band is used.
     "gb2_caffe": DownstreamTaskConfig(
         dataset="gb2-caffe",
         embedding_batch_size=8,
@@ -926,6 +928,8 @@ FT_EVAL_TASKS = {
         patch_size=4,
         primary_metric=EvalMetric.MIOU,
     ),
+    # Only 1 SAR amplitude band is provided, so we pass it in as a Sentinel1
+    # modality but only the "vv" band is used.
     "gb2_caffe": DownstreamTaskConfig(
         dataset="gb2-caffe",
         ft_batch_size=2,
