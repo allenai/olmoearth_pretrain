@@ -1,7 +1,7 @@
 """A common home for all eval dataset configs."""
 
 from dataclasses import asdict, dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from olmoearth_pretrain.data.constants import Modality
@@ -21,7 +21,7 @@ def get_eval_mode(task_type: TaskType) -> str:
 __all__ = ["TaskType", "get_eval_mode", "EvalDatasetConfig", "SourceImagery"]
 
 
-class SourceImagery(str, Enum):
+class SourceImagery(StrEnum):
     """A source sensor/imagery type an eval dataset is collected from.
 
     ``EvalDatasetConfig.source_imagery`` is a list of these (a dataset may fuse

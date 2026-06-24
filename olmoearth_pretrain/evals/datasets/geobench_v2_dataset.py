@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from enum import Enum
+from enum import StrEnum
 from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
@@ -38,11 +38,10 @@ _S2_DN_MAX = 10000.0
 _UINT8_MAX = 255.0
 
 
-class Slug(str, Enum):
+class Slug(StrEnum):
     """GeoBench v2 dataset slugs we branch on when mapping samples to modalities.
 
-    Mirrors the keys of ``SLUG_TO_DATASET``; subclassing ``str`` lets these
-    compare equal to the plain slug strings flowing through the dataset.
+    Mirrors the keys of ``SLUG_TO_DATASET``.
     """
 
     BENV2 = "benv2"
