@@ -7,6 +7,7 @@ from upath import UPath
 # Only available to internal users
 _DEFAULTS = {
     "GEOBENCH_DIR": "/weka/dfive-default/presto-geobench/dataset/geobench",
+    "GEOBENCH2_DIR": "/weka/dfive-default/rslearn-eai/datasets/geobench2",
     "BREIZHCROPS_DIR": "/weka/dfive-default/skylight/presto_eval_sets/breizhcrops",
     "MADOS_DIR": "/weka/dfive-default/presto_eval_sets/mados",
     "FLOODS_DIR": "/weka/dfive-default/presto_eval_sets/floods",
@@ -17,6 +18,7 @@ _DEFAULTS = {
 }
 
 GEOBENCH_DIR = UPath(os.getenv("GEOBENCH_DIR", _DEFAULTS["GEOBENCH_DIR"]))
+GEOBENCH2_DIR = UPath(os.getenv("GEOBENCH2_DIR", _DEFAULTS["GEOBENCH2_DIR"]))
 BREIZHCROPS_DIR = UPath(os.getenv("BREIZHCROPS_DIR", _DEFAULTS["BREIZHCROPS_DIR"]))
 MADOS_DIR = UPath(os.getenv("MADOS_DIR", _DEFAULTS["MADOS_DIR"]))
 FLOODS_DIR = UPath(os.getenv("FLOODS_DIR", _DEFAULTS["FLOODS_DIR"]))

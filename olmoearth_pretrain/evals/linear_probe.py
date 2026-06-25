@@ -24,6 +24,7 @@ from olmoearth_pretrain.evals.metrics import (
     EvalResult,
     EvalTaskResult,
     classification_metrics,
+    metric_higher_is_better,
     regression_metrics,
     segmentation_metrics,
 )
@@ -324,6 +325,9 @@ def train_and_eval_probe(
     num_times_to_run_eval = math.ceil(epochs / eval_interval)
     val_results: list[EvalResult] = []
     best_probe_state = None
+    # Direction is resolved from the actual primary metric below (lower is better
+    # for error metrics like RMSE/MAE, higher for everything else).
+    higher_is_better = True
     best_val_score = float("-inf")
     best_epoch = 0
 
@@ -370,8 +374,14 @@ def train_and_eval_probe(
         logger.info(f"Epoch {end_epoch}, Val Score: {val_result.primary}")
         val_results.append(val_result)
 
-        # Save best probe state based on primary metric
-        if val_result.primary > best_val_score:
+        # Save best probe state based on primary metric (respecting its direction:
+        # e.g. minimize RMSE/MAE, maximize accuracy/F1/R2).
+        higher_is_better = metric_higher_is_better(val_result.primary_metric)
+        if higher_is_better:
+            improved = val_result.primary > best_val_score
+        else:
+            improved = val_result.primary < best_val_score
+        if best_probe_state is None or improved:
             best_val_score = val_result.primary
             best_epoch = end_epoch
             best_probe_state = copy.deepcopy(probe.state_dict())
@@ -392,9 +402,14 @@ def train_and_eval_probe(
         final_val_result = val_results[best_idx]
     else:
         final_val_result = val_results[-1]
-        if final_val_result.primary < best_val_score:
+        final_is_worse = (
+            final_val_result.primary < best_val_score
+            if higher_is_better
+            else final_val_result.primary > best_val_score
+        )
+        if final_is_worse:
             logger.warning(
-                f"Final Val Score: {final_val_result.primary} at epoch {epochs} is less than best Val Score: "
+                f"Final Val Score: {final_val_result.primary} at epoch {epochs} is worse than best Val Score: "
                 f"{best_val_score} at epoch {best_epoch}"
             )
 
@@ -514,7 +529,7 @@ def weighted_dice_loss(
     ignore_index: int = SEGMENTATION_IGNORE_LABEL,
     smooth: float = 1.0,
 ) -> torch.Tensor:
-    """Compute class-weighted dice loss for segmentation.
+    """Compute class-weighted dice + cross-entropy loss for segmentation.
 
     Args:
         logits: Model predictions of shape (N, C, ...) where C is num_classes.
@@ -524,7 +539,7 @@ def weighted_dice_loss(
         smooth: Smoothing term to avoid division by zero.
 
     Returns:
-        Scalar weighted dice loss.
+        Scalar combined dice + CE loss.
     """
     valid_mask = targets != ignore_index
     targets_masked = targets.clone()
@@ -549,18 +564,25 @@ def weighted_dice_loss(
 
     dice_per_class = (2.0 * intersection + smooth) / (cardinality + smooth)
 
-    # Class weights: inverse frequency of valid pixels per class
+    # Class weights: inverse frequency of valid pixels per class.
+    # Use uniform weight for absent classes so the CE term still provides
+    # gradient signal on batches where a rare class (e.g. flood) is absent.
     class_counts = one_hot.sum(dim=dims)
     total = class_counts.sum()
     weights = torch.where(
         class_counts > 0,
         total / (num_classes * class_counts),
-        torch.zeros_like(class_counts),
+        torch.ones_like(class_counts),
     )
     weights = weights / (weights.sum() + 1e-8)
 
-    loss = 1.0 - (weights * dice_per_class).sum()
-    return loss
+    dice_loss = 1.0 - (weights * dice_per_class).sum()
+
+    # CE loss provides gradient even when the minority class is absent from
+    # the batch, preventing the model from collapsing to all-background.
+    ce_loss = F.cross_entropy(logits, targets, ignore_index=ignore_index)
+
+    return dice_loss + ce_loss
 
 
 def train_probe(

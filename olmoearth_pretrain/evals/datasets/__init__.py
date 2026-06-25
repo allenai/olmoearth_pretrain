@@ -12,6 +12,7 @@ from .breizhcrops import BreizhCropsDataset
 from .fifty_cities_dataset import FiftyCitiesDataset
 from .floods_dataset import Sen1Floods11Dataset
 from .geobench_dataset import GeobenchDataset
+from .geobench_v2_dataset import GeobenchV2Dataset
 from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset
@@ -72,6 +73,14 @@ def get_eval_dataset(
             test_samples=kwargs.get("pretrain_test_samples", 512),
             split_strategy=kwargs.get("pretrain_split_strategy", "random"),
             geographic_bin_size_deg=kwargs.get("pretrain_geographic_bin_size_deg", 5.0),
+        )
+    elif eval_dataset.startswith("gb2-"):
+        return GeobenchV2Dataset(
+            dataset=eval_dataset,
+            split=split,
+            partition=kwargs.get("partition", ""),
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
         )
     elif eval_dataset.startswith("m-"):
         # m- == "modified for geobench"
