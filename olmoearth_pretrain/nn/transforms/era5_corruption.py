@@ -361,18 +361,18 @@ def _corrupt_naive(
     mask = torch.zeros(b, t, v, dtype=torch.bool, device=device)
     valid = ~ignore_mask  # [B, T]
     span_range = _as_span(policy.span_days)
-    t_win = t - target_start
+    target_window_length = t - target_start
 
     for i in range(b):
         n_masks = _randint(1, policy.max_num_masks, device)
         for _ in range(n_masks):
-            seg = _random_span(span_range, t_win, device)  # [t_win]
-            seg = seg & valid[i, target_start:]
+            span_mask = _random_span(span_range, target_window_length, device)
+            span_mask = span_mask & valid[i, target_start:]
             nc = _randint(
                 policy.num_channels[0], min(policy.num_channels[1], v), device
             )
             channels = torch.randperm(v, device=device)[:nc]
-            mask[i, target_start:, channels] |= seg.unsqueeze(1)
+            mask[i, target_start:, channels] |= span_mask.unsqueeze(1)
 
     return mask
 
@@ -392,7 +392,7 @@ def _corrupt_two_stage(
     device = era5.device
     mask = torch.zeros(b, t, v, dtype=torch.bool, device=device)
     valid = ~ignore_mask  # [B, T]
-    t_win = t - target_start
+    target_window_length = t - target_start
 
     # Per-sample coin flips for each stage
     do_stage1 = torch.rand(b, device=device) < policy.temporal_interpolation_prob
@@ -411,9 +411,9 @@ def _corrupt_two_stage(
             lo, hi = _as_span(ti.span_days)
             for _ in range(ti.num_masks):
                 lengths = torch.randint(lo, hi + 1, (b,), device=device)
-                max_start = (t_win - lengths).clamp(min=0)
+                max_start = (target_window_length - lengths).clamp(min=0)
                 starts = (torch.rand(b, device=device) * (max_start.float() + 1)).long()
-                idx = torch.arange(t_win, device=device).unsqueeze(0)
+                idx = torch.arange(target_window_length, device=device).unsqueeze(0)
                 span = (idx >= starts.unsqueeze(1)) & (
                     idx < (starts + lengths).unsqueeze(1)
                 )
@@ -452,18 +452,25 @@ def _as_span(span_days: Any) -> tuple[int, int]:
     return (int(span_days[0]), int(span_days[1]))
 
 
-def _random_span(span_days: tuple[int, int], t: int, device: torch.device) -> Tensor:
-    """Return a ``[T]`` bool mask for a random contiguous span.
+def _random_span(
+    span_days: tuple[int, int], window_length: int, device: torch.device
+) -> Tensor:
+    """Return a ``[window_length]`` bool mask for a random contiguous span.
 
-    ``span_days`` is a ``(min, max)`` length range in days (== timesteps
-    for ERA5L_DAY_10); the length is clamped to the sequence length.
+    Args:
+        span_days: ``(min, max)`` span-length range in days (== timesteps
+            for ERA5L_DAY_10). The drawn length is clamped to
+            ``window_length``.
+        window_length: Length of the window the span is placed within; also
+            the length of the returned mask.
+        device: Device for the returned tensor.
     """
-    length = min(_randint(span_days[0], span_days[1], device), t)
-    max_start = max(t - length, 0)
+    length = min(_randint(span_days[0], span_days[1], device), window_length)
+    max_start = max(window_length - length, 0)
     start = _randint(0, max_start, device)
-    seg = torch.zeros(t, dtype=torch.bool, device=device)
-    seg[start : start + length] = True
-    return seg
+    span_mask = torch.zeros(window_length, dtype=torch.bool, device=device)
+    span_mask[start : start + length] = True
+    return span_mask
 
 
 def _apply_stage2_mask_policy(
@@ -488,7 +495,7 @@ def _apply_stage2_mask_policy(
     """
     b, t, v = mask.shape
     device = mask.device
-    t_win = t - target_start
+    target_window_length = t - target_start
     group_names = list(variable_groups.keys())
     if not group_names:
         return
@@ -507,7 +514,7 @@ def _apply_stage2_mask_policy(
     for i in range(b):
         if not do_stage2[i]:
             continue
-        valid_win = valid[i, target_start:]  # [t_win]
+        valid_win = valid[i, target_start:]  # [target_window_length]
         strat_name, strat = strategies[int(choices[i])]
 
         if isinstance(strat, WithinGroupSingleVarStrategy):
@@ -527,20 +534,24 @@ def _apply_stage2_mask_policy(
                         f"WITHIN_GROUP_LONG_SPAN_DAYS to use single-var masking "
                         f"for this group."
                     )
-                seg = _random_span(_as_span(strat.long_span_days[group]), t_win, device)
-                mask[i, target_start:, bi] |= seg & valid_win
+                span_mask = _random_span(
+                    _as_span(strat.long_span_days[group]), target_window_length, device
+                )
+                mask[i, target_start:, bi] |= span_mask & valid_win
 
         elif isinstance(strat, WholeGroupSpanStrategy):
             candidates = [g for g in strat.span_days if g in variable_groups]
             if not candidates:
                 continue
             group = _random_choice(candidates, device)
-            seg = (
-                _random_span(_as_span(strat.span_days[group]), t_win, device)
+            span_mask = (
+                _random_span(
+                    _as_span(strat.span_days[group]), target_window_length, device
+                )
                 & valid_win
             )
             for bi in variable_groups[group]:
-                mask[i, target_start:, bi] |= seg
+                mask[i, target_start:, bi] |= span_mask
 
         elif isinstance(strat, WholeGroupAllTStrategy):
             candidates = [g for g in strat.allowed_groups if g in variable_groups]

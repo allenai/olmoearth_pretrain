@@ -452,6 +452,33 @@ class ReconstructionObjective(_Objective):
         self.swt_lambda = swt_lambda
         self.swt_levels = swt_levels or [0, 1, 2, 3, 4, 5]
         self.swt_buffer_days = swt_buffer_days
+        # Static variable-count weights for loss averaging. Each (group, scale)
+        # term is weighted by the number of variables in the group
+        self._raw_weight, self._swt_weight = self._compute_loss_weights()
+
+    def _compute_loss_weights(self) -> tuple[float, float]:
+        """Precompute variable-count weights for raw and SWT loss averaging.
+
+        Returns ``(raw_weight, swt_weight)`` where each is the total number of
+        per-variable terms contributing to that objective: raw counts one term
+        per variable in every ``include_raw`` group; SWT counts one term per
+        variable per allowed detail level, plus the deepest-approximation term
+        for ``include_lowpass`` groups.
+        """
+        raw_weight = 0
+        swt_weight = 0
+        for group_name, bi in self.variable_groups.items():
+            n_vars = len(bi)
+            mode = self.group_recon_mode.get(group_name, "raw_plus_all_swt")
+            include_raw, allowed_levels, include_lowpass = _parse_recon_mode(
+                mode, self.swt_levels
+            )
+            if include_raw:
+                raw_weight += n_vars
+            swt_weight += n_vars * len(allowed_levels)
+            if include_lowpass and allowed_levels:
+                swt_weight += n_vars
+        return float(raw_weight), float(swt_weight)
 
     def applies_to(self, batch: Any) -> bool:
         """Fire on any batch that carries ERA5 data."""
@@ -529,15 +556,16 @@ class ReconstructionObjective(_Objective):
         mask_tgt = mask[:, ts:, :]
 
         variable_groups = self.variable_groups
-        n_groups = len(variable_groups)
 
-        # 5. Per-group loss accumulation
+        # 5. Per-group loss accumulation. Each (group, scale) Huber is weighted
+        # by the group's variable count `n_vars`
         raw_loss = torch.zeros((), device=x.device, dtype=x.dtype)
         swt_loss = torch.zeros((), device=x.device, dtype=x.dtype)
         level_loss_sums: dict[int, Tensor] = {}
         level_loss_counts: dict[int, int] = {}
 
         for group_name, bi in variable_groups.items():
+            n_vars = len(bi)
             mode = self.group_recon_mode.get(group_name, "raw_plus_all_swt")
             include_raw, allowed_levels, include_lowpass = _parse_recon_mode(
                 mode, self.swt_levels
@@ -553,7 +581,9 @@ class ReconstructionObjective(_Objective):
                     raw_std = g_targ.std(dim=(0, 1)).clamp(min=1e-6)
                 g_pred_n = g_pred / raw_std[None, None, :]
                 g_targ_n = g_targ / raw_std[None, None, :]
-                raw_loss = raw_loss + self._group_huber(g_pred_n, g_targ_n, g_mask)
+                raw_loss = raw_loss + n_vars * self._group_huber(
+                    g_pred_n, g_targ_n, g_mask
+                )
 
             # SWT wavelet loss (bands already cropped to target window)
             if pred_bands is not None and targ_bands is not None and allowed_levels:
@@ -577,7 +607,7 @@ class ReconstructionObjective(_Objective):
                     d_targ_n = d_targ_g / std[None, :, None]
 
                     lvl = self._group_huber(d_pred_n, d_targ_n, g_mask_vt)
-                    swt_loss = swt_loss + lvl
+                    swt_loss = swt_loss + n_vars * lvl
                     level_loss_sums[level] = (
                         level_loss_sums.get(
                             level, torch.zeros((), device=x.device, dtype=x.dtype)
@@ -596,7 +626,7 @@ class ReconstructionObjective(_Objective):
                         a_targ_n = a_targ_g / a_std[None, :, None]
 
                         a_lvl = self._group_huber(a_pred_n, a_targ_n, g_mask_vt)
-                        swt_loss = swt_loss + a_lvl
+                        swt_loss = swt_loss + n_vars * a_lvl
                         approx_key = -1  # sentinel for deepest approx
                         level_loss_sums[approx_key] = (
                             level_loss_sums.get(
@@ -609,10 +639,9 @@ class ReconstructionObjective(_Objective):
                             level_loss_counts.get(approx_key, 0) + 1
                         )
 
-        # Average across groups so the scale doesn't depend on group count
-        if n_groups > 0:
-            raw_loss = raw_loss / n_groups
-            swt_loss = swt_loss / n_groups
+        # Variable-weighted mean over all (group, scale) terms.
+        raw_loss = raw_loss / max(self._raw_weight, 1.0)
+        swt_loss = swt_loss / max(self._swt_weight, 1.0)
         swt_loss = self.swt_lambda * swt_loss
 
         total_loss = raw_loss + swt_loss
