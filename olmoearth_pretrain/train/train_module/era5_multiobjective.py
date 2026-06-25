@@ -350,6 +350,8 @@ class ReconstructionObjectiveConfig(Config):
         huber_delta: Delta for the raw Huber loss.
         raw_loss_on_masked_only: If True, compute raw Huber only over
             positions that were corrupted; otherwise over the full sequence.
+        raw_lambda: Weight of the raw (time-domain) reconstruction loss term.
+            Set to 0.0 for wavelet-only reconstruction.
         swt_lambda: Weight of the wavelet multiscale loss term.
         swt_levels: Which SWT decomposition levels to use.
         swt_wavelet: Wavelet family for the SWT (``db2`` or ``haar``).
@@ -370,6 +372,7 @@ class ReconstructionObjectiveConfig(Config):
     )
     huber_delta: float = 1.0
     raw_loss_on_masked_only: bool = True
+    raw_lambda: float = 1.0
     swt_lambda: float = 0.1
     swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
     swt_wavelet: str = "haar"
@@ -398,6 +401,7 @@ class ReconstructionObjectiveConfig(Config):
             group_recon_mode=dict(self.group_recon_mode),
             huber_delta=self.huber_delta,
             raw_loss_on_masked_only=self.raw_loss_on_masked_only,
+            raw_lambda=self.raw_lambda,
             swt_lambda=self.swt_lambda,
             swt_levels=self.swt_levels,
             swt_buffer_days=self.swt_buffer_days,
@@ -436,6 +440,7 @@ class ReconstructionObjective(_Objective):
         group_recon_mode: dict[str, str],
         huber_delta: float = 1.0,
         raw_loss_on_masked_only: bool = True,
+        raw_lambda: float = 1.0,
         swt_lambda: float = 0.1,
         swt_levels: list[int] | None = None,
         swt_buffer_days: int = 83,
@@ -449,6 +454,7 @@ class ReconstructionObjective(_Objective):
         self.group_recon_mode = group_recon_mode
         self.huber_delta = huber_delta
         self.raw_loss_on_masked_only = raw_loss_on_masked_only
+        self.raw_lambda = raw_lambda
         self.swt_lambda = swt_lambda
         self.swt_levels = swt_levels or [0, 1, 2, 3, 4, 5]
         self.swt_buffer_days = swt_buffer_days
@@ -576,7 +582,7 @@ class ReconstructionObjective(_Objective):
             g_mask = mask_tgt[:, :, bi] if self.raw_loss_on_masked_only else None
 
             # Raw Huber (band-normalized like the SWT path)
-            if include_raw:
+            if include_raw and self.raw_lambda > 0:
                 with torch.no_grad():
                     raw_std = g_targ.std(dim=(0, 1)).clamp(min=1e-6)
                 g_pred_n = g_pred / raw_std[None, None, :]
@@ -639,10 +645,10 @@ class ReconstructionObjective(_Objective):
                             level_loss_counts.get(approx_key, 0) + 1
                         )
 
-        # Variable-weighted mean over all (group, scale) terms.
-        raw_loss = raw_loss / max(self._raw_weight, 1.0)
-        swt_loss = swt_loss / max(self._swt_weight, 1.0)
-        swt_loss = self.swt_lambda * swt_loss
+        # Variable-weighted mean over all (group, scale) terms, then apply the
+        # per-objective weights (raw_lambda=0 => wavelet-only reconstruction).
+        raw_loss = self.raw_lambda * (raw_loss / max(self._raw_weight, 1.0))
+        swt_loss = self.swt_lambda * (swt_loss / max(self._swt_weight, 1.0))
 
         total_loss = raw_loss + swt_loss
 

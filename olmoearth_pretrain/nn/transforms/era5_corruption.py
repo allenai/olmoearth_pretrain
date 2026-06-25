@@ -208,10 +208,12 @@ class WithinGroupSingleVarStrategy:
 
     If the group is in ``full_t_allowed``, the variable is masked across
     *all* timesteps with probability ``all_T_prob``; otherwise it is masked
-    across a contiguous span drawn from ``long_span_days``.
+    across a contiguous span drawn from ``long_span_days``.  The masking is
+    repeated ``num_masks`` times (each draws its own group/variable/span).
     """
 
     prob: float = 0.5
+    num_masks: int = 1
     all_T_prob: float = 0.25
     groups: list[str] = field(
         default_factory=lambda: sorted(GROUPS_WITH_MULT_VARIABLES)
@@ -234,10 +236,12 @@ class WholeGroupSpanStrategy:
 
     The span length (in days) is sampled from the per-group ``span_days``
     range.  The group is chosen uniformly from groups that have both a
-    span range and exist in the variable groups.
+    span range and exist in the variable groups.  The masking is repeated
+    ``num_masks`` times (each draws its own group/span).
     """
 
-    prob: float = 0.4
+    prob: float = 0.5
+    num_masks: int = 1
     span_days: dict[str, list[int]] = field(
         default_factory=lambda: {k: list(v) for k, v in GROUP_SPAN_DAYS.items()}
     )
@@ -249,7 +253,8 @@ class WholeGroupAllTStrategy:
 
     Much riskier than single-var masking — no within-group signal remains.
     The group is chosen uniformly from ``allowed_groups``.  Disabled by
-    default (prob=0.0, empty allowed list).
+    default (prob=0.0, empty allowed list).  Has no ``num_masks`` knob: every
+    application masks the whole window, so there are no spans to repeat.
     """
 
     prob: float = 0.0
@@ -517,46 +522,54 @@ def _apply_stage2_mask_policy(
         valid_win = valid[i, target_start:]  # [target_window_length]
         strat_name, strat = strategies[int(choices[i])]
 
-        if isinstance(strat, WithinGroupSingleVarStrategy):
-            group = _random_choice(strat.groups or group_names, device)
-            bi = _random_choice(variable_groups[group], device)
-            full_t_allowed = set(strat.full_t_allowed)
-            if (
-                group in full_t_allowed
-                and float(torch.rand(1, device=device)) < strat.all_T_prob
-            ):
-                mask[i, target_start:, bi] |= valid_win
-            else:
-                if group not in strat.long_span_days:
-                    raise ValueError(
-                        f"WithinGroupSingleVarStrategy: group {group!r} has no "
-                        f"entry in long_span_days. Add it to "
-                        f"WITHIN_GROUP_LONG_SPAN_DAYS to use single-var masking "
-                        f"for this group."
-                    )
-                span_mask = _random_span(
-                    _as_span(strat.long_span_days[group]), target_window_length, device
-                )
-                mask[i, target_start:, bi] |= span_mask & valid_win
-
-        elif isinstance(strat, WholeGroupSpanStrategy):
-            candidates = [g for g in strat.span_days if g in variable_groups]
-            if not candidates:
-                continue
-            group = _random_choice(candidates, device)
-            span_mask = (
-                _random_span(
-                    _as_span(strat.span_days[group]), target_window_length, device
-                )
-                & valid_win
-            )
-            for bi in variable_groups[group]:
-                mask[i, target_start:, bi] |= span_mask
-
-        elif isinstance(strat, WholeGroupAllTStrategy):
+        # Whole-group all-T masks the entire window, so there are no spans to
+        # repeat: apply it once and move on.
+        if isinstance(strat, WholeGroupAllTStrategy):
             candidates = [g for g in strat.allowed_groups if g in variable_groups]
             if not candidates:
                 continue
             group = _random_choice(candidates, device)
             for bi in variable_groups[group]:
                 mask[i, target_start:, bi] |= valid_win
+            continue
+
+        for _ in range(strat.num_masks):
+            if isinstance(strat, WithinGroupSingleVarStrategy):
+                group = _random_choice(strat.groups or group_names, device)
+                bi = _random_choice(variable_groups[group], device)
+                full_t_allowed = set(strat.full_t_allowed)
+                if (
+                    group in full_t_allowed
+                    and float(torch.rand(1, device=device)) < strat.all_T_prob
+                ):
+                    mask[i, target_start:, bi] |= valid_win
+                else:
+                    if group not in strat.long_span_days:
+                        raise ValueError(
+                            f"WithinGroupSingleVarStrategy: group {group!r} has no "
+                            f"entry in long_span_days. Add it to "
+                            f"WITHIN_GROUP_LONG_SPAN_DAYS to use single-var masking "
+                            f"for this group."
+                        )
+                    span_mask = _random_span(
+                        _as_span(strat.long_span_days[group]),
+                        target_window_length,
+                        device,
+                    )
+                    mask[i, target_start:, bi] |= span_mask & valid_win
+
+            elif isinstance(strat, WholeGroupSpanStrategy):
+                candidates = [g for g in strat.span_days if g in variable_groups]
+                if not candidates:
+                    continue
+                group = _random_choice(candidates, device)
+                span_mask = (
+                    _random_span(
+                        _as_span(strat.span_days[group]),
+                        target_window_length,
+                        device,
+                    )
+                    & valid_win
+                )
+                for bi in variable_groups[group]:
+                    mask[i, target_start:, bi] |= span_mask

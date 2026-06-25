@@ -64,7 +64,13 @@ from olmoearth_pretrain.internal.experiment import (
 )
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
 from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig, Era5Pooling
-from olmoearth_pretrain.nn.transforms.era5_corruption import MaskPolicy, NaiveMaskPolicy
+from olmoearth_pretrain.nn.transforms.era5_corruption import (
+    MaskPolicy,
+    NaiveMaskPolicy,
+    TemporalInterpolationStrategy,
+    WholeGroupSpanStrategy,
+    WithinGroupSingleVarStrategy,
+)
 from olmoearth_pretrain.train.callbacks import (
     OlmoEarthWandBCallback,
 )
@@ -170,12 +176,18 @@ class Era5SupervisedCommonComponents(CommonComponents):
     recon_decoder_dropout: float = 0.0
     recon_huber_delta: float = 1.0
     recon_raw_loss_on_masked_only: bool = True
+    recon_raw_lambda: float = 1.0
     recon_swt_lambda: float = 0.1
     recon_swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
     recon_swt_wavelet: str = "haar"
     recon_use_naive_masking: bool = False
     recon_temporal_interpolation_prob: float = 1.0
     recon_cross_variable_prob: float = 1.0
+    # Number of masking spans per strategy. Stage 1 (temporal interpolation)
+    # and the two span-based stage-2 strategies each lay down this many spans.
+    recon_temporal_num_masks: int = 3
+    recon_within_group_num_masks: int = 1
+    recon_whole_group_span_num_masks: int = 1
     # ------------------------------------------------------------------
     # Downstream evaluation (linear probe).  Runs for A-only, B-only,
     # and A+B — this is the primary encoder-quality signal for B-only.
@@ -552,6 +564,7 @@ def build_model_config(
             decoder=decoder_config,
             huber_delta=common.recon_huber_delta,
             raw_loss_on_masked_only=common.recon_raw_loss_on_masked_only,
+            raw_lambda=common.recon_raw_lambda,
             swt_lambda=common.recon_swt_lambda,
             swt_levels=common.recon_swt_levels,
             swt_wavelet=common.recon_swt_wavelet,
@@ -562,6 +575,15 @@ def build_model_config(
                     "mask_policy": MaskPolicy(
                         temporal_interpolation_prob=common.recon_temporal_interpolation_prob,
                         cross_variable_prob=common.recon_cross_variable_prob,
+                        temporal_interpolation=TemporalInterpolationStrategy(
+                            num_masks=common.recon_temporal_num_masks,
+                        ),
+                        within_group_single_var=WithinGroupSingleVarStrategy(
+                            num_masks=common.recon_within_group_num_masks,
+                        ),
+                        whole_group_span=WholeGroupSpanStrategy(
+                            num_masks=common.recon_whole_group_span_num_masks,
+                        ),
                     )
                 }
             ),
