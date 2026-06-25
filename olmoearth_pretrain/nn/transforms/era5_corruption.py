@@ -253,8 +253,7 @@ class WholeGroupAllTStrategy:
 
     Much riskier than single-var masking — no within-group signal remains.
     The group is chosen uniformly from ``allowed_groups``.  Disabled by
-    default (prob=0.0, empty allowed list).  Has no ``num_masks`` knob: every
-    application masks the whole window, so there are no spans to repeat.
+    default (prob=0.0, empty allowed list).
     """
 
     prob: float = 0.0
