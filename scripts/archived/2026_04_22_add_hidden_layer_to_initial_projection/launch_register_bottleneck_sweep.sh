@@ -514,3 +514,31 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 python "scripts/official/v1_1/rope.py" launch "rope_base10k_scale0.25_origmask_noic" "$CLUSTER" \
     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
     --train_module.contrastive_config=null
+
+# ============ no latent self-attention (nolsa): drop the latent self-attention (3) ============
+# Re-runs the il / il_pdproj_noic / mdr3_ictok_pdproj frontiers WITHOUT the bottleneck's
+# latent self-attention blocks (register_latent_self_attn=false): the registers are produced
+# by the cross-attention read(s) alone, with no register-to-register mixing (the read count
+# is unchanged). Isolates the latent transformer's contribution. Each is the nolsa
+# counterpart of the like-named run above. Tagged "nolsa".
+#
+# Unlike the runs above, the architecture is NOT set via CLI overrides -- it is baked into
+# dedicated scripts. This is required because these runs also set run_as_beaker_job=true: the
+# in-loop evals are launched as a SEPARATE (non-blocking) Beaker job that reconstructs the
+# model from the script's build_model_config, so the no-latent-self-attn architecture (and
+# the per-run read schedule) must live in the script, not on the train launch's CLI. Those
+# scripts also add the fifty_cities random-split S2 + S1+S2 segmentation probes to the
+# in-loop evals (now affordable since the evals no longer block training).
+
+NOLSA_IL="scripts/archived/2026_04_22_add_hidden_layer_to_initial_projection/regbtl_gdyn_d768_il_nolsa.py"
+NOLSA_IL_PDPROJ_NOIC="scripts/archived/2026_04_22_add_hidden_layer_to_initial_projection/regbtl_gdyn_d768_il_pdproj_noic_nolsa.py"
+NOLSA_MDR3="scripts/archived/2026_04_22_add_hidden_layer_to_initial_projection/regbtl_gdyn_d768_mdr3_ictok_pdproj_nolsa.py"
+
+# python "$NOLSA_IL" launch "regbtl_base10k_scale0.25_gdyn_d768_il_nolsa" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE
+
+# python "$NOLSA_IL_PDPROJ_NOIC" launch "regbtl_base10k_scale0.25_gdyn_d768_il_pdproj_noic_nolsa" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE
+
+# python "$NOLSA_MDR3" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_nolsa" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE

@@ -1314,6 +1314,7 @@ class SpatialRegisterBottleneck(nn.Module):
         per_depth_read_proj: bool = False,
         learned_read_weighting: bool = False,
         fused_read: str | None = None,
+        latent_self_attn: bool = True,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1390,6 +1391,13 @@ class SpatialRegisterBottleneck(nn.Module):
                 signal to watch). Requires ``read_layers``; incompatible with
                 ``per_depth_read_proj`` (the fusion replaces per-depth projections).
                 None (default) keeps one read block per depth.
+            latent_self_attn: If True (default), self-attention "latent" blocks run over
+                the register grid -- interleaved after each read, or after all reads in the
+                legacy schedule. If False, those blocks are dropped entirely: the registers
+                are produced by the cross-attention read(s) alone, with no
+                register-to-register mixing. The read blocks (and their count) are
+                unchanged, so this cleanly isolates the latent self-attention's
+                contribution. Backwards compatible (default True).
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1456,6 +1464,12 @@ class SpatialRegisterBottleneck(nn.Module):
                 latent_transformer_depth if self.interleave else read_depth
             )
             num_latent_blocks = latent_transformer_depth
+        # Optionally drop the latent self-attention entirely (cross-attention reads only).
+        # The read count is unchanged; only the register-to-register self-attention blocks
+        # are removed, isolating the latent transformer's contribution.
+        self.latent_self_attn = latent_self_attn
+        if not latent_self_attn:
+            num_latent_blocks = 0
         # Per-depth read front-end: give every read block its own input norm + K/V
         # down-projection instead of a single shared pair. Only meaningful with >1 read
         # block. Multi-depth: each block draws from a different encoder depth (distinct
@@ -1765,15 +1779,16 @@ class SpatialRegisterBottleneck(nn.Module):
             # refinement (Perceiver/DETR/Flamingo style). In multi-depth mode each read
             # draws its K/V from a successively deeper encoder layer; otherwise every read
             # re-queries the same (final-layer) source.
-            for i, (read_blk, latent_blk, kv) in enumerate(
-                zip(self.read_blocks, self.latent_blocks, kv_per_read)
-            ):
+            for i, (read_blk, kv) in enumerate(zip(self.read_blocks, kv_per_read)):
                 registers = read(registers, i, read_blk, kv)
-                registers = latent_blk(
-                    x=registers,
-                    rope_positions=register_positions,
-                    window_spec=latent_window_spec,
-                )
+                # latent_blocks is empty when latent self-attention is disabled; otherwise
+                # it has one block per read (built above), so index by the read position.
+                if self.latent_blocks:
+                    registers = self.latent_blocks[i](
+                        x=registers,
+                        rope_positions=register_positions,
+                        window_spec=latent_window_spec,
+                    )
         else:
             # Legacy: all reads first, then the latent transformer.
             for i, (read_blk, kv) in enumerate(zip(self.read_blocks, kv_per_read)):
@@ -1835,6 +1850,7 @@ class Encoder(FlexiVitBase):
         register_per_depth_read_proj: bool = False,
         register_learned_read_weighting: bool = False,
         register_fused_read: str | None = None,
+        register_latent_self_attn: bool = True,
         register_contrastive_source: str = "registers",
     ):
         """Initialize the encoder.
@@ -1936,6 +1952,10 @@ class Encoder(FlexiVitBase):
                 ``register_bottleneck.last_read_source_norms`` for logging. Requires
                 ``register_read_layers``; incompatible with
                 ``register_per_depth_read_proj``. Defaults to None (one read per depth).
+            register_latent_self_attn: If False, drop the bottleneck's latent
+                self-attention blocks entirely (cross-attention reads only, no
+                register-to-register mixing); the read count is unchanged. Defaults to True
+                (keep the latent transformer, backwards compatible).
             register_contrastive_source: Where the contrastive (project-and-aggregate)
                 head reads from when the bottleneck is active: ``"registers"`` (default,
                 project from the register latents at ``register_dim``) or
@@ -2050,6 +2070,7 @@ class Encoder(FlexiVitBase):
                 per_depth_read_proj=register_per_depth_read_proj,
                 learned_read_weighting=register_learned_read_weighting,
                 fused_read=register_fused_read,
+                latent_self_attn=register_latent_self_attn,
             )
 
         if register_contrastive_source not in ("registers", "encoder_tokens"):
@@ -3292,6 +3313,10 @@ class EncoderConfig(Config):
     # project from the register latents) or "encoder_tokens" (project from the encoder
     # patch-token output, as before the bottleneck existed). Ignored when bottleneck off.
     register_contrastive_source: str = "registers"
+    # If False, drop the register bottleneck's latent self-attention blocks entirely
+    # (cross-attention reads only, no register-to-register mixing). The read count is
+    # unchanged. Default True keeps the latent transformer (backwards compatible).
+    register_latent_self_attn: bool = True
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
