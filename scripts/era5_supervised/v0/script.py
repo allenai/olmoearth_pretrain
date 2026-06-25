@@ -181,6 +181,8 @@ class Era5SupervisedCommonComponents(CommonComponents):
     recon_swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
     recon_swt_wavelet: str = "haar"
     recon_use_naive_masking: bool = False
+    # Naive-masking span count (NaiveMaskPolicy.max_num_masks).
+    recon_naive_max_num_masks: int = 5
     recon_temporal_interpolation_prob: float = 1.0
     recon_cross_variable_prob: float = 1.0
     # Number of masking spans per strategy. Stage 1 (temporal interpolation)
@@ -569,7 +571,11 @@ def build_model_config(
             swt_levels=common.recon_swt_levels,
             swt_wavelet=common.recon_swt_wavelet,
             **(
-                {"mask_policy": NaiveMaskPolicy()}
+                {
+                    "mask_policy": NaiveMaskPolicy(
+                        max_num_masks=common.recon_naive_max_num_masks,
+                    )
+                }
                 if common.recon_use_naive_masking
                 else {
                     "mask_policy": MaskPolicy(
