@@ -24,6 +24,7 @@ Notes / constraints:
 
 import logging
 import os
+import secrets
 import subprocess  # nosec
 import sys
 from pathlib import Path
@@ -134,6 +135,16 @@ def launch_checkpoint_eval_job(
         cmd.append(f"--trainer.callbacks.wandb.group={wandb_group}")
     if wandb_run_name is not None:
         cmd.append(f"--trainer.callbacks.wandb.name={wandb_run_name}")
+    # All in-loop eval jobs for this training run resume one shared wandb run id,
+    # generated once here (in the single-threaded training process) and stored in
+    # a fixed file under the checkpoint dir. Pre-creating it means each eval job
+    # only ever reads + resumes this id -- so per-step metrics consolidate into a
+    # single wandb run (keyed on checkpoint_step) with no race even when eval jobs
+    # overlap, instead of creating a separate run per eval step.
+    shared_runid_file = UPath(checkpoint_dir) / "loop_eval_wandb_runid.txt"
+    if not shared_runid_file.exists():
+        shared_runid_file.write_text(secrets.token_hex(4))
+    cmd.append(f"--trainer.callbacks.wandb.runid_path={shared_runid_file}")
     if tasks_to_run:
         cmd.append(
             "--trainer.callbacks.downstream_evaluator.tasks_to_run="
