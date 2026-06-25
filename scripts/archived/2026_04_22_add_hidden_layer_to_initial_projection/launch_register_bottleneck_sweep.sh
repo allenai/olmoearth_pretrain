@@ -511,9 +511,9 @@ ROPE="--model.encoder_config.rope_coordinate_scale=0.25 --model.decoder_config.r
 # "origmask_noic". A/Bs against rope_base10k_scale0.25_m12 (isolates the masking) and against
 # the IC-on rope baselines (isolates the contrastive loss).
 
-python "scripts/official/v1_1/rope.py" launch "rope_base10k_scale0.25_origmask_noic" "$CLUSTER" \
-    $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
-    --train_module.contrastive_config=null
+# python "scripts/official/v1_1/rope.py" launch "rope_base10k_scale0.25_origmask_noic" "$CLUSTER" \
+#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE \
+#     --train_module.contrastive_config=null
 
 # ============ no latent self-attention (nolsa): drop the latent self-attention (3) ============
 # Re-runs the il / il_pdproj_noic / mdr3_ictok_pdproj frontiers WITHOUT the bottleneck's
@@ -534,11 +534,11 @@ NOLSA_IL="scripts/archived/2026_04_22_add_hidden_layer_to_initial_projection/reg
 NOLSA_IL_PDPROJ_NOIC="scripts/archived/2026_04_22_add_hidden_layer_to_initial_projection/regbtl_gdyn_d768_il_pdproj_noic_nolsa.py"
 NOLSA_MDR3="scripts/archived/2026_04_22_add_hidden_layer_to_initial_projection/regbtl_gdyn_d768_mdr3_ictok_pdproj_nolsa.py"
 
-# python "$NOLSA_IL" launch "regbtl_base10k_scale0.25_gdyn_d768_il_nolsa" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE
+python "$NOLSA_IL" launch "regbtl_base10k_scale0.25_gdyn_d768_il_nolsa" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE
 
-# python "$NOLSA_IL_PDPROJ_NOIC" launch "regbtl_base10k_scale0.25_gdyn_d768_il_pdproj_noic_nolsa" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE
+python "$NOLSA_IL_PDPROJ_NOIC" launch "regbtl_base10k_scale0.25_gdyn_d768_il_pdproj_noic_nolsa" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE
 
-# python "$NOLSA_MDR3" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_nolsa" "$CLUSTER" \
-#     $LAUNCH_ARGS $WANDB_PROJECT $ROPE
+python "$NOLSA_MDR3" launch "regbtl_base10k_scale0.25_gdyn_d768_mdr3_ictok_pdproj_nolsa" "$CLUSTER" \
+    $LAUNCH_ARGS $WANDB_PROJECT $ROPE
