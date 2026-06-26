@@ -1053,7 +1053,12 @@ class SeparateEncodings(nn.Module):
         self.latlon_dim = latlon_dim
         self.temporal_encoding_type = temporal_encoding_type
         self.latlon_encoding_type = latlon_encoding_type
-        self.latlon_dropout_rate = float(latlon_dropout_rate)
+        # Configured rate; remains inactive (0.0) until ``enable_latlon_dropout`` is
+        # called (e.g. by the pretraining loop). Mirrors band_dropout so downstream
+        # users (fine-tuning / inference) get the encoding active with no dropout and
+        # never need to disable latlon_dropout_rate manually.
+        self._configured_latlon_dropout_rate = float(latlon_dropout_rate)
+        self.latlon_dropout_rate = 0.0
         self.enc_dim = channel_dim + temporal_dim + latlon_dim
 
         self.supported_modalities = supported_modalities
@@ -1077,6 +1082,15 @@ class SeparateEncodings(nn.Module):
         # Combine projection: [img(embedding_size) + enc(enc_dim)] -> embedding_size.
         # If enc_dim==0 this collapses to a Linear(embedding_size, embedding_size).
         self.combine_proj = nn.Linear(embedding_size + self.enc_dim, embedding_size)
+
+    def enable_latlon_dropout(self) -> None:
+        """Activate latlon dropout at the configured rate.
+
+        Latlon dropout is inactive by default so that loaded models (fine-tuning /
+        inference) always use the full latlon encoding. The pretraining loop calls
+        this to enable per-sample latlon dropout during pretraining.
+        """
+        self.latlon_dropout_rate = self._configured_latlon_dropout_rate
 
     def _ein_for_tokens(self, modality_tokens: Tensor) -> tuple[str, dict[str, int]]:
         """Pick the einops shape string for the patch-projected token tensor."""
