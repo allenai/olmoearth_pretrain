@@ -88,7 +88,7 @@ PATCH_EMBED_HIDDEN_SIZES: list[int] = [64]
 # mixed frequencies are learnable, so the only temporal knob is the input
 # coordinate scale (days-since-2000 * scale); 1/30 -> ~months.
 SPATIAL_POS_ENCODING = "rope_3d_mixed"
-ROPE_MIXED_BASE = 10.0
+ROPE_MIXED_BASE = 10000.0
 ROPE_TEMPORAL_COORDINATE_SCALE = 1.0 / 30.0
 
 S2_SINGLE_BANDSET = ModalityTokenization(
