@@ -66,6 +66,36 @@
       ],
       "weka_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_nbac_test"
     },
+    "landslide_era5": {
+      "groups": [
+        "sen12_landslides",
+        "glc"
+      ],
+      "height_width": 1,
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/landslide_era5_era5d.yaml",
+      "notes": "Weather-triggered landslide pos/neg detection from ERA5-daily. Window-level binary classification (vector 'label' layer, category=positive/negative). Leakage-safe split (one window per ERA5 cell x event-week); 852 windows (426 pos / 426 neg) across sen12_landslides + glc, train 601 / val 251. Eval-only (too small for a supervised flavor).",
+      "num_classes": 2,
+      "tags": {
+        "split": "train"
+      },
+      "task_type": "classification",
+      "test_groups": [
+        "sen12_landslides",
+        "glc"
+      ],
+      "test_tags": {
+        "split": "val"
+      },
+      "val_groups": [
+        "sen12_landslides",
+        "glc"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/landslide_era5"
+    },
     "lfmc_woody": {
       "groups": [
         "spatial_split"

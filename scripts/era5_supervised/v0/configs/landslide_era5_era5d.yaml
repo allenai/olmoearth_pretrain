@@ -1,0 +1,108 @@
+# Data-only config for landslide pos/neg detection via ERA5-daily inputs.
+# Adapted for the olmoearth_pretrain ERA5 supervised (objective A) / downstream
+# linear-probe path. Only the `data:` section is consumed by the eval builder
+# (olmoearth_pretrain.evals.datasets.rslearn_builder); the rslearn `model:` /
+# `trainer:` sections are intentionally omitted.
+#
+# Task: window-level binary classification. Each window carries a single-feature
+# vector `label` layer (category = positive|negative), read by an rslearn
+# ClassificationTask. "positive" is class id 1 (so F1-on-positive matches the
+# other ERA5 evals). Splits are tag-based on `options.split` (train/val), written
+# by the tagging step (evals/datasets/splits/landslide_era5/eval_tagging.py).
+#
+# The ERA5 layer `era5d_448d_to_event` is stored 1x1 at 640 m per the window's
+# 640 m extent (64 px @ 10 m), so it is read at native 1x1 with
+# resolution_factor 1/64 (window_res 10 m / raster_res 640 m).
+data:
+  class_path: rslearn.train.data_module.RslearnDataModule
+  init_args:
+    path: /weka/dfive-default/olmoearth/eval_datasets/landslide_era5
+    inputs:
+      era5_daily:
+        data_type: raster
+        layers:
+        - era5d_448d_to_event
+        use_all_bands_in_order_of_band_set_idx: 0
+        passthrough: true
+        dtype: FLOAT32
+        resolution_factor: "1/64"
+      targets:
+        data_type: vector
+        layers:
+        - label
+        is_target: true
+    task:
+      class_path: rslearn.train.tasks.classification.ClassificationTask
+      init_args:
+        property_name: category
+        classes:
+        - negative
+        - positive
+        enable_f1_metric: true
+        metric_kwargs:
+          average: micro
+    batch_size: 64
+    num_workers: 16
+    default_config:
+      transforms:
+      - class_path: rslearn.train.transforms.normalize.Normalize
+        init_args:
+          mean: &id001
+          - 268.209
+          - -0.00113
+          - -0.00833
+          - 0.000897
+          - 94745.2
+          - 9079014.2
+          - 11716921.0
+          - -4499458.3
+          - 0.343
+          - 0.339
+          - -0.0584
+          - 0.00188
+          - 0.463
+          - 0.0691
+          std: &id002
+          - 14.149
+          - 0.00125
+          - 0.00966
+          - 0.00221
+          - 5192.3
+          - 7486798.9
+          - 8479277.6
+          - 2228211.3
+          - 0.1436
+          - 0.1426
+          - 13.825
+          - 0.00425
+          - 1.787
+          - 1.697
+          selectors:
+          - era5_daily
+    train_config:
+      groups:
+      - sen12_landslides
+      - glc
+      tags:
+        split: train
+      transforms:
+      - class_path: rslearn.train.transforms.normalize.Normalize
+        init_args:
+          mean: *id001
+          std: *id002
+          selectors:
+          - era5_daily
+    val_config:
+      groups:
+      - sen12_landslides
+      - glc
+      tags:
+        split: val
+    test_config:
+      groups:
+      - sen12_landslides
+      - glc
+      tags:
+        split: val
+    predict_config:
+      skip_targets: true
