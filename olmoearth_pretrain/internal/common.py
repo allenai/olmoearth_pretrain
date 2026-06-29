@@ -24,7 +24,7 @@ from olmoearth_pretrain.internal.experiment import (
 )
 
 logger = logging.getLogger(__name__)
-BUDGET = "ai2/es-platform"
+BUDGET = "ai2/atec-olmoearth"
 WORKSPACE = "ai2/earth-systems"
 
 DEFAULT_OLMOEARTH_PRETRAIN_WEKA_BUCKET = BeakerWekaBucket(
@@ -152,11 +152,32 @@ def build_launch_config(
     if train_script_path is not None:
         logger.info(f"Propagating train script path to experiment: {train_script_path}")
         env_vars.append(BeakerEnvVar(name="TRAIN_SCRIPT_PATH", value=train_script_path))
+    # Propagate checkpoint sweep env vars to the experiment if set
+    checkpoint_dir = os.environ.get("CHECKPOINT_DIR")
+    if checkpoint_dir is not None:
+        logger.info(f"Propagating checkpoint dir to experiment: {checkpoint_dir}")
+        env_vars.append(BeakerEnvVar(name="CHECKPOINT_DIR", value=checkpoint_dir))
+    checkpoint_steps = os.environ.get("CHECKPOINT_STEPS")
+    if checkpoint_steps is not None:
+        logger.info(f"Propagating checkpoint steps to experiment: {checkpoint_steps}")
+        env_vars.append(BeakerEnvVar(name="CHECKPOINT_STEPS", value=checkpoint_steps))
     # Propagate the finetune tag to the experiment if set
     finetune = os.environ.get("FINETUNE")
     if finetune is not None:
         logger.info(f"Propagating finetune tag to experiment: {finetune}")
         env_vars.append(BeakerEnvVar(name="FINETUNE", value=finetune))
+    # Propagate the experiment key to the experiment if set
+    experiment = os.environ.get("EXPERIMENT")
+    if experiment is not None:
+        logger.info(f"Propagating experiment key to experiment: {experiment}")
+        env_vars.append(BeakerEnvVar(name="EXPERIMENT", value=experiment))
+    embedding_diagnostics_only = os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY")
+    if embedding_diagnostics_only is not None:
+        env_vars.append(
+            BeakerEnvVar(
+                name="EMBEDDING_DIAGNOSTICS_ONLY", value=embedding_diagnostics_only
+            )
+        )
 
     return OlmoEarthBeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",
@@ -195,7 +216,7 @@ def build_launch_config(
             "pip install uv",
             # so that we can use uv tools
             'export PATH="/root/.local/bin:$PATH" ',
-            "uv sync --locked --all-groups",
+            "uv sync --locked --all-extras",
             # activate the uv venv
             "venv_path=$(uv run python -c 'import sys; print(sys.executable)')",
             'source "$(dirname "$venv_path")/activate"',
@@ -252,6 +273,9 @@ def build_common_components(
             clusters=cluster,
             nccl_debug=nccl_debug,
         )
+        # Set retries=2 for launch command
+        if cmd == SubCmd.launch:
+            launch_config.retries = 2
     root_dir = get_root_dir(cluster)
 
     beaker_user = get_beaker_username() or ANONYMOUS_USER

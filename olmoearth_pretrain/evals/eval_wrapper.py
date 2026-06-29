@@ -24,12 +24,12 @@ from olmoearth_pretrain.evals.models import (
 )
 from olmoearth_pretrain.nn.flexi_vit import (
     FlexiVitBase,
-    PoolingType,
     TokensAndMasks,
 )
 from olmoearth_pretrain.nn.pooled_modality_predictor import EncodeEarlyAttnPool
+from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.st_model import STBase
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
+from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = getLogger(__name__)
 
@@ -68,7 +68,11 @@ class EvalWrapper:
         self.patch_size = patch_size
         self.pooling_type = pooling_type
         self.concat_features = concat_features
-        self.spatial_pool = task_type == TaskType.SEGMENTATION
+        # NOTE: REGRESSION always spatial-pools, so only dense (per-pixel)
+        # regression is supported. Scalar-target regression (one value per
+        # sample) is NOT supported yet — it would need spatial_pool=False for
+        # such tasks so the head can produce a pooled (B, D) -> (B,) prediction.
+        self.spatial_pool = task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION)
         self.use_pooled_tokens = use_pooled_tokens
         self.use_center_token = use_center_token
         if self.use_center_token and self.spatial_pool:
@@ -125,6 +129,14 @@ class EvalWrapper:
 class OlmoEarthEvalWrapper(EvalWrapper):
     """Wrapper for OlmoEarth Pretrain models."""
 
+    @staticmethod
+    def _has_missing_tokens(masked_olmoearth_sample: MaskedOlmoEarthSample) -> bool:
+        for name, value in masked_olmoearth_sample.as_dict().items():
+            if name.endswith("_mask") and value is not None:
+                if (value == MaskValue.MISSING.value).any():
+                    return True
+        return False
+
     def __call__(
         self,
         masked_olmoearth_sample: MaskedOlmoEarthSample,
@@ -133,20 +145,23 @@ class OlmoEarthEvalWrapper(EvalWrapper):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         if not self.use_pooled_tokens:
+            fast_pass = not self._has_missing_tokens(masked_olmoearth_sample)
             batch_embeddings: TokensAndMasks = self.model(
-                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True
+                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=fast_pass
             )["tokens_and_masks"]  # (bsz, dim)
             # Concat features across modalities in space averaged across time
             if self.use_center_token:
                 # Get spatial embeddings (B, H, W, D) then take center patch
-                batch_embeddings = batch_embeddings.pool_unmasked_tokens(
+                batch_embeddings = pool_unmasked_tokens(
+                    batch_embeddings,
                     self.pooling_type,
                     spatial_pooling=True,
                     concat_features=self.concat_features,
                 )
                 batch_embeddings = self._extract_center_token(batch_embeddings)
             else:
-                batch_embeddings = batch_embeddings.pool_unmasked_tokens(
+                batch_embeddings = pool_unmasked_tokens(
+                    batch_embeddings,
                     self.pooling_type,
                     spatial_pooling=self.spatial_pool,
                     concat_features=self.concat_features,

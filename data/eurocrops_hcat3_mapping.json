@@ -1,0 +1,1922 @@
+[
+  {
+    "flat_id": 1,
+    "hcat_code": 3000000000,
+    "hcat_name": "characteristics"
+  },
+  {
+    "flat_id": 2,
+    "hcat_code": 3300000000,
+    "hcat_name": "crop_type"
+  },
+  {
+    "flat_id": 3,
+    "hcat_code": 3301000000,
+    "hcat_name": "arable_crops"
+  },
+  {
+    "flat_id": 4,
+    "hcat_code": 3301010000,
+    "hcat_name": "cereal"
+  },
+  {
+    "flat_id": 5,
+    "hcat_code": 3301010100,
+    "hcat_name": "common_soft_wheat"
+  },
+  {
+    "flat_id": 6,
+    "hcat_code": 3301010101,
+    "hcat_name": "winter_common_soft_wheat"
+  },
+  {
+    "flat_id": 7,
+    "hcat_code": 3301010102,
+    "hcat_name": "spring_common_soft_wheat"
+  },
+  {
+    "flat_id": 8,
+    "hcat_code": 3301010199,
+    "hcat_name": "unspecified_season_common_soft_wheat"
+  },
+  {
+    "flat_id": 9,
+    "hcat_code": 3301010200,
+    "hcat_name": "durum_hard_wheat"
+  },
+  {
+    "flat_id": 10,
+    "hcat_code": 3301010201,
+    "hcat_name": "winter_durum_hard_wheat"
+  },
+  {
+    "flat_id": 11,
+    "hcat_code": 3301010202,
+    "hcat_name": "spring_durum_hard_wheat"
+  },
+  {
+    "flat_id": 12,
+    "hcat_code": 3301010299,
+    "hcat_name": "unspecified_season_durum_hard_wheat"
+  },
+  {
+    "flat_id": 13,
+    "hcat_code": 3301010300,
+    "hcat_name": "rye"
+  },
+  {
+    "flat_id": 14,
+    "hcat_code": 3301010301,
+    "hcat_name": "winter_rye"
+  },
+  {
+    "flat_id": 15,
+    "hcat_code": 3301010302,
+    "hcat_name": "spring_rye"
+  },
+  {
+    "flat_id": 16,
+    "hcat_code": 3301010399,
+    "hcat_name": "unspecified_season_rye"
+  },
+  {
+    "flat_id": 17,
+    "hcat_code": 3301010400,
+    "hcat_name": "barley"
+  },
+  {
+    "flat_id": 18,
+    "hcat_code": 3301010401,
+    "hcat_name": "winter_barley"
+  },
+  {
+    "flat_id": 19,
+    "hcat_code": 3301010402,
+    "hcat_name": "spring_barley"
+  },
+  {
+    "flat_id": 20,
+    "hcat_code": 3301010499,
+    "hcat_name": "unspecified_season_barley"
+  },
+  {
+    "flat_id": 21,
+    "hcat_code": 3301010500,
+    "hcat_name": "oats"
+  },
+  {
+    "flat_id": 22,
+    "hcat_code": 3301010501,
+    "hcat_name": "winter_oats"
+  },
+  {
+    "flat_id": 23,
+    "hcat_code": 3301010502,
+    "hcat_name": "spring_oats"
+  },
+  {
+    "flat_id": 24,
+    "hcat_code": 3301010599,
+    "hcat_name": "unspecified_season_oats"
+  },
+  {
+    "flat_id": 25,
+    "hcat_code": 3301010600,
+    "hcat_name": "grain_maize_corn_popcorn"
+  },
+  {
+    "flat_id": 26,
+    "hcat_code": 3301010699,
+    "hcat_name": "unspecified_season_grain_maize_corn_popcorn"
+  },
+  {
+    "flat_id": 27,
+    "hcat_code": 3301010700,
+    "hcat_name": "rice"
+  },
+  {
+    "flat_id": 28,
+    "hcat_code": 3301010799,
+    "hcat_name": "unspecified_season_rice"
+  },
+  {
+    "flat_id": 29,
+    "hcat_code": 3301010800,
+    "hcat_name": "triticale"
+  },
+  {
+    "flat_id": 30,
+    "hcat_code": 3301010801,
+    "hcat_name": "winter_triticale"
+  },
+  {
+    "flat_id": 31,
+    "hcat_code": 3301010802,
+    "hcat_name": "spring_triticale"
+  },
+  {
+    "flat_id": 32,
+    "hcat_code": 3301010899,
+    "hcat_name": "unspecified_season_triticale"
+  },
+  {
+    "flat_id": 33,
+    "hcat_code": 3301010900,
+    "hcat_name": "millet_sorghum"
+  },
+  {
+    "flat_id": 34,
+    "hcat_code": 3301010901,
+    "hcat_name": "winter_millet_sorghum"
+  },
+  {
+    "flat_id": 35,
+    "hcat_code": 3301010902,
+    "hcat_name": "spring_millet_sorghum"
+  },
+  {
+    "flat_id": 36,
+    "hcat_code": 3301010904,
+    "hcat_name": "teff"
+  },
+  {
+    "flat_id": 37,
+    "hcat_code": 3301010999,
+    "hcat_name": "unspecified_season_millet_sorghum"
+  },
+  {
+    "flat_id": 38,
+    "hcat_code": 3301011000,
+    "hcat_name": "spelt"
+  },
+  {
+    "flat_id": 39,
+    "hcat_code": 3301011001,
+    "hcat_name": "winter_spelt"
+  },
+  {
+    "flat_id": 40,
+    "hcat_code": 3301011002,
+    "hcat_name": "spring_spelt"
+  },
+  {
+    "flat_id": 41,
+    "hcat_code": 3301011099,
+    "hcat_name": "unspecified_season_spelt"
+  },
+  {
+    "flat_id": 42,
+    "hcat_code": 3301011100,
+    "hcat_name": "meslin"
+  },
+  {
+    "flat_id": 43,
+    "hcat_code": 3301011101,
+    "hcat_name": "winter_meslin"
+  },
+  {
+    "flat_id": 44,
+    "hcat_code": 3301011102,
+    "hcat_name": "spring_meslin"
+  },
+  {
+    "flat_id": 45,
+    "hcat_code": 3301011199,
+    "hcat_name": "unspecified_season_meslin"
+  },
+  {
+    "flat_id": 46,
+    "hcat_code": 3301011200,
+    "hcat_name": "emmer"
+  },
+  {
+    "flat_id": 47,
+    "hcat_code": 3301011201,
+    "hcat_name": "winter_emmer"
+  },
+  {
+    "flat_id": 48,
+    "hcat_code": 3301011202,
+    "hcat_name": "spring_emmer"
+  },
+  {
+    "flat_id": 49,
+    "hcat_code": 3301011299,
+    "hcat_name": "unspecified_season_emmer"
+  },
+  {
+    "flat_id": 50,
+    "hcat_code": 3301011300,
+    "hcat_name": "einkorn"
+  },
+  {
+    "flat_id": 51,
+    "hcat_code": 3301011301,
+    "hcat_name": "winter_einkorn"
+  },
+  {
+    "flat_id": 52,
+    "hcat_code": 3301011302,
+    "hcat_name": "spring_einkorn"
+  },
+  {
+    "flat_id": 53,
+    "hcat_code": 3301011399,
+    "hcat_name": "unspecified_season_einkorn"
+  },
+  {
+    "flat_id": 54,
+    "hcat_code": 3301011400,
+    "hcat_name": "canary_seed_canaryseed"
+  },
+  {
+    "flat_id": 55,
+    "hcat_code": 3301011499,
+    "hcat_name": "unspecified_season_canary_seed_canaryseed"
+  },
+  {
+    "flat_id": 56,
+    "hcat_code": 3301011500,
+    "hcat_name": "unspecified_cereals"
+  },
+  {
+    "flat_id": 57,
+    "hcat_code": 3301011501,
+    "hcat_name": "winter_unspecified_cereals"
+  },
+  {
+    "flat_id": 58,
+    "hcat_code": 3301011502,
+    "hcat_name": "spring_unspecified_cereals"
+  },
+  {
+    "flat_id": 59,
+    "hcat_code": 3301011503,
+    "hcat_name": "summer_unspecified_cereals"
+  },
+  {
+    "flat_id": 60,
+    "hcat_code": 3301011599,
+    "hcat_name": "unspecified_season_unspecified_cereals"
+  },
+  {
+    "flat_id": 61,
+    "hcat_code": 3301019900,
+    "hcat_name": "other_cereals"
+  },
+  {
+    "flat_id": 62,
+    "hcat_code": 3301019999,
+    "hcat_name": "unspecified_season_other_cereals"
+  },
+  {
+    "flat_id": 63,
+    "hcat_code": 3301020000,
+    "hcat_name": "legumes_dried_pulses_protein_crops"
+  },
+  {
+    "flat_id": 64,
+    "hcat_code": 3301020100,
+    "hcat_name": "beans"
+  },
+  {
+    "flat_id": 65,
+    "hcat_code": 3301020200,
+    "hcat_name": "chickpeas"
+  },
+  {
+    "flat_id": 66,
+    "hcat_code": 3301020300,
+    "hcat_name": "esparsette_onobrychis"
+  },
+  {
+    "flat_id": 67,
+    "hcat_code": 3301020400,
+    "hcat_name": "fenugreek"
+  },
+  {
+    "flat_id": 68,
+    "hcat_code": 3301020500,
+    "hcat_name": "lentils"
+  },
+  {
+    "flat_id": 69,
+    "hcat_code": 3301020600,
+    "hcat_name": "peas"
+  },
+  {
+    "flat_id": 70,
+    "hcat_code": 3301020700,
+    "hcat_name": "sweet_lupins"
+  },
+  {
+    "flat_id": 71,
+    "hcat_code": 3301029800,
+    "hcat_name": "unspecified_legumes_dried_pulses_protein_crops"
+  },
+  {
+    "flat_id": 72,
+    "hcat_code": 3301029900,
+    "hcat_name": "other_dry_pulses"
+  },
+  {
+    "flat_id": 73,
+    "hcat_code": 3301030000,
+    "hcat_name": "potatoes"
+  },
+  {
+    "flat_id": 74,
+    "hcat_code": 3301040000,
+    "hcat_name": "sweet_potatoes"
+  },
+  {
+    "flat_id": 75,
+    "hcat_code": 3301050000,
+    "hcat_name": "fodder_roots"
+  },
+  {
+    "flat_id": 76,
+    "hcat_code": 3301060000,
+    "hcat_name": "industrial_nonfood_crops"
+  },
+  {
+    "flat_id": 77,
+    "hcat_code": 3301060100,
+    "hcat_name": "tobacco"
+  },
+  {
+    "flat_id": 78,
+    "hcat_code": 3301060200,
+    "hcat_name": "hops"
+  },
+  {
+    "flat_id": 79,
+    "hcat_code": 3301060300,
+    "hcat_name": "cotton"
+  },
+  {
+    "flat_id": 80,
+    "hcat_code": 3301060400,
+    "hcat_name": "rapeseed_rape"
+  },
+  {
+    "flat_id": 81,
+    "hcat_code": 3301060401,
+    "hcat_name": "winter_rapeseed_rape"
+  },
+  {
+    "flat_id": 82,
+    "hcat_code": 3301060402,
+    "hcat_name": "spring_rapeseed_rape"
+  },
+  {
+    "flat_id": 83,
+    "hcat_code": 3301060403,
+    "hcat_name": "summer_rapeseed_rape"
+  },
+  {
+    "flat_id": 84,
+    "hcat_code": 3301060499,
+    "hcat_name": "unspecified_season_rapeseed_rape"
+  },
+  {
+    "flat_id": 85,
+    "hcat_code": 3301060500,
+    "hcat_name": "sunflower"
+  },
+  {
+    "flat_id": 86,
+    "hcat_code": 3301060600,
+    "hcat_name": "poppy"
+  },
+  {
+    "flat_id": 87,
+    "hcat_code": 3301060601,
+    "hcat_name": "winter_poppy"
+  },
+  {
+    "flat_id": 88,
+    "hcat_code": 3301060602,
+    "hcat_name": "summer_poppy"
+  },
+  {
+    "flat_id": 89,
+    "hcat_code": 3301060700,
+    "hcat_name": "flax_linseed"
+  },
+  {
+    "flat_id": 90,
+    "hcat_code": 3301060701,
+    "hcat_name": "flax_linen"
+  },
+  {
+    "flat_id": 91,
+    "hcat_code": 3301060702,
+    "hcat_name": "flax_linseed_oil"
+  },
+  {
+    "flat_id": 92,
+    "hcat_code": 3301060800,
+    "hcat_name": "oilseed_crops"
+  },
+  {
+    "flat_id": 93,
+    "hcat_code": 3301060900,
+    "hcat_name": "guizotia_abyssinica_nyger"
+  },
+  {
+    "flat_id": 94,
+    "hcat_code": 3301061000,
+    "hcat_name": "hemp_cannabis"
+  },
+  {
+    "flat_id": 95,
+    "hcat_code": 3301061001,
+    "hcat_name": "finola"
+  },
+  {
+    "flat_id": 96,
+    "hcat_code": 3301061100,
+    "hcat_name": "fibre_crops"
+  },
+  {
+    "flat_id": 97,
+    "hcat_code": 3301061200,
+    "hcat_name": "aromatic_medicinal_culinary_plants_spices_herbs"
+  },
+  {
+    "flat_id": 98,
+    "hcat_code": 3301061201,
+    "hcat_name": "actaea_baneberry_christopher_herbs"
+  },
+  {
+    "flat_id": 99,
+    "hcat_code": 3301061202,
+    "hcat_name": "alchemilla_ladys_mantle"
+  },
+  {
+    "flat_id": 100,
+    "hcat_code": 3301061203,
+    "hcat_name": "anethum_dill"
+  },
+  {
+    "flat_id": 101,
+    "hcat_code": 3301061204,
+    "hcat_name": "angelica"
+  },
+  {
+    "flat_id": 102,
+    "hcat_code": 3301061205,
+    "hcat_name": "anise_aniseed"
+  },
+  {
+    "flat_id": 103,
+    "hcat_code": 3301061206,
+    "hcat_name": "artemisia"
+  },
+  {
+    "flat_id": 104,
+    "hcat_code": 3301061207,
+    "hcat_name": "basil"
+  },
+  {
+    "flat_id": 105,
+    "hcat_code": 3301061208,
+    "hcat_name": "black_cumin"
+  },
+  {
+    "flat_id": 106,
+    "hcat_code": 3301061209,
+    "hcat_name": "borage"
+  },
+  {
+    "flat_id": 107,
+    "hcat_code": 3301061210,
+    "hcat_name": "calendula_marigold"
+  },
+  {
+    "flat_id": 108,
+    "hcat_code": 3301061211,
+    "hcat_name": "caraway"
+  },
+  {
+    "flat_id": 109,
+    "hcat_code": 3301061212,
+    "hcat_name": "catnip"
+  },
+  {
+    "flat_id": 110,
+    "hcat_code": 3301061213,
+    "hcat_name": "chamomile"
+  },
+  {
+    "flat_id": 111,
+    "hcat_code": 3301061214,
+    "hcat_name": "chervil"
+  },
+  {
+    "flat_id": 112,
+    "hcat_code": 3301061215,
+    "hcat_name": "coriander"
+  },
+  {
+    "flat_id": 113,
+    "hcat_code": 3301061216,
+    "hcat_name": "ericaceae_heather"
+  },
+  {
+    "flat_id": 114,
+    "hcat_code": 3301061217,
+    "hcat_name": "galium_bedstraw"
+  },
+  {
+    "flat_id": 115,
+    "hcat_code": 3301061218,
+    "hcat_name": "hibiscus"
+  },
+  {
+    "flat_id": 116,
+    "hcat_code": 3301061219,
+    "hcat_name": "lavender_lavandula"
+  },
+  {
+    "flat_id": 117,
+    "hcat_code": 3301061220,
+    "hcat_name": "lemon_balm_melissa"
+  },
+  {
+    "flat_id": 118,
+    "hcat_code": 3301061221,
+    "hcat_name": "lovage_maggiplant"
+  },
+  {
+    "flat_id": 119,
+    "hcat_code": 3301061222,
+    "hcat_name": "mints_peppermint"
+  },
+  {
+    "flat_id": 120,
+    "hcat_code": 3301061223,
+    "hcat_name": "moldavian_dragonhead"
+  },
+  {
+    "flat_id": 121,
+    "hcat_code": 3301061224,
+    "hcat_name": "nasturtiums"
+  },
+  {
+    "flat_id": 122,
+    "hcat_code": 3301061225,
+    "hcat_name": "nettles"
+  },
+  {
+    "flat_id": 123,
+    "hcat_code": 3301061226,
+    "hcat_name": "oregano"
+  },
+  {
+    "flat_id": 124,
+    "hcat_code": 3301061227,
+    "hcat_name": "parsly"
+  },
+  {
+    "flat_id": 125,
+    "hcat_code": 3301061228,
+    "hcat_name": "piper_pepper"
+  },
+  {
+    "flat_id": 126,
+    "hcat_code": 3301061229,
+    "hcat_name": "polygonum"
+  },
+  {
+    "flat_id": 127,
+    "hcat_code": 3301061230,
+    "hcat_name": "rosemary"
+  },
+  {
+    "flat_id": 128,
+    "hcat_code": 3301061231,
+    "hcat_name": "rubia_tinctorum_common_madder"
+  },
+  {
+    "flat_id": 129,
+    "hcat_code": 3301061232,
+    "hcat_name": "saffron_crocus_sativus"
+  },
+  {
+    "flat_id": 130,
+    "hcat_code": 3301061233,
+    "hcat_name": "silver_comb"
+  },
+  {
+    "flat_id": 131,
+    "hcat_code": 3301061234,
+    "hcat_name": "st_johns_wort"
+  },
+  {
+    "flat_id": 132,
+    "hcat_code": 3301061235,
+    "hcat_name": "stachys_hedgenettle_chinese_artichoke"
+  },
+  {
+    "flat_id": 133,
+    "hcat_code": 3301061236,
+    "hcat_name": "tarragon"
+  },
+  {
+    "flat_id": 134,
+    "hcat_code": 3301061237,
+    "hcat_name": "thyme"
+  },
+  {
+    "flat_id": 135,
+    "hcat_code": 3301061238,
+    "hcat_name": "valerian"
+  },
+  {
+    "flat_id": 136,
+    "hcat_code": 3301061239,
+    "hcat_name": "yarrow"
+  },
+  {
+    "flat_id": 137,
+    "hcat_code": 3301061298,
+    "hcat_name": "unspecified_aromatic_medicinal_culinary_plants_spices_herbs"
+  },
+  {
+    "flat_id": 138,
+    "hcat_code": 3301061299,
+    "hcat_name": "other_aromatic_medicinal_culinary_plants_spices_herbs"
+  },
+  {
+    "flat_id": 139,
+    "hcat_code": 3301061300,
+    "hcat_name": "marian_thistles"
+  },
+  {
+    "flat_id": 140,
+    "hcat_code": 3301061400,
+    "hcat_name": "phacelia"
+  },
+  {
+    "flat_id": 141,
+    "hcat_code": 3301061500,
+    "hcat_name": "camelina"
+  },
+  {
+    "flat_id": 142,
+    "hcat_code": 3301061600,
+    "hcat_name": "onobrychis_sainfoins"
+  },
+  {
+    "flat_id": 143,
+    "hcat_code": 3301069900,
+    "hcat_name": "other_industrial_crops"
+  },
+  {
+    "flat_id": 144,
+    "hcat_code": 3301070000,
+    "hcat_name": "fresh_vegetables"
+  },
+  {
+    "flat_id": 145,
+    "hcat_code": 3301080000,
+    "hcat_name": "flowers_ornamental_plants"
+  },
+  {
+    "flat_id": 146,
+    "hcat_code": 3301080100,
+    "hcat_name": "adonis"
+  },
+  {
+    "flat_id": 147,
+    "hcat_code": 3301080200,
+    "hcat_name": "anemones_windflowers"
+  },
+  {
+    "flat_id": 148,
+    "hcat_code": 3301080300,
+    "hcat_name": "asters"
+  },
+  {
+    "flat_id": 149,
+    "hcat_code": 3301080400,
+    "hcat_name": "begonias"
+  },
+  {
+    "flat_id": 150,
+    "hcat_code": 3301080500,
+    "hcat_name": "bluebells"
+  },
+  {
+    "flat_id": 151,
+    "hcat_code": 3301080600,
+    "hcat_name": "bulrush"
+  },
+  {
+    "flat_id": 152,
+    "hcat_code": 3301080700,
+    "hcat_name": "burnet"
+  },
+  {
+    "flat_id": 153,
+    "hcat_code": 3301080800,
+    "hcat_name": "carnation"
+  },
+  {
+    "flat_id": 154,
+    "hcat_code": 3301080900,
+    "hcat_name": "chrysanthemum"
+  },
+  {
+    "flat_id": 155,
+    "hcat_code": 3301081000,
+    "hcat_name": "cornflowers"
+  },
+  {
+    "flat_id": 156,
+    "hcat_code": 3301081100,
+    "hcat_name": "corsican_hellebore"
+  },
+  {
+    "flat_id": 157,
+    "hcat_code": 3301081200,
+    "hcat_name": "dahlia"
+  },
+  {
+    "flat_id": 158,
+    "hcat_code": 3301081300,
+    "hcat_name": "daisy_daisies"
+  },
+  {
+    "flat_id": 159,
+    "hcat_code": 3301081400,
+    "hcat_name": "dandelions"
+  },
+  {
+    "flat_id": 160,
+    "hcat_code": 3301081500,
+    "hcat_name": "echinacea_sun_hat"
+  },
+  {
+    "flat_id": 161,
+    "hcat_code": 3301081600,
+    "hcat_name": "edelweiss"
+  },
+  {
+    "flat_id": 162,
+    "hcat_code": 3301081700,
+    "hcat_name": "fiddleneck_amsinckia"
+  },
+  {
+    "flat_id": 163,
+    "hcat_code": 3301081800,
+    "hcat_name": "fuchsias"
+  },
+  {
+    "flat_id": 164,
+    "hcat_code": 3301081900,
+    "hcat_name": "galega"
+  },
+  {
+    "flat_id": 165,
+    "hcat_code": 3301082000,
+    "hcat_name": "gentians"
+  },
+  {
+    "flat_id": 166,
+    "hcat_code": 3301082100,
+    "hcat_name": "gladiolus_gladioli"
+  },
+  {
+    "flat_id": 167,
+    "hcat_code": 3301082200,
+    "hcat_name": "goldenrod"
+  },
+  {
+    "flat_id": 168,
+    "hcat_code": 3301082300,
+    "hcat_name": "iris"
+  },
+  {
+    "flat_id": 169,
+    "hcat_code": 3301082400,
+    "hcat_name": "isatis_tinctoria_woad"
+  },
+  {
+    "flat_id": 170,
+    "hcat_code": 3301082500,
+    "hcat_name": "lilies"
+  },
+  {
+    "flat_id": 171,
+    "hcat_code": 3301082600,
+    "hcat_name": "lotus"
+  },
+  {
+    "flat_id": 172,
+    "hcat_code": 3301082700,
+    "hcat_name": "lunaria_honesty_silver"
+  },
+  {
+    "flat_id": 173,
+    "hcat_code": 3301082800,
+    "hcat_name": "malva"
+  },
+  {
+    "flat_id": 174,
+    "hcat_code": 3301082900,
+    "hcat_name": "milk_star"
+  },
+  {
+    "flat_id": 175,
+    "hcat_code": 3301083000,
+    "hcat_name": "miscanthus_silvergrass"
+  },
+  {
+    "flat_id": 176,
+    "hcat_code": 3301083100,
+    "hcat_name": "monstera_adansonii_eyelet"
+  },
+  {
+    "flat_id": 177,
+    "hcat_code": 3301083200,
+    "hcat_name": "moonseed"
+  },
+  {
+    "flat_id": 178,
+    "hcat_code": 3301083300,
+    "hcat_name": "narcissus_daffodil"
+  },
+  {
+    "flat_id": 179,
+    "hcat_code": 3301083400,
+    "hcat_name": "peony_peonies"
+  },
+  {
+    "flat_id": 180,
+    "hcat_code": 3301083500,
+    "hcat_name": "primrose"
+  },
+  {
+    "flat_id": 181,
+    "hcat_code": 3301083600,
+    "hcat_name": "rhododendron"
+  },
+  {
+    "flat_id": 182,
+    "hcat_code": 3301083700,
+    "hcat_name": "roses"
+  },
+  {
+    "flat_id": 183,
+    "hcat_code": 3301083800,
+    "hcat_name": "rudbeckia_coneflowers"
+  },
+  {
+    "flat_id": 184,
+    "hcat_code": 3301083900,
+    "hcat_name": "safflower"
+  },
+  {
+    "flat_id": 185,
+    "hcat_code": 3301084000,
+    "hcat_name": "salsify"
+  },
+  {
+    "flat_id": 186,
+    "hcat_code": 3301084100,
+    "hcat_name": "sanvitalia_procumbens"
+  },
+  {
+    "flat_id": 187,
+    "hcat_code": 3301084200,
+    "hcat_name": "serradella"
+  },
+  {
+    "flat_id": 188,
+    "hcat_code": 3301084300,
+    "hcat_name": "silene_catchfly"
+  },
+  {
+    "flat_id": 189,
+    "hcat_code": 3301084400,
+    "hcat_name": "silphium_rosinweeds"
+  },
+  {
+    "flat_id": 190,
+    "hcat_code": 3301084500,
+    "hcat_name": "snapdragons"
+  },
+  {
+    "flat_id": 191,
+    "hcat_code": 3301084600,
+    "hcat_name": "stonecrop"
+  },
+  {
+    "flat_id": 192,
+    "hcat_code": 3301084700,
+    "hcat_name": "tagetes"
+  },
+  {
+    "flat_id": 193,
+    "hcat_code": 3301084800,
+    "hcat_name": "thimbles"
+  },
+  {
+    "flat_id": 194,
+    "hcat_code": 3301084900,
+    "hcat_name": "tulips"
+  },
+  {
+    "flat_id": 195,
+    "hcat_code": 3301085000,
+    "hcat_name": "viola"
+  },
+  {
+    "flat_id": 196,
+    "hcat_code": 3301085100,
+    "hcat_name": "violets_pansies"
+  },
+  {
+    "flat_id": 197,
+    "hcat_code": 3301085200,
+    "hcat_name": "zinnias"
+  },
+  {
+    "flat_id": 198,
+    "hcat_code": 3301089800,
+    "hcat_name": "unspecified_flowers_ornamental_plants"
+  },
+  {
+    "flat_id": 199,
+    "hcat_code": 3301089900,
+    "hcat_name": "other_flowers_ornamental_plants"
+  },
+  {
+    "flat_id": 200,
+    "hcat_code": 3301090000,
+    "hcat_name": "plants_harvested_green"
+  },
+  {
+    "flat_id": 201,
+    "hcat_code": 3301090100,
+    "hcat_name": "temporary_grass"
+  },
+  {
+    "flat_id": 202,
+    "hcat_code": 3301090200,
+    "hcat_name": "poaceae_grasses"
+  },
+  {
+    "flat_id": 203,
+    "hcat_code": 3301090201,
+    "hcat_name": "elymus"
+  },
+  {
+    "flat_id": 204,
+    "hcat_code": 3301090202,
+    "hcat_name": "festuca_fescue"
+  },
+  {
+    "flat_id": 205,
+    "hcat_code": 3301090203,
+    "hcat_name": "cocksfoot_catgrass"
+  },
+  {
+    "flat_id": 206,
+    "hcat_code": 3301090204,
+    "hcat_name": "festulolium"
+  },
+  {
+    "flat_id": 207,
+    "hcat_code": 3301090205,
+    "hcat_name": "lolium_ryegrass"
+  },
+  {
+    "flat_id": 208,
+    "hcat_code": 3301090206,
+    "hcat_name": "setaria"
+  },
+  {
+    "flat_id": 209,
+    "hcat_code": 3301090207,
+    "hcat_name": "sod_turf"
+  },
+  {
+    "flat_id": 210,
+    "hcat_code": 3301090208,
+    "hcat_name": "switchgrass"
+  },
+  {
+    "flat_id": 211,
+    "hcat_code": 3301090209,
+    "hcat_name": "timothy"
+  },
+  {
+    "flat_id": 212,
+    "hcat_code": 3301090300,
+    "hcat_name": "legumes_harvested_green"
+  },
+  {
+    "flat_id": 213,
+    "hcat_code": 3301090301,
+    "hcat_name": "alfalfa_lucerne"
+  },
+  {
+    "flat_id": 214,
+    "hcat_code": 3301090302,
+    "hcat_name": "arachis"
+  },
+  {
+    "flat_id": 215,
+    "hcat_code": 3301090303,
+    "hcat_name": "clover"
+  },
+  {
+    "flat_id": 216,
+    "hcat_code": 3301090304,
+    "hcat_name": "melilot"
+  },
+  {
+    "flat_id": 217,
+    "hcat_code": 3301090305,
+    "hcat_name": "vetches"
+  },
+  {
+    "flat_id": 218,
+    "hcat_code": 3301090398,
+    "hcat_name": "unspecified_legumes_harvested_green"
+  },
+  {
+    "flat_id": 219,
+    "hcat_code": 3301090400,
+    "hcat_name": "green_silo_maize"
+  },
+  {
+    "flat_id": 220,
+    "hcat_code": 3301099900,
+    "hcat_name": "other_plants_harvested_green"
+  },
+  {
+    "flat_id": 221,
+    "hcat_code": 3301100000,
+    "hcat_name": "arable_land_seed_seedlings"
+  },
+  {
+    "flat_id": 222,
+    "hcat_code": 3301110000,
+    "hcat_name": "fallow_land_not_crop"
+  },
+  {
+    "flat_id": 223,
+    "hcat_code": 3301120000,
+    "hcat_name": "kitchen_gardens"
+  },
+  {
+    "flat_id": 224,
+    "hcat_code": 3301130000,
+    "hcat_name": "strawberries"
+  },
+  {
+    "flat_id": 225,
+    "hcat_code": 3301140000,
+    "hcat_name": "cucurbits"
+  },
+  {
+    "flat_id": 226,
+    "hcat_code": 3301140100,
+    "hcat_name": "cucumber_pickle"
+  },
+  {
+    "flat_id": 227,
+    "hcat_code": 3301140200,
+    "hcat_name": "honeydew"
+  },
+  {
+    "flat_id": 228,
+    "hcat_code": 3301140300,
+    "hcat_name": "melon"
+  },
+  {
+    "flat_id": 229,
+    "hcat_code": 3301140400,
+    "hcat_name": "pumpkin_squash_gourd"
+  },
+  {
+    "flat_id": 230,
+    "hcat_code": 3301140500,
+    "hcat_name": "watermelon"
+  },
+  {
+    "flat_id": 231,
+    "hcat_code": 3301140600,
+    "hcat_name": "zucchini_courgette"
+  },
+  {
+    "flat_id": 232,
+    "hcat_code": 3301150000,
+    "hcat_name": "pseudocereal"
+  },
+  {
+    "flat_id": 233,
+    "hcat_code": 3301150100,
+    "hcat_name": "amaranth"
+  },
+  {
+    "flat_id": 234,
+    "hcat_code": 3301150200,
+    "hcat_name": "buckwheat"
+  },
+  {
+    "flat_id": 235,
+    "hcat_code": 3301150300,
+    "hcat_name": "quinoa"
+  },
+  {
+    "flat_id": 236,
+    "hcat_code": 3301160000,
+    "hcat_name": "soy_soybeans"
+  },
+  {
+    "flat_id": 237,
+    "hcat_code": 3301170000,
+    "hcat_name": "fennel"
+  },
+  {
+    "flat_id": 238,
+    "hcat_code": 3301180000,
+    "hcat_name": "topinambur_jerusalem_artichoke"
+  },
+  {
+    "flat_id": 239,
+    "hcat_code": 3301190000,
+    "hcat_name": "sage_chia"
+  },
+  {
+    "flat_id": 240,
+    "hcat_code": 3301200000,
+    "hcat_name": "asparagus"
+  },
+  {
+    "flat_id": 241,
+    "hcat_code": 3301210000,
+    "hcat_name": "brassicaceae_cruciferae"
+  },
+  {
+    "flat_id": 242,
+    "hcat_code": 3301210100,
+    "hcat_name": "mustard"
+  },
+  {
+    "flat_id": 243,
+    "hcat_code": 3301210200,
+    "hcat_name": "brassica_oleracea_cabbage"
+  },
+  {
+    "flat_id": 244,
+    "hcat_code": 3301210201,
+    "hcat_name": "bok_choy_pak_choi"
+  },
+  {
+    "flat_id": 245,
+    "hcat_code": 3301210202,
+    "hcat_name": "broccoli"
+  },
+  {
+    "flat_id": 246,
+    "hcat_code": 3301210203,
+    "hcat_name": "brussels_sprouts"
+  },
+  {
+    "flat_id": 247,
+    "hcat_code": 3301210204,
+    "hcat_name": "cauliflower"
+  },
+  {
+    "flat_id": 248,
+    "hcat_code": 3301210205,
+    "hcat_name": "chinese_cabbage"
+  },
+  {
+    "flat_id": 249,
+    "hcat_code": 3301210206,
+    "hcat_name": "collard_greens"
+  },
+  {
+    "flat_id": 250,
+    "hcat_code": 3301210207,
+    "hcat_name": "gai_lan"
+  },
+  {
+    "flat_id": 251,
+    "hcat_code": 3301210208,
+    "hcat_name": "kale"
+  },
+  {
+    "flat_id": 252,
+    "hcat_code": 3301210209,
+    "hcat_name": "kohlrabi"
+  },
+  {
+    "flat_id": 253,
+    "hcat_code": 3301210210,
+    "hcat_name": "red_cabbage"
+  },
+  {
+    "flat_id": 254,
+    "hcat_code": 3301210211,
+    "hcat_name": "savoy_cabbage"
+  },
+  {
+    "flat_id": 255,
+    "hcat_code": 3301210212,
+    "hcat_name": "white_cabbage"
+  },
+  {
+    "flat_id": 256,
+    "hcat_code": 3301210299,
+    "hcat_name": "other_brassica_oleracea_cabbage"
+  },
+  {
+    "flat_id": 257,
+    "hcat_code": 3301210300,
+    "hcat_name": "cress"
+  },
+  {
+    "flat_id": 258,
+    "hcat_code": 3301210400,
+    "hcat_name": "horseradish"
+  },
+  {
+    "flat_id": 259,
+    "hcat_code": 3301210500,
+    "hcat_name": "swede_rutabaga"
+  },
+  {
+    "flat_id": 260,
+    "hcat_code": 3301220000,
+    "hcat_name": "alliums"
+  },
+  {
+    "flat_id": 261,
+    "hcat_code": 3301220100,
+    "hcat_name": "chives"
+  },
+  {
+    "flat_id": 262,
+    "hcat_code": 3301220200,
+    "hcat_name": "garlic"
+  },
+  {
+    "flat_id": 263,
+    "hcat_code": 3301220300,
+    "hcat_name": "leek"
+  },
+  {
+    "flat_id": 264,
+    "hcat_code": 3301220400,
+    "hcat_name": "onions"
+  },
+  {
+    "flat_id": 265,
+    "hcat_code": 3301220500,
+    "hcat_name": "scallion"
+  },
+  {
+    "flat_id": 266,
+    "hcat_code": 3301220600,
+    "hcat_name": "shallot"
+  },
+  {
+    "flat_id": 267,
+    "hcat_code": 3301230000,
+    "hcat_name": "rhubarb"
+  },
+  {
+    "flat_id": 268,
+    "hcat_code": 3301240000,
+    "hcat_name": "purslane"
+  },
+  {
+    "flat_id": 269,
+    "hcat_code": 3301250000,
+    "hcat_name": "celery"
+  },
+  {
+    "flat_id": 270,
+    "hcat_code": 3301250100,
+    "hcat_name": "celeriac"
+  },
+  {
+    "flat_id": 271,
+    "hcat_code": 3301250200,
+    "hcat_name": "leaf_celery"
+  },
+  {
+    "flat_id": 272,
+    "hcat_code": 3301260000,
+    "hcat_name": "aubergine_eggplant"
+  },
+  {
+    "flat_id": 273,
+    "hcat_code": 3301270000,
+    "hcat_name": "artichoke"
+  },
+  {
+    "flat_id": 274,
+    "hcat_code": 3301280000,
+    "hcat_name": "tomato"
+  },
+  {
+    "flat_id": 275,
+    "hcat_code": 3301290000,
+    "hcat_name": "root_vegetables"
+  },
+  {
+    "flat_id": 276,
+    "hcat_code": 3301290100,
+    "hcat_name": "arctium_burdock"
+  },
+  {
+    "flat_id": 277,
+    "hcat_code": 3301290200,
+    "hcat_name": "beetroot_beets"
+  },
+  {
+    "flat_id": 278,
+    "hcat_code": 3301290300,
+    "hcat_name": "carrots_daucus"
+  },
+  {
+    "flat_id": 279,
+    "hcat_code": 3301290400,
+    "hcat_name": "mangelwurzel_fodder_beet"
+  },
+  {
+    "flat_id": 280,
+    "hcat_code": 3301290500,
+    "hcat_name": "parsnips"
+  },
+  {
+    "flat_id": 281,
+    "hcat_code": 3301290600,
+    "hcat_name": "radish"
+  },
+  {
+    "flat_id": 282,
+    "hcat_code": 3301290700,
+    "hcat_name": "sugar_beet"
+  },
+  {
+    "flat_id": 283,
+    "hcat_code": 3301290800,
+    "hcat_name": "turnips"
+  },
+  {
+    "flat_id": 284,
+    "hcat_code": 3301299800,
+    "hcat_name": "unspecified_root_vegetables"
+  },
+  {
+    "flat_id": 285,
+    "hcat_code": 3301300000,
+    "hcat_name": "capsicum"
+  },
+  {
+    "flat_id": 286,
+    "hcat_code": 3301300100,
+    "hcat_name": "bell_pepper_paprika"
+  },
+  {
+    "flat_id": 287,
+    "hcat_code": 3301300200,
+    "hcat_name": "chili_pepper"
+  },
+  {
+    "flat_id": 288,
+    "hcat_code": 3301310000,
+    "hcat_name": "salads_lettuce_leaf_vegetables"
+  },
+  {
+    "flat_id": 289,
+    "hcat_code": 3301310100,
+    "hcat_name": "chard"
+  },
+  {
+    "flat_id": 290,
+    "hcat_code": 3301310200,
+    "hcat_name": "chicory_chicories"
+  },
+  {
+    "flat_id": 291,
+    "hcat_code": 3301310300,
+    "hcat_name": "endive"
+  },
+  {
+    "flat_id": 292,
+    "hcat_code": 3301310400,
+    "hcat_name": "iceberg"
+  },
+  {
+    "flat_id": 293,
+    "hcat_code": 3301310500,
+    "hcat_name": "lambs_lettuce_rapunzel"
+  },
+  {
+    "flat_id": 294,
+    "hcat_code": 3301310600,
+    "hcat_name": "rocket_arugula"
+  },
+  {
+    "flat_id": 295,
+    "hcat_code": 3301310700,
+    "hcat_name": "sorrel"
+  },
+  {
+    "flat_id": 296,
+    "hcat_code": 3301310800,
+    "hcat_name": "spinach"
+  },
+  {
+    "flat_id": 297,
+    "hcat_code": 3301319900,
+    "hcat_name": "other_salads_lettuce_leaf_vegetables"
+  },
+  {
+    "flat_id": 298,
+    "hcat_code": 3301990000,
+    "hcat_name": "other_arable_land_crops"
+  },
+  {
+    "flat_id": 299,
+    "hcat_code": 3302000000,
+    "hcat_name": "pasture_meadow_grassland_grass"
+  },
+  {
+    "flat_id": 300,
+    "hcat_code": 3303000000,
+    "hcat_name": "permanent_crops_perennial"
+  },
+  {
+    "flat_id": 301,
+    "hcat_code": 3303010000,
+    "hcat_name": "orchards_fruits"
+  },
+  {
+    "flat_id": 302,
+    "hcat_code": 3303010100,
+    "hcat_name": "amelanchier_serviceberry"
+  },
+  {
+    "flat_id": 303,
+    "hcat_code": 3303010200,
+    "hcat_name": "apples"
+  },
+  {
+    "flat_id": 304,
+    "hcat_code": 3303010300,
+    "hcat_name": "apricots"
+  },
+  {
+    "flat_id": 305,
+    "hcat_code": 3303010400,
+    "hcat_name": "cherry_cherries"
+  },
+  {
+    "flat_id": 306,
+    "hcat_code": 3303010500,
+    "hcat_name": "feijoa"
+  },
+  {
+    "flat_id": 307,
+    "hcat_code": 3303010600,
+    "hcat_name": "fig"
+  },
+  {
+    "flat_id": 308,
+    "hcat_code": 3303010700,
+    "hcat_name": "kiwi"
+  },
+  {
+    "flat_id": 309,
+    "hcat_code": 3303010800,
+    "hcat_name": "medlar_loquat"
+  },
+  {
+    "flat_id": 310,
+    "hcat_code": 3303010900,
+    "hcat_name": "nectarine"
+  },
+  {
+    "flat_id": 311,
+    "hcat_code": 3303011000,
+    "hcat_name": "pawpaw"
+  },
+  {
+    "flat_id": 312,
+    "hcat_code": 3303011100,
+    "hcat_name": "peach"
+  },
+  {
+    "flat_id": 313,
+    "hcat_code": 3303011200,
+    "hcat_name": "pears"
+  },
+  {
+    "flat_id": 314,
+    "hcat_code": 3303011300,
+    "hcat_name": "plums"
+  },
+  {
+    "flat_id": 315,
+    "hcat_code": 3303011400,
+    "hcat_name": "pomegranate"
+  },
+  {
+    "flat_id": 316,
+    "hcat_code": 3303011500,
+    "hcat_name": "quinces"
+  },
+  {
+    "flat_id": 317,
+    "hcat_code": 3303019800,
+    "hcat_name": "unspecified_orchards_fruits"
+  },
+  {
+    "flat_id": 318,
+    "hcat_code": 3303020000,
+    "hcat_name": "berries_berry_species"
+  },
+  {
+    "flat_id": 319,
+    "hcat_code": 3303020100,
+    "hcat_name": "aronia_chokeberries"
+  },
+  {
+    "flat_id": 320,
+    "hcat_code": 3303020200,
+    "hcat_name": "blackberry"
+  },
+  {
+    "flat_id": 321,
+    "hcat_code": 3303020300,
+    "hcat_name": "blackcurrant_cassis"
+  },
+  {
+    "flat_id": 322,
+    "hcat_code": 3303020400,
+    "hcat_name": "blueberry"
+  },
+  {
+    "flat_id": 323,
+    "hcat_code": 3303020500,
+    "hcat_name": "cranberry"
+  },
+  {
+    "flat_id": 324,
+    "hcat_code": 3303020600,
+    "hcat_name": "currants"
+  },
+  {
+    "flat_id": 325,
+    "hcat_code": 3303020700,
+    "hcat_name": "gooseberry_gooseberries_cranberries"
+  },
+  {
+    "flat_id": 326,
+    "hcat_code": 3303020800,
+    "hcat_name": "hippophae_sea_buckthorns_seaberry"
+  },
+  {
+    "flat_id": 327,
+    "hcat_code": 3303020900,
+    "hcat_name": "jostaberry"
+  },
+  {
+    "flat_id": 328,
+    "hcat_code": 3303021000,
+    "hcat_name": "raspberry_raspberries"
+  },
+  {
+    "flat_id": 329,
+    "hcat_code": 3303021100,
+    "hcat_name": "redcurrant"
+  },
+  {
+    "flat_id": 330,
+    "hcat_code": 3303021200,
+    "hcat_name": "rose_hip_rosehip"
+  },
+  {
+    "flat_id": 331,
+    "hcat_code": 3303021300,
+    "hcat_name": "rowan_rowanberries"
+  },
+  {
+    "flat_id": 332,
+    "hcat_code": 3303021400,
+    "hcat_name": "tayberry"
+  },
+  {
+    "flat_id": 333,
+    "hcat_code": 3303029800,
+    "hcat_name": "unspecified_berries_berry_species"
+  },
+  {
+    "flat_id": 334,
+    "hcat_code": 3303030000,
+    "hcat_name": "nuts"
+  },
+  {
+    "flat_id": 335,
+    "hcat_code": 3303030100,
+    "hcat_name": "almond"
+  },
+  {
+    "flat_id": 336,
+    "hcat_code": 3303030200,
+    "hcat_name": "hazelnuts_hazel"
+  },
+  {
+    "flat_id": 337,
+    "hcat_code": 3303030300,
+    "hcat_name": "pecan"
+  },
+  {
+    "flat_id": 338,
+    "hcat_code": 3303030400,
+    "hcat_name": "pistachio"
+  },
+  {
+    "flat_id": 339,
+    "hcat_code": 3303030500,
+    "hcat_name": "sweet_chestnuts"
+  },
+  {
+    "flat_id": 340,
+    "hcat_code": 3303030600,
+    "hcat_name": "walnuts"
+  },
+  {
+    "flat_id": 341,
+    "hcat_code": 3303040000,
+    "hcat_name": "citrus_plantations"
+  },
+  {
+    "flat_id": 342,
+    "hcat_code": 3303050000,
+    "hcat_name": "olive_plantations"
+  },
+  {
+    "flat_id": 343,
+    "hcat_code": 3303050100,
+    "hcat_name": "olives_for_oil_production"
+  },
+  {
+    "flat_id": 344,
+    "hcat_code": 3303050200,
+    "hcat_name": "table_olives"
+  },
+  {
+    "flat_id": 345,
+    "hcat_code": 3303060000,
+    "hcat_name": "vineyards_wine_vine_rebland_grapes"
+  },
+  {
+    "flat_id": 346,
+    "hcat_code": 3303070000,
+    "hcat_name": "nurseries_nursery"
+  },
+  {
+    "flat_id": 347,
+    "hcat_code": 3303080000,
+    "hcat_name": "shrubberries_shrubs"
+  },
+  {
+    "flat_id": 348,
+    "hcat_code": 3303080100,
+    "hcat_name": "azaleas"
+  },
+  {
+    "flat_id": 349,
+    "hcat_code": 3303080200,
+    "hcat_name": "chaenomeles_cathayensis"
+  },
+  {
+    "flat_id": 350,
+    "hcat_code": 3303080300,
+    "hcat_name": "crataegus_hawthorn"
+  },
+  {
+    "flat_id": 351,
+    "hcat_code": 3303080400,
+    "hcat_name": "elder_elderberry"
+  },
+  {
+    "flat_id": 352,
+    "hcat_code": 3303080500,
+    "hcat_name": "honeysuckle"
+  },
+  {
+    "flat_id": 353,
+    "hcat_code": 3303080600,
+    "hcat_name": "ricinus_castor"
+  },
+  {
+    "flat_id": 354,
+    "hcat_code": 3303080700,
+    "hcat_name": "wire_bush"
+  },
+  {
+    "flat_id": 355,
+    "hcat_code": 3303090000,
+    "hcat_name": "ginko"
+  },
+  {
+    "flat_id": 356,
+    "hcat_code": 3303100000,
+    "hcat_name": "avocado"
+  },
+  {
+    "flat_id": 357,
+    "hcat_code": 3303110000,
+    "hcat_name": "legumes_from_trees"
+  },
+  {
+    "flat_id": 358,
+    "hcat_code": 3303110100,
+    "hcat_name": "carob"
+  },
+  {
+    "flat_id": 359,
+    "hcat_code": 3303110200,
+    "hcat_name": "mesquite"
+  },
+  {
+    "flat_id": 360,
+    "hcat_code": 3303110300,
+    "hcat_name": "tamarind"
+  },
+  {
+    "flat_id": 361,
+    "hcat_code": 3303120000,
+    "hcat_name": "unspecified_permanent_crops"
+  },
+  {
+    "flat_id": 362,
+    "hcat_code": 3303990000,
+    "hcat_name": "other_permanent_crops_plantations"
+  },
+  {
+    "flat_id": 363,
+    "hcat_code": 3304000000,
+    "hcat_name": "mushrooms_energy_genetically_modified_crops"
+  },
+  {
+    "flat_id": 364,
+    "hcat_code": 3304010000,
+    "hcat_name": "energy_crops"
+  },
+  {
+    "flat_id": 365,
+    "hcat_code": 3304020000,
+    "hcat_name": "genetically_modified_crops"
+  },
+  {
+    "flat_id": 366,
+    "hcat_code": 3304020100,
+    "hcat_name": "igniscum_candy"
+  },
+  {
+    "flat_id": 367,
+    "hcat_code": 3304030000,
+    "hcat_name": "sida_virginia_mallow"
+  },
+  {
+    "flat_id": 368,
+    "hcat_code": 3304040000,
+    "hcat_name": "truffle"
+  },
+  {
+    "flat_id": 369,
+    "hcat_code": 3304990000,
+    "hcat_name": "other_mushrooms_energy_crops_genetically_modified_crops"
+  },
+  {
+    "flat_id": 370,
+    "hcat_code": 3305000000,
+    "hcat_name": "greenhouse_foil_film"
+  },
+  {
+    "flat_id": 371,
+    "hcat_code": 3306000000,
+    "hcat_name": "tree_wood_forest"
+  },
+  {
+    "flat_id": 372,
+    "hcat_code": 3306010000,
+    "hcat_name": "afforestation_reforestation"
+  },
+  {
+    "flat_id": 373,
+    "hcat_code": 3306020000,
+    "hcat_name": "aspen"
+  },
+  {
+    "flat_id": 374,
+    "hcat_code": 3306030000,
+    "hcat_name": "birch"
+  },
+  {
+    "flat_id": 375,
+    "hcat_code": 3306040000,
+    "hcat_name": "dogwood_cornus"
+  },
+  {
+    "flat_id": 376,
+    "hcat_code": 3306050000,
+    "hcat_name": "eucalyptus"
+  },
+  {
+    "flat_id": 377,
+    "hcat_code": 3306060000,
+    "hcat_name": "oak"
+  },
+  {
+    "flat_id": 378,
+    "hcat_code": 3306070000,
+    "hcat_name": "populus"
+  },
+  {
+    "flat_id": 379,
+    "hcat_code": 3306080000,
+    "hcat_name": "willows_osiers"
+  },
+  {
+    "flat_id": 380,
+    "hcat_code": 3306980000,
+    "hcat_name": "unspecified_tree_wood_forest"
+  },
+  {
+    "flat_id": 381,
+    "hcat_code": 3306990000,
+    "hcat_name": "other_tree_wood_forest"
+  },
+  {
+    "flat_id": 382,
+    "hcat_code": 3307000000,
+    "hcat_name": "peat_turf"
+  },
+  {
+    "flat_id": 383,
+    "hcat_code": 3308000000,
+    "hcat_name": "unmaintained"
+  },
+  {
+    "flat_id": 384,
+    "hcat_code": 3399000000,
+    "hcat_name": "not_known_and_other"
+  }
+]

@@ -9,25 +9,24 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
-        "cache_dir": "cache/planetary_computer",
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
         "ingest": false,
-        "name": "rslearn.data_sources.planetary_computer.Sentinel1",
-        "query": {
-          "sar:instrument_mode": {
-            "eq": "IW"
-          },
-          "sar:polarizations": {
-            "eq": [
-              "VV",
-              "VH"
-            ]
+        "init_args": {
+          "cache_dir": "cache/planetary_computer",
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            }
           }
         },
         "query_config": {
@@ -46,26 +45,25 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
-        "cache_dir": "cache/planetary_computer",
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
         "duration": "30d",
         "ingest": false,
-        "name": "rslearn.data_sources.planetary_computer.Sentinel1",
-        "query": {
-          "sar:instrument_mode": {
-            "eq": "IW"
-          },
-          "sar:polarizations": {
-            "eq": [
-              "VV",
-              "VH"
-            ]
+        "init_args": {
+          "cache_dir": "cache/planetary_computer",
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            }
           }
         },
         "time_offset": "-180d"
@@ -81,26 +79,25 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
-        "cache_dir": "cache/planetary_computer",
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
         "duration": "30d",
         "ingest": false,
-        "name": "rslearn.data_sources.planetary_computer.Sentinel1",
-        "query": {
-          "sar:instrument_mode": {
-            "eq": "IW"
-          },
-          "sar:polarizations": {
-            "eq": [
-              "VV",
-              "VH"
-            ]
+        "init_args": {
+          "cache_dir": "cache/planetary_computer",
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            }
           }
         },
         "time_offset": "-150d"
@@ -116,26 +113,25 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
-        "cache_dir": "cache/planetary_computer",
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
         "duration": "30d",
         "ingest": false,
-        "name": "rslearn.data_sources.planetary_computer.Sentinel1",
-        "query": {
-          "sar:instrument_mode": {
-            "eq": "IW"
-          },
-          "sar:polarizations": {
-            "eq": [
-              "VV",
-              "VH"
-            ]
+        "init_args": {
+          "cache_dir": "cache/planetary_computer",
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            }
           }
         },
         "time_offset": "-120d"
@@ -151,26 +147,25 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
-        "cache_dir": "cache/planetary_computer",
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
         "duration": "30d",
         "ingest": false,
-        "name": "rslearn.data_sources.planetary_computer.Sentinel1",
-        "query": {
-          "sar:instrument_mode": {
-            "eq": "IW"
-          },
-          "sar:polarizations": {
-            "eq": [
-              "VV",
-              "VH"
-            ]
+        "init_args": {
+          "cache_dir": "cache/planetary_computer",
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            }
           }
         },
         "time_offset": "-90d"
@@ -186,26 +181,25 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
-        "cache_dir": "cache/planetary_computer",
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
         "duration": "30d",
         "ingest": false,
-        "name": "rslearn.data_sources.planetary_computer.Sentinel1",
-        "query": {
-          "sar:instrument_mode": {
-            "eq": "IW"
-          },
-          "sar:polarizations": {
-            "eq": [
-              "VV",
-              "VH"
-            ]
+        "init_args": {
+          "cache_dir": "cache/planetary_computer",
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            }
           }
         },
         "time_offset": "-60d"
@@ -221,26 +215,25 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
-        "cache_dir": "cache/planetary_computer",
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
         "duration": "30d",
         "ingest": false,
-        "name": "rslearn.data_sources.planetary_computer.Sentinel1",
-        "query": {
-          "sar:instrument_mode": {
-            "eq": "IW"
-          },
-          "sar:polarizations": {
-            "eq": [
-              "VV",
-              "VH"
-            ]
+        "init_args": {
+          "cache_dir": "cache/planetary_computer",
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            }
           }
         },
         "time_offset": "-30d"
@@ -256,26 +249,25 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
-        "cache_dir": "cache/planetary_computer",
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
         "duration": "30d",
         "ingest": false,
-        "name": "rslearn.data_sources.planetary_computer.Sentinel1",
-        "query": {
-          "sar:instrument_mode": {
-            "eq": "IW"
-          },
-          "sar:polarizations": {
-            "eq": [
-              "VV",
-              "VH"
-            ]
+        "init_args": {
+          "cache_dir": "cache/planetary_computer",
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            }
           }
         },
         "time_offset": "0d"
@@ -291,26 +283,25 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
-        "cache_dir": "cache/planetary_computer",
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
         "duration": "30d",
         "ingest": false,
-        "name": "rslearn.data_sources.planetary_computer.Sentinel1",
-        "query": {
-          "sar:instrument_mode": {
-            "eq": "IW"
-          },
-          "sar:polarizations": {
-            "eq": [
-              "VV",
-              "VH"
-            ]
+        "init_args": {
+          "cache_dir": "cache/planetary_computer",
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            }
           }
         },
         "time_offset": "30d"
@@ -326,26 +317,25 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
-        "cache_dir": "cache/planetary_computer",
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
         "duration": "30d",
         "ingest": false,
-        "name": "rslearn.data_sources.planetary_computer.Sentinel1",
-        "query": {
-          "sar:instrument_mode": {
-            "eq": "IW"
-          },
-          "sar:polarizations": {
-            "eq": [
-              "VV",
-              "VH"
-            ]
+        "init_args": {
+          "cache_dir": "cache/planetary_computer",
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            }
           }
         },
         "time_offset": "60d"
@@ -361,26 +351,25 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
-        "cache_dir": "cache/planetary_computer",
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
         "duration": "30d",
         "ingest": false,
-        "name": "rslearn.data_sources.planetary_computer.Sentinel1",
-        "query": {
-          "sar:instrument_mode": {
-            "eq": "IW"
-          },
-          "sar:polarizations": {
-            "eq": [
-              "VV",
-              "VH"
-            ]
+        "init_args": {
+          "cache_dir": "cache/planetary_computer",
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            }
           }
         },
         "time_offset": "90d"
@@ -396,26 +385,25 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
-        "cache_dir": "cache/planetary_computer",
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
         "duration": "30d",
         "ingest": false,
-        "name": "rslearn.data_sources.planetary_computer.Sentinel1",
-        "query": {
-          "sar:instrument_mode": {
-            "eq": "IW"
-          },
-          "sar:polarizations": {
-            "eq": [
-              "VV",
-              "VH"
-            ]
+        "init_args": {
+          "cache_dir": "cache/planetary_computer",
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            }
           }
         },
         "time_offset": "120d"
@@ -431,26 +419,25 @@
             "vh"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -32768,
-            -32768
-          ]
+          "nodata_value": -32768
         }
       ],
       "data_source": {
-        "cache_dir": "cache/planetary_computer",
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
         "duration": "30d",
         "ingest": false,
-        "name": "rslearn.data_sources.planetary_computer.Sentinel1",
-        "query": {
-          "sar:instrument_mode": {
-            "eq": "IW"
-          },
-          "sar:polarizations": {
-            "eq": [
-              "VV",
-              "VH"
-            ]
+        "init_args": {
+          "cache_dir": "cache/planetary_computer",
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            }
           }
         },
         "time_offset": "150d"

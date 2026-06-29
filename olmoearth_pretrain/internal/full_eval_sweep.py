@@ -19,9 +19,13 @@ from olmoearth_pretrain.evals.models import (
     get_launch_script_path,
 )
 from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
-from olmoearth_pretrain.internal.constants import EVAL_LAUNCH_PATH, EVAL_WANDB_PROJECT
+from olmoearth_pretrain.internal.constants import (
+    CHECKPOINT_SWEEP_LAUNCH_PATH,
+    EVAL_LAUNCH_PATH,
+    EVAL_WANDB_PROJECT,
+)
 from olmoearth_pretrain.internal.experiment import SubCmd
-from olmoearth_pretrain.nn.flexi_vit import PoolingType
+from olmoearth_pretrain.nn.pooling import PoolingType
 
 LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 Normalization_MODES = ["pre_trained", "dataset"]
@@ -118,11 +122,11 @@ def lr_only_params() -> Generator[dict[str, Any], None, None]:
 def select_best_val_args() -> str:
     """Get the early stopping arguments.
 
-    This is used to select the final test miou based on the epoch of the max val miou.
+    Selects the best test result based on the epoch with the best primary validation metric.
     """
     return " ".join(
         [
-            f" --trainer.callbacks.downstream_evaluator.tasks.{task_name}.select_final_test_miou_based_on_epoch_of_max_val_miou=True  --trainer.callbacks.downstream_evaluator.tasks.{task_name}.linear_probe_eval_interval=5"
+            f" --trainer.callbacks.downstream_evaluator.tasks.{task_name}.select_best_by_primary_metric=True  --trainer.callbacks.downstream_evaluator.tasks.{task_name}.linear_probe_eval_interval=5"
             for task_name in EVAL_TASKS.keys()
         ]
     )
@@ -406,10 +410,10 @@ def _get_base_run_name(
     return run_name
 
 
-def _get_checkpoint_args(checkpoint_path: str) -> str:
-    """Generate checkpoint arguments string."""
+def _get_checkpoint_args(checkpoint_path: str | None) -> str:
+    """Generate trainer args for checkpoint-resumed evaluation."""
     if checkpoint_path is not None:
-        return f"--trainer.load_path={checkpoint_path}"
+        return f"--trainer.load_path={checkpoint_path}{_EVAL_RESUME_MAX_DURATION}"
     return ""
 
 
@@ -510,7 +514,100 @@ def _get_pooling_type_str(pooling_type: str) -> str:
     return pooling_type_str
 
 
+def parse_task_names(task_names: str | None) -> list[str]:
+    """Parse comma-separated eval task names."""
+    if task_names is None:
+        return []
+    return [name.strip() for name in task_names.split(",") if name.strip()]
+
+
+def _get_label_fraction(args: argparse.Namespace) -> float:
+    """Get the active train-label fraction."""
+    label_fraction = getattr(args, "label_fraction", 1.0)
+    if label_fraction is None:
+        return 1.0
+    if not 0 < label_fraction <= 1:
+        raise ValueError("label_fraction must be in (0, 1].")
+    return label_fraction
+
+
+def _get_label_fraction_run_suffix(args: argparse.Namespace) -> str:
+    """Build a run-name suffix for active low-label evaluation."""
+    if getattr(args, "embedding_diagnostics_only", False):
+        return ""
+    label_fraction = _get_label_fraction(args)
+    if label_fraction == 1.0:
+        return ""
+    return f"_label{label_fraction:g}x"
+
+
+def _get_label_fraction_args(args: argparse.Namespace) -> str:
+    """Build per-task label_fraction overrides for the active low-label setting."""
+    if getattr(args, "embedding_diagnostics_only", False):
+        return ""
+    label_fraction = _get_label_fraction(args)
+    if label_fraction == 1.0:
+        return ""
+    return " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.label_fraction={label_fraction:g}"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+
+
+def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
+    """Build a downstream evaluator include-list override."""
+    if getattr(args, "embedding_diagnostics_only", False):
+        return ""
+
+    selected_tasks = parse_task_names(getattr(args, "task_names", None))
+    skip_tasks = parse_task_names(getattr(args, "task_skip_names", None))
+
+    unknown_tasks = sorted((set(selected_tasks) | set(skip_tasks)) - set(EVAL_TASKS))
+    if unknown_tasks:
+        raise ValueError(f"Unknown eval task names: {', '.join(unknown_tasks)}")
+
+    tasks_to_run = selected_tasks or list(EVAL_TASKS.keys())
+    if skip_tasks:
+        skip_task_set = set(skip_tasks)
+        tasks_to_run = [task for task in tasks_to_run if task not in skip_task_set]
+
+    if len(tasks_to_run) == len(EVAL_TASKS):
+        return ""
+    # Emit compact JSON (no space after commas). json.dumps' default separators
+    # add a space after each comma (["a", "b"]); when this list-valued override
+    # is baked into a launched Beaker job command, the surrounding quotes can be
+    # lost during shell re-serialization, so those spaces get word-split and
+    # OmegaConf receives an unterminated flow sequence (ParserError: "expected
+    # node content, but found <stream end>"). Compact separators avoid the
+    # word-splitting entirely.
+    return (
+        " --trainer.callbacks.downstream_evaluator.tasks_to_run="
+        f"'{json.dumps(tasks_to_run, separators=(',', ':'))}'"
+    )
+
+
 LAUNCH_OVERRIDES = "--launch.priority=high --launch.num_gpus=1 --launch.task_name=eval"
+# Overwrite the max duration to enable eval of the last step of the checkpoint
+MAX_DURATION_OVERRIDE = (
+    "--trainer.max_duration.value=10000000 --trainer.max_duration.unit=steps"
+)
+
+# Finished checkpoints still use the training max_duration; without extending it,
+# trainer.fit() exits immediately and eval_on_startup callbacks never run. Same values
+# as full_eval_sweep_finetune.py.
+_EVAL_RESUME_MAX_DURATION = (
+    " --trainer.max_duration.value=10000000 --trainer.max_duration.unit=steps"
+)
+
+
+def _get_env_prefix(args: argparse.Namespace, module_path: str) -> str:
+    """Build the environment variable prefix for commands."""
+    prefix = f"TRAIN_SCRIPT_PATH={module_path}"
+    if getattr(args, "embedding_diagnostics_only", False):
+        prefix += " EMBEDDING_DIAGNOSTICS_ONLY=1"
+    return prefix
 
 
 def _build_default_command(
@@ -530,11 +627,8 @@ def _build_default_command(
     logger.info(
         f"Running defaults: {norm_mode} normalization, lr={lr}, pooling={pooling_type}"
     )
-    run_name = f"{base_run_name}_df"
-    cmd_args = _get_model_specific_args(args.model)
-
-    # Add normalization-specific args
-    cmd_args += _get_normalization_args(args.model, norm_mode)
+    run_name = f"{base_run_name}_df{_get_label_fraction_run_suffix(args)}"
+    cmd_args = ""
 
     module_path = (
         args.module_path
@@ -542,23 +636,30 @@ def _build_default_command(
         else _get_module_path(args.model)
     )
     logger.info(f"Using module path {module_path}")
-    cmd_args += _get_model_size_args(args.model, size)
-    cmd_args += _get_load_checkpoints_args(args.model)
 
-    # Add quantization args if enabled
-    if getattr(args, "quantize_embeddings", False):
-        cmd_args += quantize_args
-        run_name += "_qt"
+    # Per-task overrides reference EVAL_TASKS keys — skip when using EMBED_DIAG_TASKS
+    if not getattr(args, "embedding_diagnostics_only", False):
+        cmd_args += _get_model_specific_args(args.model)
+        cmd_args += _get_normalization_args(args.model, norm_mode)
+        cmd_args += _get_model_size_args(args.model, size)
+        cmd_args += _get_load_checkpoints_args(args.model)
 
-    # Add embedding dim args if enabled
-    embedding_dim = getattr(args, "embedding_dim", None)
-    if embedding_dim is not None:
-        cmd_args += get_embedding_dim_args(embedding_dim)
-        run_name += f"_dim{embedding_dim}"
+        if getattr(args, "quantize_embeddings", False):
+            cmd_args += quantize_args
+            run_name += "_qt"
+
+        embedding_dim = getattr(args, "embedding_dim", None)
+        if embedding_dim is not None:
+            cmd_args += get_embedding_dim_args(embedding_dim)
+            run_name += f"_dim{embedding_dim}"
+    else:
+        cmd_args += _get_load_checkpoints_args(args.model)
+    cmd_args += _get_label_fraction_args(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
+    env_prefix = _get_env_prefix(args, module_path)
     return (
-        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
+        f"{env_prefix} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {run_name} {args.cluster} {launch_overrides} "
         f"{checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
     )
@@ -587,7 +688,10 @@ def _build_hyperparameter_command(
     # map default to df
     norm_mode_str = _get_norm_mode_str(norm_mode)
     pooling_type_str = _get_pooling_type_str(pooling_type)
-    run_name = f"{base_run_name}_{norm_mode_str}_lr{lr}_pt{pooling_type_str}"
+    run_name = (
+        f"{base_run_name}_{norm_mode_str}_lr{lr}_pt{pooling_type_str}"
+        f"{_get_label_fraction_run_suffix(args)}"
+    )
     cmd_args = lr_args.format(arg=lr)
 
     if pooling_type != "default":
@@ -612,18 +716,19 @@ def _build_hyperparameter_command(
         cmd_args += quantize_args
         run_name += "_qt"
 
-    # Add embedding dim args if enabled
     embedding_dim = getattr(args, "embedding_dim", None)
     if embedding_dim is not None:
         cmd_args += get_embedding_dim_args(embedding_dim)
         run_name += f"_dim{embedding_dim}"
+    cmd_args += _get_label_fraction_args(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
     if "init_seed" in extra:
         run_name += f"_seed{extra.split('init_seed=')[1].split(' ')[0]}"
+    env_prefix = _get_env_prefix(args, module_path)
     return (
-        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
+        f"{env_prefix} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {run_name} {args.cluster} {launch_overrides} {cmd_args} "
         f"{checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
     )
@@ -714,7 +819,10 @@ def _build_command_from_eval_settings(
         else _get_norm_mode_str(list(norm_modes_used)[0])
     )
 
-    run_name = f"{base_run_name}_{norm_str}_{lr_str}_pt{pooling_str}"
+    run_name = (
+        f"{base_run_name}_{norm_str}_{lr_str}_pt{pooling_str}"
+        f"{_get_label_fraction_run_suffix(args)}"
+    )
 
     # Check if quantization is enabled (either from args or from JSON settings)
     quantize_enabled = getattr(args, "quantize_embeddings", False) or any(
@@ -756,18 +864,19 @@ def _build_command_from_eval_settings(
         cmd_args += quantize_args
         run_name += "_qt"
 
-    # Add embedding dim args if enabled
     embedding_dim = getattr(args, "embedding_dim", None)
     if embedding_dim is not None:
         cmd_args += get_embedding_dim_args(embedding_dim)
         run_name += f"_dim{embedding_dim}"
+    cmd_args += _get_label_fraction_args(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
     if "init_seed" in extra:
         run_name += f"_seed{extra.split('init_seed=')[1].split(' ')[0]}"
+    env_prefix = _get_env_prefix(args, module_path)
     return (
-        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
+        f"{env_prefix} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {run_name} {args.cluster} {launch_overrides} {cmd_args} "
         f"{checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
     )
@@ -780,6 +889,50 @@ def _get_module_path(model: BaselineModelName | None) -> str:
     return get_launch_script_path(model)
 
 
+def _build_checkpoint_sweep_command(
+    args: argparse.Namespace,
+    sub_command: str,
+    launch_command: str,
+    project_name: str,
+    extra: str,
+) -> str:
+    """Build a single command that evaluates all checkpoints in a directory."""
+    checkpoint_dir = args.checkpoint_dir.rstrip("/")
+    base_run_name = os.path.basename(checkpoint_dir) + "_sweep"
+    if args.model_name:
+        base_run_name = args.model_name
+    base_run_name += _get_label_fraction_run_suffix(args)
+
+    module_path = (
+        args.module_path
+        if args.module_path is not None
+        else _get_module_path(args.model)
+    )
+
+    cmd_args = ""
+    if not getattr(args, "embedding_diagnostics_only", False):
+        cmd_args += _get_model_specific_args(args.model)
+        cmd_args += _get_normalization_args(args.model, Normalization_MODES[0])
+        if args.size:
+            cmd_args += _get_model_size_args(args.model, args.size)
+    cmd_args += _get_load_checkpoints_args(args.model)
+    cmd_args += _get_label_fraction_args(args)
+
+    env_prefix = (
+        _get_env_prefix(args, module_path) + f" CHECKPOINT_DIR={checkpoint_dir}"
+    )
+    if args.steps:
+        env_prefix += f" CHECKPOINT_STEPS={args.steps}"
+
+    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
+    return (
+        f"{env_prefix} "
+        f"{launch_command} {CHECKPOINT_SWEEP_LAUNCH_PATH} "
+        f"{sub_command} {base_run_name} {args.cluster} {launch_overrides} "
+        f"--trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
+    )
+
+
 def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     """Build the commands for the sweep."""
     project_name = args.project_name or EVAL_WANDB_PROJECT
@@ -787,6 +940,19 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
 
     sub_command = _get_sub_command(args)
     launch_command = "python3" if not sub_command == SubCmd.evaluate else "torchrun"
+
+    # Checkpoint sweep mode: evaluate all checkpoints in a directory
+    if args.checkpoint_dir:
+        cmd = _build_checkpoint_sweep_command(
+            args, sub_command, launch_command, project_name, extra
+        )
+        commands_to_run = [cmd]
+        commands_to_run = [f"{cmd} {MAX_DURATION_OVERRIDE}" for cmd in commands_to_run]
+        tasks_to_run_arg = _get_tasks_to_run_arg(args)
+        if tasks_to_run_arg:
+            commands_to_run = [f"{cmd}{tasks_to_run_arg}" for cmd in commands_to_run]
+        return commands_to_run
+
     checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
 
     commands_to_run = []
@@ -924,11 +1090,10 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             commands_to_run_new.append(cmd)
         commands_to_run = commands_to_run_new
 
-    # Filter out skipped tasks if task-skip-names is provided
-    if args.task_skip_names:
-        skip_names = [name.strip() for name in args.task_skip_names.split(",")]
-        tasks_to_run = [task for task in EVAL_TASKS.keys() if task not in skip_names]
-        tasks_to_run_arg = f" --trainer.callbacks.downstream_evaluator.tasks_to_run='{json.dumps(tasks_to_run)}'"
+    commands_to_run = [f"{cmd} {MAX_DURATION_OVERRIDE}" for cmd in commands_to_run]
+
+    tasks_to_run_arg = _get_tasks_to_run_arg(args)
+    if tasks_to_run_arg:
         commands_to_run_new = []
         for cmd in commands_to_run:
             logger.info(f"Adding tasks_to_run filter to {cmd}")
@@ -1023,6 +1188,12 @@ def main() -> None:
         help="Comma-separated list of task names to skip (e.g., pastis128_sentinel2,pastis128_sentinel1)",
     )
     parser.add_argument(
+        "--task-names",
+        type=str,
+        required=False,
+        help="Comma-separated list of task names to run. If omitted, all tasks run.",
+    )
+    parser.add_argument(
         "--size",
         type=str,
         required=False,
@@ -1044,6 +1215,31 @@ def main() -> None:
         type=int,
         default=None,
         help="If set, reduce embeddings to this dimensionality via PCA (e.g., 128, 64)",
+    )
+    parser.add_argument(
+        "--embedding_diagnostics_only",
+        action="store_true",
+        help="If set, run ONLY embedding diagnostics (no KNN/LP). Much faster than full eval.",
+    )
+    parser.add_argument(
+        "--checkpoint_dir",
+        type=str,
+        default=None,
+        help="Directory containing step{N}/ checkpoint folders. "
+        "Evaluates all checkpoints and logs to a single wandb run.",
+    )
+    parser.add_argument(
+        "--steps",
+        type=str,
+        default=None,
+        help="Comma-separated list of step numbers to evaluate "
+        "(e.g. '5000,10000,15000'). Only used with --checkpoint_dir.",
+    )
+    parser.add_argument(
+        "--label_fraction",
+        type=float,
+        default=1.0,
+        help="Train-label fraction to evaluate (1.0 uses all labels).",
     )
 
     args, extra_cli = parser.parse_known_args()

@@ -36,6 +36,7 @@ from olmoearth_pretrain.data.dataset import (
     GetItemArgs,
     OlmoEarthDataset,
     OlmoEarthSample,
+    subset_sample_default,
 )
 from olmoearth_pretrain.data.transform import Transform, TransformConfig
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
@@ -419,6 +420,12 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 (12, Modality.ERA5_10.num_bands), dtype=np.float32
             )
             output_dict["era5_10"] = mock_era5_10
+        if Modality.EUROCROPS.name in self.dataset.training_modalities:
+            mock_eurocrops = rng.random(
+                (standard_hw, standard_hw, 1, Modality.EUROCROPS.num_bands),
+                dtype=np.float32,
+            )
+            output_dict["eurocrops"] = mock_eurocrops
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))
@@ -444,8 +451,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
 
         # Generate mock samples
         mock_samples = [
-            self._get_mock_sample(rng).subset_default(
-                patch_size,
+            subset_sample_default(
+                self._get_mock_sample(rng),
+                patch_size=patch_size,
                 max_tokens_per_instance=1500,
                 sampled_hw_p=6,
                 current_length=12,

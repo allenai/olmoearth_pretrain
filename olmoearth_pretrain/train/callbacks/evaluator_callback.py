@@ -15,13 +15,11 @@ import torch
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
 from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset
+from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.evals.datasets import (
-    EvalDatasetPartition,
-    get_eval_dataset,
-)
+from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
     EvalDatasetConfig,
     TaskType,
@@ -29,7 +27,11 @@ from olmoearth_pretrain.evals.datasets.configs import (
     get_eval_mode,
 )
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
-from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn
+from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn_variable_time
+from olmoearth_pretrain.evals.embedding_diagnostics import (
+    compute_embedding_diagnostics,
+    compute_spatial_embedding_diagnostics,
+)
 from olmoearth_pretrain.evals.embedding_transforms import (
     dequantize_embeddings,
     reduce_embedding_dim,
@@ -39,8 +41,8 @@ from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
 from olmoearth_pretrain.evals.knn import run_knn
 from olmoearth_pretrain.evals.linear_probe import ProbeType, train_and_eval_probe
-from olmoearth_pretrain.evals.metrics import EvalResult, EvalTaskResult
-from olmoearth_pretrain.nn.flexi_vit import PoolingType
+from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,7 @@ class EvalMode(StrEnum):
     KNN = "knn"
     LINEAR_PROBE = "linear_probe"
     FINETUNE = "finetune"
+    EMBEDDING_DIAGNOSTICS = "embedding_diagnostics"
 
 
 @dataclass
@@ -83,7 +86,11 @@ class DownstreamTaskConfig:
     # FT
     ft_lr: float | None = None
     ft_batch_size: int = 32
+    ft_grad_accum_steps: int = 1
     finetune_seed: int = 42
+    ft_head_type: str = (
+        "linear"  # "linear" or "unet" (unet only valid for segmentation/regression)
+    )
     # LP / FT
     epochs: int = 50
     # LP / KNN / FT
@@ -95,13 +102,46 @@ class DownstreamTaskConfig:
     # Use the center spatial patch embedding instead of pooling across all patches
     # for classification tasks. Has no effect on segmentation tasks.
     use_center_token: bool = False
-    partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
-    norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
-    select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
+    # Fraction of training labels to use for low-label evals. Dataset-specific
+    # code translates this into fixed partitions or deterministic subsamples.
+    label_fraction: float = 1.0
+    # Default to 2std no clip - this matches what our model sees in pretraining,
+    # so when using dataset stats (e.g. for MADOS) consistency is important.
+    norm_method: NormMethod = field(
+        default_factory=lambda: NormMethod.NORM_NO_CLIP_2_STD
+    )
+    select_best_by_primary_metric: bool = False
+    # Subsample train embeddings for faster probe training (None = use all)
+    max_train_samples: int | None = None
+    # Seed for the max_train_samples subsample so the subset is reproducible
+    # across checkpoints in a sweep.
+    max_train_samples_seed: int = 42
     # Quantize embeddings to int8 for storage efficiency evaluation
     quantize_embeddings: bool = False
     # Reduce embedding dimensionality via PCA (None = no reduction)
     embedding_dim: int | None = None
+    # Use weighted dice loss instead of cross-entropy (only for specific tasks like wildfire)
+    use_dice_loss: bool = False
+    # Override the default primary metric (e.g. EvalMetric.F1 instead of ACCURACY).
+    # None = use the default for the task type (accuracy for classification, miou for segmentation).
+    primary_metric: EvalMetric | None = None
+    # Class index for CLASS_F1 primary metric. Required when primary_metric is CLASS_F1.
+    primary_metric_class: int | None = None
+    # For pretrain_subset dataset: path to training h5py data
+    h5py_dir: str | None = None
+    # For pretrain_subset: max samples to load
+    pretrain_max_samples: int = 512
+    # For pretrain subset auxiliary probes: target modality to predict.
+    pretrain_target_modality: str | None = None
+    pretrain_label_seed: int = 42
+    pretrain_train_samples: int = 512
+    pretrain_valid_samples: int = 512
+    pretrain_test_samples: int = 512
+    # Geographic vs random index selection for pretrain subset auxiliary probes.
+    # "random" picks indices uniformly; "geographic" buckets samples into
+    # latlon-bin holdouts so train/val/test are spatially disjoint.
+    pretrain_split_strategy: str = "random"
+    pretrain_geographic_bin_size_deg: float = 5.0
 
 
 class DownstreamEvaluator:
@@ -140,34 +180,46 @@ class DownstreamEvaluator:
         self.pooling_type = task.pooling_type
         self.norm_stats_from_pretrained = task.norm_stats_from_pretrained
         self.input_modalities = task.input_modalities
-        self.input_layers = task.input_layers
         self.probe_lr = task.probe_lr
         self.probe_batch_size = task.probe_batch_size
         self.ft_lr = task.ft_lr
         self.ft_batch_size = task.ft_batch_size
+        self.ft_grad_accum_steps = task.ft_grad_accum_steps
         self.finetune_seed = task.finetune_seed
+        self.ft_head_type = task.ft_head_type
         self.epochs = task.epochs
         self.linear_probe_eval_interval = task.linear_probe_eval_interval
         self.patch_size = task.patch_size
+        self.max_train_samples = task.max_train_samples
+        self.max_train_samples_seed = task.max_train_samples_seed
         self.eval_interval = task.eval_interval
         self.eval_mode = task.eval_mode
         self.probe_type = task.probe_type
-        self.partition = task.partition
+        self.label_fraction = task.label_fraction
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
         self.use_center_token = task.use_center_token
-        self.select_final_test_miou_based_on_epoch_of_max_val_miou = (
-            task.select_final_test_miou_based_on_epoch_of_max_val_miou
-        )
+        self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
         self.embedding_dim = task.embedding_dim
+        self.use_dice_loss = task.use_dice_loss
+        self.primary_metric = task.primary_metric
+        self.primary_metric_class = task.primary_metric_class
+        self.h5py_dir = task.h5py_dir
+        self.pretrain_max_samples = task.pretrain_max_samples
+        self.pretrain_target_modality = task.pretrain_target_modality
+        self.pretrain_label_seed = task.pretrain_label_seed
+        self.pretrain_train_samples = task.pretrain_train_samples
+        self.pretrain_valid_samples = task.pretrain_valid_samples
+        self.pretrain_test_samples = task.pretrain_test_samples
+        self.pretrain_split_strategy = task.pretrain_split_strategy
+        self.pretrain_geographic_bin_size_deg = task.pretrain_geographic_bin_size_deg
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
-        if self.select_final_test_miou_based_on_epoch_of_max_val_miou:
+        if self.select_best_by_primary_metric:
             assert self.run_on_test, (
-                "if select_final_test_miou_based_on_epoch_of_max_val_miou is True, "
-                "run_on_test must be True"
+                "if select_best_by_primary_metric is True, run_on_test must be True"
             )
         if self.eval_mode is None:
             self.eval_mode = get_eval_mode(self.config.task_type)  # type: ignore
@@ -180,17 +232,23 @@ class DownstreamEvaluator:
         if self.eval_mode == EvalMode.LINEAR_PROBE:
             if self.probe_lr is None:
                 raise ValueError("probe_lr cannot be none for segmentation tasks.")
-            if self.config.task_type == TaskType.SEGMENTATION:
+            if self.config.task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION):
                 if self.config.height_width is None:
                     raise ValueError(
                         "config.height_width cannot be none for segmentation tasks."
                     )
                 if self.config.height_width % self.patch_size != 0:
-                    raise ValueError("Image height / width indivisable by patch size.")
+                    raise ValueError(
+                        f"Image height / width indivisable by patch size. {self.config.height_width} % {self.patch_size} != 0"
+                    )
 
         if self.eval_mode == EvalMode.FINETUNE:
             if self.ft_lr is None:
                 raise ValueError("ft_lr cannot be none for finetune tasks.")
+            if self.ft_grad_accum_steps < 1:
+                raise ValueError(
+                    f"ft_grad_accum_steps must be >= 1, got {self.ft_grad_accum_steps}"
+                )
             if self.config.task_type == TaskType.SEGMENTATION:
                 if self.config.height_width is None:
                     raise ValueError(
@@ -202,6 +260,8 @@ class DownstreamEvaluator:
         self.eval_function = (
             partial(
                 run_knn,
+                primary_metric=self.primary_metric,
+                primary_metric_class=self.primary_metric_class,
             )
             if self.eval_mode == EvalMode.KNN
             else (
@@ -212,7 +272,10 @@ class DownstreamEvaluator:
                     eval_interval=self.linear_probe_eval_interval,
                     probe_type=self.probe_type,
                     lr=self.probe_lr,
-                    select_final_test_miou_based_on_epoch_of_max_val_miou=self.select_final_test_miou_based_on_epoch_of_max_val_miou,
+                    select_best_by_primary_metric=self.select_best_by_primary_metric,
+                    use_dice_loss=self.use_dice_loss,
+                    primary_metric=self.primary_metric,
+                    primary_metric_class=self.primary_metric_class,
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
                 else None
@@ -236,22 +299,39 @@ class DownstreamEvaluator:
             generator.manual_seed(split_seed)
             worker_init_fn = partial(_seed_worker, base_seed=split_seed)
 
+        extra_kwargs: dict[str, Any] = {}
+        if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
+            extra_kwargs["h5py_dir"] = self.h5py_dir
+            extra_kwargs["training_modalities"] = self.input_modalities
+            extra_kwargs["max_samples"] = self.pretrain_max_samples
+            extra_kwargs["target_modality"] = self.pretrain_target_modality
+            extra_kwargs["pretrain_split"] = split
+            extra_kwargs["pretrain_label_seed"] = self.pretrain_label_seed
+            extra_kwargs["pretrain_train_samples"] = self.pretrain_train_samples
+            extra_kwargs["pretrain_valid_samples"] = self.pretrain_valid_samples
+            extra_kwargs["pretrain_test_samples"] = self.pretrain_test_samples
+            extra_kwargs["pretrain_split_strategy"] = self.pretrain_split_strategy
+            extra_kwargs["pretrain_geographic_bin_size_deg"] = (
+                self.pretrain_geographic_bin_size_deg
+            )
+        eval_ds = get_eval_dataset(
+            eval_dataset=self.dataset,
+            split=split,
+            label_fraction=self.label_fraction,
+            norm_stats_from_pretrained=self.norm_stats_from_pretrained,
+            input_modalities=self.input_modalities,
+            norm_method=self.norm_method,
+            **extra_kwargs,
+        )
+        is_iterable = isinstance(eval_ds, IterableDataset)
         return DataLoader(
-            get_eval_dataset(
-                eval_dataset=self.dataset,
-                split=split,
-                partition=self.partition,
-                norm_stats_from_pretrained=self.norm_stats_from_pretrained,
-                input_modalities=self.input_modalities,
-                input_layers=self.input_layers,
-                norm_method=self.norm_method,
-            ),
-            collate_fn=eval_collate_fn,
+            eval_ds,
+            collate_fn=eval_collate_fn_variable_time,
             batch_size=batch_size,
             num_workers=self.num_workers,
-            generator=generator,
+            generator=None if is_iterable else generator,
             worker_init_fn=worker_init_fn,
-            shuffle=(split == "train"),  # Only shuffle train data
+            shuffle=False if is_iterable else (split == "train"),
         )
 
     def _get_embeddings(
@@ -297,21 +377,51 @@ class DownstreamEvaluator:
     def _val_embed_probe(self) -> EvalTaskResult:
         """Validate the model using embeddings and probe (knn or linear probe)."""
         logger.info(f"Validating {self.dataset} with {self.eval_mode}")
+        logger.info(f"Getting train loader for {self.dataset}...")
         train_loader = self._get_data_loader("train", self.embedding_batch_size)
+        logger.info(f"Getting val loader for {self.dataset}...")
         val_loader = self._get_data_loader("valid", self.embedding_batch_size)
-        test_loader = self._get_data_loader("test", self.embedding_batch_size)
 
         start_time = time.time()
         logger.info(f"Getting train embeddings for {self.dataset}...")
         train_embeddings, train_labels = self._get_embeddings(
             train_loader, is_train=True
         )
+        logger.info(f"Train embeddings shape: {train_embeddings.shape}")
+        logger.info(
+            f"Train label counts: {torch.unique(train_labels, return_counts=True)}"
+        )
+
+        # Subsample train embeddings if configured
+        if (
+            self.max_train_samples
+            and train_embeddings.shape[0] > self.max_train_samples
+        ):
+            logger.info(
+                f"Subsampling train embeddings from {train_embeddings.shape[0]} "
+                f"to {self.max_train_samples} (seed={self.max_train_samples_seed})"
+            )
+            generator = torch.Generator().manual_seed(self.max_train_samples_seed)
+            indices = torch.randperm(train_embeddings.shape[0], generator=generator)[
+                : self.max_train_samples
+            ]
+            train_embeddings = train_embeddings[indices]
+            train_labels = train_labels[indices]
+
         logger.info(f"Getting val embeddings for {self.dataset}...")
         val_embeddings, val_labels = self._get_embeddings(val_loader, is_train=False)
+        logger.info(f"Val embeddings shape: {val_embeddings.shape}")
+        logger.info(f"Val label counts: {torch.unique(val_labels, return_counts=True)}")
         if self.run_on_test:
+            logger.info(f"Getting test loader for {self.dataset}...")
+            test_loader = self._get_data_loader("test", self.embedding_batch_size)
             logger.info(f"Getting test embeddings for {self.dataset}...")
             test_embeddings, test_labels = self._get_embeddings(
                 test_loader, is_train=False
+            )
+            logger.info(f"Test embeddings shape: {test_embeddings.shape}")
+            logger.info(
+                f"Test label counts: {torch.unique(test_labels, return_counts=True)}"
             )
         else:
             test_embeddings, test_labels = None, None
@@ -332,7 +442,6 @@ class DownstreamEvaluator:
         if test_labels is not None:
             logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
 
-        # Dequantize if embeddings were quantized
         if self.quantize_embeddings:
             logger.info(f"Dequantizing embeddings for {self.dataset}")
             train_embeddings = dequantize_embeddings(train_embeddings)
@@ -372,6 +481,7 @@ class DownstreamEvaluator:
 
         # Free memory aggressively between evals
         del train_embeddings, train_labels, test_embeddings, test_labels
+        del val_embeddings, val_labels
         torch.cuda.empty_cache()
         gc.collect()
 
@@ -468,19 +578,44 @@ class DownstreamEvaluator:
             seed=self.finetune_seed,
             best_checkpoint_path=best_checkpoint_path,
             resume_checkpoint_path=resume_checkpoint_path,
+            primary_metric=self.primary_metric,
+            primary_metric_class=self.primary_metric_class,
+            ft_grad_accum_steps=self.ft_grad_accum_steps,
+            head_type=self.ft_head_type,  # type: ignore[arg-type]
+            use_dice_loss=self.use_dice_loss,
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
         )
         model.load_state_dict(original_state)
+        del original_state
 
         torch.cuda.empty_cache()
         gc.collect()
         return result
 
+    def _val_embedding_diagnostics(self) -> EvalTaskResult:
+        """Compute embedding diagnostics only (no downstream task)."""
+        logger.info(f"Computing embedding diagnostics for {self.dataset}")
+        data_loader = self._get_data_loader("train", self.embedding_batch_size)
+        embeddings, _ = self._get_embeddings(data_loader, is_train=False)
+        logger.info(f"Embeddings shape for {self.dataset}: {embeddings.shape}")
+
+        if embeddings.ndim >= 3:
+            diagnostics = compute_spatial_embedding_diagnostics(embeddings)
+        else:
+            diagnostics = compute_embedding_diagnostics(embeddings)
+        logger.info(f"Embedding diagnostics for {self.dataset}: {diagnostics}")
+
+        result = EvalTaskResult(val_result=None, test_result=None)
+        result.embedding_diagnostics = diagnostics
+        return result
+
     def val(self) -> EvalTaskResult:
         """Validate the model on the downstream task."""
-        if self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
+        if self.eval_mode == EvalMode.EMBEDDING_DIAGNOSTICS:
+            return self._val_embedding_diagnostics()
+        elif self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
             return self._val_embed_probe()
         elif self.eval_mode == EvalMode.FINETUNE:
             return self._val_finetune()
@@ -488,25 +623,47 @@ class DownstreamEvaluator:
             raise ValueError(f"Unsupported eval_mode: {self.eval_mode}")
 
 
+def _make_other_prefix(prefix: str) -> str:
+    """Turn 'eval' -> 'eval_other', 'eval/test' -> 'eval_other/test'."""
+    parts = prefix.split("/", 1)
+    parts[0] = parts[0] + "_other"
+    return "/".join(parts)
+
+
+def eval_result_log_dict(
+    prefix: str, name: str, result: EvalResult
+) -> dict[str, float]:
+    """Build the wandb log dict for an EvalResult.
+
+    Primary metric goes to ``{prefix}/{name}`` (e.g. ``eval/m_eurosat``).
+    Non-primary metrics go to ``{prefix}_other/.../{name}/{metric_name}``.
+    """
+    other_prefix = _make_other_prefix(prefix)
+    log_dict: dict[str, float] = {f"{prefix}/{name}": result.primary}
+    for metric_name, metric_value in result.metrics.items():
+        if metric_name == result.primary_metric_key:
+            continue
+        log_dict[f"{other_prefix}/{name}/{metric_name}"] = metric_value
+    return log_dict
+
+
 def _log_eval_result_to_wandb(
     wandb_callback: Any, prefix: str, name: str, result: EvalResult
 ) -> None:
-    """Log an EvalResult to wandb."""
-    # Log all metrics
-    for metric_name, metric_value in result.metrics.items():
-        wandb_callback.wandb.log({f"{prefix}/{name}/{metric_name}": metric_value})
-    # Also log primary metric for backward compatibility
-    wandb_callback.wandb.log({f"{prefix}/{name}": result.primary})
+    """Log an EvalResult to wandb using the shared key layout."""
+    wandb_callback.wandb.log(eval_result_log_dict(prefix, name, result))
 
 
 def _record_eval_result(
     trainer: Trainer, prefix: str, name: str, result: EvalResult
 ) -> None:
     """Record an EvalResult to trainer metrics."""
-    for metric_name, metric_value in result.metrics.items():
-        trainer.record_metric(f"{prefix}/{name}/{metric_name}", metric_value)
-    # Also record primary metric for backward compatibility
+    other_prefix = _make_other_prefix(prefix)
     trainer.record_metric(f"{prefix}/{name}", result.primary)
+    for metric_name, metric_value in result.metrics.items():
+        if metric_name == result.primary_metric_key:
+            continue
+        trainer.record_metric(f"{other_prefix}/{name}/{metric_name}", metric_value)
 
 
 @dataclass
@@ -614,7 +771,6 @@ class DownstreamEvaluatorCallback(Callback):
         bootstrap_stats = result.bootstrap_stats
 
         if wandb_callback.enabled:
-            # Log validation results
             if val_result is not None:
                 _log_eval_result_to_wandb(
                     wandb_callback, "eval", evaluator.evaluation_name, val_result
@@ -622,6 +778,13 @@ class DownstreamEvaluatorCallback(Callback):
             wandb_callback.wandb.log(
                 {"eval_time/" + evaluator.evaluation_name: eval_time}
             )
+            if result.embedding_diagnostics:
+                wandb_callback.wandb.log(
+                    {
+                        f"eval_embed_diagnostics/{evaluator.evaluation_name}/{k}": v
+                        for k, v in result.embedding_diagnostics.items()
+                    }
+                )
 
         # Separate finetune step metric per task
         if evaluator.eval_mode == EvalMode.FINETUNE:
@@ -632,13 +795,9 @@ class DownstreamEvaluatorCallback(Callback):
                 )
                 wandb_callback.wandb.log({f"{evaluator.evaluation_name}_step": 0})
 
-        # Check if results are valid
-        val_valid = val_result is not None and val_result.primary >= 0
+        # Log test results and bootstrap stats independently of val validity
         test_valid = test_result is not None and test_result.primary >= 0
-
-        # Only logging valid results to wandb
-        if val_valid and test_valid:
-            # Log bootstrap statistics if available
+        if wandb_callback.enabled and test_valid:
             if bootstrap_stats:
                 wandb_callback.wandb.log(
                     {
@@ -705,8 +864,10 @@ class DownstreamEvaluatorCallback(Callback):
     def _perform_eval(self, evaluator: DownstreamEvaluator) -> EvalTaskResult:
         """Run the evaluator."""
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
+
         start_time = time.monotonic()
         result = evaluator.val()
+
         val_result = result.val_result
         test_result = result.test_result
         bootstrap_stats = result.bootstrap_stats
@@ -740,11 +901,19 @@ class DownstreamEvaluatorCallback(Callback):
                 f"eval/test/{evaluator.evaluation_name}_bootstrap_ci_upper",
                 bootstrap_stats.get("ci_upper"),
             )
+        if result.embedding_diagnostics:
+            for metric_name, metric_value in result.embedding_diagnostics.items():
+                self.trainer.record_metric(
+                    f"eval_embed_diagnostics/{evaluator.evaluation_name}/{metric_name}",
+                    metric_value,
+                )
+
         eval_time = time.monotonic() - start_time
         self.trainer.record_metric(f"eval_time/{evaluator.evaluation_name}", eval_time)
         logger.info(
             f"Finished {evaluator.evaluation_name} evaluations in {eval_time:.1f} seconds."
         )
+
         result.eval_time = eval_time
         return result
 
@@ -773,13 +942,6 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
         self, task: DownstreamTaskConfig, config: EvalDatasetConfig
     ) -> None:
         """Verify the input modality configuration for a task."""
-        # Check that input_modalities is only set for multimodal tasks
-        if (task.dataset not in ["pastis", "pastis128", "nandi", "awf"]) and len(
-            task.input_modalities
-        ) > 0:
-            raise ValueError(
-                f"input_modalities is only supported for multimodal tasks, got {task.dataset}"
-            )
         # Make sure input_modalities contains only unique modalities
         if len(task.input_modalities) != len(set(task.input_modalities)):
             raise ValueError(
@@ -789,21 +951,6 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             raise ValueError(
                 f"input_modalities must be a subset of supported_modalities, got {task.input_modalities} and {config.supported_modalities}"
             )
-
-    def verify_input_layers(self, task: DownstreamTaskConfig) -> None:
-        """Check input_layers config."""
-        rslearn_datasets = {"nandi", "awf"}
-        layers = task.input_layers or []
-
-        # input_layers not allowed on non-rslearn datasets
-        if task.dataset not in rslearn_datasets and layers:
-            raise ValueError(
-                f"`input_layers` not supported for dataset '{task.dataset}'."
-            )
-
-        # input_layers must be unique
-        if len(layers) != len(set(layers)):
-            raise ValueError(f"`input_layers` must be unique, got {layers}")
 
     def build(self, trainer: Trainer) -> Callback | None:
         """Build the downstream evaluator callback."""
@@ -830,8 +977,20 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                 )
                 continue
 
+            if task.h5py_dir is not None and not UPath(task.h5py_dir).exists():
+                raise FileNotFoundError(
+                    f"h5py_dir for eval task '{evaluation_name}' does not exist: "
+                    f"{task.h5py_dir}. Pretrain-subset eval snapshots are created "
+                    f"by scripts/tools/20260611_snapshot_pretrain_eval_subset.py "
+                    f"and must match the path constants in "
+                    f"olmoearth_pretrain/internal/all_evals.py."
+                )
+
             config = dataset_to_config(task.dataset)
-            if config.task_type == TaskType.SEGMENTATION:
+            if (
+                config.task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION)
+                and task.eval_mode != EvalMode.EMBEDDING_DIAGNOSTICS
+            ):
                 if task.probe_lr is None and task.ft_lr is None:
                     raise ValueError(
                         f"probe_lr and ft_lr cannot both be None for {task.dataset}"
@@ -840,7 +999,6 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             self.verify_input_modalities(task, config)
             # Sort to ensure consistent order
             task.input_modalities.sort()
-            self.verify_input_layers(task)
             logger.info(f"Adding {evaluation_name} with eval mode {task.eval_mode}")
             evaluators.append(
                 DownstreamEvaluator(
