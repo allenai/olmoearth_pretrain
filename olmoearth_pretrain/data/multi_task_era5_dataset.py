@@ -83,10 +83,10 @@ class Era5SupervisedSample(Era5Sample):
     """An ERA5 sample carrying a supervised label.
 
     Shapes:
-        label        : task-specific (scalar or vector)
+        labels       : task-specific (scalar or vector)
     """
 
-    label: Tensor
+    labels: Tensor
 
 
 @dataclass
@@ -134,6 +134,10 @@ class Era5Batch:
             if isinstance(getattr(self, f.name), Tensor)
         }
         return replace(self, **updates)
+
+    def __contains__(self, key: str) -> bool:
+        """Support ``'key' in batch`` for olmo_core callbacks (e.g. SpeedMonitorCallback)."""
+        return hasattr(self, key)
 
     def __len__(self) -> int:
         """Batch size along dim 0."""
@@ -500,12 +504,12 @@ class Era5TaskDataset(Dataset):
                 task_name=self.task_spec.name,
             )
         assert self._label_extractor is not None
-        label = self._label_extractor(target)
+        labels = self._label_extractor(target)
         return Era5SupervisedSample(
             era5=era5,
             timestamps=timestamps,
             ignore_mask=ignore_mask,
-            label=label,
+            labels=labels,
             task_name=self.task_spec.name,
         )
 

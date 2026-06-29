@@ -114,10 +114,10 @@ def _build_eval_dataset(
 
 
 def _collate_fn(samples: list) -> Any:
-    """Collate wrapper that passes a dummy task_name (unused by probe)."""
+    """Collate wrapper for the downstream eval DataLoader."""
     if not samples:
         return None
-    return _collate_samples(samples, samples[0].task_name)
+    return _collate_samples(samples)
 
 
 def _extract_embeddings(

@@ -66,7 +66,27 @@
       ],
       "weka_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_nbac_test"
     },
-    "landslide_era5": {
+    "era5enc_pretrain_ssl": {
+      "groups": [
+        "default"
+      ],
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/era5enc_pretrain_ssl_era5d.yaml",
+      "notes": "Label-free ERA5-daily SSL corpus (era5enc_pretrain rslearn dataset). ~314,699 materialized windows over the era5d_448d_historical layer (14 bands x 448 daily steps, stored 1x1). For reconstruction / SSL objectives only; not a supervised eval task. Windows missing the layer (ocean / south-of-60S, no ERA5-Land coverage) are filtered out at dataset-build time.",
+      "ssl": true,
+      "weka_path": "/weka/dfive-default/helios/dataset/era5enc_pretrain/rslearn_dataset"
+    },
+    "era5enc_pretrain_ssl_test": {
+      "groups": [
+        "testing_only"
+      ],
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/era5enc_pretrain_ssl_era5d.yaml",
+      "notes": "Tiny 32-window subset of era5enc_pretrain_ssl",
+      "ssl": true,
+      "weka_path": "/weka/dfive-default/helios/dataset/era5enc_pretrain/rslearn_dataset"
+    },
+    "landslide_era5_eval": {
       "groups": [
         "sen12_landslides",
         "glc"
