@@ -32,11 +32,10 @@ import logging
 import multiprocessing
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 logging.basicConfig(
@@ -77,6 +76,7 @@ LAT_BAND_LABELS = ["[-90,-60)", "[-60,-30)", "[-30,0)", "[0,30)", "[30,60)", "[6
 
 
 def lat_to_band(lat: float) -> str:
+    """Bucket a latitude into a coarse 30-degree band label."""
     for i in range(len(LAT_BAND_EDGES) - 1):
         lo, hi = LAT_BAND_EDGES[i], LAT_BAND_EDGES[i + 1]
         if lo <= lat < hi or (i == len(LAT_BAND_EDGES) - 2 and lat == hi):
@@ -132,7 +132,7 @@ def _parse_one_window(args: tuple[str, str, str]) -> dict[str, Any] | None:
     try:
         dt = datetime.fromisoformat(trs)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         iso_cal = dt.isocalendar()
         row["iso_year"] = iso_cal[0]
         row["iso_week"] = iso_cal[1]
@@ -204,17 +204,29 @@ def scan_windows(
                 eta = (len(jobs) - i - 1) / rate if rate > 0 else 0
                 logger.info(
                     "  ... %d / %d scanned (%.0f/s, ETA %.0fs)",
-                    i + 1, len(jobs), rate, eta,
+                    i + 1,
+                    len(jobs),
+                    rate,
+                    eta,
                 )
 
     elapsed = time.time() - t0
     logger.info(
         "Scanned %d windows in %.1fs — %d valid, %d dropped (bad date / missing fields)",
-        len(jobs), elapsed, len(rows), dropped,
+        len(jobs),
+        elapsed,
+        len(rows),
+        dropped,
     )
 
     df = pd.DataFrame(rows)
-    for col in ("num_overlapping_landslides", "event_year", "era5_cell_id", "iso_year", "iso_week"):
+    for col in (
+        "num_overlapping_landslides",
+        "event_year",
+        "era5_cell_id",
+        "iso_year",
+        "iso_week",
+    ):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
     if "is_cloudy" in df.columns:
@@ -276,7 +288,9 @@ def dedup_windows(df: pd.DataFrame) -> pd.DataFrame:
         else:
             n_buckets_neg += 1
             # Pick deterministic negative
-            best_idx = min(bucket_df.index, key=lambda idx: bucket_df.loc[idx, "window_name"])
+            best_idx = min(
+                bucket_df.index, key=lambda idx: bucket_df.loc[idx, "window_name"]
+            )
             survivors.append(bucket_df.loc[best_idx])
             n_dropped_from_neg_buckets += len(bucket_df) - 1
 
@@ -313,7 +327,9 @@ def _count_table(before: pd.DataFrame, after: pd.DataFrame, col: str) -> str:
         a = int(ac.get(v, 0))
         lines.append(f"| {v} | {b:,} | {a:,} | {a - b:+,} |")
     # Totals
-    lines.append(f"| **total** | **{len(before):,}** | **{len(after):,}** | **{len(after) - len(before):+,}** |")
+    lines.append(
+        f"| **total** | **{len(before):,}** | **{len(after):,}** | **{len(after) - len(before):+,}** |"
+    )
     return "\n".join(lines)
 
 
@@ -358,18 +374,21 @@ def generate_summary(before: pd.DataFrame, after: pd.DataFrame, out_path: Path) 
 
 DEFAULT_DS_ROOT = "/weka/dfive-default/piperw/rslearn_projects/data/landslide/sen12landslides/all_positives"
 DEFAULT_GROUPS = ["sen12_landslides", "icimod", "glc"]
-DEFAULT_OUT_DIR = str(
-    Path(__file__).resolve().parent
-)
+DEFAULT_OUT_DIR = str(Path(__file__).resolve().parent)
 
 
 def main() -> None:
+    """CLI entry point for building the leakage-safe deduped window universe."""
     parser = argparse.ArgumentParser(description="Landslide ERA5 window dedup.")
     parser.add_argument("--ds-root", type=str, default=DEFAULT_DS_ROOT)
     parser.add_argument("--groups", nargs="+", default=DEFAULT_GROUPS)
     parser.add_argument("--out-dir", type=str, default=DEFAULT_OUT_DIR)
-    parser.add_argument("--workers", type=int, default=1,
-                        help="Workers for scanning. 1 (sequential) is best on weka.")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Workers for scanning. 1 (sequential) is best on weka.",
+    )
     parser.add_argument(
         "--rescan",
         action="store_true",

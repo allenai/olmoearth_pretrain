@@ -60,7 +60,11 @@ def _stacked_crosstab(
 
 
 def _stacked_barh(
-    ax, ct: pd.DataFrame, groups: list[str], title: str, cap: int = BAR_CAP
+    ax: plt.Axes,
+    ct: pd.DataFrame,
+    groups: list[str],
+    title: str,
+    cap: int = BAR_CAP,
 ) -> None:
     """Horizontal stacked bars (one segment per group), with total labels.
 
@@ -72,9 +76,13 @@ def _stacked_barh(
     for g in groups:
         vals = ct[g].to_numpy()
         ax.barh(
-            y, vals, left=left,
+            y,
+            vals,
+            left=left,
             color=GROUP_COLORS.get(g, GROUP_FALLBACK_COLOR),
-            edgecolor="white", linewidth=0.5, label=g,
+            edgecolor="white",
+            linewidth=0.5,
+            label=g,
         )
         left += vals
     ax.set_yticks(y)
@@ -87,15 +95,33 @@ def _stacked_barh(
     totals = ct.sum(axis=1).to_numpy()
     for yi, total in zip(y, totals):
         if cap and total > cap:
-            ax.text(cap * 0.98, yi, f"{int(total):,}", va="center", ha="right",
-                    fontsize=9, color="white", fontweight="bold")
+            ax.text(
+                cap * 0.98,
+                yi,
+                f"{int(total):,}",
+                va="center",
+                ha="right",
+                fontsize=9,
+                color="white",
+                fontweight="bold",
+            )
         else:
-            ax.text(total + cap * 0.01, yi, f"{int(total):,}", va="center",
-                    ha="left", fontsize=9)
+            ax.text(
+                total + cap * 0.01,
+                yi,
+                f"{int(total):,}",
+                va="center",
+                ha="left",
+                fontsize=9,
+            )
 
 
 def _stacked_barv(
-    ax, ct: pd.DataFrame, groups: list[str], title: str, cap: int = BAR_CAP
+    ax: plt.Axes,
+    ct: pd.DataFrame,
+    groups: list[str],
+    title: str,
+    cap: int = BAR_CAP,
 ) -> None:
     """Vertical stacked bars (one segment per group), with total labels.
 
@@ -107,9 +133,13 @@ def _stacked_barv(
     for g in groups:
         vals = ct[g].to_numpy()
         ax.bar(
-            x, vals, bottom=bottom,
+            x,
+            vals,
+            bottom=bottom,
             color=GROUP_COLORS.get(g, GROUP_FALLBACK_COLOR),
-            edgecolor="white", linewidth=0.5, label=g,
+            edgecolor="white",
+            linewidth=0.5,
+            label=g,
         )
         bottom += vals
     ax.set_xticks(x)
@@ -122,14 +152,29 @@ def _stacked_barv(
     totals = ct.sum(axis=1).to_numpy()
     for xi, total in zip(x, totals):
         if cap and total > cap:
-            ax.text(xi, cap * 0.98, f"{int(total):,}", ha="center", va="top",
-                    fontsize=9, color="white", fontweight="bold")
+            ax.text(
+                xi,
+                cap * 0.98,
+                f"{int(total):,}",
+                ha="center",
+                va="top",
+                fontsize=9,
+                color="white",
+                fontweight="bold",
+            )
         else:
-            ax.text(xi, total + cap * 0.01, f"{int(total):,}", ha="center",
-                    va="bottom", fontsize=9)
+            ax.text(
+                xi,
+                total + cap * 0.01,
+                f"{int(total):,}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
 
 
 def main() -> None:
+    """CLI entry point for plotting the deduped window distribution."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--parquet", type=str, default=str(DEFAULT_PQ))
     parser.add_argument("--output", type=str, default=str(DEFAULT_OUT))
@@ -201,9 +246,14 @@ def main() -> None:
     # Shared legend for the source-group coloring.
     handles, labels = ax_loc.get_legend_handles_labels()
     fig.legend(
-        handles, labels, title="Source group",
-        loc="lower center", ncol=len(groups), fontsize=10,
-        title_fontsize=11, bbox_to_anchor=(0.5, -0.02),
+        handles,
+        labels,
+        title="Source group",
+        loc="lower center",
+        ncol=len(groups),
+        fontsize=10,
+        title_fontsize=11,
+        bbox_to_anchor=(0.5, -0.02),
     )
 
     fig.savefig(args.output, bbox_inches="tight", facecolor="white")

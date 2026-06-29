@@ -166,11 +166,10 @@ def _cell_table(df: pd.DataFrame) -> pd.DataFrame:
     return cells
 
 
-def assign_splits(
-    df: pd.DataFrame, val_frac: float, seed: int
-) -> dict[int, str]:
-    """Greedily assign whole ERA5 cells to train/val to mirror the overall
-    distribution across (event_type, event_year, geo_region).
+def assign_splits(df: pd.DataFrame, val_frac: float, seed: int) -> dict[int, str]:
+    """Greedily assign whole ERA5 cells to train/val.
+
+    Mirrors the overall distribution across (event_type, event_year, geo_region).
 
     Strategy: cells that contain a hand-curated val window are seeded into val
     first (they are the trusted held-out anchors). Remaining cells are then
@@ -199,9 +198,7 @@ def assign_splits(
         totals = df.groupby(axis).size()
         cat_target[axis] = {k: val_frac * v for k, v in totals.items()}
 
-    cat_val: dict[str, dict[Any, float]] = {
-        axis: defaultdict(float) for axis in axes
-    }
+    cat_val: dict[str, dict[Any, float]] = {axis: defaultdict(float) for axis in axes}
     assignment: dict[int, str] = {}
     val_count = 0
 
@@ -278,7 +275,9 @@ def _write_label_layer(dst_dir: Path, meta: dict[str, Any], window_type: str) ->
     cx = (bounds[0] + bounds[2]) / 2.0
     cy = (bounds[1] + bounds[3]) / 2.0
     category = "positive" if window_type == "positive" else "negative"
-    feat = Feature(STGeometry(proj, shapely.Point(cx, cy), None), {LABEL_PROPERTY_NAME: category})
+    feat = Feature(
+        STGeometry(proj, shapely.Point(cx, cy), None), {LABEL_PROPERTY_NAME: category}
+    )
 
     layer_dir = UPath(str(dst_dir / "layers" / LABEL_LAYER_NAME))
     GeojsonVectorFormat().encode_vector(layer_dir, [feat])
@@ -403,7 +402,10 @@ def write_labels_for_materialized(data_root: Path) -> int:
     if n_missing:
         logger.warning("Skipped %d windows with missing/unreadable metadata", n_missing)
     logger.info(
-        "Wrote %d %r vector label layers under %s", n_labels, LABEL_LAYER_NAME, data_root
+        "Wrote %d %r vector label layers under %s",
+        n_labels,
+        LABEL_LAYER_NAME,
+        data_root,
     )
     ensure_label_layer_in_config(data_root)
     return n_labels
@@ -437,6 +439,7 @@ def _split_table(df: pd.DataFrame, col: str) -> str:
 
 
 def write_summary(df: pd.DataFrame, out_path: Path) -> None:
+    """Write a markdown summary of the train/val split distribution."""
     n_train = int((df["split"] == "train").sum())
     n_val = int((df["split"] == "val").sum())
     n_cells = df["era5_cell_id"].nunique()
@@ -470,7 +473,9 @@ def _splits_in(df: pd.DataFrame) -> list[str]:
     return [s for s in ("train", "val") if s in set(df["split"].unique())]
 
 
-def _stacked_crosstab(df: pd.DataFrame, category: str, splits: list[str]) -> pd.DataFrame:
+def _stacked_crosstab(
+    df: pd.DataFrame, category: str, splits: list[str]
+) -> pd.DataFrame:
     ct = pd.crosstab(df[category].fillna("unknown"), df["split"])
     for s in splits:
         if s not in ct.columns:
@@ -478,13 +483,27 @@ def _stacked_crosstab(df: pd.DataFrame, category: str, splits: list[str]) -> pd.
     return ct[splits]
 
 
-def _stacked_barh(ax, ct, splits, title, cap=None) -> None:
+def _stacked_barh(
+    ax: plt.Axes,
+    ct: pd.DataFrame,
+    splits: list[str],
+    title: str,
+    cap: int | None = None,
+) -> None:
+    """Horizontal stacked bars (one segment per split), with total labels."""
     y = np.arange(len(ct))
     left = np.zeros(len(ct))
     for s in splits:
         vals = ct[s].to_numpy()
-        ax.barh(y, vals, left=left, color=SPLIT_COLORS[s],
-                edgecolor="white", linewidth=0.5, label=s)
+        ax.barh(
+            y,
+            vals,
+            left=left,
+            color=SPLIT_COLORS[s],
+            edgecolor="white",
+            linewidth=0.5,
+            label=s,
+        )
         left += vals
     ax.set_yticks(y)
     ax.set_yticklabels(ct.index, fontsize=10)
@@ -496,20 +515,48 @@ def _stacked_barh(ax, ct, splits, title, cap=None) -> None:
     totals = ct.sum(axis=1).to_numpy()
     for yi, total in zip(y, totals):
         if cap and total > cap:
-            ax.text(cap * 0.98, yi, f"{int(total):,}", va="center", ha="right",
-                    fontsize=9, color="white", fontweight="bold")
+            ax.text(
+                cap * 0.98,
+                yi,
+                f"{int(total):,}",
+                va="center",
+                ha="right",
+                fontsize=9,
+                color="white",
+                fontweight="bold",
+            )
         else:
-            ax.text(total + max(totals) * 0.01, yi, f"{int(total):,}",
-                    va="center", ha="left", fontsize=9)
+            ax.text(
+                total + max(totals) * 0.01,
+                yi,
+                f"{int(total):,}",
+                va="center",
+                ha="left",
+                fontsize=9,
+            )
 
 
-def _stacked_barv(ax, ct, splits, title, cap=None) -> None:
+def _stacked_barv(
+    ax: plt.Axes,
+    ct: pd.DataFrame,
+    splits: list[str],
+    title: str,
+    cap: int | None = None,
+) -> None:
+    """Vertical stacked bars (one segment per split), with total labels."""
     x = np.arange(len(ct))
     bottom = np.zeros(len(ct))
     for s in splits:
         vals = ct[s].to_numpy()
-        ax.bar(x, vals, bottom=bottom, color=SPLIT_COLORS[s],
-               edgecolor="white", linewidth=0.5, label=s)
+        ax.bar(
+            x,
+            vals,
+            bottom=bottom,
+            color=SPLIT_COLORS[s],
+            edgecolor="white",
+            linewidth=0.5,
+            label=s,
+        )
         bottom += vals
     ax.set_xticks(x)
     ax.set_xticklabels([str(int(v)) for v in ct.index], fontsize=10)
@@ -521,14 +568,29 @@ def _stacked_barv(ax, ct, splits, title, cap=None) -> None:
     totals = ct.sum(axis=1).to_numpy()
     for xi, total in zip(x, totals):
         if cap and total > cap:
-            ax.text(xi, cap * 0.98, f"{int(total):,}", ha="center", va="top",
-                    fontsize=9, color="white", fontweight="bold")
+            ax.text(
+                xi,
+                cap * 0.98,
+                f"{int(total):,}",
+                ha="center",
+                va="top",
+                fontsize=9,
+                color="white",
+                fontweight="bold",
+            )
         else:
-            ax.text(xi, total + max(totals) * 0.01, f"{int(total):,}",
-                    ha="center", va="bottom", fontsize=9)
+            ax.text(
+                xi,
+                total + max(totals) * 0.01,
+                f"{int(total):,}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
 
 
 def make_plot(df: pd.DataFrame, out_path: Path) -> None:
+    """Render the train/val distribution figure (map + stratum histograms)."""
     splits = _splits_in(df)
     fig = plt.figure(figsize=(20, 14), dpi=150)
     gs = fig.add_gridspec(3, 3, hspace=0.35, wspace=0.30)
@@ -545,16 +607,23 @@ def make_plot(df: pd.DataFrame, out_path: Path) -> None:
     for s in splits:
         sub = df_u[df_u["split"] == s]
         ax_map.scatter(
-            sub["longitude"], sub["latitude"], c=SPLIT_COLORS[s], s=12, alpha=0.75,
-            transform=ccrs.PlateCarree(), zorder=3 if s == "val" else 2,
-            edgecolors="none", label=s,
+            sub["longitude"],
+            sub["latitude"],
+            c=SPLIT_COLORS[s],
+            s=12,
+            alpha=0.75,
+            transform=ccrs.PlateCarree(),
+            zorder=3 if s == "val" else 2,
+            edgecolors="none",
+            label=s,
         )
     n_train = int((df["split"] == "train").sum())
     n_val = int((df["split"] == "val").sum())
     ax_map.set_title(
         f"Weather-Triggered Landslide Split — {len(df):,} windows "
         f"(train {n_train} / val {n_val})  •  {len(df_u):,} unique locations",
-        fontsize=14, fontweight="bold",
+        fontsize=14,
+        fontweight="bold",
     )
 
     # Row 3, col 1: by location.
@@ -584,9 +653,16 @@ def make_plot(df: pd.DataFrame, out_path: Path) -> None:
     _stacked_barh(ax_type, type_ct, splits, "By event type")
 
     handles, labels = ax_loc.get_legend_handles_labels()
-    fig.legend(handles, labels, title="Split", loc="lower center",
-               ncol=len(splits), fontsize=11, title_fontsize=12,
-               bbox_to_anchor=(0.5, -0.02))
+    fig.legend(
+        handles,
+        labels,
+        title="Split",
+        loc="lower center",
+        ncol=len(splits),
+        fontsize=11,
+        title_fontsize=12,
+        bbox_to_anchor=(0.5, -0.02),
+    )
 
     fig.savefig(out_path, bbox_inches="tight", facecolor="white")
     plt.close(fig)
@@ -599,25 +675,37 @@ def make_plot(df: pd.DataFrame, out_path: Path) -> None:
 
 
 def main() -> None:
+    """CLI entry point for tagging the leakage-safe train/val split."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ds-root", type=str, default=DEFAULT_DS_ROOT)
     parser.add_argument("--parquet", type=str, default=str(DEFAULT_PARQUET))
-    parser.add_argument("--out-dir", type=str, default=str(DEFAULT_OUT_DIR),
-                        help="Where analysis artifacts (parquet/summary/plot) go.")
-    parser.add_argument("--data-root", type=str, default=DEFAULT_DATA_ROOT,
-                        help="Where the tagged window metadata tree (dataset) goes.")
+    parser.add_argument(
+        "--out-dir",
+        type=str,
+        default=str(DEFAULT_OUT_DIR),
+        help="Where analysis artifacts (parquet/summary/plot) go.",
+    )
+    parser.add_argument(
+        "--data-root",
+        type=str,
+        default=DEFAULT_DATA_ROOT,
+        help="Where the tagged window metadata tree (dataset) goes.",
+    )
     parser.add_argument("--val-frac", type=float, default=DEFAULT_VAL_FRAC)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
-        "--no-copy", action="store_true",
+        "--no-copy",
+        action="store_true",
         help="Skip copying metadata.json (only write parquet/summary/plot).",
     )
     parser.add_argument(
-        "--no-labels", action="store_true",
+        "--no-labels",
+        action="store_true",
         help="Skip writing the per-window vector 'label' layer (pos/neg target).",
     )
     parser.add_argument(
-        "--labels-only", action="store_true",
+        "--labels-only",
+        action="store_true",
         help=(
             "Only write the vector 'label' layer for windows already materialized "
             "under --data-root (skip parquet/split/plot). Use when the split is "
@@ -637,7 +725,8 @@ def main() -> None:
     weather = df[df["event_type"].isin(WEATHER_TYPES)].copy()
     logger.info(
         "Weather-triggered windows: %d / %d deduped (%d pos / %d neg, %d ERA5 cells)",
-        len(weather), len(df),
+        len(weather),
+        len(df),
         int((weather["window_type"] == "positive").sum()),
         int((weather["window_type"] == "negative").sum()),
         weather["era5_cell_id"].nunique(),
