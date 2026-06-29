@@ -65,7 +65,7 @@ The v1 models were trained using the scripts in [`scripts/official/v1`](scripts/
 | Large | [link](https://huggingface.co/allenai/OlmoEarth-v1-Large) | 308M | 53M |
 </details>
 
-<details open>
+<details>
 <summary> v1.1 </summary>
 
 The v1.1 models were trained using the scripts in [`scripts/official/v1_1`](scripts/official/v1_1/). We describe this model in the [OlmoEarth v1.1 tech report](https://arxiv.org/abs/2605.20804).
@@ -75,6 +75,20 @@ The v1.1 models were trained using the scripts in [`scripts/official/v1_1`](scri
 | Nano | [link](https://huggingface.co/allenai/OlmoEarth-v1_1-Nano) | 5.5M | 800K |
 | Tiny | [link](https://huggingface.co/allenai/OlmoEarth-v1_1-Tiny) | 12.5M | 1.9M |
 | Base | [link](https://huggingface.co/allenai/OlmoEarth-v1_1-Base) | 114M | 30M |
+
+</details>
+
+<details open>
+<summary> v1.2 </summary>
+
+The v1.2 models were trained using the scripts in [`scripts/official/v1_2`](scripts/official/v1_2/). We describe this model in the [OlmoEarth v1.2 tech report](https://allenai.org/papers/olmoearth-v1-2).
+
+| Model Size | Weights |
+| --- | --- |
+| Nano | [link](https://huggingface.co/allenai/OlmoEarth-v1_2-Nano) |
+| Tiny | [link](https://huggingface.co/allenai/OlmoEarth-v1_2-Tiny) |
+| Small | [link](https://huggingface.co/allenai/OlmoEarth-v1_2-Small) |
+| Base | [link](https://huggingface.co/allenai/OlmoEarth-v1_2-Base) |
 
 </details>
 
