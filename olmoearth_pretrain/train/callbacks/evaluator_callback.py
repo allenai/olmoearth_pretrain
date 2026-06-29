@@ -87,7 +87,11 @@ class DownstreamTaskConfig:
     # FT
     ft_lr: float | None = None
     ft_batch_size: int = 32
+    ft_grad_accum_steps: int = 1
     finetune_seed: int = 42
+    ft_head_type: str = (
+        "linear"  # "linear" or "unet" (unet only valid for segmentation/regression)
+    )
     # LP / FT
     epochs: int = 50
     # LP / KNN / FT
@@ -193,7 +197,9 @@ class DownstreamEvaluator:
         self.probe_batch_size = task.probe_batch_size
         self.ft_lr = task.ft_lr
         self.ft_batch_size = task.ft_batch_size
+        self.ft_grad_accum_steps = task.ft_grad_accum_steps
         self.finetune_seed = task.finetune_seed
+        self.ft_head_type = task.ft_head_type
         self.epochs = task.epochs
         self.linear_probe_eval_interval = task.linear_probe_eval_interval
         self.patch_size = task.patch_size
@@ -252,6 +258,10 @@ class DownstreamEvaluator:
         if self.eval_mode == EvalMode.FINETUNE:
             if self.ft_lr is None:
                 raise ValueError("ft_lr cannot be none for finetune tasks.")
+            if self.ft_grad_accum_steps < 1:
+                raise ValueError(
+                    f"ft_grad_accum_steps must be >= 1, got {self.ft_grad_accum_steps}"
+                )
             if self.config.task_type == TaskType.SEGMENTATION:
                 if self.config.height_width is None:
                     raise ValueError(
@@ -586,6 +596,9 @@ class DownstreamEvaluator:
             resume_checkpoint_path=resume_checkpoint_path,
             primary_metric=self.primary_metric,
             primary_metric_class=self.primary_metric_class,
+            ft_grad_accum_steps=self.ft_grad_accum_steps,
+            head_type=self.ft_head_type,  # type: ignore[arg-type]
+            use_dice_loss=self.use_dice_loss,
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
@@ -988,6 +1001,10 @@ class DownstreamEvaluatorCallback(Callback):
             ),
             # Group all of this run's eval jobs together (and alongside training).
             wandb_group=train_run_name,
+            # All eval steps log to one consolidated wandb run (resumed via the
+            # shared runid file set in launch_checkpoint_eval_job), keyed on
+            # checkpoint_step -- instead of a separate run per eval step.
+            wandb_run_name=f"{train_run_name}_loop_evals",
             extra_overrides=self.beaker_eval_extra_overrides,
             log_dir=os.path.join(save_folder, "loop_eval_launch_logs"),
         )
@@ -1137,7 +1154,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
 
             config = dataset_to_config(task.dataset)
             if (
-                config.task_type == TaskType.SEGMENTATION
+                config.task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION)
                 and task.eval_mode != EvalMode.EMBEDDING_DIAGNOSTICS
             ):
                 if task.probe_lr is None and task.ft_lr is None:

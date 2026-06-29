@@ -24,6 +24,7 @@ from olmoearth_pretrain.evals.metrics import (
     EvalResult,
     EvalTaskResult,
     classification_metrics,
+    metric_higher_is_better,
     regression_metrics,
     segmentation_metrics,
 )
@@ -32,11 +33,52 @@ from olmoearth_pretrain.evals.utils import adjust_learning_rate
 logger = getLogger(__name__)
 
 
+class MaskedMSELoss(nn.Module):
+    """MSE loss that ignores NaN targets (used for sparse regression labels)."""
+
+    def forward(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Compute MSE only over finite (non-NaN) target pixels."""
+        mask = torch.isfinite(targets)
+        if not mask.any():
+            return torch.tensor(0.0, device=predictions.device, requires_grad=True)
+        return (predictions[mask] - targets[mask]).pow(2).mean()
+
+
+def _compute_regression_target_stats(
+    labels: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor] | tuple[None, None]:
+    """Compute mean/std of finite regression labels for target normalization.
+
+    Returns (None, None) when there are no finite labels to fit on, signalling
+    callers to skip normalization entirely.
+    """
+    finite = labels[torch.isfinite(labels)]
+    if finite.numel() == 0:
+        return None, None
+    mean = finite.mean()
+    # Clamp std away from zero so degenerate constant-label datasets don't
+    # produce inf/NaN after dividing.
+    std = finite.std().clamp_min(1e-6)
+    return mean, std
+
+
+def _unnormalize_regression(
+    t: torch.Tensor,
+    mean: torch.Tensor | None,
+    std: torch.Tensor | None,
+) -> torch.Tensor:
+    """Map a normalized regression tensor back to original target units."""
+    if mean is None or std is None:
+        return t
+    return t * std.to(t.device, dtype=t.dtype) + mean.to(t.device, dtype=t.dtype)
+
+
 class ProbeType(StrEnum):
     """Enumeration of probe types for linear probing."""
 
     ATTNPOOL = "attnpool"
     LINEAR = "linear"
+    BILINEAR_CONV = "bilinear_conv"
 
 
 class AttnPoolLinearProbe(nn.Module):
@@ -105,6 +147,51 @@ class AttnPoolLinearProbe(nn.Module):
         return {"logits": self.linear(x), "attn_weights": attn_weights}
 
 
+class BilinearConvProbe(nn.Module):
+    """Bilinear upsample + shared 1×1 conv probe for per-pixel regression.
+
+    Instead of a per-patch linear that reshapes outputs blockwise (no spatial
+    mixing, separate weights per sub-pixel slot), this probe:
+      1. Rearranges (B, H, W, D) patch embeddings to (B, D, H, W).
+      2. Bilinearly upsamples to the full label resolution (mixing neighbors).
+      3. Applies a single Conv2d(D, out_channels, 1) shared across all pixels.
+
+    This mirrors the rslearn Upsample+Conv head and is better regularized for
+    sparse point-label regression tasks like LFMC.
+    """
+
+    def __init__(self, in_dim: int, scale_factor: int, out_channels: int = 1) -> None:
+        """Initialize the bilinear conv probe.
+
+        Args:
+            in_dim: Embedding dimension per patch.
+            scale_factor: Spatial upsample factor (typically patch_size).
+            out_channels: Number of output channels (1 for regression).
+        """
+        super().__init__()
+        self.upsample = nn.Upsample(
+            scale_factor=scale_factor, mode="bilinear", align_corners=True
+        )
+        self.conv = nn.Conv2d(in_dim, out_channels, kernel_size=1)
+
+    def forward(self, x: torch.Tensor) -> dict:
+        """Forward pass.
+
+        Args:
+            x: Patch embeddings of shape (B, H, W, D).
+
+        Returns:
+            Dict with 'logits' of shape (B, H*scale, W*scale) for single-channel
+            regression, or (B, C, H*scale, W*scale) for multi-channel.
+        """
+        x = x.permute(0, 3, 1, 2)  # (B, D, H, W)
+        x = self.upsample(x)  # (B, D, H', W')
+        x = self.conv(x)  # (B, out_channels, H', W')
+        if x.shape[1] == 1:
+            x = x.squeeze(1)  # (B, H', W') for regression
+        return {"logits": x}
+
+
 class LinearProbe(nn.Module):
     """Linear Probe for classification tasks."""
 
@@ -158,6 +245,30 @@ def train_and_eval_probe(
         if train_embeddings.shape[-1] != test_embeddings.shape[-1]:
             raise ValueError("Embedding dims don't match.")
     in_features = train_embeddings.shape[-1]
+
+    # Z-score regression targets using train-set statistics so the MSE probe
+    # is well-conditioned regardless of target units (e.g. raw LFMC values in
+    # [0, 302]). Predictions and labels are un-normalized before any metric
+    # is computed, so reported RMSE/MAE/R2 stay in original units. Stats are
+    # kept on CPU; NaN-masked invalid pixels stay NaN through the affine map.
+    target_mean: torch.Tensor | None = None
+    target_std: torch.Tensor | None = None
+    if config.task_type == TaskType.REGRESSION:
+        target_mean, target_std = _compute_regression_target_stats(train_labels)
+        if target_mean is not None and target_std is not None:
+            logger.info(
+                f"Normalizing regression targets with mean={target_mean.item():.4f}, "
+                f"std={target_std.item():.4f}"
+            )
+            train_labels = (train_labels - target_mean) / target_std
+            val_labels = (val_labels - target_mean) / target_std
+            if test_labels is not None:
+                test_labels = (test_labels - target_mean) / target_std
+        else:
+            logger.warning(
+                "No finite regression labels found in train set; "
+                "skipping target normalization."
+            )
     output_pixels_per_side_of_patch = None
     if config.task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION):
         assert config.height_width is not None, (
@@ -174,7 +285,20 @@ def train_and_eval_probe(
         )
         num_output_pixels = output_channels * output_pixels_per_side_of_patch**2
         logits_per_patch = num_output_pixels
-        if probe_type == ProbeType.ATTNPOOL:
+        if config.task_type == TaskType.REGRESSION and probe_type == ProbeType.LINEAR:
+            probe_type = ProbeType.BILINEAR_CONV
+            logger.info(
+                "Auto-upgrading probe from LINEAR to BILINEAR_CONV for regression "
+                "(shared 1×1 conv with bilinear upsampling is better regularized "
+                "for sparse per-pixel regression targets)."
+            )
+        if probe_type == ProbeType.BILINEAR_CONV:
+            probe = BilinearConvProbe(
+                in_dim=in_features,
+                scale_factor=output_pixels_per_side_of_patch,
+                out_channels=output_channels,
+            ).to(device)
+        elif probe_type == ProbeType.ATTNPOOL:
             if config.task_type == TaskType.REGRESSION:
                 raise ValueError("Attention pooling is not supported for regression.")
             probe = AttnPoolLinearProbe(
@@ -201,6 +325,9 @@ def train_and_eval_probe(
     num_times_to_run_eval = math.ceil(epochs / eval_interval)
     val_results: list[EvalResult] = []
     best_probe_state = None
+    # Direction is resolved from the actual primary metric below (lower is better
+    # for error metrics like RMSE/MAE, higher for everything else).
+    higher_is_better = True
     best_val_score = float("-inf")
     best_epoch = 0
 
@@ -241,12 +368,20 @@ def train_and_eval_probe(
             probe_type=probe_type,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
+            target_mean=target_mean,
+            target_std=target_std,
         )
         logger.info(f"Epoch {end_epoch}, Val Score: {val_result.primary}")
         val_results.append(val_result)
 
-        # Save best probe state based on primary metric
-        if val_result.primary > best_val_score:
+        # Save best probe state based on primary metric (respecting its direction:
+        # e.g. minimize RMSE/MAE, maximize accuracy/F1/R2).
+        higher_is_better = metric_higher_is_better(val_result.primary_metric)
+        if higher_is_better:
+            improved = val_result.primary > best_val_score
+        else:
+            improved = val_result.primary < best_val_score
+        if best_probe_state is None or improved:
             best_val_score = val_result.primary
             best_epoch = end_epoch
             best_probe_state = copy.deepcopy(probe.state_dict())
@@ -267,9 +402,14 @@ def train_and_eval_probe(
         final_val_result = val_results[best_idx]
     else:
         final_val_result = val_results[-1]
-        if final_val_result.primary < best_val_score:
+        final_is_worse = (
+            final_val_result.primary < best_val_score
+            if higher_is_better
+            else final_val_result.primary > best_val_score
+        )
+        if final_is_worse:
             logger.warning(
-                f"Final Val Score: {final_val_result.primary} at epoch {epochs} is less than best Val Score: "
+                f"Final Val Score: {final_val_result.primary} at epoch {epochs} is worse than best Val Score: "
                 f"{best_val_score} at epoch {best_epoch}"
             )
 
@@ -304,6 +444,13 @@ def train_and_eval_probe(
             probe_type=probe_type,
             num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
         )
+
+        # Map regression preds/labels back to original target units so the
+        # downstream metrics (and bootstrap resamples of them) are reported
+        # on the same scale as the raw labels.
+        if config.task_type == TaskType.REGRESSION:
+            all_preds = _unnormalize_regression(all_preds, target_mean, target_std)
+            all_labels = _unnormalize_regression(all_labels, target_mean, target_std)
 
         if n_bootstrap > 0:
             # Bootstrap resample the predictions (very fast!)
@@ -382,7 +529,7 @@ def weighted_dice_loss(
     ignore_index: int = SEGMENTATION_IGNORE_LABEL,
     smooth: float = 1.0,
 ) -> torch.Tensor:
-    """Compute class-weighted dice loss for segmentation.
+    """Compute class-weighted dice + cross-entropy loss for segmentation.
 
     Args:
         logits: Model predictions of shape (N, C, ...) where C is num_classes.
@@ -392,7 +539,7 @@ def weighted_dice_loss(
         smooth: Smoothing term to avoid division by zero.
 
     Returns:
-        Scalar weighted dice loss.
+        Scalar combined dice + CE loss.
     """
     valid_mask = targets != ignore_index
     targets_masked = targets.clone()
@@ -417,18 +564,25 @@ def weighted_dice_loss(
 
     dice_per_class = (2.0 * intersection + smooth) / (cardinality + smooth)
 
-    # Class weights: inverse frequency of valid pixels per class
+    # Class weights: inverse frequency of valid pixels per class.
+    # Use uniform weight for absent classes so the CE term still provides
+    # gradient signal on batches where a rare class (e.g. flood) is absent.
     class_counts = one_hot.sum(dim=dims)
     total = class_counts.sum()
     weights = torch.where(
         class_counts > 0,
         total / (num_classes * class_counts),
-        torch.zeros_like(class_counts),
+        torch.ones_like(class_counts),
     )
     weights = weights / (weights.sum() + 1e-8)
 
-    loss = 1.0 - (weights * dice_per_class).sum()
-    return loss
+    dice_loss = 1.0 - (weights * dice_per_class).sum()
+
+    # CE loss provides gradient even when the minority class is absent from
+    # the batch, preventing the model from collapsing to all-background.
+    ce_loss = F.cross_entropy(logits, targets, ignore_index=ignore_index)
+
+    return dice_loss + ce_loss
 
 
 def train_probe(
@@ -448,8 +602,9 @@ def train_probe(
     opt = torch.optim.AdamW(probe.parameters(), lr=lr)
 
     probe = probe.train()
+    loss_function: nn.Module | functools.partial
     if task_type == TaskType.REGRESSION:
-        loss_function = nn.MSELoss()
+        loss_function = MaskedMSELoss()
     elif use_dice_loss:
         loss_function = functools.partial(weighted_dice_loss, num_classes=num_classes)
     else:
@@ -466,45 +621,36 @@ def train_probe(
                     batch_emb
                 )  # (bsz, num_patches, logits_per_patch) or (bsz, n_cls)
                 logits = outputs["logits"]
-                # logger.info(f"logits: {logits.shape}")
                 if task_type == TaskType.SEGMENTATION:
-                    assert num_output_pixels_per_side_of_patch is not None, (
-                        "num_output_pixels_per_side_of_patch is required for segmentation"
-                    )
-                    # This is effectively nearest neighbor interpolation
-                    logits = rearrange(
-                        logits,
-                        "b h w (c i j) -> b c (h i) (w j)",
-                        h=spatial_patches_per_dim,
-                        w=spatial_patches_per_dim,
-                        c=num_classes,
-                        i=num_output_pixels_per_side_of_patch,
-                        j=num_output_pixels_per_side_of_patch,
-                    )
-                    if logits.shape[-2] != batch_labels.shape[-2]:
-                        logger.debug(
-                            f"Logits shape {logits.shape} does not match batch_labels shape {batch_labels.shape} interpolating to labels shape"
+                    if not isinstance(probe, BilinearConvProbe):
+                        assert num_output_pixels_per_side_of_patch is not None, (
+                            "num_output_pixels_per_side_of_patch is required for segmentation"
                         )
-                        logits = F.interpolate(
+                        logits = rearrange(
                             logits,
-                            size=(batch_labels.shape[-2], batch_labels.shape[-1]),
-                            mode="bilinear",
-                            align_corners=True,
-                        )  # (bsz, num_classes, H, W)
+                            "b h w (c i j) -> b c (h i) (w j)",
+                            h=spatial_patches_per_dim,
+                            w=spatial_patches_per_dim,
+                            c=num_classes,
+                            i=num_output_pixels_per_side_of_patch,
+                            j=num_output_pixels_per_side_of_patch,
+                        )
+                        if logits.shape[-2] != batch_labels.shape[-2]:
+                            logger.debug(
+                                f"Logits shape {logits.shape} does not match batch_labels shape {batch_labels.shape} interpolating to labels shape"
+                            )
+                            logits = F.interpolate(
+                                logits,
+                                size=(batch_labels.shape[-2], batch_labels.shape[-1]),
+                                mode="bilinear",
+                                align_corners=True,
+                            )
                     targets = batch_labels.to(device)
                 elif task_type == TaskType.REGRESSION:
-                    assert num_output_pixels_per_side_of_patch is not None, (
-                        "num_output_pixels_per_side_of_patch is required for regression"
-                    )
-                    logits = rearrange(
-                        logits,
-                        "b h w (i j) -> b (h i) (w j)",
-                        h=spatial_patches_per_dim,
-                        w=spatial_patches_per_dim,
-                        i=num_output_pixels_per_side_of_patch,
-                        j=num_output_pixels_per_side_of_patch,
-                    )
-                    if logits.shape[-2] != batch_labels.shape[-2]:
+                    if (
+                        logits.shape[-2] != batch_labels.shape[-2]
+                        or logits.shape[-1] != batch_labels.shape[-1]
+                    ):
                         logits = F.interpolate(
                             logits.unsqueeze(1),
                             size=(batch_labels.shape[-2], batch_labels.shape[-1]),
@@ -559,7 +705,8 @@ def get_probe_predictions(
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 outputs = probe(batch_emb)  # (bsz, num_patches, logits_per_patch)
                 logits = outputs["logits"]
-                if task_type == TaskType.SEGMENTATION:
+                is_bilinear_conv = isinstance(probe, BilinearConvProbe)
+                if task_type == TaskType.SEGMENTATION and not is_bilinear_conv:
                     assert num_output_pixels_per_side_of_patch is not None, (
                         "num_output_pixels_per_side_of_patch is required for segmentation"
                     )
@@ -579,29 +726,19 @@ def get_probe_predictions(
                             size=(batch_labels.shape[-2], batch_labels.shape[-1]),
                             mode="bilinear",
                             align_corners=True,
-                        )  # (bsz, num_classes, H, W)
-                elif task_type == TaskType.REGRESSION:
-                    assert num_output_pixels_per_side_of_patch is not None, (
-                        "num_output_pixels_per_side_of_patch is required for regression"
-                    )
-                    spatial_patches_per_dim = batch_emb.shape[1]
-                    logits = rearrange(
-                        logits,
-                        "b h w (i j) -> b (h i) (w j)",
-                        h=spatial_patches_per_dim,
-                        w=spatial_patches_per_dim,
-                        i=num_output_pixels_per_side_of_patch,
-                        j=num_output_pixels_per_side_of_patch,
-                    )
-                    if logits.shape[-2] != batch_labels.shape[-2]:
-                        logits = F.interpolate(
-                            logits.unsqueeze(1),
-                            size=(batch_labels.shape[-2], batch_labels.shape[-1]),
-                            mode="bilinear",
-                            align_corners=True,
-                        ).squeeze(1)
+                        )
 
             if task_type == TaskType.REGRESSION:
+                if (
+                    logits.shape[-2] != batch_labels.shape[-2]
+                    or logits.shape[-1] != batch_labels.shape[-1]
+                ):
+                    logits = F.interpolate(
+                        logits.unsqueeze(1),
+                        size=(batch_labels.shape[-2], batch_labels.shape[-1]),
+                        mode="bilinear",
+                        align_corners=True,
+                    ).squeeze(1)
                 preds = logits.float().cpu()
             else:
                 preds = torch.argmax(logits, dim=1).cpu()
@@ -664,8 +801,15 @@ def evaluate_probe(
     num_output_pixels_per_side_of_patch: int | None = None,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    target_mean: torch.Tensor | None = None,
+    target_std: torch.Tensor | None = None,
 ) -> EvalResult:
-    """Evaluate a trained linear probe on a segmentation or classification task."""
+    """Evaluate a trained linear probe on a segmentation or classification task.
+
+    For regression, ``target_mean``/``target_std`` are the train-set stats used
+    to normalize labels before training; they're applied in reverse here so the
+    reported metrics stay in original target units.
+    """
     preds, labels = get_probe_predictions(
         data_loader=data_loader,
         probe=probe,
@@ -675,6 +819,9 @@ def evaluate_probe(
         probe_type=probe_type,
         num_output_pixels_per_side_of_patch=num_output_pixels_per_side_of_patch,
     )
+    if task_type == TaskType.REGRESSION:
+        preds = _unnormalize_regression(preds, target_mean, target_std)
+        labels = _unnormalize_regression(labels, target_mean, target_std)
     return compute_metric(
         preds,
         labels,

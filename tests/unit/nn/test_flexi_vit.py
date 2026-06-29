@@ -7,6 +7,7 @@ import torch
 from einops import repeat
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.nn.encodings import timestamps_to_days
 from olmoearth_pretrain.nn.flexi_vit import (
     CompositeEncodings,
     Encoder,
@@ -197,6 +198,68 @@ class TestFlexiVitBase:
             4,
         ], f"Incorrect shape for modality2 tokens: {modality2_tokens.shape}"
 
+    def test_3d_rope_positions_share_timestamp_slots_across_modalities(self) -> None:
+        """All multitemporal modalities should use the same timestamp slot values."""
+        model = FlexiVitBase(
+            embedding_size=32,
+            num_heads=2,
+            mlp_ratio=2.0,
+            depth=1,
+            drop_path=0.0,
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.LANDSAT],
+            max_sequence_length=12,
+            position_encoding="rope_3d",
+        )
+        timestamps = torch.tensor(
+            [[[1, 0, 2023], [1, 1, 2023], [1, 6, 2023]]], dtype=torch.long
+        )
+        tokens_only_dict = {
+            "sentinel2_l2a": torch.zeros(1, 1, 1, 3, 1, 32),
+            "landsat": torch.zeros(1, 1, 1, 3, 1, 32),
+        }
+        masks_dict = {
+            "sentinel2_l2a_mask": torch.zeros(1, 1, 1, 3, 1),
+            "landsat_mask": torch.zeros(1, 1, 1, 3, 1),
+        }
+
+        positions = model.build_rope_positions(
+            tokens_only_dict=tokens_only_dict,
+            original_masks_dict=masks_dict,
+            patch_size=4,
+            input_res=10,
+            timestamps=timestamps,
+        )
+
+        assert positions is not None
+        expected_days = timestamps_to_days(timestamps)[0].repeat_interleave(2)
+        actual_days = torch.sort(positions[0, :, 0]).values
+        assert torch.allclose(actual_days, torch.sort(expected_days).values)
+        assert torch.equal(positions[0, :, 1:], torch.zeros_like(positions[0, :, 1:]))
+
+    def test_3d_rope_requires_timestamps(self) -> None:
+        """3D RoPE cannot build the temporal coordinate without timestamps."""
+        model = FlexiVitBase(
+            embedding_size=32,
+            num_heads=2,
+            mlp_ratio=2.0,
+            depth=1,
+            drop_path=0.0,
+            supported_modalities=[Modality.SENTINEL2_L2A],
+            max_sequence_length=12,
+            position_encoding="rope_3d",
+        )
+        tokens_only_dict = {"sentinel2_l2a": torch.zeros(1, 1, 1, 3, 1, 32)}
+        masks_dict = {"sentinel2_l2a_mask": torch.zeros(1, 1, 1, 3, 1)}
+
+        with pytest.raises(ValueError, match="3D RoPE requires timestamps"):
+            model.build_rope_positions(
+                tokens_only_dict=tokens_only_dict,
+                original_masks_dict=masks_dict,
+                patch_size=4,
+                input_res=10,
+                timestamps=None,
+            )
+
 
 class TestEncoder:
     """Unit tests for the Encoder class."""
@@ -342,12 +405,12 @@ class TestEncoder:
             supported_modality_names,
             embedding_size=16,
             num_heads=2,
-            spatial_pos_encoding="rope",
+            position_encoding="rope",
             rope_base=5000.0,
             rope_coordinate_scale=0.5,
         )
         encoder = config.build()
-        assert encoder.spatial_pos_encoding == "rope"
+        assert encoder.position_encoding == "rope"
         assert encoder.rope_base == 5000.0
         assert encoder.rope_coordinate_scale == 0.5
         assert encoder.blocks[0].attn.rope_base == 5000.0
@@ -361,7 +424,7 @@ class TestEncoder:
             supported_modality_names,
             embedding_size=12,
             num_heads=2,
-            spatial_pos_encoding="rope",
+            position_encoding="rope",
         )
         with pytest.raises(ValueError, match="head_dim divisible by 4"):
             config.build()
@@ -375,7 +438,7 @@ class TestEncoder:
             supported_modality_names,
             embedding_size=16,
             num_heads=2,
-            spatial_pos_encoding="rope",
+            position_encoding="rope",
             attn_window_size=8,
         )
         encoder = config.build()
@@ -390,10 +453,10 @@ class TestEncoder:
             supported_modality_names,
             embedding_size=16,
             num_heads=2,
-            spatial_pos_encoding="absolute",
+            position_encoding="absolute",
             attn_window_size=8,
         )
-        with pytest.raises(ValueError, match='requires spatial_pos_encoding="rope"'):
+        with pytest.raises(ValueError, match="requires a 2D RoPE position_encoding"):
             config.build()
 
     def test_encoder_config_windowed_incompatible_with_flash(
@@ -405,12 +468,90 @@ class TestEncoder:
             supported_modality_names,
             embedding_size=16,
             num_heads=2,
-            spatial_pos_encoding="rope",
+            position_encoding="rope",
             attn_window_size=8,
             use_flash_attn=True,
         )
         with pytest.raises(ValueError, match="incompatible with use_flash_attn"):
             config.build()
+
+    def test_encoder_config_rope_mixed(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Tests we can build an encoder with RoPE-Mixed (learnable freqs)."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=16,
+            num_heads=2,
+            position_encoding="rope_mixed",
+            rope_mixed_base=5.0,
+        )
+        encoder = config.build()
+        assert encoder.position_encoding == "rope_mixed"
+        assert encoder.rope_mixed_base == 5.0
+        attn = encoder.blocks[0].attn
+        assert attn.position_encoding == "rope_mixed"
+        assert attn.rope_mixed_freqs is not None
+        # (2, num_heads, head_dim // 2)
+        assert attn.rope_mixed_freqs.shape == (2, 2, 4)
+        assert attn.rope_mixed_freqs.requires_grad is True
+
+    def test_encoder_config_rope_mixed_requires_valid_head_dim(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """RoPE-Mixed init also needs head_dim divisible by 4."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=12,
+            num_heads=2,
+            position_encoding="rope_mixed",
+        )
+        with pytest.raises(ValueError, match="head_dim divisible by 4"):
+            config.build()
+
+    def test_position_encoding_deprecated_alias(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """The legacy ``spatial_pos_encoding`` name still works but warns."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        with pytest.warns(DeprecationWarning, match="spatial_pos_encoding"):
+            config = EncoderConfig(
+                supported_modality_names,
+                embedding_size=16,
+                num_heads=2,
+                spatial_pos_encoding="rope",
+                rope_base=5000.0,
+            )
+        # Reconciled onto the canonical field; legacy field cleared.
+        assert config.position_encoding == "rope"
+        assert config.spatial_pos_encoding is None
+        encoder = config.build()
+        assert encoder.position_encoding == "rope"
+
+    def test_position_encoding_legacy_from_dict(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Old checkpoint configs carrying the legacy key still deserialize.
+
+        ``Config.from_dict`` drops keys that are not dataclass fields, so the
+        deprecated ``spatial_pos_encoding`` must remain a field for old
+        checkpoints to keep loading rather than silently falling back to the
+        ``absolute`` default.
+        """
+        supported_modality_names = [m.name for m in supported_modalities]
+        with pytest.warns(DeprecationWarning, match="spatial_pos_encoding"):
+            config = EncoderConfig.from_dict(
+                {
+                    "supported_modality_names": supported_modality_names,
+                    "embedding_size": 16,
+                    "num_heads": 2,
+                    "spatial_pos_encoding": "rope",
+                }
+            )
+        assert config.position_encoding == "rope"
+        assert config.spatial_pos_encoding is None
 
 
 class TestPredictor:
@@ -748,15 +889,34 @@ class TestPredictor:
             supported_modality_names,
             decoder_embedding_size=16,
             num_heads=2,
-            spatial_pos_encoding="rope",
+            position_encoding="rope",
             rope_base=5000.0,
             rope_coordinate_scale=0.5,
         )
         predictor = config.build()
-        assert predictor.spatial_pos_encoding == "rope"
+        assert predictor.position_encoding == "rope"
         assert predictor.rope_base == 5000.0
         assert predictor.rope_coordinate_scale == 0.5
         assert predictor.blocks[0].attn.rope_base == 5000.0
+
+    def test_predictor_config_rope_mixed(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Tests we can build a predictor with RoPE-Mixed."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = PredictorConfig(
+            supported_modality_names,
+            decoder_embedding_size=16,
+            num_heads=2,
+            position_encoding="rope_mixed",
+            rope_mixed_base=5.0,
+        )
+        predictor = config.build()
+        assert predictor.position_encoding == "rope_mixed"
+        assert predictor.rope_mixed_base == 5.0
+        attn = predictor.blocks[0].attn
+        assert attn.position_encoding == "rope_mixed"
+        assert attn.rope_mixed_freqs.shape == (2, 2, 4)
 
 
 class TestTokensAndMasks:

@@ -33,11 +33,11 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the v1.1 base model with 2D RoPE."""
     config = build_model_config_base(common)
 
-    config.encoder_config.spatial_pos_encoding = SPATIAL_POS_ENCODING
+    config.encoder_config.position_encoding = SPATIAL_POS_ENCODING
     config.encoder_config.rope_base = ROPE_BASE
     config.encoder_config.rope_coordinate_scale = ROPE_COORDINATE_SCALE
 
-    config.decoder_config.spatial_pos_encoding = SPATIAL_POS_ENCODING
+    config.decoder_config.position_encoding = SPATIAL_POS_ENCODING
     config.decoder_config.rope_base = ROPE_BASE
     config.decoder_config.rope_coordinate_scale = ROPE_COORDINATE_SCALE
 

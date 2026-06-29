@@ -49,12 +49,34 @@ OlmoEarth is built using [OLMo-core](https://github.com/allenai/OLMo-core.git). 
 <img src="https://raw.githubusercontent.com/allenai/olmoearth_pretrain/main/assets/model.png" alt="Model Architecture Diagram" style="width: 800px; margin-left:'auto' margin-right:'auto' display:'block'"/>
 
 The OlmoEarth models are trained on three satellite modalities (Sentinel 2, Sentinel 1 and Landsat) and six derived maps (OpenStreetMap, WorldCover, USDA Cropland Data Layer, SRTM DEM, WRI Canopy Height Map, and WorldCereal).
+
+We iteratively release improvements to our OlmoEarth models. These are recorded in our [changelog](https://docs.olmoearth.allenai.org/changelog).
+
+<details>
+<summary>v1 </summary>
+
+The v1 models were trained using the scripts in [`scripts/official/v1`](scripts/official/v1/). We describe this model in the [original OlmoEarth report](arxiv.org/abs/2511.13655).
+
 | Model Size | Weights | Encoder Params | Decoder Params |
 | --- | --- | --- | --- |
 | Nano | [link](https://huggingface.co/allenai/OlmoEarth-v1-Nano) | 1.4M | 800K |
 | Tiny | [link](https://huggingface.co/allenai/OlmoEarth-v1-Tiny) | 6.2M | 1.9M |
 | Base | [link](https://huggingface.co/allenai/OlmoEarth-v1-Base) | 89M | 30M |
 | Large | [link](https://huggingface.co/allenai/OlmoEarth-v1-Large) | 308M | 53M |
+</details>
+
+<details open>
+<summary> v1.1 </summary>
+
+The v1.1 models were trained using the scripts in [`scripts/official/v1_1`](scripts/official/v1_1/). We describe this model in the [OlmoEarth v1.1 tech report](https://arxiv.org/abs/2605.20804).
+
+| Model Size | Weights | Encoder Params | Decoder Params |
+| --- | --- | --- | --- |
+| Nano | [link](https://huggingface.co/allenai/OlmoEarth-v1_1-Nano) | 5.5M | 800K |
+| Tiny | [link](https://huggingface.co/allenai/OlmoEarth-v1_1-Tiny) | 12.5M | 1.9M |
+| Base | [link](https://huggingface.co/allenai/OlmoEarth-v1_1-Base) | 114M | 30M |
+
+</details>
 
 ## Using OlmoEarth
 
