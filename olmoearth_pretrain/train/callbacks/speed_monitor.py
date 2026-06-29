@@ -7,7 +7,7 @@ from typing import Any
 from olmo_core.train.callbacks.speed_monitor import SpeedMonitorCallback
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModule,
 )
@@ -86,16 +86,16 @@ class OlmoEarthSpeedMonitorCallback(SpeedMonitorCallback):
             # We don't record the first batch since the first one tends to take
             # unusually long.
             return
-        _, batch = batch
+        # Batch can be 2-tuple (patch_size, sample) or 3-tuple (patch_size, sample_a, sample_b)
+        sample: MaskedOlmoEarthSample = batch[1]
         # We need token budget times encoder ratio and token budget times decoder ratio
-        if isinstance(batch, OlmoEarthSample):
-            self._step_tokens_encoded = (
-                batch.batch_size * self._encoder_ratio * self._token_budget
-            )
-            self._step_tokens_decoded = (
-                batch.batch_size * self._decoder_ratio * self._token_budget
-            )
-            self._step_tokens_target_encoder = batch.batch_size * self._token_budget
+        self._step_tokens_encoded = (
+            sample.batch_size * self._encoder_ratio * self._token_budget
+        )
+        self._step_tokens_decoded = (
+            sample.batch_size * self._decoder_ratio * self._token_budget
+        )
+        self._step_tokens_target_encoder = sample.batch_size * self._token_budget
 
         self._total_steps += 1
         self._total_tokens_encoded += self._step_tokens_encoded

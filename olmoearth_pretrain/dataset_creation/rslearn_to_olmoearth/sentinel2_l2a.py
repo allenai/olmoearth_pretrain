@@ -4,6 +4,7 @@ import argparse
 import multiprocessing
 
 import tqdm
+from rslearn.dataset import Dataset, Window
 from rslearn.utils.mp import star_imap_unordered
 from upath import UPath
 
@@ -18,22 +19,25 @@ LAYER_FREQ = "sentinel2_l2a_freq"
 LAYER_MONTHLY = "sentinel2_l2a"
 
 
-def convert_sentinel2_l2a(window_path: UPath, olmoearth_path: UPath) -> None:
+def convert_sentinel2_l2a(window: Window, olmoearth_path: UPath) -> None:
     """Add Sentinel-2 data for this window to the OlmoEarth Pretrain dataset.
 
     Args:
-        window_path: the rslearn window directory to read data from.
+        window: the rslearn window to read data from.
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
     """
-    convert_freq(
-        window_path,
-        olmoearth_path,
-        LAYER_FREQ,
-        Modality.SENTINEL2_L2A,
-        missing_okay=True,
-        unprepared_okay=True,
-    )
-    convert_monthly(window_path, olmoearth_path, LAYER_MONTHLY, Modality.SENTINEL2_L2A)
+    try:
+        convert_freq(
+            window,
+            olmoearth_path,
+            LAYER_FREQ,
+            Modality.SENTINEL2_L2A,
+            missing_okay=True,
+            unprepared_okay=True,
+        )
+        convert_monthly(window, olmoearth_path, LAYER_MONTHLY, Modality.SENTINEL2_L2A)
+    except Exception as e:
+        print(f"warning: error handling window {window.name}: {e}")
 
 
 if __name__ == "__main__":
@@ -62,15 +66,16 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    ds_path = UPath(args.ds_path)
+    dataset = Dataset(UPath(args.ds_path))
     olmoearth_path = UPath(args.olmoearth_path)
 
-    metadata_fnames = ds_path.glob("windows/res_10/*/metadata.json")
     jobs = []
-    for metadata_fname in metadata_fnames:
+    for window in dataset.load_windows(
+        workers=args.workers, show_progress=True, groups=["res_10"]
+    ):
         jobs.append(
             dict(
-                window_path=metadata_fname.parent,
+                window=window,
                 olmoearth_path=olmoearth_path,
             )
         )

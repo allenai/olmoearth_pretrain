@@ -196,9 +196,9 @@ class TestTokenizationWithMasking:
 
     def test_tokenization_config_propagates_to_nested_masking_strategies(self) -> None:
         """Tokenization config should propagate to nested masking strategies."""
-        from olmoearth_pretrain.train.masking import RandomFixedModalityMaskingStrategy
-        from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
-            _propagate_tokenization_config,
+        from olmoearth_pretrain.train.masking import (
+            RandomFixedModalityMaskingStrategy,
+            propagate_tokenization_config,
         )
 
         tokenization_config = TokenizationConfig(
@@ -213,8 +213,59 @@ class TestTokenizationWithMasking:
             decoded_modalities=[Modality.SENTINEL2_L2A.name]
         )
 
-        _propagate_tokenization_config(strategy, tokenization_config)
+        propagate_tokenization_config(strategy, tokenization_config)
 
         assert strategy.tokenization_config is tokenization_config
         # Wrapped strategy should also receive the config
         assert strategy.strategy.tokenization_config is tokenization_config
+
+    def test_masking_config_propagates_tokenization_config(self) -> None:
+        """MaskingConfig.build() should propagate tokenization_config to the strategy."""
+        from olmoearth_pretrain.train.masking import MaskingConfig
+
+        tokenization_config = TokenizationConfig(
+            overrides={
+                Modality.SENTINEL2_L2A.name: ModalityTokenization(
+                    band_groups=[["B02", "B03", "B04"]]  # Single group instead of 3
+                )
+            }
+        )
+
+        # Create a MaskingConfig with tokenization_config
+        masking_config = MaskingConfig(
+            strategy_config={
+                "type": "random",
+                "encode_ratio": 0.5,
+                "decode_ratio": 0.5,
+            },
+            tokenization_config=tokenization_config,
+        )
+
+        # Build the strategy
+        strategy = masking_config.build()
+
+        # Verify tokenization config was propagated
+        assert strategy.tokenization_config is tokenization_config
+        # Verify the strategy uses the custom bandset count
+        assert strategy._get_num_bandsets(Modality.SENTINEL2_L2A.name) == 1
+
+    def test_masking_config_without_tokenization_config(self) -> None:
+        """MaskingConfig.build() without tokenization_config uses default bandsets."""
+        from olmoearth_pretrain.train.masking import MaskingConfig
+
+        # Create a MaskingConfig without tokenization_config
+        masking_config = MaskingConfig(
+            strategy_config={
+                "type": "random",
+                "encode_ratio": 0.5,
+                "decode_ratio": 0.5,
+            },
+        )
+
+        # Build the strategy
+        strategy = masking_config.build()
+
+        # Verify tokenization config is None
+        assert strategy.tokenization_config is None
+        # Verify the strategy uses the default bandset count (3 for S2 L2A)
+        assert strategy._get_num_bandsets(Modality.SENTINEL2_L2A.name) == 3

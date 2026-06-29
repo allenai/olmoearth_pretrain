@@ -13,6 +13,7 @@ import tqdm
 from rasterio.crs import CRS
 from rslearn.utils.geometry import Projection
 from rslearn.utils.mp import star_imap_unordered
+from rslearn.utils.raster_array import RasterArray
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality, TimeSpan
@@ -187,6 +188,12 @@ def rasterize_openstreetmap(olmoearth_path: UPath, in_fname: UPath) -> None:
             if coords[1] < 0 or coords[1] >= OUTPUT_SIZE:
                 continue
             array[category_id, coords[1], coords[0]] = 1
+        elif geometry["type"] == "MultiLineString":
+            for line_string_coords in geometry["coordinates"]:
+                draw_line_string(array, line_string_coords, category_id, transform)
+        elif geometry["type"] == "MultiPolygon":
+            for polygon_coords in geometry["coordinates"]:
+                draw_polygon(array, polygon_coords, category_id, transform)
         else:
             raise ValueError(f"cannot handle geometry type {geometry['type']}")
 
@@ -205,7 +212,7 @@ def rasterize_openstreetmap(olmoearth_path: UPath, in_fname: UPath) -> None:
         path=out_fname.parent,
         projection=Projection(crs, OUTPUT_RESOLUTION, -OUTPUT_RESOLUTION),
         bounds=bounds,
-        array=array,
+        raster=RasterArray(chw_array=array),
         fname=out_fname.name,
     )
 

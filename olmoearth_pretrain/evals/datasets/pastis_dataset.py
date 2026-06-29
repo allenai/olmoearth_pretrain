@@ -7,7 +7,6 @@ from pathlib import Path
 import einops
 import numpy as np
 import torch
-import torch.multiprocessing
 from torch.utils.data import Dataset
 
 from olmoearth_pretrain.data.constants import Modality
@@ -23,9 +22,6 @@ from olmoearth_pretrain.evals.datasets.utils import load_min_max_stats
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
-
-# TODO: Move this into a worker init function and see if this has to do with the eval memory leak on long runs
-torch.multiprocessing.set_sharing_strategy("file_system")
 
 
 S2_BAND_STATS = {
@@ -49,6 +45,19 @@ S1_BAND_STATS = {
     "vh": {"mean": -17.3257, "std": 2.8106},
 }
 
+# Map low-label fractions to the precomputed partition-file basename shipped
+# alongside the PASTIS partitions (e.g. ``0.01x_train_partition.json``). 1.0
+# means "use everything", i.e. no partition file.
+_LABEL_FRACTION_TO_PARTITION = {
+    0.01: "0.01x_train",
+    0.02: "0.02x_train",
+    0.05: "0.05x_train",
+    0.10: "0.10x_train",
+    0.20: "0.20x_train",
+    0.50: "0.50x_train",
+    1.00: None,
+}
+
 
 class PASTISRDataset(Dataset):
     """PASTIS-R dataset class."""
@@ -60,18 +69,20 @@ class PASTISRDataset(Dataset):
         path_to_splits: Path,
         dir_partition: Path | None = None,
         split: str = "train",
-        partition: str = "default",
+        label_fraction: float = 1.0,
         norm_stats_from_pretrained: bool = True,
-        norm_method: str = "norm_no_clip",
+        # Default to 2std no clip - this matches what our model sees in pretraining,
+        # so when using dataset stats (e.g. for MADOS) consistency is important.
+        norm_method: str = "norm_no_clip_2_std",
         input_modalities: list[str] = [],
     ):
         """Init PASTIS-R dataset.
 
         Args:
             path_to_splits: Path where .pt objects returned by process_pastis_r have been saved
-            dir_partition: Path to the partition directory, only used if partition is not "default"
+            dir_partition: Path to the partition directory, only used if label_fraction < 1.0
             split: Split to use
-            partition: Partition to use
+            label_fraction: Fraction of train labels to load; must match a precomputed partition file
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
             input_modalities: List of modalities to use, must be a subset of ["sentinel1", "sentinel2_l2a"]
@@ -141,7 +152,16 @@ class PASTISRDataset(Dataset):
         self.s1_images_dir = path_to_splits / f"pastis_r_{split}" / "s1_images"
         self.labels = torch.load(path_to_splits / f"pastis_r_{split}" / "targets.pt")
         self.months = torch.load(path_to_splits / f"pastis_r_{split}" / "months.pt")
-        if (partition != "default") and (split == "train"):
+        if label_fraction not in _LABEL_FRACTION_TO_PARTITION:
+            valid = ", ".join(
+                f"{value:g}" for value in sorted(_LABEL_FRACTION_TO_PARTITION)
+            )
+            raise ValueError(
+                f"Unsupported label_fraction {label_fraction}. Supported values "
+                f"are: {valid}"
+            )
+        partition = _LABEL_FRACTION_TO_PARTITION[label_fraction]
+        if partition is not None and split == "train":
             assert dir_partition is not None, "dir_partition must be set"
             # PASTIS and PASTIS-R share the same partitions so we just use PASTIS Partitions
             with open(dir_partition / f"{partition}_partition.json") as json_file:

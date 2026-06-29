@@ -24,7 +24,6 @@ from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
 from olmoearth_pretrain.data.dataset import (
     OlmoEarthDatasetConfig,
-    collate_olmoearth_pretrain,
 )
 from olmoearth_pretrain.data.visualize import visualize_sample
 from olmoearth_pretrain.inference_benchmarking.run_throughput_benchmark import (
@@ -34,6 +33,7 @@ from olmoearth_pretrain.internal.utils import (
     MockLatentMIMTrainModule,
     MockOlmoEarthDataLoader,
 )
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModuleConfig,
 )
@@ -73,14 +73,25 @@ HeliosBeakerLaunchConfig = _deprecated_class_alias(
 
 @dataclass
 class CommonComponents(Config):
-    """Any configurable items that are common to all experiments."""
+    """Any configurable items that are common to all experiments.
+
+    Args:
+        run_name: Name of the experiment run.
+        save_folder: Path to save checkpoints and logs.
+        training_modalities: List of modality names to train on.
+        launch: Optional Beaker launch configuration.
+        nccl_debug: Whether to enable NCCL debugging.
+        tokenization_config: Optional custom tokenization config for band groupings.
+            If provided, will be used by both the model and masking strategy to ensure
+            consistent band groupings.
+    """
 
     run_name: str
     save_folder: str
     training_modalities: list[str]
     launch: OlmoEarthBeakerLaunchConfig | None = None
     nccl_debug: bool = False
-    # callbacks: dict[str, Callback]
+    tokenization_config: TokenizationConfig | None = None
 
     def validate(self) -> None:
         """Validate the common components."""
@@ -92,6 +103,8 @@ class CommonComponents(Config):
             raise ValueError(
                 "training_modalities must contain only valid modality names"
             )
+        if self.tokenization_config is not None:
+            self.tokenization_config.validate()
 
 
 @dataclass
@@ -289,10 +302,8 @@ def train(config: OlmoEarthExperimentConfig) -> None:
     model = model.to(device)
     train_module = config.train_module.build(model)
     dataset = config.dataset.build()
-    # TODO: akward harcoding of the collator here
     data_loader = config.data_loader.build(
         dataset,
-        collator=collate_olmoearth_pretrain,
         dp_process_group=train_module.dp_process_group,
     )
     trainer = config.trainer.build(train_module, data_loader)
@@ -344,9 +355,7 @@ def visualize(config: OlmoEarthExperimentConfig) -> None:
     global_step = config.visualize.global_step
     dataset = config.dataset.build()
     if global_step is not None:
-        data_loader = config.data_loader.build(
-            dataset, collator=collate_olmoearth_pretrain, dp_process_group=None
-        )
+        data_loader = config.data_loader.build(dataset, dp_process_group=None)
         sample_indices = data_loader.fast_forward(global_step)
     else:
         sample_indices = np.random.randint(
@@ -371,10 +380,7 @@ def launch(config: OlmoEarthExperimentConfig) -> None:
 def prep(config: OlmoEarthExperimentConfig) -> None:
     """Prepare the dataset for an experiment."""
     dataset = config.dataset.build()
-    # TODO: akward harcoding of the collator here
-    data_loader = config.data_loader.build(
-        dataset, collator=collate_olmoearth_pretrain, dp_process_group=None
-    )
+    data_loader = config.data_loader.build(dataset, dp_process_group=None)
     data_loader.reshuffle(epoch=1)
     # Also may want to create the first index of shuffling here for starters
 

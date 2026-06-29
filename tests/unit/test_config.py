@@ -122,13 +122,15 @@ class TestStandaloneConfig:
 
         assert resolved is MaskValue
 
-    def test_standalone_config_resolve_class_returns_none_for_invalid(self) -> None:
-        """Test that _resolve_class returns None for invalid class names."""
+    def test_standalone_config_resolve_class_raises_for_invalid(self) -> None:
+        """Test that _resolve_class raises for invalid class names."""
         # No dot in name
-        assert _StandaloneConfig._resolve_class("InvalidName") is None
+        with pytest.raises(ValueError, match="must be fully qualified"):
+            _StandaloneConfig._resolve_class("InvalidName")
 
         # Non-existent module
-        assert _StandaloneConfig._resolve_class("nonexistent.module.Class") is None
+        with pytest.raises(ModuleNotFoundError):
+            _StandaloneConfig._resolve_class("nonexistent.module.Class")
 
 
 class TestConfigCompatibility:

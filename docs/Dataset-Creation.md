@@ -244,6 +244,7 @@ Now convert the data from the rslearn dataset to OlmoEarth format.
 export OLMOEARTH_PATH=./olmoearth_dataset
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.cdl --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.era5_10 --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
+python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.eurocrops --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.landsat --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.naip_10 --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.openstreetmap --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
@@ -268,6 +269,7 @@ into the per-modality CSVs:
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality cdl
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality era5_10 --time_span two_week
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality era5_10 --time_span year
+python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality eurocrops
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality landsat --time_span two_week
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality landsat --time_span year
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality naip_10

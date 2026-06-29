@@ -73,13 +73,15 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.google_earth_engine.GoogleSatelliteEmbeddings",
         "duration": "370d",
-        "gcs_bucket_name": "rslearn-gee-ingest-bucket",
-        "index_cache_dir": "cache/gse",
         "ingest": false,
-        "name": "rslearn.data_sources.google_earth_engine.GoogleSatelliteEmbeddings",
-        "service_account_credentials": "/etc/credentials/gee_credentials.json",
-        "service_account_name": "rslearn-gee-account2",
+        "init_args": {
+          "gcs_bucket_name": "rslearn-gee-ingest-bucket",
+          "index_cache_dir": "cache/gse",
+          "service_account_credentials": "/etc/credentials/gee_credentials.json",
+          "service_account_name": "rslearn-gee-account2"
+        },
         "time_offset": "-180d"
       },
       "resampling_method": "nearest",

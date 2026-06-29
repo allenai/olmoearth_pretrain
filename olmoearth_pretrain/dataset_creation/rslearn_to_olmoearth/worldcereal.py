@@ -7,8 +7,9 @@ from datetime import UTC, datetime
 
 import numpy as np
 import tqdm
-from rslearn.dataset import Window
+from rslearn.dataset import Dataset, Window
 from rslearn.utils.mp import star_imap_unordered
+from rslearn.utils.raster_array import RasterArray
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality, TimeSpan
@@ -39,17 +40,16 @@ def _fill_nones_with_zeros(ndarrays: list[np.ndarray | None]) -> np.ndarray | No
     return np.concatenate(return_list, axis=0)
 
 
-def convert_worldcereal(window_path: UPath, olmoearth_path: UPath) -> None:
+def convert_worldcereal(window: Window, olmoearth_path: UPath) -> None:
     """Add WorldCereal data for this window to the OlmoEarth Pretrain dataset.
 
     Args:
-        window_path: the rslearn window directory to read data from.
+        window: the rslearn window to read data from.
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
     """
     ndarrays: list[np.ndarray | None] = []
     assert len(Modality.WORLDCEREAL.band_sets) == 1
     band_set = Modality.WORLDCEREAL.band_sets[0]
-    window = Window.load(window_path)
     window_metadata = get_window_metadata(window)
     for band in band_set.bands:
         if not window.is_layer_completed(band):
@@ -60,7 +60,7 @@ def convert_worldcereal(window_path: UPath, olmoearth_path: UPath) -> None:
         ndarrays.append(
             GEOTIFF_RASTER_FORMAT.decode_raster(
                 path=window_dir, projection=window.projection, bounds=window.bounds
-            )
+            ).get_chw_array()
         )
 
     assert len(ndarrays) == len(band_set.bands), (
@@ -91,7 +91,7 @@ def convert_worldcereal(window_path: UPath, olmoearth_path: UPath) -> None:
         path=dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,
-        array=concatenated_arrays,
+        raster=RasterArray(chw_array=concatenated_arrays),
         fname=dst_fname.name,
     )
     metadata_fname = get_modality_temp_meta_fname(
@@ -140,15 +140,14 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    ds_path = UPath(args.ds_path)
+    dataset = Dataset(UPath(args.ds_path))
     olmoearth_path = UPath(args.olmoearth_path)
 
-    metadata_fnames = ds_path.glob("windows/*/*/metadata.json")
     jobs = []
-    for metadata_fname in metadata_fnames:
+    for window in dataset.load_windows(workers=args.workers, show_progress=True):
         jobs.append(
             dict(
-                window_path=metadata_fname.parent,
+                window=window,
                 olmoearth_path=olmoearth_path,
             )
         )

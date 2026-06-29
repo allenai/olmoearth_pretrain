@@ -176,7 +176,7 @@ class TestMultiModalPatchEmbeddings:
             latlon_num_band_sets,
             embedding_size,
         )  # B, C_G , D
-        assert (output["latlon"] == 0).all()
+        assert (output["latlon_mask"] == 1).all()
         assert output["latlon_mask"].shape == (B, latlon_num_band_sets)  # B, C_G
 
 
@@ -720,6 +720,95 @@ class TestEncoder:
             f"Expected output latlon_mask shape {latlon_mask.shape}, got {output.latlon_mask.shape}"
         )
 
+    def test_output_embedding_size(
+        self,
+        supported_modalities: list[ModalitySpec],
+        modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    ) -> None:
+        """Test that output_embedding_size projects tokens to the correct size."""
+        # Temporarily disable deterministic mode for this test due to scatter_reduce
+        torch.use_deterministic_algorithms(False)
+
+        embedding_size = 16
+        output_embedding_size = 32
+
+        encoder = Encoder(
+            embedding_size=embedding_size,
+            max_patch_size=8,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=4.0,
+            depth=2,
+            drop_path=0.1,
+            supported_modalities=supported_modalities,
+            max_sequence_length=12,
+            output_embedding_size=output_embedding_size,
+        )
+
+        sentinel2_l2a_num_band_sets, sentinel2_l2a_num_bands = (
+            modality_band_set_len_and_total_bands["sentinel2_l2a"]
+        )
+        latlon_num_band_sets, latlon_num_bands = modality_band_set_len_and_total_bands[
+            "latlon"
+        ]
+        B, H, W, T, C = 1, 8, 8, 4, sentinel2_l2a_num_bands
+        sentinel2_l2a = torch.randn(B, H, W, T, C)
+        sentinel2_l2a_mask = torch.zeros(B, H, W, T, C, dtype=torch.long)
+        latlon = torch.randn(B, latlon_num_bands)
+        latlon_mask = torch.zeros(B, latlon_num_bands, dtype=torch.float32)
+        days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
+        months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
+        years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
+        timestamps = torch.cat([days, months, years], dim=-1)
+
+        masked_sample_dict = {
+            "sentinel2_l2a": sentinel2_l2a,
+            "sentinel2_l2a_mask": sentinel2_l2a_mask,
+            "latlon": latlon,
+            "latlon_mask": latlon_mask,
+            "timestamps": timestamps,
+        }
+        x = MaskedOlmoEarthSample(**masked_sample_dict)
+
+        patch_size = 4
+        input_res = 1
+
+        output_dict = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
+        output, project_aggregated, _ = unpack_encoder_output(output_dict)
+
+        # Verify tokens have output_embedding_size, not embedding_size
+        expected_H = H // patch_size
+        expected_W = W // patch_size
+        expected_shape = (
+            B,
+            expected_H,
+            expected_W,
+            T,
+            sentinel2_l2a_num_band_sets,
+            output_embedding_size,
+        )
+        assert output.sentinel2_l2a is not None
+        assert output.sentinel2_l2a.shape == expected_shape, (
+            f"Expected sentinel2_l2a shape {expected_shape}, got {output.sentinel2_l2a.shape}"
+        )
+
+        assert output.latlon is not None
+        assert output.latlon.shape == (
+            B,
+            latlon_num_band_sets,
+            output_embedding_size,
+        ), (
+            f"Expected latlon shape (B, {latlon_num_band_sets}, {output_embedding_size}), "
+            f"got {output.latlon.shape}"
+        )
+
+        # Verify project_aggregated also has output_embedding_size
+        assert project_aggregated is not None
+        assert project_aggregated.shape == (B, output_embedding_size), (
+            f"Expected project_aggregated shape (B, {output_embedding_size}), "
+            f"got {project_aggregated.shape}"
+        )
+
 
 class TestPredictor:
     """Integration tests for the Predictor class."""
@@ -922,6 +1011,467 @@ class TestPredictor:
                 ]
             ):
                 assert param.grad is not None, name
+
+
+def test_encoder_rope_dynamic_patch_sizes(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """2D RoPE should use runtime patch grid/size, not a fixed spatial table."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        position_encoding="rope",
+    )
+
+    B, H, W, T = 1, 8, 8, 2
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+    for patch_size in (2, 4):
+        sample = MaskedOlmoEarthSample(
+            sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+            sentinel2_l2a_mask=torch.zeros(
+                B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
+            ),
+            latlon=torch.randn(B, latlon_num_bands),
+            latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+            timestamps=timestamps,
+        )
+        encoder.zero_grad()
+        output_dict = encoder.forward(sample, patch_size=patch_size, input_res=10)
+        output, _, _ = unpack_encoder_output(output_dict)
+
+        assert output.sentinel2_l2a is not None
+        assert output.sentinel2_l2a.shape[:3] == (
+            B,
+            H // patch_size,
+            W // patch_size,
+        )
+        output.sentinel2_l2a.sum().backward()
+        assert encoder.blocks[0].attn.q.weight.grad is not None
+
+
+def test_encoder_rope_mixed_forward_and_learns_freqs(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """RoPE-Mixed encoder should forward and backprop into learnable freqs."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        position_encoding="rope_mixed",
+    )
+
+    B, H, W, T = 1, 8, 8, 2
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=4, input_res=10)
+    output, _, _ = unpack_encoder_output(output_dict)
+    assert output.sentinel2_l2a is not None
+    assert output.sentinel2_l2a.shape[:3] == (B, H // 4, W // 4)
+    output.sentinel2_l2a.sum().backward()
+    for blk in encoder.blocks:
+        assert blk.attn.rope_mixed_freqs.grad is not None
+        assert torch.isfinite(blk.attn.rope_mixed_freqs.grad).all()
+        assert blk.attn.rope_mixed_freqs.grad.abs().sum() > 0
+
+
+def test_predictor_forward_rope(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Predictor cross-attention should pass separate 2D RoPE positions for Q/K."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_band_sets = modality_band_set_len_and_total_bands[
+        "sentinel2_l2a"
+    ][0]
+    latlon_num_band_sets = modality_band_set_len_and_total_bands["latlon"][0]
+    predictor = Predictor(
+        supported_modalities=supported_modalities,
+        encoder_embedding_size=16,
+        decoder_embedding_size=16,
+        depth=2,
+        mlp_ratio=2.0,
+        num_heads=2,
+        max_sequence_length=12,
+        drop_path=0.0,
+        position_encoding="rope",
+    )
+
+    B, H, W, T = 1, 2, 2, 2
+    sentinel2_l2a_tokens = torch.randn(
+        B, H, W, T, sentinel2_l2a_num_band_sets, 16, requires_grad=True
+    )
+    sentinel2_l2a_mask = torch.zeros(
+        B, H, W, T, sentinel2_l2a_num_band_sets, dtype=torch.float32
+    )
+    sentinel2_l2a_mask[:, 0, 0, :, :] = MaskValue.DECODER.value
+    latlon = torch.randn(B, latlon_num_band_sets, 16, requires_grad=True)
+    latlon_mask = torch.zeros(B, latlon_num_band_sets, dtype=torch.float32)
+    encoded_tokens = TokensAndMasks(
+        sentinel2_l2a=sentinel2_l2a_tokens,
+        sentinel2_l2a_mask=sentinel2_l2a_mask,
+        latlon=latlon,
+        latlon_mask=latlon_mask,
+    )
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+
+    output = predictor.forward(encoded_tokens, timestamps, patch_size=4, input_res=10)
+
+    assert output.sentinel2_l2a is not None
+    assert output.sentinel2_l2a.shape == (
+        B,
+        H,
+        W,
+        T,
+        sentinel2_l2a_num_band_sets,
+        16,
+    )
+    output.sentinel2_l2a.sum().backward()
+    assert predictor.blocks[0].attn.q.weight.grad is not None
+
+
+def test_predictor_forward_rope_mixed(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Predictor cross-attention should also work with RoPE-Mixed."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_band_sets = modality_band_set_len_and_total_bands[
+        "sentinel2_l2a"
+    ][0]
+    latlon_num_band_sets = modality_band_set_len_and_total_bands["latlon"][0]
+    predictor = Predictor(
+        supported_modalities=supported_modalities,
+        encoder_embedding_size=16,
+        decoder_embedding_size=16,
+        depth=2,
+        mlp_ratio=2.0,
+        num_heads=2,
+        max_sequence_length=12,
+        drop_path=0.0,
+        position_encoding="rope_mixed",
+    )
+
+    B, H, W, T = 1, 2, 2, 2
+    sentinel2_l2a_tokens = torch.randn(
+        B, H, W, T, sentinel2_l2a_num_band_sets, 16, requires_grad=True
+    )
+    sentinel2_l2a_mask = torch.zeros(
+        B, H, W, T, sentinel2_l2a_num_band_sets, dtype=torch.float32
+    )
+    sentinel2_l2a_mask[:, 0, 0, :, :] = MaskValue.DECODER.value
+    latlon = torch.randn(B, latlon_num_band_sets, 16, requires_grad=True)
+    latlon_mask = torch.zeros(B, latlon_num_band_sets, dtype=torch.float32)
+    encoded_tokens = TokensAndMasks(
+        sentinel2_l2a=sentinel2_l2a_tokens,
+        sentinel2_l2a_mask=sentinel2_l2a_mask,
+        latlon=latlon,
+        latlon_mask=latlon_mask,
+    )
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+
+    output = predictor.forward(encoded_tokens, timestamps, patch_size=4, input_res=10)
+
+    assert output.sentinel2_l2a is not None
+    assert output.sentinel2_l2a.shape == (
+        B,
+        H,
+        W,
+        T,
+        sentinel2_l2a_num_band_sets,
+        16,
+    )
+    output.sentinel2_l2a.sum().backward()
+    assert predictor.blocks[0].attn.q.weight.grad is not None
+    assert predictor.blocks[0].attn.rope_mixed_freqs.grad is not None
+
+
+def test_encoder_rope_3d_forward_and_skips_slot_pos_embed(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """3D axial RoPE encoder forwards, drops slot-index additive, keeps month."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    # Use head_dim=16 (32/2): default 0.25 frac yields 4/12/12 split (all even,
+    # remaining div by 4).
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=32,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        position_encoding="rope_3d",
+    )
+
+    B, H, W, T = 1, 8, 8, 2
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=4, input_res=10)
+    output, _, _ = unpack_encoder_output(output_dict)
+    assert output.sentinel2_l2a is not None
+    assert output.sentinel2_l2a.shape[:3] == (B, H // 4, W // 4)
+    output.sentinel2_l2a.sum().backward()
+    assert encoder.blocks[0].attn.q.weight.grad is not None
+    assert output.sentinel2_l2a.abs().sum() > 0
+
+
+def test_encoder_rope_3d_mixed_forward_and_learns_freqs(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """3D RoPE-Mixed encoder should forward and backprop into 3-vec learnable freqs."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=32,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        position_encoding="rope_3d_mixed",
+    )
+
+    B, H, W, T = 1, 8, 8, 2
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=4, input_res=10)
+    output, _, _ = unpack_encoder_output(output_dict)
+    assert output.sentinel2_l2a is not None
+    assert output.sentinel2_l2a.shape[:3] == (B, H // 4, W // 4)
+    output.sentinel2_l2a.sum().backward()
+    for blk in encoder.blocks:
+        assert blk.attn.rope_mixed_freqs.shape[0] == 3  # 3D: (t, row, col)
+        assert blk.attn.rope_mixed_freqs.grad is not None
+        assert torch.isfinite(blk.attn.rope_mixed_freqs.grad).all()
+        assert blk.attn.rope_mixed_freqs.grad.abs().sum() > 0
+
+
+def test_predictor_forward_rope_3d(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Predictor cross-attention should support 3D RoPE positions."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_band_sets = modality_band_set_len_and_total_bands[
+        "sentinel2_l2a"
+    ][0]
+    latlon_num_band_sets = modality_band_set_len_and_total_bands["latlon"][0]
+    predictor = Predictor(
+        supported_modalities=supported_modalities,
+        encoder_embedding_size=32,
+        decoder_embedding_size=32,
+        depth=2,
+        mlp_ratio=2.0,
+        num_heads=2,
+        max_sequence_length=12,
+        drop_path=0.0,
+        position_encoding="rope_3d",
+    )
+
+    B, H, W, T = 1, 2, 2, 2
+    sentinel2_l2a_tokens = torch.randn(
+        B, H, W, T, sentinel2_l2a_num_band_sets, 32, requires_grad=True
+    )
+    sentinel2_l2a_mask = torch.zeros(
+        B, H, W, T, sentinel2_l2a_num_band_sets, dtype=torch.float32
+    )
+    sentinel2_l2a_mask[:, 0, 0, :, :] = MaskValue.DECODER.value
+    latlon = torch.randn(B, latlon_num_band_sets, 32, requires_grad=True)
+    latlon_mask = torch.zeros(B, latlon_num_band_sets, dtype=torch.float32)
+    encoded_tokens = TokensAndMasks(
+        sentinel2_l2a=sentinel2_l2a_tokens,
+        sentinel2_l2a_mask=sentinel2_l2a_mask,
+        latlon=latlon,
+        latlon_mask=latlon_mask,
+    )
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+
+    output = predictor.forward(encoded_tokens, timestamps, patch_size=4, input_res=10)
+
+    assert output.sentinel2_l2a is not None
+    assert output.sentinel2_l2a.shape == (
+        B,
+        H,
+        W,
+        T,
+        sentinel2_l2a_num_band_sets,
+        32,
+    )
+    output.sentinel2_l2a.sum().backward()
+    assert predictor.blocks[0].attn.q.weight.grad is not None
+
+
+@torch.inference_mode()
+def test_encoder_rope_3d_uses_real_timestamp_deltas(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """3D RoPE outputs should change when timestamps shift (vs. slot index)."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=32,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        position_encoding="rope_3d",
+        rope_temporal_base=1000.0,
+    )
+    encoder.eval()
+
+    B, H, W, T = 1, 8, 8, 2
+    s2 = torch.randn(B, H, W, T, sentinel2_l2a_num_bands)
+    s2_mask = torch.zeros(B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long)
+    latlon = torch.randn(B, latlon_num_bands)
+    latlon_mask = torch.zeros(B, latlon_num_bands, dtype=torch.long)
+
+    # Same slot indices, different real-day deltas (1 month apart vs 6 months).
+    timestamps_close = torch.tensor([[[1, 0, 2023], [1, 1, 2023]]], dtype=torch.long)
+    timestamps_far = torch.tensor([[[1, 0, 2023], [1, 6, 2023]]], dtype=torch.long)
+
+    sample_close = MaskedOlmoEarthSample(
+        sentinel2_l2a=s2,
+        sentinel2_l2a_mask=s2_mask,
+        latlon=latlon,
+        latlon_mask=latlon_mask,
+        timestamps=timestamps_close,
+    )
+    sample_far = MaskedOlmoEarthSample(
+        sentinel2_l2a=s2,
+        sentinel2_l2a_mask=s2_mask,
+        latlon=latlon,
+        latlon_mask=latlon_mask,
+        timestamps=timestamps_far,
+    )
+    out_close, _, _ = unpack_encoder_output(
+        encoder.forward(sample_close, patch_size=4, input_res=10)
+    )
+    out_far, _, _ = unpack_encoder_output(
+        encoder.forward(sample_far, patch_size=4, input_res=10)
+    )
+    assert out_close.sentinel2_l2a is not None
+    assert out_far.sentinel2_l2a is not None
+    # The month additive embedding changes too, but isolating that we still
+    # expect different outputs since the temporal RoPE rotation shifts with the
+    # day delta. Just assert tensors aren't identical.
+    assert not torch.allclose(out_close.sentinel2_l2a, out_far.sentinel2_l2a, atol=1e-4)
+
+
+def test_predictor_forward_rope_3d_mixed(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Predictor cross-attention should support 3D RoPE-Mixed."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_band_sets = modality_band_set_len_and_total_bands[
+        "sentinel2_l2a"
+    ][0]
+    latlon_num_band_sets = modality_band_set_len_and_total_bands["latlon"][0]
+    predictor = Predictor(
+        supported_modalities=supported_modalities,
+        encoder_embedding_size=32,
+        decoder_embedding_size=32,
+        depth=2,
+        mlp_ratio=2.0,
+        num_heads=2,
+        max_sequence_length=12,
+        drop_path=0.0,
+        position_encoding="rope_3d_mixed",
+    )
+
+    B, H, W, T = 1, 2, 2, 2
+    sentinel2_l2a_tokens = torch.randn(
+        B, H, W, T, sentinel2_l2a_num_band_sets, 32, requires_grad=True
+    )
+    sentinel2_l2a_mask = torch.zeros(
+        B, H, W, T, sentinel2_l2a_num_band_sets, dtype=torch.float32
+    )
+    sentinel2_l2a_mask[:, 0, 0, :, :] = MaskValue.DECODER.value
+    latlon = torch.randn(B, latlon_num_band_sets, 32, requires_grad=True)
+    latlon_mask = torch.zeros(B, latlon_num_band_sets, dtype=torch.float32)
+    encoded_tokens = TokensAndMasks(
+        sentinel2_l2a=sentinel2_l2a_tokens,
+        sentinel2_l2a_mask=sentinel2_l2a_mask,
+        latlon=latlon,
+        latlon_mask=latlon_mask,
+    )
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+
+    output = predictor.forward(encoded_tokens, timestamps, patch_size=4, input_res=10)
+
+    assert output.sentinel2_l2a is not None
+    assert output.sentinel2_l2a.shape == (
+        B,
+        H,
+        W,
+        T,
+        sentinel2_l2a_num_band_sets,
+        32,
+    )
+    output.sentinel2_l2a.sum().backward()
+    assert predictor.blocks[0].attn.q.weight.grad is not None
+    assert predictor.blocks[0].attn.rope_mixed_freqs.shape[0] == 3
+    # At least one block should have learnable freqs receive gradient.
+    grads = [
+        blk.attn.rope_mixed_freqs.grad
+        for blk in predictor.blocks
+        if blk.attn.rope_mixed_freqs.grad is not None
+    ]
+    assert len(grads) > 0
+    assert all(torch.isfinite(g).all() for g in grads)
+    assert sum(g.abs().sum() for g in grads) > 0
 
 
 def test_end_to_end_with_exit_config(

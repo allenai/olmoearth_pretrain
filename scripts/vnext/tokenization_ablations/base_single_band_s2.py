@@ -20,7 +20,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "official"))
 
 from script import (
-    build_common_components,
+    build_common_components as build_common_components_base,
+)
+from script import (
     build_dataloader_config,
     build_dataset_config,
     build_train_module_config,
@@ -28,7 +30,7 @@ from script import (
     build_visualize_config,
 )
 
-from olmoearth_pretrain.internal.experiment import CommonComponents, main
+from olmoearth_pretrain.internal.experiment import CommonComponents, SubCmd, main
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
 from olmoearth_pretrain.nn.flexihelios import (
     EncoderConfig,
@@ -63,16 +65,26 @@ SENTINEL2_SINGLE_BAND_TOKENIZATION = ModalityTokenization(
     ]
 )
 
+# Tokenization config used by model, masking, and dataloader
+TOKENIZATION_CONFIG = TokenizationConfig(
+    overrides={
+        "sentinel2_l2a": SENTINEL2_SINGLE_BAND_TOKENIZATION,
+    }
+)
+
+
+def build_common_components(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components with single-band S2 tokenization."""
+    common = build_common_components_base(script, cmd, run_name, cluster, overrides)
+    common.tokenization_config = TOKENIZATION_CONFIG
+    return common
+
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config with single-band tokenization for Sentinel-2."""
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
-
-    tokenization_config = TokenizationConfig(
-        overrides={
-            "sentinel2_l2a": SENTINEL2_SINGLE_BAND_TOKENIZATION,
-        }
-    )
 
     encoder_config = EncoderConfig(
         embedding_size=model_size["encoder_embedding_size"],
@@ -83,7 +95,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_patch_size=MAX_PATCH_SIZE,
         drop_path=0.1,
         max_sequence_length=12,
-        tokenization_config=tokenization_config,
+        tokenization_config=common.tokenization_config,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
@@ -93,7 +105,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         num_heads=model_size["decoder_num_heads"],
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
-        tokenization_config=tokenization_config,
+        tokenization_config=common.tokenization_config,
     )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,

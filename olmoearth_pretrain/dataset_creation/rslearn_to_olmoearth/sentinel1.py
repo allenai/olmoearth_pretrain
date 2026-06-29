@@ -4,6 +4,7 @@ import argparse
 import multiprocessing
 
 import tqdm
+from rslearn.dataset import Dataset, Window
 from rslearn.utils.mp import star_imap_unordered
 from upath import UPath
 
@@ -18,16 +19,16 @@ LAYER_FREQ = "sentinel1_freq"
 LAYER_MONTHLY = "sentinel1"
 
 
-def convert_sentinel1(window_path: UPath, olmoearth_path: UPath) -> None:
+def convert_sentinel1(window: Window, olmoearth_path: UPath) -> None:
     """Add Landsat data for this window to the OlmoEarth Pretrain dataset.
 
     Args:
-        window_path: the rslearn window directory to read data from.
+        window: the rslearn window to read data from.
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
     """
     try:
         convert_freq(
-            window_path,
+            window,
             olmoearth_path,
             LAYER_FREQ,
             Modality.SENTINEL1,
@@ -36,14 +37,14 @@ def convert_sentinel1(window_path: UPath, olmoearth_path: UPath) -> None:
         )
     except Exception as e:
         print(
-            f"warning: got error {e} while converting frequent data for window {window_path}"
+            f"warning: got error {e} while converting frequent data for window {window.name}"
         )
 
     try:
-        convert_monthly(window_path, olmoearth_path, LAYER_MONTHLY, Modality.SENTINEL1)
+        convert_monthly(window, olmoearth_path, LAYER_MONTHLY, Modality.SENTINEL1)
     except Exception as e:
         print(
-            f"warning: got error {e} while converting monthly data for window {window_path}"
+            f"warning: got error {e} while converting monthly data for window {window.name}"
         )
 
 
@@ -73,15 +74,16 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    ds_path = UPath(args.ds_path)
+    dataset = Dataset(UPath(args.ds_path))
     olmoearth_path = UPath(args.olmoearth_path)
 
-    metadata_fnames = ds_path.glob("windows/res_10/*/metadata.json")
     jobs = []
-    for metadata_fname in metadata_fnames:
+    for window in dataset.load_windows(
+        workers=args.workers, show_progress=True, groups=["res_10"]
+    ):
         jobs.append(
             dict(
-                window_path=metadata_fname.parent,
+                window=window,
                 olmoearth_path=olmoearth_path,
             )
         )

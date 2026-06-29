@@ -13,7 +13,7 @@ from torch import nn
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.models.tessera.tessera_model import build_inference_model
-from olmoearth_pretrain.nn.flexi_vit import PoolingType
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
@@ -54,10 +54,13 @@ S1_BAND_MEAN = np.array([5484.0407, 3003.7812], dtype=np.float32)
 S1_BAND_STD = np.array([1871.2334, 1726.0670], dtype=np.float32)
 
 
-# Tessera band order based on https://github.com/ucam-eo/tessera/blob/a883aa12392eb9fc237ae4c29824318760e138a2/tessera_preprocessing/s2_fast_processor.py#L51
+# Tessera band order based on https://github.com/ucam-eo/tessera#overview
+# Note: Tessera training data uses a non-standard S2 band order
+# (not wavelength-ascending). The order below must match the released
+# checkpoint's expected channel order; do not reorder.
 HELIOS_SENTINEL2_TESSERA_BANDS = [
     Modality.SENTINEL2_L2A.band_order.index(b)
-    for b in ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12"]
+    for b in ["B04", "B02", "B03", "B08", "B8A", "B05", "B06", "B07", "B11", "B12"]
     if b in Modality.SENTINEL2_L2A.band_order
 ]
 HELIOS_SENTINEL1_TESSERA_BANDS = [

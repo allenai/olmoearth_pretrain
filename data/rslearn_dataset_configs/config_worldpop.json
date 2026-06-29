@@ -7,17 +7,17 @@
             "B1"
           ],
           "dtype": "float32",
-          "nodata_vals": [
-            -99999
-          ]
+          "nodata_value": -99999
         }
       ],
       "data_source": {
-        "name": "rslearn.data_sources.worldpop.WorldPop",
+        "class_path": "rslearn.data_sources.worldpop.WorldPop",
+        "init_args": {
+          "worldpop_dir": "source_data/worldpop/"
+        },
         "query_config": {
           "max_matches": 16
-        },
-        "worldpop_dir": "source_data/worldpop/"
+        }
       },
       "type": "raster"
     }

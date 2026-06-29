@@ -1,7 +1,7 @@
 """Shared constants important for inference throughput benchmarking."""
 
 # BEAKER-LAND
-BEAKER_BUDGET = "ai2/es-platform"
+BEAKER_BUDGET = "ai2/atec-olmoearth"
 BEAKER_WORKSPACE = "ai2/earth-systems"
 WEKA_BUCKET = "dfive-default"
 BEAKER_TASK_PRIORITY = "normal"

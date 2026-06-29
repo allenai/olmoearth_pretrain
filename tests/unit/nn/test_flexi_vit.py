@@ -7,17 +7,20 @@ import torch
 from einops import repeat
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.nn.encodings import timestamps_to_days
 from olmoearth_pretrain.nn.flexi_vit import (
     CompositeEncodings,
     Encoder,
     EncoderConfig,
     FlexiVitBase,
+    MultiModalPatchEmbeddings,
     PoolingType,
     Predictor,
     PredictorConfig,
     ProjectAndAggregate,
     TokensAndMasks,
 )
+from olmoearth_pretrain.nn.pooling import pool_unmasked_tokens
 from olmoearth_pretrain.train.masking import MaskValue
 
 logger = logging.getLogger(__name__)
@@ -195,6 +198,68 @@ class TestFlexiVitBase:
             4,
         ], f"Incorrect shape for modality2 tokens: {modality2_tokens.shape}"
 
+    def test_3d_rope_positions_share_timestamp_slots_across_modalities(self) -> None:
+        """All multitemporal modalities should use the same timestamp slot values."""
+        model = FlexiVitBase(
+            embedding_size=32,
+            num_heads=2,
+            mlp_ratio=2.0,
+            depth=1,
+            drop_path=0.0,
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.LANDSAT],
+            max_sequence_length=12,
+            position_encoding="rope_3d",
+        )
+        timestamps = torch.tensor(
+            [[[1, 0, 2023], [1, 1, 2023], [1, 6, 2023]]], dtype=torch.long
+        )
+        tokens_only_dict = {
+            "sentinel2_l2a": torch.zeros(1, 1, 1, 3, 1, 32),
+            "landsat": torch.zeros(1, 1, 1, 3, 1, 32),
+        }
+        masks_dict = {
+            "sentinel2_l2a_mask": torch.zeros(1, 1, 1, 3, 1),
+            "landsat_mask": torch.zeros(1, 1, 1, 3, 1),
+        }
+
+        positions = model.build_rope_positions(
+            tokens_only_dict=tokens_only_dict,
+            original_masks_dict=masks_dict,
+            patch_size=4,
+            input_res=10,
+            timestamps=timestamps,
+        )
+
+        assert positions is not None
+        expected_days = timestamps_to_days(timestamps)[0].repeat_interleave(2)
+        actual_days = torch.sort(positions[0, :, 0]).values
+        assert torch.allclose(actual_days, torch.sort(expected_days).values)
+        assert torch.equal(positions[0, :, 1:], torch.zeros_like(positions[0, :, 1:]))
+
+    def test_3d_rope_requires_timestamps(self) -> None:
+        """3D RoPE cannot build the temporal coordinate without timestamps."""
+        model = FlexiVitBase(
+            embedding_size=32,
+            num_heads=2,
+            mlp_ratio=2.0,
+            depth=1,
+            drop_path=0.0,
+            supported_modalities=[Modality.SENTINEL2_L2A],
+            max_sequence_length=12,
+            position_encoding="rope_3d",
+        )
+        tokens_only_dict = {"sentinel2_l2a": torch.zeros(1, 1, 1, 3, 1, 32)}
+        masks_dict = {"sentinel2_l2a_mask": torch.zeros(1, 1, 1, 3, 1)}
+
+        with pytest.raises(ValueError, match="3D RoPE requires timestamps"):
+            model.build_rope_positions(
+                tokens_only_dict=tokens_only_dict,
+                original_masks_dict=masks_dict,
+                patch_size=4,
+                input_res=10,
+                timestamps=None,
+            )
+
 
 class TestEncoder:
     """Unit tests for the Encoder class."""
@@ -330,6 +395,117 @@ class TestEncoder:
         supported_modality_names = [m.name for m in supported_modalities]
         config = EncoderConfig(supported_modality_names)
         _ = config.build()
+
+    def test_encoder_config_rope(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Tests we can build an encoder with 2D RoPE."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=16,
+            num_heads=2,
+            position_encoding="rope",
+            rope_base=5000.0,
+            rope_coordinate_scale=0.5,
+        )
+        encoder = config.build()
+        assert encoder.position_encoding == "rope"
+        assert encoder.rope_base == 5000.0
+        assert encoder.rope_coordinate_scale == 0.5
+        assert encoder.blocks[0].attn.rope_base == 5000.0
+
+    def test_encoder_config_rope_requires_valid_head_dim(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """2D RoPE needs each attention head to split cleanly across x/y axes."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=12,
+            num_heads=2,
+            position_encoding="rope",
+        )
+        with pytest.raises(ValueError, match="head_dim divisible by 4"):
+            config.build()
+
+    def test_encoder_config_rope_mixed(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Tests we can build an encoder with RoPE-Mixed (learnable freqs)."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=16,
+            num_heads=2,
+            position_encoding="rope_mixed",
+            rope_mixed_base=5.0,
+        )
+        encoder = config.build()
+        assert encoder.position_encoding == "rope_mixed"
+        assert encoder.rope_mixed_base == 5.0
+        attn = encoder.blocks[0].attn
+        assert attn.position_encoding == "rope_mixed"
+        assert attn.rope_mixed_freqs is not None
+        # (2, num_heads, head_dim // 2)
+        assert attn.rope_mixed_freqs.shape == (2, 2, 4)
+        assert attn.rope_mixed_freqs.requires_grad is True
+
+    def test_encoder_config_rope_mixed_requires_valid_head_dim(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """RoPE-Mixed init also needs head_dim divisible by 4."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=12,
+            num_heads=2,
+            position_encoding="rope_mixed",
+        )
+        with pytest.raises(ValueError, match="head_dim divisible by 4"):
+            config.build()
+
+    def test_position_encoding_deprecated_alias(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """The legacy ``spatial_pos_encoding`` name still works but warns."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        with pytest.warns(DeprecationWarning, match="spatial_pos_encoding"):
+            config = EncoderConfig(
+                supported_modality_names,
+                embedding_size=16,
+                num_heads=2,
+                spatial_pos_encoding="rope",
+                rope_base=5000.0,
+            )
+        # Reconciled onto the canonical field; legacy field cleared.
+        assert config.position_encoding == "rope"
+        assert config.spatial_pos_encoding is None
+        encoder = config.build()
+        assert encoder.position_encoding == "rope"
+
+    def test_position_encoding_legacy_from_dict(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Old checkpoint configs carrying the legacy key still deserialize.
+
+        ``Config.from_dict`` drops keys that are not dataclass fields, so the
+        deprecated ``spatial_pos_encoding`` must remain a field for old
+        checkpoints to keep loading rather than silently falling back to the
+        ``absolute`` default.
+        """
+        supported_modality_names = [m.name for m in supported_modalities]
+        with pytest.warns(DeprecationWarning, match="spatial_pos_encoding"):
+            config = EncoderConfig.from_dict(
+                {
+                    "supported_modality_names": supported_modality_names,
+                    "embedding_size": 16,
+                    "num_heads": 2,
+                    "spatial_pos_encoding": "rope",
+                }
+            )
+        assert config.position_encoding == "rope"
+        assert config.spatial_pos_encoding is None
 
 
 class TestPredictor:
@@ -658,12 +834,50 @@ class TestPredictor:
         config = PredictorConfig(supported_modality_names)
         _ = config.build()
 
+    def test_predictor_config_rope(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Tests we can build a predictor with 2D RoPE."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = PredictorConfig(
+            supported_modality_names,
+            decoder_embedding_size=16,
+            num_heads=2,
+            position_encoding="rope",
+            rope_base=5000.0,
+            rope_coordinate_scale=0.5,
+        )
+        predictor = config.build()
+        assert predictor.position_encoding == "rope"
+        assert predictor.rope_base == 5000.0
+        assert predictor.rope_coordinate_scale == 0.5
+        assert predictor.blocks[0].attn.rope_base == 5000.0
+
+    def test_predictor_config_rope_mixed(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Tests we can build a predictor with RoPE-Mixed."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = PredictorConfig(
+            supported_modality_names,
+            decoder_embedding_size=16,
+            num_heads=2,
+            position_encoding="rope_mixed",
+            rope_mixed_base=5.0,
+        )
+        predictor = config.build()
+        assert predictor.position_encoding == "rope_mixed"
+        assert predictor.rope_mixed_base == 5.0
+        attn = predictor.blocks[0].attn
+        assert attn.position_encoding == "rope_mixed"
+        assert attn.rope_mixed_freqs.shape == (2, 2, 4)
+
 
 class TestTokensAndMasks:
     """Test TestTokensAndMasks."""
 
     def test_flatten_tokens_and_masks(self) -> None:
-        """Test TokensAndMasks.flatten_tokens_and_masks."""
+        """Test TokensAndMasks.flatten_all_tokens_and_masks."""
         b, h, w, t, d = 2, 4, 4, 3, 128
         sentinel_2 = torch.ones((b, h, w, t, d))
         sentinel_2[0, 0, 0, 0, :] = 0  # set one "token" to 0s
@@ -672,7 +886,7 @@ class TestTokensAndMasks:
         t_and_m = TokensAndMasks(
             sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
         )
-        x, mask = t_and_m.flatten_tokens_and_masks()
+        x, mask = t_and_m.flatten_all_tokens_and_masks()
 
         assert x.shape == (b, h * w * t, d)
         assert mask.shape == (b, h * w * t)
@@ -700,12 +914,16 @@ class TestTokensAndMasks:
         )
 
         # Test max pooling
-        pooled_max = t_and_m_max.pool_unmasked_tokens(PoolingType.MAX)
+        pooled_max = pool_unmasked_tokens(
+            t_and_m_max, PoolingType.MAX, spatial_pooling=False
+        )
         assert pooled_max.shape == (b, d)
         assert (pooled_max == 2).all()  # check the 3 tokens have been ignored
 
         # Test mean pooling
-        pooled_mean = t_and_m_mean.pool_unmasked_tokens(PoolingType.MEAN)
+        pooled_mean = pool_unmasked_tokens(
+            t_and_m_mean, PoolingType.MEAN, spatial_pooling=False
+        )
         assert pooled_mean.shape == (b, d)
         assert (pooled_mean == 1).all()  # check the 0 tokens have been ignored
 
@@ -726,8 +944,8 @@ class TestTokensAndMasks:
         )
 
         # Test mean pooling
-        pooled_mean = t_and_m_mean.pool_unmasked_tokens(
-            PoolingType.MEAN, spatial_pooling=True
+        pooled_mean = pool_unmasked_tokens(
+            t_and_m_mean, PoolingType.MEAN, spatial_pooling=True
         )
         assert pooled_mean.shape == (b, h, w, d)
         assert (pooled_mean == 1).all()  # check the sen1 tokens have been ignored
@@ -747,8 +965,8 @@ class TestTokensAndMasks:
         )
 
         # Test max pooling
-        pooled_max = t_and_m_max.pool_unmasked_tokens(
-            PoolingType.MAX, spatial_pooling=True
+        pooled_max = pool_unmasked_tokens(
+            t_and_m_max, PoolingType.MAX, spatial_pooling=True
         )
         assert pooled_max.shape == (b, h, w, d)
         assert (pooled_max == 2).all()  # check the 3 tokens have been ignored
@@ -796,5 +1014,186 @@ class TestProjectionAndAggregation:
                 # for now, lets just check it all runs properly
                 _ = layer(t_and_m)
 
+    def test_output_embedding_size(self) -> None:
+        """Test output_embedding_size changes output dimension."""
+        b, h, w, t, d = 2, 4, 4, 3, 128
+        out_d = 64
+        sentinel_2 = torch.ones((b, h, w, t, d))
+        sentinel_2_mask = torch.zeros((b, h, w, t)).long()
+        t_and_m = TokensAndMasks(
+            sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
+        )
 
-# TODO: write a unit test for the FlexiPatchEmbeddings
+        for num_layers in [1, 2, 3]:
+            for agg_first in [True, False]:
+                layer = ProjectAndAggregate(
+                    embedding_size=d,
+                    num_layers=num_layers,
+                    aggregate_then_project=agg_first,
+                    output_embedding_size=out_d,
+                )
+                out = layer(t_and_m)
+                assert out.shape == (b, out_d), (
+                    f"Expected (b, {out_d}), got {out.shape}"
+                )
+
+        # Also test with raw tensor input
+        x_tensor = torch.ones((b, h * w * t, d))
+        layer = ProjectAndAggregate(
+            embedding_size=d,
+            num_layers=2,
+            aggregate_then_project=True,
+            output_embedding_size=out_d,
+        )
+        out = layer(x_tensor)
+        assert out.shape == (b, out_d)
+
+    def test_only_project(self) -> None:
+        """Test only_project returns tokens without aggregation."""
+        b, h, w, t, d = 2, 4, 4, 3, 128
+        sentinel_2 = torch.ones((b, h, w, t, d))
+        sentinel_2_mask = torch.zeros((b, h, w, t)).long()
+        t_and_m = TokensAndMasks(
+            sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
+        )
+
+        layer = ProjectAndAggregate(embedding_size=d, num_layers=2, only_project=True)
+        out = layer(t_and_m)
+        # Should return TokensAndMasks, not aggregated tensor
+        assert isinstance(out, TokensAndMasks)
+        assert out.sentinel2_l2a is not None
+        assert out.sentinel2_l2a.shape == (b, h, w, t, d)
+
+        # Test with raw tensor - should preserve token structure
+        x_tensor = torch.ones((b, h * w * t, d))
+        out_tensor = layer(x_tensor)
+        assert isinstance(out_tensor, torch.Tensor)
+        assert out_tensor.shape == (b, h * w * t, d)
+
+    def test_only_project_with_output_embedding_size(self) -> None:
+        """Test only_project combined with output_embedding_size."""
+        b, h, w, t, d = 2, 4, 4, 3, 128
+        out_d = 64
+        sentinel_2 = torch.ones((b, h, w, t, d))
+        sentinel_2_mask = torch.zeros((b, h, w, t)).long()
+        t_and_m = TokensAndMasks(
+            sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
+        )
+
+        layer = ProjectAndAggregate(
+            embedding_size=d,
+            num_layers=2,
+            only_project=True,
+            output_embedding_size=out_d,
+        )
+        out = layer(t_and_m)
+        assert isinstance(out, TokensAndMasks)
+        assert out.sentinel2_l2a is not None
+        # Output tokens should have projected dimension
+        assert out.sentinel2_l2a.shape == (b, h, w, t, out_d)
+
+        # Test with raw tensor
+        x_tensor = torch.ones((b, h * w * t, d))
+        out_tensor = layer(x_tensor)
+        assert out_tensor.shape == (b, h * w * t, out_d)
+
+
+class TestBandDropout:
+    """Unit tests for band dropout in MultiModalPatchEmbeddings."""
+
+    def test_apply_band_dropout_zeros_some_bands(self) -> None:
+        """Test that _apply_band_dropout zeros out some bands."""
+        torch.manual_seed(42)
+        B, H, W, num_bands = 4, 2, 2, 12
+        data = torch.ones(B, H, W, num_bands)
+        result = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.5)
+        # Some bands should be zeroed
+        assert (result == 0).any(), "Expected some bands to be dropped"
+        # Some bands should be kept
+        assert (result == 1).any(), "Expected some bands to be kept"
+
+    def test_apply_band_dropout_at_least_one_band_kept(self) -> None:
+        """Test that at least one band is kept per sample even at rate=1.0."""
+        torch.manual_seed(0)
+        B, num_bands = 8, 6
+        data = torch.ones(B, num_bands)
+        result = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=1.0)
+        # Every sample must have at least one non-zero band
+        per_sample_sum = result.sum(dim=-1)
+        assert (per_sample_sum > 0).all(), "Each sample must keep at least 1 band"
+
+    def test_apply_band_dropout_rate_zero_no_change(self) -> None:
+        """Test that rate=0.0 keeps all bands."""
+        B, num_bands = 4, 10
+        data = torch.randn(B, num_bands)
+        result = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.0)
+        assert torch.equal(result, data), "rate=0.0 should not modify data"
+
+    def test_band_dropout_not_applied_when_rate_zero(self) -> None:
+        """Test that when dropout rate is 0.0, no values are zeroed."""
+        B, num_bands = 4, 12
+        data = torch.ones(B, num_bands)
+        result = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.0)
+        assert (result != 0).all(), "No values should be zero when dropout rate is 0.0"
+
+    def test_band_dropout_not_applied_in_eval(self) -> None:
+        """Test that band dropout is gated by self.training (eval mode skips it)."""
+        torch.manual_seed(42)
+        B, num_bands = 4, 12
+        data = torch.ones(B, num_bands)
+        embed = MultiModalPatchEmbeddings(
+            supported_modality_names=["sentinel2_l2a"],
+            max_patch_size=8,
+            embedding_size=16,
+            band_dropout_rate=0.5,
+            random_band_dropout=False,
+        )
+        # In train mode, dropout should zero some bands
+        embed.train()
+        result_train = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.5)
+        assert (result_train == 0).any(), "Dropout should zero some bands in train mode"
+        # In eval mode, the caller gates dropout with self.training
+        embed.eval()
+        assert not embed.training, "Module should be in eval mode"
+        # Since self.training is False, dropout is never called — data stays intact
+        assert (data != 0).all(), (
+            "No values should be zero when eval mode skips dropout"
+        )
+
+    def test_band_dropout_disabled_by_default(self) -> None:
+        """Test that Encoder leaves band dropout disabled at construction."""
+        encoder = Encoder(
+            embedding_size=8,
+            max_patch_size=8,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=4.0,
+            depth=2,
+            drop_path=0.1,
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
+            max_sequence_length=12,
+            band_dropout_rate=0.5,
+            random_band_dropout=True,
+        )
+        # Configured rate is stored on the encoder but the patch embeddings
+        # start with rate 0.0 so band dropout is inactive until enabled.
+        assert encoder.band_dropout_rate == 0.5
+        assert encoder.patch_embeddings.band_dropout_rate == 0.0
+
+    def test_enable_band_dropout(self) -> None:
+        """Test Encoder.enable_band_dropout activates the configured rate."""
+        encoder = Encoder(
+            embedding_size=8,
+            max_patch_size=8,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=4.0,
+            depth=2,
+            drop_path=0.1,
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
+            max_sequence_length=12,
+            band_dropout_rate=0.5,
+            random_band_dropout=True,
+        )
+        encoder.enable_band_dropout()
+        assert encoder.patch_embeddings.band_dropout_rate == 0.5

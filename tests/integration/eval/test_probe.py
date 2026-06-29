@@ -5,6 +5,7 @@ import torch
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.linear_probe import train_and_eval_probe
+from olmoearth_pretrain.evals.metrics import EvalResult, EvalTaskResult
 
 
 def test_probe_cls() -> None:
@@ -42,9 +43,13 @@ def test_probe_cls() -> None:
         batch_size=batch_size,
         lr=0.1,
     )
-    assert "val_score" in result
-    assert "test_score" in result
-    assert "bootstrap_stats" in result
+    assert isinstance(result, EvalTaskResult)
+    assert isinstance(result.val_result, EvalResult)
+    assert isinstance(result.test_result, EvalResult)
+
+    # Classification returns EvalResult with accuracy
+    assert "accuracy" in result.val_result.metrics
+    assert "accuracy" in result.test_result.metrics
 
 
 def test_probe_seg() -> None:
@@ -95,6 +100,60 @@ def test_probe_seg() -> None:
         batch_size=batch_size,
         lr=0.1,
     )
-    assert "val_score" in result
-    assert "test_score" in result
-    assert "bootstrap_stats" in result
+    assert isinstance(result, EvalTaskResult)
+    assert isinstance(result.val_result, EvalResult)
+    assert isinstance(result.test_result, EvalResult)
+
+    # Segmentation returns EvalResult with segmentation metrics
+    expected_metrics = {"miou", "overall_acc", "macro_acc", "macro_f1", "micro_f1"} | {
+        f"f1_class_{i}" for i in range(config.num_classes)
+    }
+    assert set(result.val_result.metrics.keys()) == expected_metrics
+    assert set(result.test_result.metrics.keys()) == expected_metrics
+
+    # All metric values should be floats between 0 and 1
+    for metric_name in expected_metrics:
+        assert isinstance(result.val_result.metrics[metric_name], float)
+        assert isinstance(result.test_result.metrics[metric_name], float)
+        assert 0.0 <= result.val_result.metrics[metric_name] <= 1.0
+        assert 0.0 <= result.test_result.metrics[metric_name] <= 1.0
+
+
+def test_probe_regression() -> None:
+    """Test linear probe for spatial regression."""
+    batch_size, h, w, embedding_dim, patch_size = 16, 8, 8, 16, 4
+    train_embeddings = torch.rand(32, h // patch_size, w // patch_size, embedding_dim)
+    val_embeddings = torch.rand(32, h // patch_size, w // patch_size, embedding_dim)
+    test_embeddings = torch.rand(32, h // patch_size, w // patch_size, embedding_dim)
+    train_labels = torch.rand(32, h, w)
+    val_labels = torch.rand(32, h, w)
+    test_labels = torch.rand(32, h, w)
+
+    config = EvalDatasetConfig(
+        task_type=TaskType.REGRESSION,
+        imputes=[],
+        num_classes=1,
+        is_multilabel=False,
+        height_width=h,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+    )
+
+    result = train_and_eval_probe(
+        config=config,
+        train_embeddings=train_embeddings,
+        train_labels=train_labels,
+        val_embeddings=val_embeddings,
+        val_labels=val_labels,
+        test_embeddings=test_embeddings,
+        test_labels=test_labels,
+        device=train_embeddings.device,
+        batch_size=batch_size,
+        lr=0.1,
+    )
+
+    assert isinstance(result, EvalTaskResult)
+    assert isinstance(result.val_result, EvalResult)
+    assert isinstance(result.test_result, EvalResult)
+    expected_metrics = {"mae", "rmse", "neg_rmse", "r2"}
+    assert set(result.val_result.metrics.keys()) == expected_metrics
+    assert set(result.test_result.metrics.keys()) == expected_metrics

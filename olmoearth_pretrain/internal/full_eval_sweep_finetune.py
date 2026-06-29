@@ -1,13 +1,40 @@
 """Launch fine-tune evaluation sweeps for OlmoEarth and other models.
 
-Example run:
-python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --project_name 2025_10_25_phase2_finetune --module_path olmoearth_pretrain/evals/models/clay/clay_launch.py --cluster ai2/titan --model clay --defaults_only
+Usage examples:
 
-python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step667200 --project_name 2025_10_25_phase2_finetune --module_path scripts/2025_10_02_phase2/base.py --cluster ai2/titan --defaults_only
+1. Finetune all eval tasks using TerraMind model (default lr only):
+   python olmoearth_pretrain/internal/full_eval_sweep_finetune.py \
+       --project_name test_finetune \
+       --module_path olmoearth_pretrain/evals/models/terramind/terramind_launch.py \
+       --cluster ai2/jupiter \
+       --model terramind \
+       --defaults_only
+
+2. Finetune all eval tasks using OlmoEarth model (default lr only):
+   python olmoearth_pretrain/internal/full_eval_sweep_finetune.py \
+       --checkpoint_path /weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step667200 \
+       --project_name test_finetune \
+       --module_path scripts/official/base.py \
+       --cluster ai2/jupiter \
+       --defaults_only
+
+3. To run a subset of tasks, add either explicit tasks_to_run or the same skip list as full_eval_sweep:
+     --trainer.callbacks.downstream_evaluator.tasks_to_run='["m_eurosat","m_so2sat","mados"]'
+     --task-skip-names=m_eurosat,m_bigearthnet
+   You can also launch multiple jobs with different tasks_to_run values to speed up the finetuning.
+
+Flags:
+  --defaults_only  Runs just one job: lr = 1e-4
+  (omit)           Sweeps lrs: [1e-4, 5e-4, 1e-3]
+
+OlmoEarth: normalization method (pretrained vs dataset) is *not* swept.
+Each FT eval task's normalization is defined in all_evals.py.
 """
 
 import argparse
+import json
 import os
+import socket
 import subprocess  # nosec
 import uuid
 from collections.abc import Iterable
@@ -24,6 +51,20 @@ logger = getLogger(__name__)
 
 # Learning rates to sweep over.
 FT_LRS = [1e-4, 5e-4, 1e-3]
+
+
+def _pick_free_listen_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def _local_torchrun_master_port() -> int:
+    env_mp = os.environ.get("MASTER_PORT")
+    if env_mp and env_mp.strip():
+        return int(env_mp.strip())
+    return _pick_free_listen_port()
+
 
 TASK_ARG_PREFIX = "--trainer.callbacks.downstream_evaluator.tasks"
 FT_TASK_NAMES = list(FT_EVAL_TASKS.keys())
@@ -243,6 +284,9 @@ def _get_sub_command(args: argparse.Namespace) -> str:
 
 def _get_base_run_name(args: argparse.Namespace, selected_preset: str | None) -> str:
     """Get the base run name."""
+    if args.model_name is not None:
+        logger.info("Overriding checkpoint name with %s", args.model_name)
+        return args.model_name
     if args.model is not None:
         logger.info("Overriding checkpoint name with %s", args.model)
         return args.model
@@ -277,8 +321,14 @@ def _format_launch_command(
     model_args: list[str],
     lr: float,
     seed_args: Iterable[str],
+    torchrun_master_port: int | None = None,
+    is_external_model: bool = False,
 ) -> str:
     """Format the launch command."""
+    if torchrun_master_port is not None:
+        if launch_command != "torchrun":
+            raise ValueError("torchrun_master_port is only valid with torchrun")
+        launch_command = f"torchrun --master-port={torchrun_master_port}"
     parts = [
         f"TRAIN_SCRIPT_PATH={module_path}",
         launch_command,
@@ -293,7 +343,7 @@ def _format_launch_command(
     if cluster != "local":
         parts.extend(
             [
-                "--launch.priority=urgent",
+                "--launch.priority=high",
                 "--launch.num_gpus=1",
                 "--launch.preemptible=True",
                 "--launch.task_name=eval",
@@ -306,7 +356,9 @@ def _format_launch_command(
     parts.extend(FT_MODE_ARGS)
     parts.extend(_format_ft_lr_args(lr))
     parts.extend(seed_args)
-    # parts.append("--train_module.dp_config=null")
+    parts.append(
+        "--train_module=null" if is_external_model else "--train_module.dp_config=null"
+    )
     return " ".join(parts)
 
 
@@ -320,6 +372,14 @@ def build_commands(
     selected_preset = args.model
     base_run_name = _get_base_run_name(args, selected_preset)
     launch_command = "python3" if not sub_command == SubCmd.evaluate else "torchrun"
+    torchrun_master_port: int | None = None
+    if args.cluster == "local" and launch_command == "torchrun":
+        torchrun_master_port = _local_torchrun_master_port()
+        logger.info(
+            "Local eval: torchrun will use --master-port=%s "
+            "(export MASTER_PORT to pin the rendezvous port).",
+            torchrun_master_port,
+        )
 
     module_path = _resolve_module_path(args, selected_preset)
     checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
@@ -367,6 +427,9 @@ def build_commands(
         run_name = f"{base_run_name}{seed_suffix}_{run_suffix}"
         model_args = _build_model_args(selected_preset, normalizer_value)
 
+        _preset_for_check = (
+            MODEL_PRESETS.get(selected_preset) if selected_preset else None
+        )
         commands.append(
             _format_launch_command(
                 module_path=module_path,
@@ -380,8 +443,23 @@ def build_commands(
                 model_args=model_args,
                 lr=lr,
                 seed_args=seed_args,
+                torchrun_master_port=torchrun_master_port,
+                is_external_model=_preset_for_check is not None
+                and _preset_for_check.launch_script_key is not None,
             )
         )
+
+    if args.task_skip_names:
+        skip_names = [name.strip() for name in args.task_skip_names.split(",")]
+        tasks_to_run = [task for task in FT_EVAL_TASKS.keys() if task not in skip_names]
+        tasks_to_run_arg = f" --trainer.callbacks.downstream_evaluator.tasks_to_run='{json.dumps(tasks_to_run)}'"
+        commands_new = []
+        for cmd in commands:
+            logger.info(f"Adding tasks_to_run filter to {cmd}")
+            cmd += tasks_to_run_arg
+            commands_new.append(cmd)
+        commands = commands_new
+
     return commands
 
 
@@ -425,6 +503,13 @@ def main() -> None:
         help="Model preset key to apply (defaults to none).",
     )
     parser.add_argument(
+        "--model_name",
+        type=str,
+        required=False,
+        default=None,
+        help="If set, use this as the base run name (overrides checkpoint-derived name).",
+    )
+    parser.add_argument(
         "--use_dataset_normalizer",
         action="store_true",
         help=(
@@ -436,6 +521,16 @@ def main() -> None:
         type=int,
         default=None,
         help="Base random seed applied to every finetune task (optional).",
+    )
+    parser.add_argument(
+        "--task-skip-names",
+        type=str,
+        required=False,
+        help=(
+            "Comma-separated FT eval task keys to skip (intersected with FT_EVAL_TASKS; "
+            "other names are ignored). If no FT tasks would remain, all FT tasks are run "
+            "with a warning."
+        ),
     )
 
     args, extra_cli = parser.parse_known_args()
