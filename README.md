@@ -68,7 +68,7 @@ The v1 models were trained using the scripts in [`scripts/official/v1`](scripts/
 <details>
 <summary> v1.1 </summary>
 
-The v1.1 models were trained using the scripts in [`scripts/official/v1_1`](scripts/official/v1_1/). We describe this model in the [OlmoEarth v1.1 tech report](https://arxiv.org/abs/2605.20804).
+The v1.1 models were trained using the scripts in [`scripts/official/v1_1`](scripts/official/v1_1/). We describe this model in the [OlmoEarth v1.1 tech report](https://arxiv.org/abs/2605.20804v1).
 
 | Model Size | Weights | Encoder Params | Decoder Params |
 | --- | --- | --- | --- |
