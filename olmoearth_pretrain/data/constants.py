@@ -447,20 +447,20 @@ class Modality:
         band_sets=[
             BandSet(
                 [
-                    "d2m",
-                    "e",
-                    "pev",
-                    "ro",
-                    "sp",
-                    "ssr",
-                    "ssrd",
-                    "str",
-                    "swvl1",
-                    "swvl2",
-                    "t2m",
-                    "tp",
-                    "u10",
-                    "v10",
+                    "d2m",  # 2m dewpoint temperature (K)
+                    "e",  # Evaporation (m of water equivalent)
+                    "pev",  # Potential evaporation (m of water equivalent)
+                    "ro",  # Runoff (m)
+                    "sp",  # Surface pressure (Pa)
+                    "ssr",  # Surface net solar radiation (J m-2)
+                    "ssrd",  # Surface solar radiation downwards (J m-2)
+                    "str",  # Surface net thermal radiation (J m-2)
+                    "swvl1",  # Volumetric soil water layer 1 (m3 m-3)
+                    "swvl2",  # Volumetric soil water layer 2 (m3 m-3)
+                    "t2m",  # 2m temperature (K)
+                    "tp",  # Total precipitation (m)
+                    "u10",  # 10m u-component of wind (m s-1)
+                    "v10",  # 10m v-component of wind (m s-1)
                 ],
                 4096,
             ),
