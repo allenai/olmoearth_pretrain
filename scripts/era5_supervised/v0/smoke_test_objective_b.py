@@ -21,7 +21,10 @@ import sys
 import torch
 
 from olmoearth_pretrain.data.constants import ERA5_INPUT_SEQUENCE_LENGTH, Modality
-from olmoearth_pretrain.data.multi_task_era5_dataset import Era5SupervisedBatch
+from olmoearth_pretrain.data.multi_task_era5_dataset import (
+    Era5SslBatch,
+    Era5SupervisedBatch,
+)
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
 from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig
 from olmoearth_pretrain.nn.transforms.era5_corruption import (
@@ -49,13 +52,18 @@ B = 4
 SWT_BUFFER = 83
 
 
-def _make_batch(device: torch.device = torch.device("cpu")) -> Era5SupervisedBatch:
-    """Create a synthetic ERA5 supervised batch."""
-    era5 = torch.randn(B, T, V, device=device)
+def _make_timestamps(device: torch.device) -> torch.Tensor:
     timestamps = torch.zeros(B, T, 3, dtype=torch.long, device=device)
     timestamps[..., 0] = torch.arange(1, T + 1).unsqueeze(0)
     timestamps[..., 1] = (timestamps[..., 0] - 1) * 12 // 365
     timestamps[..., 2] = 2020
+    return timestamps
+
+
+def _make_batch(device: torch.device = torch.device("cpu")) -> Era5SupervisedBatch:
+    """Create a synthetic ERA5 supervised batch."""
+    era5 = torch.randn(B, T, V, device=device)
+    timestamps = _make_timestamps(device)
     ignore_mask = torch.zeros(B, T, dtype=torch.bool, device=device)
     labels = torch.zeros(B, dtype=torch.long, device=device)
     return Era5SupervisedBatch(
@@ -64,6 +72,19 @@ def _make_batch(device: torch.device = torch.device("cpu")) -> Era5SupervisedBat
         ignore_mask=ignore_mask,
         labels=labels,
         task_name="smoke_task",
+    )
+
+
+def _make_ssl_batch(device: torch.device = torch.device("cpu")) -> Era5SslBatch:
+    """Create a synthetic ERA5 SSL batch (no label, no S2)."""
+    era5 = torch.randn(B, T, V, device=device)
+    timestamps = _make_timestamps(device)
+    ignore_mask = torch.zeros(B, T, dtype=torch.bool, device=device)
+    return Era5SslBatch(
+        era5=era5,
+        timestamps=timestamps,
+        ignore_mask=ignore_mask,
+        task_name="smoke_ssl_task",
     )
 
 
@@ -225,6 +246,79 @@ def test_b_only():
     )
     assert encoder_grad > 0, "No gradients flowed to encoder"
     print(f"  Encoder grad norm (sum): {encoder_grad:.4f}")
+    print("  PASS")
+
+
+def test_ssl_batch_dispatch():
+    """SSL batch: reconstruction fires, supervised does not; loss/grads flow."""
+    print("--- test_ssl_batch_dispatch (Era5SslBatch) ---")
+    model_cfg = Era5MultiObjectiveModelConfig(
+        encoder_config=Era5DailyEncoderConfig(
+            embedding_size=D,
+            depth=2,
+            num_heads=4,
+            max_sequence_length=T,
+            modality_name=Modality.ERA5L_DAY_10.name.lower(),
+            use_mask_embed=True,
+            use_conv_stem=True,
+        ),
+        supervised_objective=SupervisedObjectiveConfig(
+            tasks=[
+                SupervisedTaskConfig(
+                    name="smoke_task",
+                    task_type="classification",
+                    num_classes=2,
+                )
+            ],
+        ),
+        reconstruction_objective=ReconstructionObjectiveConfig(
+            decoder=Era5TimeQueryDecoderConfig(
+                embedding_size=D,
+                depth=1,
+                num_heads=4,
+                max_sequence_length=T,
+                num_output_channels=V,
+            ),
+            swt_levels=[0, 1],
+            swt_lambda=0.1,
+        ),
+    )
+    model = model_cfg.build()
+    objectives = {obj.name: obj for obj in model.objective_list}
+
+    ssl_batch = _make_ssl_batch()
+
+    # Reconstruction must apply to an SSL batch; supervised must not.
+    assert objectives["reconstruction"].applies_to(ssl_batch), (
+        "reconstruction should apply to Era5SslBatch"
+    )
+    assert not objectives["supervised"].applies_to(ssl_batch), (
+        "supervised should NOT apply to Era5SslBatch"
+    )
+    print("  applies_to dispatch: OK")
+
+    # Reconstruction forward/backward over the SSL batch.
+    loss, metrics = objectives["reconstruction"].compute(model.encoder, ssl_batch)
+    assert loss.ndim == 0, f"Loss should be scalar, got {loss.shape}"
+    assert torch.isfinite(loss), f"Loss not finite: {loss.item()}"
+    loss.backward()
+    encoder_grad = sum(
+        p.grad.abs().sum().item()
+        for p in model.encoder.parameters()
+        if p.grad is not None
+    )
+    assert encoder_grad > 0, "No gradients flowed to encoder from SSL batch"
+    print(f"  SSL reconstruction loss: {loss.item():.6f}")
+    print(f"  Encoder grad norm (sum): {encoder_grad:.4f}")
+
+    # Generic batch helpers preserve the SSL type and slice/move tensors.
+    micro = ssl_batch.microbatch(0, 2)
+    assert isinstance(micro, Era5SslBatch) and len(micro) == 2, (
+        f"microbatch broke type/len: {type(micro).__name__}, {len(micro)}"
+    )
+    moved = ssl_batch.to_device(torch.device("cpu"))
+    assert isinstance(moved, Era5SslBatch), "to_device broke SSL batch type"
+    print("  microbatch/to_device preserve type: OK")
     print("  PASS")
 
 
@@ -460,6 +554,7 @@ if __name__ == "__main__":
         test_swt,
         test_decoder_forward,
         test_b_only,
+        test_ssl_batch_dispatch,
         test_a_plus_b,
         test_a_only,
         test_recon_mode_gating,

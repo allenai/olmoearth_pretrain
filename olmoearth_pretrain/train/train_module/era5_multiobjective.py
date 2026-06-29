@@ -36,7 +36,10 @@ from torch.distributed import DeviceMesh
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.multi_task_era5_dataset import Era5SupervisedBatch
+from olmoearth_pretrain.data.multi_task_era5_dataset import (
+    Era5Batch,
+    Era5SupervisedBatch,
+)
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.nn.era5_decoder import (
     Era5TimeQueryDecoder,
@@ -487,8 +490,8 @@ class ReconstructionObjective(_Objective):
         return float(raw_weight), float(swt_weight)
 
     def applies_to(self, batch: Any) -> bool:
-        """Fire on any batch that carries ERA5 data."""
-        return isinstance(batch, Era5SupervisedBatch)
+        """Fire on any batch that carries ERA5 data (supervised or SSL)."""
+        return isinstance(batch, Era5Batch)
 
     def get_module(self) -> nn.Module | None:
         """Return the decoder module owned by this objective."""
@@ -513,7 +516,7 @@ class ReconstructionObjective(_Objective):
     def compute(
         self,
         encoder: Era5DailyEncoder,
-        batch: Era5SupervisedBatch,
+        batch: Era5Batch,
     ) -> tuple[Tensor, dict[str, Tensor]]:
         """Corrupt → encode → decode → per-group loss.
 
@@ -836,39 +839,30 @@ class MultiObjectiveEra5TrainModule(OlmoEarthTrainModule):
             batch_size_unit=EvalBatchSizeUnit.instances,
         )
 
-    def _split_batch(self, batch: Era5SupervisedBatch) -> list[Era5SupervisedBatch]:
-        """Split a batch along dim 0 into microbatches of size ``rank_microbatch_size``."""
+    def _split_batch(self, batch: Era5Batch) -> list[Era5Batch]:
+        """Split a batch along dim 0 into microbatches of size ``rank_microbatch_size``.
+
+        Uses the batch's generic ``microbatch`` helper so both supervised and
+        SSL batch types (and any future extra tensor fields) are sliced
+        uniformly while preserving the concrete batch type.
+        """
         bsz = batch.era5.shape[0]
         if bsz <= self.rank_microbatch_size:
             return [batch]
         mb = self.rank_microbatch_size
-        microbatches: list[Era5SupervisedBatch] = []
+        microbatches: list[Era5Batch] = []
         for start in range(0, bsz, mb):
             end = min(start + mb, bsz)
-            microbatches.append(
-                Era5SupervisedBatch(
-                    era5=batch.era5[start:end],
-                    timestamps=batch.timestamps[start:end],
-                    ignore_mask=batch.ignore_mask[start:end],
-                    labels=batch.labels[start:end],
-                    task_name=batch.task_name,
-                )
-            )
+            microbatches.append(batch.microbatch(start, end))
         return microbatches
 
-    def _to_device(self, batch: Era5SupervisedBatch) -> Era5SupervisedBatch:
-        return Era5SupervisedBatch(
-            era5=batch.era5.to(self.device, non_blocking=True),
-            timestamps=batch.timestamps.to(self.device, non_blocking=True),
-            ignore_mask=batch.ignore_mask.to(self.device, non_blocking=True),
-            labels=batch.labels.to(self.device, non_blocking=True),
-            task_name=batch.task_name,
-        )
+    def _to_device(self, batch: Era5Batch) -> Era5Batch:
+        return batch.to_device(self.device)
 
     # ---- main train_batch ----
     def train_batch(
         self,
-        batch: Era5SupervisedBatch,
+        batch: Era5Batch,
         dry_run: bool = False,
     ) -> None:
         """Run a single training step over *batch*.

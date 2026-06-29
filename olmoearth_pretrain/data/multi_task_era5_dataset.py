@@ -27,8 +27,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass, field
-from typing import Any, NamedTuple
+from dataclasses import dataclass, field, fields, replace
+from typing import Any
 
 import numpy as np
 import torch
@@ -59,8 +59,9 @@ logger = logging.getLogger(__name__)
 _ERA5_MODALITY = Modality.ERA5L_DAY_10
 
 
-class Era5SupervisedSample(NamedTuple):
-    """A single ERA5 supervised training sample.
+@dataclass
+class Era5Sample:
+    """Base ERA5 training sample (modality-agnostic fields).
 
     All tensors are CPU tensors; the train module moves them to the device.
 
@@ -68,25 +69,95 @@ class Era5SupervisedSample(NamedTuple):
         era5         : ``[T, C]``       float32
         timestamps   : ``[T, 3]``       int64    ``[day-of-year, month0, year]``
         ignore_mask  : ``[T]``          bool     (always all-False; kept for interface compat)
-        label        : task-specific (scalar or vector)
         task_name    : str
     """
 
     era5: Tensor
     timestamps: Tensor
     ignore_mask: Tensor
-    label: Tensor
     task_name: str
 
 
-class Era5SupervisedBatch(NamedTuple):
-    """A collated batch of `Era5SupervisedSample`s (all from one task)."""
+@dataclass
+class Era5SupervisedSample(Era5Sample):
+    """An ERA5 sample carrying a supervised label.
+
+    Shapes:
+        label        : task-specific (scalar or vector)
+    """
+
+    label: Tensor
+
+
+@dataclass
+class Era5SslSample(Era5Sample):
+    """An ERA5 self-supervised sample (no label).
+
+    Optionally carries an S2 stream (raw or precomputed latents) for the
+    future S2-residual objective; all S2 fields default to ``None`` and are
+    not populated yet.
+    """
+
+    s2: Tensor | None = None
+    s2_timestamps: Tensor | None = None
+    s2_ignore_mask: Tensor | None = None
+
+
+@dataclass
+class Era5Batch:
+    """Base collated batch of ERA5 samples (all from one task).
+
+    Generic helpers (`to_device`, `microbatch`, `__len__`) operate over every
+    `Tensor` field via `dataclasses.fields`, so subclass-specific fields
+    (`labels`, future `s2`) are handled automatically.
+    """
 
     era5: Tensor  # [B, T_max, C]
     timestamps: Tensor  # [B, T_max, 3]
     ignore_mask: Tensor  # [B, T_max]
-    labels: Tensor  # task-specific stacking of labels
     task_name: str
+
+    def to_device(self, device: Any) -> Era5Batch:
+        """Move every tensor field to *device*, preserving the batch type."""
+        updates = {
+            f.name: getattr(self, f.name).to(device, non_blocking=True)
+            for f in fields(self)
+            if isinstance(getattr(self, f.name), Tensor)
+        }
+        return replace(self, **updates)
+
+    def microbatch(self, start: int, end: int) -> Era5Batch:
+        """Slice every tensor field on dim 0, preserving the batch type."""
+        updates = {
+            f.name: getattr(self, f.name)[start:end]
+            for f in fields(self)
+            if isinstance(getattr(self, f.name), Tensor)
+        }
+        return replace(self, **updates)
+
+    def __len__(self) -> int:
+        """Batch size along dim 0."""
+        return self.era5.shape[0]
+
+
+@dataclass
+class Era5SupervisedBatch(Era5Batch):
+    """A collated batch of `Era5SupervisedSample`s (all from one task)."""
+
+    labels: Tensor  # task-specific stacking of labels
+
+
+@dataclass
+class Era5SslBatch(Era5Batch):
+    """A collated batch of `Era5SslSample`s (all from one task).
+
+    Optionally carries a batched S2 stream for the future S2-residual
+    objective; all S2 fields default to ``None``.
+    """
+
+    s2: Tensor | None = None
+    s2_timestamps: Tensor | None = None
+    s2_ignore_mask: Tensor | None = None
 
 
 # A LabelExtractor takes the rslearn target dict and returns a torch Tensor.
@@ -257,6 +328,10 @@ class Era5TaskSpec:
             the supervised head). Only used for regression tasks.
         target_std: Std of regression targets (for z-score normalization in
             the supervised head). Only used for regression tasks.
+        ssl: When True, this is a self-supervised task: the dataset emits
+            `Era5SslSample`s (no label extraction, no rslearn target needed)
+            and the supervised fields (`task_type`, `num_classes`,
+            `label_extractor_name`) are ignored.
     """
 
     name: str
@@ -276,6 +351,7 @@ class Era5TaskSpec:
     max_samples: int | None = None
     target_mean: float | None = None
     target_std: float | None = None
+    ssl: bool = False
 
     def get_label_extractor(self) -> LabelExtractor:
         """Resolve the `LabelExtractor` to use for this task."""
@@ -298,7 +374,10 @@ class Era5TaskSpec:
 
 
 class Era5TaskDataset(Dataset):
-    """Wrap one rslearn `ModelDataset` and emit `Era5SupervisedSample`s.
+    """Wrap one rslearn `ModelDataset` and emit ERA5 samples.
+
+    Emits `Era5SupervisedSample`s for supervised tasks, or `Era5SslSample`s
+    when ``spec.ssl`` is set (no label extraction, rslearn target ignored).
 
     Only the ERA5-daily input modality is read from each sample; image
     modalities (S1, S2, ...) are skipped. This keeps objective A's input
@@ -317,7 +396,8 @@ class Era5TaskDataset(Dataset):
         self.dataset = model_dataset
         self.max_sequence_length = max_sequence_length
         self.normalizer = normalizer or Normalizer(Strategy.COMPUTED)
-        self._label_extractor = spec.get_label_extractor()
+        # SSL tasks carry no label, so no extractor (and no target) is needed.
+        self._label_extractor = None if spec.ssl else spec.get_label_extractor()
         self._num_bands = _ERA5_MODALITY.num_bands
 
     def __len__(self) -> int:
@@ -397,8 +477,8 @@ class Era5TaskDataset(Dataset):
             ts[i, 2] = 1970
         return ts
 
-    def __getitem__(self, idx: int) -> Era5SupervisedSample:
-        """Load and return the ERA5 supervised sample at *idx*."""
+    def __getitem__(self, idx: int) -> Era5Sample:
+        """Load and return the ERA5 sample at *idx* (supervised or SSL)."""
         sample = self.dataset[idx]
         # rslearn ModelDataset yields (inputs, target, metadata).
         if isinstance(sample, tuple) and len(sample) == 3:
@@ -411,6 +491,15 @@ class Era5TaskDataset(Dataset):
                 f"{type(sample).__name__}"
             )
         era5, timestamps, ignore_mask = self._extract_era5(inputs)
+        if self.task_spec.ssl:
+            # SSL: no label extraction; the rslearn target is ignored.
+            return Era5SslSample(
+                era5=era5,
+                timestamps=timestamps,
+                ignore_mask=ignore_mask,
+                task_name=self.task_spec.name,
+            )
+        assert self._label_extractor is not None
         label = self._label_extractor(target)
         return Era5SupervisedSample(
             era5=era5,
@@ -421,21 +510,31 @@ class Era5TaskDataset(Dataset):
         )
 
 
-def _collate_samples(
-    samples: list[Era5SupervisedSample], task_name: str
-) -> Era5SupervisedBatch:
-    """Stack a list of `Era5SupervisedSample`s from one task into a batch."""
-    era5 = torch.stack([s.era5 for s in samples], dim=0)
-    timestamps = torch.stack([s.timestamps for s in samples], dim=0)
-    ignore_mask = torch.stack([s.ignore_mask for s in samples], dim=0)
-    labels = torch.stack([s.label for s in samples], dim=0)
-    return Era5SupervisedBatch(
-        era5=era5,
-        timestamps=timestamps,
-        ignore_mask=ignore_mask,
-        labels=labels,
-        task_name=task_name,
-    )
+# Maps a per-item sample class to the collated batch class it produces.
+_SAMPLE_TO_BATCH: dict[type[Era5Sample], type[Era5Batch]] = {
+    Era5SupervisedSample: Era5SupervisedBatch,
+    Era5SslSample: Era5SslBatch,
+}
+
+
+def _collate_samples(samples: list[Era5Sample]) -> Era5Batch:
+    """Stack a list of ERA5 samples (all one type, one task) into a batch.
+
+    Every `Tensor` field is stacked on a new batch dim; ``task_name`` is copied
+    from the first sample; ``None`` fields (e.g. unset S2) are left unset so the
+    batch class default (``None``) applies.
+    """
+    proto = samples[0]
+    sample_cls = type(proto)
+    batch_cls = _SAMPLE_TO_BATCH[sample_cls]
+    kwargs: dict[str, Any] = {"task_name": proto.task_name}
+    for f in fields(sample_cls):
+        if f.name == "task_name":
+            continue
+        value = getattr(proto, f.name)
+        if isinstance(value, Tensor):
+            kwargs[f.name] = torch.stack([getattr(s, f.name) for s in samples], dim=0)
+    return batch_cls(**kwargs)
 
 
 def _build_task_dataset(
@@ -611,7 +710,7 @@ class MultiTaskEra5DataLoader(DataLoaderBase):
        is ``w_t / sum(w_*)``.
     2. Pulls ``global_batch_size`` sample indices from that task, sharded
        across DP ranks (so the local batch is `rank_batch_size`).
-    3. Yields a single `Era5SupervisedBatch` for the local rank.
+    3. Yields a single `Era5Batch` (supervised or SSL) for the local rank.
     """
 
     _epoch: int | None
@@ -718,7 +817,7 @@ class MultiTaskEra5DataLoader(DataLoaderBase):
         self._schedule_task_ids = task_id_choices.astype(np.int64)
         self._schedule_indices = schedule_indices
 
-    def _iter_batches(self) -> Iterable[Era5SupervisedBatch]:
+    def _iter_batches(self) -> Iterable[Era5Batch]:
         if self._schedule_task_ids is None or self._schedule_indices is None:
             raise RuntimeError(
                 "Call reshuffle() before iterating MultiTaskEra5DataLoader"
@@ -747,8 +846,12 @@ class MultiTaskEra5DataLoader(DataLoaderBase):
         )
         yield from loader
 
-    def get_mock_batch(self) -> Era5SupervisedBatch:
-        """Return a synthetic batch (used by the trainer's dry-run)."""
+    def get_mock_batch(self) -> Era5Batch:
+        """Return a synthetic batch (used by the trainer's dry-run).
+
+        Builds the batch type matching the first task's spec (SSL or
+        supervised).
+        """
         if not self._task_names:
             raise RuntimeError("Dataloader has no tasks configured")
         task_name = self._task_names[0]
@@ -762,6 +865,13 @@ class MultiTaskEra5DataLoader(DataLoaderBase):
         timestamps[..., 1] = (timestamps[..., 0] - 1) * 12 // 365
         timestamps[..., 2] = 1970
         ignore_mask = torch.zeros(bsz, t_max, dtype=torch.bool)
+        if spec.ssl:
+            return Era5SslBatch(
+                era5=era5,
+                timestamps=timestamps,
+                ignore_mask=ignore_mask,
+                task_name=task_name,
+            )
         if TaskType(spec.task_type) == TaskType.CLASSIFICATION:
             labels = torch.zeros(bsz, dtype=torch.long)
         else:
@@ -820,7 +930,7 @@ class _ScheduleDispatcher(torch.utils.data.IterableDataset):
         self.dp_rank = dp_rank
         self.dp_world_size = dp_world_size
 
-    def __iter__(self) -> Iterator[Era5SupervisedBatch]:
+    def __iter__(self) -> Iterator[Era5Batch]:
         worker_info = torch.utils.data.get_worker_info()
         num_workers = worker_info.num_workers if worker_info is not None else 1
         worker_id = worker_info.id if worker_info is not None else 0
@@ -833,4 +943,4 @@ class _ScheduleDispatcher(torch.utils.data.IterableDataset):
             local_indices = global_indices[self.dp_rank :: self.dp_world_size]
             task_ds = self.task_datasets[task_name]
             samples = [task_ds[int(i)] for i in local_indices]
-            yield _collate_samples(samples, task_name)
+            yield _collate_samples(samples)

@@ -146,6 +146,10 @@ class Era5SupervisedCommonComponents(CommonComponents):
     direct_train_groups: list[str] = field(default_factory=lambda: ["train"])
     direct_train_tags: dict[str, str] = field(default_factory=dict)
     direct_max_samples: int | None = None
+    # When True, the single-task direct-load is treated as a self-supervised
+    # task (label-free, no rslearn target required), mirroring an ``ssl: true``
+    # registry entry.
+    direct_ssl: bool = False
     encoder_embedding_size: int = 384
     encoder_depth: int = 8
     encoder_num_heads: int = 6
@@ -324,6 +328,24 @@ def _resolve_direct_task_spec(
         common.direct_model_yaml_path, common.save_folder, task_name
     )
     task_type = _task_type_from_str(common.direct_task_type)
+    if common.direct_ssl:
+        # SSL single-task direct-load: no supervised label / target needed.
+        return Era5TaskSpec(
+            name=task_name,
+            weight=1.0,
+            task_type=task_type,
+            is_multilabel=common.direct_is_multilabel,
+            num_classes=common.direct_num_classes,
+            modality_layer_name=common.direct_modality_layer_name,
+            weka_path=common.direct_weka_path,
+            model_yaml_path=yaml_path,
+            groups_override=common.direct_train_groups,
+            tags_override=common.direct_train_tags or None,
+            norm_stats_from_pretrained=True,
+            label_extractor_name=None,
+            max_samples=common.direct_max_samples,
+            ssl=True,
+        )
     _require_supervised_task_type(task_type, f"direct task {common.direct_task_name!r}")
     label_extractor_name = _auto_label_extractor(
         task_type, yaml_path, common.direct_task_name
@@ -360,12 +382,33 @@ def _spec_from_direct_entry(
     """
     yaml_path = _snapshot_yaml(entry.model_yaml_path, save_folder, entry.name)
     task_type = _task_type_from_str(entry.task_type)
+    groups = groups_override if groups_override is not None else entry.groups
+    tags = tags_override if tags_override is not None else entry.tags
+    if entry.ssl:
+        # SSL task: no supervised label, so skip the task-type validation and
+        # the label-extractor resolution entirely.
+        return Era5TaskSpec(
+            name=entry.name,
+            weight=weight_override if weight_override is not None else entry.weight,
+            task_type=task_type,
+            is_multilabel=entry.is_multilabel,
+            num_classes=entry.num_classes,
+            modality_layer_name=entry.modality_layer_name,
+            weka_path=entry.weka_path,
+            model_yaml_path=yaml_path,
+            groups_override=groups or None,
+            tags_override=tags or None,
+            norm_stats_from_pretrained=entry.norm_stats_from_pretrained,
+            label_extractor_name=None,
+            max_samples=entry.max_samples,
+            target_mean=entry.target_mean,
+            target_std=entry.target_std,
+            ssl=True,
+        )
     _require_supervised_task_type(task_type, f"task {entry.name!r}")
     label_extractor_name = entry.label_extractor_name or _auto_label_extractor(
         task_type, yaml_path, entry.name
     )
-    groups = groups_override if groups_override is not None else entry.groups
-    tags = tags_override if tags_override is not None else entry.tags
     return Era5TaskSpec(
         name=entry.name,
         weight=weight_override if weight_override is not None else entry.weight,
@@ -531,6 +574,15 @@ def build_model_config(
     # -- Objective A (supervised) --
     supervised_objective: SupervisedObjectiveConfig | None = None
     if common.enable_supervised:
+        # SSL specs carry no label, so they get no supervised head; they only
+        # feed the SSL objective(s) via batch-type dispatch.
+        supervised_specs = [spec for spec in specs if not spec.ssl]
+        if not supervised_specs:
+            raise ValueError(
+                "common.enable_supervised=True but all resolved tasks are SSL "
+                "(ssl=True). Add at least one supervised task or set "
+                "common.enable_supervised=False."
+            )
         supervised_objective = SupervisedObjectiveConfig(
             name="supervised",
             weight=1.0,
@@ -544,7 +596,7 @@ def build_model_config(
                     target_mean=spec.target_mean,
                     target_std=spec.target_std,
                 )
-                for spec in specs
+                for spec in supervised_specs
             ],
         )
 

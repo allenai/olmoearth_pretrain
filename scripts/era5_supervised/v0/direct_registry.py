@@ -72,6 +72,13 @@ class DirectRslearnTaskEntry(BaseModel):
         test_tags: Optional rslearn tag filter for the test split.
         norm_stats_from_pretrained: Use the pretrain ``computed.json`` stats.
         max_samples: Optional cap on the number of samples (debug / smoke runs).
+        ssl: When True, this is a self-supervised task used purely for data
+            sourcing (e.g. reconstruction). The dataset emits label-free
+            samples and ignores the supervised fields (``task_type``,
+            ``num_classes``, ``label_extractor_name``), so the rslearn
+            ``model.yaml`` does not need a parseable target. Such an entry only
+            needs ``weka_path``, ``model_yaml_path``, ``modality_layer_name``,
+            and ``groups``. SSL entries must not be used as eval tasks.
         notes: Free-form human notes (ignored by the pipeline).
     """
 
@@ -97,6 +104,7 @@ class DirectRslearnTaskEntry(BaseModel):
     target_mean: float | None = None
     target_std: float | None = None
     height_width: int | None = None
+    ssl: bool = False
     notes: str | None = None
 
 
