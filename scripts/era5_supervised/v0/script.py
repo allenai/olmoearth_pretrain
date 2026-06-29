@@ -154,7 +154,6 @@ class Era5SupervisedCommonComponents(CommonComponents):
     encoder_depth: int = 8
     encoder_num_heads: int = 6
     encoder_pooling: str = Era5Pooling.MEAN.value
-    encoder_use_mask_embed: bool = False
     encoder_use_conv_stem: bool = False
     global_batch_size: int = 64
     rank_microbatch_size: int = 32
@@ -661,7 +660,7 @@ def build_model_config(
         max_sequence_length=ERA5_INPUT_SEQUENCE_LENGTH,
         modality_name=Modality.ERA5L_DAY_10.name.lower(),
         pooling=common.encoder_pooling,
-        use_mask_embed=common.encoder_use_mask_embed,
+        use_mask_embed=common.enable_reconstruction,
         use_conv_stem=common.encoder_use_conv_stem,
     )
     return Era5MultiObjectiveModelConfig(
