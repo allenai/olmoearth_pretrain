@@ -34,6 +34,8 @@ from olmoearth_pretrain.evals.embedding_diagnostics import (
 )
 from olmoearth_pretrain.evals.embedding_transforms import (
     dequantize_embeddings,
+    dequantize_embeddings_percentile,
+    load_quantile_config,
     reduce_embedding_dim,
 )
 from olmoearth_pretrain.evals.embeddings import get_embeddings
@@ -118,6 +120,11 @@ class DownstreamTaskConfig:
     max_train_samples_seed: int = 42
     # Quantize embeddings to int8 for storage efficiency evaluation
     quantize_embeddings: bool = False
+    # Number of bits for percentile-based quantization (1, 2, 4, or 8)
+    # If None, uses legacy power-based int8 quantization when quantize_embeddings=True
+    quantize_bits: int | None = None
+    # Path to HDF5 file with precomputed quantile boundaries for percentile quantization
+    quantile_config_path: str | None = None
     # Reduce embedding dimensionality via PCA (None = no reduction)
     embedding_dim: int | None = None
     # Use weighted dice loss instead of cross-entropy (only for specific tasks like wildfire)
@@ -201,6 +208,13 @@ class DownstreamEvaluator:
         self.use_center_token = task.use_center_token
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
+        self.quantize_bits = task.quantize_bits
+        self.quantile_config_path = task.quantile_config_path
+        # Load quantile config if path is provided
+        self.quantile_config: dict | None = None
+        if self.quantile_config_path is not None:
+            logger.info(f"Loading quantile config from {self.quantile_config_path}")
+            self.quantile_config = load_quantile_config(self.quantile_config_path)
         self.embedding_dim = task.embedding_dim
         self.use_dice_loss = task.use_dice_loss
         self.primary_metric = task.primary_metric
@@ -372,6 +386,8 @@ class DownstreamEvaluator:
             model=model,
             is_train=is_train,
             quantize=self.quantize_embeddings,
+            quantize_bits=self.quantize_bits,
+            quantile_config=self.quantile_config,
         )
 
     def _val_embed_probe(self) -> EvalTaskResult:
@@ -444,10 +460,26 @@ class DownstreamEvaluator:
 
         if self.quantize_embeddings:
             logger.info(f"Dequantizing embeddings for {self.dataset}")
-            train_embeddings = dequantize_embeddings(train_embeddings)
-            val_embeddings = dequantize_embeddings(val_embeddings)
-            if test_embeddings is not None:
-                test_embeddings = dequantize_embeddings(test_embeddings)
+            if self.quantize_bits is not None and self.quantile_config is not None:
+                # Percentile-based dequantization
+                key = f"{self.quantize_bits}bit"
+                midpoints = self.quantile_config[key]["midpoints"]
+                train_embeddings = dequantize_embeddings_percentile(
+                    train_embeddings, midpoints
+                )
+                val_embeddings = dequantize_embeddings_percentile(
+                    val_embeddings, midpoints
+                )
+                if test_embeddings is not None:
+                    test_embeddings = dequantize_embeddings_percentile(
+                        test_embeddings, midpoints
+                    )
+            else:
+                # Legacy power-based dequantization
+                train_embeddings = dequantize_embeddings(train_embeddings)
+                val_embeddings = dequantize_embeddings(val_embeddings)
+                if test_embeddings is not None:
+                    test_embeddings = dequantize_embeddings(test_embeddings)
 
         # Reduce embedding dimensionality via PCA if specified
         if self.embedding_dim is not None:
