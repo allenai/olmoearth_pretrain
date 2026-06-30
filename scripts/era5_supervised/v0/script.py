@@ -162,6 +162,9 @@ class Era5SupervisedCommonComponents(CommonComponents):
     weight_decay: float = 0.02
     warmup_steps: int = 500
     max_epochs: int = 50
+    # If > 0, training runs for this many optimizer steps and `max_epochs` is
+    # ignored. Useful for step-matched runs across datasets of different sizes.
+    max_steps: int = -1
     save_interval: int = 1000
     eval_interval: int = 1000
     # ------------------------------------------------------------------
@@ -186,6 +189,11 @@ class Era5SupervisedCommonComponents(CommonComponents):
     recon_use_naive_masking: bool = False
     # Naive-masking span count (NaiveMaskPolicy.max_num_masks).
     recon_naive_max_num_masks: int = 5
+    # Naive-masking channel-count range (NaiveMaskPolicy.num_channels): each mask
+    # drops a random subset of this many channels.
+    recon_naive_num_channels: list[int] = field(default_factory=lambda: [1, 7])
+    # Naive-masking span length range in days (NaiveMaskPolicy.span_days).
+    recon_naive_span_days: list[int] = field(default_factory=lambda: [1, 30])
     recon_temporal_interpolation_prob: float = 1.0
     recon_cross_variable_prob: float = 1.0
     # Number of masking spans per strategy. Stage 1 (temporal interpolation)
@@ -195,6 +203,11 @@ class Era5SupervisedCommonComponents(CommonComponents):
     # num_masks fixed and growing this span is the budget knob for the temporal
     # mask-fraction sweep (keeps num_masks small while reaching higher budgets).
     recon_temporal_span_days: list[int] = field(default_factory=lambda: [1, 1])
+    # Stage-1 temporal-interpolation excluded groups: groups whose daily signals
+    # are too noisy/event-driven for meaningful temporal infilling.
+    recon_temporal_excluded_groups: list[str] = field(
+        default_factory=lambda: ["wind", "hydro_flux"]
+    )
     recon_within_group_num_masks: int = 1
     recon_whole_group_span_num_masks: int = 1
     # ------------------------------------------------------------------
@@ -629,6 +642,8 @@ def build_model_config(
                 {
                     "mask_policy": NaiveMaskPolicy(
                         max_num_masks=common.recon_naive_max_num_masks,
+                        num_channels=tuple(common.recon_naive_num_channels),
+                        span_days=tuple(common.recon_naive_span_days),
                     )
                 }
                 if common.recon_use_naive_masking
@@ -639,6 +654,7 @@ def build_model_config(
                         temporal_interpolation=TemporalInterpolationStrategy(
                             num_masks=common.recon_temporal_num_masks,
                             span_days=list(common.recon_temporal_span_days),
+                            excluded_groups=list(common.recon_temporal_excluded_groups),
                         ),
                         within_group_single_var=WithinGroupSingleVarStrategy(
                             num_masks=common.recon_within_group_num_masks,
@@ -738,7 +754,11 @@ def build_trainer_config(common: Era5SupervisedCommonComponents) -> TrainerConfi
             save_folder=common.save_folder,
             cancel_check_interval=25,
             metrics_collect_interval=10,
-            max_duration=Duration.epochs(common.max_epochs),
+            max_duration=(
+                Duration.steps(common.max_steps)
+                if common.max_steps > 0
+                else Duration.epochs(common.max_epochs)
+            ),
             checkpointer=checkpointer_config,
         )
         .with_callback("wandb", wandb_callback)
