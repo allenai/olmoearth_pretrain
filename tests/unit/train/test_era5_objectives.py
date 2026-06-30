@@ -9,6 +9,7 @@ Covers:
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -539,7 +540,7 @@ class TestPerGroupLossGating:
             lambda era5, policy, variable_groups, target_start: mask,
         )
 
-        batch = _make_batch()._replace(era5=target)
+        batch = replace(_make_batch(), era5=target)
 
         def _build_obj(mode: str):
             model = Era5MultiObjectiveModelConfig(
@@ -652,7 +653,7 @@ class TestLossComputationCorrectness:
         obj = model.objective_list[0]
         assert isinstance(obj, era5_multiobjective.ReconstructionObjective)
         obj._module.decoder = _FixedDecoder(prediction)
-        batch = _make_batch()._replace(era5=target)
+        batch = replace(_make_batch(), era5=target)
 
         loss, metrics = obj.compute(_FixedEncoder(), batch)
 
