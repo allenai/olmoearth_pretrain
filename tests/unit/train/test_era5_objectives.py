@@ -62,13 +62,11 @@ def _make_batch(
     timestamps[..., 0] = torch.arange(1, T + 1).unsqueeze(0)
     timestamps[..., 1] = (timestamps[..., 0] - 1) * 12 // 365
     timestamps[..., 2] = 2020
-    ignore_mask = torch.zeros(B, T, dtype=torch.bool, device=device)
     if labels is None:
         labels = torch.zeros(B, dtype=torch.long, device=device)
     return Era5SupervisedBatch(
         era5=era5,
         timestamps=timestamps,
-        ignore_mask=ignore_mask,
         labels=labels,
         task_name=task_name,
     )
@@ -107,14 +105,12 @@ class _FixedEncoder:
         self,
         era5: Tensor,
         timestamps: Tensor,
-        ignore_mask: Tensor,
         corruption_mask: Tensor | None = None,
     ) -> dict[str, Tensor]:
-        del timestamps, ignore_mask, corruption_mask
+        del timestamps, corruption_mask
         b = era5.shape[0]
         return {
             "tokens": torch.zeros(b, 1, D, device=era5.device, dtype=era5.dtype),
-            "ignore_mask": torch.zeros(b, 1, dtype=torch.bool, device=era5.device),
         }
 
 
@@ -128,10 +124,9 @@ class _FixedDecoder(nn.Module):
     def forward(
         self,
         tokens: Tensor,
-        token_ignore_mask: Tensor,
         timestamps: Tensor,
     ) -> Tensor:
-        del token_ignore_mask, timestamps
+        del timestamps
         return self.prediction.to(device=tokens.device, dtype=tokens.dtype)
 
 
@@ -461,25 +456,21 @@ class TestMaskingInvariants:
     def test_buffer_never_masked(self):
         """Buffer region [0, 83) is never masked across many seeds."""
         era5 = torch.randn(B, T, V)
-        ignore = torch.zeros(B, T, dtype=torch.bool)
 
         for seed in range(50):
             torch.manual_seed(seed)
-            mask = corrupt_era5(
-                era5, ignore, MaskPolicy(), DEFAULT_VARIABLE_GROUPS, SWT_BUFFER
-            )
+            mask = corrupt_era5(era5, MaskPolicy(), DEFAULT_VARIABLE_GROUPS, SWT_BUFFER)
             assert not mask[:, :SWT_BUFFER, :].any(), f"Buffer masked at seed {seed}"
             assert mask[:, SWT_BUFFER:, :].any(), f"Nothing masked at seed {seed}"
 
     def test_naive_policy_buffer_clean(self):
         """NaiveMaskPolicy also respects the buffer."""
         era5 = torch.randn(B, T, V)
-        ignore = torch.zeros(B, T, dtype=torch.bool)
 
         for seed in range(20):
             torch.manual_seed(seed)
             mask = corrupt_era5(
-                era5, ignore, NaiveMaskPolicy(), DEFAULT_VARIABLE_GROUPS, SWT_BUFFER
+                era5, NaiveMaskPolicy(), DEFAULT_VARIABLE_GROUPS, SWT_BUFFER
             )
             assert not mask[:, :SWT_BUFFER, :].any()
             assert mask[:, SWT_BUFFER:, :].any(), f"Nothing masked at seed {seed}"
@@ -487,7 +478,6 @@ class TestMaskingInvariants:
     def test_stage1_excludes_wind_hydro(self):
         """With Stage 2 disabled, wind and hydro_flux bands are never masked."""
         era5 = torch.randn(B, T, V)
-        ignore = torch.zeros(B, T, dtype=torch.bool)
         policy = MaskPolicy(cross_variable_prob=0.0)
 
         wind_bands = DEFAULT_VARIABLE_GROUPS["wind"]
@@ -497,9 +487,7 @@ class TestMaskingInvariants:
 
         for seed in range(30):
             torch.manual_seed(seed)
-            mask = corrupt_era5(
-                era5, ignore, policy, DEFAULT_VARIABLE_GROUPS, SWT_BUFFER
-            )
+            mask = corrupt_era5(era5, policy, DEFAULT_VARIABLE_GROUPS, SWT_BUFFER)
             assert not mask[:, :, excluded].any(), (
                 f"Excluded bands masked at seed {seed}"
             )
@@ -507,32 +495,14 @@ class TestMaskingInvariants:
                 f"No eligible Stage 1 bands masked at seed {seed}"
             )
 
-    def test_ignore_mask_respected(self):
-        """Timesteps with ignore_mask=True are never masked."""
-        era5 = torch.randn(B, T, V)
-        ignore = torch.zeros(B, T, dtype=torch.bool)
-        ignore[:, SWT_BUFFER : SWT_BUFFER + 10] = True
-
-        for seed in range(20):
-            torch.manual_seed(seed)
-            mask = corrupt_era5(
-                era5, ignore, MaskPolicy(), DEFAULT_VARIABLE_GROUPS, SWT_BUFFER
-            )
-            assert not mask[:, SWT_BUFFER : SWT_BUFFER + 10, :].any(), (
-                f"Ignored timesteps masked at seed {seed}"
-            )
-
     def test_masked_fraction_reasonable(self):
         """Masked fraction stays in a sane range."""
         era5 = torch.randn(B, T, V)
-        ignore = torch.zeros(B, T, dtype=torch.bool)
 
         fracs = []
         for seed in range(50):
             torch.manual_seed(seed)
-            mask = corrupt_era5(
-                era5, ignore, MaskPolicy(), DEFAULT_VARIABLE_GROUPS, SWT_BUFFER
-            )
+            mask = corrupt_era5(era5, MaskPolicy(), DEFAULT_VARIABLE_GROUPS, SWT_BUFFER)
             frac = mask[:, SWT_BUFFER:, :].float().mean().item()
             fracs.append(frac)
 
@@ -566,7 +536,7 @@ class TestPerGroupLossGating:
         monkeypatch.setattr(
             era5_multiobjective,
             "corrupt_era5",
-            lambda era5, ignore_mask, policy, variable_groups, target_start: mask,
+            lambda era5, policy, variable_groups, target_start: mask,
         )
 
         batch = _make_batch()._replace(era5=target)
@@ -667,7 +637,7 @@ class TestLossComputationCorrectness:
         monkeypatch.setattr(
             era5_multiobjective,
             "corrupt_era5",
-            lambda era5, ignore_mask, policy, variable_groups, target_start: mask,
+            lambda era5, policy, variable_groups, target_start: mask,
         )
 
         model = Era5MultiObjectiveModelConfig(

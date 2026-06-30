@@ -154,10 +154,9 @@ def _extract_embeddings(
                 continue
             era5 = batch.era5.to(device)
             timestamps = batch.timestamps.to(device)
-            ignore_mask = batch.ignore_mask.to(device)
 
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-                out = encoder(era5=era5, timestamps=timestamps, ignore_mask=ignore_mask)
+                out = encoder(era5=era5, timestamps=timestamps)
 
             all_embeddings.append(out["pooled"].float().cpu())
             all_labels.append(batch.labels)

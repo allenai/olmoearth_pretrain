@@ -73,14 +73,12 @@ class _CrossAttentionBlock(nn.Module):
         self,
         queries: Tensor,
         memory: Tensor,
-        memory_key_padding_mask: Tensor | None = None,
     ) -> Tensor:
         """Cross-attend from *queries* into *memory*.
 
         Args:
             queries: ``[B, T, D]``
-            memory: ``[B, N, D]`` encoder tokens.
-            memory_key_padding_mask: ``[B, N]`` bool, True = ignore.
+            memory: ``[B, N, D]`` encoder tokens (all valid).
         """
         q = self.norm_q(queries)
         kv = self.norm_kv(memory)
@@ -88,7 +86,6 @@ class _CrossAttentionBlock(nn.Module):
             q,
             kv,
             kv,
-            key_padding_mask=memory_key_padding_mask,
             need_weights=False,
         )
         queries = queries + attn_out
@@ -194,7 +191,6 @@ class Era5TimeQueryDecoder(nn.Module):
     def forward(
         self,
         tokens: Tensor,
-        token_ignore_mask: Tensor,
         timestamps: Tensor,
         seq_len: int | None = None,
     ) -> Tensor:
@@ -203,7 +199,6 @@ class Era5TimeQueryDecoder(nn.Module):
         Args:
             tokens: ``[B, N_total, D]`` full encoder output (may include
                 CLS / prior tokens — those are attended to as well).
-            token_ignore_mask: ``[B, N_total]`` bool, True = ignored.
             timestamps: ``[B, T, 3]``  ``[day-of-year, month0, year]``.
             seq_len: Override for the output sequence length (defaults to
                 ``timestamps.shape[1]``).
@@ -226,7 +221,7 @@ class Era5TimeQueryDecoder(nn.Module):
 
         # Cross-attend into encoder tokens
         for block in self.blocks:
-            queries = block(queries, tokens, memory_key_padding_mask=token_ignore_mask)
+            queries = block(queries, tokens)
 
         # Project to output channels
         return self.head(queries)

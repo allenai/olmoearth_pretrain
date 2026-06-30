@@ -68,13 +68,11 @@ class Era5Sample:
     Shapes:
         era5         : ``[T, C]``       float32
         timestamps   : ``[T, 3]``       int64    ``[day-of-year, month0, year]``
-        ignore_mask  : ``[T]``          bool     (always all-False; kept for interface compat)
         task_name    : str
     """
 
     era5: Tensor
     timestamps: Tensor
-    ignore_mask: Tensor
     task_name: str
 
 
@@ -100,7 +98,6 @@ class Era5SslSample(Era5Sample):
 
     s2: Tensor | None = None
     s2_timestamps: Tensor | None = None
-    s2_ignore_mask: Tensor | None = None
 
 
 @dataclass
@@ -114,7 +111,6 @@ class Era5Batch:
 
     era5: Tensor  # [B, T_max, C]
     timestamps: Tensor  # [B, T_max, 3]
-    ignore_mask: Tensor  # [B, T_max]
     task_name: str
 
     def to_device(self, device: Any) -> Era5Batch:
@@ -161,7 +157,6 @@ class Era5SslBatch(Era5Batch):
 
     s2: Tensor | None = None
     s2_timestamps: Tensor | None = None
-    s2_ignore_mask: Tensor | None = None
 
 
 # A LabelExtractor takes the rslearn target dict and returns a torch Tensor.
@@ -408,8 +403,8 @@ class Era5TaskDataset(Dataset):
         """Return number of samples in the underlying dataset."""
         return len(self.dataset)
 
-    def _extract_era5(self, inputs: dict[str, Any]) -> tuple[Tensor, Tensor, Tensor]:
-        """Return ``(era5[T, C], timestamps[T, 3], ignore_mask[T])``."""
+    def _extract_era5(self, inputs: dict[str, Any]) -> tuple[Tensor, Tensor]:
+        """Return ``(era5[T, C], timestamps[T, 3])``."""
         layer_name = self.task_spec.modality_layer_name
         if layer_name not in inputs:
             raise KeyError(
@@ -454,8 +449,7 @@ class Era5TaskDataset(Dataset):
                 f"{self.max_sequence_length}, got {t}. ERA5 is a dense "
                 f"reanalysis product — all samples must have uniform length."
             )
-        ignore_mask = torch.zeros(t, dtype=torch.bool)
-        return era5, timestamps, ignore_mask
+        return era5, timestamps
 
     @staticmethod
     def _build_timestamps(
@@ -494,13 +488,12 @@ class Era5TaskDataset(Dataset):
                 f"Unexpected rslearn sample type for task {self.task_spec.name!r}: "
                 f"{type(sample).__name__}"
             )
-        era5, timestamps, ignore_mask = self._extract_era5(inputs)
+        era5, timestamps = self._extract_era5(inputs)
         if self.task_spec.ssl:
             # SSL: no label extraction; the rslearn target is ignored.
             return Era5SslSample(
                 era5=era5,
                 timestamps=timestamps,
-                ignore_mask=ignore_mask,
                 task_name=self.task_spec.name,
             )
         assert self._label_extractor is not None
@@ -508,7 +501,6 @@ class Era5TaskDataset(Dataset):
         return Era5SupervisedSample(
             era5=era5,
             timestamps=timestamps,
-            ignore_mask=ignore_mask,
             labels=labels,
             task_name=self.task_spec.name,
         )
@@ -868,12 +860,10 @@ class MultiTaskEra5DataLoader(DataLoaderBase):
         timestamps[..., 0] = torch.arange(1, t_max + 1).unsqueeze(0)
         timestamps[..., 1] = (timestamps[..., 0] - 1) * 12 // 365
         timestamps[..., 2] = 1970
-        ignore_mask = torch.zeros(bsz, t_max, dtype=torch.bool)
         if spec.ssl:
             return Era5SslBatch(
                 era5=era5,
                 timestamps=timestamps,
-                ignore_mask=ignore_mask,
                 task_name=task_name,
             )
         if TaskType(spec.task_type) == TaskType.CLASSIFICATION:
@@ -883,7 +873,6 @@ class MultiTaskEra5DataLoader(DataLoaderBase):
         return Era5SupervisedBatch(
             era5=era5,
             timestamps=timestamps,
-            ignore_mask=ignore_mask,
             labels=labels,
             task_name=task_name,
         )

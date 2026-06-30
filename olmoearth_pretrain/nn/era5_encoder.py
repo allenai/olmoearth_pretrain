@@ -30,7 +30,6 @@ from enum import StrEnum
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor, nn
 
 from olmoearth_pretrain.config import Config
@@ -112,14 +111,13 @@ class _TransformerBlock(nn.Module):
         )
         self.drop_path2 = _StochasticDepth(drop_path)
 
-    def forward(self, x: Tensor, key_padding_mask: Tensor | None = None) -> Tensor:
-        """Forward pass with optional key_padding_mask (True = ignore)."""
+    def forward(self, x: Tensor) -> Tensor:
+        """Forward pass over the full token sequence (no validity masking)."""
         attn_input = self.norm1(x)
         attn_out, _ = self.attn(
             attn_input,
             attn_input,
             attn_input,
-            key_padding_mask=key_padding_mask,
             need_weights=False,
         )
         x = x + self.drop_path1(attn_out)
@@ -149,7 +147,7 @@ class Era5DailyEncoderConfig(Config):
         patch_kernel_size: Temporal kernel (in timesteps) of the Conv1D
             patch embedding.
         patch_stride: Stride (in timesteps) of the Conv1D patch embedding.
-        dropout: Dropout probability in MLP and token dropout.
+        dropout: Dropout probability in MLP and on the token sequence.
         attention_dropout: Dropout inside multi-head attention.
         drop_path_rate: Stochastic depth rate (linearly increased per layer).
         add_day_of_year_features: Add sin/cos day-of-year features to tokens.
@@ -262,7 +260,7 @@ class Era5DailyEncoder(nn.Module):
                 kernel_size=config.patch_kernel_size,
                 stride=config.patch_stride,
             )
-        self.token_dropout = nn.Dropout(config.dropout)
+        self.dropout = nn.Dropout(config.dropout)
 
         # Time features (day-of-year sin/cos, optional relative pos sin/cos)
         self.num_time_features = 0
@@ -322,20 +320,19 @@ class Era5DailyEncoder(nn.Module):
         self,
         era5: Tensor,
         timestamps: Tensor,
-        ignore_mask: Tensor,
         prior_tokens: Tensor | None = None,
         corruption_mask: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Encode a batch of daily ERA5 sequences.
 
+        ERA5 is a dense reanalysis product with a fixed-length sequence, so
+        every timestep is always valid; there is no padding/validity masking.
+
         Args:
             era5: ``[B, T, C]`` daily ERA5 values (already normalized).
             timestamps: ``[B, T, 3]`` per-step ``[day-of-year, month0, year]``.
-            ignore_mask: ``[B, T]`` boolean tensor. ``True`` positions are
-                ignored by attention / pooling.
             prior_tokens: Optional ``[B, K, D]`` prior tokens prepended to
-                the sequence (used by objective C). They are always
-                considered valid (never ignored).
+                the sequence (used by objective C).
             corruption_mask: Optional ``[B, T, C]`` boolean tensor. ``True``
                 positions are replaced with the learned ``mask_embed``
                 before patchifying.  Only effective when ``use_mask_embed``
@@ -347,8 +344,6 @@ class Era5DailyEncoder(nn.Module):
             * ``tokens``  : ``[B, N, D]`` per-token sequence after the
               transformer stack.
             * ``pooled``  : ``[B, D]`` global embedding.
-            * ``ignore_mask`` : ``[B, N]`` boolean mask aligned with
-              ``tokens`` (``True`` = ignored position).
             * ``num_prior_tokens`` / ``num_cls_tokens`` / ``num_data_tokens`` :
               ints stored as 0-d tensors so callers can slice the sequence.
         """
@@ -358,32 +353,17 @@ class Era5DailyEncoder(nn.Module):
             raise ValueError(
                 f"Expected [B, T, 3] timestamps, got shape {tuple(timestamps.shape)}"
             )
-        if ignore_mask.ndim != 2:
-            raise ValueError(
-                f"Expected [B, T] ignore_mask, got shape {tuple(ignore_mask.shape)}"
-            )
-        b, t, _ = era5.shape
-        if ignore_mask.shape != (b, t):
-            raise ValueError(
-                f"ignore_mask shape {tuple(ignore_mask.shape)} does not "
-                f"match era5 (B, T) = ({b}, {t})"
-            )
+        b, _, _ = era5.shape
 
         # Replace corrupted positions with learned mask embedding
         if corruption_mask is not None and self.mask_embed is not None:
             era5 = torch.where(corruption_mask, self.mask_embed.expand_as(era5), era5)
 
-        # valid_mask: True = real data (used internally)
-        valid_mask = ~ignore_mask
-
-        # Zero out padded timesteps before conv
-        seq = era5 * valid_mask.unsqueeze(-1)
-
         # --- Patch embedding via Conv1D ---
-        tokens, token_mask = self._patchify(seq, valid_mask)
+        tokens = self._patchify(era5)
 
         # --- Time features (per-token center-date calendar encoding) ---
-        patch_time = self._build_patch_time_features(timestamps, valid_mask)
+        patch_time = self._build_patch_time_features(timestamps)
         if patch_time is not None:
             tokens = tokens + patch_time
 
@@ -402,38 +382,23 @@ class Era5DailyEncoder(nn.Module):
                     f"match encoder embedding_size {self.embedding_size}"
                 )
             num_prior = prior_tokens.shape[1]
-            prior_valid = torch.ones(
-                b, num_prior, dtype=torch.bool, device=tokens.device
-            )
             tokens = torch.cat([prior_tokens, tokens], dim=1)
-            token_mask = torch.cat([prior_valid, token_mask], dim=1)
 
         if self.cls_token is not None:
             num_cls = 1
             cls = self.cls_token.expand(b, -1, -1)
-            cls_valid = torch.ones(b, 1, dtype=torch.bool, device=tokens.device)
             tokens = torch.cat([cls, tokens], dim=1)
-            token_mask = torch.cat([cls_valid, token_mask], dim=1)
-
-        # Guard against fully-padded sequences producing NaN in attention
-        empty_rows = ~token_mask.any(dim=1)
-        if empty_rows.any():
-            token_mask = token_mask.clone()
-            token_mask[empty_rows, 0] = True
 
         # --- Transformer blocks ---
-        tokens = self.token_dropout(tokens)
-        key_padding_mask = ~token_mask  # MHA convention: True = ignore
+        tokens = self.dropout(tokens)
         for block in self.blocks:
-            tokens = block(tokens, key_padding_mask=key_padding_mask)
+            tokens = block(tokens)
         tokens = self.final_norm(tokens)
 
         # --- Pooling ---
-        full_ignore_mask = ~token_mask
         num_data = tokens.shape[1] - num_prior - num_cls
         pooled = self._pool(
             tokens=tokens,
-            token_mask=token_mask,
             num_prior=num_prior,
             num_cls=num_cls,
         )
@@ -441,7 +406,6 @@ class Era5DailyEncoder(nn.Module):
         return {
             "tokens": tokens,
             "pooled": pooled,
-            "ignore_mask": full_ignore_mask,
             "num_prior_tokens": torch.tensor(num_prior, device=tokens.device),
             "num_cls_tokens": torch.tensor(num_cls, device=tokens.device),
             "num_data_tokens": torch.tensor(num_data, device=tokens.device),
@@ -451,54 +415,48 @@ class Era5DailyEncoder(nn.Module):
     # Internals
     # ------------------------------------------------------------------
 
-    def _patchify(self, seq: Tensor, valid_mask: Tensor) -> tuple[Tensor, Tensor]:
-        """Conv1D patch embedding + derive per-token validity mask.
+    def _patchify(self, seq: Tensor) -> Tensor:
+        """Conv1D patch embedding.
+
+        ERA5 sequences are fixed-length and must patchify cleanly (the
+        Conv1D receptive field tiles the sequence with no leftover
+        timesteps); this is enforced so no right-padding is ever needed.
 
         Args:
-            seq: ``[B, T, C]`` (padded positions already zeroed).
-            valid_mask: ``[B, T]`` bool, True = valid.
+            seq: ``[B, T, C]``.
 
         Returns:
-            tokens ``[B, N, D]`` and token_mask ``[B, N]`` (True = valid).
+            tokens ``[B, N, D]``.
         """
-        b, t, _ = seq.shape
-        kernel = self.patch_kernel_size
-        stride = self.patch_stride
-
-        # Pad time dimension so conv covers all timesteps cleanly
-        pad_t = self._patch_pad_amount(t)
-        if pad_t > 0:
-            seq = F.pad(seq, (0, 0, 0, pad_t), value=0.0)
-            valid_mask = F.pad(valid_mask, (0, pad_t), value=False)
+        _, t, _ = seq.shape
+        self._check_clean_patchify(t)
 
         # Conv1D expects [B, C, T]
-        tokens = self.patch_embed(seq.transpose(1, 2)).transpose(1, 2)
+        return self.patch_embed(seq.transpose(1, 2)).transpose(1, 2)
 
-        # Token is valid if at least one timestep in its receptive field is valid
-        patch_mask = valid_mask.unfold(dimension=1, size=kernel, step=stride)
-        token_mask = patch_mask.any(dim=-1)  # [B, N]
-
-        return tokens, token_mask
-
-    def _patch_pad_amount(self, t: int) -> int:
-        """Timesteps to right-pad so the Conv1D patching covers ``t`` cleanly."""
+    def _check_clean_patchify(self, t: int) -> None:
+        """Assert sequence length ``t`` tiles cleanly under the patch conv."""
         kernel = self.patch_kernel_size
         stride = self.patch_stride
-        if t < kernel:
-            return kernel - t
-        remainder = (t - kernel) % stride
-        return (stride - remainder) % stride
+        if t < kernel or (t - kernel) % stride != 0:
+            raise ValueError(
+                f"Sequence length {t} does not patchify cleanly with "
+                f"kernel={kernel}, stride={stride}: ERA5 sequences must tile "
+                f"exactly (t >= kernel and (t - kernel) % stride == 0)."
+            )
 
-    def _build_patch_time_features(
-        self, timestamps: Tensor, valid_mask: Tensor
-    ) -> Tensor | None:
+    def _num_patches(self, t: int) -> int:
+        """Number of patch tokens produced for a clean sequence length ``t``."""
+        return (t - self.patch_kernel_size) // self.patch_stride + 1
+
+    def _build_patch_time_features(self, timestamps: Tensor) -> Tensor | None:
         """Encode one representative timestamp per patch token.
 
         Rather than averaging per-day sin/cos features, we derive a single
         representative date for each patch and encode that. For day-of-year we
-        take the mask-aware mean day-of-year of the days in the patch's
-        receptive field (its center date); for relative position we use the
-        token's own index. Both are mapped through sin/cos and projected.
+        take the mean day-of-year of the days in the patch's receptive field
+        (its center date); for relative position we use the token's own index.
+        Both are mapped through sin/cos and projected.
 
         Returns ``[B, N, D]`` additive contribution to token embeddings, or
         None if no time features are configured.
@@ -508,31 +466,23 @@ class Era5DailyEncoder(nn.Module):
 
         kernel = self.patch_kernel_size
         stride = self.patch_stride
-        b, t = valid_mask.shape
-
-        pad_t = self._patch_pad_amount(t)
-        t_padded = t + pad_t
-        num_tokens = (t_padded - kernel) // stride + 1
+        b, t, _ = timestamps.shape
+        self._check_clean_patchify(t)
+        num_tokens = self._num_patches(t)
 
         feats: list[Tensor] = []
 
         if self.add_day_of_year_features:
             doy = timestamps[..., 0].float()  # [B, T]
-            weights = valid_mask.float()
-            if pad_t > 0:
-                doy = F.pad(doy, (0, pad_t), value=0.0)
-                weights = F.pad(weights, (0, pad_t), value=0.0)
-            # Mask-aware mean day-of-year within each patch -> [B, N]
+            # Mean day-of-year within each patch -> [B, N]
             patch_doy = doy.unfold(dimension=1, size=kernel, step=stride)
-            patch_w = weights.unfold(dimension=1, size=kernel, step=stride)
-            denom = patch_w.sum(dim=-1).clamp(min=1.0)
-            center_doy = (patch_doy * patch_w).sum(dim=-1) / denom  # [B, N]
+            center_doy = patch_doy.mean(dim=-1)  # [B, N]
             angle = 2.0 * math.pi * (center_doy - 1.0) / 365.0
             feats.extend([torch.sin(angle), torch.cos(angle)])
 
         if self.add_relative_position_features:
             idx = torch.arange(
-                num_tokens, device=valid_mask.device, dtype=torch.float32
+                num_tokens, device=timestamps.device, dtype=torch.float32
             )
             rel = idx / max(num_tokens - 1, 1)
             rel_angle = 2.0 * math.pi * rel
@@ -546,20 +496,9 @@ class Era5DailyEncoder(nn.Module):
         patch_time = torch.stack(feats, dim=-1)  # [B, N, F]
         return self.time_embed(patch_time)  # [B, N, D]
 
-    @staticmethod
-    def _masked_softmax(scores: Tensor, mask: Tensor) -> Tensor:
-        """Mask-aware softmax (mask True = valid position)."""
-        fill_value = torch.finfo(scores.dtype).min
-        scores = scores.masked_fill(~mask, fill_value)
-        weights = torch.softmax(scores, dim=-1)
-        weights = weights * mask.float()
-        denom = weights.sum(dim=-1, keepdim=True).clamp(min=1e-6)
-        return weights / denom
-
     def _pool(
         self,
         tokens: Tensor,
-        token_mask: Tensor,
         num_prior: int,
         num_cls: int,
     ) -> Tensor:
@@ -570,24 +509,20 @@ class Era5DailyEncoder(nn.Module):
         """
         start = num_cls + num_prior
         data_tokens = tokens[:, start:, :]
-        data_mask = token_mask[:, start:]  # True = valid
 
         if self.pooling == Era5Pooling.MEAN:
-            weights = data_mask.float()
-            denom = weights.sum(dim=1, keepdim=True).clamp(min=1.0)
-            return (data_tokens * weights.unsqueeze(-1)).sum(dim=1) / denom
+            return data_tokens.mean(dim=1)
 
         if self.pooling == Era5Pooling.ATTN:
             assert self.attn_query is not None
             scale = self.embedding_size**-0.5
             scores = (data_tokens * self.attn_query).sum(dim=-1) * scale
-            weights = self._masked_softmax(scores, data_mask)
+            weights = torch.softmax(scores, dim=-1)
             return (data_tokens * weights.unsqueeze(-1)).sum(dim=1)
 
         if self.pooling == Era5Pooling.GATED:
             assert self.gate_proj is not None
             gates = torch.sigmoid(self.gate_proj(data_tokens)).squeeze(-1)
-            gates = gates * data_mask.float()
             denom = gates.sum(dim=1, keepdim=True).clamp(min=1e-6)
             return (data_tokens * gates.unsqueeze(-1)).sum(dim=1) / denom
 
@@ -596,9 +531,7 @@ class Era5DailyEncoder(nn.Module):
 
         if self.pooling == Era5Pooling.CLS_MEAN_CONCAT:
             cls_vec = tokens[:, 0, :]
-            weights = data_mask.float()
-            denom = weights.sum(dim=1, keepdim=True).clamp(min=1.0)
-            mean_vec = (data_tokens * weights.unsqueeze(-1)).sum(dim=1) / denom
+            mean_vec = data_tokens.mean(dim=1)
             return torch.cat([cls_vec, mean_vec], dim=1)
 
         raise ValueError(f"Unsupported pooling mode: {self.pooling}")

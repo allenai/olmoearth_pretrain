@@ -64,12 +64,10 @@ def _make_batch(device: torch.device = torch.device("cpu")) -> Era5SupervisedBat
     """Create a synthetic ERA5 supervised batch."""
     era5 = torch.randn(B, T, V, device=device)
     timestamps = _make_timestamps(device)
-    ignore_mask = torch.zeros(B, T, dtype=torch.bool, device=device)
     labels = torch.zeros(B, dtype=torch.long, device=device)
     return Era5SupervisedBatch(
         era5=era5,
         timestamps=timestamps,
-        ignore_mask=ignore_mask,
         labels=labels,
         task_name="smoke_task",
     )
@@ -79,11 +77,9 @@ def _make_ssl_batch(device: torch.device = torch.device("cpu")) -> Era5SslBatch:
     """Create a synthetic ERA5 SSL batch (no label, no S2)."""
     era5 = torch.randn(B, T, V, device=device)
     timestamps = _make_timestamps(device)
-    ignore_mask = torch.zeros(B, T, dtype=torch.bool, device=device)
     return Era5SslBatch(
         era5=era5,
         timestamps=timestamps,
-        ignore_mask=ignore_mask,
         task_name="smoke_ssl_task",
     )
 
@@ -94,9 +90,7 @@ def test_corruption():
     batch = _make_batch()
     policy = MaskPolicy()
     ts = SWT_BUFFER
-    mask = corrupt_era5(
-        batch.era5, batch.ignore_mask, policy, DEFAULT_VARIABLE_GROUPS, ts
-    )
+    mask = corrupt_era5(batch.era5, policy, DEFAULT_VARIABLE_GROUPS, ts)
     assert mask.shape == (B, T, V), f"Bad mask shape: {mask.shape}"
     assert mask.any(), "Nothing was masked"
     frac = mask[:, ts:, :].float().mean().item()
@@ -184,12 +178,9 @@ def test_decoder_forward():
 
     batch = _make_batch()
     with torch.no_grad():
-        out = encoder(
-            era5=batch.era5, timestamps=batch.timestamps, ignore_mask=batch.ignore_mask
-        )
+        out = encoder(era5=batch.era5, timestamps=batch.timestamps)
         x_hat = decoder(
             tokens=out["tokens"],
-            token_ignore_mask=out["ignore_mask"],
             timestamps=batch.timestamps,
         )
     assert x_hat.shape == (B, T, V), f"Expected ({B}, {T}, {V}), got {x_hat.shape}"
@@ -490,9 +481,7 @@ def test_naive_masking():
     batch = _make_batch()
     policy = NaiveMaskPolicy()
     ts = SWT_BUFFER
-    mask = corrupt_era5(
-        batch.era5, batch.ignore_mask, policy, DEFAULT_VARIABLE_GROUPS, ts
-    )
+    mask = corrupt_era5(batch.era5, policy, DEFAULT_VARIABLE_GROUPS, ts)
     assert mask.shape == (B, T, V), f"Bad mask shape: {mask.shape}"
     assert mask.any(), "Nothing was masked"
     assert not mask[:, :ts, :].any(), "Buffer region should never be masked (naive)"

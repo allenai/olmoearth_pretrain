@@ -16,8 +16,9 @@ Masking operates on normalized ERA5 input ``[B, T, V]`` via a two-stage
 Note: ERA5L_DAY_10 has one timestep per day, so span lengths expressed
 in *days* map directly onto timesteps.
 
-Everything is applied on-the-fly on the GPU and respects the existing
-``ignore_mask`` (padding).
+Everything is applied on-the-fly on the GPU. Only timesteps at index
+``target_start`` and beyond are eligible for masking; the causal buffer
+region ``[:target_start]`` is never corrupted.
 
 :func:`corrupt_era5` returns a boolean corruption mask.  The encoder
 replaces masked positions with a learned per-band embedding before
@@ -322,7 +323,6 @@ class NaiveMaskPolicy(MaskPolicy):
 
 def corrupt_era5(
     era5: Tensor,
-    ignore_mask: Tensor,
     policy: MaskPolicy,
     variable_groups: dict[str, list[int]],
     target_start: int,
@@ -339,7 +339,6 @@ def corrupt_era5(
 
     Args:
         era5: ``[B, T, V]`` normalized input (used only for shape/device).
-        ignore_mask: ``[B, T]`` bool, True = padded / invalid timestep.
         policy: Masking policy (:class:`MaskPolicy` or :class:`NaiveMaskPolicy`).
         variable_groups: Group name -> band-index mapping.
         target_start: First index of the target window.  Indices before this
@@ -349,13 +348,12 @@ def corrupt_era5(
         ``mask`` — ``[B, T, V]`` bool (True = corrupted position).
     """
     if isinstance(policy, NaiveMaskPolicy):
-        return _corrupt_naive(era5, ignore_mask, policy, target_start)
-    return _corrupt_two_stage(era5, ignore_mask, policy, variable_groups, target_start)
+        return _corrupt_naive(era5, policy, target_start)
+    return _corrupt_two_stage(era5, policy, variable_groups, target_start)
 
 
 def _corrupt_naive(
     era5: Tensor,
-    ignore_mask: Tensor,
     policy: NaiveMaskPolicy,
     target_start: int,
 ) -> Tensor:
@@ -363,7 +361,6 @@ def _corrupt_naive(
     b, t, v = era5.shape
     device = era5.device
     mask = torch.zeros(b, t, v, dtype=torch.bool, device=device)
-    valid = ~ignore_mask  # [B, T]
     span_range = _as_span(policy.span_days)
     target_window_length = t - target_start
 
@@ -371,7 +368,6 @@ def _corrupt_naive(
         n_masks = _randint(1, policy.max_num_masks, device)
         for _ in range(n_masks):
             span_mask = _random_span(span_range, target_window_length, device)
-            span_mask = span_mask & valid[i, target_start:]
             nc = _randint(
                 policy.num_channels[0], min(policy.num_channels[1], v), device
             )
@@ -383,7 +379,6 @@ def _corrupt_naive(
 
 def _corrupt_two_stage(
     era5: Tensor,
-    ignore_mask: Tensor,
     policy: MaskPolicy,
     variable_groups: dict[str, list[int]],
     target_start: int,
@@ -395,7 +390,6 @@ def _corrupt_two_stage(
     b, t, v = era5.shape
     device = era5.device
     mask = torch.zeros(b, t, v, dtype=torch.bool, device=device)
-    valid = ~ignore_mask  # [B, T]
     target_window_length = t - target_start
 
     # Per-sample coin flips for each stage
@@ -421,15 +415,13 @@ def _corrupt_two_stage(
                 span = (idx >= starts.unsqueeze(1)) & (
                     idx < (starts + lengths).unsqueeze(1)
                 )
-                span = span & valid[:, target_start:] & do_stage1.unsqueeze(1)
+                span = span & do_stage1.unsqueeze(1)
                 mask[:, target_start:, :] = mask[:, target_start:, :] | (
                     span.unsqueeze(-1) & eligible[None, None, :]
                 )
 
     # --- Stage 2: Cross-variable reconstruction (target window only) ---
-    _apply_stage2_mask_policy(
-        mask, valid, policy, variable_groups, do_stage2, target_start
-    )
+    _apply_stage2_mask_policy(mask, policy, variable_groups, do_stage2, target_start)
 
     return mask
 
@@ -479,7 +471,6 @@ def _random_span(
 
 def _apply_stage2_mask_policy(
     mask: Tensor,
-    valid: Tensor,
     policy: MaskPolicy,
     variable_groups: dict[str, list[int]],
     do_stage2: Tensor,
@@ -491,7 +482,6 @@ def _apply_stage2_mask_policy(
 
     Args:
         mask: ``[B, T, V]`` bool mask to update in place.
-        valid: ``[B, T]`` bool, True = real (non-padded) timestep.
         policy: :class:`MaskPolicy` instance.
         variable_groups: Group name -> band-index mapping.
         do_stage2: ``[B]`` bool, True = apply stage 2 to this sample.
@@ -518,7 +508,6 @@ def _apply_stage2_mask_policy(
     for i in range(b):
         if not do_stage2[i]:
             continue
-        valid_win = valid[i, target_start:]  # [target_window_length]
         strat_name, strat = strategies[int(choices[i])]
 
         # Whole-group all-T masks the entire window, so there are no spans to
@@ -529,7 +518,7 @@ def _apply_stage2_mask_policy(
                 continue
             group = _random_choice(candidates, device)
             for bi in variable_groups[group]:
-                mask[i, target_start:, bi] |= valid_win
+                mask[i, target_start:, bi] = True
             continue
 
         for _ in range(strat.num_masks):
@@ -541,7 +530,7 @@ def _apply_stage2_mask_policy(
                     group in full_t_allowed
                     and float(torch.rand(1, device=device)) < strat.all_T_prob
                 ):
-                    mask[i, target_start:, bi] |= valid_win
+                    mask[i, target_start:, bi] = True
                 else:
                     if group not in strat.long_span_days:
                         raise ValueError(
@@ -555,20 +544,17 @@ def _apply_stage2_mask_policy(
                         target_window_length,
                         device,
                     )
-                    mask[i, target_start:, bi] |= span_mask & valid_win
+                    mask[i, target_start:, bi] |= span_mask
 
             elif isinstance(strat, WholeGroupSpanStrategy):
                 candidates = [g for g in strat.span_days if g in variable_groups]
                 if not candidates:
                     continue
                 group = _random_choice(candidates, device)
-                span_mask = (
-                    _random_span(
-                        _as_span(strat.span_days[group]),
-                        target_window_length,
-                        device,
-                    )
-                    & valid_win
+                span_mask = _random_span(
+                    _as_span(strat.span_days[group]),
+                    target_window_length,
+                    device,
                 )
                 for bi in variable_groups[group]:
                     mask[i, target_start:, bi] |= span_mask

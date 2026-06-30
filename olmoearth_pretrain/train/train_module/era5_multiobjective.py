@@ -299,7 +299,6 @@ class SupervisedObjective(_Objective):
         out = encoder(
             era5=batch.era5,
             timestamps=batch.timestamps,
-            ignore_mask=batch.ignore_mask,
         )
         pooled = out["pooled"]
         loss, head_metrics = self.registry.compute_loss(
@@ -525,17 +524,15 @@ class ReconstructionObjective(_Objective):
         ``swt_buffer_days``).
         """
         x = batch.era5  # [B, T, V]
-        ignore_mask = batch.ignore_mask  # [B, T]
         ts = self.swt_buffer_days  # target_start index
 
         # 1. Generate corruption mask (only target window is masked)
-        mask = corrupt_era5(x, ignore_mask, self.mask_policy, self.variable_groups, ts)
+        mask = corrupt_era5(x, self.mask_policy, self.variable_groups, ts)
 
         # 2. Encode with corruption mask
         out = encoder(
             era5=x,
             timestamps=batch.timestamps,
-            ignore_mask=ignore_mask,
             corruption_mask=mask,
         )
 
@@ -543,7 +540,6 @@ class ReconstructionObjective(_Objective):
         decoder = self._module.decoder
         x_hat = decoder(
             tokens=out["tokens"],
-            token_ignore_mask=out["ignore_mask"],
             timestamps=batch.timestamps,
         )
 
