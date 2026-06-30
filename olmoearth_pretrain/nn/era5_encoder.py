@@ -418,9 +418,7 @@ class Era5DailyEncoder(nn.Module):
     def _patchify(self, seq: Tensor) -> Tensor:
         """Conv1D patch embedding.
 
-        ERA5 sequences are fixed-length and must patchify cleanly (the
-        Conv1D receptive field tiles the sequence with no leftover
-        timesteps); this is enforced so no right-padding is ever needed.
+        ERA5 sequences must patchify cleanly (this is enforced for now)
 
         Args:
             seq: ``[B, T, C]``.
