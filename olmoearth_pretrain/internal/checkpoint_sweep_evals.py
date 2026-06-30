@@ -45,6 +45,7 @@ from olmo_core.train.common import Duration
 from olmo_core.train.config import TrainerConfig
 from olmo_core.utils import get_default_device, prepare_cli_environment, seed_all
 
+from olmoearth_pretrain.evals.linear_probe import select_rank_max_lr_result
 from olmoearth_pretrain.internal.all_evals import (
     EMBED_DIAG_TASKS,
     EVAL_TASKS,
@@ -177,6 +178,10 @@ def evaluate_checkpoints(
 
             start_time = time.monotonic()
             result = evaluator.val()
+            # For a rank-max LR sweep, collapse the per-rank results (each rank ran a
+            # different LR) to the best LR's result before logging; no-op otherwise.
+            # Runs on every rank -- it's a collective gather.
+            result = select_rank_max_lr_result(result, evaluator.rank_max_lr)
             eval_time = time.monotonic() - start_time
 
             val_result = result.val_result

@@ -36,9 +36,9 @@ logger = getLogger(__name__)
 
 # Log-spaced learning rates for the rank-max LR sweep -- the same grid used by the
 # offline eval sweeps. When ``rank_max_lr`` is enabled, rank ``i`` of a distributed
-# eval trains its probe with ``RANK_MAX_LRS[i]`` and the best result is selected via
-# a max-reduce across ranks, giving a "free" LR sweep that reuses ranks which would
-# otherwise do identical, redundant work.
+# eval trains its probe with ``RANK_MAX_LRS[i]`` and the best result is then selected
+# across ranks (see ``select_rank_max_lr_result``), giving a "free" LR sweep that
+# reuses ranks which would otherwise do identical, redundant work.
 RANK_MAX_LRS = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 
 
@@ -48,10 +48,57 @@ def get_rank_lr(rank: int) -> float:
     The grid is indexed modulo its length so the assignment is well-defined for any
     ``world_size``: with fewer ranks than LRs the sweep covers the front subset
     ``RANK_MAX_LRS[:world_size]``; with more ranks the extra ranks repeat earlier LRs
-    (harmless -- the max-reduce just sees a duplicate). Every rank always gets an LR,
-    so the collective reduce never deadlocks waiting on a non-participating rank.
+    (harmless -- the selection just sees a duplicate). Every rank always gets an LR,
+    so the collective gather never deadlocks waiting on a non-participating rank.
     """
     return RANK_MAX_LRS[rank % len(RANK_MAX_LRS)]
+
+
+def _pick_best_result(
+    results: list[EvalTaskResult], higher_is_better: bool
+) -> EvalTaskResult:
+    """Pick the result with the best primary val (else test) metric.
+
+    NaN/missing primaries are treated as worst, so a diverged probe never wins.
+    """
+
+    def score(result: EvalTaskResult) -> float:
+        ref = result.val_result or result.test_result
+        value = ref.primary if ref is not None else None
+        if value is None or math.isnan(value):
+            return float("-inf") if higher_is_better else float("inf")
+        return value
+
+    return max(results, key=score) if higher_is_better else min(results, key=score)
+
+
+def select_rank_max_lr_result(
+    result: EvalTaskResult, rank_max_lr: bool
+) -> EvalTaskResult:
+    """Reduce a per-rank rank-max LR result to the single best one across ranks.
+
+    With rank-max LR every rank trained its probe with a different LR (see
+    :func:`get_rank_lr`), so each holds a different result. This gathers them and
+    returns the one with the best primary metric -- direction-aware: ``max`` for
+    higher-is-better metrics (accuracy, mIoU, ...), ``min`` for lower-is-better ones
+    (RMSE, MAE). The *whole* winning result is returned, so the reported secondary
+    metrics stay internally consistent with the winning LR (not an independent
+    per-metric max).
+
+    Returns ``result`` unchanged when rank-max LR is off or the eval is
+    single-process. MUST be called on every rank -- it runs a collective gather.
+    """
+    if not rank_max_lr or not is_distributed():
+        return result
+    reference = result.val_result or result.test_result
+    if reference is None:
+        return result
+    gathered: list[EvalTaskResult | None] = [None] * get_world_size()
+    torch.distributed.all_gather_object(gathered, result)
+    candidates = [r for r in gathered if r is not None]
+    return _pick_best_result(
+        candidates, metric_higher_is_better(reference.primary_metric)
+    )
 
 
 class MaskedMSELoss(nn.Module):

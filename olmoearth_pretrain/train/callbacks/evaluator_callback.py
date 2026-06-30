@@ -14,7 +14,7 @@ import numpy as np
 import torch
 from olmo_core.distributed.utils import get_rank
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
-from olmo_core.train.common import Duration, ReduceType
+from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader, IterableDataset
 from upath import UPath
@@ -44,6 +44,7 @@ from olmoearth_pretrain.evals.knn import run_knn
 from olmoearth_pretrain.evals.linear_probe import (
     RANK_MAX_LRS,
     ProbeType,
+    select_rank_max_lr_result,
     train_and_eval_probe,
 )
 from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
@@ -666,29 +667,15 @@ def _log_eval_result_to_wandb(
 
 
 def _record_eval_result(
-    trainer: Trainer,
-    prefix: str,
-    name: str,
-    result: EvalResult,
-    reduce_type: ReduceType | None = None,
+    trainer: Trainer, prefix: str, name: str, result: EvalResult
 ) -> None:
-    """Record an EvalResult to trainer metrics.
-
-    ``reduce_type`` controls how the metric is reduced across ranks. For rank-max LR
-    evals it should be :attr:`ReduceType.max`, so the best LR's result (each rank ran
-    a different LR) is what gets reported. Left as ``None`` (the default reduction)
-    for ordinary evals, where every rank computes an identical value anyway.
-    """
+    """Record an EvalResult to trainer metrics."""
     other_prefix = _make_other_prefix(prefix)
-    trainer.record_metric(f"{prefix}/{name}", result.primary, reduce_type=reduce_type)
+    trainer.record_metric(f"{prefix}/{name}", result.primary)
     for metric_name, metric_value in result.metrics.items():
         if metric_name == result.primary_metric_key:
             continue
-        trainer.record_metric(
-            f"{other_prefix}/{name}/{metric_name}",
-            metric_value,
-            reduce_type=reduce_type,
-        )
+        trainer.record_metric(f"{other_prefix}/{name}/{metric_name}", metric_value)
 
 
 def _resolve_eval_job_num_gpus(
@@ -1048,32 +1035,23 @@ class DownstreamEvaluatorCallback(Callback):
 
         start_time = time.monotonic()
         result = evaluator.val()
+        # For a rank-max LR sweep, collapse the per-rank results to the best LR's
+        # result (no-op otherwise). Runs on every rank -- it's a collective gather.
+        result = select_rank_max_lr_result(result, evaluator.rank_max_lr)
 
         val_result = result.val_result
         test_result = result.test_result
         bootstrap_stats = result.bootstrap_stats
 
-        # When the evaluator ran a rank-max LR sweep, reduce across ranks with max so
-        # the best LR's result is the one reported.
-        reduce_type = ReduceType.max if evaluator.rank_max_lr else None
-
         # Record validation metrics
         if val_result is not None:
             _record_eval_result(
-                self.trainer,
-                "eval",
-                evaluator.evaluation_name,
-                val_result,
-                reduce_type=reduce_type,
+                self.trainer, "eval", evaluator.evaluation_name, val_result
             )
 
         if self.run_on_test and test_result is not None:
             _record_eval_result(
-                self.trainer,
-                "eval/test",
-                evaluator.evaluation_name,
-                test_result,
-                reduce_type=reduce_type,
+                self.trainer, "eval/test", evaluator.evaluation_name, test_result
             )
 
         # Log bootstrap statistics if available
