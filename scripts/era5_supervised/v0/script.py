@@ -191,6 +191,10 @@ class Era5SupervisedCommonComponents(CommonComponents):
     # Number of masking spans per strategy. Stage 1 (temporal interpolation)
     # and the two span-based stage-2 strategies each lay down this many spans.
     recon_temporal_num_masks: int = 3
+    # Stage-1 temporal-interpolation span length range (in days). Holding
+    # num_masks fixed and growing this span is the budget knob for the temporal
+    # mask-fraction sweep (keeps num_masks small while reaching higher budgets).
+    recon_temporal_span_days: list[int] = field(default_factory=lambda: [1, 1])
     recon_within_group_num_masks: int = 1
     recon_whole_group_span_num_masks: int = 1
     # ------------------------------------------------------------------
@@ -634,6 +638,7 @@ def build_model_config(
                         cross_variable_prob=common.recon_cross_variable_prob,
                         temporal_interpolation=TemporalInterpolationStrategy(
                             num_masks=common.recon_temporal_num_masks,
+                            span_days=list(common.recon_temporal_span_days),
                         ),
                         within_group_single_var=WithinGroupSingleVarStrategy(
                             num_masks=common.recon_within_group_num_masks,
