@@ -159,6 +159,14 @@ def _instantiate_data_module(
         data_config, split, groups_override, tags_override, max_samples
     )
 
+    # setup("fit") builds both train and val datasets.  When groups are
+    # overridden for train, propagate the restriction to val_config so
+    # rslearn doesn't scan the entire dataset root for a val split that
+    # will never be used.
+    if split == "train" and groups_override:
+        val_cfg = init_args.setdefault("val_config", {})
+        val_cfg.setdefault("groups", groups_override)
+
     parser = jsonargparse.ArgumentParser()
     parser.add_argument("--data", type=RslearnDataModule)
     parsed = parser.parse_object({"data": data_config})

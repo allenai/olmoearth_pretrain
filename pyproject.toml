@@ -37,8 +37,19 @@ fix = true
 [tool.ruff.lint]
 extend-select = ["D", "I", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D102", "D103"]
+
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.mypy]
+ignore_missing_imports = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
 testpaths = [

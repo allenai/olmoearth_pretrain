@@ -1,0 +1,136 @@
+# Data-only config for the olmoearth_pretrain ERA5 supervised (objective A)
+# direct-load path. Only the `data:` section is consumed by the eval builder
+# (olmoearth_pretrain.evals.datasets.rslearn_builder); the rslearn `model:` /
+# `trainer:` sections are intentionally omitted. Derived from the rslearn
+# training config era5d_xfmr_base_14x7_attn_sin_doy_rel_lr1e5 with two
+# rslearn-version fixes: MaxPoolResize -> AdaptivePooling, and an explicit
+# resolution_factor (denominator: 280) so the 2800 m ERA5 raster is read at
+# its native 1x1 resolution instead of being reprojected to the 10 m window.
+data:
+  class_path: rslearn.train.data_module.RslearnDataModule
+  init_args:
+    path: /weka/dfive-default/rslearn-eai/datasets/wildfire/canada_nbac
+    inputs:
+      era5_daily:
+        data_type: raster
+        layers:
+        - era5d_448d_historical
+        use_all_bands_in_order_of_band_set_idx: 0
+        passthrough: true
+        dtype: FLOAT32
+        resolution_factor: "1/280"
+      label:
+        data_type: raster
+        layers:
+        - label_100m
+        bands:
+        - label_100m
+        dtype: INT32
+        is_target: true
+    task:
+      class_path: rslearn.train.tasks.multi_task.MultiTask
+      init_args:
+        tasks:
+          segmentation:
+            class_path: rslearn.train.tasks.segmentation.SegmentationTask
+            init_args:
+              num_classes: 2
+              enable_miou_metric: true
+              enable_f1_metric: true
+              report_metric_per_class: true
+              other_metrics:
+                PRAUC_cls0:
+                  class_path: rslearn.train.tasks.segmentation.SegmentationMetric
+                  init_args:
+                    metric:
+                      class_path: torchmetrics.classification.MulticlassAveragePrecision
+                      init_args:
+                        num_classes: 2
+                        average: null
+                        thresholds: 128
+                    class_idx: 0
+                PRAUC_cls1:
+                  class_path: rslearn.train.tasks.segmentation.SegmentationMetric
+                  init_args:
+                    metric:
+                      class_path: torchmetrics.classification.MulticlassAveragePrecision
+                      init_args:
+                        num_classes: 2
+                        average: null
+                        thresholds: 128
+                    class_idx: 1
+        input_mapping:
+          segmentation:
+            label: targets
+    batch_size: 64
+    num_workers: 16
+    default_config:
+      transforms:
+      - class_path: rslearn.train.transforms.normalize.Normalize
+        init_args:
+          mean: &id001
+          - 268.209
+          - -0.00113
+          - -0.00833
+          - 0.000897
+          - 94745.2
+          - 9079014.2
+          - 11716921.0
+          - -4499458.3
+          - 0.343
+          - 0.339
+          - -0.0584
+          - 0.00188
+          - 0.463
+          - 0.0691
+          std: &id002
+          - 14.149
+          - 0.00125
+          - 0.00966
+          - 0.00221
+          - 5192.3
+          - 7486798.9
+          - 8479277.6
+          - 2228211.3
+          - 0.1436
+          - 0.1426
+          - 13.825
+          - 0.00425
+          - 1.787
+          - 1.697
+          selectors:
+          - era5_daily
+      - class_path: rslearn.train.transforms.adaptive_pooling.AdaptivePooling
+        init_args:
+          target_size:
+          - 1
+          - 1
+          selectors:
+          - target/segmentation/classes
+          - target/segmentation/valid
+    train_config:
+      groups:
+      - train
+      transforms:
+      - class_path: rslearn.train.transforms.normalize.Normalize
+        init_args:
+          mean: *id001
+          std: *id002
+          selectors:
+          - era5_daily
+      - class_path: rslearn.train.transforms.adaptive_pooling.AdaptivePooling
+        init_args:
+          target_size:
+          - 1
+          - 1
+          selectors:
+          - target/segmentation/classes
+          - target/segmentation/valid
+    val_config:
+      groups:
+      - val
+    test_config:
+      groups:
+      - test
+    predict_config:
+      skip_targets: true

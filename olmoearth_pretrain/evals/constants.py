@@ -14,6 +14,14 @@ RSLEARN_TO_OLMOEARTH: dict[str, ModalitySpec] = {
     "sentinel1_ascending": Modality.SENTINEL1,
     "sentinel1_descending": Modality.SENTINEL1,
     "landsat": Modality.LANDSAT,
+    # Daily ERA5-Land time series — used by the dedicated ERA5 encoder
+    # (see olmoearth_pretrain/nn/era5_encoder.py). Canonical rslearn layer
+    # name is ``era5l_day_10`` (matches Modality.ERA5L_DAY_10.name); the
+    # ``era5_land`` / ``era5_land_daily`` aliases are kept defensively in
+    # case existing rslearn dataset configs spell it differently.
+    "era5l_day_10": Modality.ERA5L_DAY_10,
+    "era5_land_daily": Modality.ERA5L_DAY_10,
+    "era5d_historical": Modality.ERA5L_DAY_10,
 }
 
 

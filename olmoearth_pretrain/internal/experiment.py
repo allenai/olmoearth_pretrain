@@ -130,7 +130,7 @@ class OlmoEarthExperimentConfig(Config):
     run_name: str
     model: Config
     dataset: Config  # will likely be fixed for us
-    data_loader: OlmoEarthDataLoaderConfig  # will likely be fixed for us
+    data_loader: Config  # will likely be fixed for us
     train_module: OlmoEarthTrainModuleConfig
     trainer: TrainerConfig
     launch: OlmoEarthBeakerLaunchConfig | None = None

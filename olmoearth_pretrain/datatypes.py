@@ -103,6 +103,10 @@ class OlmoEarthSample(NamedTuple):
     wri_canopy_height_map: ArrayTensor | None = None  # [B, H, W, 1, 1]
     # era5_10 is not spatially varying, so it has no height/width dimensions.
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
+    # era5l_day_10 is also not spatially varying. T can be up to
+    # ERA5_INPUT_SEQUENCE_LENGTH (one observation per day) — much
+    # longer than era5_10 (monthly).
+    era5l_day_10: ArrayTensor | None = None  # [B, T, len(ERA5L_DAY_10_bands)]
     # ndvi is computed from S2 L2A bands B04 (Red) and B08 (NIR), not loaded from file.
     ndvi: ArrayTensor | None = None  # [B, H, W, T, 1]
     eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
@@ -387,6 +391,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     wri_canopy_height_map_mask: Tensor | None = None
     era5_10: Tensor | None = None
     era5_10_mask: Tensor | None = None
+    era5l_day_10: Tensor | None = None
+    era5l_day_10_mask: Tensor | None = None
     ndvi: Tensor | None = None
     ndvi_mask: Tensor | None = None
     eurocrops: Tensor | None = None
@@ -493,6 +499,7 @@ class TokensAndMasks(NamedTuple):
         - modality: (B, P_H, P_W, T, Band_Sets, D)
         - modality_mask: (B, P_H, P_W, T, Band_Sets)
         - era5_10: (B, T, Band_Sets, D) — no spatial dims (not spatially varying)
+        - era5l_day_10: (B, T, Band_Sets, D) — no spatial dims (not spatially varying)
         - latlon: (B, D) — no spatial or temporal dims
     """
 
@@ -527,6 +534,8 @@ class TokensAndMasks(NamedTuple):
     wri_canopy_height_map_mask: Tensor | None = None
     era5_10: Tensor | None = None
     era5_10_mask: Tensor | None = None
+    era5l_day_10: Tensor | None = None
+    era5l_day_10_mask: Tensor | None = None
     ndvi: Tensor | None = None
     ndvi_mask: Tensor | None = None
     eurocrops: Tensor | None = None

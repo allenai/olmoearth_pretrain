@@ -1,0 +1,184 @@
+{
+  "tasks": {
+    "burnrisk_canada_nbac": {
+      "groups": [
+        "train"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "segmentation_to_scalar",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/burnrisk_canada_nbac_era5d.yaml",
+      "notes": "Canada NBAC wildfire burn-risk, full rslearn dataset. rslearn segmentation target reduced to a scalar 2-class label.",
+      "num_classes": 2,
+      "task_type": "classification",
+      "test_groups": [
+        "test"
+      ],
+      "val_groups": [
+        "val"
+      ],
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_nbac"
+    },
+    "burnrisk_canada_nbac_eval": {
+      "groups": [
+        "train"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "segmentation_to_scalar",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/burnrisk_canada_nbac_era5d.yaml",
+      "notes": "Canada NBAC wildfire burn-risk, full rslearn dataset. rslearn segmentation target reduced to a scalar 2-class label.",
+      "num_classes": 2,
+      "tags": {
+        "oep_eval": ""
+      },
+      "task_type": "classification",
+      "test_groups": [
+        "test"
+      ],
+      "test_tags": {
+        "oep_eval": ""
+      },
+      "val_groups": [
+        "val"
+      ],
+      "val_tags": {
+        "oep_eval": ""
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_nbac"
+    },
+    "burnrisk_canada_nbac_test": {
+      "groups": [
+        "train"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "segmentation_to_scalar",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/burnrisk_canada_nbac_era5d.yaml",
+      "notes": "Small Canada NBAC subset for local smoke tests.",
+      "num_classes": 2,
+      "task_type": "classification",
+      "test_groups": [
+        "test"
+      ],
+      "val_groups": [
+        "val"
+      ],
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_nbac_test"
+    },
+    "era5enc_pretrain_ssl": {
+      "groups": [
+        "default"
+      ],
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/era5enc_pretrain_ssl_era5d.yaml",
+      "notes": "Label-free ERA5-daily SSL corpus (era5enc_pretrain rslearn dataset). ~314,699 materialized windows over the era5d_448d_historical layer (14 bands x 448 daily steps, stored 1x1). For reconstruction / SSL objectives only; not a supervised eval task. Windows missing the layer (ocean / south-of-60S, no ERA5-Land coverage) are filtered out at dataset-build time.",
+      "ssl": true,
+      "weka_path": "/weka/dfive-default/helios/dataset/era5enc_pretrain/rslearn_dataset"
+    },
+    "era5enc_pretrain_ssl_test": {
+      "groups": [
+        "testing_only"
+      ],
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/era5enc_pretrain_ssl_era5d.yaml",
+      "notes": "Tiny 32-window subset of era5enc_pretrain_ssl",
+      "ssl": true,
+      "weka_path": "/weka/dfive-default/helios/dataset/era5enc_pretrain/rslearn_dataset"
+    },
+    "landslide_era5_eval": {
+      "groups": [
+        "sen12_landslides",
+        "glc"
+      ],
+      "height_width": 1,
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/landslide_era5_era5d.yaml",
+      "notes": "Weather-triggered landslide pos/neg detection from ERA5-daily. Window-level binary classification (vector 'label' layer, category=positive/negative). Leakage-safe split (one window per ERA5 cell x event-week); 852 windows (426 pos / 426 neg) across sen12_landslides + glc, train 601 / val 251. Eval-only (too small for a supervised flavor).",
+      "num_classes": 2,
+      "tags": {
+        "split": "train"
+      },
+      "task_type": "classification",
+      "test_groups": [
+        "sen12_landslides",
+        "glc"
+      ],
+      "test_tags": {
+        "split": "val"
+      },
+      "val_groups": [
+        "sen12_landslides",
+        "glc"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/landslide_era5"
+    },
+    "lfmc_woody": {
+      "groups": [
+        "spatial_split"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "per_pixel_regression_to_scalar",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/lfmc_woody_era5d.yaml",
+      "notes": "LFMC woody per-pixel regression, full rslearn dataset.",
+      "num_classes": 1,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": 108.38952,
+      "target_std": 36.616698,
+      "task_type": "regression",
+      "test_groups": [
+        "spatial_split"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "spatial_split"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/lfmc/20251023/woody/scratch/dataset"
+    },
+    "lfmc_woody_eval": {
+      "groups": [
+        "spatial_split"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "per_pixel_regression_to_scalar",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/lfmc_woody_era5d.yaml",
+      "notes": "LFMC woody per-pixel regression, 3k subsample for train (oep_eval tag filter).",
+      "num_classes": 1,
+      "tags": {
+        "oep_eval": "",
+        "split": "train"
+      },
+      "target_mean": 108.38952,
+      "target_std": 36.616698,
+      "task_type": "regression",
+      "test_groups": [
+        "spatial_split"
+      ],
+      "test_tags": {
+        "oep_eval": "",
+        "split": "test"
+      },
+      "val_groups": [
+        "spatial_split"
+      ],
+      "val_tags": {
+        "oep_eval": "",
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/lfmc/20251023/woody/scratch/dataset"
+    }
+  },
+  "version": "1.0"
+}
