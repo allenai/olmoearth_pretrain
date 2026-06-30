@@ -68,8 +68,19 @@ def _task_config(run: wandb.apis.public.Run, task: str) -> dict:
     )
 
 
-def get_best_per_task(project: str, run_prefix: str) -> dict[str, dict]:
-    """Return per-task best-val info across runs matching `run_prefix`."""
+def get_best_per_task(
+    project: str, run_prefix: str, metric_key: str | None = None
+) -> dict[str, dict]:
+    """Return per-task best-val info across runs matching `run_prefix`.
+
+    Args:
+        project: W&B project name under the entity.
+        run_prefix: prefix shared by the runs in the sweep.
+        metric_key: if provided, only this exact metric key is used for
+            selection (e.g. ``eval/lfmc_woody_3k``).  When None, all
+            eval metrics compete per task (beware that sub-metrics like
+            positive RMSE can shadow the primary).
+    """
     api = wandb.Api()
     wandb_path = f"{WANDB_ENTITY}/{project}"
     runs = [
@@ -90,6 +101,8 @@ def get_best_per_task(project: str, run_prefix: str) -> dict[str, dict]:
             if not isinstance(value, int | float):
                 continue
             normalized = _normalize_eval_key(key)
+            if metric_key is not None and normalized != metric_key:
+                continue
             parts = normalized.split("/")
             if len(parts) < 2:
                 continue
@@ -169,9 +182,16 @@ if __name__ == "__main__":
         default=None,
         help="Optional CSV output path (default: {run_prefix}_best_lr.csv).",
     )
+    parser.add_argument(
+        "--metric-key",
+        default=None,
+        help="Only use this exact metric key for best-run selection "
+        "(e.g. 'eval/lfmc_woody_3k'). Prevents sub-metrics like positive "
+        "RMSE from shadowing the primary negative-RMSE metric.",
+    )
     args = parser.parse_args()
 
-    results = get_best_per_task(args.project, args.run_prefix)
+    results = get_best_per_task(args.project, args.run_prefix, args.metric_key)
     if not results:
         print("No matching tasks found.")
         raise SystemExit(1)

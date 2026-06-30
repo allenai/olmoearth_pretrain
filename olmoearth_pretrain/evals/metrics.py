@@ -7,7 +7,11 @@ from enum import StrEnum
 from typing import Any
 
 import torch
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    f1_score,
+)
 
 
 class EvalMetric(StrEnum):
@@ -17,6 +21,10 @@ class EvalMetric(StrEnum):
     F1 = "f1"
     CLASS_F1 = "class_f1"
     MICRO_F1 = "micro_f1"
+    # Micro-averaged mean Average Precision (threshold-free, ranking-based).
+    # This is GeoBench-2 / torchgeo-bench's reported metric for multilabel
+    # classification (e.g. TreeSatAI, BigEarthNet), computed on sigmoid scores.
+    MICRO_MAP = "micro_map"
     MIOU = "miou"
     OVERALL_ACC = "overall_acc"
     MACRO_ACC = "macro_acc"
@@ -25,6 +33,16 @@ class EvalMetric(StrEnum):
     RMSE = "rmse"
     NEG_RMSE = "neg_rmse"
     R2 = "r2"
+
+
+# Error metrics where a smaller value is better. Every other metric (accuracy,
+# F1, mIoU, R2, neg_rmse, ...) is higher-is-better.
+LOWER_IS_BETTER_METRICS = frozenset({EvalMetric.MAE, EvalMetric.RMSE})
+
+
+def metric_higher_is_better(metric: EvalMetric) -> bool:
+    """Whether a larger value of ``metric`` indicates a better model."""
+    return metric not in LOWER_IS_BETTER_METRICS
 
 
 # Label value used to mark invalid/ignored pixels in segmentation targets.
@@ -94,6 +112,7 @@ class EvalResult:
         f1: float | None = None,
         macro_f1: float | None = None,
         per_class_f1: list[float] | None = None,
+        micro_map: float | None = None,
         is_multilabel: bool = False,
         primary_metric: EvalMetric | None = None,
         primary_metric_class: int | None = None,
@@ -107,6 +126,8 @@ class EvalResult:
             metrics[EvalMetric.F1.value] = f1
         if macro_f1 is not None:
             metrics[EvalMetric.MACRO_F1.value] = macro_f1
+        if micro_map is not None:
+            metrics[EvalMetric.MICRO_MAP.value] = micro_map
         if per_class_f1 is not None:
             for i, score in enumerate(per_class_f1):
                 metrics[f"f1_class_{i}"] = score
@@ -319,8 +340,22 @@ def classification_metrics(
     is_multilabel: bool = False,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    scores: torch.Tensor | None = None,
 ) -> EvalResult:
-    """Compute classification metrics from predictions and labels."""
+    """Compute classification metrics from predictions and labels.
+
+    Args:
+        predictions: Hard predictions (thresholded multi-hot or argmax indices).
+        labels: Ground-truth labels (multi-hot for multilabel, indices otherwise).
+        is_multilabel: Whether this is a multi-label task (sigmoid/multi-hot)
+            rather than single-label (softmax/argmax).
+        primary_metric: Override the default primary metric (None = task default).
+        primary_metric_class: Class index for the CLASS_F1 primary metric.
+        scores: Optional per-class continuous scores (e.g. sigmoid probabilities),
+            shape (N, num_classes). Required to compute ``micro_map`` for
+            multilabel tasks — this is the threshold-free, ranking-based metric
+            GeoBench-2 / torchgeo-bench reports for multilabel classification.
+    """
     preds_np = predictions.detach().cpu().numpy()
     labels_np = labels.detach().cpu().numpy()
 
@@ -333,11 +368,18 @@ def classification_metrics(
         per_class_f1 = f1_score(
             labels_np, preds_np, average=None, zero_division=0
         ).tolist()
+        micro_map: float | None = None
+        if scores is not None:
+            scores_np = scores.detach().cpu().float().numpy()
+            micro_map = float(
+                average_precision_score(labels_np, scores_np, average="micro")
+            )
         return EvalResult.from_classification(
             accuracy,
             f1=micro_f1,
             macro_f1=macro_f1,
             per_class_f1=per_class_f1,
+            micro_map=micro_map,
             is_multilabel=True,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,

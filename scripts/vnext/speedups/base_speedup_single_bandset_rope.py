@@ -41,7 +41,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
     rope_kwargs = {
-        "spatial_pos_encoding": SPATIAL_POS_ENCODING,
+        "position_encoding": SPATIAL_POS_ENCODING,
         "rope_base": ROPE_BASE,
         "rope_coordinate_scale": ROPE_COORDINATE_SCALE,
     }

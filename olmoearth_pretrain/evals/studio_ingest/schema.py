@@ -35,7 +35,10 @@ if TYPE_CHECKING:
     from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
 
 from olmoearth_pretrain.data.constants import ModalitySpec
-from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
+from olmoearth_pretrain.evals.constants import (
+    RSLEARN_TO_OLMOEARTH,
+    resolve_rslearn_layer_name,
+)
 from olmoearth_pretrain.evals.task_types import TaskType
 
 # =============================================================================
@@ -51,6 +54,8 @@ def rslearn_task_type_to_olmoearth_task_type(rslearn_task: Any) -> TaskType:
         return TaskType.CLASSIFICATION
     elif "segmentation" in rslearn_name:
         return TaskType.SEGMENTATION
+    elif "regression" in rslearn_name:
+        return TaskType.REGRESSION
     else:
         # Default/fallback; update if regression is to be supported etc.
         raise ValueError(f"Unknown rslearn task type: {type(rslearn_task)}")
@@ -99,18 +104,12 @@ def instantiate_from_config(config: dict) -> Any:
 def rslearn_to_olmoearth(layer_name: str) -> ModalitySpec:
     """Map an rslearn layer name to an OlmoEarth ModalitySpec.
 
-    Uses RSLEARN_TO_OLMOEARTH from rslearn_dataset as the single source of truth.
-    Also handles layer names prefixed with "pre_" or "post_" (e.g.
-    "pre_sentinel2" -> Modality.SENTINEL2_L2A).
+    Uses :func:`resolve_rslearn_layer_name` for flexible matching
+    (direct, prefix-stripped, and suffix-stripped layer names).
     """
-    if layer_name in RSLEARN_TO_OLMOEARTH:
-        return RSLEARN_TO_OLMOEARTH[layer_name]
-
-    for prefix in ("pre_", "post_"):
-        if layer_name.startswith(prefix):
-            stripped = layer_name[len(prefix) :]
-            if stripped in RSLEARN_TO_OLMOEARTH:
-                return RSLEARN_TO_OLMOEARTH[stripped]
+    resolved = resolve_rslearn_layer_name(layer_name)
+    if resolved is not None:
+        return RSLEARN_TO_OLMOEARTH[resolved]
 
     raise KeyError(f"Unknown rslearn layer name: {layer_name!r}")
 
@@ -249,8 +248,11 @@ class EvalDatasetEntry(BaseModel):
                 f"Cannot convert '{self.name}' to EvalDatasetConfig: num_classes is required"
             )
 
-        # For segmentation, use window_size as height_width
-        height_width = self.window_size if self.task_type == "segmentation" else None
+        height_width = (
+            self.window_size
+            if self.task_type in ("segmentation", "regression")
+            else None
+        )
 
         return EvalDatasetConfig(
             task_type=TaskType(self.task_type),

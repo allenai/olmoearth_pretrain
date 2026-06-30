@@ -16,6 +16,7 @@ from olmo_core.train.callbacks.callback import Callback, CallbackConfig
 from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader, IterableDataset
+from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets import get_eval_dataset
@@ -33,6 +34,8 @@ from olmoearth_pretrain.evals.embedding_diagnostics import (
 )
 from olmoearth_pretrain.evals.embedding_transforms import (
     dequantize_embeddings,
+    dequantize_embeddings_percentile,
+    load_quantile_config,
     reduce_embedding_dim,
 )
 from olmoearth_pretrain.evals.embeddings import get_embeddings
@@ -85,7 +88,11 @@ class DownstreamTaskConfig:
     # FT
     ft_lr: float | None = None
     ft_batch_size: int = 32
+    ft_grad_accum_steps: int = 1
     finetune_seed: int = 42
+    ft_head_type: str = (
+        "linear"  # "linear" or "unet" (unet only valid for segmentation/regression)
+    )
     # LP / FT
     epochs: int = 50
     # LP / KNN / FT
@@ -94,6 +101,9 @@ class DownstreamTaskConfig:
     eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
+    # Use the center spatial patch embedding instead of pooling across all patches
+    # for classification tasks. Has no effect on segmentation tasks.
+    use_center_token: bool = False
     # Fraction of training labels to use for low-label evals. Dataset-specific
     # code translates this into fixed partitions or deterministic subsamples.
     label_fraction: float = 1.0
@@ -110,6 +120,11 @@ class DownstreamTaskConfig:
     max_train_samples_seed: int = 42
     # Quantize embeddings to int8 for storage efficiency evaluation
     quantize_embeddings: bool = False
+    # Number of bits for percentile-based quantization (1, 2, 4, or 8)
+    # If None, uses legacy power-based int8 quantization when quantize_embeddings=True
+    quantize_bits: int | None = None
+    # Path to HDF5 file with precomputed quantile boundaries for percentile quantization
+    quantile_config_path: str | None = None
     # Reduce embedding dimensionality via PCA (None = no reduction)
     embedding_dim: int | None = None
     # Use weighted dice loss instead of cross-entropy (only for specific tasks like wildfire)
@@ -176,7 +191,9 @@ class DownstreamEvaluator:
         self.probe_batch_size = task.probe_batch_size
         self.ft_lr = task.ft_lr
         self.ft_batch_size = task.ft_batch_size
+        self.ft_grad_accum_steps = task.ft_grad_accum_steps
         self.finetune_seed = task.finetune_seed
+        self.ft_head_type = task.ft_head_type
         self.epochs = task.epochs
         self.linear_probe_eval_interval = task.linear_probe_eval_interval
         self.patch_size = task.patch_size
@@ -188,8 +205,16 @@ class DownstreamEvaluator:
         self.label_fraction = task.label_fraction
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
+        self.use_center_token = task.use_center_token
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
+        self.quantize_bits = task.quantize_bits
+        self.quantile_config_path = task.quantile_config_path
+        # Load quantile config if path is provided
+        self.quantile_config: dict | None = None
+        if self.quantile_config_path is not None:
+            logger.info(f"Loading quantile config from {self.quantile_config_path}")
+            self.quantile_config = load_quantile_config(self.quantile_config_path)
         self.embedding_dim = task.embedding_dim
         self.use_dice_loss = task.use_dice_loss
         self.primary_metric = task.primary_metric
@@ -234,6 +259,10 @@ class DownstreamEvaluator:
         if self.eval_mode == EvalMode.FINETUNE:
             if self.ft_lr is None:
                 raise ValueError("ft_lr cannot be none for finetune tasks.")
+            if self.ft_grad_accum_steps < 1:
+                raise ValueError(
+                    f"ft_grad_accum_steps must be >= 1, got {self.ft_grad_accum_steps}"
+                )
             if self.config.task_type == TaskType.SEGMENTATION:
                 if self.config.height_width is None:
                     raise ValueError(
@@ -349,6 +378,7 @@ class DownstreamEvaluator:
             "pooling_type": self.pooling_type,
             "concat_features": (self.probe_type == "attn_pool"),
             "use_pooled_tokens": self.use_pooled_tokens,
+            "use_center_token": self.use_center_token,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(
@@ -356,6 +386,8 @@ class DownstreamEvaluator:
             model=model,
             is_train=is_train,
             quantize=self.quantize_embeddings,
+            quantize_bits=self.quantize_bits,
+            quantile_config=self.quantile_config,
         )
 
     def _val_embed_probe(self) -> EvalTaskResult:
@@ -428,10 +460,26 @@ class DownstreamEvaluator:
 
         if self.quantize_embeddings:
             logger.info(f"Dequantizing embeddings for {self.dataset}")
-            train_embeddings = dequantize_embeddings(train_embeddings)
-            val_embeddings = dequantize_embeddings(val_embeddings)
-            if test_embeddings is not None:
-                test_embeddings = dequantize_embeddings(test_embeddings)
+            if self.quantize_bits is not None and self.quantile_config is not None:
+                # Percentile-based dequantization
+                key = f"{self.quantize_bits}bit"
+                midpoints = self.quantile_config[key]["midpoints"]
+                train_embeddings = dequantize_embeddings_percentile(
+                    train_embeddings, midpoints
+                )
+                val_embeddings = dequantize_embeddings_percentile(
+                    val_embeddings, midpoints
+                )
+                if test_embeddings is not None:
+                    test_embeddings = dequantize_embeddings_percentile(
+                        test_embeddings, midpoints
+                    )
+            else:
+                # Legacy power-based dequantization
+                train_embeddings = dequantize_embeddings(train_embeddings)
+                val_embeddings = dequantize_embeddings(val_embeddings)
+                if test_embeddings is not None:
+                    test_embeddings = dequantize_embeddings(test_embeddings)
 
         # Reduce embedding dimensionality via PCA if specified
         if self.embedding_dim is not None:
@@ -564,6 +612,9 @@ class DownstreamEvaluator:
             resume_checkpoint_path=resume_checkpoint_path,
             primary_metric=self.primary_metric,
             primary_metric_class=self.primary_metric_class,
+            ft_grad_accum_steps=self.ft_grad_accum_steps,
+            head_type=self.ft_head_type,  # type: ignore[arg-type]
+            use_dice_loss=self.use_dice_loss,
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
@@ -958,9 +1009,18 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                 )
                 continue
 
+            if task.h5py_dir is not None and not UPath(task.h5py_dir).exists():
+                raise FileNotFoundError(
+                    f"h5py_dir for eval task '{evaluation_name}' does not exist: "
+                    f"{task.h5py_dir}. Pretrain-subset eval snapshots are created "
+                    f"by scripts/tools/20260611_snapshot_pretrain_eval_subset.py "
+                    f"and must match the path constants in "
+                    f"olmoearth_pretrain/internal/all_evals.py."
+                )
+
             config = dataset_to_config(task.dataset)
             if (
-                config.task_type == TaskType.SEGMENTATION
+                config.task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION)
                 and task.eval_mode != EvalMode.EMBEDDING_DIAGNOSTICS
             ):
                 if task.probe_lr is None and task.ft_lr is None:
