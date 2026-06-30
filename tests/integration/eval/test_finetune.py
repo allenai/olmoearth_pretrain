@@ -24,22 +24,28 @@ def test_segmentation_eval_pipeline() -> None:
     # Simulate model output: logits after rearrange (B, C, H, W)
     logits = torch.randn(batch_size, num_classes, h, w)
 
-    # Get predictions via argmax
+    # Get predictions via argmax and per-class softmax scores
     preds = torch.argmax(logits, dim=1)  # (B, H, W)
+    scores = torch.softmax(logits, dim=1)  # (B, C, H, W)
 
     # Ground truth labels
     labels = torch.randint(0, num_classes, (batch_size, h, w))
 
     # Call segmentation_metrics (this is what _eval_seg uses)
     result = segmentation_metrics(
-        preds, labels, num_classes=num_classes, ignore_label=-1
+        preds, labels, num_classes=num_classes, scores=scores, ignore_label=-1
     )
 
     # Verify return type is EvalResult
     assert isinstance(result, EvalResult)
-    expected_keys = {"miou", "overall_acc", "macro_acc", "macro_f1", "micro_f1"} | {
-        f"f1_class_{i}" for i in range(num_classes)
-    }
+    expected_keys = {
+        "miou",
+        "overall_acc",
+        "macro_acc",
+        "macro_f1",
+        "micro_f1",
+        "auroc",
+    } | {f"f1_class_{i}" for i in range(num_classes)}
     assert set(result.metrics.keys()) == expected_keys
 
     # Primary metric should be miou
@@ -90,9 +96,10 @@ def test_segmentation_eval_with_interpolation() -> None:
         )
 
     preds = torch.argmax(logits, dim=1)
+    scores = torch.softmax(logits, dim=1)
 
     result = segmentation_metrics(
-        preds, labels, num_classes=num_classes, ignore_label=-1
+        preds, labels, num_classes=num_classes, scores=scores, ignore_label=-1
     )
 
     assert isinstance(result, EvalResult)
@@ -110,6 +117,7 @@ def test_segmentation_eval_with_ignore_labels() -> None:
     num_classes = 3
 
     preds = torch.randint(0, num_classes, (batch_size, h, w))
+    scores = F.one_hot(preds, num_classes).permute(0, 3, 1, 2).float()
     labels = torch.randint(0, num_classes, (batch_size, h, w))
 
     # Set some pixels to ignore label
@@ -117,7 +125,7 @@ def test_segmentation_eval_with_ignore_labels() -> None:
     labels[1, :, 0] = -1
 
     result = segmentation_metrics(
-        preds, labels, num_classes=num_classes, ignore_label=-1
+        preds, labels, num_classes=num_classes, scores=scores, ignore_label=-1
     )
 
     assert isinstance(result, EvalResult)
