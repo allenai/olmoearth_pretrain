@@ -461,6 +461,36 @@ class Modality:
         image_tile_size_factor=-256,
     )
 
+    ERA5L_DAY_10 = ModalitySpec(
+        name="era5l_day_10",
+        # ERA5-Land daily 9 km/pixel bands that we store at 2.56 km/pixel, T=720 daily timesteps, non-spatial.
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [
+                    "d2m",  # 2m dewpoint temperature (K)
+                    "e",  # Evaporation (m of water equivalent)
+                    "pev",  # Potential evaporation (m of water equivalent)
+                    "ro",  # Runoff (m)
+                    "sp",  # Surface pressure (Pa)
+                    "ssr",  # Surface net solar radiation (J m-2)
+                    "ssrd",  # Surface solar radiation downwards (J m-2)
+                    "str",  # Surface net thermal radiation (J m-2)
+                    "swvl1",  # Volumetric soil water layer 1 (m3 m-3)
+                    "swvl2",  # Volumetric soil water layer 2 (m3 m-3)
+                    "t2m",  # 2m temperature (K)
+                    "tp",  # Total precipitation (m)
+                    "u10",  # 10m u-component of wind (m s-1)
+                    "v10",  # 10m v-component of wind (m s-1)
+                ],
+                4096,
+            ),
+        ],
+        is_multitemporal=True,
+        ignore_when_parsing=False,
+        image_tile_size_factor=-256,
+    )
+
     LATLON = ModalitySpec(
         name="latlon",
         tile_resolution_factor=0,
