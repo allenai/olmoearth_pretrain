@@ -774,11 +774,11 @@ class OlmoEarthDataset(Dataset):
                 # stored on disk, so read the worldcover dataset and one-hot encode it.
                 # If worldcover is absent the modality is treated as missing downstream.
                 if (
-                    "worldcover_onehot" in self.training_modalities
-                    and "worldcover" in h5file
+                    Modality.WORLDCOVER_ONEHOT.name in self.training_modalities
+                    and Modality.WORLDCOVER.name in h5file
                 ):
-                    sample_dict["worldcover_onehot"] = one_hot_worldcover(
-                        h5file["worldcover"][()], self.dtype
+                    sample_dict[Modality.WORLDCOVER_ONEHOT.name] = one_hot_worldcover(
+                        h5file[Modality.WORLDCOVER.name][()], self.dtype
                     )
 
                 if (

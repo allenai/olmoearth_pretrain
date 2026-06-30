@@ -25,14 +25,13 @@ from olmoearth_pretrain.internal.experiment import CommonComponents, SubCmd, mai
 
 logger = logging.getLogger(__name__)
 
-_RAW_WORLDCOVER = Modality.WORLDCOVER.name
-_ONEHOT_WORLDCOVER = Modality.WORLDCOVER_ONEHOT.name
-
 
 def _swap_worldcover(modalities: list[str]) -> list[str]:
     """Replace raw worldcover with its one-hot variant, preserving order."""
     return [
-        _ONEHOT_WORLDCOVER if modality == _RAW_WORLDCOVER else modality
+        Modality.WORLDCOVER_ONEHOT.name
+        if modality == Modality.WORLDCOVER.name
+        else modality
         for modality in modalities
     ]
 
