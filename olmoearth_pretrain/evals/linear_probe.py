@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from olmo_core.data.utils import get_rng
+from olmo_core.distributed.utils import get_rank, get_world_size, is_distributed
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
@@ -31,6 +32,26 @@ from olmoearth_pretrain.evals.metrics import (
 from olmoearth_pretrain.evals.utils import adjust_learning_rate
 
 logger = getLogger(__name__)
+
+
+# Log-spaced learning rates for the rank-max LR sweep -- the same grid used by the
+# offline eval sweeps. When ``rank_max_lr`` is enabled, rank ``i`` of a distributed
+# eval trains its probe with ``RANK_MAX_LRS[i]`` and the best result is selected via
+# a max-reduce across ranks, giving a "free" LR sweep that reuses ranks which would
+# otherwise do identical, redundant work.
+RANK_MAX_LRS = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
+
+
+def get_rank_lr(rank: int) -> float:
+    """Return the sweep learning rate assigned to ``rank``.
+
+    The grid is indexed modulo its length so the assignment is well-defined for any
+    ``world_size``: with fewer ranks than LRs the sweep covers the front subset
+    ``RANK_MAX_LRS[:world_size]``; with more ranks the extra ranks repeat earlier LRs
+    (harmless -- the max-reduce just sees a duplicate). Every rank always gets an LR,
+    so the collective reduce never deadlocks waiting on a non-participating rank.
+    """
+    return RANK_MAX_LRS[rank % len(RANK_MAX_LRS)]
 
 
 class MaskedMSELoss(nn.Module):
@@ -229,8 +250,15 @@ def train_and_eval_probe(
     use_dice_loss: bool = False,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    rank_max_lr: bool = False,
 ) -> EvalTaskResult:
     """Run a linear probe on the OlmoEarth Pretrain model.
+
+    When ``rank_max_lr`` is True and the eval is distributed, each rank trains its
+    probe with a different LR from :data:`RANK_MAX_LRS` (see :func:`get_rank_lr`)
+    instead of ``lr``; the caller selects the best result across ranks with a
+    max-reduce. This works because every rank computes the full embeddings and
+    trains an independent, complete probe -- they differ only in LR.
 
     Returns:
         Dictionary with keys:
@@ -238,6 +266,25 @@ def train_and_eval_probe(
             - test_score: EvalResult for test, or None if no test set
             - bootstrap_stats: Bootstrap statistics dict (empty dict if n_bootstrap == 0)
     """
+    # Resolve the effective LR: per-rank sweep value when rank-max LR is enabled and
+    # we're actually distributed, otherwise the configured lr. Single-process evals
+    # (e.g. an eval job launched with 1 GPU) fall back to the configured lr.
+    effective_lr = lr
+    if rank_max_lr and is_distributed():
+        rank = get_rank()
+        world_size = get_world_size()
+        effective_lr = get_rank_lr(rank)
+        n_covered = min(world_size, len(RANK_MAX_LRS))
+        logger.info(
+            f"Rank-max LR enabled: rank {rank}/{world_size} using lr={effective_lr:.6f} "
+            f"(sweeping {n_covered} of {len(RANK_MAX_LRS)} LRs: {RANK_MAX_LRS[:n_covered]})"
+        )
+    elif rank_max_lr:
+        logger.info(
+            "rank_max_lr requested but the eval is not distributed (world_size=1); "
+            f"falling back to the configured lr={lr:.6f}."
+        )
+
     logger.info(f"Probe type {probe_type}")
     if train_embeddings.shape[-1] != val_embeddings.shape[-1]:
         raise ValueError("Embedding dims don't match.")
@@ -345,7 +392,7 @@ def train_and_eval_probe(
             task_type=config.task_type,
             probe=probe,
             data_loader=data_loader,
-            lr=lr,
+            lr=effective_lr,
             epochs=end_epoch,
             total_epochs=epochs,
             current_epoch=start_epoch,

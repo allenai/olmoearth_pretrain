@@ -36,8 +36,9 @@ from olmoearth_pretrain.internal.constants import CHECKPOINT_SWEEP_LAUNCH_PATH
 
 logger = logging.getLogger(__name__)
 
-# Mirrors full_eval_sweep.LAUNCH_OVERRIDES (minus priority, which we resolve per-call).
-_EVAL_LAUNCH_OVERRIDES = ["--launch.num_gpus=1", "--launch.task_name=eval"]
+# Mirrors full_eval_sweep.LAUNCH_OVERRIDES (minus priority and num_gpus, which we
+# resolve per-call -- num_gpus varies for rank-max LR sweeps).
+_EVAL_LAUNCH_OVERRIDES = ["--launch.task_name=eval"]
 
 
 def _repo_root() -> Path:
@@ -81,6 +82,7 @@ def launch_checkpoint_eval_job(
     cluster: str,
     run_name: str,
     priority: str,
+    num_gpus: int = 1,
     tasks_to_run: list[str] | None = None,
     wandb_project: str | None = None,
     wandb_entity: str | None = None,
@@ -123,6 +125,7 @@ def launch_checkpoint_eval_job(
         run_name,
         cluster,
         f"--launch.priority={priority}",
+        f"--launch.num_gpus={num_gpus}",
         *_EVAL_LAUNCH_OVERRIDES,
     ]
     # Tie the eval run to the training run's wandb project/entity/group so the
