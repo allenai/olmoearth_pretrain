@@ -17,8 +17,7 @@ Note: ERA5L_DAY_10 has one timestep per day, so span lengths expressed
 in *days* map directly onto timesteps.
 
 Everything is applied on-the-fly on the GPU. Only timesteps at index
-``target_start`` and beyond are eligible for masking; the causal buffer
-region ``[:target_start]`` is never corrupted.
+``target_start`` and beyond are eligible for masking
 
 :func:`corrupt_era5` returns a boolean corruption mask.  The encoder
 replaces masked positions with a learned per-band embedding before
