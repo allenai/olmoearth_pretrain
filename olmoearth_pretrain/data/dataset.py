@@ -26,6 +26,7 @@ from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
     MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
+    WORLDCOVER_CLASSES,
     Modality,
     ModalitySpec,
 )
@@ -271,6 +272,34 @@ def subset_sample_cutmix(
             new_data_dict[attribute] = modality
 
     return OlmoEarthSample(**new_data_dict)
+
+
+def one_hot_worldcover(raw: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    """One-hot encode raw ESA WorldCover class codes.
+
+    The worldcover modality is stored on disk as a single band holding one class code per
+    pixel. The derived worldcover_onehot modality expands that band into one channel per
+    class in WORLDCOVER_CLASSES order.
+
+    Args:
+        raw: array of class codes with the band axis as the last dim of size 1,
+            e.g. [H, W, 1, 1]. MISSING_VALUE marks missing pixels.
+        dtype: the dtype of the output array.
+
+    Returns:
+        Array with the trailing band axis expanded to len(WORLDCOVER_CLASSES). Missing
+        pixels are MISSING_VALUE across all channels (so the existing missing-value
+        handling continues to work); codes not in WORLDCOVER_CLASSES map to all-zero.
+    """
+    # Drop the single-band axis: [H, W, 1, 1] -> [H, W, 1].
+    codes = raw[..., 0]
+    missing = codes == MISSING_VALUE
+    onehot = np.zeros((*codes.shape, len(WORLDCOVER_CLASSES)), dtype=dtype)
+    for idx, code in enumerate(WORLDCOVER_CLASSES):
+        onehot[..., idx] = codes == code
+    # Preserve missingness so it is recognised by the missing mask downstream.
+    onehot[missing] = MISSING_VALUE
+    return onehot
 
 
 class GetItemArgs(NamedTuple):
@@ -740,6 +769,17 @@ class OlmoEarthDataset(Dataset):
                     # TODO: Fix the floating string issue
                     or k in ["timestamps"]
                 }
+
+                # worldcover_onehot is derived from the raw worldcover band: it is not
+                # stored on disk, so read the worldcover dataset and one-hot encode it.
+                # If worldcover is absent the modality is treated as missing downstream.
+                if (
+                    Modality.WORLDCOVER_ONEHOT.name in self.training_modalities
+                    and Modality.WORLDCOVER.name in h5file
+                ):
+                    sample_dict[Modality.WORLDCOVER_ONEHOT.name] = one_hot_worldcover(
+                        h5file[Modality.WORLDCOVER.name][()], self.dtype
+                    )
 
                 if (
                     missing_mask_group_name
