@@ -4,9 +4,8 @@ Identical to ``naip_gan.py`` except the generator is trained with a pure
 adversarial objective (``lambda_l1 = 0``) and generated-vs-real NAIP images are
 uploaded to W&B every 2000 steps.
 
-Note: the generator only receives gradients once the adversarial phase turns on
-(after ``gan_warmup_steps``), since the L1 term is disabled. Lower
-``gan_warmup_steps`` if you want the generator to start training sooner.
+Since the L1 term is disabled, the adversarial phase starts immediately
+(``gan_warmup_steps = 0``) so the generator receives gradients from step 0.
 
 Validate before launching::
 
@@ -31,6 +30,7 @@ def build_train_module_config(
     """NAIP GAN train module config with L1 disabled and periodic image logging."""
     config = naip_gan_base.build_train_module_config(common)
     config.lambda_l1 = 0.0
+    config.gan_warmup_steps = 0
     config.image_log_interval = IMAGE_LOG_INTERVAL
     return config
 
