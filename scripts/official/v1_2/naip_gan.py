@@ -47,26 +47,8 @@ logger = logging.getLogger(__name__)
 MAX_PATCH_SIZE = v1_2_base.MAX_PATCH_SIZE
 MIN_PATCH_SIZE = v1_2_base.MIN_PATCH_SIZE
 
-# Modalities available in the NAIP-containing dataset used below. This is a
-# subset of the full v1.2 modality set (no cdl / worldcereal / canopy height),
-# since those are not present in the NAIP h5py dataset.
-TRAINING_MODALITIES = [
-    Modality.SENTINEL2_L2A.name,
-    Modality.SENTINEL1.name,
-    Modality.LANDSAT.name,
-    Modality.WORLDCOVER.name,
-    Modality.SRTM.name,
-    Modality.OPENSTREETMAP_RASTER.name,
-    Modality.NAIP_10.name,
-]
-
-# Decode-only modalities (NAIP is the GAN target).
-ONLY_DECODE_MODALITIES = [
-    Modality.WORLDCOVER.name,
-    Modality.SRTM.name,
-    Modality.OPENSTREETMAP_RASTER.name,
-    Modality.NAIP_10.name,
-]
+# NAIP is added as a decode-only modality on top of the v1.2 decode targets.
+ONLY_DECODE_MODALITIES = [*v1_2_base.ONLY_DECODE_MODALITIES, Modality.NAIP_10.name]
 
 # Generator upsamples the pooled token grid 4x to reach the 2.5 m/px NAIP grid.
 NAIP_UPSAMPLE_FACTOR = 4
@@ -97,7 +79,10 @@ def build_common_components(
     config = v1_2_base.build_common_components(
         script, cmd, run_name, cluster, overrides
     )
-    config.training_modalities = TRAINING_MODALITIES
+    config.training_modalities = [
+        *config.training_modalities,
+        Modality.NAIP_10.name,
+    ]
     return config
 
 
@@ -184,7 +169,7 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
 def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
     """Build the dataset config (a NAIP-containing h5py dataset)."""
     return OlmoEarthDatasetConfig(
-        h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
+        h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/1138828",
         training_modalities=common.training_modalities,
     )
 
