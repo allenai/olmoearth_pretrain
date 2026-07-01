@@ -449,8 +449,14 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                 mode="bilinear",
                 align_corners=False,
             )
-            real_logits = self.discriminator(real_v, cond_v)
-            fake_logits = self.discriminator(fake_v, cond_v)
+            # Single discriminator forward on the concatenated real+fake batch.
+            # DDP (used to replicate the discriminator) requires exactly one
+            # forward per backward; two separate forwards would double-fire its
+            # reducer hooks ("marked ready twice").
+            images = torch.cat([real_v, fake_v], dim=0)
+            conds = torch.cat([cond_v, cond_v], dim=0)
+            logits = self.discriminator(images, conds)
+            real_logits, fake_logits = logits.chunk(2, dim=0)
             d_loss = discriminator_adversarial_loss(
                 real_logits, fake_logits, self.gan_loss_type
             )
