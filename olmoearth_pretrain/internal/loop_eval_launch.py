@@ -39,6 +39,11 @@ logger = logging.getLogger(__name__)
 # Mirrors full_eval_sweep.LAUNCH_OVERRIDES (minus priority, which we resolve per-call).
 _EVAL_LAUNCH_OVERRIDES = ["--launch.num_gpus=1", "--launch.task_name=eval"]
 
+# In-loop evals track training progress on the val set only; the test set is
+# reserved for final evaluation. checkpoint_sweep_evals.py defaults run_on_test
+# to True (for standalone sweeps), so we override it off for in-loop launches.
+_LOOP_EVAL_OVERRIDES = ["--trainer.callbacks.downstream_evaluator.run_on_test=false"]
+
 
 def _repo_root() -> Path:
     """Return the repository root (parent of the ``olmoearth_pretrain`` package)."""
@@ -124,6 +129,7 @@ def launch_checkpoint_eval_job(
         cluster,
         f"--launch.priority={priority}",
         *_EVAL_LAUNCH_OVERRIDES,
+        *_LOOP_EVAL_OVERRIDES,
     ]
     # Tie the eval run to the training run's wandb project/entity/group so the
     # eval-over-training-steps curve lands alongside the training run.
