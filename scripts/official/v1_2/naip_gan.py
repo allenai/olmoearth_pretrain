@@ -189,9 +189,14 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
     )
 
 
+WANDB_PROJECT = "2026_07_01_naip_gan"
+
+
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
-    """Reuse the v1.2 trainer config."""
-    return v1_2_base.build_trainer_config(common)
+    """Reuse the v1.2 trainer config, overriding the W&B project."""
+    trainer_config = v1_2_base.build_trainer_config(common)
+    trainer_config.callbacks["wandb"].project = WANDB_PROJECT
+    return trainer_config
 
 
 def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig:
