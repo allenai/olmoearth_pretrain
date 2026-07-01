@@ -1,0 +1,72 @@
+"""Unit tests for the NAIP GAN generator and discriminator."""
+
+import pytest
+import torch
+
+from olmoearth_pretrain.nn.naip_gan import (
+    NaipDiscriminator,
+    NaipGenerator,
+    discriminator_adversarial_loss,
+    generator_adversarial_loss,
+)
+
+torch.set_default_device("cpu")
+
+
+def test_generator_output_shape() -> None:
+    """Generator upsamples the pooled grid by the requested factor."""
+    batch, height, width, dim = 2, 4, 5, 16
+    gen = NaipGenerator(
+        embedding_size=dim,
+        hidden_size=32,
+        out_channels=4,
+        upsample_factor=4,
+        num_res_blocks=1,
+    )
+    pooled = torch.randn(batch, height, width, dim)
+    out = gen(pooled)
+    assert out.shape == (batch, 4, height * 4, width * 4)
+
+
+def test_generator_upsample_factor_must_be_power_of_two() -> None:
+    """A non-power-of-2 upsample factor is rejected."""
+    with pytest.raises(ValueError):
+        NaipGenerator(embedding_size=8, upsample_factor=3)
+
+
+def test_discriminator_output_shape() -> None:
+    """Discriminator returns per-patch logits at the conditioning grid size."""
+    batch, height, width, dim = 2, 4, 5, 16
+    disc = NaipDiscriminator(
+        embedding_size=dim,
+        in_channels=4,
+        hidden_size=16,
+        num_image_layers=2,
+    )
+    image = torch.randn(batch, 4, height * 4, width * 4)
+    cond = torch.randn(batch, height, width, dim)
+    logits = disc(image, cond)
+    assert logits.shape == (batch, 1, height, width)
+
+
+@pytest.mark.parametrize("loss_type", ["hinge", "bce"])
+def test_adversarial_losses_are_scalars(loss_type: str) -> None:
+    """Both adversarial losses reduce to scalars for each variant."""
+    real_logits = torch.randn(2, 1, 4, 4, requires_grad=True)
+    fake_logits = torch.randn(2, 1, 4, 4, requires_grad=True)
+    d_loss = discriminator_adversarial_loss(real_logits, fake_logits, loss_type)
+    g_loss = generator_adversarial_loss(fake_logits, loss_type)
+    assert d_loss.ndim == 0
+    assert g_loss.ndim == 0
+    # Losses should be differentiable.
+    d_loss.backward(retain_graph=True)
+    g_loss.backward()
+
+
+def test_unknown_loss_type_raises() -> None:
+    """An unsupported loss type is rejected."""
+    logits = torch.randn(2, 1, 4, 4)
+    with pytest.raises(ValueError):
+        generator_adversarial_loss(logits, "nope")
+    with pytest.raises(ValueError):
+        discriminator_adversarial_loss(logits, logits, "nope")
