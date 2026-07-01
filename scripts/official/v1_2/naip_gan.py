@@ -154,7 +154,7 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     return OlmoEarthDataLoaderConfig(
         num_workers=16,
         global_batch_size=512,
-        token_budget=1500,
+        token_budget=2250,
         prefetch_factor=4,
         sampled_hw_p_list=list(range(1, 13)),
         min_patch_size=MIN_PATCH_SIZE,
