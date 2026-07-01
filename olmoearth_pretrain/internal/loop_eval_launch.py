@@ -40,6 +40,11 @@ logger = logging.getLogger(__name__)
 # resolve per-call -- num_gpus varies for rank-max LR sweeps).
 _EVAL_LAUNCH_OVERRIDES = ["--launch.task_name=eval"]
 
+# In-loop evals track training progress on the val set only; the test set is
+# reserved for final evaluation. checkpoint_sweep_evals.py defaults run_on_test
+# to True (for standalone sweeps), so we override it off for in-loop launches.
+_LOOP_EVAL_OVERRIDES = ["--trainer.callbacks.downstream_evaluator.run_on_test=false"]
+
 
 def _repo_root() -> Path:
     """Return the repository root (parent of the ``olmoearth_pretrain`` package)."""
@@ -90,6 +95,7 @@ def launch_checkpoint_eval_job(
     wandb_run_name: str | None = None,
     extra_overrides: list[str] | None = None,
     log_dir: str | None = None,
+    beaker_group: str | None = None,
 ) -> bool:
     """Launch a Beaker job that evaluates ``checkpoint_dir/step{step}``.
 
@@ -117,6 +123,17 @@ def launch_checkpoint_eval_job(
     env["TRAIN_SCRIPT_PATH"] = module_path
     env["CHECKPOINT_DIR"] = checkpoint_dir
     env["CHECKPOINT_STEPS"] = str(step)
+    # Tell the eval job to source its tasks from the training run's own evaluator
+    # config (matching names + hyperparameters, incl. experiment-specific tasks not
+    # in the shared catalog) rather than the catalog. common.py forwards this onto
+    # the spawned Beaker experiment.
+    env["OE_LOOP_EVAL_FROM_TRAIN_CONFIG"] = "1"
+    # Collect all of this training run's eval experiments into one Beaker group so
+    # they show up as a single console entry instead of many loose experiments.
+    # The launcher subprocess (checkpoint_sweep_evals.py) reads this and adds the
+    # submitted experiment to the group.
+    if beaker_group:
+        env["OE_LOOP_EVAL_BEAKER_GROUP"] = beaker_group
 
     cmd: list[str] = [
         sys.executable,
@@ -127,6 +144,7 @@ def launch_checkpoint_eval_job(
         f"--launch.priority={priority}",
         f"--launch.num_gpus={num_gpus}",
         *_EVAL_LAUNCH_OVERRIDES,
+        *_LOOP_EVAL_OVERRIDES,
     ]
     # Tie the eval run to the training run's wandb project/entity/group so the
     # eval-over-training-steps curve lands alongside the training run.
