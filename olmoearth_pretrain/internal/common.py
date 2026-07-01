@@ -161,6 +161,17 @@ def build_launch_config(
     if checkpoint_steps is not None:
         logger.info(f"Propagating checkpoint steps to experiment: {checkpoint_steps}")
         env_vars.append(BeakerEnvVar(name="CHECKPOINT_STEPS", value=checkpoint_steps))
+    # In-loop eval jobs source their tasks from the training run's own config
+    # (rather than the shared catalog); propagate the flag so the remote job knows.
+    loop_eval_from_train_config = os.environ.get("OE_LOOP_EVAL_FROM_TRAIN_CONFIG")
+    if loop_eval_from_train_config is not None:
+        logger.info("Propagating OE_LOOP_EVAL_FROM_TRAIN_CONFIG to experiment")
+        env_vars.append(
+            BeakerEnvVar(
+                name="OE_LOOP_EVAL_FROM_TRAIN_CONFIG",
+                value=loop_eval_from_train_config,
+            )
+        )
     # Propagate the finetune tag to the experiment if set
     finetune = os.environ.get("FINETUNE")
     if finetune is not None:

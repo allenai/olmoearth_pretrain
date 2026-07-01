@@ -28,6 +28,8 @@ import os
 import re
 import sys
 import time
+from functools import partial
+from types import ModuleType
 from typing import cast
 
 import torch
@@ -232,8 +234,18 @@ def _get_eval_tasks() -> dict:
     return EVAL_TASKS
 
 
-def build_trainer_config(common: CommonComponents) -> TrainerConfig:
-    """Build trainer config for checkpoint sweep (no training, no auto-eval)."""
+def build_trainer_config(
+    common: CommonComponents, eval_tasks: dict | None = None
+) -> TrainerConfig:
+    """Build trainer config for checkpoint sweep (no training, no auto-eval).
+
+    ``eval_tasks`` overrides the task set the downstream evaluator runs. In-loop
+    eval jobs pass the *training run's own* tasks here (see ``__main__``) so task
+    names and hyperparameters match the run that launched the job -- including
+    experiment-specific tasks that are not in the shared ``all_evals`` catalog.
+    When ``None`` (e.g. standalone checkpoint sweeps) we fall back to the catalog.
+    """
+    tasks = eval_tasks if eval_tasks is not None else _get_eval_tasks()
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = OlmoEarthWandBCallback(
         name=common.run_name,
@@ -258,7 +270,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         .with_callback(
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
-                tasks=_get_eval_tasks(),
+                tasks=tasks,
                 eval_on_startup=False,
                 cancel_after_first_eval=False,
                 run_on_test=True,
@@ -275,6 +287,34 @@ def parse_steps(steps_str: str | None) -> list[int] | None:
     if steps_str is None:
         return None
     return [int(s.strip()) for s in steps_str.split(",") if s.strip()]
+
+
+def get_train_run_eval_tasks(
+    user_mod: ModuleType, common: CommonComponents
+) -> dict | None:
+    """Read the downstream_evaluator tasks from the training run's trainer config.
+
+    Used by in-loop eval jobs so the job evaluates exactly the tasks the *training
+    run* configured (matching names + hyperparameters, including experiment-specific
+    tasks absent from the shared catalog). Returns ``None`` if the module has no
+    ``build_trainer_config``, it fails to build, or it has no evaluator tasks -- in
+    which case the caller falls back to the shared catalog.
+    """
+    build = getattr(user_mod, "build_trainer_config", None)
+    if build is None:
+        return None
+    try:
+        train_trainer_config = build(common)
+    except Exception as e:  # noqa: BLE001 - best-effort; fall back to catalog
+        logger.warning(
+            "Could not build the training run's trainer config to read eval tasks "
+            "(%s); falling back to the shared eval catalog.",
+            e,
+        )
+        return None
+    evaluator_config = train_trainer_config.callbacks.get("downstream_evaluator")
+    tasks = getattr(evaluator_config, "tasks", None)
+    return tasks or None
 
 
 if __name__ == "__main__":
@@ -325,10 +365,28 @@ if __name__ == "__main__":
 
     cmd = SubCmd(cmd)
 
+    # For in-loop eval jobs, evaluate the training run's *own* configured tasks
+    # instead of the shared catalog, so task names + hyperparameters match the run
+    # that launched the job (and experiment-specific tasks not in the catalog run
+    # too). Gated on an env var set by the in-loop launcher so standalone checkpoint
+    # sweeps keep using the full catalog.
+    trainer_config_builder = build_trainer_config
+    if os.environ.get("OE_LOOP_EVAL_FROM_TRAIN_CONFIG"):
+        train_eval_tasks = get_train_run_eval_tasks(user_mod, common)
+        if train_eval_tasks:
+            logger.info(
+                "In-loop eval: using %d tasks from the training run's config: %s",
+                len(train_eval_tasks),
+                sorted(train_eval_tasks),
+            )
+            trainer_config_builder = partial(
+                build_trainer_config, eval_tasks=train_eval_tasks
+            )
+
     config = build_evaluate_config(
         common=common,
         model_config_builder=build_model_config,
-        trainer_config_builder=build_trainer_config,
+        trainer_config_builder=trainer_config_builder,
         overrides=overrides,
         train_module_config_builder=build_train_module_config,
     )

@@ -120,6 +120,11 @@ def launch_checkpoint_eval_job(
     env["TRAIN_SCRIPT_PATH"] = module_path
     env["CHECKPOINT_DIR"] = checkpoint_dir
     env["CHECKPOINT_STEPS"] = str(step)
+    # Tell the eval job to source its tasks from the training run's own evaluator
+    # config (matching names + hyperparameters, incl. experiment-specific tasks not
+    # in the shared catalog) rather than the catalog. common.py forwards this onto
+    # the spawned Beaker experiment.
+    env["OE_LOOP_EVAL_FROM_TRAIN_CONFIG"] = "1"
 
     cmd: list[str] = [
         sys.executable,
