@@ -1,0 +1,183 @@
+model:
+  class_path: rslearn.train.lightning_module.RslearnLightningModule
+  init_args:
+    model:
+      class_path: rslearn.models.singletask.SingleTaskModel
+      init_args:
+        encoder:
+          - class_path: rslearn.models.olmoearth_pretrain.model.OlmoEarth
+            init_args:
+              model_id: OLMOEARTH_V1_2_BASE
+              patch_size: 4
+              use_legacy_timestamps: false
+        decoder:
+          - class_path: rslearn.models.unet.UNetDecoder
+            init_args:
+              in_channels: [[4, 768]]
+              out_channels: 13
+              num_channels: {2: 256, 1: 128}
+          - class_path: rslearn.train.tasks.segmentation.SegmentationHead
+    optimizer:
+      class_path: rslearn.train.optimizer.AdamW
+      init_args:
+        lr: 0.0001
+    scheduler:
+      class_path: rslearn.train.scheduler.PlateauScheduler
+      init_args:
+        factor: 0.2
+        patience: 2
+        min_lr: 0
+        cooldown: 10
+data:
+  class_path: rslearn.train.data_module.RslearnDataModule
+  init_args:
+    # Overridden at runtime with --data.init_args.path pointing at the pretraining
+    # rslearn dataset. Its config.json is config_sentinel2_l2a.json, which defines the
+    # 12 monthly sentinel2_l2a_moXX layers referenced below.
+    path: /weka/dfive-default/rslearn-eai/datasets/olmoearth_pretrain
+    inputs:
+      sentinel2_l2a_mo01:
+        data_type: "raster"
+        layers: ["sentinel2_l2a_mo01"]
+        bands: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+        passthrough: true
+        dtype: FLOAT32
+        required: true
+      sentinel2_l2a_mo02:
+        data_type: "raster"
+        layers: ["sentinel2_l2a_mo02"]
+        bands: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+        passthrough: true
+        dtype: FLOAT32
+        required: false
+      sentinel2_l2a_mo03:
+        data_type: "raster"
+        layers: ["sentinel2_l2a_mo03"]
+        bands: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+        passthrough: true
+        dtype: FLOAT32
+        required: false
+      sentinel2_l2a_mo04:
+        data_type: "raster"
+        layers: ["sentinel2_l2a_mo04"]
+        bands: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+        passthrough: true
+        dtype: FLOAT32
+        required: false
+      sentinel2_l2a_mo05:
+        data_type: "raster"
+        layers: ["sentinel2_l2a_mo05"]
+        bands: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+        passthrough: true
+        dtype: FLOAT32
+        required: false
+      sentinel2_l2a_mo06:
+        data_type: "raster"
+        layers: ["sentinel2_l2a_mo06"]
+        bands: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+        passthrough: true
+        dtype: FLOAT32
+        required: false
+      sentinel2_l2a_mo07:
+        data_type: "raster"
+        layers: ["sentinel2_l2a_mo07"]
+        bands: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+        passthrough: true
+        dtype: FLOAT32
+        required: false
+      sentinel2_l2a_mo08:
+        data_type: "raster"
+        layers: ["sentinel2_l2a_mo08"]
+        bands: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+        passthrough: true
+        dtype: FLOAT32
+        required: false
+      sentinel2_l2a_mo09:
+        data_type: "raster"
+        layers: ["sentinel2_l2a_mo09"]
+        bands: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+        passthrough: true
+        dtype: FLOAT32
+        required: false
+      sentinel2_l2a_mo10:
+        data_type: "raster"
+        layers: ["sentinel2_l2a_mo10"]
+        bands: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+        passthrough: true
+        dtype: FLOAT32
+        required: false
+      sentinel2_l2a_mo11:
+        data_type: "raster"
+        layers: ["sentinel2_l2a_mo11"]
+        bands: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+        passthrough: true
+        dtype: FLOAT32
+        required: false
+      sentinel2_l2a_mo12:
+        data_type: "raster"
+        layers: ["sentinel2_l2a_mo12"]
+        bands: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+        passthrough: true
+        dtype: FLOAT32
+        required: false
+    task:
+      class_path: rslearn.train.tasks.segmentation.SegmentationTask
+      init_args:
+        num_classes: 13
+        nodata_value: 0
+        class_names: ["nodata", "bare", "burnt", "crops", "fallow/shifting cultivation", "grassland", "Lichen and moss", "shrub", "snow and ice", "tree", "urban/built-up", "water", "wetland (herbaceous)"]
+        metric_kwargs:
+          average: "micro"
+    # batch_size 1 since the number of available months (timesteps) varies per window.
+    batch_size: 1
+    num_workers: 32
+    predict_config:
+      groups: ["res_10"]
+      crop_size: 32
+      load_all_crops: true
+      skip_targets: true
+      # Skip windows that already have the output layer completed (resumable).
+      output_layer_name_skip_inference_if_exists: output
+      transforms:
+        - class_path: rslearn.train.transforms.concatenate.Concatenate
+          init_args:
+            concatenate_dim: TIME
+            skip_missing: true
+            output_selector: sentinel2_l2a
+            selections:
+              sentinel2_l2a_mo01: []
+              sentinel2_l2a_mo02: []
+              sentinel2_l2a_mo03: []
+              sentinel2_l2a_mo04: []
+              sentinel2_l2a_mo05: []
+              sentinel2_l2a_mo06: []
+              sentinel2_l2a_mo07: []
+              sentinel2_l2a_mo08: []
+              sentinel2_l2a_mo09: []
+              sentinel2_l2a_mo10: []
+              sentinel2_l2a_mo11: []
+              sentinel2_l2a_mo12: []
+        - class_path: rslearn.models.olmoearth_pretrain.norm.OlmoEarthNormalize
+          init_args:
+            band_names:
+              sentinel2_l2a: ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"]
+trainer:
+  callbacks:
+    # Writes the single-band argmax land-cover class map to the "output" layer. The
+    # layer is defined inline here so the dataset config.json does not need it.
+    - class_path: rslearn.train.prediction_writer.RslearnWriter
+      init_args:
+        output_layer: output
+        selector: []
+        layer_config:
+          class_path: rslearn.config.LayerConfig
+          init_args:
+            type: raster
+            band_sets:
+              - class_path: rslearn.config.BandSetConfig
+                init_args:
+                  dtype: uint8
+                  bands: ["output"]
+project_name: 2026_07_01_worldcover_pred
+run_name: olmoearth_v1_2_base_s2_ws32_ps4_00
+management_dir: ${RSLP_PREFIX}/projects
