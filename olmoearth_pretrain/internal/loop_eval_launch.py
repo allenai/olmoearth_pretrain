@@ -93,6 +93,7 @@ def launch_checkpoint_eval_job(
     wandb_run_name: str | None = None,
     extra_overrides: list[str] | None = None,
     log_dir: str | None = None,
+    beaker_group: str | None = None,
 ) -> bool:
     """Launch a Beaker job that evaluates ``checkpoint_dir/step{step}``.
 
@@ -125,6 +126,12 @@ def launch_checkpoint_eval_job(
     # in the shared catalog) rather than the catalog. common.py forwards this onto
     # the spawned Beaker experiment.
     env["OE_LOOP_EVAL_FROM_TRAIN_CONFIG"] = "1"
+    # Collect all of this training run's eval experiments into one Beaker group so
+    # they show up as a single console entry instead of many loose experiments.
+    # The launcher subprocess (checkpoint_sweep_evals.py) reads this and adds the
+    # submitted experiment to the group.
+    if beaker_group:
+        env["OE_LOOP_EVAL_BEAKER_GROUP"] = beaker_group
 
     cmd: list[str] = [
         sys.executable,

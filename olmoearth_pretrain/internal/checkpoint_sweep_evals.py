@@ -33,6 +33,7 @@ from types import ModuleType
 from typing import cast
 
 import torch
+from beaker import Experiment
 from olmo_core.distributed.checkpoint import load_model_and_optim_state
 from olmo_core.distributed.utils import get_rank
 from olmo_core.train import prepare_training_environment, teardown_training_environment
@@ -317,6 +318,44 @@ def get_train_run_eval_tasks(
     return tasks or None
 
 
+def add_experiment_to_loop_eval_group(
+    config: OlmoEarthEvaluateConfig, experiment: Experiment
+) -> None:
+    """Add a just-launched in-loop eval experiment to its per-run Beaker group.
+
+    All eval jobs for one training run share a Beaker group (named via the
+    ``OE_LOOP_EVAL_BEAKER_GROUP`` env var set by the in-loop launcher) so they
+    appear as a single entry in the Beaker console instead of many loose
+    experiments. Best-effort: any failure here only logs a warning and never fails
+    the eval launch. No-op when the env var is unset (e.g. standalone sweeps).
+    """
+    group_name = os.environ.get("OE_LOOP_EVAL_BEAKER_GROUP")
+    if not group_name:
+        return
+    try:
+        from beaker import Beaker, GroupConflict, GroupNotFound
+
+        beaker = Beaker.from_env()
+        workspace = config.launch.workspace if config.launch is not None else None
+        try:
+            group = beaker.group.get(group_name)
+        except GroupNotFound:
+            # First eval job for this run creates the group; concurrent launches
+            # may race, so treat a conflict as "already created" and re-fetch.
+            try:
+                group = beaker.group.create(group_name, workspace=workspace)
+            except GroupConflict:
+                group = beaker.group.get(group_name)
+        beaker.group.add_experiments(group, experiment)
+        logger.info(
+            "Added eval experiment %s to Beaker group %r", experiment.id, group_name
+        )
+    except Exception as e:  # noqa: BLE001 - best-effort, never block the eval launch
+        logger.warning(
+            "Could not add eval experiment to Beaker group %r (%s)", group_name, e
+        )
+
+
 if __name__ == "__main__":
     checkpoint_dir = os.environ.get("CHECKPOINT_DIR")
     if checkpoint_dir is None:
@@ -393,7 +432,8 @@ if __name__ == "__main__":
 
     if cmd == SubCmd.launch_evaluate:
         prepare_cli_environment()
-        launch(config)
+        experiment = launch(config)
+        add_experiment_to_loop_eval_group(config, experiment)
     elif cmd == SubCmd.evaluate:
         prepare_training_environment()
         try:

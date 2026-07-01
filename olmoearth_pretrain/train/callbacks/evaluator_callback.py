@@ -983,6 +983,9 @@ class DownstreamEvaluatorCallback(Callback):
             # shared runid file set in launch_checkpoint_eval_job), keyed on
             # checkpoint_step -- instead of a separate run per eval step.
             wandb_run_name=f"{train_run_name}_loop_evals",
+            # Collect all of this run's eval experiments into one Beaker group
+            # (same name as the consolidated wandb run) to declutter the console.
+            beaker_group=f"{train_run_name}_loop_evals",
             extra_overrides=self.beaker_eval_extra_overrides,
             log_dir=os.path.join(save_folder, "loop_eval_launch_logs"),
         )
