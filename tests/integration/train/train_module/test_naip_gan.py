@@ -116,7 +116,8 @@ def naip_gan_model() -> NaipGanModel:
     encoder_config = EncoderConfig(
         supported_modality_names=SUPPORTED_MODALITIES,
         embedding_size=EMBEDDING_SIZE,
-        max_patch_size=8,
+        min_patch_size=1,
+        max_patch_size=1,
         num_heads=2,
         mlp_ratio=1.0,
         depth=2,
@@ -136,6 +137,7 @@ def naip_gan_model() -> NaipGanModel:
     )
     generator_config = NaipGeneratorConfig(
         embedding_size=EMBEDDING_SIZE,
+        patch_size=1,
         hidden_size=32,
         out_channels=4,
         upsample_factor=4,

@@ -14,24 +14,27 @@ torch.set_default_device("cpu")
 
 
 def test_generator_output_shape() -> None:
-    """Generator upsamples the pooled grid by the requested factor."""
+    """Generator upsamples the token grid by patch_size * upsample_factor."""
     batch, height, width, dim = 2, 4, 5, 16
+    patch_size, upsample_factor = 4, 4
     gen = NaipGenerator(
         embedding_size=dim,
+        patch_size=patch_size,
         hidden_size=32,
         out_channels=4,
-        upsample_factor=4,
+        upsample_factor=upsample_factor,
         num_res_blocks=1,
     )
     pooled = torch.randn(batch, height, width, dim)
     out = gen(pooled)
-    assert out.shape == (batch, 4, height * 4, width * 4)
+    factor = patch_size * upsample_factor
+    assert out.shape == (batch, 4, height * factor, width * factor)
 
 
 def test_generator_upsample_factor_must_be_power_of_two() -> None:
     """A non-power-of-2 upsample factor is rejected."""
     with pytest.raises(ValueError):
-        NaipGenerator(embedding_size=8, upsample_factor=3)
+        NaipGenerator(embedding_size=8, patch_size=4, upsample_factor=3)
 
 
 def test_discriminator_output_shape() -> None:
@@ -52,7 +55,11 @@ def test_discriminator_output_shape() -> None:
 def test_generator_casts_input_to_param_dtype() -> None:
     """Generator handles inputs whose dtype differs from its params (mixed precision)."""
     gen = NaipGenerator(
-        embedding_size=8, hidden_size=16, upsample_factor=2, num_res_blocks=1
+        embedding_size=8,
+        patch_size=2,
+        hidden_size=16,
+        upsample_factor=2,
+        num_res_blocks=1,
     ).double()
     pooled = torch.randn(1, 4, 4, 8)  # float32 input, float64 params
     out = gen(pooled)

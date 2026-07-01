@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
 from torch import Tensor
 
 from olmoearth_pretrain.config import Config
@@ -63,6 +64,7 @@ class NaipGenerator(nn.Module):
     def __init__(
         self,
         embedding_size: int,
+        patch_size: int,
         hidden_size: int = 128,
         out_channels: int = 4,
         upsample_factor: int = 4,
@@ -71,12 +73,19 @@ class NaipGenerator(nn.Module):
     ):
         """Initialize the generator.
 
+        The total upsampling from the token grid is ``patch_size * upsample_factor``:
+        a learned per-patch unpatchify (``patch_size``) brings the token grid to the
+        base pixel resolution, then the conv trunk upsamples by ``upsample_factor``.
+        For NAIP set ``upsample_factor = naip_10.image_tile_size_factor``.
+
         Args:
             embedding_size: Channel dim ``D`` of the pooled embedding ``[B, H, W, D]``.
+            patch_size: Encoder patch size; the token is unpatchified into a
+                ``patch_size x patch_size`` block of features.
             hidden_size: Width of the conv trunk.
             out_channels: Number of NAIP output bands (R, G, B, IR -> 4).
-            upsample_factor: Spatial upsampling factor (must be a power of 2).
-            num_res_blocks: Residual blocks applied at the input resolution and
+            upsample_factor: Conv-trunk spatial upsampling factor (power of 2).
+            num_res_blocks: Residual blocks applied at the base resolution and
                 after each upsampling step.
             num_groups: Target GroupNorm groups.
         """
@@ -86,10 +95,16 @@ class NaipGenerator(nn.Module):
             raise ValueError(
                 f"upsample_factor must be a power of 2, got {upsample_factor}"
             )
+        self.patch_size = patch_size
+        self.hidden_size = hidden_size
         self.upsample_factor = upsample_factor
         self.out_channels = out_channels
 
-        self.input_proj = nn.Conv2d(embedding_size, hidden_size, kernel_size=1)
+        # Learned unpatchify: each token -> a patch_size x patch_size block of
+        # hidden features, i.e. the token grid is expanded to the base pixel grid.
+        self.unpatchify = nn.Linear(
+            embedding_size, patch_size * patch_size * hidden_size
+        )
 
         layers: list[nn.Module] = [
             _ResBlock(hidden_size, num_groups) for _ in range(num_res_blocks)
@@ -114,13 +129,20 @@ class NaipGenerator(nn.Module):
             pooled: Pooled spatial embedding of shape ``[B, H, W, D]``.
 
         Returns:
-            NAIP image of shape ``[B, out_channels, H * factor, W * factor]``.
+            NAIP image of shape
+            ``[B, out_channels, H * patch_size * upsample_factor, W * patch_size * upsample_factor]``.
         """
-        x = pooled.permute(0, 3, 1, 2).contiguous()  # [B, D, H, W]
         # Match the (possibly mixed-precision) param dtype; pooling can upcast to
         # float32 even when the model runs in bf16 under FSDP mixed precision.
-        x = x.to(self.input_proj.weight.dtype)
-        x = self.input_proj(x)
+        pooled = pooled.to(self.unpatchify.weight.dtype)
+        x = self.unpatchify(pooled)  # [B, H, W, patch^2 * hidden]
+        x = rearrange(
+            x,
+            "b h w (ph pw c) -> b c (h ph) (w pw)",
+            ph=self.patch_size,
+            pw=self.patch_size,
+            c=self.hidden_size,
+        )  # [B, hidden, H * patch_size, W * patch_size] (base pixel grid)
         x = self.upsample(x)
         return self.to_image(x)
 
@@ -225,9 +247,15 @@ def generator_adversarial_loss(fake_logits: Tensor, loss_type: str = "hinge") ->
 
 @dataclass
 class NaipGeneratorConfig(Config):
-    """Configuration for :class:`NaipGenerator`."""
+    """Configuration for :class:`NaipGenerator`.
+
+    Total upsampling from the token grid is ``patch_size * upsample_factor``; set
+    ``upsample_factor`` to the NAIP ``image_tile_size_factor`` so the output lands
+    at native NAIP resolution.
+    """
 
     embedding_size: int
+    patch_size: int
     hidden_size: int = 128
     out_channels: int = 4
     upsample_factor: int = 4
@@ -238,6 +266,7 @@ class NaipGeneratorConfig(Config):
         """Build the generator."""
         return NaipGenerator(
             embedding_size=self.embedding_size,
+            patch_size=self.patch_size,
             hidden_size=self.hidden_size,
             out_channels=self.out_channels,
             upsample_factor=self.upsample_factor,
@@ -361,6 +390,18 @@ class NaipGanModelConfig(Config):
             raise ValueError(
                 "Generator embedding_size must match the encoder output size "
                 f"({encoder_output_size} != {self.generator_config.embedding_size})"
+            )
+        # The generator's unpatchify factor must equal the encoder's (fixed) patch
+        # size so the generated image lands at native NAIP resolution.
+        if (
+            self.encoder_config.min_patch_size != self.encoder_config.max_patch_size
+            or self.encoder_config.min_patch_size != self.generator_config.patch_size
+        ):
+            raise ValueError(
+                "Generator patch_size must equal a fixed encoder patch size "
+                f"(encoder min={self.encoder_config.min_patch_size}, "
+                f"max={self.encoder_config.max_patch_size}, "
+                f"generator={self.generator_config.patch_size})"
             )
 
     def build(self) -> NaipGanModel:

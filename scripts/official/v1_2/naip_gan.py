@@ -44,14 +44,18 @@ from olmoearth_pretrain.train.train_module.naip_gan import NaipGanTrainModuleCon
 
 logger = logging.getLogger(__name__)
 
-MAX_PATCH_SIZE = v1_2_base.MAX_PATCH_SIZE
-MIN_PATCH_SIZE = v1_2_base.MIN_PATCH_SIZE
+# Fix the patch size for this experiment: the generator's learned unpatchify
+# factor must equal a static encoder patch size to hit native NAIP resolution.
+NAIP_PATCH_SIZE = 4
+MAX_PATCH_SIZE = NAIP_PATCH_SIZE
+MIN_PATCH_SIZE = NAIP_PATCH_SIZE
 
 # NAIP is added as a decode-only modality on top of the v1.2 decode targets.
 ONLY_DECODE_MODALITIES = [*v1_2_base.ONLY_DECODE_MODALITIES, Modality.NAIP_10.name]
 
-# Generator upsamples the pooled token grid 4x to reach the 2.5 m/px NAIP grid.
-NAIP_UPSAMPLE_FACTOR = 4
+# Conv-trunk upsampling after the learned unpatchify. Set to the NAIP tile size
+# factor so the generator output lands at native NAIP (2.5 m/px) resolution.
+NAIP_UPSAMPLE_FACTOR = Modality.NAIP_10.image_tile_size_factor
 GENERATOR_HIDDEN_SIZE = 128
 DISCRIMINATOR_HIDDEN_SIZE = 64
 LAMBDA_ADV = 0.1
@@ -91,12 +95,16 @@ def build_model_config(common: CommonComponents) -> NaipGanModelConfig:
     base_model = v1_2_base.build_size_model_config(
         common, "base_shallow_decoder", v1_2_base.PATCH_EMBED_HIDDEN_SIZES
     )
+    # Fix the encoder to a static patch size (non-flexi) for this experiment.
+    base_model.encoder_config.min_patch_size = NAIP_PATCH_SIZE
+    base_model.encoder_config.max_patch_size = NAIP_PATCH_SIZE
     embedding_size = (
         base_model.encoder_config.output_embedding_size
         or base_model.encoder_config.embedding_size
     )
     generator_config = NaipGeneratorConfig(
         embedding_size=embedding_size,
+        patch_size=NAIP_PATCH_SIZE,
         hidden_size=GENERATOR_HIDDEN_SIZE,
         out_channels=Modality.NAIP_10.num_bands,
         upsample_factor=NAIP_UPSAMPLE_FACTOR,
