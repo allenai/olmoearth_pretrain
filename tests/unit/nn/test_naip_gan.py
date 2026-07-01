@@ -49,6 +49,27 @@ def test_discriminator_output_shape() -> None:
     assert logits.shape == (batch, 1, height, width)
 
 
+def test_generator_casts_input_to_param_dtype() -> None:
+    """Generator handles inputs whose dtype differs from its params (mixed precision)."""
+    gen = NaipGenerator(
+        embedding_size=8, hidden_size=16, upsample_factor=2, num_res_blocks=1
+    ).double()
+    pooled = torch.randn(1, 4, 4, 8)  # float32 input, float64 params
+    out = gen(pooled)
+    assert out.dtype == torch.float64
+
+
+def test_discriminator_casts_inputs_to_param_dtype() -> None:
+    """Discriminator handles inputs whose dtype differs from its params."""
+    disc = NaipDiscriminator(
+        embedding_size=8, in_channels=4, hidden_size=8, num_image_layers=2
+    ).double()
+    image = torch.randn(1, 4, 16, 16)  # float32 inputs, float64 params
+    cond = torch.randn(1, 4, 4, 8)
+    logits = disc(image, cond)
+    assert logits.dtype == torch.float64
+
+
 @pytest.mark.parametrize("loss_type", ["hinge", "bce"])
 def test_adversarial_losses_are_scalars(loss_type: str) -> None:
     """Both adversarial losses reduce to scalars for each variant."""

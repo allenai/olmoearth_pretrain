@@ -65,6 +65,10 @@ class MockTrainer:
         """Record a metric."""
         self._metrics[name] = value
 
+    def _iter_callbacks(self):  # type: ignore[no-untyped-def]
+        """No callbacks in the mock trainer."""
+        return iter([])
+
 
 @pytest.fixture
 def naip_samples() -> list[tuple[int, OlmoEarthSample]]:
@@ -146,7 +150,9 @@ def naip_gan_model() -> NaipGanModel:
     return model
 
 
-def _build_train_module(model: NaipGanModel) -> NaipGanTrainModule:
+def _build_train_module(
+    model: NaipGanModel, image_log_interval: int = 0
+) -> NaipGanTrainModule:
     config = NaipGanTrainModuleConfig(
         optim_config=AdamWConfig(lr=1e-4, weight_decay=0.0),
         rank_microbatch_size=2,
@@ -167,6 +173,7 @@ def _build_train_module(model: NaipGanModel) -> NaipGanTrainModule:
         lambda_adv=1.0,
         lambda_l1=1.0,
         gan_warmup_steps=0,
+        image_log_interval=image_log_interval,
         token_exit_cfg={modality: 0 for modality in Modality.names()},
         ema_decay=(1.0, 1.0),
         max_grad_norm=1.0,
@@ -258,3 +265,60 @@ def test_gradient_isolation(
         assert _all_grads_none(tm.discriminator)
         assert _has_any_grad(tm.model.generator)
         assert _has_any_grad(tm.model.encoder)
+
+
+class FakeWandb:
+    """Minimal wandb stand-in capturing Image/log calls."""
+
+    def __init__(self) -> None:
+        """Initialize the fake wandb module."""
+        self.logged: list[tuple[dict, int | None]] = []
+
+    def Image(self, arr: np.ndarray, caption: str | None = None) -> np.ndarray:  # noqa: N802
+        """Return the array unchanged (records nothing extra)."""
+        return arr
+
+    def log(self, data: dict, step: int | None = None) -> None:
+        """Capture a log call."""
+        self.logged.append((data, step))
+
+
+def test_naip_images_logged_at_interval(
+    naip_samples: list[tuple[int, OlmoEarthSample]],
+    naip_gan_model: NaipGanModel,
+    set_random_seeds: None,
+) -> None:
+    """Paired real/generated NAIP images are logged to W&B at the interval."""
+    batch = _collate(naip_samples)
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        tm = _build_train_module(naip_gan_model, image_log_interval=1)
+        fake_wandb = FakeWandb()
+        tm._get_wandb = lambda: fake_wandb  # type: ignore[method-assign]
+        tm.train_batch(batch)
+
+        assert len(fake_wandb.logged) == 1
+        data, step = fake_wandb.logged[0]
+        assert step == tm.trainer.global_step
+        images = data["gan/naip_real_vs_fake"]
+        # Two valid NAIP samples in the batch -> two paired images.
+        assert len(images) == 2
+        for pair in images:
+            # Side-by-side [H, 2W, 3] RGB in [0, 1].
+            assert pair.ndim == 3
+            assert pair.shape[2] == 3
+            assert float(pair.min()) >= 0.0 and float(pair.max()) <= 1.0
+
+
+def test_naip_images_not_logged_when_disabled(
+    naip_samples: list[tuple[int, OlmoEarthSample]],
+    naip_gan_model: NaipGanModel,
+    set_random_seeds: None,
+) -> None:
+    """No images are logged when image_log_interval is 0."""
+    batch = _collate(naip_samples)
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        tm = _build_train_module(naip_gan_model, image_log_interval=0)
+        fake_wandb = FakeWandb()
+        tm._get_wandb = lambda: fake_wandb  # type: ignore[method-assign]
+        tm.train_batch(batch)
+        assert len(fake_wandb.logged) == 0

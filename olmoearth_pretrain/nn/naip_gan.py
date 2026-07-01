@@ -117,6 +117,9 @@ class NaipGenerator(nn.Module):
             NAIP image of shape ``[B, out_channels, H * factor, W * factor]``.
         """
         x = pooled.permute(0, 3, 1, 2).contiguous()  # [B, D, H, W]
+        # Match the (possibly mixed-precision) param dtype; pooling can upcast to
+        # float32 even when the model runs in bf16 under FSDP mixed precision.
+        x = x.to(self.input_proj.weight.dtype)
         x = self.input_proj(x)
         x = self.upsample(x)
         return self.to_image(x)
@@ -182,6 +185,11 @@ class NaipDiscriminator(nn.Module):
         Returns:
             Per-patch logits of shape ``[B, 1, H, W]``.
         """
+        # The discriminator is kept in its own (fp32) precision, separate from the
+        # FSDP mixed-precision model, so cast inputs to its param dtype.
+        param_dtype = self.cond_proj.weight.dtype
+        image = image.to(param_dtype)
+        cond = cond.to(param_dtype)
         feats = self.from_image(image)
         feats = F.adaptive_avg_pool2d(feats, output_size=cond.shape[1:3])
         cond_feats = self.cond_proj(cond).permute(0, 3, 1, 2).contiguous()

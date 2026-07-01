@@ -11,17 +11,19 @@ from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any
 
+import numpy as np
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 import torch.nn.functional as F
 from olmo_core.distributed.parallel import DataParallelConfig, get_dp_mesh
-from olmo_core.distributed.utils import get_local_rank, get_local_tensor
+from olmo_core.distributed.utils import get_local_rank, get_local_tensor, get_rank
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.normalize import load_computed_config
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import (
     MaskedOlmoEarthSample,
@@ -58,6 +60,11 @@ class NaipGanTrainModuleConfig(LatentMIMTrainModuleConfig):
         gan_warmup_steps: Number of steps before the adversarial terms turn on
             (the L1 reconstruction term is active from step 0).
         naip_modality: Name of the NAIP modality to predict.
+        image_log_interval: Log generated-vs-real NAIP images to W&B every this
+            many steps (0 disables image logging).
+        num_log_images: Max number of paired images to upload each time.
+        naip_denorm_std_multiplier: std multiplier used to invert the NAIP
+            normalization for display (must match the dataset Normalizer).
     """
 
     discriminator_config: Config | None = None
@@ -67,6 +74,9 @@ class NaipGanTrainModuleConfig(LatentMIMTrainModuleConfig):
     gan_loss_type: str = "hinge"
     gan_warmup_steps: int = 0
     naip_modality: str = field(default_factory=lambda: Modality.NAIP_10.name)
+    image_log_interval: int = 1000
+    num_log_images: int = 10
+    naip_denorm_std_multiplier: float = 2.0
 
     def build(
         self,
@@ -105,6 +115,9 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         gan_loss_type: str = "hinge",
         gan_warmup_steps: int = 0,
         naip_modality: str = Modality.NAIP_10.name,
+        image_log_interval: int = 1000,
+        num_log_images: int = 10,
+        naip_denorm_std_multiplier: float = 2.0,
         mae_loss_config: LossConfig | None = None,
         compile_model: bool = False,
         dp_config: DataParallelConfig | None = None,
@@ -147,6 +160,17 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         self.gan_loss_type = gan_loss_type
         self.gan_warmup_steps = gan_warmup_steps
         self.naip_modality = naip_modality
+        self.image_log_interval = image_log_interval
+        self.num_log_images = num_log_images
+
+        # Precompute per-band (R, G, B) min/max for inverse min-max denormalization
+        # of NAIP for W&B display, matching the dataset's computed normalization.
+        computed_config = load_computed_config()[self.naip_modality]
+        rgb_bands = Modality.get(self.naip_modality).band_order[:3]
+        means = np.array([computed_config[b]["mean"] for b in rgb_bands])
+        stds = np.array([computed_config[b]["std"] for b in rgb_bands])
+        self._naip_rgb_min = means - naip_denorm_std_multiplier * stds
+        self._naip_rgb_max = means + naip_denorm_std_multiplier * stds
 
         # The discriminator is intentionally NOT part of ``self.model`` so it is
         # excluded from the main optimizer (its loss must not update the encoder).
@@ -233,6 +257,71 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         naip_img = naip[:, :, :, 0, :].permute(0, 3, 1, 2).contiguous()
         return naip_img, valid
 
+    def _naip_to_rgb01(self, x: torch.Tensor) -> np.ndarray:
+        """Invert NAIP normalization and return displayable RGB in ``[0, 1]``.
+
+        Args:
+            x: Normalized NAIP tensor of shape ``[N, C, H, W]`` (C >= 3).
+
+        Returns:
+            A ``[N, H, W, 3]`` float array in ``[0, 1]``.
+        """
+        rgb = x[:, :3].detach().float().cpu().numpy()  # [N, 3, H, W]
+        min_vals = self._naip_rgb_min.reshape(1, 3, 1, 1)
+        max_vals = self._naip_rgb_max.reshape(1, 3, 1, 1)
+        raw = rgb * (max_vals - min_vals) + min_vals
+        rgb01 = np.clip(raw / 255.0, 0.0, 1.0)
+        return np.transpose(rgb01, (0, 2, 3, 1))  # [N, H, W, 3]
+
+    def _maybe_log_naip_images(
+        self, batch: MaskedOlmoEarthSample, fake_naip: torch.Tensor | None
+    ) -> None:
+        """Occasionally upload paired real/generated NAIP images to W&B."""
+        if self.image_log_interval <= 0 or fake_naip is None:
+            return
+        if self.trainer.global_step % self.image_log_interval != 0:
+            return
+        if get_rank() != 0:
+            return
+
+        real_img, valid = self._extract_real_naip(batch)
+        if real_img is None or valid is None or not bool(valid.any()):
+            return
+
+        wandb = self._get_wandb()
+        if wandb is None:
+            return
+
+        num = min(self.num_log_images, int(valid.sum().item()))
+        fake_v = fake_naip[valid][:num]
+        real_v = F.interpolate(
+            real_img[valid][:num].to(fake_v.dtype),
+            size=fake_v.shape[-2:],
+            mode="bilinear",
+            align_corners=False,
+        )
+        fake_rgb = self._naip_to_rgb01(fake_v)
+        real_rgb = self._naip_to_rgb01(real_v)
+
+        images = []
+        for i in range(num):
+            # Real on the left, generated on the right.
+            pair = np.concatenate([real_rgb[i], fake_rgb[i]], axis=1)
+            images.append(wandb.Image(pair, caption="left: real | right: generated"))
+        wandb.log(
+            {"gan/naip_real_vs_fake": images},
+            step=self.trainer.global_step,
+        )
+
+    def _get_wandb(self) -> Any | None:
+        """Return the wandb module from the OlmoEarth W&B callback, if enabled."""
+        from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
+
+        for callback in self.trainer._iter_callbacks():
+            if isinstance(callback, OlmoEarthWandBCallback) and callback.enabled:
+                return callback.wandb
+        return None
+
     def train_batch(
         self,
         batch: tuple[int, MaskedOlmoEarthSample],
@@ -273,6 +362,10 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                 loss, latent, decoded, target_output, pooled, fake_naip = (
                     self.model_forward(masked_batch, patch_size, self.token_exit_cfg)
                 )
+
+                if not dry_run and microbatch_idx == 0:
+                    with torch.no_grad():
+                        self._maybe_log_naip_images(masked_batch, fake_naip)
 
                 reg_term = self.compute_regularization(latent)
                 if reg_term is not None:
