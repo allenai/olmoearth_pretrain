@@ -42,7 +42,12 @@ from olmoearth_pretrain.evals.embeddings import get_embeddings
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
 from olmoearth_pretrain.evals.knn import run_knn
-from olmoearth_pretrain.evals.linear_probe import ProbeType, train_and_eval_probe
+from olmoearth_pretrain.evals.linear_probe import (
+    RANK_MAX_LRS,
+    ProbeType,
+    select_rank_max_lr_result,
+    train_and_eval_probe,
+)
 from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
@@ -85,6 +90,14 @@ class DownstreamTaskConfig:
     probe_lr: float | None = None
     probe_batch_size: int = 32
     linear_probe_eval_interval: int = 50  # calculate val results every N epochs
+    # Rank-max LR: when True, a distributed linear-probe eval trains a different LR
+    # per rank (from linear_probe.RANK_MAX_LRS) and reports the best via a max-reduce
+    # -- a "free" LR sweep across the ranks. Inert when the eval runs single-process.
+    rank_max_lr: bool = False
+    # GPUs to request for the spawned Beaker eval job when this task uses rank_max_lr,
+    # i.e. how many sweep points run in parallel. Capped at len(RANK_MAX_LRS); only
+    # consulted by the in-loop launcher (run_as_beaker_job) for rank_max_lr tasks.
+    rank_max_lr_num_gpus: int = 8
     # FT
     ft_lr: float | None = None
     ft_batch_size: int = 32
@@ -181,6 +194,8 @@ class DownstreamEvaluator:
         self.input_modalities = task.input_modalities
         self.probe_lr = task.probe_lr
         self.probe_batch_size = task.probe_batch_size
+        self.rank_max_lr = task.rank_max_lr
+        self.rank_max_lr_num_gpus = task.rank_max_lr_num_gpus
         self.ft_lr = task.ft_lr
         self.ft_batch_size = task.ft_batch_size
         self.ft_grad_accum_steps = task.ft_grad_accum_steps
@@ -270,6 +285,7 @@ class DownstreamEvaluator:
                     eval_interval=self.linear_probe_eval_interval,
                     probe_type=self.probe_type,
                     lr=self.probe_lr,
+                    rank_max_lr=self.rank_max_lr,
                     select_best_by_primary_metric=self.select_best_by_primary_metric,
                     use_dice_loss=self.use_dice_loss,
                     primary_metric=self.primary_metric,
@@ -693,6 +709,27 @@ def _record_eval_result(
         trainer.record_metric(f"{other_prefix}/{name}/{metric_name}", metric_value)
 
 
+def _resolve_eval_job_num_gpus(
+    evaluators: list["DownstreamEvaluator"], task_names: list[str]
+) -> int:
+    """GPUs to request for a spawned eval job covering ``task_names``.
+
+    A rank-max LR task needs one rank per sweep point, so we request its
+    ``rank_max_lr_num_gpus`` (capped at ``len(RANK_MAX_LRS)`` -- extra ranks would only
+    repeat LRs). One job covers several tasks on shared ranks, so we take the max
+    across the rank-max tasks in the job. Returns 1 when no task in the job sweeps
+    (the default), preserving the existing single-GPU eval-job behavior.
+    """
+    return max(
+        (
+            min(ev.rank_max_lr_num_gpus, len(RANK_MAX_LRS))
+            for ev in evaluators
+            if ev.evaluation_name in task_names and ev.rank_max_lr
+        ),
+        default=1,
+    )
+
+
 @dataclass
 class DownstreamEvaluatorCallback(Callback):
     """Runs in-loop evaluations periodically during training."""
@@ -1041,6 +1078,10 @@ class DownstreamEvaluatorCallback(Callback):
 
         priority = self.beaker_eval_priority or resolve_parent_priority()
 
+        # If any task in this job runs a rank-max LR sweep, request enough GPUs to run
+        # its sweep points in parallel (one LR per rank); otherwise stays at 1.
+        num_gpus = _resolve_eval_job_num_gpus(self.evaluators, task_names)
+
         save_folder = str(self.trainer.save_folder)
         wandb_callback = self._get_wandb_callback()
         train_run_name = (
@@ -1056,6 +1097,7 @@ class DownstreamEvaluatorCallback(Callback):
             cluster=clusters[0],
             run_name=f"{train_run_name}_eval_step{step}",
             priority=priority,
+            num_gpus=num_gpus,
             tasks_to_run=task_names,
             wandb_project=(
                 wandb_callback.project if wandb_callback is not None else None
@@ -1087,6 +1129,9 @@ class DownstreamEvaluatorCallback(Callback):
 
         start_time = time.monotonic()
         result = evaluator.val()
+        # For a rank-max LR sweep, collapse the per-rank results to the best LR's
+        # result (no-op otherwise). Runs on every rank -- it's a collective gather.
+        result = select_rank_max_lr_result(result, evaluator.rank_max_lr)
 
         val_result = result.val_result
         test_result = result.test_result
