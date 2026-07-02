@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -27,6 +28,11 @@ class EvalMetric(StrEnum):
     # classes that are all-positive/all-negative). Threshold-free and robust to
     # class imbalance, computed on softmax/sigmoid scores.
     AUROC = "auroc"
+    # Macro one-vs-rest area under the precision-recall curve (mean of per-class
+    # average precision, skipping classes that are all-positive/all-negative).
+    # Threshold-free and, unlike AUROC, sensitive to class imbalance; computed
+    # on softmax/sigmoid scores.
+    PRAUC = "prauc"
     # Micro-averaged mean Average Precision (threshold-free, ranking-based).
     # This is GeoBench-2 / torchgeo-bench's reported metric for multilabel
     # classification (e.g. TreeSatAI, BigEarthNet), computed on sigmoid scores.
@@ -120,6 +126,7 @@ class EvalResult:
         per_class_f1: list[float] | None = None,
         micro_map: float | None = None,
         auroc: float | None = None,
+        prauc: float | None = None,
         is_multilabel: bool = False,
         primary_metric: EvalMetric | None = None,
         primary_metric_class: int | None = None,
@@ -137,6 +144,8 @@ class EvalResult:
             metrics[EvalMetric.MICRO_MAP.value] = micro_map
         if auroc is not None:
             metrics[EvalMetric.AUROC.value] = auroc
+        if prauc is not None:
+            metrics[EvalMetric.PRAUC.value] = prauc
         if per_class_f1 is not None:
             for i, score in enumerate(per_class_f1):
                 metrics[f"f1_class_{i}"] = score
@@ -166,6 +175,7 @@ class EvalResult:
         micro_f1: float,
         per_class_f1: list[float] | None = None,
         auroc: float | None = None,
+        prauc: float | None = None,
         primary_metric: EvalMetric | None = None,
         primary_metric_class: int | None = None,
     ) -> EvalResult:
@@ -179,6 +189,8 @@ class EvalResult:
         }
         if auroc is not None:
             metrics[EvalMetric.AUROC.value] = auroc
+        if prauc is not None:
+            metrics[EvalMetric.PRAUC.value] = prauc
         if per_class_f1 is not None:
             for i, score in enumerate(per_class_f1):
                 metrics[f"f1_class_{i}"] = score
@@ -228,49 +240,43 @@ class EvalResult:
         )
 
 
-def _macro_ovr_auroc(
-    scores: np.ndarray, labels_idx: np.ndarray, num_classes: int
+def _indices_to_one_hot(labels_idx: np.ndarray, num_classes: int) -> np.ndarray:
+    """Convert integer class indices of shape (M,) to a one-hot (M, num_classes)."""
+    one_hot = np.zeros((labels_idx.shape[0], num_classes), dtype=int)
+    if labels_idx.size:
+        one_hot[np.arange(labels_idx.shape[0]), labels_idx] = 1
+    return one_hot
+
+
+def _macro_binary_score(
+    scores: np.ndarray,
+    binary_labels: np.ndarray,
+    score_fn: Callable[[np.ndarray, np.ndarray], float],
 ) -> float:
-    """Macro one-vs-rest AUROC from per-class scores and integer labels.
+    """Macro-average a per-class binary score (e.g. ROC AUC or average precision).
 
     Args:
         scores: Per-class continuous scores of shape (M, num_classes).
-        labels_idx: Integer class indices of shape (M,).
-        num_classes: Number of classes.
+        binary_labels: Multi-hot / one-hot ground-truth of shape
+            (M, num_classes). For single-label tasks pass a one-hot encoding.
+        score_fn: Binary scoring function ``score_fn(y_true, y_score) -> float``,
+            such as ``roc_auc_score`` or ``average_precision_score``.
 
     Returns:
-        Mean of per-class ROC AUC. Classes with only positive or only negative
-        ground-truth samples are skipped (AUC undefined). Returns NaN if every
-        class is degenerate.
+        Mean of the per-class score, skipping columns that are all-positive or
+        all-negative (score undefined). Returns NaN if every column is
+        degenerate or if there are no samples.
     """
-    aucs = []
-    for c in range(num_classes):
-        y_true_c = (labels_idx == c).astype(int)
-        # AUC is undefined when a class has no positives or no negatives.
+    if binary_labels.shape[0] == 0:
+        return float("nan")
+    values = []
+    for c in range(binary_labels.shape[1]):
+        y_true_c = binary_labels[:, c]
+        # The score is undefined when a class has no positives or no negatives.
         if y_true_c.min() == y_true_c.max():
             continue
-        aucs.append(roc_auc_score(y_true_c, scores[:, c]))
-    return float(np.mean(aucs)) if aucs else float("nan")
-
-
-def _macro_multilabel_auroc(scores: np.ndarray, labels: np.ndarray) -> float:
-    """Macro AUROC for multilabel targets (per-column ROC AUC, averaged).
-
-    Args:
-        scores: Per-class continuous scores of shape (M, num_classes).
-        labels: Multi-hot ground-truth labels of shape (M, num_classes).
-
-    Returns:
-        Mean of per-class ROC AUC, skipping columns that are all-positive or
-        all-negative. Returns NaN if every column is degenerate.
-    """
-    aucs = []
-    for c in range(labels.shape[1]):
-        y_true_c = labels[:, c]
-        if y_true_c.min() == y_true_c.max():
-            continue
-        aucs.append(roc_auc_score(y_true_c, scores[:, c]))
-    return float(np.mean(aucs)) if aucs else float("nan")
+        values.append(score_fn(y_true_c, scores[:, c]))
+    return float(np.mean(values)) if values else float("nan")
 
 
 def _build_confusion_matrix(
@@ -342,12 +348,15 @@ def segmentation_metrics(
     """
     confusion = _build_confusion_matrix(predictions, labels, num_classes, ignore_label)
 
-    # Flatten to (M, C) / (M,) over valid pixels, then macro OVR AUROC.
+    # Flatten to (M, C) / (M,) over valid pixels, then macro OVR AUROC / PR-AUC.
     scores_np = scores.detach().cpu().float().numpy()
     scores_np = scores_np.transpose(0, 2, 3, 1).reshape(-1, num_classes)
     labels_np = labels.detach().cpu().numpy().reshape(-1)
     valid_mask = labels_np != ignore_label
-    auroc = _macro_ovr_auroc(scores_np[valid_mask], labels_np[valid_mask], num_classes)
+    valid_scores = scores_np[valid_mask]
+    one_hot = _indices_to_one_hot(labels_np[valid_mask], num_classes)
+    auroc = _macro_binary_score(valid_scores, one_hot, roc_auc_score)
+    prauc = _macro_binary_score(valid_scores, one_hot, average_precision_score)
 
     # Per-class statistics from confusion matrix
     # confusion[i, j] = number of pixels with true label i predicted as j
@@ -397,6 +406,7 @@ def segmentation_metrics(
         micro_f1=micro_f1,
         per_class_f1=per_class_f1.tolist(),
         auroc=auroc,
+        prauc=prauc,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
     )
@@ -417,7 +427,7 @@ def classification_metrics(
         labels: Ground-truth labels (multi-hot for multilabel, indices otherwise).
         scores: Per-class continuous scores (softmax/sigmoid probabilities),
             shape (N, num_classes). Used to compute the macro one-vs-rest
-            ``auroc`` (and ``micro_map`` for multilabel tasks).
+            ``auroc`` and ``prauc`` (and ``micro_map`` for multilabel tasks).
         is_multilabel: Whether this is a multi-label task (sigmoid/multi-hot)
             rather than single-label (softmax/argmax).
         primary_metric: Override the default primary metric (None = task default).
@@ -439,7 +449,8 @@ def classification_metrics(
         micro_map = float(
             average_precision_score(labels_np, scores_np, average="micro")
         )
-        auroc = _macro_multilabel_auroc(scores_np, labels_np)
+        auroc = _macro_binary_score(scores_np, labels_np, roc_auc_score)
+        prauc = _macro_binary_score(scores_np, labels_np, average_precision_score)
         return EvalResult.from_classification(
             accuracy,
             f1=micro_f1,
@@ -447,6 +458,7 @@ def classification_metrics(
             per_class_f1=per_class_f1,
             micro_map=micro_map,
             auroc=auroc,
+            prauc=prauc,
             is_multilabel=True,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
@@ -455,12 +467,15 @@ def classification_metrics(
     accuracy = accuracy_score(labels_np, preds_np)
     macro_f1 = f1_score(labels_np, preds_np, average="macro", zero_division=0)
     per_class_f1 = f1_score(labels_np, preds_np, average=None, zero_division=0).tolist()
-    auroc = _macro_ovr_auroc(scores_np, labels_np, scores_np.shape[-1])
+    one_hot = _indices_to_one_hot(labels_np, scores_np.shape[-1])
+    auroc = _macro_binary_score(scores_np, one_hot, roc_auc_score)
+    prauc = _macro_binary_score(scores_np, one_hot, average_precision_score)
     return EvalResult.from_classification(
         accuracy,
         macro_f1=macro_f1,
         per_class_f1=per_class_f1,
         auroc=auroc,
+        prauc=prauc,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
     )

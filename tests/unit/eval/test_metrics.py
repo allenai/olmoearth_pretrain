@@ -1,16 +1,19 @@
 """Unit tests for segmentation metrics."""
 
 import math
+from collections.abc import Callable
 
 import numpy as np
 import pytest
 import torch
+from sklearn.metrics import average_precision_score, roc_auc_score
 
 from olmoearth_pretrain.evals.metrics import (
     EvalMetric,
     EvalResult,
     _build_confusion_matrix,
-    _macro_ovr_auroc,
+    _indices_to_one_hot,
+    _macro_binary_score,
     classification_metrics,
     regression_metrics,
     segmentation_metrics,
@@ -290,6 +293,7 @@ class TestSegmentationMetrics:
             "macro_f1",
             "micro_f1",
             "auroc",
+            "prauc",
         } | {f"f1_class_{i}" for i in range(num_classes)}
         assert set(result.metrics.keys()) == expected_keys
 
@@ -354,12 +358,33 @@ class TestRegressionMetrics:
         assert result.metrics["rmse"] == pytest.approx(2**0.5)
 
 
-class TestMacroOvrAuroc:
-    """Tests for the _macro_ovr_auroc helper."""
+class TestIndicesToOneHot:
+    """Tests for the _indices_to_one_hot helper."""
 
-    def test_perfect_separation(self) -> None:
-        """Scores perfectly ranking each class give AUROC = 1.0."""
+    def test_basic(self) -> None:
+        """Integer indices become a one-hot matrix."""
+        one_hot = _indices_to_one_hot(np.array([0, 2, 1]), num_classes=3)
+        expected = np.array([[1, 0, 0], [0, 0, 1], [0, 1, 0]])
+        assert np.array_equal(one_hot, expected)
+
+    def test_empty(self) -> None:
+        """Empty indices produce a (0, num_classes) matrix without erroring."""
+        one_hot = _indices_to_one_hot(np.array([], dtype=int), num_classes=3)
+        assert one_hot.shape == (0, 3)
+
+
+class TestMacroBinaryScore:
+    """Tests for the generic _macro_binary_score helper (AUROC and PR-AUC)."""
+
+    SCORE_FNS = [roc_auc_score, average_precision_score]
+
+    @pytest.mark.parametrize("score_fn", SCORE_FNS)
+    def test_perfect_separation(
+        self, score_fn: Callable[[np.ndarray, np.ndarray], float]
+    ) -> None:
+        """Scores perfectly ranking each class give a score of 1.0."""
         labels = np.array([0, 0, 1, 1, 2, 2])
+        one_hot = _indices_to_one_hot(labels, num_classes=3)
         scores = np.array(
             [
                 [0.9, 0.05, 0.05],
@@ -370,20 +395,25 @@ class TestMacroOvrAuroc:
                 [0.1, 0.1, 0.8],
             ]
         )
-        assert _macro_ovr_auroc(scores, labels, num_classes=3) == pytest.approx(1.0)
+        assert _macro_binary_score(scores, one_hot, score_fn) == pytest.approx(1.0)
 
-    def test_random_scores_near_half(self) -> None:
-        """Uninformative (constant) scores give AUROC ~0.5."""
+    def test_auroc_random_scores_near_half(self) -> None:
+        """Uninformative (constant) scores give AUROC exactly 0.5."""
         rng = np.random.default_rng(0)
         labels = rng.integers(0, 3, size=2000)
+        one_hot = _indices_to_one_hot(labels, num_classes=3)
         scores = np.full((2000, 3), 1.0 / 3)
         # Constant scores -> every threshold ties -> AUROC exactly 0.5.
-        assert _macro_ovr_auroc(scores, labels, num_classes=3) == pytest.approx(0.5)
+        assert _macro_binary_score(scores, one_hot, roc_auc_score) == pytest.approx(0.5)
 
-    def test_skips_degenerate_class(self) -> None:
+    @pytest.mark.parametrize("score_fn", SCORE_FNS)
+    def test_skips_degenerate_class(
+        self, score_fn: Callable[[np.ndarray, np.ndarray], float]
+    ) -> None:
         """A class absent from labels is skipped, not errored on."""
         # Class 2 never appears; sklearn would raise if not skipped.
         labels = np.array([0, 0, 1, 1])
+        one_hot = _indices_to_one_hot(labels, num_classes=3)
         scores = np.array(
             [
                 [0.9, 0.05, 0.05],
@@ -392,17 +422,29 @@ class TestMacroOvrAuroc:
                 [0.1, 0.8, 0.1],
             ]
         )
-        assert _macro_ovr_auroc(scores, labels, num_classes=3) == pytest.approx(1.0)
+        assert _macro_binary_score(scores, one_hot, score_fn) == pytest.approx(1.0)
 
-    def test_all_degenerate_returns_nan(self) -> None:
+    @pytest.mark.parametrize("score_fn", SCORE_FNS)
+    def test_all_degenerate_returns_nan(
+        self, score_fn: Callable[[np.ndarray, np.ndarray], float]
+    ) -> None:
         """If every class is all-positive/all-negative, return NaN."""
-        labels = np.array([0, 0, 0])
+        one_hot = _indices_to_one_hot(np.array([0, 0, 0]), num_classes=1)
         scores = np.array([[1.0], [0.5], [0.2]])
-        assert math.isnan(_macro_ovr_auroc(scores, labels, num_classes=1))
+        assert math.isnan(_macro_binary_score(scores, one_hot, score_fn))
+
+    @pytest.mark.parametrize("score_fn", SCORE_FNS)
+    def test_empty_labels_returns_nan(
+        self, score_fn: Callable[[np.ndarray, np.ndarray], float]
+    ) -> None:
+        """No samples (e.g. all pixels ignored) returns NaN instead of raising."""
+        one_hot = np.empty((0, 3), dtype=int)
+        scores = np.empty((0, 3))
+        assert math.isnan(_macro_binary_score(scores, one_hot, score_fn))
 
 
 class TestAurocMetrics:
-    """Tests for AUROC wiring through classification and segmentation metrics."""
+    """Tests for AUROC/PR-AUC wiring through classification and segmentation metrics."""
 
     def test_single_label_classification_auroc(self) -> None:
         """Single-label classification includes AUROC when scores are passed."""
@@ -421,6 +463,7 @@ class TestAurocMetrics:
         )
         assert result.primary_metric == EvalMetric.AUROC
         assert result.metrics["auroc"] == pytest.approx(1.0)
+        assert result.metrics["prauc"] == pytest.approx(1.0)
 
     def test_multilabel_classification_auroc(self) -> None:
         """Multilabel classification includes AUROC when scores are passed."""
@@ -432,6 +475,8 @@ class TestAurocMetrics:
         )
         assert "auroc" in result.metrics
         assert result.metrics["auroc"] == pytest.approx(1.0)
+        assert "prauc" in result.metrics
+        assert result.metrics["prauc"] == pytest.approx(1.0)
 
     def test_segmentation_auroc(self) -> None:
         """Segmentation includes AUROC computed over valid pixels."""
@@ -451,6 +496,7 @@ class TestAurocMetrics:
         )
         assert result.primary_metric == EvalMetric.AUROC
         assert result.metrics["auroc"] == pytest.approx(1.0)
+        assert result.metrics["prauc"] == pytest.approx(1.0)
 
     def test_segmentation_auroc_respects_ignore_label(self) -> None:
         """Ignored pixels are excluded from the AUROC computation."""
