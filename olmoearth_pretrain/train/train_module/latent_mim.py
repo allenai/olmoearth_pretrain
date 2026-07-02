@@ -216,6 +216,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
+        accumulated_extra_metrics: dict[str, Any] = {}
+        extra_metric_counts: dict[str, int] = {}
         patch_size = batch[0]
         batch_data = batch[1]
 
@@ -233,9 +235,13 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 masked_batch = microbatch_masked.to_device(self.device)
 
                 # Run Encoder and decoder on the augmented input
-                loss, latent, decoded, target_output = self.model_forward(
-                    masked_batch, patch_size, self.token_exit_cfg
+                loss, latent, decoded, target_output, extra_metrics = (
+                    self.model_forward(masked_batch, patch_size, self.token_exit_cfg)
                 )
+                if extra_metrics is not None:
+                    self.accumulate_extra_metrics(
+                        accumulated_extra_metrics, extra_metric_counts, extra_metrics
+                    )
                 reg_term = self.compute_regularization(latent)
                 if reg_term is not None:
                     loss = loss + reg_term
@@ -265,6 +271,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             total_batch_loss,
             ReduceType.mean,
         )
+        self.log_accumulated_extra_metrics(
+            accumulated_extra_metrics, extra_metric_counts
+        )
         self.log_regularization(total_batch_reg)
 
         del batch, batch_data  # In case this helps with memory utilization.
@@ -276,7 +285,13 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         batch: MaskedOlmoEarthSample,
         patch_size: int,
         token_exit_cfg: dict[str, int],
-    ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
+    ) -> tuple[
+        torch.Tensor,
+        TokensAndMasks,
+        TokensAndMasks,
+        TokensAndMasks,
+        dict[str, Any] | None,
+    ]:
         """Run a forward pass."""
         with self._model_forward_context():
             (
@@ -315,7 +330,4 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                         extra_metrics = {}
                     extra_metrics[f"supervision/{mod_name}"] = mod_loss
 
-            if extra_metrics is not None:
-                self.log_extra_metrics(extra_metrics)
-
-            return loss, latent, decoded, target_output
+            return loss, latent, decoded, target_output, extra_metrics

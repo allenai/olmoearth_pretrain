@@ -218,6 +218,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_con = torch.zeros([], device=self.device)
+        accumulated_extra_metrics: dict[str, Any] = {}
+        extra_metric_counts: dict[str, int] = {}
 
         # Unpack batch
         patch_size = batch[0]
@@ -239,12 +241,17 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 masked_batch_b = microbatch_b.to_device(self.device)
 
                 # Run Encoder and decoder on the augmented input
-                loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
+                loss_a, latent_a, decoded_a, target_output_a, pooled_a, metrics_a = (
                     self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
                 )
-                loss_b, latent_b, decoded_b, target_output_b, pooled_b = (
+                loss_b, latent_b, decoded_b, target_output_b, pooled_b, metrics_b = (
                     self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
                 )
+                for metrics in (metrics_a, metrics_b):
+                    if metrics is not None:
+                        self.accumulate_extra_metrics(
+                            accumulated_extra_metrics, extra_metric_counts, metrics
+                        )
                 loss = (loss_a + loss_b) / 2
 
                 # Scale loss by number of microbatches
@@ -296,6 +303,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 total_batch_con,
                 ReduceType.mean,
             )
+        self.log_accumulated_extra_metrics(
+            accumulated_extra_metrics, extra_metric_counts
+        )
         self.log_regularization(total_batch_reg)
 
         del batch  # In case this helps with memory utilization.
@@ -307,7 +317,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         patch_size: int,
         token_exit_cfg: dict[str, int],
     ) -> tuple[
-        torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
+        torch.Tensor,
+        TokensAndMasks,
+        TokensAndMasks,
+        TokensAndMasks,
+        torch.Tensor,
+        dict[str, Any] | None,
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
@@ -347,7 +362,11 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 for mod_name, mod_loss in per_modality_losses.items():
                     extra_metrics[f"supervision/{mod_name}"] = mod_loss
 
-            if extra_metrics is not None:
-                self.log_extra_metrics(extra_metrics)
-
-            return loss, latent, decoded, target_output, latent_projected_and_pooled
+            return (
+                loss,
+                latent,
+                decoded,
+                target_output,
+                latent_projected_and_pooled,
+                extra_metrics,
+            )

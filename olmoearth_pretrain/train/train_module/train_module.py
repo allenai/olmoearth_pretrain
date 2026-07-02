@@ -18,7 +18,7 @@ from olmo_core.distributed.parallel import (
     get_dp_mesh,
     get_dp_process_group,
 )
-from olmo_core.distributed.utils import get_world_size
+from olmo_core.distributed.utils import get_local_tensor, get_world_size
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
@@ -596,6 +596,50 @@ class OlmoEarthTrainModule(TrainModule):
             total_batch_reg,
             ReduceType.mean,
         )
+
+    def accumulate_extra_metrics(
+        self,
+        accumulator: dict[str, Any],
+        counts: dict[str, int],
+        extra_metrics: dict[str, Any],
+    ) -> None:
+        """Accumulate extra metrics across microbatches.
+
+        Extra metrics used to be logged once per microbatch, which trips
+        olmo-core's duplicate-metric warning (it keeps the first value for a
+        given step/name and warns on the rest). We instead accumulate here and
+        log once per step, like the train loss.
+
+        Flattens one level of nesting to match ``log_extra_metrics`` key naming,
+        and tracks a per-key count so metrics present in only some microbatches
+        (e.g. a supervision modality absent from a microbatch) are averaged over
+        the microbatches that actually contributed them.
+        """
+
+        def _add(name: str, value: Any) -> None:
+            if isinstance(value, torch.Tensor):
+                value = get_local_tensor(value.detach())
+            accumulator[name] = accumulator.get(name, 0) + value
+            counts[name] = counts.get(name, 0) + 1
+
+        for key, value in extra_metrics.items():
+            if isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    _add(f"{key}/{sub_key}", sub_value)
+            else:
+                _add(key, value)
+
+    def log_accumulated_extra_metrics(
+        self,
+        accumulator: dict[str, Any],
+        counts: dict[str, int],
+        reduce_type: ReduceType | None = None,
+    ) -> None:
+        """Log metrics accumulated across microbatches, averaged per key."""
+        if not counts:
+            return
+        averaged = {name: total / counts[name] for name, total in accumulator.items()}
+        self.log_extra_metrics(averaged, reduce_type=reduce_type)
 
     def log_extra_metrics(
         self, extra_metrics: dict[str, Any], reduce_type: ReduceType | None = None
