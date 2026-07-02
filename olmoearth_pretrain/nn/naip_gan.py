@@ -172,8 +172,18 @@ class NaipDiscriminator(nn.Module):
     """Conditional PatchGAN discriminator over NAIP images.
 
     The image is downsampled with strided convs, adaptively pooled to the token
-    grid, then concatenated with the projected pooled embedding before a small
-    conv head produces per-patch real/fake logits.
+    grid, then combined with the projected pooled embedding before a conv head
+    produces per-patch real/fake logits.
+
+    Because the condition here is a rich Sentinel-2-derived embedding (not a
+    downscaled NAIP image), the discriminator can be pushed to actually judge
+    image-vs-condition *consistency* rather than unconditional realism via:
+
+    * an MLP projection of the condition (``cond_hidden_size``),
+    * a deeper reasoning head (``num_head_res_blocks``), and
+    * a projection-discriminator inner-product term (``use_projection``;
+      Miyato & Koyama, "cGANs with Projection Discriminator"), which only
+      rewards logits when image features align with the projected condition.
     """
 
     def __init__(
@@ -183,6 +193,10 @@ class NaipDiscriminator(nn.Module):
         hidden_size: int = 64,
         num_image_layers: int = 3,
         max_channel_multiple: int = 4,
+        cond_hidden_size: int | None = None,
+        num_head_res_blocks: int = 0,
+        use_projection: bool = False,
+        num_groups: int = 8,
     ):
         """Initialize the discriminator.
 
@@ -193,6 +207,18 @@ class NaipDiscriminator(nn.Module):
             num_image_layers: Number of strided conv layers on the image.
             max_channel_multiple: Cap on the channel growth as a multiple of
                 ``hidden_size``.
+            cond_hidden_size: If set, project the condition with a 2-layer MLP
+                (``embedding_size -> cond_hidden_size -> feature_channels``)
+                instead of a single linear, giving the condition real transform
+                capacity.
+            num_head_res_blocks: Number of residual blocks inserted into the
+                fusion head so it has depth to compare image features against the
+                condition (0 keeps the original shallow head).
+            use_projection: If True, add a projection-discriminator term: the
+                spatial inner product between the image features and the
+                projected condition is added to the logits, so the discriminator
+                cannot score well by ignoring the condition.
+            num_groups: Target GroupNorm groups for the head residual blocks.
         """
         super().__init__()
         layers: list[nn.Module] = []
@@ -205,9 +231,18 @@ class NaipDiscriminator(nn.Module):
             c_out = min(c_out * 2, hidden_size * max_channel_multiple)
         self.from_image = nn.Sequential(*layers)
         self.feature_channels = c_in
+        self.use_projection = use_projection
 
-        self.cond_proj = nn.Linear(embedding_size, self.feature_channels)
-        self.head = nn.Sequential(
+        if cond_hidden_size is None:
+            self.cond_proj: nn.Module = nn.Linear(embedding_size, self.feature_channels)
+        else:
+            self.cond_proj = nn.Sequential(
+                nn.Linear(embedding_size, cond_hidden_size),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Linear(cond_hidden_size, self.feature_channels),
+            )
+
+        head_layers: list[nn.Module] = [
             nn.Conv2d(
                 self.feature_channels * 2,
                 self.feature_channels,
@@ -215,8 +250,13 @@ class NaipDiscriminator(nn.Module):
                 padding=1,
             ),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(self.feature_channels, 1, kernel_size=3, padding=1),
+        ]
+        for _ in range(num_head_res_blocks):
+            head_layers.append(_ResBlock(self.feature_channels, num_groups))
+        head_layers.append(
+            nn.Conv2d(self.feature_channels, 1, kernel_size=3, padding=1)
         )
+        self.head = nn.Sequential(*head_layers)
 
     def forward(self, image: Tensor, cond: Tensor) -> Tensor:
         """Classify each patch as real or fake.
@@ -229,15 +269,21 @@ class NaipDiscriminator(nn.Module):
             Per-patch logits of shape ``[B, 1, H, W]``.
         """
         # The discriminator is kept in its own (fp32) precision, separate from the
-        # FSDP mixed-precision model, so cast inputs to its param dtype.
-        param_dtype = self.cond_proj.weight.dtype
+        # FSDP mixed-precision model, so cast inputs to its param dtype. Reference
+        # the first image conv, which exists regardless of the cond-proj variant.
+        param_dtype = self.from_image[0].weight.dtype
         image = image.to(param_dtype)
         cond = cond.to(param_dtype)
         feats = self.from_image(image)
         feats = F.adaptive_avg_pool2d(feats, output_size=cond.shape[1:3])
         cond_feats = self.cond_proj(cond).permute(0, 3, 1, 2).contiguous()
         combined = torch.cat([feats, cond_feats], dim=1)
-        return self.head(combined)
+        logits = self.head(combined)
+        if self.use_projection:
+            # Projection-discriminator term: reward image/condition agreement.
+            proj = (feats * cond_feats).sum(dim=1, keepdim=True)
+            logits = logits + proj
+        return logits
 
 
 def discriminator_adversarial_loss(
@@ -304,13 +350,22 @@ class NaipGeneratorConfig(Config):
 
 @dataclass
 class NaipDiscriminatorConfig(Config):
-    """Configuration for :class:`NaipDiscriminator`."""
+    """Configuration for :class:`NaipDiscriminator`.
+
+    Set ``cond_hidden_size``, ``num_head_res_blocks`` and ``use_projection`` to
+    make the discriminator reason more about the conditioning embedding (rather
+    than just the realism of the input image).
+    """
 
     embedding_size: int
     in_channels: int = 4
     hidden_size: int = 64
     num_image_layers: int = 3
     max_channel_multiple: int = 4
+    cond_hidden_size: int | None = None
+    num_head_res_blocks: int = 0
+    use_projection: bool = False
+    num_groups: int = 8
 
     def build(self) -> NaipDiscriminator:
         """Build the discriminator."""
@@ -320,6 +375,10 @@ class NaipDiscriminatorConfig(Config):
             hidden_size=self.hidden_size,
             num_image_layers=self.num_image_layers,
             max_channel_multiple=self.max_channel_multiple,
+            cond_hidden_size=self.cond_hidden_size,
+            num_head_res_blocks=self.num_head_res_blocks,
+            use_projection=self.use_projection,
+            num_groups=self.num_groups,
         )
 
 
