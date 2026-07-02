@@ -159,6 +159,14 @@ class Era5DailyEncoderConfig(Config):
         use_conv_stem: When True, replace the single Conv1D patch embedding
             with a two-layer stem (Conv1D + GroupNorm + GELU + 1x1 Conv1D)
             that has enough nonlinear capacity to gate out masked channels.
+        use_stem_norm: Whether to include the tokenizer GroupNorm. ``None``
+            (default) follows the stem-type default — on for ``use_conv_stem``,
+            off for the single Conv1D — preserving legacy behavior. Set
+            explicitly to disentangle the extra nonlinear layer from the
+            normalization (the 2x2 {single, two-layer} x {no-norm, GroupNorm}
+            ablation): with ``use_conv_stem=True`` it toggles the GroupNorm
+            inside the stem; with ``use_conv_stem=False`` it appends a
+            ``GroupNorm(1, d_model)`` after the single Conv1D.
         extras: Reserved for objective C plumbing.
     """
 
@@ -178,6 +186,7 @@ class Era5DailyEncoderConfig(Config):
     add_relative_position_features: bool = False
     use_mask_embed: bool = False
     use_conv_stem: bool = False
+    use_stem_norm: bool | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
@@ -240,26 +249,39 @@ class Era5DailyEncoder(nn.Module):
             self.mask_embed = None
 
         # Patch embedding: [B, C, T] -> [B, d_model, N]
+        # `use_stem_norm=None` follows the stem-type default (GroupNorm on for
+        # the conv stem, off for the single conv) so legacy behavior is
+        # preserved; an explicit bool enables the 2x2 stem/norm ablation.
+        use_stem_norm = (
+            config.use_stem_norm
+            if config.use_stem_norm is not None
+            else config.use_conv_stem
+        )
         if config.use_conv_stem:
             mid = d_model // 2
-            self.patch_embed: nn.Module = nn.Sequential(
+            stem_layers: list[nn.Module] = [
                 nn.Conv1d(
                     in_channels,
                     mid,
                     kernel_size=config.patch_kernel_size,
                     stride=config.patch_stride,
-                ),
-                nn.GroupNorm(1, mid),
-                nn.GELU(),
-                nn.Conv1d(mid, d_model, kernel_size=1),
-            )
+                )
+            ]
+            if use_stem_norm:
+                stem_layers.append(nn.GroupNorm(1, mid))
+            stem_layers += [nn.GELU(), nn.Conv1d(mid, d_model, kernel_size=1)]
+            self.patch_embed: nn.Module = nn.Sequential(*stem_layers)
         else:
-            self.patch_embed = nn.Conv1d(
+            conv = nn.Conv1d(
                 in_channels=in_channels,
                 out_channels=d_model,
                 kernel_size=config.patch_kernel_size,
                 stride=config.patch_stride,
             )
+            if use_stem_norm:
+                self.patch_embed = nn.Sequential(conv, nn.GroupNorm(1, d_model))
+            else:
+                self.patch_embed = conv
         self.dropout = nn.Dropout(config.dropout)
 
         # Time features (day-of-year sin/cos, optional relative pos sin/cos)

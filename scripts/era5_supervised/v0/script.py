@@ -155,6 +155,7 @@ class Era5SupervisedCommonComponents(CommonComponents):
     encoder_num_heads: int = 6
     encoder_pooling: str = Era5Pooling.MEAN.value
     encoder_use_conv_stem: bool = False
+    encoder_use_stem_norm: bool | None = None
     global_batch_size: int = 64
     rank_microbatch_size: int = 32
     num_workers: int = 4
@@ -683,6 +684,7 @@ def build_model_config(
         pooling=common.encoder_pooling,
         use_mask_embed=common.enable_reconstruction,
         use_conv_stem=common.encoder_use_conv_stem,
+        use_stem_norm=common.encoder_use_stem_norm,
     )
     return Era5MultiObjectiveModelConfig(
         encoder_config=encoder_config,
