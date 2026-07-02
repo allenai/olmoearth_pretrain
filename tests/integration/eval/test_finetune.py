@@ -45,6 +45,7 @@ def test_segmentation_eval_pipeline() -> None:
         "macro_f1",
         "micro_f1",
         "auroc",
+        "prauc",
     } | {f"f1_class_{i}" for i in range(num_classes)}
     assert set(result.metrics.keys()) == expected_keys
 

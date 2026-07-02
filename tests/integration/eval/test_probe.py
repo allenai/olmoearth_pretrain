@@ -112,6 +112,7 @@ def test_probe_seg() -> None:
         "macro_f1",
         "micro_f1",
         "auroc",
+        "prauc",
     } | {f"f1_class_{i}" for i in range(config.num_classes)}
     assert set(result.val_result.metrics.keys()) == expected_metrics
     assert set(result.test_result.metrics.keys()) == expected_metrics
