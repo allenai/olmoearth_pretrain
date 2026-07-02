@@ -548,7 +548,12 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                 # params, which would then be applied by ``disc_optimizer``.
                 for p in self.discriminator.parameters():
                     p.requires_grad_(False)
-                fake_logits = self.discriminator(fake_v, cond_v)
+                # Detach the condition so the adversarial gradient only reaches
+                # the encoder through the generated image (fake_v), not through
+                # the conditioning tokens the discriminator ingests. This stops
+                # the encoder from "cheating" the discriminator by reshaping the
+                # condition embedding instead of improving the generated image.
+                fake_logits = self.discriminator(fake_v, cond_v.detach())
                 for p in self.discriminator.parameters():
                     p.requires_grad_(True)
                 g_adv = generator_adversarial_loss(fake_logits, self.gan_loss_type)
