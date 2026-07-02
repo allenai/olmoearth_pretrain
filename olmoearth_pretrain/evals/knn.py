@@ -65,7 +65,9 @@ def run_knn(
     bootstrap_stats: dict = {}
 
     if not config.is_multilabel:
-        val_predictions = _run_knn_for_k(
+        # Soft per-class vote distribution; argmax of it equals the hard KNN
+        # prediction, and the distribution doubles as scores for AUROC.
+        val_scores = _run_knn_for_k(
             train_embeddings=train_embeddings,
             train_labels=train_labels,
             test_embeddings=val_embeddings,
@@ -73,10 +75,13 @@ def run_knn(
             k=k,
             device=device,
             skip_idx=skip_idx,
+            return_scores=True,
         )
+        val_predictions = torch.argmax(val_scores, dim=1)
         val_result = classification_metrics(
             predictions=val_predictions,
             labels=val_labels,
+            scores=val_scores,
             is_multilabel=False,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
@@ -85,7 +90,7 @@ def run_knn(
         if test_embeddings is not None:
             if test_labels is None:
                 raise ValueError("Can't have test embeddings without test labels")
-            test_predictions = _run_knn_for_k(
+            test_scores = _run_knn_for_k(
                 train_embeddings=train_embeddings,
                 train_labels=train_labels,
                 test_embeddings=test_embeddings,
@@ -93,10 +98,13 @@ def run_knn(
                 k=k,
                 device=device,
                 skip_idx=skip_idx,
+                return_scores=True,
             )
+            test_predictions = torch.argmax(test_scores, dim=1)
             test_result = classification_metrics(
                 predictions=test_predictions,
                 labels=test_labels,
+                scores=test_scores,
                 is_multilabel=False,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
