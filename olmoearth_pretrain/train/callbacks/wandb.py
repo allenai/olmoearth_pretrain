@@ -77,6 +77,11 @@ class OlmoEarthWandBCallback(WandBCallback):
     upload_dataset_distribution_pre_train: bool = True
     upload_modality_data_band_distribution_pre_train: bool = False
     restart_on_same_run: bool = True
+    # Optional explicit path to the file storing this run's wandb id. When set,
+    # the run always resumes from (and writes) this id. This lets multiple
+    # separate jobs (e.g. the in-loop beaker eval jobs) share one wandb run id so
+    # their metrics consolidate into a single run instead of one run per job.
+    runid_path: str | None = None
 
     def pre_train(self) -> None:
         """Pre-train callback for the wandb callback."""
@@ -88,10 +93,17 @@ class OlmoEarthWandBCallback(WandBCallback):
             wandb_dir = Path(self.trainer.save_folder) / "wandb"
             wandb_dir.mkdir(parents=True, exist_ok=True)
             resume_id = None
-            if self.restart_on_same_run:
-                runid_file = wandb_dir / "wandb_runid.txt"
-                if runid_file.exists():
-                    resume_id = runid_file.read_text().strip()
+            # A shared runid_path (set for in-loop beaker eval jobs) makes every
+            # job resume one wandb run; otherwise fall back to the per-run file
+            # when restart_on_same_run is set.
+            runid_file = (
+                Path(self.runid_path)
+                if self.runid_path
+                else wandb_dir / "wandb_runid.txt"
+            )
+            use_runid_file = self.runid_path is not None or self.restart_on_same_run
+            if use_runid_file and runid_file.exists():
+                resume_id = runid_file.read_text().strip()
 
             self.wandb.init(
                 dir=wandb_dir,
@@ -107,7 +119,8 @@ class OlmoEarthWandBCallback(WandBCallback):
                 settings=self.wandb.Settings(init_timeout=240),
             )
 
-            if not resume_id and self.restart_on_same_run:
+            if not resume_id and use_runid_file:
+                runid_file.parent.mkdir(parents=True, exist_ok=True)
                 runid_file.write_text(self.run.id)
 
             self._run_path = self.run.path  # type: ignore
