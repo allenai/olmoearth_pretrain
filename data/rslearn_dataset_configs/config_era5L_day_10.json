@@ -1,0 +1,45 @@
+{
+  "layers": {
+    "era5_365dhistory": {
+      "band_sets": [
+        {
+          "bands": [
+            "d2m",
+            "e",
+            "pev",
+            "ro",
+            "sp",
+            "ssr",
+            "ssrd",
+            "str",
+            "swvl1",
+            "swvl2",
+            "t2m",
+            "tp",
+            "u10",
+            "v10"
+          ],
+          "dtype": "float32",
+          "format": {
+            "class_path": "rslearn.utils.raster_format.NumpyRasterFormat"
+          },
+          "spatial_size": [
+            1,
+            1
+          ]
+        }
+      ],
+      "compositing_method": "SPATIAL_MOSAIC_TEMPORAL_STACK",
+      "data_source": {
+        "class_path": "rslearn.data_sources.earthdatahub.ERA5LandDailyUTCv1",
+        "duration": "720d",
+        "query_config": {
+          "max_matches": 1,
+          "space_mode": "SINGLE_COMPOSITE"
+        },
+        "time_offset": "-510d"
+      },
+      "type": "raster"
+    }
+  }
+}
