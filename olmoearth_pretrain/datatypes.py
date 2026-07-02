@@ -85,6 +85,10 @@ class OlmoEarthSample(NamedTuple):
     sentinel2_l2a: ArrayTensor | None = None  # [B, H, W, T, len(S2_bands)]
     sentinel1: ArrayTensor | None = None  # [B, H, W, T, len(S1_bands)]
     worldcover: ArrayTensor | None = None  # [B, H, W, 1, len(WC_bands)]
+    # worldcover_onehot is derived from worldcover at load time (one channel per class).
+    worldcover_onehot: ArrayTensor | None = (
+        None  # [B, H, W, 1, len(WORLDCOVER_CLASSES)]
+    )
     openstreetmap_raster: ArrayTensor | None = None  # [B, H, W, 1, len(OSM_bands)]
     srtm: ArrayTensor | None = None  # [B, H, W, 1, len(SRTM_bands)]
     landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
@@ -358,6 +362,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     sentinel1_mask: Tensor | None = None
     worldcover: Tensor | None = None
     worldcover_mask: Tensor | None = None
+    worldcover_onehot: Tensor | None = None
+    worldcover_onehot_mask: Tensor | None = None
     latlon: Tensor | None = None  # [B, 2]
     latlon_mask: Tensor | None = None
     openstreetmap_raster: Tensor | None = None
@@ -500,6 +506,8 @@ class TokensAndMasks(NamedTuple):
     sentinel1_mask: Tensor | None = None
     worldcover: Tensor | None = None
     worldcover_mask: Tensor | None = None
+    worldcover_onehot: Tensor | None = None
+    worldcover_onehot_mask: Tensor | None = None
     openstreetmap_raster: Tensor | None = None
     openstreetmap_raster_mask: Tensor | None = None
     srtm: Tensor | None = None

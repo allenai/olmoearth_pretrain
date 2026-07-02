@@ -49,6 +49,7 @@ class EvalWrapper:
         concat_features: bool = False,
         use_pooled_tokens: bool = False,
         eval_on_encoder_tokens: bool = False,
+        use_center_token: bool = False,
     ):
         """Initialize the eval wrapper.
 
@@ -63,7 +64,8 @@ class EvalWrapper:
                 probe the pooled encoder patch tokens instead of the register latents.
                 No effect when the model has no register bottleneck (encoder tokens are
                 always used in that case).
-            is_train: whether this is being used on the training data.
+            use_center_token: Whether to use the center spatial patch embedding instead
+                of pooling across all patches for classification tasks.
         """
         super().__init__()
         self.model = model
@@ -78,6 +80,12 @@ class EvalWrapper:
         self.spatial_pool = task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION)
         self.use_pooled_tokens = use_pooled_tokens
         self.eval_on_encoder_tokens = eval_on_encoder_tokens
+        self.use_center_token = use_center_token
+        if self.use_center_token and self.spatial_pool:
+            raise ValueError(
+                "use_center_token is only supported for classification tasks, "
+                "not segmentation (spatial_pool=True)"
+            )
         if self.use_pooled_tokens:
             assert isinstance(self.model, EncodeEarlyAttnPool), (
                 "Pooled tokens are only supported for EncodeEarlyAttnPool"
@@ -100,6 +108,19 @@ class EvalWrapper:
     def __getattr__(self, name: str) -> Any:
         """Delegate attribute access to the underlying model if the attribute is not found on the wrapper."""
         return getattr(self.model, name)
+
+    @staticmethod
+    def _extract_center_token(spatial_embeddings: torch.Tensor) -> torch.Tensor:
+        """Extract the center spatial patch embedding.
+
+        Args:
+            spatial_embeddings: Tensor of shape (B, H, W, D).
+
+        Returns:
+            Tensor of shape (B, D) from the center patch.
+        """
+        H, W = spatial_embeddings.shape[1], spatial_embeddings.shape[2]
+        return spatial_embeddings[:, H // 2, W // 2, :]
 
     def __call__(
         self,
@@ -161,12 +182,22 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                     "tokens_and_masks"
                 ]  # (bsz, dim)
                 # Concat features across modalities in space averaged across time
-                batch_embeddings = pool_unmasked_tokens(
-                    tokens_and_masks,
-                    self.pooling_type,
-                    spatial_pooling=self.spatial_pool,
-                    concat_features=self.concat_features,
-                )
+                if self.use_center_token:
+                    # Get spatial embeddings (B, H, W, D) then take center patch
+                    batch_embeddings = pool_unmasked_tokens(
+                        tokens_and_masks,
+                        self.pooling_type,
+                        spatial_pooling=True,
+                        concat_features=self.concat_features,
+                    )
+                    batch_embeddings = self._extract_center_token(batch_embeddings)
+                else:
+                    batch_embeddings = pool_unmasked_tokens(
+                        tokens_and_masks,
+                        self.pooling_type,
+                        spatial_pooling=self.spatial_pool,
+                        concat_features=self.concat_features,
+                    )
         else:
             pooled_tokens_dict = self.model(
                 masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True
@@ -184,8 +215,16 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                 pooled_tokens = reduce(
                     pooled_tokens, "b h w ... d -> b h w d", self.pooling_type
                 )
+            elif self.use_center_token:
+                # Pool time but keep spatial, then take center patch
+                if pooled_tokens.shape[1] == 1 and pooled_tokens.ndim == 3:
+                    pooled_tokens = pooled_tokens.unsqueeze(1)
+                pooled_tokens = reduce(
+                    pooled_tokens, "b h w ... d -> b h w d", self.pooling_type
+                )
+                pooled_tokens = self._extract_center_token(pooled_tokens)
             else:
-                # Take the mean of all dims excetp the first and last
+                # Take the mean of all dims except the first and last
                 pooled_tokens = reduce(
                     pooled_tokens, "b ... d -> b d", self.pooling_type
                 )
@@ -208,11 +247,14 @@ class TerramindEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
         batch_embeddings = self.model(
             masked_olmoearth_sample,
             pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
+            spatial_pool=spatial_pool,
         )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
         return batch_embeddings, labels
 
 
@@ -226,11 +268,13 @@ class PanopticonEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
-        if self.spatial_pool:
+        if self.spatial_pool or self.use_center_token:
             # Intermediate features are not yet working because of some bug internal to the model
             batch_embeddings = self.model.forward_features(
                 masked_olmoearth_sample, pooling=self.pooling_type
             )
+            if self.use_center_token:
+                batch_embeddings = self._extract_center_token(batch_embeddings)
         else:
             batch_embeddings = self.model(
                 masked_olmoearth_sample, pooling=self.pooling_type
@@ -248,11 +292,14 @@ class GalileoEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
         embeddings = self.model(
             masked_olmoearth_sample,
             pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
+            spatial_pool=spatial_pool,
         )
+        if self.use_center_token:
+            embeddings = self._extract_center_token(embeddings)
         return embeddings, labels
 
 
@@ -266,11 +313,15 @@ class AnySatEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
         embeddings = self.model(
             masked_olmoearth_sample,
             pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
+            spatial_pool=spatial_pool,
         )
+        if self.use_center_token:
+            embeddings = self._extract_center_token(embeddings)
+            return embeddings, labels
         if is_train and (self.task_type == TaskType.SEGMENTATION):
             # this is a special case for AnySat. Since it outputs per-pixel embeddings,
             # we subsample training pixels to keep the memory requirements reasonable.
@@ -313,11 +364,14 @@ class PrithviV2EvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
         embeddings = self.model(
             masked_olmoearth_sample,
             pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
+            spatial_pool=spatial_pool,
         )
+        if self.use_center_token:
+            embeddings = self._extract_center_token(embeddings)
         return embeddings, labels
 
 
@@ -331,11 +385,14 @@ class ClayEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
         batch_embeddings = self.model(
             masked_olmoearth_sample,
             pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
+            spatial_pool=spatial_pool,
         )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
         return batch_embeddings, labels
 
 
@@ -349,11 +406,14 @@ class CromaEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
         batch_embeddings = self.model(
             masked_olmoearth_sample,
             pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
+            spatial_pool=spatial_pool,
         )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
         return batch_embeddings, labels
 
 
@@ -367,11 +427,14 @@ class PrestoEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
         batch_embeddings = self.model(
             masked_olmoearth_sample,
             pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
+            spatial_pool=spatial_pool,
         )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
         return batch_embeddings, labels
 
 
@@ -386,12 +449,14 @@ class DINOv3EvalWrapper(EvalWrapper):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         # i need to do the apply imagenet normalizer thing in here
-        if self.spatial_pool:
+        if self.spatial_pool or self.use_center_token:
             # Intermediate features are not yet working because of some bug internal to the model
             batch_embeddings = self.model.forward_features(
                 masked_olmoearth_sample,
                 pooling=self.pooling_type,
             )
+            if self.use_center_token:
+                batch_embeddings = self._extract_center_token(batch_embeddings)
         else:
             # should this call model ditectly
             batch_embeddings = self.model(
@@ -411,11 +476,14 @@ class SatlasEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
         batch_embeddings = self.model(
             masked_olmoearth_sample,
             pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
+            spatial_pool=spatial_pool,
         )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
         return batch_embeddings, labels
 
 
@@ -429,11 +497,14 @@ class TesseraEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
         batch_embeddings = self.model(
             masked_olmoearth_sample,
             pooling=self.pooling_type,
-            spatial_pool=self.spatial_pool,
+            spatial_pool=spatial_pool,
         )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
         return batch_embeddings, labels
 
 

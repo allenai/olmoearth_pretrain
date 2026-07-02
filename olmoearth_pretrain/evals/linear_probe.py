@@ -78,6 +78,7 @@ class ProbeType(StrEnum):
 
     ATTNPOOL = "attnpool"
     LINEAR = "linear"
+    INTERPOLATE_LINEAR = "interpolate_linear"
     BILINEAR_CONV = "bilinear_conv"
 
 
@@ -86,7 +87,9 @@ class AttnPoolLinearProbe(nn.Module):
 
     Args:
         in_dim (int): Input feature dimension. Must be divisible by 64.
-        out_dim (int): Output dimension (typically num_classes * patch_size * patch_size).
+        num_classes (int): Number of output classes.
+        task_type (TaskType): Must be SEGMENTATION.
+        num_output_pixels_per_side_of_patch (int | None): Number of output pixels per side of each patch.
 
     Attributes:
         query_token (nn.Parameter): Learnable query token for attention pooling.
@@ -95,10 +98,25 @@ class AttnPoolLinearProbe(nn.Module):
         linear (nn.Linear): Final linear layer for output logits.
     """
 
-    def __init__(self, in_dim: int, out_dim: int) -> None:
+    def __init__(
+        self,
+        in_dim: int,
+        num_classes: int,
+        task_type: TaskType,
+        num_output_pixels_per_side_of_patch: int | None = None,
+    ) -> None:
         """Initialize the attention pooling linear probe."""
         super().__init__()
+        if task_type != TaskType.SEGMENTATION:
+            raise ValueError("AttnPoolLinearProbe only supports segmentation")
+        if num_output_pixels_per_side_of_patch is None:
+            raise ValueError(
+                "num_output_pixels_per_side_of_patch is required for AttnPoolLinearProbe"
+            )
         assert in_dim % 64 == 0, "in_dim must be divisible by 64"
+        out_dim = num_classes * num_output_pixels_per_side_of_patch**2
+        self.num_classes = num_classes
+        self.num_output_pixels_per_side_of_patch = num_output_pixels_per_side_of_patch
         self.query_token: nn.Parameter = nn.Parameter(torch.empty(in_dim))
         self.num_heads: int = in_dim // 64
         self.kv: nn.Linear = nn.Linear(in_dim, in_dim * 2)
@@ -120,9 +138,9 @@ class AttnPoolLinearProbe(nn.Module):
             feat_tokens (torch.Tensor): Input feature tokens of shape (B, H, W, N, D).
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor]:
-                - Output logits after linear layer, shape (B, H, W, out_dim).
-                - Attention weights, shape (B*H*W, num_heads, 1, N).
+            dict with:
+                - "logits": Output logits, shape (B, C, H_out, W_out).
+                - "attn_weights": Attention weights, shape (B*H*W, num_heads, 1, N).
         """
         B, H, W, N, D = feat_tokens.shape
         feat_tokens = rearrange(feat_tokens, "b h w n d -> (b h w) n d")
@@ -144,7 +162,64 @@ class AttnPoolLinearProbe(nn.Module):
         attn_weights = F.softmax(attn_scores, dim=-1)
         x = torch.matmul(attn_weights, v)  # [B, head, 1, D_head]
         x = x.reshape(B, H, W, D)
-        return {"logits": self.linear(x), "attn_weights": attn_weights}
+        logits = self.linear(x)  # (B, H, W, out_dim)
+        logits = rearrange(
+            logits,
+            "b h w (c i j) -> b c (h i) (w j)",
+            c=self.num_classes,
+            i=self.num_output_pixels_per_side_of_patch,
+            j=self.num_output_pixels_per_side_of_patch,
+        )
+        return {"logits": logits, "attn_weights": attn_weights}
+
+
+class InterpolateLinearProbe(nn.Module):
+    """Probe that bilinear-interpolates embeddings to full resolution then applies a per-pixel linear layer.
+
+    For segmentation only. Takes (B, H_p, W_p, D) embeddings, upsamples to
+    (B, H_p * num_output_pixels_per_side_of_patch, ..., D), then applies Linear(D, num_classes).
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        num_classes: int,
+        task_type: TaskType,
+        num_output_pixels_per_side_of_patch: int | None = None,
+    ) -> None:
+        """Initialize the interpolate linear probe."""
+        super().__init__()
+        if task_type != TaskType.SEGMENTATION:
+            raise ValueError("InterpolateLinearProbe only supports segmentation")
+        if num_output_pixels_per_side_of_patch is None:
+            raise ValueError(
+                "num_output_pixels_per_side_of_patch is required for InterpolateLinearProbe"
+            )
+        self.linear = nn.Linear(in_dim, num_classes)
+        self.num_output_pixels_per_side_of_patch = num_output_pixels_per_side_of_patch
+
+    def forward(self, x: torch.Tensor) -> dict:
+        """Forward pass: bilinear upsample embeddings, then per-pixel linear.
+
+        Args:
+            x: Embedding tensor of shape (B, H_p, W_p, D).
+
+        Returns:
+            dict with "logits" of shape (B, C, H, W).
+        """
+        B, H_p, W_p, D = x.shape
+        target_hw = H_p * self.num_output_pixels_per_side_of_patch
+        x = rearrange(x, "b h w d -> b d h w")
+        x = F.interpolate(
+            x,
+            size=(target_hw, target_hw),
+            mode="bilinear",
+            align_corners=True,
+        )
+        x = rearrange(x, "b d h w -> b h w d")
+        logits = self.linear(x)  # (B, target_hw, target_hw, C)
+        logits = rearrange(logits, "b h w c -> b c h w")
+        return {"logits": logits}
 
 
 class BilinearConvProbe(nn.Module):
@@ -160,17 +235,32 @@ class BilinearConvProbe(nn.Module):
     sparse point-label regression tasks like LFMC.
     """
 
-    def __init__(self, in_dim: int, scale_factor: int, out_channels: int = 1) -> None:
+    def __init__(
+        self,
+        in_dim: int,
+        num_classes: int,
+        task_type: TaskType,
+        num_output_pixels_per_side_of_patch: int | None = None,
+    ) -> None:
         """Initialize the bilinear conv probe.
 
         Args:
             in_dim: Embedding dimension per patch.
-            scale_factor: Spatial upsample factor (typically patch_size).
-            out_channels: Number of output channels (1 for regression).
+            num_classes: Number of output classes (used for non-regression tasks).
+            task_type: Task type; REGRESSION produces a single output channel.
+            num_output_pixels_per_side_of_patch: Spatial upsample factor (typically
+                patch_size).
         """
         super().__init__()
+        if num_output_pixels_per_side_of_patch is None:
+            raise ValueError(
+                "num_output_pixels_per_side_of_patch is required for BilinearConvProbe"
+            )
+        out_channels = 1 if task_type == TaskType.REGRESSION else num_classes
         self.upsample = nn.Upsample(
-            scale_factor=scale_factor, mode="bilinear", align_corners=True
+            scale_factor=num_output_pixels_per_side_of_patch,
+            mode="bilinear",
+            align_corners=True,
         )
         self.conv = nn.Conv2d(in_dim, out_channels, kernel_size=1)
 
@@ -193,20 +283,55 @@ class BilinearConvProbe(nn.Module):
 
 
 class LinearProbe(nn.Module):
-    """Linear Probe for classification tasks."""
+    """Linear Probe for classification and segmentation tasks.
 
-    def __init__(self, in_dim: int, out_dim: int, use_batchnorm: bool = False) -> None:
+    For classification: applies BatchNorm1d then Linear(D, num_classes).
+    For segmentation: applies Linear(D, num_classes * ps^2) then rearranges to (B, C, H, W).
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        num_classes: int,
+        task_type: TaskType,
+        num_output_pixels_per_side_of_patch: int | None = None,
+    ) -> None:
         """Initialize the linear probe."""
         super().__init__()
-        self.linear = nn.Linear(in_dim, out_dim)
-        if use_batchnorm:
-            self.batchnorm = nn.BatchNorm1d(in_dim)
+        self.task_type = task_type
+        self.num_classes = num_classes
+        self.num_output_pixels_per_side_of_patch = num_output_pixels_per_side_of_patch
+        if task_type == TaskType.SEGMENTATION:
+            assert num_output_pixels_per_side_of_patch is not None, (
+                "num_output_pixels_per_side_of_patch is required for segmentation"
+            )
+            out_dim = num_classes * num_output_pixels_per_side_of_patch**2
+            self.batchnorm: nn.Module = nn.Identity()
         else:
-            self.batchnorm = nn.Identity()
+            out_dim = num_classes
+            self.batchnorm = nn.BatchNorm1d(in_dim)
+        self.linear = nn.Linear(in_dim, out_dim)
 
     def forward(self, x: torch.Tensor) -> dict:
         """Forward pass for linear probe."""
-        return {"logits": self.linear(self.batchnorm(x))}
+        logits = self.linear(self.batchnorm(x))
+        if self.task_type == TaskType.SEGMENTATION:
+            logits = rearrange(
+                logits,
+                "b h w (c i j) -> b c (h i) (w j)",
+                c=self.num_classes,
+                i=self.num_output_pixels_per_side_of_patch,
+                j=self.num_output_pixels_per_side_of_patch,
+            )
+        return {"logits": logits}
+
+
+PROBE_TYPE_TO_CLASS: dict[ProbeType, type[nn.Module]] = {
+    ProbeType.LINEAR: LinearProbe,
+    ProbeType.ATTNPOOL: AttnPoolLinearProbe,
+    ProbeType.INTERPOLATE_LINEAR: InterpolateLinearProbe,
+    ProbeType.BILINEAR_CONV: BilinearConvProbe,
+}
 
 
 def train_and_eval_probe(
@@ -280,47 +405,26 @@ def train_and_eval_probe(
         output_pixels_per_side_of_patch = int(
             (config.height_width**2 / num_patches) ** 0.5
         )
-        output_channels = (
-            1 if config.task_type == TaskType.REGRESSION else config.num_classes
+
+    # Regression auto-upgrades a plain LINEAR probe to the spatially-aware
+    # BilinearConvProbe; attention pooling is not supported for regression.
+    if config.task_type == TaskType.REGRESSION and probe_type == ProbeType.LINEAR:
+        probe_type = ProbeType.BILINEAR_CONV
+        logger.info(
+            "Auto-upgrading probe from LINEAR to BILINEAR_CONV for regression "
+            "(shared 1×1 conv with bilinear upsampling is better regularized "
+            "for sparse per-pixel regression targets)."
         )
-        num_output_pixels = output_channels * output_pixels_per_side_of_patch**2
-        logits_per_patch = num_output_pixels
-        if config.task_type == TaskType.REGRESSION and probe_type == ProbeType.LINEAR:
-            probe_type = ProbeType.BILINEAR_CONV
-            logger.info(
-                "Auto-upgrading probe from LINEAR to BILINEAR_CONV for regression "
-                "(shared 1×1 conv with bilinear upsampling is better regularized "
-                "for sparse per-pixel regression targets)."
-            )
-        if probe_type == ProbeType.BILINEAR_CONV:
-            probe = BilinearConvProbe(
-                in_dim=in_features,
-                scale_factor=output_pixels_per_side_of_patch,
-                out_channels=output_channels,
-            ).to(device)
-        elif probe_type == ProbeType.ATTNPOOL:
-            if config.task_type == TaskType.REGRESSION:
-                raise ValueError("Attention pooling is not supported for regression.")
-            probe = AttnPoolLinearProbe(
-                in_dim=in_features, out_dim=logits_per_patch
-            ).to(device)
-        elif probe_type == ProbeType.LINEAR:
-            probe = LinearProbe(
-                in_dim=in_features, out_dim=logits_per_patch, use_batchnorm=False
-            ).to(device)
-        else:
-            raise ValueError(
-                f"Probe type {probe_type} not supported for spatial tasks."
-            )
-    else:
-        if probe_type == ProbeType.LINEAR:
-            probe = LinearProbe(
-                in_dim=in_features, out_dim=config.num_classes, use_batchnorm=True
-            ).to(device)
-        else:
-            raise ValueError(
-                f"Probe type {probe_type} not supported for classification."
-            )
+    if probe_type == ProbeType.ATTNPOOL and config.task_type == TaskType.REGRESSION:
+        raise ValueError("Attention pooling is not supported for regression.")
+
+    probe_cls = PROBE_TYPE_TO_CLASS[probe_type]
+    probe = probe_cls(
+        in_dim=in_features,
+        num_classes=config.num_classes,
+        task_type=config.task_type,
+        num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
+    ).to(device)
 
     num_times_to_run_eval = math.ceil(epochs / eval_interval)
     val_results: list[EvalResult] = []
@@ -342,16 +446,15 @@ def train_and_eval_probe(
         end_epoch = min(start_epoch + eval_interval, epochs)
 
         probe = train_probe(
-            task_type=config.task_type,
             probe=probe,
             data_loader=data_loader,
             lr=lr,
             epochs=end_epoch,
             total_epochs=epochs,
             current_epoch=start_epoch,
-            num_classes=config.num_classes,
-            num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
             device=device,
+            task_type=config.task_type,
+            num_classes=config.num_classes,
             use_dice_loss=use_dice_loss,
         )
         val_result = evaluate_probe(
@@ -362,7 +465,6 @@ def train_and_eval_probe(
             ),
             probe=probe,
             num_classes=config.num_classes,
-            num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
             device=device,
             task_type=config.task_type,
             probe_type=probe_type,
@@ -438,11 +540,9 @@ def train_and_eval_probe(
         all_preds, all_labels = get_probe_predictions(
             data_loader=test_data_loader,
             probe=probe,
-            num_classes=config.num_classes,
             device=device,
-            task_type=config.task_type,
             probe_type=probe_type,
-            num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
+            task_type=config.task_type,
         )
 
         # Map regression preds/labels back to original target units so the
@@ -592,10 +692,9 @@ def train_probe(
     current_epoch: int,
     epochs: int,
     total_epochs: int,
-    num_classes: int,
     device: torch.device,
     task_type: TaskType,
-    num_output_pixels_per_side_of_patch: int | None = None,
+    num_classes: int,
     use_dice_loss: bool = False,
 ) -> nn.Module:
     """Train a linear probe on a classification or segmentation task."""
@@ -612,45 +711,27 @@ def train_probe(
     start_epoch = current_epoch
     for epoch in range(start_epoch, epochs):
         for i, batch in enumerate(data_loader):
-            batch_emb, batch_labels = batch  # (bsz, t_h, t_w, dim), (bsz, H, W)
-            spatial_patches_per_dim = batch_emb.shape[1]
+            batch_emb, batch_labels = batch
             batch_emb = batch_emb.to(device)
 
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-                outputs = probe(
-                    batch_emb
-                )  # (bsz, num_patches, logits_per_patch) or (bsz, n_cls)
+                # Probes return final-shaped logits (rearrange happens inside
+                # each probe). Only interpolate to label resolution when the
+                # probe output and label spatial shapes disagree (e.g. models
+                # that require a fixed input image size).
+                outputs = probe(batch_emb)
                 logits = outputs["logits"]
                 if task_type == TaskType.SEGMENTATION:
-                    if not isinstance(probe, BilinearConvProbe):
-                        assert num_output_pixels_per_side_of_patch is not None, (
-                            "num_output_pixels_per_side_of_patch is required for segmentation"
-                        )
-                        logits = rearrange(
+                    if logits.shape[-2:] != batch_labels.shape[-2:]:
+                        logits = F.interpolate(
                             logits,
-                            "b h w (c i j) -> b c (h i) (w j)",
-                            h=spatial_patches_per_dim,
-                            w=spatial_patches_per_dim,
-                            c=num_classes,
-                            i=num_output_pixels_per_side_of_patch,
-                            j=num_output_pixels_per_side_of_patch,
+                            size=(batch_labels.shape[-2], batch_labels.shape[-1]),
+                            mode="bilinear",
+                            align_corners=True,
                         )
-                        if logits.shape[-2] != batch_labels.shape[-2]:
-                            logger.debug(
-                                f"Logits shape {logits.shape} does not match batch_labels shape {batch_labels.shape} interpolating to labels shape"
-                            )
-                            logits = F.interpolate(
-                                logits,
-                                size=(batch_labels.shape[-2], batch_labels.shape[-1]),
-                                mode="bilinear",
-                                align_corners=True,
-                            )
                     targets = batch_labels.to(device)
                 elif task_type == TaskType.REGRESSION:
-                    if (
-                        logits.shape[-2] != batch_labels.shape[-2]
-                        or logits.shape[-1] != batch_labels.shape[-1]
-                    ):
+                    if logits.shape[-2:] != batch_labels.shape[-2:]:
                         logits = F.interpolate(
                             logits.unsqueeze(1),
                             size=(batch_labels.shape[-2], batch_labels.shape[-1]),
@@ -681,11 +762,9 @@ def train_probe(
 def get_probe_predictions(
     data_loader: DataLoader,
     probe: nn.Module,
-    num_classes: int,
     device: torch.device,
-    task_type: TaskType,
     probe_type: ProbeType,
-    num_output_pixels_per_side_of_patch: int | None = None,
+    task_type: TaskType,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Get predictions from a trained linear probe.
 
@@ -699,34 +778,24 @@ def get_probe_predictions(
     all_attn_weights = []
     with torch.no_grad():
         for batch in data_loader:
-            batch_emb, batch_labels = batch  # (bsz, num_patches, dim), (bsz, H, W)
+            batch_emb, batch_labels = batch
             batch_emb = batch_emb.to(device)
 
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-                outputs = probe(batch_emb)  # (bsz, num_patches, logits_per_patch)
+                # Probes return final-shaped logits; only interpolate to the
+                # label resolution when the spatial shapes disagree.
+                outputs = probe(batch_emb)
                 logits = outputs["logits"]
-                is_bilinear_conv = isinstance(probe, BilinearConvProbe)
-                if task_type == TaskType.SEGMENTATION and not is_bilinear_conv:
-                    assert num_output_pixels_per_side_of_patch is not None, (
-                        "num_output_pixels_per_side_of_patch is required for segmentation"
-                    )
-                    spatial_patches_per_dim = batch_emb.shape[1]
-                    logits = rearrange(
+                if (
+                    task_type == TaskType.SEGMENTATION
+                    and logits.shape[-2:] != batch_labels.shape[-2:]
+                ):
+                    logits = F.interpolate(
                         logits,
-                        "b h w (c i j) -> b c (h i) (w j)",
-                        h=spatial_patches_per_dim,
-                        w=spatial_patches_per_dim,
-                        c=num_classes,
-                        i=num_output_pixels_per_side_of_patch,
-                        j=num_output_pixels_per_side_of_patch,
+                        size=(batch_labels.shape[-2], batch_labels.shape[-1]),
+                        mode="bilinear",
+                        align_corners=True,
                     )
-                    if logits.shape[-2] != batch_labels.shape[-2]:
-                        logits = F.interpolate(
-                            logits,
-                            size=(batch_labels.shape[-2], batch_labels.shape[-1]),
-                            mode="bilinear",
-                            align_corners=True,
-                        )
 
             if task_type == TaskType.REGRESSION:
                 if (
@@ -798,7 +867,6 @@ def evaluate_probe(
     device: torch.device,
     task_type: TaskType,
     probe_type: ProbeType,
-    num_output_pixels_per_side_of_patch: int | None = None,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
     target_mean: torch.Tensor | None = None,
@@ -813,11 +881,9 @@ def evaluate_probe(
     preds, labels = get_probe_predictions(
         data_loader=data_loader,
         probe=probe,
-        num_classes=num_classes,
         device=device,
-        task_type=task_type,
         probe_type=probe_type,
-        num_output_pixels_per_side_of_patch=num_output_pixels_per_side_of_patch,
+        task_type=task_type,
     )
     if task_type == TaskType.REGRESSION:
         preds = _unnormalize_regression(preds, target_mean, target_std)

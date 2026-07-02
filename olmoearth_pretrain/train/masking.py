@@ -1944,7 +1944,9 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                 else:
                     use_random_masking = False
                     not_missing_t = torch.argwhere(missing_per_time)[:, 0]
-                    not_missing_t = not_missing_t[torch.randperm(len(not_missing_t))]
+                    not_missing_t = not_missing_t[
+                        torch.randperm(len(not_missing_t), device=not_missing_t.device)
+                    ]
                     num_encode = math.ceil(len(not_missing_t) * self.encode_ratio)
                     encode_timestamps = not_missing_t[:num_encode]
                     decode_timestamps = not_missing_t[num_encode:]

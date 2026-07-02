@@ -7,7 +7,10 @@ import torch
 from einops import repeat
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
-from olmoearth_pretrain.nn.encodings import timestamps_to_days
+from olmoearth_pretrain.nn.encodings import (
+    get_1d_sincos_pos_encoding,
+    timestamps_to_days,
+)
 from olmoearth_pretrain.nn.flexi_vit import (
     CompositeEncodings,
     Encoder,
@@ -120,6 +123,56 @@ class TestCompositeEncodings:
             composite_encodings.per_modality_channel_embeddings["sentinel2_l2a"].grad
             is not None
         )
+
+    def test_dynamic_pos_embed_matches_static(self) -> None:
+        """On-the-fly sinusoidal encoding matches a pre-allocated table for overlapping positions."""
+        dim = 48
+        table = get_1d_sincos_pos_encoding(torch.arange(12), dim)
+        for t in [1, 5, 12, 17, 24]:
+            dynamic = get_1d_sincos_pos_encoding(torch.arange(t), dim)
+            overlap = min(t, 12)
+            assert torch.allclose(dynamic[:overlap], table[:overlap], atol=1e-6)
+
+    def test_temporal_encoding_works_beyond_max_sequence_length(
+        self,
+    ) -> None:
+        """Forward pass works when t exceeds the configured max_sequence_length."""
+        ce = CompositeEncodings(
+            embedding_size=16,
+            supported_modalities=[Modality.SENTINEL2_L2A],
+            max_sequence_length=12,
+            random_channel_embeddings=True,
+        )
+        B, H, W, T, C, D = 2, 4, 4, 17, 3, 16
+        tokens = torch.randn(B, H, W, T, C, D)
+        timestamps = torch.zeros(B, T, 3, dtype=torch.long)
+        timestamps[:, :, 1] = torch.arange(T) % 12
+        result = ce._apply_encodings_per_modality(
+            "sentinel2_l2a", tokens, timestamps, patch_size=4, input_res=10
+        )
+        assert result.shape == tokens.shape
+        assert not (result == tokens).all()
+
+    def test_temporal_encoding_values_match_expected(self) -> None:
+        """Temporal position encoding values match get_1d_sincos_pos_encoding directly."""
+        embedding_size = 16
+        n = embedding_size // 4
+        ce = CompositeEncodings(
+            embedding_size=embedding_size,
+            supported_modalities=[Modality.SENTINEL2_L2A],
+            max_sequence_length=12,
+            random_channel_embeddings=True,
+        )
+        B, H, W, T, C, D = 1, 2, 2, 5, 3, embedding_size
+        tokens = torch.zeros(B, H, W, T, C, D)
+        timestamps = torch.zeros(B, T, 3, dtype=torch.long)
+        timestamps[:, :, 1] = torch.arange(T)
+        result = ce._apply_encodings_per_modality(
+            "sentinel2_l2a", tokens, timestamps, patch_size=4, input_res=10
+        )
+        expected_time = get_1d_sincos_pos_encoding(torch.arange(T), n)
+        actual_time = result[0, 0, 0, :, 0, n : 2 * n]
+        assert torch.allclose(actual_time, expected_time, atol=1e-5)
 
 
 # TODO: Add tests for when the inputs are completely masked or different dims or something

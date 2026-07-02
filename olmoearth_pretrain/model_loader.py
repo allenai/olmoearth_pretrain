@@ -49,6 +49,15 @@ class ModelID(StrEnum):
     OLMOEARTH_V1_BASE = "OlmoEarth-v1-Base"
     OLMOEARTH_V1_LARGE = "OlmoEarth-v1-Large"
 
+    OLMOEARTH_V1_1_NANO = "OlmoEarth-v1_1-Nano"
+    OLMOEARTH_V1_1_TINY = "OlmoEarth-v1_1-Tiny"
+    OLMOEARTH_V1_1_BASE = "OlmoEarth-v1_1-Base"
+
+    OLMOEARTH_V1_2_NANO = "OlmoEarth-v1_2-Nano"
+    OLMOEARTH_V1_2_TINY = "OlmoEarth-v1_2-Tiny"
+    OLMOEARTH_V1_2_SMALL = "OlmoEarth-v1_2-Small"
+    OLMOEARTH_V1_2_BASE = "OlmoEarth-v1_2-Base"
+
     def repo_id(self) -> str:
         """Return the Hugging Face repo ID for this model."""
         return f"allenai/{self.value}"
