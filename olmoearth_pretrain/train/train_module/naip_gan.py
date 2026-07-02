@@ -7,18 +7,22 @@ updates the discriminator; the generator loss (adversarial + L1) backprops
 through the encoder.
 """
 
-import contextlib
-from collections.abc import Generator
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 import torch.nn.functional as F
-from olmo_core.distributed.parallel import DataParallelConfig, get_dp_mesh
-from olmo_core.distributed.utils import get_local_rank, get_local_tensor, get_rank
+from olmo_core.distributed.parallel import DataParallelConfig
+from olmo_core.distributed.utils import (
+    get_local_rank,
+    get_local_tensor,
+    get_rank,
+    get_world_size,
+)
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
@@ -178,21 +182,19 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         # excluded from the main optimizer (its loss must not update the encoder).
         self.discriminator = discriminator_config.build()
         self.discriminator.to(self.device)
-        # Holds the composable-replicate state so we can toggle gradient sync /
-        # ``prepare_for_backward`` around the extra discriminator forward passes
-        # (None when the discriminator is not DDP-replicated).
-        self._disc_replicate_state: Any | None = None
-        if self._dp_config is not None:
-            # Replicate the (small) discriminator with DDP so its gradients stay
-            # in sync across ranks; the main model may be FSDP-sharded.
-            from torch.distributed._composable.replicate import replicate
-
-            replicate(
-                self.discriminator,
-                device_mesh=get_dp_mesh(self.world_mesh),
-                find_unused_parameters=find_unused_parameters,
-            )
-            self._disc_replicate_state = replicate.state(self.discriminator)
+        # The discriminator is small and replicated (not sharded); rather than
+        # wrapping it in DDP we keep it as a plain module and all-reduce its
+        # gradients manually once per step (see ``_all_reduce_discriminator_grads``).
+        # Broadcast the initial weights from the first rank of the data-parallel
+        # group so every replica starts identical (this is what DDP would do at
+        # construction time).
+        if self._dp_config is not None and get_world_size(self.dp_process_group) > 1:
+            src = dist.get_global_rank(self.dp_process_group, 0)
+            for tensor in [
+                *self.discriminator.parameters(),
+                *self.discriminator.buffers(),
+            ]:
+                dist.broadcast(tensor.detach(), src=src, group=self.dp_process_group)
         self.disc_optimizer = disc_optim_config.build(self.discriminator)
 
         self.total_loss_name = f"{self.total_loss_name}+G_l1+G_adv"
@@ -202,27 +204,27 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         super().zero_grads()
         self.disc_optimizer.zero_grad(set_to_none=True)
 
-    @contextlib.contextmanager
-    def _discriminator_sync(self, enabled: bool) -> Generator[None, None, None]:
-        """Toggle the discriminator's DDP gradient sync for enclosed forwards.
+    def _all_reduce_discriminator_grads(self) -> None:
+        """Average the discriminator gradients across the data-parallel group.
 
-        When ``enabled`` is False, the composable-replicate wrapper skips
-        ``prepare_for_backward`` for forwards run inside this context. This is
-        essential because the discriminator is forwarded twice per step (the
-        discriminator loss and the generator adversarial loss); without it, the
-        second forward re-arms the reducer and DDP raises "marked ready twice"
-        during ``d_loss.backward()``. It also implements gradient-accumulation
-        no-sync so the discriminator only all-reduces on the final microbatch.
+        The discriminator is a plain (non-DDP) replicated module, so its
+        gradients are accumulated purely locally during backward. This performs
+        the single explicit all-reduce that keeps every replica's update (and
+        therefore its weights) identical. Ranks that produced no discriminator
+        gradient this step (e.g. no valid NAIP) contribute zeros so that every
+        rank still participates in the collective; the sum is divided by the full
+        data-parallel world size, matching standard DDP averaging.
         """
-        if self._disc_replicate_state is None:
-            yield
+        if self._dp_config is None:
             return
-        prev = self._disc_replicate_state._no_sync
-        self._disc_replicate_state._no_sync = not enabled
-        try:
-            yield
-        finally:
-            self._disc_replicate_state._no_sync = prev
+        world_size = get_world_size(self.dp_process_group)
+        if world_size <= 1:
+            return
+        for p in self.discriminator.parameters():
+            if p.grad is None:
+                p.grad = torch.zeros_like(p)
+            dist.all_reduce(p.grad, op=dist.ReduceOp.SUM, group=self.dp_process_group)
+            p.grad /= world_size
 
     def model_forward(  # type: ignore[override]
         self,
@@ -374,13 +376,11 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         adversarial_active = (
             not dry_run and self.trainer.global_step >= self.gan_warmup_steps
         )
-        stepped_discriminator = False
 
         masked_microbatches = split_masked_batch(batch_data, self.rank_microbatch_size)
         num_microbatches = len(masked_microbatches)
 
         for microbatch_idx in range(num_microbatches):
-            is_last_microbatch = microbatch_idx == num_microbatches - 1
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
                 microbatch_masked = masked_microbatches[microbatch_idx]
                 logger.info(
@@ -410,13 +410,23 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                     fake_naip,
                     num_microbatches,
                     adversarial_active,
-                    disc_sync=is_last_microbatch,
                 )
                 gen_loss, g_l1_val, g_adv_val = self._generator_loss(
                     masked_batch, pooled, fake_naip, adversarial_active
                 )
                 total_g_l1 += g_l1_val / num_microbatches
                 total_g_adv += g_adv_val / num_microbatches
+
+                # Anchor the generator to the loss with zero weight so its
+                # parameters always receive a gradient on every rank. When a rank
+                # has no valid NAIP, the generator is otherwise disconnected from
+                # the loss (both the L1 and adversarial terms are skipped), so its
+                # gradient flow -- and therefore the root model's FSDP gradient
+                # reduce-scatter -- would be asymmetric across ranks and could
+                # deadlock the collective. The term is exactly zero and does not
+                # change any real gradient.
+                if fake_naip is not None:
+                    loss = loss + 0.0 * fake_naip.sum()
 
                 loss = (loss + gen_loss) / num_microbatches
                 total_batch_loss += get_local_tensor(loss.detach())
@@ -431,10 +441,15 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                 if d_loss is not None:
                     total_d_loss += get_local_tensor(d_loss.detach())
                     d_loss.backward()
-                    stepped_discriminator = True
                 loss.backward()
 
-        if not dry_run and stepped_discriminator:
+        if not dry_run and adversarial_active:
+            # The discriminator accumulated gradients locally across microbatches;
+            # average them across the data-parallel group once, then step. Gating
+            # on ``adversarial_active`` (which is derived from the global step and
+            # so is identical on every rank) guarantees all ranks participate in
+            # the collective together, even if some had no valid NAIP this step.
+            self._all_reduce_discriminator_grads()
             self.disc_optimizer.step()
 
         if dry_run:
@@ -460,7 +475,6 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         fake_naip: torch.Tensor,
         num_microbatches: int,
         adversarial_active: bool,
-        disc_sync: bool = True,
     ) -> torch.Tensor | None:
         """Compute the (scaled) discriminator loss on detached inputs.
 
@@ -481,16 +495,11 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                 mode="bilinear",
                 align_corners=False,
             )
-            # Single discriminator forward on the concatenated real+fake batch.
-            # DDP (used to replicate the discriminator) requires exactly one
-            # forward per backward; two separate forwards would double-fire its
-            # reducer hooks ("marked ready twice"). This forward is the one that
-            # arms the reducer for ``d_loss.backward()``; sync is only enabled on
-            # the final microbatch to accumulate gradients correctly.
+            # Single discriminator forward on the concatenated real+fake batch
+            # (one forward is slightly cheaper than two separate passes).
             images = torch.cat([real_v, fake_v], dim=0)
             conds = torch.cat([cond_v, cond_v], dim=0)
-            with self._discriminator_sync(enabled=disc_sync):
-                logits = self.discriminator(images, conds)
+            logits = self.discriminator(images, conds)
             real_logits, fake_logits = logits.chunk(2, dim=0)
             d_loss = discriminator_adversarial_loss(
                 real_logits, fake_logits, self.gan_loss_type
@@ -533,15 +542,13 @@ class NaipGanTrainModule(LatentMIMTrainModule):
             gen_loss = self.lambda_l1 * g_l1
             g_adv = zero
             if adversarial_active:
-                # Freeze the discriminator so the generator loss doesn't update it.
+                # Freeze the discriminator so the generator loss doesn't update
+                # it: without this, ``loss.backward()`` (which includes g_adv)
+                # would accumulate adversarial gradients into the discriminator's
+                # params, which would then be applied by ``disc_optimizer``.
                 for p in self.discriminator.parameters():
                     p.requires_grad_(False)
-                # Run this second discriminator forward with DDP sync disabled so
-                # it does not call ``prepare_for_backward`` and thus does not
-                # disturb the reducer state armed by the discriminator-loss
-                # forward. Otherwise DDP raises "marked ready twice".
-                with self._discriminator_sync(enabled=False):
-                    fake_logits = self.discriminator(fake_v, cond_v)
+                fake_logits = self.discriminator(fake_v, cond_v)
                 for p in self.discriminator.parameters():
                     p.requires_grad_(True)
                 g_adv = generator_adversarial_loss(fake_logits, self.gan_loss_type)

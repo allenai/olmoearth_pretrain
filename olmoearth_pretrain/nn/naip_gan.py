@@ -70,6 +70,7 @@ class NaipGenerator(nn.Module):
         upsample_factor: int = 4,
         num_res_blocks: int = 2,
         num_groups: int = 8,
+        hidden_sizes: list[int] | None = None,
     ):
         """Initialize the generator.
 
@@ -82,12 +83,18 @@ class NaipGenerator(nn.Module):
             embedding_size: Channel dim ``D`` of the pooled embedding ``[B, H, W, D]``.
             patch_size: Encoder patch size; the token is unpatchified into a
                 ``patch_size x patch_size`` block of features.
-            hidden_size: Width of the conv trunk.
+            hidden_size: Width of the conv trunk when ``hidden_sizes`` is not given
+                (a single width shared by every resolution stage).
             out_channels: Number of NAIP output bands (R, G, B, IR -> 4).
             upsample_factor: Conv-trunk spatial upsampling factor (power of 2).
             num_res_blocks: Residual blocks applied at the base resolution and
                 after each upsampling step.
             num_groups: Target GroupNorm groups.
+            hidden_sizes: Optional per-stage channel widths, one for the base
+                (post-unpatchify) resolution followed by one for each upsampling
+                stage (length ``log2(upsample_factor) + 1``). Lets capacity be
+                concentrated at the coarse resolution, e.g. ``[256, 128, 128]``.
+                Overrides ``hidden_size`` when provided.
         """
         super().__init__()
         n_up = int(round(math.log2(upsample_factor)))
@@ -95,32 +102,46 @@ class NaipGenerator(nn.Module):
             raise ValueError(
                 f"upsample_factor must be a power of 2, got {upsample_factor}"
             )
+        # Per-stage channel widths: one for the base (post-unpatchify) resolution
+        # plus one for each upsampling stage. Defaults to a flat ``hidden_size``.
+        if hidden_sizes is None:
+            channels = [hidden_size] * (n_up + 1)
+        else:
+            if len(hidden_sizes) != n_up + 1:
+                raise ValueError(
+                    f"hidden_sizes must have length log2(upsample_factor) + 1 = "
+                    f"{n_up + 1} (base resolution plus one per upsampling stage), "
+                    f"got {len(hidden_sizes)}"
+                )
+            channels = list(hidden_sizes)
         self.patch_size = patch_size
-        self.hidden_size = hidden_size
+        self.hidden_size = channels[0]
         self.upsample_factor = upsample_factor
         self.out_channels = out_channels
 
         # Learned unpatchify: each token -> a patch_size x patch_size block of
-        # hidden features, i.e. the token grid is expanded to the base pixel grid.
+        # base-resolution features, i.e. the token grid is expanded to the base
+        # pixel grid.
         self.unpatchify = nn.Linear(
-            embedding_size, patch_size * patch_size * hidden_size
+            embedding_size, patch_size * patch_size * channels[0]
         )
 
         layers: list[nn.Module] = [
-            _ResBlock(hidden_size, num_groups) for _ in range(num_res_blocks)
+            _ResBlock(channels[0], num_groups) for _ in range(num_res_blocks)
         ]
-        for _ in range(n_up):
+        for stage in range(n_up):
+            c_in = channels[stage]
+            c_out = channels[stage + 1]
             layers.append(nn.Upsample(scale_factor=2, mode="nearest"))
-            layers.append(nn.Conv2d(hidden_size, hidden_size, kernel_size=3, padding=1))
-            layers.append(
-                nn.GroupNorm(_num_groups(num_groups, hidden_size), hidden_size)
-            )
+            # This conv both refines and (optionally) changes the channel width.
+            layers.append(nn.Conv2d(c_in, c_out, kernel_size=3, padding=1))
+            layers.append(nn.GroupNorm(_num_groups(num_groups, c_out), c_out))
             layers.append(nn.SiLU())
             for _ in range(num_res_blocks):
-                layers.append(_ResBlock(hidden_size, num_groups))
+                layers.append(_ResBlock(c_out, num_groups))
         self.upsample = nn.Sequential(*layers)
 
-        self.to_image = nn.Conv2d(hidden_size, out_channels, kernel_size=3, padding=1)
+        self.to_image = nn.Conv2d(channels[-1], out_channels, kernel_size=3, padding=1)
 
     def forward(self, pooled: Tensor) -> Tensor:
         """Generate a NAIP image.
@@ -252,6 +273,10 @@ class NaipGeneratorConfig(Config):
     Total upsampling from the token grid is ``patch_size * upsample_factor``; set
     ``upsample_factor`` to the NAIP ``image_tile_size_factor`` so the output lands
     at native NAIP resolution.
+
+    Set ``hidden_sizes`` to a per-stage list (base resolution plus one per
+    upsampling stage) to concentrate capacity at the coarse resolution, e.g.
+    ``[256, 128, 128]``; otherwise ``hidden_size`` is shared by every stage.
     """
 
     embedding_size: int
@@ -261,6 +286,7 @@ class NaipGeneratorConfig(Config):
     upsample_factor: int = 4
     num_res_blocks: int = 2
     num_groups: int = 8
+    hidden_sizes: list[int] | None = None
 
     def build(self) -> NaipGenerator:
         """Build the generator."""
@@ -272,6 +298,7 @@ class NaipGeneratorConfig(Config):
             upsample_factor=self.upsample_factor,
             num_res_blocks=self.num_res_blocks,
             num_groups=self.num_groups,
+            hidden_sizes=self.hidden_sizes,
         )
 
 
