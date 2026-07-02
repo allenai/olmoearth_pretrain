@@ -158,6 +158,96 @@ def test_latentmim_register_bottleneck(
     assert model.supervision_head.heads["worldcover"].weight.grad is not None
 
 
+def test_latentmim_register_bottleneck_3d_encoder_2d_decoder(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    masked_sample_dict: dict[str, torch.Tensor],
+) -> None:
+    """3D-RoPE encoder + spatial (2D) register bottleneck + 2D decoder, end-to-end.
+
+    The patch encoder self-attention keeps 3D RoPE over ``(t, row, col)``; the register
+    grid is a spatial summary read with 2D RoPE; and the decoder cross-attends the mask
+    tokens to that 2D register grid (so it runs in 2D and recovers the timestep from the
+    additive slot-index + month encodings). Verifies gradients flow through the whole path.
+    """
+    supported_modalities = [
+        Modality.SENTINEL2_L2A,
+        Modality.LATLON,
+        Modality.WORLDCOVER,
+    ]
+    B, H, W, T, _ = masked_sample_dict["sentinel2_l2a"].shape
+    x = MaskedOlmoEarthSample(**masked_sample_dict)
+
+    patch_size = 4
+    register_dim = 8
+    encoder_config = EncoderConfig(
+        supported_modality_names=[m.name for m in supported_modalities],
+        embedding_size=16,
+        num_heads=2,
+        depth=2,
+        mlp_ratio=4.0,
+        max_patch_size=8,
+        min_patch_size=1,
+        max_sequence_length=12,
+        drop_path=0.1,
+        position_encoding="rope_3d_mixed",  # 3D encoder self-attention
+        use_register_bottleneck=True,
+        register_grid_size=0,  # dynamic single-latent grid (gdyn)
+        register_dim=register_dim,
+        register_interleave=True,
+        register_per_depth_read_proj=True,
+    )
+    decoder_config = PredictorConfig(
+        supported_modality_names=[m.name for m in supported_modalities],
+        encoder_embedding_size=16,
+        decoder_embedding_size=16,
+        num_heads=2,
+        depth=2,
+        mlp_ratio=4.0,
+        max_sequence_length=12,
+        drop_path=0.1,
+        position_encoding="rope",  # 2D decoder: cross-attends the spatial register grid
+        use_register_bottleneck=True,
+        register_dim=register_dim,
+    )
+    model = LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+    ).build()
+
+    _, decoded, _, _, _, _ = model.forward(x, patch_size)
+    assert decoded.sentinel2_l2a is not None
+    patched_H, patched_W = H // patch_size, W // patch_size
+    assert decoded.sentinel2_l2a.shape == (
+        B,
+        patched_H,
+        patched_W,
+        T,
+        modality_band_set_len_and_total_bands["sentinel2_l2a"][0],
+        model.decoder.output_embedding_size,
+    )
+
+    loss_fn = PatchDiscriminationLoss()
+    with torch.no_grad():
+        output_dict = model.target_encoder.forward(
+            x.unmask(),
+            patch_size=patch_size,
+            token_exit_cfg={
+                modality: 0 for modality in model.encoder.supported_modality_names
+            },
+        )
+        target_output, _, _ = unpack_encoder_output(output_dict)
+    loss_fn.compute(decoded, target_output).backward()
+
+    # Gradients reach the (2D) register read and the decoder's register projection, and the
+    # 3D encoder self-attention still trains.
+    assert model.encoder.register_bottleneck.register.grad is not None
+    assert (
+        model.encoder.register_bottleneck.read_blocks[0].attn.q.weight.grad is not None
+    )
+    assert model.decoder.register_to_decoder_embed.weight.grad is not None
+    assert model.encoder.blocks[0].attn.q.weight.grad is not None
+
+
 def test_eval_wrapper_probes_register_grid(
     masked_sample_dict: dict[str, torch.Tensor],
 ) -> None:

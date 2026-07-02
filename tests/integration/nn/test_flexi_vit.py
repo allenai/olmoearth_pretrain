@@ -1188,6 +1188,65 @@ def test_encoder_register_bottleneck_dynamic_grid(
         assert encoder.register_bottleneck.register.grad is not None
 
 
+def test_encoder_register_bottleneck_3d_rope_encoder_2d_read(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """A 3D-RoPE encoder keeps the register bottleneck spatial: it reads with 2D RoPE.
+
+    The patch encoder self-attention rotates over ``(t, row, col)`` while the register
+    grid is a purely spatial summary; the bottleneck therefore reads with the ``(row, col)``
+    axes only (temporal coordinate sliced off). Exercises the decoupled path.
+    """
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    register_dim = 8
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        position_encoding="rope_3d_mixed",
+        use_register_bottleneck=True,
+        register_grid_size=0,  # dynamic single-latent grid (gdyn) under a 3D encoder
+        register_dim=register_dim,
+        register_read_depth=1,
+        register_latent_depth=2,
+    )
+    assert encoder.register_bottleneck is not None
+    # The bottleneck reads spatially (2D RoPE) even though the encoder is 3D.
+    assert encoder.register_bottleneck.use_2d_rope
+    assert encoder.register_bottleneck.dynamic_grid
+
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=4, input_res=10)
+    expected_side = H // 4
+    n_reg = expected_side * expected_side
+    assert output_dict["registers"].shape == (B, n_reg, register_dim)
+    # Register positions are spatial only -- 2D, regardless of the 3D encoder.
+    assert output_dict["register_positions"].shape == (B, n_reg, 2)
+    output_dict["registers"].sum().backward()
+    assert encoder.register_bottleneck.register.grad is not None
+    assert torch.isfinite(encoder.register_bottleneck.register.grad).all()
+
+
 def test_encoder_register_bottleneck_interleave(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:

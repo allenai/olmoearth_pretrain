@@ -2311,7 +2311,11 @@ class Encoder(FlexiVitBase):
                 mlp_ratio=mlp_ratio,
                 read_depth=register_read_depth,
                 latent_transformer_depth=register_latent_depth,
-                use_2d_rope=PositionEncoding.is_2d_rope(self.position_encoding),
+                # The register grid is a purely spatial (row, col) summary with no
+                # temporal axis, so the bottleneck always reads/mixes with 2D RoPE --
+                # even when the encoder self-attention uses 3D RoPE. The caller feeds it
+                # 2D positions (the temporal coordinate is sliced off in Encoder.forward).
+                use_2d_rope=PositionEncoding.is_rope(self.position_encoding),
                 rope_base=rope_base,
                 qk_norm=qk_norm,
                 interleave=register_interleave,
@@ -2642,6 +2646,14 @@ class Encoder(FlexiVitBase):
         # bottleneck read so registers attend over the encoded *visible* patch tokens
         # using their original coordinates (`positions` below is reduced/packed in place).
         register_kv_positions = positions
+        # The register grid has no temporal axis, so the bottleneck reads with 2D
+        # (row, col) positions even when the encoder self-attention uses 3D RoPE. Drop
+        # the leading temporal coordinate (3D positions are ``(t, row, col)``). This does
+        # not touch `positions`, which the encoder blocks still use for full 3D RoPE.
+        if register_kv_positions is not None and PositionEncoding.is_3d_rope(
+            self.position_encoding
+        ):
+            register_kv_positions = register_kv_positions[..., 1:]
 
         # Windowed (local) spatial attention setup. Active only when the patch grid is
         # larger than the window in some dim; otherwise we leave the fast (full-attention)
@@ -3663,12 +3675,14 @@ class EncoderConfig(Config):
                     f"register_grid_size must be >= 0 (0 = dynamic single-latent grid), "
                     f"got {self.register_grid_size}"
                 )
-            if self.register_grid_size == 0 and not PositionEncoding.is_2d_rope(
+            if self.register_grid_size == 0 and not PositionEncoding.is_rope(
                 self.position_encoding
             ):
                 raise ValueError(
                     "register_grid_size=0 (dynamic single-latent bottleneck) requires "
-                    "a 2D RoPE position_encoding"
+                    "a RoPE position_encoding: the register grid is differentiated by "
+                    "per-cell 2D (row, col) coordinates. A 3D encoder is fine -- the "
+                    "bottleneck reads with the spatial axes only (see use_2d_rope)."
                 )
             register_dim = (
                 self.register_dim
@@ -3686,7 +3700,7 @@ class EncoderConfig(Config):
                     f"register_num_heads ({register_heads})"
                 )
             if (
-                PositionEncoding.is_2d_rope(self.position_encoding)
+                PositionEncoding.is_rope(self.position_encoding)
                 and (register_dim // register_heads) % 4 != 0
             ):
                 raise ValueError(
