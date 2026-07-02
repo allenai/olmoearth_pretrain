@@ -14,6 +14,7 @@ import numpy as np
 import torch
 from olmo_core.distributed.utils import get_rank
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
+from olmo_core.train.callbacks.checkpointer import CheckpointerCallback
 from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader, IterableDataset
@@ -646,6 +647,36 @@ def _make_other_prefix(prefix: str) -> str:
     return "/".join(parts)
 
 
+# Name of the wandb metric that eval curves are plotted against. It equals the
+# training step at which the evaluated checkpoint was saved. Both the in-loop
+# evals (this callback) and the built-in beaker-job evals log on this x-axis so
+# their curves share one directly-comparable axis in wandb -- rather than the
+# in-loop evals landing on wandb's native per-run ``step`` while the beaker-job
+# evals (a separate run) land on ``checkpoint_step``.
+CHECKPOINT_STEP_METRIC = "checkpoint_step"
+
+# Eval metric prefixes bound to the ``checkpoint_step`` x-axis.
+EVAL_METRIC_PREFIXES = (
+    "eval/*",
+    "eval/test/*",
+    "eval_other/*",
+    "eval_other/test/*",
+    "eval_time/*",
+    "eval_embed_diagnostics/*",
+)
+
+
+def define_checkpoint_step_metrics(wandb_module: Any) -> None:
+    """Tell wandb to plot the eval metric prefixes against ``checkpoint_step``.
+
+    ``wandb_module`` is the live ``wandb`` handle (e.g. ``wandb_callback.wandb``).
+    Safe to call once after the run is initialized.
+    """
+    wandb_module.define_metric(CHECKPOINT_STEP_METRIC)
+    for metric_prefix in EVAL_METRIC_PREFIXES:
+        wandb_module.define_metric(metric_prefix, step_metric=CHECKPOINT_STEP_METRIC)
+
+
 def eval_result_log_dict(
     prefix: str, name: str, result: EvalResult
 ) -> dict[str, float]:
@@ -845,6 +876,19 @@ class DownstreamEvaluatorCallback(Callback):
 
     def pre_train(self) -> None:
         """Run the evaluators on startup."""
+        # Bind eval metrics to the shared ``checkpoint_step`` x-axis so in-loop
+        # eval curves line up with the built-in beaker-job evals (which log on the
+        # same axis from a separate run). Only needed for in-loop (non-beaker)
+        # evals; the beaker-job path defines these metrics in its own run.
+        if not self.run_as_beaker_job:
+            wandb_callback = self._get_wandb_callback()
+            if (
+                wandb_callback is not None
+                and wandb_callback.enabled
+                and get_rank() == 0
+            ):
+                define_checkpoint_step_metrics(wandb_callback.wandb)
+
         if self.eval_on_startup and self.run_as_beaker_job:
             supported = [
                 evaluator
@@ -924,6 +968,29 @@ class DownstreamEvaluatorCallback(Callback):
             None,
         )
 
+    def _permanent_save_interval(self) -> int | None:
+        """Permanent-checkpoint interval (in steps) of the trainer's checkpointer.
+
+        Beaker-job evals load a *saved* checkpoint at their eval step, but only
+        permanent checkpoints (saved every ``save_interval`` steps) survive -- a
+        single ephemeral checkpoint is kept at a time and deleted well before a
+        queued eval job runs. This lets ``_launch_beaker_eval_job`` skip steps that
+        will not have a durable checkpoint. Returns ``None`` if no enabled
+        checkpointer is found (caller then falls back to the launcher's on-disk
+        existence check).
+        """
+        checkpointer = next(
+            (
+                callback
+                for callback in self.trainer._iter_callbacks()
+                if isinstance(callback, CheckpointerCallback)
+            ),
+            None,
+        )
+        if checkpointer is None or not getattr(checkpointer, "enabled", True):
+            return None
+        return checkpointer.save_interval
+
     def _launch_beaker_eval_job(self, step: int, task_names: list[str]) -> None:
         """Launch a Beaker job to evaluate the checkpoint at ``step``.
 
@@ -944,6 +1011,25 @@ class DownstreamEvaluatorCallback(Callback):
         )
 
         if get_rank() != 0:
+            return
+
+        # The eval job loads the saved checkpoint at ``step``, but only permanent
+        # checkpoints persist long enough for a queued Beaker job to load them
+        # (ephemeral checkpoints are rotated out within a few hundred steps). If
+        # ``step`` will not have a permanent checkpoint, skip the launch instead of
+        # spawning a job that will crash with "No step directories found" once the
+        # ephemeral checkpoint is gone.
+        save_interval = self._permanent_save_interval()
+        if save_interval is not None and step % save_interval != 0:
+            logger.warning(
+                "Skipping in-loop Beaker eval launch for step %d: it is not a "
+                "permanent checkpoint step (checkpointer save_interval=%d). Set the "
+                "evaluator eval_interval to a multiple of %d so a durable checkpoint "
+                "exists for the eval job to load.",
+                step,
+                save_interval,
+                save_interval,
+            )
             return
 
         module_path = self.beaker_eval_module_path or os.environ.get(
@@ -1015,6 +1101,11 @@ class DownstreamEvaluatorCallback(Callback):
     def _perform_eval(self, evaluator: DownstreamEvaluator) -> EvalTaskResult:
         """Run the evaluator."""
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
+
+        # Record the checkpoint step alongside the eval metrics so they share the
+        # ``checkpoint_step`` x-axis with the built-in beaker-job evals. It is
+        # numerically equal to the training step, so existing curves are unchanged.
+        self.trainer.record_metric(CHECKPOINT_STEP_METRIC, self.step)
 
         start_time = time.monotonic()
         result = evaluator.val()

@@ -70,7 +70,9 @@ from olmoearth_pretrain.train.callbacks import (
     OlmoEarthWandBCallback,
 )
 from olmoearth_pretrain.train.callbacks.evaluator_callback import (
+    CHECKPOINT_STEP_METRIC,
     DownstreamEvaluatorCallback,
+    define_checkpoint_step_metrics,
     eval_result_log_dict,
 )
 
@@ -140,18 +142,7 @@ def evaluate_checkpoints(
 
     # Tell wandb to use checkpoint_step as the x-axis for eval metrics
     if wandb_callback.enabled and get_rank() == 0:
-        wandb_callback.wandb.define_metric("checkpoint_step")
-        for metric_prefix in (
-            "eval/*",
-            "eval/test/*",
-            "eval_other/*",
-            "eval_other/test/*",
-            "eval_time/*",
-            "eval_embed_diagnostics/*",
-        ):
-            wandb_callback.wandb.define_metric(
-                metric_prefix, step_metric="checkpoint_step"
-            )
+        define_checkpoint_step_metrics(wandb_callback.wandb)
 
     # Get the evaluator callback (contains the built evaluator objects)
     eval_callback = trainer.callbacks.get("downstream_evaluator")
@@ -184,7 +175,7 @@ def evaluate_checkpoints(
 
             val_result = result.val_result
             test_result = result.test_result
-            metrics: dict[str, float | int] = {"checkpoint_step": step_num}
+            metrics: dict[str, float | int] = {CHECKPOINT_STEP_METRIC: step_num}
 
             if val_result is not None:
                 metrics.update(
