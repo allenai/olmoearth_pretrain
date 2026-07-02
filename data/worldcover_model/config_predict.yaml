@@ -134,6 +134,8 @@ data:
     predict_config:
       groups: ["res_10"]
       crop_size: 32
+      # 16-pixel overlap between adjacent sliding-window crops (input resolution).
+      overlap_pixels: 16
       load_all_crops: true
       skip_targets: true
       # Skip windows that already have the output layer completed (resumable).
@@ -169,15 +171,19 @@ trainer:
       init_args:
         output_layer: output
         selector: []
-        layer_config:
-          class_path: rslearn.config.LayerConfig
+        merger:
+          # Merge overlapping crops, removing half of the overlap from each side. The
+          # UNet decoder upsamples back to input resolution, so downsample_factor: 1
+          # and overlap_pixels matches the input-resolution overlap (16).
+          class_path: rslearn.train.prediction_writer.RasterMerger
           init_args:
-            type: raster
-            band_sets:
-              - class_path: rslearn.config.BandSetConfig
-                init_args:
-                  dtype: uint8
-                  bands: ["output"]
+            overlap_pixels: 16
+            downsample_factor: 1
+        layer_config:
+          type: RASTER
+          band_sets:
+            - dtype: UINT8
+              bands: ["output"]
 project_name: 2026_07_01_worldcover_pred
-run_name: olmoearth_v1_2_base_s2_ws32_ps4_00
+run_name: olmoearth_v1_2_base_s2_ws32_ps4_00_singlegpu
 management_dir: ${RSLP_PREFIX}/projects
