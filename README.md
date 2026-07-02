@@ -72,7 +72,7 @@ The v1.1 models were trained using the scripts in [`scripts/official/v1_1`](scri
 
 | Model Size | Weights | Encoder Params | Decoder Params |
 | --- | --- | --- | --- |
-| Nano | [link](https://huggingface.co/allenai/OlmoEarth-v1_1-Nano) | 5.5M | 800K |
+| Nano | [link](https://huggingface.co/allenai/OlmoEarth-v1_1-Nano) | 1.7M | 800K |
 | Tiny | [link](https://huggingface.co/allenai/OlmoEarth-v1_1-Tiny) | 12.5M | 1.9M |
 | Base | [link](https://huggingface.co/allenai/OlmoEarth-v1_1-Base) | 114M | 30M |
 
@@ -85,7 +85,7 @@ The v1.2 models were trained using the scripts in [`scripts/official/v1_2`](scri
 
 | Model Size | Weights | Encoder Params | Decoder Params |
 | --- | --- | --- | --- |
-| Nano | [link](https://huggingface.co/allenai/OlmoEarth-v1_2-Nano) | 5.5M | 800K |
+| Nano | [link](https://huggingface.co/allenai/OlmoEarth-v1_2-Nano) | 1.7M | 800K |
 | Tiny | [link](https://huggingface.co/allenai/OlmoEarth-v1_2-Tiny) | 12.5M | 1.9M |
 | Small | [link](https://huggingface.co/allenai/OlmoEarth-v1_2-Small) | 35.6M | 7.4M |
 | Base | [link](https://huggingface.co/allenai/OlmoEarth-v1_2-Base) | 114M | 30M |
