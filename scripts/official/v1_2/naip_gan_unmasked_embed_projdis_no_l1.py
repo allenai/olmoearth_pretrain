@@ -1,13 +1,13 @@
-"""v1.2 NAIP target-embedding projection GAN without the L1 loss.
+"""v1.2 NAIP unmasked-embedding projection GAN without the L1 loss.
 
-Same as ``naip_gan_target_embed_projdis.py`` (target-embedding condition,
-projection discriminator) but drops the L1 reconstruction loss
+Same as ``naip_gan_unmasked_embed_projdis.py`` (unmasked-input embedding
+condition, projection discriminator) but drops the L1 reconstruction loss
 (``lambda_l1=0``), so the generator is trained by the adversarial loss alone
 (``lambda_adv=0.1``).
 
 Validate before launching::
 
-    python3 scripts/official/v1_2/naip_gan_target_embed_projdis_no_l1.py dry_run naip_gan_target_embed_projdis_no_l1 local
+    python3 scripts/official/v1_2/naip_gan_unmasked_embed_projdis_no_l1.py dry_run naip_gan_unmasked_embed_projdis_no_l1 local
 """
 
 import logging

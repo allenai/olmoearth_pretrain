@@ -73,12 +73,13 @@ class NaipGanTrainModuleConfig(LatentMIMTrainModuleConfig):
         naip_denorm_std_multiplier: std multiplier used to invert the NAIP
             normalization for display (must match the dataset Normalizer).
         discriminator_cond_source: What the discriminator conditions on. One of
-            "online_pooled" (default; the online-encoder pooled embedding),
-            "target_pooled" (the target-encoder pooled embedding over the
-            unmasked tokens), or "raw_sentinel2" (the raw Sentinel-2 image,
-            conditioned on even when it is masked for the online encoder). The
-            discriminator's ``cond_mode`` must match: "image" for
-            "raw_sentinel2", "embedding" otherwise.
+            "online_pooled" (default; the online-encoder pooled embedding of the
+            masked input), "online_unmasked_pooled" (the online-encoder pooled
+            embedding from a full-depth forward on the unmasked input), or
+            "raw_sentinel2" (the raw Sentinel-2 image, conditioned on even when
+            it is masked for the online encoder). The discriminator's
+            ``cond_mode`` must match: "image" for "raw_sentinel2", "embedding"
+            otherwise.
         cond_modality: Modality name used as the raw image condition when
             ``discriminator_cond_source == "raw_sentinel2"``. The full temporal
             stack of all its bands is fed to the discriminator.
@@ -185,7 +186,7 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         self.num_log_images = num_log_images
         self.discriminator_cond_source = discriminator_cond_source
         self.cond_modality = cond_modality
-        valid_sources = ("online_pooled", "target_pooled", "raw_sentinel2")
+        valid_sources = ("online_pooled", "online_unmasked_pooled", "raw_sentinel2")
         if discriminator_cond_source not in valid_sources:
             raise ValueError(
                 f"discriminator_cond_source must be one of {valid_sources}, "
@@ -440,9 +441,7 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                     )
 
                 d_cond, d_cond_valid, d_cond_time_mask = (
-                    self._extract_discriminator_cond(
-                        masked_batch, pooled, target_output
-                    )
+                    self._extract_discriminator_cond(masked_batch, pooled, patch_size)
                 )
 
                 d_loss = self._maybe_discriminator_loss(
@@ -522,15 +521,17 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         self,
         batch: MaskedOlmoEarthSample,
         pooled: torch.Tensor,
-        target_output: TokensAndMasks,
+        patch_size: int,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
         """Return the discriminator condition, validity mask, and time mask.
 
         The condition depends on ``discriminator_cond_source``:
 
-        * ``online_pooled``: the online-encoder pooled embedding ``[B, H, W, D]``.
-        * ``target_pooled``: the target-encoder pooled embedding over the unmasked
-          tokens ``[B, H, W, D]`` (EMA weights).
+        * ``online_pooled``: the online-encoder pooled embedding of the masked
+          input ``[B, H, W, D]``.
+        * ``online_unmasked_pooled``: the online-encoder pooled embedding from a
+          full-depth forward on the unmasked input ``[B, H, W, D]`` (run under
+          ``no_grad``; an extra encoder forward per step).
         * ``raw_sentinel2``: the raw Sentinel-2 temporal stack
           ``[B, T, C, Hs, Ws]``.
 
@@ -548,11 +549,21 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         source = self.discriminator_cond_source
         if source == "online_pooled":
             return pooled, None, None
-        if source == "target_pooled":
-            target_pooled = pool_unmasked_tokens(
-                target_output, PoolingType.MEAN, spatial_pooling=True
-            )
-            return target_pooled, None, None
+        if source == "online_unmasked_pooled":
+            # Full-depth online-encoder forward on the unmasked input. The
+            # condition is detached at the discriminator, so this runs under
+            # no_grad (forward only).
+            with self._model_forward_context(), torch.no_grad():
+                output_dict = self.model.encoder.forward(
+                    batch.unmask(),
+                    patch_size=patch_size,
+                    token_exit_cfg=None,
+                )
+                online_unmasked_output, _, _ = unpack_encoder_output(output_dict)
+                pooled_unmasked = pool_unmasked_tokens(
+                    online_unmasked_output, PoolingType.MEAN, spatial_pooling=True
+                )
+            return pooled_unmasked, None, None
         # raw_sentinel2
         return self._extract_raw_s2_cond(batch)
 

@@ -5,7 +5,7 @@ Sentinel-2 temporal stack (``raw_sentinel2``): the full time series of all S2
 bands is embedded by non-strided per-timestep convs (3 layers), averaged over
 the valid timesteps, then refined by more non-strided convs before fusing with
 the NAIP image features. The generator and NAIP image path match
-``naip_gan_target_embed.py``; the projection term is off.
+``naip_gan_unmasked_embed.py``; the projection term is off.
 
 Validate before launching::
 

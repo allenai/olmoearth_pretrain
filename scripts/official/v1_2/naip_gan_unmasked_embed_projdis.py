@@ -1,12 +1,12 @@
-"""v1.2 NAIP target-embedding GAN with a projection discriminator.
+"""v1.2 NAIP unmasked-embedding GAN with a projection discriminator.
 
-Same as ``naip_gan_target_embed.py`` but enables the projection-discriminator
+Same as ``naip_gan_unmasked_embed.py`` but enables the projection-discriminator
 term (``use_projection=True``), so the discriminator's logits reward agreement
 between the NAIP image features and the projected condition.
 
 Validate before launching::
 
-    python3 scripts/official/v1_2/naip_gan_target_embed_projdis.py dry_run naip_gan_target_embed_projdis local
+    python3 scripts/official/v1_2/naip_gan_unmasked_embed_projdis.py dry_run naip_gan_unmasked_embed_projdis local
 """
 
 import logging

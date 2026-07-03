@@ -1,14 +1,15 @@
-"""v1.2 NAIP conditional GAN conditioned on the target-encoder embedding.
+"""v1.2 NAIP conditional GAN conditioned on the unmasked-input embedding.
 
 This is the base ``naip_gan.py`` configuration made explicit: the discriminator
-conditions on the target-encoder pooled embedding (``target_pooled``) with the
-``[256, 128, 128]`` generator and the condition-aware discriminator (two head
-residual blocks, post-unpatchify condition convs, no projection term). It exists
-as a named experiment; it reuses the base builders unchanged.
+conditions on the online encoder's pooled embedding from a full-depth forward on
+the unmasked input (``online_unmasked_pooled``) with the ``[256, 128, 128]``
+generator and the condition-aware discriminator (two head residual blocks,
+post-unpatchify condition convs, no projection term). It exists as a named
+experiment; it reuses the base builders unchanged.
 
 Validate before launching::
 
-    python3 scripts/official/v1_2/naip_gan_target_embed.py dry_run naip_gan_target_embed local
+    python3 scripts/official/v1_2/naip_gan_unmasked_embed.py dry_run naip_gan_unmasked_embed local
 """
 
 import logging

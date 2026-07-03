@@ -261,11 +261,11 @@ def test_gradient_isolation(
         microbatch = split_masked_batch(batch_data, tm.rank_microbatch_size)[0]
         microbatch = microbatch.to_device(torch.device("cpu"))
 
-        _, _, _, target_output, pooled, fake_naip = tm.model_forward(
+        _, _, _, _, pooled, fake_naip = tm.model_forward(
             microbatch, patch_size, tm.token_exit_cfg
         )
         cond, cond_valid, cond_time_mask = tm._extract_discriminator_cond(
-            microbatch, pooled, target_output
+            microbatch, pooled, patch_size
         )
 
         # --- Discriminator loss: only the discriminator gets gradients. ---
@@ -304,7 +304,7 @@ def test_gradient_isolation(
 
 
 @pytest.mark.parametrize(
-    "cond_source", ["online_pooled", "target_pooled", "raw_sentinel2"]
+    "cond_source", ["online_pooled", "online_unmasked_pooled", "raw_sentinel2"]
 )
 def test_train_batch_runs_for_cond_sources(
     naip_samples: list[tuple[int, OlmoEarthSample]],

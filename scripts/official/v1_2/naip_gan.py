@@ -5,7 +5,8 @@ latent-MIM patch-discrimination objective but adds a NAIP generator on top of
 the encoder's pooled spatial embedding plus a conditional discriminator. NAIP
 (``naip_10``) is a decode-only modality, so the generator must synthesize it
 from the (masked) Sentinel-2 / other encode tokens. The discriminator here
-conditions on the target-encoder pooled embedding (``target_pooled``).
+conditions on the online encoder's pooled embedding from a full-depth forward on
+the unmasked input (``online_unmasked_pooled``).
 
 Validate before launching::
 
@@ -67,11 +68,12 @@ DISCRIMINATOR_IMAGE_CHANNELS = [128, 128, 128]
 DISCRIMINATOR_FEATURE_CHANNELS = 128
 DISCRIMINATOR_NUM_CONVS_PER_RESOLUTION = 1
 DISCRIMINATOR_NUM_HEAD_RES_BLOCKS = 2
-# The discriminator conditions on the target-encoder pooled embedding. The
-# embedding tokens (40 m/px, patch size 4) are resampled to the unpatchify factor
-# then a learned unpatchify expands them to the 10 m/px fusion grid; two convs
-# (128 -> 256 -> 128) refine the condition after the unpatchify.
-DISCRIMINATOR_COND_SOURCE = "target_pooled"
+# The discriminator conditions on the online-encoder pooled embedding from a
+# full-depth forward on the unmasked input. The embedding tokens (40 m/px, patch
+# size 4) are resampled to the unpatchify factor then a learned unpatchify
+# expands them to the 10 m/px fusion grid; two convs (128 -> 256 -> 128) refine
+# the condition after the unpatchify.
+DISCRIMINATOR_COND_SOURCE = "online_unmasked_pooled"
 DISCRIMINATOR_COND_UNPATCHIFY_FACTOR = NAIP_PATCH_SIZE
 DISCRIMINATOR_COND_EMBEDDING_CHANNELS = [256]
 DISCRIMINATOR_USE_PROJECTION = False
