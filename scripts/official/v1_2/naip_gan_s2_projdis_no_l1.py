@@ -1,37 +1,33 @@
-"""v1.2 NAIP conditional GAN with the generator L1 loss disabled.
+"""v1.2 NAIP raw-Sentinel-2 projection GAN without the L1 loss.
 
-Identical to ``naip_gan.py`` except the generator is trained with a pure
-adversarial objective (``lambda_l1 = 0``) and generated-vs-real NAIP images are
-uploaded to W&B every 2000 steps.
-
-Since the L1 term is disabled, the adversarial phase starts immediately
-(``gan_warmup_steps = 0``) so the generator receives gradients from step 0.
+Same as ``naip_gan_s2_projdis.py`` (raw Sentinel-2 condition, projection
+discriminator) but drops the L1 reconstruction loss (``lambda_l1=0``), so the
+generator is trained by the adversarial loss alone (``lambda_adv=0.1``).
 
 Validate before launching::
 
-    python3 scripts/official/v1_2/naip_gan_no_l1.py dry_run naip_gan_no_l1 local
+    python3 scripts/official/v1_2/naip_gan_s2_projdis_no_l1.py dry_run naip_gan_s2_projdis_no_l1 local
 """
 
 import logging
 
 import naip_gan as naip_gan_base
+import naip_gan_s2 as naip_gan_s2_base
 
 from olmoearth_pretrain.internal.experiment import CommonComponents, main
 from olmoearth_pretrain.train.train_module.naip_gan import NaipGanTrainModuleConfig
 
 logger = logging.getLogger(__name__)
 
-IMAGE_LOG_INTERVAL = 2000
 
-
-def build_train_module_config(
-    common: CommonComponents,
-) -> NaipGanTrainModuleConfig:
-    """NAIP GAN train module config with L1 disabled and periodic image logging."""
-    config = naip_gan_base.build_train_module_config(common)
+def build_train_module_config(common: CommonComponents) -> NaipGanTrainModuleConfig:
+    """Build the raw-Sentinel-2 train module config: projection, no L1 loss."""
+    config = naip_gan_s2_base.build_train_module_config(common)
+    config.discriminator_config.use_projection = True
     config.lambda_l1 = 0.0
+    # No L1 term, so there is nothing to train the generator during a warmup;
+    # start the adversarial loss immediately.
     config.gan_warmup_steps = 0
-    config.image_log_interval = IMAGE_LOG_INTERVAL
     return config
 
 

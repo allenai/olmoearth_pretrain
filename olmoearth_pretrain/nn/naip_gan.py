@@ -65,12 +65,11 @@ class NaipGenerator(nn.Module):
         self,
         embedding_size: int,
         patch_size: int,
-        hidden_size: int = 128,
+        hidden_sizes: list[int],
         out_channels: int = 4,
         upsample_factor: int = 4,
         num_res_blocks: int = 2,
         num_groups: int = 8,
-        hidden_sizes: list[int] | None = None,
     ):
         """Initialize the generator.
 
@@ -79,22 +78,27 @@ class NaipGenerator(nn.Module):
         base pixel resolution, then the conv trunk upsamples by ``upsample_factor``.
         For NAIP set ``upsample_factor = naip_10.image_tile_size_factor``.
 
+        To support a flexible / varying encoder patch size, pass the encoder
+        ``patch_size`` to :meth:`forward`: the pooled token grid is first bilinearly
+        resampled so each token spans the canonical ``self.patch_size`` base pixels
+        (keeping the physical extent fixed), and the single learned unpatchify then
+        always lands at the base resolution regardless of the encoder patch size.
+
         Args:
             embedding_size: Channel dim ``D`` of the pooled embedding ``[B, H, W, D]``.
-            patch_size: Encoder patch size; the token is unpatchified into a
-                ``patch_size x patch_size`` block of features.
-            hidden_size: Width of the conv trunk when ``hidden_sizes`` is not given
-                (a single width shared by every resolution stage).
+            patch_size: Learned unpatchify block factor (the canonical patch
+                size); each (resampled) token is expanded into a
+                ``patch_size x patch_size`` block of features, e.g. 4 -> 40 m/px
+                tokens unpatchified to the 10 m/px base grid.
+            hidden_sizes: Per-stage channel widths, one for the base
+                (post-unpatchify) resolution followed by one for each upsampling
+                stage (length ``log2(upsample_factor) + 1``). Lets capacity be
+                concentrated at the coarse resolution, e.g. ``[256, 128, 128]``.
             out_channels: Number of NAIP output bands (R, G, B, IR -> 4).
             upsample_factor: Conv-trunk spatial upsampling factor (power of 2).
             num_res_blocks: Residual blocks applied at the base resolution and
                 after each upsampling step.
             num_groups: Target GroupNorm groups.
-            hidden_sizes: Optional per-stage channel widths, one for the base
-                (post-unpatchify) resolution followed by one for each upsampling
-                stage (length ``log2(upsample_factor) + 1``). Lets capacity be
-                concentrated at the coarse resolution, e.g. ``[256, 128, 128]``.
-                Overrides ``hidden_size`` when provided.
         """
         super().__init__()
         n_up = int(round(math.log2(upsample_factor)))
@@ -103,17 +107,14 @@ class NaipGenerator(nn.Module):
                 f"upsample_factor must be a power of 2, got {upsample_factor}"
             )
         # Per-stage channel widths: one for the base (post-unpatchify) resolution
-        # plus one for each upsampling stage. Defaults to a flat ``hidden_size``.
-        if hidden_sizes is None:
-            channels = [hidden_size] * (n_up + 1)
-        else:
-            if len(hidden_sizes) != n_up + 1:
-                raise ValueError(
-                    f"hidden_sizes must have length log2(upsample_factor) + 1 = "
-                    f"{n_up + 1} (base resolution plus one per upsampling stage), "
-                    f"got {len(hidden_sizes)}"
-                )
-            channels = list(hidden_sizes)
+        # plus one for each upsampling stage.
+        if len(hidden_sizes) != n_up + 1:
+            raise ValueError(
+                f"hidden_sizes must have length log2(upsample_factor) + 1 = "
+                f"{n_up + 1} (base resolution plus one per upsampling stage), "
+                f"got {len(hidden_sizes)}"
+            )
+        channels = list(hidden_sizes)
         self.patch_size = patch_size
         self.hidden_size = channels[0]
         self.upsample_factor = upsample_factor
@@ -143,19 +144,44 @@ class NaipGenerator(nn.Module):
 
         self.to_image = nn.Conv2d(channels[-1], out_channels, kernel_size=3, padding=1)
 
-    def forward(self, pooled: Tensor) -> Tensor:
+    def forward(self, pooled: Tensor, patch_size: int) -> Tensor:
         """Generate a NAIP image.
 
         Args:
             pooled: Pooled spatial embedding of shape ``[B, H, W, D]``.
+            patch_size: Encoder patch size for this batch. When it differs from
+                the unpatchify factor ``self.patch_size`` the token grid is
+                bilinearly resampled by ``patch_size / self.patch_size`` so each
+                token becomes canonical before the (fixed) unpatchify, keeping
+                the output resolution consistent across patch sizes.
 
         Returns:
-            NAIP image of shape
-            ``[B, out_channels, H * patch_size * upsample_factor, W * patch_size * upsample_factor]``.
+            NAIP image of shape ``[B, out_channels, Hc * U * upsample_factor,
+            Wc * U * upsample_factor]`` where ``U`` is the unpatchify factor
+            (``self.patch_size``) and ``(Hc, Wc)`` the (resampled) token grid.
         """
         # Match the (possibly mixed-precision) param dtype; pooling can upcast to
         # float32 even when the model runs in bf16 under FSDP mixed precision.
         pooled = pooled.to(self.unpatchify.weight.dtype)
+        # Resample the token grid so each token spans the canonical
+        # ``self.patch_size`` base pixels (fixed extent), letting one learned
+        # unpatchify land at the base resolution for any encoder patch size.
+        h, w = pooled.shape[1], pooled.shape[2]
+        target = (
+            max(1, round(h * patch_size / self.patch_size)),
+            max(1, round(w * patch_size / self.patch_size)),
+        )
+        if target != (h, w):
+            pooled = (
+                F.interpolate(
+                    pooled.permute(0, 3, 1, 2),
+                    size=target,
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                .permute(0, 2, 3, 1)
+                .contiguous()
+            )
         x = self.unpatchify(pooled)  # [B, H, W, patch^2 * hidden]
         x = rearrange(
             x,
@@ -171,15 +197,16 @@ class NaipGenerator(nn.Module):
 class NaipDiscriminator(nn.Module):
     """Conditional PatchGAN discriminator over NAIP images.
 
-    The image is downsampled with strided convs, adaptively pooled to the token
-    grid, then combined with the projected pooled embedding before a conv head
-    produces per-patch real/fake logits.
+    The image is downsampled with strided convs and adaptively pooled to the
+    fusion grid (the base 10 m/px grid in embedding mode, or the Sentinel-2 image
+    resolution in image mode), then combined with the projected condition before
+    a conv head produces per-patch real/fake logits.
 
     Because the condition here is a rich Sentinel-2-derived embedding (not a
     downscaled NAIP image), the discriminator can be pushed to actually judge
     image-vs-condition *consistency* rather than unconditional realism via:
 
-    * an MLP projection of the condition (``cond_hidden_size``),
+    * post-unpatchify convs on the condition (``cond_embedding_channels``),
     * a deeper reasoning head (``num_head_res_blocks``), and
     * a projection-discriminator inner-product term (``use_projection``;
       Miyato & Koyama, "cGANs with Projection Discriminator"), which only
@@ -190,27 +217,40 @@ class NaipDiscriminator(nn.Module):
         self,
         embedding_size: int,
         in_channels: int = 4,
-        hidden_size: int = 64,
-        num_image_layers: int = 3,
-        max_channel_multiple: int = 4,
-        cond_hidden_size: int | None = None,
+        image_strided_conv_channels: list[int] | None = None,
+        feature_channels: int = 256,
+        cond_embedding_channels: list[int] | None = None,
         num_head_res_blocks: int = 0,
         use_projection: bool = False,
         num_groups: int = 8,
+        cond_mode: str = "embedding",
+        cond_in_channels: int = 4,
+        cond_image_pre_pool_channels: list[int] | None = None,
+        cond_image_post_pool_channels: list[int] | None = None,
+        num_convs_per_resolution: int = 0,
+        cond_unpatchify_factor: int = 1,
     ):
         """Initialize the discriminator.
 
         Args:
-            embedding_size: Channel dim ``D`` of the conditioning embedding.
+            embedding_size: Channel dim ``D`` of the conditioning embedding
+                (used only when ``cond_mode == 'embedding'``).
             in_channels: Number of NAIP input bands.
-            hidden_size: Base channel width.
-            num_image_layers: Number of strided conv layers on the image.
-            max_channel_multiple: Cap on the channel growth as a multiple of
-                ``hidden_size``.
-            cond_hidden_size: If set, project the condition with a 2-layer MLP
-                (``embedding_size -> cond_hidden_size -> feature_channels``)
-                instead of a single linear, giving the condition real transform
-                capacity.
+            image_strided_conv_channels: Per-conv output widths of the NAIP image
+                stack. The first entry is a stride-1 stem and each subsequent
+                entry a stride-2 conv, e.g. ``[64, 128, 256]`` is a stem to 64
+                then two strided convs to 128 and 256. Defaults to
+                ``[64, 128, 256]``.
+            feature_channels: Fused feature width. A final conv projects the image
+                stack to this width, the condition is produced at this width, and
+                the head fuses the two (so its input is ``2 * feature_channels``).
+            cond_embedding_channels: Optional per-conv output widths of the
+                non-strided convs applied to the condition *after* the learned
+                unpatchify (a final 1x1 conv projects back to
+                ``feature_channels``), e.g. ``[256]`` gives
+                ``feature_channels -> 256 -> feature_channels``. ``None``/empty
+                applies no post-unpatchify convs. Only used when
+                ``cond_mode == 'embedding'``.
             num_head_res_blocks: Number of residual blocks inserted into the
                 fusion head so it has depth to compare image features against the
                 condition (0 keeps the original shallow head).
@@ -219,28 +259,117 @@ class NaipDiscriminator(nn.Module):
                 projected condition is added to the logits, so the discriminator
                 cannot score well by ignoring the condition.
             num_groups: Target GroupNorm groups for the head residual blocks.
+            cond_mode: How the condition is provided. ``'embedding'`` (default)
+                takes a pooled embedding ``[B, H, W, D]`` and projects it;
+                ``'image'`` takes a raw image temporal stack
+                ``[B, T, cond_in_channels, Hc, Wc]`` (the Sentinel-2 time series)
+                and embeds it (see ``cond_image_pre_pool_channels``).
+            cond_in_channels: Number of channels (bands) of the raw image
+                condition when ``cond_mode == 'image'``.
+            cond_image_pre_pool_channels: Per-conv output widths of the
+                non-strided convs applied to each timestep of the raw image
+                condition (at the image resolution) before the mean over time.
+                Defaults to ``[feature_channels]``.
+            cond_image_post_pool_channels: Per-conv output widths of the extra
+                non-strided convs applied after the mean over time (before the
+                final 1x1 projection to ``feature_channels``). Defaults to none.
+            num_convs_per_resolution: Number of stride-1 refinement convs (3x3 +
+                LeakyReLU) inserted after each conv of the NAIP image stack, at
+                that resolution (0 disables them).
+            cond_unpatchify_factor: In ``'embedding'`` mode, the factor ``f`` of
+                the learned unpatchify: tokens are first resampled so each spans
+                ``f`` canonical base pixels, then a single linear expands each
+                into an ``f x f`` block of features, mirroring the generator.
+                Fusion always happens at the base ``token_grid * patch_size``
+                (10 m/px) grid regardless of ``f``; ``f`` only sets the
+                unpatchify block factor (set it to the generator ``patch_size``,
+                e.g. 4, to resample tokens to 40 m/px before a learned 4x4
+                unpatchify to 10 m/px).
         """
         super().__init__()
-        layers: list[nn.Module] = []
-        c_in = in_channels
-        c_out = hidden_size
-        for _ in range(num_image_layers):
-            layers.append(nn.Conv2d(c_in, c_out, kernel_size=4, stride=2, padding=1))
-            layers.append(nn.LeakyReLU(0.2, inplace=True))
-            c_in = c_out
-            c_out = min(c_out * 2, hidden_size * max_channel_multiple)
-        self.from_image = nn.Sequential(*layers)
-        self.feature_channels = c_in
-        self.use_projection = use_projection
-
-        if cond_hidden_size is None:
-            self.cond_proj: nn.Module = nn.Linear(embedding_size, self.feature_channels)
-        else:
-            self.cond_proj = nn.Sequential(
-                nn.Linear(embedding_size, cond_hidden_size),
-                nn.LeakyReLU(0.2, inplace=True),
-                nn.Linear(cond_hidden_size, self.feature_channels),
+        if cond_mode not in ("embedding", "image"):
+            raise ValueError(f"Unknown cond_mode: {cond_mode}")
+        if cond_unpatchify_factor < 1:
+            raise ValueError(
+                f"cond_unpatchify_factor must be >= 1, got {cond_unpatchify_factor}"
             )
+        self.cond_mode = cond_mode
+        self.use_projection = use_projection
+        self.cond_unpatchify_factor = cond_unpatchify_factor
+        self.feature_channels = feature_channels
+
+        # Downsample the NAIP image: a stride-1 stem (channels[0]) then stride-2
+        # convs (channels[1:]), each optionally followed by num_convs_per_resolution
+        # stride-1 refinement convs, and a final conv to feature_channels.
+        image_channels = image_strided_conv_channels or [64, 128, 256]
+        if not image_channels:
+            raise ValueError("image_strided_conv_channels must be non-empty")
+        image_layers: list[nn.Module] = []
+        prev = in_channels
+        for i, width in enumerate(image_channels):
+            if i == 0:
+                image_layers.append(
+                    nn.Conv2d(prev, width, kernel_size=3, stride=1, padding=1)
+                )
+            else:
+                image_layers.append(
+                    nn.Conv2d(prev, width, kernel_size=4, stride=2, padding=1)
+                )
+            image_layers.append(nn.LeakyReLU(0.2, inplace=True))
+            for _ in range(num_convs_per_resolution):
+                image_layers.append(
+                    nn.Conv2d(width, width, kernel_size=3, stride=1, padding=1)
+                )
+                image_layers.append(nn.LeakyReLU(0.2, inplace=True))
+            prev = width
+        image_layers.append(nn.Conv2d(prev, feature_channels, kernel_size=3, padding=1))
+        image_layers.append(nn.LeakyReLU(0.2, inplace=True))
+        self.from_image = nn.Sequential(*image_layers)
+
+        if cond_mode == "embedding":
+            # Learned unpatchify of the pooled embedding [B, H, W, D]: a single
+            # linear expands each token into an f x f block of features
+            # (f = cond_unpatchify_factor), mirroring the generator.
+            cond_out = (
+                cond_unpatchify_factor * cond_unpatchify_factor * feature_channels
+            )
+            self.cond_proj = nn.Linear(embedding_size, cond_out)
+            # Optional non-strided convs applied after the unpatchify, with a
+            # final 1x1 projection back to feature_channels. Identity when unset.
+            unpatchify_layers: list[nn.Module] = []
+            prev = feature_channels
+            for width in cond_embedding_channels or []:
+                unpatchify_layers.append(
+                    nn.Conv2d(prev, width, kernel_size=3, padding=1)
+                )
+                unpatchify_layers.append(nn.LeakyReLU(0.2, inplace=True))
+                prev = width
+            if cond_embedding_channels:
+                unpatchify_layers.append(
+                    nn.Conv2d(prev, feature_channels, kernel_size=1)
+                )
+            self.cond_post_unpatchify = nn.Sequential(*unpatchify_layers)
+        else:
+            # Raw image condition as a temporal stack [B, T, cond_in_channels, H, W].
+            # Non-strided per-timestep convs keep it at the image resolution; after
+            # the mean over time, more non-strided convs and a 1x1 projection to
+            # feature_channels. The result is resampled to the fusion grid in
+            # forward (a no-op when it already matches).
+            pre_channels = cond_image_pre_pool_channels or [feature_channels]
+            pre_layers: list[nn.Module] = []
+            prev = cond_in_channels
+            for width in pre_channels:
+                pre_layers.append(nn.Conv2d(prev, width, kernel_size=3, padding=1))
+                pre_layers.append(nn.LeakyReLU(0.2, inplace=True))
+                prev = width
+            self.cond_pre_pool = nn.Sequential(*pre_layers)
+            post_layers: list[nn.Module] = []
+            for width in cond_image_post_pool_channels or []:
+                post_layers.append(nn.Conv2d(prev, width, kernel_size=3, padding=1))
+                post_layers.append(nn.LeakyReLU(0.2, inplace=True))
+                prev = width
+            post_layers.append(nn.Conv2d(prev, feature_channels, kernel_size=1))
+            self.cond_post_pool = nn.Sequential(*post_layers)
 
         head_layers: list[nn.Module] = [
             nn.Conv2d(
@@ -258,25 +387,93 @@ class NaipDiscriminator(nn.Module):
         )
         self.head = nn.Sequential(*head_layers)
 
-    def forward(self, image: Tensor, cond: Tensor) -> Tensor:
+    def forward(
+        self,
+        image: Tensor,
+        cond: Tensor,
+        patch_size: int,
+        cond_time_mask: Tensor | None = None,
+    ) -> Tensor:
         """Classify each patch as real or fake.
 
         Args:
             image: NAIP image of shape ``[B, in_channels, Hf, Wf]``.
-            cond: Conditioning embedding of shape ``[B, H, W, D]``.
+            cond: Conditioning input. When ``cond_mode == 'embedding'`` this is a
+                pooled embedding ``[B, H, W, D]`` (whose ``[H, W]`` is the token
+                grid); when ``cond_mode == 'image'`` this is a raw image temporal
+                stack ``[B, T, cond_in_channels, Hc, Wc]`` (the Sentinel-2 time
+                series at its native 10 m/px resolution).
+            patch_size: Encoder patch size for this batch. Only used in
+                ``'embedding'`` mode: the token grid is resampled by
+                ``patch_size / cond_unpatchify_factor`` so each token spans
+                ``cond_unpatchify_factor`` canonical base pixels before the
+                learned unpatchify, landing fusion at the base
+                ``token_grid * patch_size`` (10 m/px) grid regardless of patch
+                size. Ignored in ``'image'`` mode.
+            cond_time_mask: Optional ``[B, T]`` boolean mask of valid timesteps for
+                the ``'image'`` condition; the mean over time uses only valid
+                timesteps. When ``None`` all timesteps are averaged.
 
         Returns:
-            Per-patch logits of shape ``[B, 1, H, W]``.
+            Per-patch logits. In ``'embedding'`` mode of shape
+            ``[B, 1, H * patch_size, W * patch_size]`` (the base 10 m/px grid);
+            in ``'image'`` mode of shape ``[B, 1, Hc, Wc]`` (the Sentinel-2 image
+            resolution).
         """
         # The discriminator is kept in its own (fp32) precision, separate from the
         # FSDP mixed-precision model, so cast inputs to its param dtype. Reference
-        # the first image conv, which exists regardless of the cond-proj variant.
+        # the first image conv, which exists regardless of the cond variant.
         param_dtype = self.from_image[0].weight.dtype
         image = image.to(param_dtype)
         cond = cond.to(param_dtype)
         feats = self.from_image(image)
-        feats = F.adaptive_avg_pool2d(feats, output_size=cond.shape[1:3])
-        cond_feats = self.cond_proj(cond).permute(0, 3, 1, 2).contiguous()
+        f = self.cond_unpatchify_factor
+        if self.cond_mode == "embedding":
+            token_grid = (int(cond.shape[1]), int(cond.shape[2]))
+            # Resample tokens so each spans the canonical ``f`` base pixels, so the
+            # learned unpatchify lands at the base (10 m/px) grid for any encoder
+            # patch size.
+            canonical = (
+                max(1, round(token_grid[0] * patch_size / f)),
+                max(1, round(token_grid[1] * patch_size / f)),
+            )
+            if canonical != token_grid:
+                cond = (
+                    F.interpolate(
+                        cond.permute(0, 3, 1, 2),
+                        size=canonical,
+                        mode="bilinear",
+                        align_corners=False,
+                    )
+                    .permute(0, 2, 3, 1)
+                    .contiguous()
+                )
+                token_grid = canonical
+            fusion_grid = (token_grid[0] * f, token_grid[1] * f)
+            feats = F.adaptive_avg_pool2d(feats, output_size=fusion_grid)
+            # Learned unpatchify: [B, H, W, f*f*C] -> [B, C, H*f, W*f].
+            cond_feats = rearrange(
+                self.cond_proj(cond),
+                "b h w (ph pw c) -> b c (h ph) (w pw)",
+                ph=f,
+                pw=f,
+                c=self.feature_channels,
+            ).contiguous()
+            cond_feats = self.cond_post_unpatchify(cond_feats)
+        else:
+            # cond is a temporal stack [B, T, cond_in_channels, H, W] at the
+            # Sentinel-2 (10 m/px) resolution. Apply the per-timestep convs, mean
+            # over the (valid) timesteps, then the post-pool convs; fusion happens
+            # at that native image resolution.
+            b, t = cond.shape[0], cond.shape[1]
+            x = self.cond_pre_pool(cond.flatten(0, 1)).unflatten(0, (b, t))
+            if cond_time_mask is not None:
+                m = cond_time_mask.to(x.dtype).reshape(b, t, 1, 1, 1)
+                x = (x * m).sum(dim=1) / m.sum(dim=1).clamp(min=1.0)
+            else:
+                x = x.mean(dim=1)
+            cond_feats = self.cond_post_pool(x)  # [B, feature_channels, Hc, Wc]
+            feats = F.adaptive_avg_pool2d(feats, output_size=cond_feats.shape[-2:])
         combined = torch.cat([feats, cond_feats], dim=1)
         logits = self.head(combined)
         if self.use_projection:
@@ -320,31 +517,34 @@ class NaipGeneratorConfig(Config):
     ``upsample_factor`` to the NAIP ``image_tile_size_factor`` so the output lands
     at native NAIP resolution.
 
-    Set ``hidden_sizes`` to a per-stage list (base resolution plus one per
-    upsampling stage) to concentrate capacity at the coarse resolution, e.g.
-    ``[256, 128, 128]``; otherwise ``hidden_size`` is shared by every stage.
+    Set ``hidden_sizes`` to a per-stage list of channel widths (base resolution
+    plus one per upsampling stage, length ``log2(upsample_factor) + 1``) to
+    concentrate capacity at the coarse resolution, e.g. ``[256, 128, 128]``.
+
+    Pass the encoder ``patch_size`` to the generator's ``forward`` to support a
+    flexible encoder patch size: the token grid is resampled to the canonical
+    ``patch_size`` (unpatchify factor) before the unpatchify, so the output stays
+    consistent across patch sizes.
     """
 
     embedding_size: int
     patch_size: int
-    hidden_size: int = 128
+    hidden_sizes: list[int]
     out_channels: int = 4
     upsample_factor: int = 4
     num_res_blocks: int = 2
     num_groups: int = 8
-    hidden_sizes: list[int] | None = None
 
     def build(self) -> NaipGenerator:
         """Build the generator."""
         return NaipGenerator(
             embedding_size=self.embedding_size,
             patch_size=self.patch_size,
-            hidden_size=self.hidden_size,
+            hidden_sizes=self.hidden_sizes,
             out_channels=self.out_channels,
             upsample_factor=self.upsample_factor,
             num_res_blocks=self.num_res_blocks,
             num_groups=self.num_groups,
-            hidden_sizes=self.hidden_sizes,
         )
 
 
@@ -352,33 +552,60 @@ class NaipGeneratorConfig(Config):
 class NaipDiscriminatorConfig(Config):
     """Configuration for :class:`NaipDiscriminator`.
 
-    Set ``cond_hidden_size``, ``num_head_res_blocks`` and ``use_projection`` to
-    make the discriminator reason more about the conditioning embedding (rather
+    Set ``cond_embedding_channels``, ``num_head_res_blocks`` and ``use_projection``
+    to make the discriminator reason more about the conditioning embedding (rather
     than just the realism of the input image).
+
+    Set ``cond_mode='image'`` (with ``cond_in_channels``) to condition on a raw
+    image (the full Sentinel-2 temporal stack) instead of a pooled embedding;
+    ``embedding_size`` is then unused. ``cond_image_pre_pool_channels`` are
+    non-strided convs applied to each timestep at the S2 resolution;
+    ``cond_image_post_pool_channels`` are non-strided convs applied after the mean
+    over time. In embedding mode ``cond_embedding_channels`` are non-strided convs
+    applied after the learned unpatchify of the condition.
+
+    ``image_strided_conv_channels`` is the per-conv width list for the NAIP image
+    stack (first entry a stride-1 stem, the rest stride-2 convs); ``feature_channels``
+    is the fused width the image and condition are projected to before the head.
+
+    Set ``cond_unpatchify_factor`` to the generator ``patch_size`` so the condition
+    tokens are resampled to that (coarse) resolution and a learned unpatchify
+    expands them back to the base 10 m/px fusion grid, mirroring the generator
+    (embedding mode only; image mode fuses at the Sentinel-2 image resolution).
     """
 
     embedding_size: int
     in_channels: int = 4
-    hidden_size: int = 64
-    num_image_layers: int = 3
-    max_channel_multiple: int = 4
-    cond_hidden_size: int | None = None
+    image_strided_conv_channels: list[int] | None = None
+    feature_channels: int = 256
+    cond_embedding_channels: list[int] | None = None
     num_head_res_blocks: int = 0
     use_projection: bool = False
     num_groups: int = 8
+    cond_mode: str = "embedding"
+    cond_in_channels: int = 4
+    cond_image_pre_pool_channels: list[int] | None = None
+    cond_image_post_pool_channels: list[int] | None = None
+    num_convs_per_resolution: int = 0
+    cond_unpatchify_factor: int = 1
 
     def build(self) -> NaipDiscriminator:
         """Build the discriminator."""
         return NaipDiscriminator(
             embedding_size=self.embedding_size,
             in_channels=self.in_channels,
-            hidden_size=self.hidden_size,
-            num_image_layers=self.num_image_layers,
-            max_channel_multiple=self.max_channel_multiple,
-            cond_hidden_size=self.cond_hidden_size,
+            image_strided_conv_channels=self.image_strided_conv_channels,
+            feature_channels=self.feature_channels,
+            cond_embedding_channels=self.cond_embedding_channels,
             num_head_res_blocks=self.num_head_res_blocks,
             use_projection=self.use_projection,
             num_groups=self.num_groups,
+            cond_mode=self.cond_mode,
+            cond_in_channels=self.cond_in_channels,
+            cond_image_pre_pool_channels=self.cond_image_pre_pool_channels,
+            cond_image_post_pool_channels=self.cond_image_post_pool_channels,
+            num_convs_per_resolution=self.num_convs_per_resolution,
+            cond_unpatchify_factor=self.cond_unpatchify_factor,
         )
 
 
@@ -426,7 +653,7 @@ class NaipGanModel(LatentMIM):
         pooled = pool_unmasked_tokens(
             latent, PoolingType.MEAN, spatial_pooling=True
         )  # [B, H, W, D]
-        fake_naip = self.generator(pooled)
+        fake_naip = self.generator(pooled, patch_size)
         return (
             latent,
             decoded,
@@ -477,18 +704,9 @@ class NaipGanModelConfig(Config):
                 "Generator embedding_size must match the encoder output size "
                 f"({encoder_output_size} != {self.generator_config.embedding_size})"
             )
-        # The generator's unpatchify factor must equal the encoder's (fixed) patch
-        # size so the generated image lands at native NAIP resolution.
-        if (
-            self.encoder_config.min_patch_size != self.encoder_config.max_patch_size
-            or self.encoder_config.min_patch_size != self.generator_config.patch_size
-        ):
-            raise ValueError(
-                "Generator patch_size must equal a fixed encoder patch size "
-                f"(encoder min={self.encoder_config.min_patch_size}, "
-                f"max={self.encoder_config.max_patch_size}, "
-                f"generator={self.generator_config.patch_size})"
-            )
+        # The generator (and the discriminator, in the train module) resamples the
+        # token grid to the canonical unpatchify factor using the per-batch encoder
+        # patch size, so a fixed encoder patch size is no longer required.
 
     def build(self) -> NaipGanModel:
         """Build the NAIP GAN model."""

@@ -138,7 +138,7 @@ def naip_gan_model() -> NaipGanModel:
     generator_config = NaipGeneratorConfig(
         embedding_size=EMBEDDING_SIZE,
         patch_size=1,
-        hidden_size=32,
+        hidden_sizes=[32, 32, 32],
         out_channels=4,
         upsample_factor=4,
         num_res_blocks=1,
@@ -153,8 +153,27 @@ def naip_gan_model() -> NaipGanModel:
 
 
 def _build_train_module(
-    model: NaipGanModel, image_log_interval: int = 0
+    model: NaipGanModel,
+    image_log_interval: int = 0,
+    cond_source: str = "online_pooled",
 ) -> NaipGanTrainModule:
+    if cond_source == "raw_sentinel2":
+        # Condition on the full Sentinel-2 temporal stack (all 13 sample bands).
+        discriminator_config = NaipDiscriminatorConfig(
+            embedding_size=EMBEDDING_SIZE,
+            in_channels=4,
+            image_strided_conv_channels=[16, 32],
+            feature_channels=32,
+            cond_mode="image",
+            cond_in_channels=13,
+        )
+    else:
+        discriminator_config = NaipDiscriminatorConfig(
+            embedding_size=EMBEDDING_SIZE,
+            in_channels=4,
+            image_strided_conv_channels=[16, 32],
+            feature_channels=32,
+        )
     config = NaipGanTrainModuleConfig(
         optim_config=AdamWConfig(lr=1e-4, weight_decay=0.0),
         rank_microbatch_size=2,
@@ -168,14 +187,13 @@ def _build_train_module(
                 "only_decode_modalities": [Modality.NAIP_10.name],
             }
         ),
-        discriminator_config=NaipDiscriminatorConfig(
-            embedding_size=EMBEDDING_SIZE, in_channels=4, hidden_size=16
-        ),
+        discriminator_config=discriminator_config,
         disc_optim_config=AdamWConfig(lr=2e-4, betas=(0.5, 0.999), weight_decay=0.0),
         lambda_adv=1.0,
         lambda_l1=1.0,
         gan_warmup_steps=0,
         image_log_interval=image_log_interval,
+        discriminator_cond_source=cond_source,
         token_exit_cfg={modality: 0 for modality in Modality.names()},
         ema_decay=(1.0, 1.0),
         max_grad_norm=1.0,
@@ -243,14 +261,24 @@ def test_gradient_isolation(
         microbatch = split_masked_batch(batch_data, tm.rank_microbatch_size)[0]
         microbatch = microbatch.to_device(torch.device("cpu"))
 
-        _, _, _, _, pooled, fake_naip = tm.model_forward(
+        _, _, _, target_output, pooled, fake_naip = tm.model_forward(
             microbatch, patch_size, tm.token_exit_cfg
+        )
+        cond, cond_valid, cond_time_mask = tm._extract_discriminator_cond(
+            microbatch, pooled, target_output
         )
 
         # --- Discriminator loss: only the discriminator gets gradients. ---
         tm.zero_grads()
         d_loss = tm._maybe_discriminator_loss(
-            microbatch, pooled, fake_naip, num_microbatches=1, adversarial_active=True
+            microbatch,
+            cond,
+            cond_valid,
+            fake_naip,
+            num_microbatches=1,
+            adversarial_active=True,
+            patch_size=patch_size,
+            cond_time_mask=cond_time_mask,
         )
         assert d_loss is not None
         d_loss.backward()
@@ -261,12 +289,40 @@ def test_gradient_isolation(
         # --- Generator loss: only the generator/encoder get gradients. ---
         tm.zero_grads()
         gen_loss, _, _ = tm._generator_loss(
-            microbatch, pooled, fake_naip, adversarial_active=True
+            microbatch,
+            cond,
+            cond_valid,
+            fake_naip,
+            adversarial_active=True,
+            patch_size=patch_size,
+            cond_time_mask=cond_time_mask,
         )
         gen_loss.backward()
         assert _all_grads_none(tm.discriminator)
         assert _has_any_grad(tm.model.generator)
         assert _has_any_grad(tm.model.encoder)
+
+
+@pytest.mark.parametrize(
+    "cond_source", ["online_pooled", "target_pooled", "raw_sentinel2"]
+)
+def test_train_batch_runs_for_cond_sources(
+    naip_samples: list[tuple[int, OlmoEarthSample]],
+    naip_gan_model: NaipGanModel,
+    set_random_seeds: None,
+    cond_source: str,
+) -> None:
+    """Each discriminator conditioning source runs a full batch end-to-end."""
+    batch = _collate(naip_samples)
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        tm = _build_train_module(naip_gan_model, cond_source=cond_source)
+        tm.train_batch(batch)
+        assert "train/G_l1" in tm.trainer._metrics
+        assert "train/D_loss" in tm.trainer._metrics
+        # The discriminator was trained (D loss active from step 0 here).
+        assert _has_any_grad(tm.discriminator)
+        # Generator (in the model) received gradients from the GAN branch.
+        assert _has_any_grad(tm.model.generator)
 
 
 class FakeWandb:

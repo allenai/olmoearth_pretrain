@@ -28,7 +28,7 @@ from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 from olmoearth_pretrain.data.normalize import load_computed_config
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import (
@@ -41,6 +41,7 @@ from olmoearth_pretrain.nn.naip_gan import (
     discriminator_adversarial_loss,
     generator_adversarial_loss,
 )
+from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
@@ -71,6 +72,16 @@ class NaipGanTrainModuleConfig(LatentMIMTrainModuleConfig):
         num_log_images: Max number of paired images to upload each time.
         naip_denorm_std_multiplier: std multiplier used to invert the NAIP
             normalization for display (must match the dataset Normalizer).
+        discriminator_cond_source: What the discriminator conditions on. One of
+            "online_pooled" (default; the online-encoder pooled embedding),
+            "target_pooled" (the target-encoder pooled embedding over the
+            unmasked tokens), or "raw_sentinel2" (the raw Sentinel-2 image,
+            conditioned on even when it is masked for the online encoder). The
+            discriminator's ``cond_mode`` must match: "image" for
+            "raw_sentinel2", "embedding" otherwise.
+        cond_modality: Modality name used as the raw image condition when
+            ``discriminator_cond_source == "raw_sentinel2"``. The full temporal
+            stack of all its bands is fed to the discriminator.
     """
 
     discriminator_config: Config | None = None
@@ -83,6 +94,8 @@ class NaipGanTrainModuleConfig(LatentMIMTrainModuleConfig):
     image_log_interval: int = 1000
     num_log_images: int = 10
     naip_denorm_std_multiplier: float = 2.0
+    discriminator_cond_source: str = "online_pooled"
+    cond_modality: str = field(default_factory=lambda: Modality.SENTINEL2_L2A.name)
 
     def build(
         self,
@@ -124,6 +137,8 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         image_log_interval: int = 1000,
         num_log_images: int = 10,
         naip_denorm_std_multiplier: float = 2.0,
+        discriminator_cond_source: str = "online_pooled",
+        cond_modality: str = Modality.SENTINEL2_L2A.name,
         mae_loss_config: LossConfig | None = None,
         compile_model: bool = False,
         dp_config: DataParallelConfig | None = None,
@@ -168,6 +183,14 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         self.naip_modality = naip_modality
         self.image_log_interval = image_log_interval
         self.num_log_images = num_log_images
+        self.discriminator_cond_source = discriminator_cond_source
+        self.cond_modality = cond_modality
+        valid_sources = ("online_pooled", "target_pooled", "raw_sentinel2")
+        if discriminator_cond_source not in valid_sources:
+            raise ValueError(
+                f"discriminator_cond_source must be one of {valid_sources}, "
+                f"got {discriminator_cond_source}"
+            )
 
         # Precompute per-band (R, G, B) min/max for inverse min-max denormalization
         # of NAIP for W&B display, matching the dataset's computed normalization.
@@ -182,6 +205,18 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         # excluded from the main optimizer (its loss must not update the encoder).
         self.discriminator = discriminator_config.build()
         self.discriminator.to(self.device)
+        # The discriminator's condition input must match the chosen source: a raw
+        # image ("image") for raw Sentinel-2, otherwise a pooled embedding.
+        expected_cond_mode = (
+            "image" if discriminator_cond_source == "raw_sentinel2" else "embedding"
+        )
+        disc_cond_mode = getattr(self.discriminator, "cond_mode", "embedding")
+        if disc_cond_mode != expected_cond_mode:
+            raise ValueError(
+                f"discriminator_cond_source={discriminator_cond_source!r} requires "
+                f"the discriminator cond_mode={expected_cond_mode!r}, but got "
+                f"{disc_cond_mode!r}"
+            )
         # The discriminator is small and replicated (not sharded); rather than
         # wrapping it in DDP we keep it as a plain module and all-reduce its
         # gradients manually once per step (see ``_all_reduce_discriminator_grads``).
@@ -404,15 +439,30 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                         get_local_tensor(reg_term.detach()) / num_microbatches
                     )
 
+                d_cond, d_cond_valid, d_cond_time_mask = (
+                    self._extract_discriminator_cond(
+                        masked_batch, pooled, target_output
+                    )
+                )
+
                 d_loss = self._maybe_discriminator_loss(
                     masked_batch,
-                    pooled,
+                    d_cond,
+                    d_cond_valid,
                     fake_naip,
                     num_microbatches,
                     adversarial_active,
+                    patch_size,
+                    d_cond_time_mask,
                 )
                 gen_loss, g_l1_val, g_adv_val = self._generator_loss(
-                    masked_batch, pooled, fake_naip, adversarial_active
+                    masked_batch,
+                    d_cond,
+                    d_cond_valid,
+                    fake_naip,
+                    adversarial_active,
+                    patch_size,
+                    d_cond_time_mask,
                 )
                 total_g_l1 += g_l1_val / num_microbatches
                 total_g_adv += g_adv_val / num_microbatches
@@ -468,27 +518,108 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         del masked_batch
         del latent, decoded, target_output, pooled, fake_naip
 
-    def _maybe_discriminator_loss(
+    def _extract_discriminator_cond(
         self,
         batch: MaskedOlmoEarthSample,
         pooled: torch.Tensor,
+        target_output: TokensAndMasks,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        """Return the discriminator condition, validity mask, and time mask.
+
+        The condition depends on ``discriminator_cond_source``:
+
+        * ``online_pooled``: the online-encoder pooled embedding ``[B, H, W, D]``
+          (gradients flow to the encoder through the condition path).
+        * ``target_pooled``: the target-encoder pooled embedding over the unmasked
+          tokens ``[B, H, W, D]`` (no gradient to the encoder, EMA weights).
+        * ``raw_sentinel2``: the raw Sentinel-2 temporal stack
+          ``[B, T, C, Hs, Ws]``.
+
+        Returns:
+            ``(cond, cond_valid, cond_time_mask)``. ``cond`` is None when the raw
+            condition is entirely absent from the batch; ``cond_valid`` is a
+            ``[B]`` bool mask (None means every instance is valid);
+            ``cond_time_mask`` is a ``[B, T]`` bool mask of valid timesteps for
+            the raw stack (None for the pooled embedding modes).
+        """
+        source = self.discriminator_cond_source
+        if source == "online_pooled":
+            return pooled, None, None
+        if source == "target_pooled":
+            target_pooled = pool_unmasked_tokens(
+                target_output, PoolingType.MEAN, spatial_pooling=True
+            )
+            return target_pooled, None, None
+        # raw_sentinel2
+        return self._extract_raw_s2_cond(batch)
+
+    def _extract_raw_s2_cond(
+        self, batch: MaskedOlmoEarthSample
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        """Extract the raw image temporal stack and validity masks.
+
+        The raw modality tensor retains its full pixel values regardless of the
+        online-encoder mask, so an instance can be conditioned on even when the
+        modality is masked for the online encoder (any non-MISSING mask counts as
+        valid). All bands and all timesteps are returned; missing entries (the
+        MISSING_VALUE sentinel) are zeroed and excluded from the temporal mean via
+        the returned per-timestep validity mask.
+
+        Returns:
+            ``(stack [B, T, C, H, W], valid [B], time_valid [B, T])`` or
+            ``(None, None, None)`` if the modality is absent from the batch.
+        """
+        modality = self.cond_modality
+        raw = getattr(batch, modality, None)
+        mask = getattr(
+            batch,
+            MaskedOlmoEarthSample.get_masked_modality_name(modality),
+            None,
+        )
+        if raw is None or mask is None:
+            return None, None, None
+        batch_size = raw.shape[0]
+        # [B, H, W, T, C] -> [B, T, C, H, W] (all bands).
+        stack = raw.permute(0, 3, 4, 1, 2)
+        present = stack != MISSING_VALUE
+        # Zero the sentinel so the per-timestep convs don't see huge values.
+        stack = torch.where(present, stack, torch.zeros_like(stack))
+        # Per-timestep validity (any present pixel/band).
+        time_valid = present.reshape(batch_size, stack.shape[1], -1).any(dim=2)
+        # Per-instance validity.
+        valid = (mask != MaskValue.MISSING.value).reshape(batch_size, -1).any(dim=1)
+        return stack, valid, time_valid
+
+    def _maybe_discriminator_loss(
+        self,
+        batch: MaskedOlmoEarthSample,
+        cond: torch.Tensor | None,
+        cond_valid: torch.Tensor | None,
         fake_naip: torch.Tensor,
         num_microbatches: int,
         adversarial_active: bool,
+        patch_size: int,
+        cond_time_mask: torch.Tensor | None = None,
     ) -> torch.Tensor | None:
         """Compute the (scaled) discriminator loss on detached inputs.
 
-        Returns None when the adversarial phase is inactive or NAIP is absent.
-        Only the discriminator receives gradients from this loss.
+        Returns None when the adversarial phase is inactive, NAIP is absent, or no
+        instance has both valid NAIP and a valid condition. Only the
+        discriminator receives gradients from this loss.
         """
-        if not adversarial_active or fake_naip is None:
+        if not adversarial_active or fake_naip is None or cond is None:
             return None
         real_img, valid = self._extract_real_naip(batch)
-        if real_img is None or valid is None or not bool(valid.any()):
+        if real_img is None or valid is None:
+            return None
+        if cond_valid is not None:
+            valid = valid & cond_valid
+        if not bool(valid.any()):
             return None
         with self._model_forward_context():
             fake_v = fake_naip[valid].detach()
-            cond_v = pooled[valid].detach()
+            cond_v = cond[valid].detach()
+            time_v = None if cond_time_mask is None else cond_time_mask[valid]
             real_v = F.interpolate(
                 real_img[valid].to(fake_naip.dtype),
                 size=fake_naip.shape[-2:],
@@ -499,7 +630,13 @@ class NaipGanTrainModule(LatentMIMTrainModule):
             # (one forward is slightly cheaper than two separate passes).
             images = torch.cat([real_v, fake_v], dim=0)
             conds = torch.cat([cond_v, cond_v], dim=0)
-            logits = self.discriminator(images, conds)
+            time_mask = None if time_v is None else torch.cat([time_v, time_v], dim=0)
+            logits = self.discriminator(
+                images,
+                conds,
+                patch_size=patch_size,
+                cond_time_mask=time_mask,
+            )
             real_logits, fake_logits = logits.chunk(2, dim=0)
             d_loss = discriminator_adversarial_loss(
                 real_logits, fake_logits, self.gan_loss_type
@@ -509,9 +646,12 @@ class NaipGanTrainModule(LatentMIMTrainModule):
     def _generator_loss(
         self,
         batch: MaskedOlmoEarthSample,
-        pooled: torch.Tensor,
+        cond: torch.Tensor | None,
+        cond_valid: torch.Tensor | None,
         fake_naip: torch.Tensor,
         adversarial_active: bool,
+        patch_size: int,
+        cond_time_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute the generator loss (L1 always, adversarial once warmed up).
 
@@ -526,12 +666,15 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         if fake_naip is None:
             return zero, zero, zero
         real_img, valid = self._extract_real_naip(batch)
-        if real_img is None or valid is None or not bool(valid.any()):
+        if real_img is None or valid is None:
+            return zero, zero, zero
+        if cond_valid is not None:
+            valid = valid & cond_valid
+        if not bool(valid.any()):
             return zero, zero, zero
 
         with self._model_forward_context():
             fake_v = fake_naip[valid]
-            cond_v = pooled[valid]
             real_v = F.interpolate(
                 real_img[valid].to(fake_naip.dtype),
                 size=fake_naip.shape[-2:],
@@ -541,14 +684,21 @@ class NaipGanTrainModule(LatentMIMTrainModule):
             g_l1 = F.l1_loss(fake_v, real_v)
             gen_loss = self.lambda_l1 * g_l1
             g_adv = zero
-            if adversarial_active:
+            if adversarial_active and cond is not None:
+                cond_v = cond[valid]
+                time_v = None if cond_time_mask is None else cond_time_mask[valid]
                 # Freeze the discriminator so the generator loss doesn't update
                 # it: without this, ``loss.backward()`` (which includes g_adv)
                 # would accumulate adversarial gradients into the discriminator's
                 # params, which would then be applied by ``disc_optimizer``.
                 for p in self.discriminator.parameters():
                     p.requires_grad_(False)
-                fake_logits = self.discriminator(fake_v, cond_v)
+                fake_logits = self.discriminator(
+                    fake_v,
+                    cond_v,
+                    patch_size=patch_size,
+                    cond_time_mask=time_v,
+                )
                 for p in self.discriminator.parameters():
                     p.requires_grad_(True)
                 g_adv = generator_adversarial_loss(fake_logits, self.gan_loss_type)

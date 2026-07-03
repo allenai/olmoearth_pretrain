@@ -4,7 +4,8 @@ This is a single-view variant of the v1.2 baseline (``base.py``): it keeps the
 latent-MIM patch-discrimination objective but adds a NAIP generator on top of
 the encoder's pooled spatial embedding plus a conditional discriminator. NAIP
 (``naip_10``) is a decode-only modality, so the generator must synthesize it
-from the (masked) Sentinel-2 / other encode tokens.
+from the (masked) Sentinel-2 / other encode tokens. The discriminator here
+conditions on the target-encoder pooled embedding (``target_pooled``).
 
 Validate before launching::
 
@@ -56,8 +57,24 @@ ONLY_DECODE_MODALITIES = [*v1_2_base.ONLY_DECODE_MODALITIES, Modality.NAIP_10.na
 # Conv-trunk upsampling after the learned unpatchify. Set to the NAIP tile size
 # factor so the generator output lands at native NAIP (2.5 m/px) resolution.
 NAIP_UPSAMPLE_FACTOR = Modality.NAIP_10.image_tile_size_factor
-GENERATOR_HIDDEN_SIZE = 128
-DISCRIMINATOR_HIDDEN_SIZE = 64
+# Generator per-stage channel widths (base 10 m/px, then 5 m/px, then 2.5 m/px):
+# capacity is concentrated at the coarse resolution.
+GENERATOR_HIDDEN_SIZES = [256, 128, 128]
+# Discriminator NAIP image stack: a stride-1 stem then two strided convs, each
+# followed by one stride-1 refinement conv; image and condition features are
+# fused at DISCRIMINATOR_FEATURE_CHANNELS by a head with two residual blocks.
+DISCRIMINATOR_IMAGE_CHANNELS = [128, 128, 128]
+DISCRIMINATOR_FEATURE_CHANNELS = 128
+DISCRIMINATOR_NUM_CONVS_PER_RESOLUTION = 1
+DISCRIMINATOR_NUM_HEAD_RES_BLOCKS = 2
+# The discriminator conditions on the target-encoder pooled embedding. The
+# embedding tokens (40 m/px, patch size 4) are resampled to the unpatchify factor
+# then a learned unpatchify expands them to the 10 m/px fusion grid; two convs
+# (128 -> 256 -> 128) refine the condition after the unpatchify.
+DISCRIMINATOR_COND_SOURCE = "target_pooled"
+DISCRIMINATOR_COND_UNPATCHIFY_FACTOR = NAIP_PATCH_SIZE
+DISCRIMINATOR_COND_EMBEDDING_CHANNELS = [256]
+DISCRIMINATOR_USE_PROJECTION = False
 LAMBDA_ADV = 0.1
 LAMBDA_L1 = 10.0
 GAN_WARMUP_STEPS = 8000
@@ -105,7 +122,7 @@ def build_model_config(common: CommonComponents) -> NaipGanModelConfig:
     generator_config = NaipGeneratorConfig(
         embedding_size=embedding_size,
         patch_size=NAIP_PATCH_SIZE,
-        hidden_size=GENERATOR_HIDDEN_SIZE,
+        hidden_sizes=GENERATOR_HIDDEN_SIZES,
         out_channels=Modality.NAIP_10.num_bands,
         upsample_factor=NAIP_UPSAMPLE_FACTOR,
     )
@@ -137,8 +154,15 @@ def build_train_module_config(
         discriminator_config=NaipDiscriminatorConfig(
             embedding_size=embedding_size,
             in_channels=Modality.NAIP_10.num_bands,
-            hidden_size=DISCRIMINATOR_HIDDEN_SIZE,
+            image_strided_conv_channels=DISCRIMINATOR_IMAGE_CHANNELS,
+            feature_channels=DISCRIMINATOR_FEATURE_CHANNELS,
+            num_convs_per_resolution=DISCRIMINATOR_NUM_CONVS_PER_RESOLUTION,
+            num_head_res_blocks=DISCRIMINATOR_NUM_HEAD_RES_BLOCKS,
+            use_projection=DISCRIMINATOR_USE_PROJECTION,
+            cond_unpatchify_factor=DISCRIMINATOR_COND_UNPATCHIFY_FACTOR,
+            cond_embedding_channels=DISCRIMINATOR_COND_EMBEDDING_CHANNELS,
         ),
+        discriminator_cond_source=DISCRIMINATOR_COND_SOURCE,
         disc_optim_config=AdamWConfig(
             lr=0.0002, betas=(0.5, 0.999), weight_decay=0.0, fused=False
         ),
