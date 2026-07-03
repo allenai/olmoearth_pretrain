@@ -38,19 +38,19 @@ def eval_cls(
         labels_all.append(label.cpu())
     logits = torch.cat(logits_all, 0)
     labels = torch.cat(labels_all, 0)
-    scores: torch.Tensor | None = None
     if is_multilabel:
         scores = torch.sigmoid(logits)
         preds = scores.gt(0.5).int()
     else:
+        scores = torch.softmax(logits, dim=-1)
         preds = torch.argmax(logits, dim=-1)
     return classification_metrics(
         preds,
         labels,
+        scores=scores,
         is_multilabel=is_multilabel,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
-        scores=scores,
     )
 
 
@@ -154,7 +154,7 @@ def eval_seg(
 ) -> EvalResult:
     """Evaluate segmentation metrics."""
     module.eval()
-    preds_all, labels_all = [], []
+    preds_all, labels_all, scores_all = [], [], []
     for masked, label in loader:
         label = label.to(device=device)
         masked = to_device(masked, device)
@@ -165,12 +165,15 @@ def eval_seg(
             )
         preds_all.append(torch.argmax(logits, dim=1).cpu())
         labels_all.append(label.cpu())
+        scores_all.append(torch.softmax(logits.float(), dim=1).cpu())
     preds = torch.cat(preds_all, 0)
     labels = torch.cat(labels_all, 0)
+    scores = torch.cat(scores_all, 0)
     return segmentation_metrics(
         preds,
         labels,
         num_classes=num_classes,
+        scores=scores,
         ignore_label=-1,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,

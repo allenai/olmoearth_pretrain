@@ -537,7 +537,7 @@ def train_and_eval_probe(
             batch_size=batch_size,
             shuffle=False,
         )
-        all_preds, all_labels = get_probe_predictions(
+        all_preds, all_labels, all_scores = get_probe_predictions(
             data_loader=test_data_loader,
             probe=probe,
             device=device,
@@ -570,6 +570,9 @@ def train_and_eval_probe(
 
                 bootstrap_preds = all_preds[bootstrap_indices]
                 bootstrap_labels = all_labels[bootstrap_indices]
+                bootstrap_iter_scores = (
+                    all_scores[bootstrap_indices] if all_scores is not None else None
+                )
 
                 # Compute metric on resampled predictions
                 result = compute_metric(
@@ -579,6 +582,7 @@ def train_and_eval_probe(
                     task_type=config.task_type,
                     primary_metric=primary_metric,
                     primary_metric_class=primary_metric_class,
+                    scores=bootstrap_iter_scores,
                 )
                 bootstrap_scores.append(result.primary)
 
@@ -611,6 +615,7 @@ def train_and_eval_probe(
             task_type=config.task_type,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
+            scores=all_scores,
         )
         if n_bootstrap == 0:
             logger.info(f"Test result: {test_result}")
@@ -765,17 +770,21 @@ def get_probe_predictions(
     device: torch.device,
     probe_type: ProbeType,
     task_type: TaskType,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     """Get predictions from a trained linear probe.
 
     Returns:
-        tuple[torch.Tensor, torch.Tensor]: (predictions, labels)
+        tuple of (predictions, labels, scores). ``scores`` holds per-class
+        softmax scores (shape (N, C) for classification, (N, C, H, W) for
+        segmentation) and is None for regression.
     """
     probe = probe.eval()
 
     all_preds = []
     all_labels = []
+    all_scores: list[torch.Tensor] = []
     all_attn_weights = []
+    collect_scores = task_type != TaskType.REGRESSION
     with torch.no_grad():
         for batch in data_loader:
             batch_emb, batch_labels = batch
@@ -811,6 +820,8 @@ def get_probe_predictions(
                 preds = logits.float().cpu()
             else:
                 preds = torch.argmax(logits, dim=1).cpu()
+                if collect_scores:
+                    all_scores.append(torch.softmax(logits.float(), dim=1).cpu())
             all_preds.append(preds)
             all_labels.append(batch_labels)
             if probe_type == ProbeType.ATTNPOOL:
@@ -825,7 +836,8 @@ def get_probe_predictions(
 
     all_preds = torch.cat(all_preds)
     all_labels = torch.cat(all_labels)
-    return all_preds, all_labels
+    scores = torch.cat(all_scores) if collect_scores else None
+    return all_preds, all_labels, scores
 
 
 def compute_metric(
@@ -835,6 +847,7 @@ def compute_metric(
     task_type: TaskType,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    scores: torch.Tensor | None = None,
 ) -> EvalResult:
     """Compute metric from predictions and labels."""
     if task_type == TaskType.SEGMENTATION:
@@ -843,6 +856,7 @@ def compute_metric(
             labels,
             num_classes=num_classes,
             ignore_label=SEGMENTATION_IGNORE_LABEL,
+            scores=scores,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
         )
@@ -855,6 +869,7 @@ def compute_metric(
     return classification_metrics(
         predictions=preds,
         labels=labels,
+        scores=scores,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
     )
@@ -878,7 +893,7 @@ def evaluate_probe(
     to normalize labels before training; they're applied in reverse here so the
     reported metrics stay in original target units.
     """
-    preds, labels = get_probe_predictions(
+    preds, labels, scores = get_probe_predictions(
         data_loader=data_loader,
         probe=probe,
         device=device,
@@ -895,4 +910,5 @@ def evaluate_probe(
         task_type,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
+        scores=scores,
     )

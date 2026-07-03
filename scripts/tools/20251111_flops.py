@@ -247,7 +247,7 @@ if __name__ == "__main__":
             supported_modalities=modalities,
             max_sequence_length=24,
             tokenization_config=SINGLE_BANDSET_CONFIG,
-            patch_embed_hidden_sizes=[64],
+            patch_embed_hidden_sizes=[12],
         ),
         Encoder(  # base encoder, single bandset
             embedding_size=768,
