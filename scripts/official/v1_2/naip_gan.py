@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 # below the canonical are downsampled to it (lossy); those >= it are upsampled.
 CANONICAL_PATCH_SIZE = 4
 MIN_PATCH_SIZE = 1
-MAX_PATCH_SIZE = 8
+MAX_PATCH_SIZE = 6
 
 # NAIP is added as a decode-only modality on top of the v1.2 decode targets.
 ONLY_DECODE_MODALITIES = [*v1_2_base.ONLY_DECODE_MODALITIES, Modality.NAIP_10.name]
