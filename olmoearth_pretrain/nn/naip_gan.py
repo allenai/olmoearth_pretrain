@@ -18,6 +18,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor
+from torch.distributed import DeviceMesh
+from torch.distributed.fsdp import register_fsdp_forward_method
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, TokensAndMasks
@@ -663,6 +665,30 @@ class NaipGanModel(LatentMIM):
             pooled,
             fake_naip,
         )
+
+    def apply_fsdp(
+        self,
+        dp_mesh: DeviceMesh | None = None,
+        param_dtype: torch.dtype | None = None,
+        reduce_dtype: torch.dtype = torch.float32,
+        prefetch_factor: int = 0,
+    ) -> None:
+        """Apply FSDP, additionally registering the online encoder's ``forward``.
+
+        The base class registers the target encoder's ``forward`` as an FSDP
+        forward method so it can be called directly (it unshards/reshards around
+        the call). The discriminator's ``online_unmasked_pooled`` condition calls
+        ``self.encoder.forward`` directly too, so register it the same way;
+        otherwise its (sharded) params stay ``DTensor`` and mix with the plain
+        input tensor.
+        """
+        super().apply_fsdp(
+            dp_mesh=dp_mesh,
+            param_dtype=param_dtype,
+            reduce_dtype=reduce_dtype,
+            prefetch_factor=prefetch_factor,
+        )
+        register_fsdp_forward_method(self.encoder, "forward")
 
 
 @dataclass

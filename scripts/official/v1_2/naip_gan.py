@@ -46,11 +46,15 @@ from olmoearth_pretrain.train.train_module.naip_gan import NaipGanTrainModuleCon
 
 logger = logging.getLogger(__name__)
 
-# Fix the patch size for this experiment: the generator's learned unpatchify
-# factor must equal a static encoder patch size to hit native NAIP resolution.
-NAIP_PATCH_SIZE = 4
-MAX_PATCH_SIZE = NAIP_PATCH_SIZE
-MIN_PATCH_SIZE = NAIP_PATCH_SIZE
+# The encoder patch size varies per batch (flexi-ViT, 1-8 here). The generator's
+# learned unpatchify factor and the discriminator's condition unpatchify factor
+# are a fixed "canonical" patch size (40 m/px tokens): each batch's token grid is
+# bilinearly resampled to this canonical grid before the learned unpatchify, so
+# any encoder patch size lands at the native NAIP resolution. Encoder patch sizes
+# below the canonical are downsampled to it (lossy); those >= it are upsampled.
+CANONICAL_PATCH_SIZE = 4
+MIN_PATCH_SIZE = 1
+MAX_PATCH_SIZE = 8
 
 # NAIP is added as a decode-only modality on top of the v1.2 decode targets.
 ONLY_DECODE_MODALITIES = [*v1_2_base.ONLY_DECODE_MODALITIES, Modality.NAIP_10.name]
@@ -69,12 +73,12 @@ DISCRIMINATOR_FEATURE_CHANNELS = 128
 DISCRIMINATOR_NUM_CONVS_PER_RESOLUTION = 1
 DISCRIMINATOR_NUM_HEAD_RES_BLOCKS = 2
 # The discriminator conditions on the online-encoder pooled embedding from a
-# full-depth forward on the unmasked input. The embedding tokens (40 m/px, patch
-# size 4) are resampled to the unpatchify factor then a learned unpatchify
-# expands them to the 10 m/px fusion grid; two convs (128 -> 256 -> 128) refine
-# the condition after the unpatchify.
+# full-depth forward on the unmasked input. The embedding tokens are resampled to
+# the canonical unpatchify factor (40 m/px) then a learned unpatchify expands them
+# to the 10 m/px fusion grid; two convs (128 -> 256 -> 128) refine the condition
+# after the unpatchify.
 DISCRIMINATOR_COND_SOURCE = "online_unmasked_pooled"
-DISCRIMINATOR_COND_UNPATCHIFY_FACTOR = NAIP_PATCH_SIZE
+DISCRIMINATOR_COND_UNPATCHIFY_FACTOR = CANONICAL_PATCH_SIZE
 DISCRIMINATOR_COND_EMBEDDING_CHANNELS = [256]
 DISCRIMINATOR_USE_PROJECTION = False
 LAMBDA_ADV = 0.1
@@ -114,16 +118,16 @@ def build_model_config(common: CommonComponents) -> NaipGanModelConfig:
     base_model = v1_2_base.build_size_model_config(
         common, "base_shallow_decoder", v1_2_base.PATCH_EMBED_HIDDEN_SIZES
     )
-    # Fix the encoder to a static patch size (non-flexi) for this experiment.
-    base_model.encoder_config.min_patch_size = NAIP_PATCH_SIZE
-    base_model.encoder_config.max_patch_size = NAIP_PATCH_SIZE
+    # Flexi encoder: the patch size varies per batch within [MIN, MAX].
+    base_model.encoder_config.min_patch_size = MIN_PATCH_SIZE
+    base_model.encoder_config.max_patch_size = MAX_PATCH_SIZE
     embedding_size = (
         base_model.encoder_config.output_embedding_size
         or base_model.encoder_config.embedding_size
     )
     generator_config = NaipGeneratorConfig(
         embedding_size=embedding_size,
-        patch_size=NAIP_PATCH_SIZE,
+        patch_size=CANONICAL_PATCH_SIZE,
         hidden_sizes=GENERATOR_HIDDEN_SIZES,
         out_channels=Modality.NAIP_10.num_bands,
         upsample_factor=NAIP_UPSAMPLE_FACTOR,
