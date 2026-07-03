@@ -528,12 +528,15 @@ class NaipGanTrainModule(LatentMIMTrainModule):
 
         The condition depends on ``discriminator_cond_source``:
 
-        * ``online_pooled``: the online-encoder pooled embedding ``[B, H, W, D]``
-          (gradients flow to the encoder through the condition path).
+        * ``online_pooled``: the online-encoder pooled embedding ``[B, H, W, D]``.
         * ``target_pooled``: the target-encoder pooled embedding over the unmasked
-          tokens ``[B, H, W, D]`` (no gradient to the encoder, EMA weights).
+          tokens ``[B, H, W, D]`` (EMA weights).
         * ``raw_sentinel2``: the raw Sentinel-2 temporal stack
           ``[B, T, C, Hs, Ws]``.
+
+        The condition is always detached where it feeds the discriminator, so the
+        encoder never receives gradient through the conditioning path (only the
+        generator's L1/adversarial loss through the generated image trains it).
 
         Returns:
             ``(cond, cond_valid, cond_time_mask)``. ``cond`` is None when the raw
@@ -693,9 +696,14 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                 # params, which would then be applied by ``disc_optimizer``.
                 for p in self.discriminator.parameters():
                     p.requires_grad_(False)
+                # Detach the condition so the adversarial gradient only reaches
+                # the encoder through the generated image (fake_v), not through
+                # the conditioning tokens the discriminator ingests. This stops
+                # the encoder from "cheating" the discriminator by reshaping the
+                # condition embedding instead of improving the generated image.
                 fake_logits = self.discriminator(
                     fake_v,
-                    cond_v,
+                    cond_v.detach(),
                     patch_size=patch_size,
                     cond_time_mask=time_v,
                 )
