@@ -34,23 +34,48 @@ def _num_groups(num_groups: int, channels: int) -> int:
     return math.gcd(num_groups, channels)
 
 
+def _apply_spectral_norm(module: nn.Module) -> None:
+    """Apply spectral normalization in-place to every Conv2d/Linear descendant.
+
+    Uses :func:`torch.nn.utils.parametrizations.spectral_norm` (the parametrize
+    API), which registers a power-iteration parametrization on each layer's
+    ``weight``. Matches the ESRGAN / Real-ESRGAN ``UNetDiscriminatorSN`` practice
+    of spectrally normalizing all convolutions to bound the discriminator's
+    Lipschitz constant.
+    """
+    from torch.nn.utils.parametrizations import spectral_norm
+
+    for child_name, child in module.named_children():
+        if isinstance(child, nn.Conv2d | nn.Linear):
+            setattr(module, child_name, spectral_norm(child))
+        else:
+            _apply_spectral_norm(child)
+
+
 class _ResBlock(nn.Module):
     """A simple pre-activation residual block."""
 
-    def __init__(self, channels: int, num_groups: int = 8):
+    def __init__(self, channels: int, num_groups: int = 8, norm: bool = True):
         """Initialize the residual block.
 
         Args:
             channels: Number of input/output channels.
             num_groups: Target number of groups for GroupNorm.
+            norm: Whether to include GroupNorm before each activation. Set to
+                False for a spectrally-normalized discriminator: GroupNorm's
+                learned affine rescaling would otherwise undo the Lipschitz bound
+                spectral normalization is meant to impose (Real-ESRGAN's
+                ``UNetDiscriminatorSN`` is likewise norm-free).
         """
         super().__init__()
         groups = _num_groups(num_groups, channels)
+        norm1: nn.Module = nn.GroupNorm(groups, channels) if norm else nn.Identity()
+        norm2: nn.Module = nn.GroupNorm(groups, channels) if norm else nn.Identity()
         self.block = nn.Sequential(
-            nn.GroupNorm(groups, channels),
+            norm1,
             nn.SiLU(),
             nn.Conv2d(channels, channels, kernel_size=3, padding=1),
-            nn.GroupNorm(groups, channels),
+            norm2,
             nn.SiLU(),
             nn.Conv2d(channels, channels, kernel_size=3, padding=1),
         )
@@ -135,9 +160,12 @@ class NaipGenerator(nn.Module):
         for stage in range(n_up):
             c_in = channels[stage]
             c_out = channels[stage + 1]
-            layers.append(nn.Upsample(scale_factor=2, mode="nearest"))
-            # This conv both refines and (optionally) changes the channel width.
-            layers.append(nn.Conv2d(c_in, c_out, kernel_size=3, padding=1))
+            # Sub-pixel (PixelShuffle) upsampling, ESRGAN-style: a conv expands to
+            # 4 * c_out channels and PixelShuffle(2) rearranges them into a 2x
+            # spatial block. This is a learnable upsampler (vs. fixed nearest) and
+            # tends to avoid the blockiness of nearest + conv.
+            layers.append(nn.Conv2d(c_in, c_out * 4, kernel_size=3, padding=1))
+            layers.append(nn.PixelShuffle(2))
             layers.append(nn.GroupNorm(_num_groups(num_groups, c_out), c_out))
             layers.append(nn.SiLU())
             for _ in range(num_res_blocks):
@@ -231,6 +259,7 @@ class NaipDiscriminator(nn.Module):
         cond_image_post_pool_channels: list[int] | None = None,
         num_convs_per_resolution: int = 0,
         cond_unpatchify_factor: int = 1,
+        use_spectral_norm: bool = False,
     ):
         """Initialize the discriminator.
 
@@ -287,6 +316,11 @@ class NaipDiscriminator(nn.Module):
                 unpatchify block factor (set it to the generator ``patch_size``,
                 e.g. 4, to resample tokens to 40 m/px before a learned 4x4
                 unpatchify to 10 m/px).
+            use_spectral_norm: If True, wrap every ``Conv2d``/``Linear`` in the
+                discriminator with spectral normalization (Miyato et al.,
+                matching the ESRGAN / Real-ESRGAN ``UNetDiscriminatorSN``). This
+                bounds the discriminator's Lipschitz constant and is the main
+                stabilizer when the reconstruction (L1) anchor is weak or absent.
         """
         super().__init__()
         if cond_mode not in ("embedding", "image"):
@@ -383,11 +417,16 @@ class NaipDiscriminator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
         ]
         for _ in range(num_head_res_blocks):
-            head_layers.append(_ResBlock(self.feature_channels, num_groups))
+            head_layers.append(
+                _ResBlock(self.feature_channels, num_groups, norm=not use_spectral_norm)
+            )
         head_layers.append(
             nn.Conv2d(self.feature_channels, 1, kernel_size=3, padding=1)
         )
         self.head = nn.Sequential(*head_layers)
+
+        if use_spectral_norm:
+            _apply_spectral_norm(self)
 
     def forward(
         self,
@@ -590,6 +629,7 @@ class NaipDiscriminatorConfig(Config):
     cond_image_post_pool_channels: list[int] | None = None
     num_convs_per_resolution: int = 0
     cond_unpatchify_factor: int = 1
+    use_spectral_norm: bool = False
 
     def build(self) -> NaipDiscriminator:
         """Build the discriminator."""
@@ -608,6 +648,7 @@ class NaipDiscriminatorConfig(Config):
             cond_image_post_pool_channels=self.cond_image_post_pool_channels,
             num_convs_per_resolution=self.num_convs_per_resolution,
             cond_unpatchify_factor=self.cond_unpatchify_factor,
+            use_spectral_norm=self.use_spectral_norm,
         )
 
 

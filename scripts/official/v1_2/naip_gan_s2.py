@@ -23,9 +23,10 @@ from olmoearth_pretrain.train.train_module.naip_gan import NaipGanTrainModuleCon
 logger = logging.getLogger(__name__)
 
 # Non-strided convs applied to each Sentinel-2 timestep before the mean over
-# time (input bands -> 128 -> 128 -> 128), then two more after the mean pooling.
-DISCRIMINATOR_COND_PRE_POOL_CHANNELS = [128, 128, 128]
-DISCRIMINATOR_COND_POST_POOL_CHANNELS = [128, 128]
+# time (input bands -> 256 -> 256 -> 256 -> 256), then three more (256) after
+# the mean pooling.
+DISCRIMINATOR_COND_PRE_POOL_CHANNELS = [256, 256, 256, 256]
+DISCRIMINATOR_COND_POST_POOL_CHANNELS = [256, 256, 256]
 
 
 def build_train_module_config(common: CommonComponents) -> NaipGanTrainModuleConfig:

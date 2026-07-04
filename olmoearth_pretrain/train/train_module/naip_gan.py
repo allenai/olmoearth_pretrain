@@ -41,6 +41,7 @@ from olmoearth_pretrain.nn.naip_gan import (
     discriminator_adversarial_loss,
     generator_adversarial_loss,
 )
+from olmoearth_pretrain.nn.perceptual import VGGPerceptualLossConfig
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
@@ -63,9 +64,15 @@ class NaipGanTrainModuleConfig(LatentMIMTrainModuleConfig):
         disc_optim_config: Optimizer config for the discriminator.
         lambda_adv: Weight on the generator adversarial loss.
         lambda_l1: Weight on the generator L1 reconstruction loss.
+        lambda_perceptual: Weight on the generator VGG perceptual loss (0
+            disables it and skips building the VGG network). Like the L1 term it
+            is active from step 0 and provides the mid-frequency content signal
+            that ESRGAN / Real-ESRGAN rely on.
+        perceptual_config: Config for the VGG perceptual loss. Defaults to the
+            ESRGAN layer weights when ``lambda_perceptual > 0``.
         gan_loss_type: Adversarial loss variant ("hinge" or "bce").
         gan_warmup_steps: Number of steps before the adversarial terms turn on
-            (the L1 reconstruction term is active from step 0).
+            (the L1 and perceptual reconstruction terms are active from step 0).
         naip_modality: Name of the NAIP modality to predict.
         image_log_interval: Log generated-vs-real NAIP images to W&B every this
             many steps (0 disables image logging).
@@ -89,6 +96,8 @@ class NaipGanTrainModuleConfig(LatentMIMTrainModuleConfig):
     disc_optim_config: OptimConfig | None = None
     lambda_adv: float = 0.1
     lambda_l1: float = 10.0
+    lambda_perceptual: float = 0.0
+    perceptual_config: VGGPerceptualLossConfig | None = None
     gan_loss_type: str = "hinge"
     gan_warmup_steps: int = 0
     naip_modality: str = field(default_factory=lambda: Modality.NAIP_10.name)
@@ -132,6 +141,8 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         disc_optim_config: OptimConfig,
         lambda_adv: float = 0.1,
         lambda_l1: float = 10.0,
+        lambda_perceptual: float = 0.0,
+        perceptual_config: VGGPerceptualLossConfig | None = None,
         gan_loss_type: str = "hinge",
         gan_warmup_steps: int = 0,
         naip_modality: str = Modality.NAIP_10.name,
@@ -179,6 +190,7 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         )
         self.lambda_adv = lambda_adv
         self.lambda_l1 = lambda_l1
+        self.lambda_perceptual = lambda_perceptual
         self.gan_loss_type = gan_loss_type
         self.gan_warmup_steps = gan_warmup_steps
         self.naip_modality = naip_modality
@@ -201,6 +213,14 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         stds = np.array([computed_config[b]["std"] for b in rgb_bands])
         self._naip_rgb_min = means - naip_denorm_std_multiplier * stds
         self._naip_rgb_max = means + naip_denorm_std_multiplier * stds
+        # Torch versions on-device for the differentiable RGB[0,1] conversion the
+        # perceptual loss needs (the numpy versions above stay for W&B display).
+        self._naip_rgb_min_t = torch.tensor(
+            self._naip_rgb_min, dtype=torch.float32, device=self.device
+        ).reshape(1, 3, 1, 1)
+        self._naip_rgb_max_t = torch.tensor(
+            self._naip_rgb_max, dtype=torch.float32, device=self.device
+        ).reshape(1, 3, 1, 1)
 
         # The discriminator is intentionally NOT part of ``self.model`` so it is
         # excluded from the main optimizer (its loss must not update the encoder).
@@ -233,7 +253,22 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                 dist.broadcast(tensor.detach(), src=src, group=self.dp_process_group)
         self.disc_optimizer = disc_optim_config.build(self.discriminator)
 
+        # Perceptual loss network: a frozen VGG held here (like the discriminator,
+        # it is NOT part of ``self.model`` and has no optimizer). Its weights are
+        # deterministic pretrained ImageNet weights, so every rank is identical
+        # without any broadcast. Gradients flow through it into the generator.
+        self.perceptual_loss = None
+        if self.lambda_perceptual > 0:
+            cfg = perceptual_config or VGGPerceptualLossConfig()
+            self.perceptual_loss = cfg.build()
+            self.perceptual_loss.to(self.device)
+            self.perceptual_loss.eval()
+            for p in self.perceptual_loss.parameters():
+                p.requires_grad_(False)
+
         self.total_loss_name = f"{self.total_loss_name}+G_l1+G_adv"
+        if self.lambda_perceptual > 0:
+            self.total_loss_name = f"{self.total_loss_name}+G_perceptual"
 
     def zero_grads(self) -> None:
         """Zero gradients for both the main optimizer and the discriminator."""
@@ -261,6 +296,26 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                 p.grad = torch.zeros_like(p)
             dist.all_reduce(p.grad, op=dist.ReduceOp.SUM, group=self.dp_process_group)
             p.grad /= world_size
+
+    def _sync_discriminator_buffers(self) -> None:
+        """Broadcast the discriminator's buffers from data-parallel rank 0.
+
+        The discriminator is a plain replicated module whose gradients are
+        all-reduced (so its parameters stay identical across ranks), but any
+        buffers updated in forward drift independently per rank. In particular,
+        spectral normalization's power-iteration vectors are updated a different
+        number of times on ranks that skip the discriminator forward this step
+        (e.g. no valid NAIP), so the effective normalization diverges. This
+        rebroadcast keeps every replica bit-identical, matching DDP's default
+        ``broadcast_buffers=True`` behavior (a no-op when there are no buffers).
+        """
+        if self._dp_config is None:
+            return
+        if get_world_size(self.dp_process_group) <= 1:
+            return
+        src = dist.get_global_rank(self.dp_process_group, 0)
+        for buf in self.discriminator.buffers():
+            dist.broadcast(buf.detach(), src=src, group=self.dp_process_group)
 
     def model_forward(  # type: ignore[override]
         self,
@@ -340,6 +395,27 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         rgb01 = np.clip(raw / 255.0, 0.0, 1.0)
         return np.transpose(rgb01, (0, 2, 3, 1))  # [N, H, W, 3]
 
+    def _naip_to_rgb01_tensor(self, x: torch.Tensor) -> torch.Tensor:
+        """Differentiably invert NAIP normalization to RGB ``[0, 1]`` for VGG.
+
+        Unlike :meth:`_naip_to_rgb01` (numpy, for display) this keeps the graph
+        so the perceptual loss can backprop into the generator. The raw pixel
+        range is mapped linearly to ``[0, 1]`` and softly clamped with
+        ``clamp`` only at the boundaries (values already inside the range keep a
+        unit gradient).
+
+        Args:
+            x: Normalized NAIP tensor ``[N, C, H, W]`` (uses the first 3 bands).
+
+        Returns:
+            RGB tensor ``[N, 3, H, W]`` in ``[0, 1]``.
+        """
+        rgb = x[:, :3].float()
+        min_vals = self._naip_rgb_min_t.to(rgb.device)
+        max_vals = self._naip_rgb_max_t.to(rgb.device)
+        raw = rgb * (max_vals - min_vals) + min_vals
+        return (raw / 255.0).clamp(0.0, 1.0)
+
     def _maybe_log_naip_images(
         self, batch: MaskedOlmoEarthSample, fake_naip: torch.Tensor | None
     ) -> None:
@@ -405,6 +481,7 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         total_d_loss = torch.zeros([], device=self.device)
         total_g_adv = torch.zeros([], device=self.device)
         total_g_l1 = torch.zeros([], device=self.device)
+        total_g_perceptual = torch.zeros([], device=self.device)
 
         patch_size = batch[0]
         batch_data = batch[1]
@@ -454,7 +531,7 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                     patch_size,
                     d_cond_time_mask,
                 )
-                gen_loss, g_l1_val, g_adv_val = self._generator_loss(
+                gen_loss, g_l1_val, g_adv_val, g_perceptual_val = self._generator_loss(
                     masked_batch,
                     d_cond,
                     d_cond_valid,
@@ -465,6 +542,7 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                 )
                 total_g_l1 += g_l1_val / num_microbatches
                 total_g_adv += g_adv_val / num_microbatches
+                total_g_perceptual += g_perceptual_val / num_microbatches
 
                 # Anchor the generator to the loss with zero weight so its
                 # parameters always receive a gradient on every rank. When a rank
@@ -500,6 +578,10 @@ class NaipGanTrainModule(LatentMIMTrainModule):
             # the collective together, even if some had no valid NAIP this step.
             self._all_reduce_discriminator_grads()
             self.disc_optimizer.step()
+            # Keep the replicated discriminator bit-identical across ranks: its
+            # buffers (e.g. spectral-norm power-iteration vectors) can drift when
+            # ranks run the discriminator forward a different number of times.
+            self._sync_discriminator_buffers()
 
         if dry_run:
             self.disc_optimizer.zero_grad(set_to_none=True)
@@ -511,6 +593,10 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         self.trainer.record_metric("train/G_l1", total_g_l1, ReduceType.mean)
         self.trainer.record_metric("train/G_adv", total_g_adv, ReduceType.mean)
         self.trainer.record_metric("train/D_loss", total_d_loss, ReduceType.mean)
+        if self.perceptual_loss is not None:
+            self.trainer.record_metric(
+                "train/G_perceptual", total_g_perceptual, ReduceType.mean
+            )
         self.log_regularization(total_batch_reg)
 
         del batch, batch_data
@@ -666,26 +752,26 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         adversarial_active: bool,
         patch_size: int,
         cond_time_mask: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Compute the generator loss (L1 always, adversarial once warmed up).
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Compute the generator loss (L1 + perceptual always, adversarial once warmed up).
 
         Gradients from this loss flow into the generator and encoder but not the
         discriminator (its parameters are frozen during the forward pass here).
 
         Returns:
-            (generator_loss, g_l1_value, g_adv_value); the loss is zero when NAIP
-            is absent from the batch.
+            (generator_loss, g_l1_value, g_adv_value, g_perceptual_value); the
+            loss is zero when NAIP is absent from the batch.
         """
         zero = torch.zeros([], device=self.device)
         if fake_naip is None:
-            return zero, zero, zero
+            return zero, zero, zero, zero
         real_img, valid = self._extract_real_naip(batch)
         if real_img is None or valid is None:
-            return zero, zero, zero
+            return zero, zero, zero, zero
         if cond_valid is not None:
             valid = valid & cond_valid
         if not bool(valid.any()):
-            return zero, zero, zero
+            return zero, zero, zero, zero
 
         with self._model_forward_context():
             fake_v = fake_naip[valid]
@@ -697,6 +783,14 @@ class NaipGanTrainModule(LatentMIMTrainModule):
             )
             g_l1 = F.l1_loss(fake_v, real_v)
             gen_loss = self.lambda_l1 * g_l1
+            g_perceptual = zero
+            if self.perceptual_loss is not None:
+                # Compare RGB in [0, 1] (ImageNet-normalized inside the VGG).
+                g_perceptual = self.perceptual_loss(
+                    self._naip_to_rgb01_tensor(fake_v),
+                    self._naip_to_rgb01_tensor(real_v),
+                )
+                gen_loss = gen_loss + self.lambda_perceptual * g_perceptual
             g_adv = zero
             if adversarial_active and cond is not None:
                 cond_v = cond[valid]
@@ -726,6 +820,7 @@ class NaipGanTrainModule(LatentMIMTrainModule):
             gen_loss,
             get_local_tensor(g_l1.detach()),
             get_local_tensor(g_adv.detach()),
+            get_local_tensor(g_perceptual.detach()),
         )
 
     def _get_state_dict(

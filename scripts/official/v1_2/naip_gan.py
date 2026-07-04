@@ -63,14 +63,15 @@ ONLY_DECODE_MODALITIES = [*v1_2_base.ONLY_DECODE_MODALITIES, Modality.NAIP_10.na
 # factor so the generator output lands at native NAIP (2.5 m/px) resolution.
 NAIP_UPSAMPLE_FACTOR = Modality.NAIP_10.image_tile_size_factor
 # Generator per-stage channel widths (base 10 m/px, then 5 m/px, then 2.5 m/px):
-# capacity is concentrated at the coarse resolution.
-GENERATOR_HIDDEN_SIZES = [256, 128, 128]
+# widened at the fine (post-upsampling) stages so more capacity lands where NAIP
+# texture is synthesized. Upsampling between stages is sub-pixel (PixelShuffle).
+GENERATOR_HIDDEN_SIZES = [256, 192, 192]
 # Discriminator NAIP image stack: a stride-1 stem then two strided convs, each
-# followed by one stride-1 refinement conv; image and condition features are
+# followed by two stride-1 refinement convs; image and condition features are
 # fused at DISCRIMINATOR_FEATURE_CHANNELS by a head with two residual blocks.
-DISCRIMINATOR_IMAGE_CHANNELS = [128, 128, 128]
-DISCRIMINATOR_FEATURE_CHANNELS = 128
-DISCRIMINATOR_NUM_CONVS_PER_RESOLUTION = 1
+DISCRIMINATOR_IMAGE_CHANNELS = [128, 256, 256]
+DISCRIMINATOR_FEATURE_CHANNELS = 256
+DISCRIMINATOR_NUM_CONVS_PER_RESOLUTION = 2
 DISCRIMINATOR_NUM_HEAD_RES_BLOCKS = 2
 # The discriminator conditions on the online-encoder pooled embedding from a
 # full-depth forward on the unmasked input. The embedding tokens are resampled to
