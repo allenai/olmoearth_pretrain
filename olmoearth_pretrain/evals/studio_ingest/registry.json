@@ -2618,6 +2618,228 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/small_sentinel1_vessel_type",
       "window_size": 64
     },
+    "small_sentinel2_vessel_length": {
+      "classes": [
+        "0"
+      ],
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "small_sentinel2_vessel_length",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 7017.0,
+            "mean": 1513.5216853153163,
+            "min": 0.0,
+            "std": 257.7911100957512
+          },
+          "B02": {
+            "max": 18121.0,
+            "mean": 1186.2739834849622,
+            "min": 0.0,
+            "std": 303.57012822655975
+          },
+          "B03": {
+            "max": 16926.0,
+            "mean": 870.0241448818109,
+            "min": 0.0,
+            "std": 335.82706324479784
+          },
+          "B04": {
+            "max": 18810.0,
+            "mean": 623.7478094592437,
+            "min": 0.0,
+            "std": 366.9701369682935
+          },
+          "B05": {
+            "max": 11405.0,
+            "mean": 554.5664758849307,
+            "min": 0.0,
+            "std": 347.69348602928125
+          },
+          "B06": {
+            "max": 10460.0,
+            "mean": 515.1354886878412,
+            "min": 0.0,
+            "std": 362.92779445192826
+          },
+          "B07": {
+            "max": 14380.0,
+            "mean": 517.088640246424,
+            "min": 0.0,
+            "std": 395.6446897062631
+          },
+          "B08": {
+            "max": 18996.0,
+            "mean": 448.22767538829453,
+            "min": 0.0,
+            "std": 379.47625349445696
+          },
+          "B09": {
+            "max": 3462.0,
+            "mean": 141.02588959786152,
+            "min": 0.0,
+            "std": 135.93188602954035
+          },
+          "B11": {
+            "max": 13752.0,
+            "mean": 308.5863827358923,
+            "min": 0.0,
+            "std": 371.8588968443291
+          },
+          "B12": {
+            "max": 13146.0,
+            "mean": 234.26498595153237,
+            "min": 0.0,
+            "std": 293.38830230447695
+          },
+          "B8A": {
+            "max": 13423.0,
+            "mean": 474.38808352646413,
+            "min": 0.0,
+            "std": 415.6745905626536
+          }
+        }
+      },
+      "num_classes": 1,
+      "num_timesteps": 1,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/small_sentinel2_vessel_attribute/",
+      "split_stats": {
+        "test": {
+          "count": 533
+        },
+        "train": {
+          "count": 7886
+        },
+        "val": {
+          "count": 532
+        }
+      },
+      "split_tag_key": "eval_split",
+      "task_type": "scalar_regression",
+      "timeseries": false,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/small_sentinel2_vessel_length",
+      "window_size": 64
+    },
+    "small_sentinel2_vessel_type": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8"
+      ],
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "small_sentinel2_vessel_type",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 7017.0,
+            "mean": 1513.5216853153163,
+            "min": 0.0,
+            "std": 257.7911100957512
+          },
+          "B02": {
+            "max": 18121.0,
+            "mean": 1186.2739834849622,
+            "min": 0.0,
+            "std": 303.57012822655975
+          },
+          "B03": {
+            "max": 16926.0,
+            "mean": 870.0241448818109,
+            "min": 0.0,
+            "std": 335.82706324479784
+          },
+          "B04": {
+            "max": 18810.0,
+            "mean": 623.7478094592437,
+            "min": 0.0,
+            "std": 366.9701369682935
+          },
+          "B05": {
+            "max": 11405.0,
+            "mean": 554.5664758849307,
+            "min": 0.0,
+            "std": 347.69348602928125
+          },
+          "B06": {
+            "max": 10460.0,
+            "mean": 515.1354886878412,
+            "min": 0.0,
+            "std": 362.92779445192826
+          },
+          "B07": {
+            "max": 14380.0,
+            "mean": 517.088640246424,
+            "min": 0.0,
+            "std": 395.6446897062631
+          },
+          "B08": {
+            "max": 18996.0,
+            "mean": 448.22767538829453,
+            "min": 0.0,
+            "std": 379.47625349445696
+          },
+          "B09": {
+            "max": 3462.0,
+            "mean": 141.02588959786152,
+            "min": 0.0,
+            "std": 135.93188602954035
+          },
+          "B11": {
+            "max": 13752.0,
+            "mean": 308.5863827358923,
+            "min": 0.0,
+            "std": 371.8588968443291
+          },
+          "B12": {
+            "max": 13146.0,
+            "mean": 234.26498595153237,
+            "min": 0.0,
+            "std": 293.38830230447695
+          },
+          "B8A": {
+            "max": 13423.0,
+            "mean": 474.38808352646413,
+            "min": 0.0,
+            "std": 415.6745905626536
+          }
+        }
+      },
+      "num_classes": 9,
+      "num_timesteps": 1,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/small_sentinel2_vessel_attribute/",
+      "split_stats": {
+        "test": {
+          "count": 533
+        },
+        "train": {
+          "count": 7886
+        },
+        "val": {
+          "count": 532
+        }
+      },
+      "split_tag_key": "eval_split",
+      "task_type": "classification",
+      "timeseries": false,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/small_sentinel2_vessel_type",
+      "window_size": 64
+    },
     "surface_fuels": {
       "classes": [
         "0",
@@ -3127,6 +3349,6 @@
       "window_size": 16
     }
   },
-  "updated_at": "2026-07-03T20:08:27.366528",
+  "updated_at": "2026-07-04T06:07:35.030913",
   "version": "1.0"
 }
