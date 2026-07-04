@@ -74,3 +74,39 @@ def test_eval_dataset_entry_classification_no_height_width() -> None:
 
     assert config.task_type == TaskType.CLASSIFICATION
     assert config.height_width is None  # classification doesn't use height_width
+
+
+def test_eval_dataset_entry_scalar_regression_no_height_width() -> None:
+    """Scalar regression (per-sample) does not get a height_width."""
+    entry = EvalDatasetEntry(
+        name="test_scalar_regression",
+        source_path="",
+        weka_path="",
+        task_type=TaskType.SCALAR_REGRESSION.value,
+        num_classes=1,
+        modalities=["SENTINEL1"],
+        window_size=64,
+    )
+
+    config = entry.to_eval_config()
+
+    assert config.task_type == TaskType.SCALAR_REGRESSION
+    assert config.height_width is None  # scalar regression pools to (B, D)
+
+
+def test_eval_dataset_entry_dense_regression_has_height_width() -> None:
+    """Dense (per-pixel) regression still uses window_size as height_width."""
+    entry = EvalDatasetEntry(
+        name="test_dense_regression",
+        source_path="",
+        weka_path="",
+        task_type=TaskType.REGRESSION.value,
+        num_classes=1,
+        modalities=["SENTINEL2_L2A"],
+        window_size=32,
+    )
+
+    config = entry.to_eval_config()
+
+    assert config.task_type == TaskType.REGRESSION
+    assert config.height_width == 32

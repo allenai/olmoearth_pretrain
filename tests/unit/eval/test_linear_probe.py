@@ -33,6 +33,15 @@ class TestLinearProbeClassification:
         logits = probe(x)["logits"]
         assert logits.shape == (2, 5, 32, 32)
 
+    def test_output_shape_scalar_regression(self) -> None:
+        """Scalar regression probe: (B, D) -> (B,)."""
+        probe = LinearProbe(
+            in_dim=32, num_classes=1, task_type=TaskType.SCALAR_REGRESSION
+        )
+        x = torch.randn(4, 32)
+        logits = probe(x)["logits"]
+        assert logits.shape == (4,)
+
 
 class TestInterpolateLinearProbe:
     """Tests for InterpolateLinearProbe."""

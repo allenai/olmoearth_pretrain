@@ -1209,7 +1209,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
 
     if num_classes is None:
         task_type = rslearn_task_type_to_olmoearth_task_type(rslearn_task)
-        if task_type == TaskType.REGRESSION:
+        if task_type in (TaskType.REGRESSION, TaskType.SCALAR_REGRESSION):
             num_classes = 1
         else:
             raise ValueError(

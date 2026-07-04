@@ -68,10 +68,9 @@ class EvalWrapper:
         self.patch_size = patch_size
         self.pooling_type = pooling_type
         self.concat_features = concat_features
-        # NOTE: REGRESSION always spatial-pools, so only dense (per-pixel)
-        # regression is supported. Scalar-target regression (one value per
-        # sample) is NOT supported yet — it would need spatial_pool=False for
-        # such tasks so the head can produce a pooled (B, D) -> (B,) prediction.
+        # SEGMENTATION and (dense) REGRESSION keep the spatial grid for per-pixel
+        # heads. CLASSIFICATION and SCALAR_REGRESSION are per-sample, so they pool
+        # over space to a single (B, D) embedding.
         self.spatial_pool = task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION)
         self.use_pooled_tokens = use_pooled_tokens
         self.use_center_token = use_center_token

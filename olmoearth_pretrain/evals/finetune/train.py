@@ -191,6 +191,11 @@ def run_finetune_eval(
     use_dice_loss: bool = False,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
+    if task_config.task_type == TaskType.SCALAR_REGRESSION:
+        raise NotImplementedError(
+            "Finetune eval does not support scalar (per-sample) regression yet; "
+            "use eval_mode=LINEAR_PROBE for scalar regression tasks."
+        )
     accum_steps = max(1, ft_grad_accum_steps)
     if seed is not None:
         logger.info(f"Setting finetune random seed to {seed}")

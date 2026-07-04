@@ -323,6 +323,9 @@ class LinearProbe(nn.Module):
                 i=self.num_output_pixels_per_side_of_patch,
                 j=self.num_output_pixels_per_side_of_patch,
             )
+        elif self.task_type == TaskType.SCALAR_REGRESSION:
+            # Single value per sample: (B, 1) -> (B,).
+            logits = logits.squeeze(-1)
         return {"logits": logits}
 
 
@@ -378,7 +381,7 @@ def train_and_eval_probe(
     # kept on CPU; NaN-masked invalid pixels stay NaN through the affine map.
     target_mean: torch.Tensor | None = None
     target_std: torch.Tensor | None = None
-    if config.task_type == TaskType.REGRESSION:
+    if config.task_type in (TaskType.REGRESSION, TaskType.SCALAR_REGRESSION):
         target_mean, target_std = _compute_regression_target_stats(train_labels)
         if target_mean is not None and target_std is not None:
             logger.info(
@@ -415,7 +418,10 @@ def train_and_eval_probe(
             "(shared 1×1 conv with bilinear upsampling is better regularized "
             "for sparse per-pixel regression targets)."
         )
-    if probe_type == ProbeType.ATTNPOOL and config.task_type == TaskType.REGRESSION:
+    if probe_type == ProbeType.ATTNPOOL and config.task_type in (
+        TaskType.REGRESSION,
+        TaskType.SCALAR_REGRESSION,
+    ):
         raise ValueError("Attention pooling is not supported for regression.")
 
     probe_cls = PROBE_TYPE_TO_CLASS[probe_type]
@@ -548,7 +554,7 @@ def train_and_eval_probe(
         # Map regression preds/labels back to original target units so the
         # downstream metrics (and bootstrap resamples of them) are reported
         # on the same scale as the raw labels.
-        if config.task_type == TaskType.REGRESSION:
+        if config.task_type in (TaskType.REGRESSION, TaskType.SCALAR_REGRESSION):
             all_preds = _unnormalize_regression(all_preds, target_mean, target_std)
             all_labels = _unnormalize_regression(all_labels, target_mean, target_std)
 
@@ -707,7 +713,7 @@ def train_probe(
 
     probe = probe.train()
     loss_function: nn.Module | functools.partial
-    if task_type == TaskType.REGRESSION:
+    if task_type in (TaskType.REGRESSION, TaskType.SCALAR_REGRESSION):
         loss_function = MaskedMSELoss()
     elif use_dice_loss:
         loss_function = functools.partial(weighted_dice_loss, num_classes=num_classes)
@@ -743,6 +749,9 @@ def train_probe(
                             mode="bilinear",
                             align_corners=True,
                         ).squeeze(1)
+                    targets = batch_labels.to(device).float()
+                elif task_type == TaskType.SCALAR_REGRESSION:
+                    # Pooled (B,) prediction vs (B,) scalar target; no interp.
                     targets = batch_labels.to(device).float()
                 else:
                     targets = batch_labels.to(device)
@@ -784,7 +793,10 @@ def get_probe_predictions(
     all_labels = []
     all_scores: list[torch.Tensor] = []
     all_attn_weights = []
-    collect_scores = task_type != TaskType.REGRESSION
+    collect_scores = task_type not in (
+        TaskType.REGRESSION,
+        TaskType.SCALAR_REGRESSION,
+    )
     with torch.no_grad():
         for batch in data_loader:
             batch_emb, batch_labels = batch
@@ -806,7 +818,9 @@ def get_probe_predictions(
                         align_corners=True,
                     )
 
-            if task_type == TaskType.REGRESSION:
+            if task_type == TaskType.SCALAR_REGRESSION:
+                preds = logits.float().cpu()
+            elif task_type == TaskType.REGRESSION:
                 if (
                     logits.shape[-2] != batch_labels.shape[-2]
                     or logits.shape[-1] != batch_labels.shape[-1]
@@ -860,7 +874,7 @@ def compute_metric(
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
         )
-    if task_type == TaskType.REGRESSION:
+    if task_type == TaskType.REGRESSION or task_type == TaskType.SCALAR_REGRESSION:
         return regression_metrics(
             predictions=preds,
             labels=labels,
@@ -900,7 +914,7 @@ def evaluate_probe(
         probe_type=probe_type,
         task_type=task_type,
     )
-    if task_type == TaskType.REGRESSION:
+    if task_type in (TaskType.REGRESSION, TaskType.SCALAR_REGRESSION):
         preds = _unnormalize_regression(preds, target_mean, target_std)
         labels = _unnormalize_regression(labels, target_mean, target_std)
     return compute_metric(
