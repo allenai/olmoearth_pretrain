@@ -89,6 +89,11 @@ class OlmoEarthSample(NamedTuple):
     worldcover_onehot: ArrayTensor | None = (
         None  # [B, H, W, 1, len(WORLDCOVER_CLASSES)]
     )
+    worldcover_pred: ArrayTensor | None = None  # [B, H, W, 1, len(WC_bands)]
+    # worldcover_pred_onehot is derived from worldcover_pred at load time.
+    worldcover_pred_onehot: ArrayTensor | None = (
+        None  # [B, H, W, 1, WORLDCOVER_PRED_NUM_CLASSES]
+    )
     openstreetmap_raster: ArrayTensor | None = None  # [B, H, W, 1, len(OSM_bands)]
     srtm: ArrayTensor | None = None  # [B, H, W, 1, len(SRTM_bands)]
     landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
@@ -363,6 +368,10 @@ class MaskedOlmoEarthSample(NamedTuple):
     worldcover_mask: Tensor | None = None
     worldcover_onehot: Tensor | None = None
     worldcover_onehot_mask: Tensor | None = None
+    worldcover_pred: Tensor | None = None
+    worldcover_pred_mask: Tensor | None = None
+    worldcover_pred_onehot: Tensor | None = None
+    worldcover_pred_onehot_mask: Tensor | None = None
     latlon: Tensor | None = None  # [B, 2]
     latlon_mask: Tensor | None = None
     openstreetmap_raster: Tensor | None = None
@@ -505,6 +514,10 @@ class TokensAndMasks(NamedTuple):
     worldcover_mask: Tensor | None = None
     worldcover_onehot: Tensor | None = None
     worldcover_onehot_mask: Tensor | None = None
+    worldcover_pred: Tensor | None = None
+    worldcover_pred_mask: Tensor | None = None
+    worldcover_pred_onehot: Tensor | None = None
+    worldcover_pred_onehot_mask: Tensor | None = None
     openstreetmap_raster: Tensor | None = None
     openstreetmap_raster_mask: Tensor | None = None
     srtm: Tensor | None = None
