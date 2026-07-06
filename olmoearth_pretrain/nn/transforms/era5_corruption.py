@@ -288,6 +288,13 @@ class MaskPolicy:
 
     temporal_interpolation_prob: float = 1.0
     cross_variable_prob: float = 1.0
+    # When True, guarantee every sample gets at least one stage via a single
+    # uniform draw (u<0.5 -> temporal, u>=0.5 -> xvar, outer tails co-activate
+    # both). This ignores temporal_interpolation_prob / cross_variable_prob.
+    require_at_least_one_stage: bool = False
+    # Total probability that BOTH stages fire when require_at_least_one_stage
+    # is set (the two outer tails, each of width both_activation_prob/2).
+    both_activation_prob: float = 0.25
 
     temporal_interpolation: TemporalInterpolationStrategy = field(
         default_factory=TemporalInterpolationStrategy
@@ -391,9 +398,21 @@ def _corrupt_two_stage(
     mask = torch.zeros(b, t, v, dtype=torch.bool, device=device)
     target_window_length = t - target_start
 
-    # Per-sample coin flips for each stage
-    do_stage1 = torch.rand(b, device=device) < policy.temporal_interpolation_prob
-    do_stage2 = torch.rand(b, device=device) < policy.cross_variable_prob
+    # Per-sample stage selection.
+    if policy.require_at_least_one_stage:
+        # Single uniform per sample guarantees at least one stage: the lower
+        # half [0, 0.5) selects temporal, the upper half [0.5, 1) selects
+        # xvar. The two outer tails (each of width both_activation_prob/2)
+        # additionally co-activate the other stage, so both fire with total
+        # probability both_activation_prob (0.25 -> tails at 0.125 / 0.875).
+        u = torch.rand(b, device=device)
+        half = policy.both_activation_prob / 2.0
+        both = (u < half) | (u >= 1.0 - half)
+        do_stage1 = (u < 0.5) | both
+        do_stage2 = (u >= 0.5) | both
+    else:
+        do_stage1 = torch.rand(b, device=device) < policy.temporal_interpolation_prob
+        do_stage2 = torch.rand(b, device=device) < policy.cross_variable_prob
 
     # --- Stage 1: Temporal interpolation (target window only) ---
     ti = policy.temporal_interpolation

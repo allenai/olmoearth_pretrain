@@ -78,6 +78,9 @@ from olmoearth_pretrain.train.callbacks.era5_evaluator_callback import (
     Era5DownstreamEvaluatorCallbackConfig,
     Era5LinearProbeTaskConfig,
 )
+from olmoearth_pretrain.train.callbacks.era5_mask_embed_callback import (
+    Era5MaskEmbedVizCallbackConfig,
+)
 from olmoearth_pretrain.train.train_module.era5_multiobjective import (
     Era5MultiObjectiveModelConfig,
     MultiObjectiveEra5TrainModuleConfig,
@@ -201,6 +204,12 @@ class Era5SupervisedCommonComponents(CommonComponents):
     recon_naive_span_days: list[int] = field(default_factory=lambda: [1, 30])
     recon_temporal_interpolation_prob: float = 1.0
     recon_cross_variable_prob: float = 1.0
+    # When True, every sample gets at least one stage via a 50/50 competition
+    # + co-activation (ignores the two probs above). Used by the "both" policy
+    # so it never leaves samples uncorrupted.
+    recon_require_at_least_one_stage: bool = False
+    # Probability that BOTH stages fire under require_at_least_one_stage.
+    recon_both_activation_prob: float = 0.25
     # Number of masking spans per strategy. Stage 1 (temporal interpolation)
     # and the two span-based stage-2 strategies each lay down this many spans.
     recon_temporal_num_masks: int = 3
@@ -215,6 +224,11 @@ class Era5SupervisedCommonComponents(CommonComponents):
     )
     recon_within_group_num_masks: int = 1
     recon_whole_group_span_num_masks: int = 1
+    # ------------------------------------------------------------------
+    # Mask-embedding visualization.
+    # ------------------------------------------------------------------
+    enable_mask_embed_viz: bool = True
+    mask_embed_viz_interval: int = 10000
     # ------------------------------------------------------------------
     # Downstream evaluation (linear probe).  Runs for A-only, B-only,
     # and A+B — this is the primary encoder-quality signal for B-only.
@@ -660,6 +674,8 @@ def build_model_config(
                     "mask_policy": MaskPolicy(
                         temporal_interpolation_prob=common.recon_temporal_interpolation_prob,
                         cross_variable_prob=common.recon_cross_variable_prob,
+                        require_at_least_one_stage=common.recon_require_at_least_one_stage,
+                        both_activation_prob=common.recon_both_activation_prob,
                         temporal_interpolation=TemporalInterpolationStrategy(
                             num_masks=common.recon_temporal_num_masks,
                             span_days=list(common.recon_temporal_span_days),
@@ -783,6 +799,15 @@ def build_trainer_config(common: Era5SupervisedCommonComponents) -> TrainerConfi
             ),
         )
     )
+
+    if common.enable_mask_embed_viz and common.enable_reconstruction:
+        trainer_config = trainer_config.with_callback(
+            "era5_mask_embed_viz",
+            Era5MaskEmbedVizCallbackConfig(
+                enabled=True,
+                log_interval=common.mask_embed_viz_interval,
+            ),
+        )
 
     eval_task_configs = _resolve_eval_task_configs(common)
     if eval_task_configs:
