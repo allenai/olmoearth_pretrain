@@ -873,6 +873,7 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         """Include the discriminator + its optimizer for clean resume."""
         sd = super()._get_state_dict(sd_options)
         if self.discriminator is not None:
+            assert self.disc_optimizer is not None
             sd["discriminator"] = dist_cp_sd.get_model_state_dict(
                 self.discriminator, options=sd_options
             )
@@ -886,6 +887,7 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         super().load_state_dict(state_dict)
         if self.discriminator is None:
             return
+        assert self.disc_optimizer is not None
         if "discriminator" in state_dict:
             dist_cp_sd.set_model_state_dict(
                 self.discriminator,
