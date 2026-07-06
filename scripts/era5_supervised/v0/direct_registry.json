@@ -29,6 +29,7 @@
       "model_yaml_path": "configs/burnrisk_canada_nbac_era5d.yaml",
       "notes": "Canada NBAC wildfire burn-risk, full rslearn dataset. rslearn segmentation target reduced to a scalar 2-class label.",
       "num_classes": 2,
+      "probe_lr": 0.0001,
       "tags": {
         "oep_eval": ""
       },
@@ -96,6 +97,7 @@
       "model_yaml_path": "configs/landslide_era5_era5d.yaml",
       "notes": "Weather-triggered landslide pos/neg detection from ERA5-daily. Window-level binary classification (vector 'label' layer, category=positive/negative). Leakage-safe split (one window per ERA5 cell x event-week); 852 windows (426 pos / 426 neg) across sen12_landslides + glc, train 601 / val 251. Eval-only (too small for a supervised flavor).",
       "num_classes": 2,
+      "probe_lr": 0.005,
       "tags": {
         "split": "train"
       },
@@ -156,6 +158,7 @@
       "model_yaml_path": "configs/lfmc_woody_era5d.yaml",
       "notes": "LFMC woody per-pixel regression, 3k subsample for train (oep_eval tag filter).",
       "num_classes": 1,
+      "probe_lr": 0.005,
       "tags": {
         "oep_eval": "",
         "split": "train"

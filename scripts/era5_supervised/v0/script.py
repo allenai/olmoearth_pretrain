@@ -154,7 +154,8 @@ class Era5SupervisedCommonComponents(CommonComponents):
     encoder_depth: int = 8
     encoder_num_heads: int = 6
     encoder_pooling: str = Era5Pooling.MEAN.value
-    encoder_use_conv_stem: bool = False
+    # Settled default (v0.3): the two-layer conv tokenizer stem was a large win.
+    encoder_use_conv_stem: bool = True
     global_batch_size: int = 64
     rank_microbatch_size: int = 32
     num_workers: int = 4
@@ -182,11 +183,15 @@ class Era5SupervisedCommonComponents(CommonComponents):
     recon_decoder_dropout: float = 0.0
     recon_huber_delta: float = 1.0
     recon_raw_loss_on_masked_only: bool = True
-    recon_raw_lambda: float = 1.0
-    recon_swt_lambda: float = 0.1
+    # Settled default (v0.2.4xx-7xx): wavelet-only reconstruction (swt 1.0 /
+    # raw 0.0) was the LFMC/F1 winner.
+    recon_raw_lambda: float = 0.0
+    recon_swt_lambda: float = 1.0
     recon_swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
     recon_swt_wavelet: str = "haar"
-    recon_use_naive_masking: bool = False
+    # Settled default (v0.2.4xx-7xx): naive masking (m5, c[1,7], span[1,30]) was
+    # the winning masking policy.
+    recon_use_naive_masking: bool = True
     # Naive-masking span count (NaiveMaskPolicy.max_num_masks).
     recon_naive_max_num_masks: int = 5
     # Naive-masking channel-count range (NaiveMaskPolicy.num_channels): each mask
@@ -564,7 +569,11 @@ def _resolve_eval_task_configs(
                 val_tags=entry.val_tags or None,
                 test_groups=entry.test_groups,
                 test_tags=entry.test_tags or None,
-                probe_lr=common.eval_probe_lr,
+                probe_lr=(
+                    entry.probe_lr
+                    if entry.probe_lr is not None
+                    else common.eval_probe_lr
+                ),
                 probe_epochs=common.eval_probe_epochs,
                 probe_batch_size=common.eval_probe_batch_size,
                 embedding_batch_size=common.eval_embedding_batch_size,

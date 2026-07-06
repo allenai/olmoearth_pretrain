@@ -70,6 +70,9 @@ class DirectRslearnTaskEntry(BaseModel):
         test_groups: rslearn window groups for the test split. ``None`` defers
             to the ``test_config`` in ``model.yaml``.
         test_tags: Optional rslearn tag filter for the test split.
+        probe_lr: Per-task linear-probe learning rate for downstream eval.
+            ``None`` defers to the run-level ``common.eval_probe_lr`` default.
+            Set per eval task since the best probe LR differs by task.
         norm_stats_from_pretrained: Use the pretrain ``computed.json`` stats.
         max_samples: Optional cap on the number of samples (debug / smoke runs).
         ssl: When True, this is a self-supervised task used purely for data
@@ -99,6 +102,7 @@ class DirectRslearnTaskEntry(BaseModel):
     val_tags: dict[str, str] = Field(default_factory=dict)
     test_groups: list[str] | None = None
     test_tags: dict[str, str] = Field(default_factory=dict)
+    probe_lr: float | None = None
     norm_stats_from_pretrained: bool = True
     max_samples: int | None = None
     target_mean: float | None = None
