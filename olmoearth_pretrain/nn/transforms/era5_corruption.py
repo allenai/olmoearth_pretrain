@@ -400,11 +400,7 @@ def _corrupt_two_stage(
 
     # Per-sample stage selection.
     if policy.require_at_least_one_stage:
-        # Single uniform per sample guarantees at least one stage: the lower
-        # half [0, 0.5) selects temporal, the upper half [0.5, 1) selects
-        # xvar. The two outer tails (each of width both_activation_prob/2)
-        # additionally co-activate the other stage, so both fire with total
-        # probability both_activation_prob (0.25 -> tails at 0.125 / 0.875).
+        # Single uniform per sample guarantees at least one stage
         u = torch.rand(b, device=device)
         half = policy.both_activation_prob / 2.0
         both = (u < half) | (u >= 1.0 - half)
