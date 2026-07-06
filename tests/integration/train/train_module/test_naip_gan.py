@@ -288,7 +288,7 @@ def test_gradient_isolation(
 
         # --- Generator loss: only the generator/encoder get gradients. ---
         tm.zero_grads()
-        gen_loss, _, _ = tm._generator_loss(
+        gen_loss, _, _, _ = tm._generator_loss(
             microbatch,
             cond,
             cond_valid,
@@ -322,6 +322,67 @@ def test_train_batch_runs_for_cond_sources(
         # The discriminator was trained (D loss active from step 0 here).
         assert _has_any_grad(tm.discriminator)
         # Generator (in the model) received gradients from the GAN branch.
+        assert _has_any_grad(tm.model.generator)
+
+
+def _build_l1_only_train_module(model: NaipGanModel) -> NaipGanTrainModule:
+    """Build a train module with no discriminator (pure L1 reconstruction)."""
+    config = NaipGanTrainModuleConfig(
+        optim_config=AdamWConfig(lr=1e-4, weight_decay=0.0),
+        rank_microbatch_size=2,
+        loss_config=LossConfig(loss_config={"type": "patch_discrimination"}),
+        masking_config=MaskingConfig(
+            strategy_config={
+                "type": "random_time_with_decode",
+                "encode_ratio": 0.5,
+                "decode_ratio": 0.5,
+                "random_ratio": 0.5,
+                "only_decode_modalities": [Modality.NAIP_10.name],
+            }
+        ),
+        discriminator_config=None,
+        disc_optim_config=None,
+        lambda_adv=0.0,
+        lambda_l1=1.0,
+        gan_warmup_steps=0,
+        image_log_interval=0,
+        token_exit_cfg={modality: 0 for modality in Modality.names()},
+        ema_decay=(1.0, 1.0),
+        max_grad_norm=1.0,
+        transform_config=TransformConfig(transform_type="no_transform"),
+    )
+    tm = config.build(model, device="cpu")
+    tm.on_attach = MagicMock(return_value=None)  # type: ignore
+    tm._attach_trainer(MockTrainer())
+    return tm
+
+
+def test_l1_only_requires_no_discriminator(
+    naip_gan_model: NaipGanModel,
+    set_random_seeds: None,
+) -> None:
+    """With lambda_adv=0 the module builds without a discriminator/optimizer."""
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        tm = _build_l1_only_train_module(naip_gan_model)
+        assert tm.discriminator is None
+        assert tm.disc_optimizer is None
+
+
+def test_l1_only_train_batch_trains_generator(
+    naip_samples: list[tuple[int, OlmoEarthSample]],
+    naip_gan_model: NaipGanModel,
+    set_random_seeds: None,
+) -> None:
+    """A pure-L1 batch runs end-to-end, trains the generator, records no D loss."""
+    batch = _collate(naip_samples)
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        tm = _build_l1_only_train_module(naip_gan_model)
+        tm.train_batch(batch)
+        # L1 is recorded; the adversarial/discriminator metrics are not.
+        assert "train/G_l1" in tm.trainer._metrics
+        assert "train/G_adv" not in tm.trainer._metrics
+        assert "train/D_loss" not in tm.trainer._metrics
+        # The generator (and encoder) are trained by the L1 loss alone.
         assert _has_any_grad(tm.model.generator)
 
 

@@ -113,10 +113,14 @@ class NaipGanTrainModuleConfig(LatentMIMTrainModuleConfig):
         device: torch.device | None = None,
     ) -> "NaipGanTrainModule":
         """Build the corresponding :class:`NaipGanTrainModule`."""
-        if self.discriminator_config is None:
-            raise ValueError("discriminator_config is required")
-        if self.disc_optim_config is None:
-            raise ValueError("disc_optim_config is required")
+        # The discriminator (and its optimizer) is only needed for the adversarial
+        # branch. When ``lambda_adv == 0`` the generator is trained by the
+        # reconstruction terms alone (pure L1 / perceptual), so it may be omitted.
+        if self.lambda_adv > 0:
+            if self.discriminator_config is None:
+                raise ValueError("discriminator_config is required when lambda_adv > 0")
+            if self.disc_optim_config is None:
+                raise ValueError("disc_optim_config is required when lambda_adv > 0")
         kwargs = self.prepare_kwargs()
         return NaipGanTrainModule(
             model=model,
@@ -137,8 +141,8 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         loss_config: LossConfig,
         rank_microbatch_size: int,
         token_exit_cfg: dict[str, int],
-        discriminator_config: Config,
-        disc_optim_config: OptimConfig,
+        discriminator_config: Config | None = None,
+        disc_optim_config: OptimConfig | None = None,
         lambda_adv: float = 0.1,
         lambda_l1: float = 10.0,
         lambda_perceptual: float = 0.0,
@@ -224,34 +228,48 @@ class NaipGanTrainModule(LatentMIMTrainModule):
 
         # The discriminator is intentionally NOT part of ``self.model`` so it is
         # excluded from the main optimizer (its loss must not update the encoder).
-        self.discriminator = discriminator_config.build()
-        self.discriminator.to(self.device)
-        # The discriminator's condition input must match the chosen source: a raw
-        # image ("image") for raw Sentinel-2, otherwise a pooled embedding.
-        expected_cond_mode = (
-            "image" if discriminator_cond_source == "raw_sentinel2" else "embedding"
-        )
-        disc_cond_mode = getattr(self.discriminator, "cond_mode", "embedding")
-        if disc_cond_mode != expected_cond_mode:
-            raise ValueError(
-                f"discriminator_cond_source={discriminator_cond_source!r} requires "
-                f"the discriminator cond_mode={expected_cond_mode!r}, but got "
-                f"{disc_cond_mode!r}"
+        # It is only built for the adversarial branch; when ``discriminator_config``
+        # is None (pure L1 / perceptual training, ``lambda_adv == 0``) the module
+        # runs without any discriminator and all discriminator paths are skipped.
+        self.discriminator = None
+        self.disc_optimizer = None
+        if discriminator_config is not None:
+            self.discriminator = discriminator_config.build()
+            self.discriminator.to(self.device)
+            # The discriminator's condition input must match the chosen source: a
+            # raw image ("image") for raw Sentinel-2, otherwise a pooled embedding.
+            expected_cond_mode = (
+                "image" if discriminator_cond_source == "raw_sentinel2" else "embedding"
             )
-        # The discriminator is small and replicated (not sharded); rather than
-        # wrapping it in DDP we keep it as a plain module and all-reduce its
-        # gradients manually once per step (see ``_all_reduce_discriminator_grads``).
-        # Broadcast the initial weights from the first rank of the data-parallel
-        # group so every replica starts identical (this is what DDP would do at
-        # construction time).
-        if self._dp_config is not None and get_world_size(self.dp_process_group) > 1:
-            src = dist.get_global_rank(self.dp_process_group, 0)
-            for tensor in [
-                *self.discriminator.parameters(),
-                *self.discriminator.buffers(),
-            ]:
-                dist.broadcast(tensor.detach(), src=src, group=self.dp_process_group)
-        self.disc_optimizer = disc_optim_config.build(self.discriminator)
+            disc_cond_mode = getattr(self.discriminator, "cond_mode", "embedding")
+            if disc_cond_mode != expected_cond_mode:
+                raise ValueError(
+                    f"discriminator_cond_source={discriminator_cond_source!r} requires "
+                    f"the discriminator cond_mode={expected_cond_mode!r}, but got "
+                    f"{disc_cond_mode!r}"
+                )
+            # The discriminator is small and replicated (not sharded); rather than
+            # wrapping it in DDP we keep it as a plain module and all-reduce its
+            # gradients manually once per step (see
+            # ``_all_reduce_discriminator_grads``). Broadcast the initial weights
+            # from the first rank of the data-parallel group so every replica
+            # starts identical (this is what DDP would do at construction time).
+            if (
+                self._dp_config is not None
+                and get_world_size(self.dp_process_group) > 1
+            ):
+                src = dist.get_global_rank(self.dp_process_group, 0)
+                for tensor in [
+                    *self.discriminator.parameters(),
+                    *self.discriminator.buffers(),
+                ]:
+                    dist.broadcast(
+                        tensor.detach(), src=src, group=self.dp_process_group
+                    )
+            assert disc_optim_config is not None
+            self.disc_optimizer = disc_optim_config.build(self.discriminator)
+        elif lambda_adv > 0:
+            raise ValueError("discriminator_config is required when lambda_adv > 0")
 
         # Perceptual loss network: a frozen VGG held here (like the discriminator,
         # it is NOT part of ``self.model`` and has no optimizer). Its weights are
@@ -266,14 +284,17 @@ class NaipGanTrainModule(LatentMIMTrainModule):
             for p in self.perceptual_loss.parameters():
                 p.requires_grad_(False)
 
-        self.total_loss_name = f"{self.total_loss_name}+G_l1+G_adv"
+        self.total_loss_name = f"{self.total_loss_name}+G_l1"
+        if self.discriminator is not None:
+            self.total_loss_name = f"{self.total_loss_name}+G_adv"
         if self.lambda_perceptual > 0:
             self.total_loss_name = f"{self.total_loss_name}+G_perceptual"
 
     def zero_grads(self) -> None:
         """Zero gradients for both the main optimizer and the discriminator."""
         super().zero_grads()
-        self.disc_optimizer.zero_grad(set_to_none=True)
+        if self.disc_optimizer is not None:
+            self.disc_optimizer.zero_grad(set_to_none=True)
 
     def _all_reduce_discriminator_grads(self) -> None:
         """Average the discriminator gradients across the data-parallel group.
@@ -286,6 +307,8 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         rank still participates in the collective; the sum is divided by the full
         data-parallel world size, matching standard DDP averaging.
         """
+        if self.discriminator is None:
+            return
         if self._dp_config is None:
             return
         world_size = get_world_size(self.dp_process_group)
@@ -309,6 +332,8 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         rebroadcast keeps every replica bit-identical, matching DDP's default
         ``broadcast_buffers=True`` behavior (a no-op when there are no buffers).
         """
+        if self.discriminator is None:
+            return
         if self._dp_config is None:
             return
         if get_world_size(self.dp_process_group) <= 1:
@@ -474,7 +499,8 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         if not dry_run:
             self.update_target_encoder()
         self.model.train()
-        self.discriminator.train()
+        if self.discriminator is not None:
+            self.discriminator.train()
 
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
@@ -487,7 +513,9 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         batch_data = batch[1]
 
         adversarial_active = (
-            not dry_run and self.trainer.global_step >= self.gan_warmup_steps
+            self.discriminator is not None
+            and not dry_run
+            and self.trainer.global_step >= self.gan_warmup_steps
         )
 
         masked_microbatches = split_masked_batch(batch_data, self.rank_microbatch_size)
@@ -517,9 +545,18 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                         get_local_tensor(reg_term.detach()) / num_microbatches
                     )
 
-                d_cond, d_cond_valid, d_cond_time_mask = (
-                    self._extract_discriminator_cond(masked_batch, pooled, patch_size)
-                )
+                # Skip the condition extraction entirely without a discriminator
+                # (pure L1 / perceptual training): it is only consumed by the
+                # discriminator/adversarial paths, and the ``online_unmasked_pooled``
+                # source would otherwise run an extra full-depth encoder forward.
+                if self.discriminator is None:
+                    d_cond, d_cond_valid, d_cond_time_mask = None, None, None
+                else:
+                    d_cond, d_cond_valid, d_cond_time_mask = (
+                        self._extract_discriminator_cond(
+                            masked_batch, pooled, patch_size
+                        )
+                    )
 
                 d_loss = self._maybe_discriminator_loss(
                     masked_batch,
@@ -577,6 +614,7 @@ class NaipGanTrainModule(LatentMIMTrainModule):
             # so is identical on every rank) guarantees all ranks participate in
             # the collective together, even if some had no valid NAIP this step.
             self._all_reduce_discriminator_grads()
+            assert self.disc_optimizer is not None
             self.disc_optimizer.step()
             # Keep the replicated discriminator bit-identical across ranks: its
             # buffers (e.g. spectral-norm power-iteration vectors) can drift when
@@ -584,15 +622,17 @@ class NaipGanTrainModule(LatentMIMTrainModule):
             self._sync_discriminator_buffers()
 
         if dry_run:
-            self.disc_optimizer.zero_grad(set_to_none=True)
+            if self.disc_optimizer is not None:
+                self.disc_optimizer.zero_grad(set_to_none=True)
             return
 
         self.trainer.record_metric(
             f"train/{self.total_loss_name}", total_batch_loss, ReduceType.mean
         )
         self.trainer.record_metric("train/G_l1", total_g_l1, ReduceType.mean)
-        self.trainer.record_metric("train/G_adv", total_g_adv, ReduceType.mean)
-        self.trainer.record_metric("train/D_loss", total_d_loss, ReduceType.mean)
+        if self.discriminator is not None:
+            self.trainer.record_metric("train/G_adv", total_g_adv, ReduceType.mean)
+            self.trainer.record_metric("train/D_loss", total_d_loss, ReduceType.mean)
         if self.perceptual_loss is not None:
             self.trainer.record_metric(
                 "train/G_perceptual", total_g_perceptual, ReduceType.mean
@@ -709,6 +749,8 @@ class NaipGanTrainModule(LatentMIMTrainModule):
         """
         if not adversarial_active or fake_naip is None or cond is None:
             return None
+        # ``adversarial_active`` implies a discriminator exists.
+        assert self.discriminator is not None
         real_img, valid = self._extract_real_naip(batch)
         if real_img is None or valid is None:
             return None
@@ -793,6 +835,8 @@ class NaipGanTrainModule(LatentMIMTrainModule):
                 gen_loss = gen_loss + self.lambda_perceptual * g_perceptual
             g_adv = zero
             if adversarial_active and cond is not None:
+                # ``adversarial_active`` implies a discriminator exists.
+                assert self.discriminator is not None
                 cond_v = cond[valid]
                 time_v = None if cond_time_mask is None else cond_time_mask[valid]
                 # Freeze the discriminator so the generator loss doesn't update
@@ -828,17 +872,20 @@ class NaipGanTrainModule(LatentMIMTrainModule):
     ) -> dict[str, Any]:
         """Include the discriminator + its optimizer for clean resume."""
         sd = super()._get_state_dict(sd_options)
-        sd["discriminator"] = dist_cp_sd.get_model_state_dict(
-            self.discriminator, options=sd_options
-        )
-        sd["disc_optim"] = dist_cp_sd.get_optimizer_state_dict(
-            self.discriminator, self.disc_optimizer, options=sd_options
-        )
+        if self.discriminator is not None:
+            sd["discriminator"] = dist_cp_sd.get_model_state_dict(
+                self.discriminator, options=sd_options
+            )
+            sd["disc_optim"] = dist_cp_sd.get_optimizer_state_dict(
+                self.discriminator, self.disc_optimizer, options=sd_options
+            )
         return sd
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         """Load model + optim, then the discriminator state if present."""
         super().load_state_dict(state_dict)
+        if self.discriminator is None:
+            return
         if "discriminator" in state_dict:
             dist_cp_sd.set_model_state_dict(
                 self.discriminator,
