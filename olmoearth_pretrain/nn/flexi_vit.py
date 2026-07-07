@@ -544,6 +544,7 @@ class Reconstructor(nn.Module):
                         out_chans=len(channel_set_idxs),
                         embedding_size=self.embedding_size,
                         max_patch_size=self.max_patch_size,
+                        modality_spec=modality,
                     )
                     for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
@@ -560,6 +561,9 @@ class Reconstructor(nn.Module):
 
         modality_spec = Modality.get(modality)
         bandset_indices = self.tokenization_config.get_bandset_indices(modality)
+        # Modalities stored at a finer resolution than the base grid (e.g. NAIP) expand
+        # each token into patch_size * image_tile_size_factor pixels.
+        pixels_per_patch = patch_size * modality_spec.image_tile_size_factor
 
         # x: Input tensor with shape [b, h, w, (t), b_s, d]
         modality_tokens, modality_masks = [], []
@@ -577,15 +581,15 @@ class Reconstructor(nn.Module):
             masks = repeat(
                 masks,
                 "b h w ... -> b (h p_h) (w p_w) ...",
-                p_h=patch_size,
-                p_w=patch_size,
+                p_h=pixels_per_patch,
+                p_w=pixels_per_patch,
             )
             modality_masks.append(masks)
         modality_mask = repeat(
             modality_mask,
             "b h w ... -> b (h p_h) (w p_w) ...",
-            p_h=patch_size,
-            p_w=patch_size,
+            p_h=pixels_per_patch,
+            p_w=pixels_per_patch,
         )
         return torch.cat(modality_tokens, dim=-1), modality_mask
 

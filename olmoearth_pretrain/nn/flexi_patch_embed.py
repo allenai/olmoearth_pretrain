@@ -278,6 +278,7 @@ class FlexiPatchReconstruction(nn.Module):
         bias: bool = True,
         interpolation: str = "bicubic",
         antialias: bool = True,
+        modality_spec: ModalitySpec | None = None,
     ) -> None:
         """Patch embeding to 2d image reconstruction w/ flexible patch sizes.
 
@@ -289,18 +290,29 @@ class FlexiPatchReconstruction(nn.Module):
             bias: Whether to use bias in convolution
             interpolation: Resize interpolation type
             antialias: Whether to apply antialiasing resizing
+            modality_spec: Optional modality spec. When provided, patch sizes are scaled
+                by ``modality_spec.image_tile_size_factor`` so that modalities stored at a
+                finer resolution than the base grid (e.g. NAIP) reconstruct to their true
+                pixel resolution. Defaults to a factor of 1 (no scaling).
         """
         super().__init__()
 
         self.embedding_size = embedding_size
+        self.image_tile_size_factor = (
+            modality_spec.image_tile_size_factor if modality_spec is not None else 1
+        )
 
-        self.max_patch_size = _to_2tuple(max_patch_size)
+        base = _to_2tuple(max_patch_size)
+        self.max_patch_size = (
+            base[0] * self.image_tile_size_factor,
+            base[1] * self.image_tile_size_factor,
+        )
 
         self.proj = nn.ConvTranspose2d(
             embedding_size,
             out_chans,
-            kernel_size=max_patch_size,
-            stride=max_patch_size,
+            kernel_size=self.max_patch_size,
+            stride=self.max_patch_size,
             bias=bias,
         )
         self.norm = norm_layer(embedding_size) if norm_layer else nn.Identity()
@@ -349,6 +361,12 @@ class FlexiPatchReconstruction(nn.Module):
         if not patch_size:
             # During evaluation use base patch size if not specified
             patch_size = self.max_patch_size
+        else:
+            base = _to_2tuple(patch_size)
+            patch_size = (
+                base[0] * self.image_tile_size_factor,
+                base[1] * self.image_tile_size_factor,
+            )
 
         patch_size = _to_2tuple(patch_size)
 

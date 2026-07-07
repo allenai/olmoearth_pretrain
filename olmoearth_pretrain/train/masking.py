@@ -2042,6 +2042,97 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         return mask
 
 
+@MASKING_STRATEGY_REGISTRY.register("random_time_with_decode_separate_encoder")
+class RandomTimeWithDecodeSeparateEncoderMaskingStrategy(
+    RandomTimeWithDecodeMaskingStrategy
+):
+    """``random_time_with_decode`` with an independent encode/decode split for some modalities.
+
+    This is intended for a modality (e.g. NAIP) that is processed by a *separate*
+    encoder and reconstructed by the decoder. Such a modality needs both:
+
+    - a subset of tokens marked ``ONLINE_ENCODER`` so the separate encoder can see them, and
+    - the remaining tokens marked ``DECODER`` so the decoder is trained to reconstruct them.
+
+    The base ``random_time_with_decode`` strategy assigns each bandset *either* an
+    encode-only *or* a decode-only role, so it cannot give a single modality both roles.
+    Here, ``separate_encoder_modalities`` are excluded from the base encode/decode bandset
+    shuffle (they are passed through as ``only_decode_modalities`` so the base leaves them
+    fully ``DECODER``), and afterwards each such modality is re-split per instance using an
+    independent ``separate_encode_ratio`` / ``separate_decode_ratio``.
+
+    With ``separate_encode_ratio=0.25`` and ``separate_decode_ratio=0.75``, 25% of the
+    modality's (non-missing) tokens are visible to the separate encoder and 75% are masked
+    out for the decoder to reconstruct.
+    """
+
+    def __init__(
+        self,
+        encode_ratio: float = 0.5,
+        decode_ratio: float = 0.5,
+        random_ratio: float = 0.5,
+        only_decode_modalities: list[str] = [],
+        separate_encoder_modalities: list[str] = [],
+        separate_encode_ratio: float = 0.25,
+        separate_decode_ratio: float = 0.75,
+    ):
+        """Initialize the masking strategy.
+
+        Args:
+            encode_ratio: base encode ratio for the shared-encoder modalities.
+            decode_ratio: base decode ratio for the shared-encoder modalities.
+            random_ratio: how often to apply random vs time masking (see base class).
+            only_decode_modalities: modalities that are only ever decoded.
+            separate_encoder_modalities: modalities processed by a separate encoder, which
+                get their own independent encode/decode split.
+            separate_encode_ratio: fraction of a separate modality's non-missing tokens to
+                mark ``ONLINE_ENCODER`` (visible to the separate encoder).
+            separate_decode_ratio: fraction of a separate modality's non-missing tokens to
+                mark ``DECODER`` (reconstructed by the decoder).
+        """
+        # Pass separate_encoder_modalities through as only_decode so the base pass leaves
+        # them fully DECODER and excludes them from the encode/decode bandset shuffle.
+        super().__init__(
+            encode_ratio=encode_ratio,
+            decode_ratio=decode_ratio,
+            random_ratio=random_ratio,
+            only_decode_modalities=only_decode_modalities + separate_encoder_modalities,
+        )
+        self.separate_encoder_modalities = separate_encoder_modalities
+        self.separate_encode_ratio = separate_encode_ratio
+        self.separate_decode_ratio = separate_decode_ratio
+
+    def apply_mask(
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
+        """Apply base masking, then re-split the separate-encoder modalities."""
+        masked = super().apply_mask(batch, patch_size, **kwargs)
+        # super().apply_mask raises if patch_size is None; assert for the type checker.
+        assert patch_size is not None
+        output_dict: dict[str, ArrayTensor | None] = dict(masked._asdict())
+        for modality_name in self.separate_encoder_modalities:
+            mask = output_dict.get(
+                MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+            )
+            if mask is None:
+                continue
+            modality = Modality.get(modality_name)
+            new_mask = mask.clone()
+            # _random_fill_unmasked assumes B == 1, so re-split per instance.
+            for i in range(new_mask.shape[0]):
+                new_mask[i : i + 1] = self._random_fill_unmasked(
+                    new_mask[i : i + 1],
+                    modality,
+                    patch_size,
+                    self.separate_encode_ratio,
+                    self.separate_decode_ratio,
+                )
+            output_dict[
+                MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+            ] = new_mask
+        return MaskedOlmoEarthSample(**output_dict)
+
+
 def propagate_tokenization_config(
     masking_strategy: MaskingStrategy,
     tokenization_config: "TokenizationConfig",
