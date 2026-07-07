@@ -12,7 +12,9 @@ from typing import Any
 
 import numpy as np
 import torch
+from olmo_core.distributed.utils import get_rank
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
+from olmo_core.train.callbacks.checkpointer import CheckpointerCallback
 from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader, IterableDataset
@@ -662,6 +664,36 @@ def _make_other_prefix(prefix: str) -> str:
     return "/".join(parts)
 
 
+# Name of the wandb metric that eval curves are plotted against. It equals the
+# training step at which the evaluated checkpoint was saved. Both the in-loop
+# evals (this callback) and the built-in beaker-job evals log on this x-axis so
+# their curves share one directly-comparable axis in wandb -- rather than the
+# in-loop evals landing on wandb's native per-run ``step`` while the beaker-job
+# evals (a separate run) land on ``checkpoint_step``.
+CHECKPOINT_STEP_METRIC = "checkpoint_step"
+
+# Eval metric prefixes bound to the ``checkpoint_step`` x-axis.
+EVAL_METRIC_PREFIXES = (
+    "eval/*",
+    "eval/test/*",
+    "eval_other/*",
+    "eval_other/test/*",
+    "eval_time/*",
+    "eval_embed_diagnostics/*",
+)
+
+
+def define_checkpoint_step_metrics(wandb_module: Any) -> None:
+    """Tell wandb to plot the eval metric prefixes against ``checkpoint_step``.
+
+    ``wandb_module`` is the live ``wandb`` handle (e.g. ``wandb_callback.wandb``).
+    Safe to call once after the run is initialized.
+    """
+    wandb_module.define_metric(CHECKPOINT_STEP_METRIC)
+    for metric_prefix in EVAL_METRIC_PREFIXES:
+        wandb_module.define_metric(metric_prefix, step_metric=CHECKPOINT_STEP_METRIC)
+
+
 def eval_result_log_dict(
     prefix: str, name: str, result: EvalResult
 ) -> dict[str, float]:
@@ -708,6 +740,11 @@ class DownstreamEvaluatorCallback(Callback):
     run_on_test: bool = False
     n_bootstrap: int = 0
     bootstrap_seed: int = 42
+    run_as_beaker_job: bool = False
+    beaker_eval_module_path: str | None = None
+    beaker_eval_clusters: list[str] | None = None
+    beaker_eval_priority: str | None = None
+    beaker_eval_extra_overrides: list[str] | None = None
 
     def _check_supported_modalities(self, evaluator: DownstreamEvaluator) -> bool:
         """Check if the evaluator is supported by the model."""
@@ -854,7 +891,32 @@ class DownstreamEvaluatorCallback(Callback):
 
     def pre_train(self) -> None:
         """Run the evaluators on startup."""
-        if self.eval_on_startup:
+        # Bind eval metrics to the shared ``checkpoint_step`` x-axis so in-loop
+        # eval curves line up with the built-in beaker-job evals (which log on the
+        # same axis from a separate run). Only needed for in-loop (non-beaker)
+        # evals; the beaker-job path defines these metrics in its own run.
+        if not self.run_as_beaker_job:
+            wandb_callback = self._get_wandb_callback()
+            if (
+                wandb_callback is not None
+                and wandb_callback.enabled
+                and get_rank() == 0
+            ):
+                define_checkpoint_step_metrics(wandb_callback.wandb)
+
+        if self.eval_on_startup and self.run_as_beaker_job:
+            supported = [
+                evaluator
+                for evaluator in self.evaluators
+                if self._check_supported_modalities(evaluator)
+            ]
+            if supported:
+                # Evaluates the checkpoint at the (possibly resumed) current step;
+                # skipped inside the launcher if no such checkpoint exists yet.
+                self._launch_beaker_eval_job(
+                    self.step, [evaluator.evaluation_name for evaluator in supported]
+                )
+        elif self.eval_on_startup:
             logger.info(f"Running {len(self.evaluators)} evaluators on startup.")
 
             for evaluator in self.evaluators:
@@ -878,13 +940,30 @@ class DownstreamEvaluatorCallback(Callback):
                 no_sync=True,  # 'no_sync' because we're calling this from all ranks at the same time.
             )
 
+    def _is_due(self, evaluator: DownstreamEvaluator) -> bool:
+        """Whether ``evaluator`` is scheduled to run at the current step."""
+        eval_interval_steps = self.trainer.convert_duration_to_steps(
+            evaluator.eval_interval
+        )
+        return self.step > 1 and self.step % eval_interval_steps == 0
+
     def post_step(self) -> None:
         """Run the evaluators in-loop."""
+        if self.run_as_beaker_job:
+            due = [
+                evaluator
+                for evaluator in self.evaluators
+                if self._is_due(evaluator)
+                and self._check_supported_modalities(evaluator)
+            ]
+            if due:
+                self._launch_beaker_eval_job(
+                    self.step, [evaluator.evaluation_name for evaluator in due]
+                )
+            return
+
         for evaluator in self.evaluators:
-            eval_interval_steps = self.trainer.convert_duration_to_steps(
-                evaluator.eval_interval
-            )
-            if self.step <= 1 or self.step % eval_interval_steps != 0:
+            if not self._is_due(evaluator):
                 continue
             if not self._check_supported_modalities(evaluator):
                 logger.info(
@@ -893,9 +972,155 @@ class DownstreamEvaluatorCallback(Callback):
                 continue
             self._perform_eval(evaluator)
 
+    def _get_wandb_callback(self) -> OlmoEarthWandBCallback | None:
+        """Return the wandb callback if one is registered."""
+        return next(
+            (
+                callback
+                for callback in self.trainer._iter_callbacks()
+                if isinstance(callback, OlmoEarthWandBCallback)
+            ),
+            None,
+        )
+
+    def _permanent_save_interval(self) -> int | None:
+        """Permanent-checkpoint interval (in steps) of the trainer's checkpointer.
+
+        Beaker-job evals load a *saved* checkpoint at their eval step, but only
+        permanent checkpoints (saved every ``save_interval`` steps) survive -- a
+        single ephemeral checkpoint is kept at a time and deleted well before a
+        queued eval job runs. This lets ``_launch_beaker_eval_job`` skip steps that
+        will not have a durable checkpoint. Returns ``None`` if no enabled
+        checkpointer is found (caller then falls back to the launcher's on-disk
+        existence check).
+        """
+        checkpointer = next(
+            (
+                callback
+                for callback in self.trainer._iter_callbacks()
+                if isinstance(callback, CheckpointerCallback)
+            ),
+            None,
+        )
+        if checkpointer is None or not getattr(checkpointer, "enabled", True):
+            return None
+        return checkpointer.save_interval
+
+    def _launch_beaker_eval_job(self, step: int, task_names: list[str]) -> None:
+        """Launch a Beaker job to evaluate the checkpoint at ``step``.
+
+        Runs only on rank 0 and never blocks training: it spawns a launcher
+        subprocess that submits the eval experiment and returns immediately. The
+        eval job evaluates the saved checkpoint (so it does not touch the live
+        training model) and logs metrics on a ``checkpoint_step`` wandb x-axis.
+
+        Note: the spawned job rebuilds its evaluators from the canonical eval task
+        set, then filters to ``task_names`` -- so the task names used in the in-loop
+        config must match those known to the eval job for the filter to select them.
+        """
+        # Importing lazily keeps the (optional) beaker dependency and import cost out
+        # of the module-load path.
+        from olmoearth_pretrain.internal.loop_eval_launch import (
+            launch_checkpoint_eval_job,
+            resolve_parent_priority,
+        )
+
+        if get_rank() != 0:
+            return
+
+        # The eval job loads the saved checkpoint at ``step``, but only permanent
+        # checkpoints persist long enough for a queued Beaker job to load them
+        # (ephemeral checkpoints are rotated out within a few hundred steps). If
+        # ``step`` will not have a permanent checkpoint, skip the launch instead of
+        # spawning a job that will crash with "No step directories found" once the
+        # ephemeral checkpoint is gone.
+        save_interval = self._permanent_save_interval()
+        if save_interval is not None and step % save_interval != 0:
+            logger.warning(
+                "Skipping in-loop Beaker eval launch for step %d: it is not a "
+                "permanent checkpoint step (checkpointer save_interval=%d). Set the "
+                "evaluator eval_interval to a multiple of %d so a durable checkpoint "
+                "exists for the eval job to load.",
+                step,
+                save_interval,
+                save_interval,
+            )
+            return
+
+        module_path = self.beaker_eval_module_path or os.environ.get(
+            "TRAIN_SCRIPT_PATH"
+        )
+        if not module_path:
+            logger.warning(
+                "run_as_beaker_job is set but no module path is available "
+                "(set beaker_eval_module_path or the TRAIN_SCRIPT_PATH env var); "
+                "skipping eval launch for step %d.",
+                step,
+            )
+            return
+
+        clusters = self.beaker_eval_clusters
+        if not clusters:
+            env_clusters = os.environ.get("OE_LOOP_EVAL_CLUSTERS")
+            clusters = (
+                [c.strip() for c in env_clusters.split(",") if c.strip()]
+                if env_clusters
+                else None
+            )
+        if not clusters:
+            logger.warning(
+                "run_as_beaker_job is set but no clusters are available "
+                "(set beaker_eval_clusters or the OE_LOOP_EVAL_CLUSTERS env var); "
+                "skipping eval launch for step %d.",
+                step,
+            )
+            return
+
+        priority = self.beaker_eval_priority or resolve_parent_priority()
+
+        save_folder = str(self.trainer.save_folder)
+        wandb_callback = self._get_wandb_callback()
+        train_run_name = (
+            wandb_callback.name
+            if wandb_callback is not None and wandb_callback.name
+            else os.path.basename(save_folder.rstrip("/"))
+        )
+
+        launch_checkpoint_eval_job(
+            module_path=module_path,
+            checkpoint_dir=save_folder,
+            step=step,
+            cluster=clusters[0],
+            run_name=f"{train_run_name}_eval_step{step}",
+            priority=priority,
+            tasks_to_run=task_names,
+            wandb_project=(
+                wandb_callback.project if wandb_callback is not None else None
+            ),
+            wandb_entity=(
+                wandb_callback.entity if wandb_callback is not None else None
+            ),
+            # Group all of this run's eval jobs together (and alongside training).
+            wandb_group=train_run_name,
+            # All eval steps log to one consolidated wandb run (resumed via the
+            # shared runid file set in launch_checkpoint_eval_job), keyed on
+            # checkpoint_step -- instead of a separate run per eval step.
+            wandb_run_name=f"{train_run_name}_loop_evals",
+            # Collect all of this run's eval experiments into one Beaker group
+            # (same name as the consolidated wandb run) to declutter the console.
+            beaker_group=f"{train_run_name}_loop_evals",
+            extra_overrides=self.beaker_eval_extra_overrides,
+            log_dir=os.path.join(save_folder, "loop_eval_launch_logs"),
+        )
+
     def _perform_eval(self, evaluator: DownstreamEvaluator) -> EvalTaskResult:
         """Run the evaluator."""
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
+
+        # Record the checkpoint step alongside the eval metrics so they share the
+        # ``checkpoint_step`` x-axis with the built-in beaker-job evals. It is
+        # numerically equal to the training step, so existing curves are unchanged.
+        self.trainer.record_metric(CHECKPOINT_STEP_METRIC, self.step)
 
         start_time = time.monotonic()
         result = evaluator.val()
@@ -969,6 +1194,24 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     # Bootstrap sampling for uncertainty estimation (applies to KNN and Linear Probe)
     n_bootstrap: int = 0  # Number of bootstrap samples (0 = no bootstrap)
     bootstrap_seed: int = 42  # Random seed for bootstrap sampling
+
+    # --- Run evals as separate Beaker jobs (instead of inline, blocking training) ---
+    # When True, an eval that comes due launches a Beaker job (via
+    # checkpoint_sweep_evals.py) that evaluates the just-saved checkpoint, and the
+    # training loop continues without running the eval inline. Requires that a
+    # checkpoint exists at the eval step, so eval_interval should be a multiple of the
+    # checkpointer save_interval.
+    run_as_beaker_job: bool = False
+    # Module path used to rebuild the model/train-module config in the eval job
+    # (passed as TRAIN_SCRIPT_PATH). Falls back to the $TRAIN_SCRIPT_PATH env var.
+    beaker_eval_module_path: str | None = None
+    # Cluster(s) the eval job may run on. The first is used as the launch positional.
+    # Falls back to $OE_LOOP_EVAL_CLUSTERS (comma-separated) if unset.
+    beaker_eval_clusters: list[str] | None = None
+    # Priority for the eval job. None -> match the running training job's priority.
+    beaker_eval_priority: str | None = None
+    # Extra CLI overrides appended verbatim to the eval launch command.
+    beaker_eval_extra_overrides: list[str] | None = None
 
     def verify_input_modalities(
         self, task: DownstreamTaskConfig, config: EvalDatasetConfig
@@ -1055,4 +1298,9 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             run_on_test=self.run_on_test,
             n_bootstrap=self.n_bootstrap,
             bootstrap_seed=self.bootstrap_seed,
+            run_as_beaker_job=self.run_as_beaker_job,
+            beaker_eval_module_path=self.beaker_eval_module_path,
+            beaker_eval_clusters=self.beaker_eval_clusters,
+            beaker_eval_priority=self.beaker_eval_priority,
+            beaker_eval_extra_overrides=self.beaker_eval_extra_overrides,
         )
