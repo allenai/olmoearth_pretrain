@@ -39,11 +39,13 @@ from base import (  # noqa: E402
     ROPE_MIXED_BASE,
     ROPE_TEMPORAL_COORDINATE_SCALE,
     SPATIAL_POS_ENCODING,
-    build_trainer_config,
     build_visualize_config,
 )
 from base import (  # noqa: E402
     build_common_components as build_common_components_v1_2,
+)
+from base import (  # noqa: E402
+    build_trainer_config as build_trainer_config_v1_2,
 )
 
 from olmoearth_pretrain.data.constants import Modality  # noqa: E402
@@ -81,6 +83,9 @@ NAIP_ENCODER_MLP_RATIO = 4.0
 # decoder to reconstruct.
 NAIP_ENCODE_RATIO = 0.25
 NAIP_DECODE_RATIO = 0.75
+
+# W&B project for this experiment (overrides the inherited v1.2 project).
+WANDB_PROJECT = "2026_07_07_naip_separate_encoder"
 
 # NAIP-containing dataset (adds naip_10 to the v1.2 modality mix).
 H5PY_DIR = (
@@ -258,6 +263,13 @@ def build_train_module_config(
             reduce_dtype=DType.float32,
         ),
     )
+
+
+def build_trainer_config(common: CommonComponents):
+    """v1.2 trainer config, but logging to this experiment's own W&B project."""
+    trainer_config = build_trainer_config_v1_2(common)
+    trainer_config.callbacks["wandb"].project = WANDB_PROJECT
+    return trainer_config
 
 
 def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
