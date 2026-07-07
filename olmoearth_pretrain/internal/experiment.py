@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import cast
 
 import numpy as np
+from beaker import Experiment
 from olmo_core.config import StrEnum
 from olmo_core.distributed.utils import get_local_rank
 from olmo_core.launch.beaker import BeakerLaunchConfig, ExperimentSpec
@@ -367,14 +368,14 @@ def visualize(config: OlmoEarthExperimentConfig) -> None:
     logger.info("Done visualizing the dataset")
 
 
-def launch(config: OlmoEarthExperimentConfig) -> None:
-    """Launch an experiment."""
+def launch(config: OlmoEarthExperimentConfig) -> Experiment:
+    """Launch an experiment and return the submitted Beaker experiment."""
     logger.info("Launching the experiment")
     logger.info(config)
     # Set follow=False if you don't want to stream the logs to the terminal
     assert config.launch is not None
     # Default to enabling torchrun so we can run multi gpu scripts on single gpu
-    config.launch.launch(follow=False, torchrun=True)
+    return config.launch.launch(follow=False, torchrun=True)
 
 
 def prep(config: OlmoEarthExperimentConfig) -> None:
