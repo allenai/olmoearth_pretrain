@@ -40,6 +40,10 @@ class Strategy(Enum):
     # Whether to use predefined or computed values for normalization
     PREDEFINED = "predefined"
     COMPUTED = "computed"
+    # No-op: return the data unchanged. Used when normalization is defined
+    # elsewhere (e.g. an rslearn `Normalize` transform in the model.yaml) so the
+    # shared computed.json is not tied to that pipeline.
+    IDENTITY = "identity"
 
 
 class Normalizer:
@@ -70,6 +74,8 @@ class Normalizer:
             return load_predefined_config()
         elif self.strategy == Strategy.COMPUTED:
             return load_computed_config()
+        elif self.strategy == Strategy.IDENTITY:
+            return {}
         else:
             raise ValueError(f"Invalid strategy: {self.strategy}")
 
@@ -127,5 +133,7 @@ class Normalizer:
             return self._normalize_predefined(modality, data)
         elif self.strategy == Strategy.COMPUTED:
             return self._normalize_computed(modality, data)
+        elif self.strategy == Strategy.IDENTITY:
+            return data
         else:
             raise ValueError(f"Invalid strategy: {self.strategy}")

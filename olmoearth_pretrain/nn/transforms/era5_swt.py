@@ -146,6 +146,45 @@ class StationaryWaveletTransform1d(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Band stacking helper (shared by the encoder input adapter)
+# ---------------------------------------------------------------------------
+
+
+def swt_bands_to_channels(
+    bands: list[tuple[Tensor, Tensor]],
+    include_approx: bool = True,
+) -> Tensor:
+    """Stack SWT bands into a var-major channel tensor.
+
+    Turns the per-level ``(approx, detail)`` list returned by
+    :meth:`StationaryWaveletTransform1d.forward` into a single dense tensor
+    suitable as encoder input.
+
+    Args:
+        bands: List of ``(approx, detail)`` per level, each ``[B, V, T]``.
+        include_approx: If True, append the *deepest* level's approximation
+            band after the detail bands (making the representation complete).
+
+    Returns:
+        ``[B, T, V * n_bands]`` where ``n_bands = len(bands) + include_approx``.
+        Channels are **var-major**: ``c = v * n_bands + s`` with scale order
+        ``[detail_0, ..., detail_{L-1}, (approx_deepest)]``, so a
+        ``view(B, T, V, n_bands)`` recovers per-variable scale groups.
+    """
+    if not bands:
+        raise ValueError("swt_bands_to_channels requires at least one SWT level")
+    band_list = [detail for _, detail in bands]  # detail_0 .. detail_{L-1}
+    if include_approx:
+        band_list.append(bands[-1][0])  # deepest-level approximation
+    # Each band is [B, V, T]; stack along a new scale axis -> [B, n_bands, V, T].
+    stacked = torch.stack(band_list, dim=1)
+    b, n_bands, v, t = stacked.shape
+    # var-major flatten: [B, V, n_bands, T] -> [B, V*n_bands, T] -> [B, T, C].
+    stacked = stacked.permute(0, 2, 1, 3).reshape(b, v * n_bands, t)
+    return stacked.transpose(1, 2).contiguous()
+
+
+# ---------------------------------------------------------------------------
 # Multiscale SWT loss
 # ---------------------------------------------------------------------------
 

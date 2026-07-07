@@ -394,7 +394,7 @@ class Era5TaskDataset(Dataset):
         self.task_spec = spec
         self.dataset = model_dataset
         self.max_sequence_length = max_sequence_length
-        self.normalizer = normalizer or Normalizer(Strategy.COMPUTED)
+        self.normalizer = normalizer or Normalizer(Strategy.IDENTITY)
         # SSL tasks carry no label, so no extractor (and no target) is needed.
         self._label_extractor = None if spec.ssl else spec.get_label_extractor()
         self._num_bands = _ERA5_MODALITY.num_bands
@@ -559,11 +559,12 @@ def _build_task_dataset(
         tags_override=spec.tags_override,
         max_samples=spec.max_samples,
     )
-    normalizer = (
-        Normalizer(Strategy.COMPUTED)
-        if spec.norm_stats_from_pretrained
-        else Normalizer(Strategy.PREDEFINED)
-    )
+    # ERA5 normalization is defined per-task in the rslearn model.yaml (a
+    # `Normalize` transform with hardcoded per-band mean/std), so the olmoearth
+    # Normalizer is a no-op here: the shared computed.json is intentionally NOT
+    # tied to the ERA5 pretraining pipeline. (spec.norm_stats_from_pretrained is
+    # therefore unused for ERA5 normalization.)
+    normalizer = Normalizer(Strategy.IDENTITY)
     return Era5TaskDataset(
         spec=spec,
         model_dataset=model_dataset,

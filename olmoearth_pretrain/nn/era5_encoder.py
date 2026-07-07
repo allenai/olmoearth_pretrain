@@ -37,6 +37,10 @@ from olmoearth_pretrain.data.constants import (
     ERA5_INPUT_SEQUENCE_LENGTH,
     Modality,
 )
+from olmoearth_pretrain.nn.transforms.era5_swt import (
+    StationaryWaveletTransform1d,
+    swt_bands_to_channels,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +163,15 @@ class Era5DailyEncoderConfig(Config):
         use_conv_stem: When True, replace the single Conv1D patch embedding
             with a two-layer stem (Conv1D + GroupNorm + GELU + 1x1 Conv1D)
             that has enough nonlinear capacity to gate out masked channels.
+        is_swt_input: When True, the encoder works directly in wavelet space
+        swt_input_wavelet: Wavelet family for the input SWT (``haar`` / ``db2``).
+        swt_input_levels: Which detail levels to include (0-indexed).
+        swt_input_include_approx: When True, append the deepest level's
+            approximation band (complete representation): ``n_bands =
+            len(levels) + 1``; otherwise ``n_bands = len(levels)``.
+        swt_input_normalize: When True, apply a ``BatchNorm1d`` over the band
+            channels before masking/patchifying (SWT coefficients differ in
+            magnitude across scales, so this conditions the patch conv).
         extras: Reserved for objective C plumbing.
     """
 
@@ -178,6 +191,11 @@ class Era5DailyEncoderConfig(Config):
     add_relative_position_features: bool = False
     use_mask_embed: bool = False
     use_conv_stem: bool = False
+    is_swt_input: bool = False
+    swt_input_wavelet: str = "haar"
+    swt_input_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
+    swt_input_include_approx: bool = True
+    swt_input_normalize: bool = True
     extras: dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
@@ -196,6 +214,10 @@ class Era5DailyEncoderConfig(Config):
             raise ValueError("patch_stride must be >= 1")
         if self.drop_path_rate < 0.0 or self.drop_path_rate >= 1.0:
             raise ValueError("drop_path_rate must be in [0, 1)")
+        if self.is_swt_input and not self.swt_input_levels:
+            raise ValueError(
+                "swt_input_levels must be non-empty when is_swt_input=True"
+            )
 
     def build(self) -> Era5DailyEncoder:
         """Build the corresponding encoder."""
@@ -232,9 +254,46 @@ class Era5DailyEncoder(nn.Module):
         self.add_day_of_year_features = config.add_day_of_year_features
         self.add_relative_position_features = config.add_relative_position_features
 
-        # Learned per-band mask embedding for reconstruction masking
+        # --- Optional SWT input adapter (raw [B,T,V] -> band channels) ---
+        # ``raw_in_channels`` is the number of raw variables (V); ``swt_channels``
+        # is what the learned patch conv / mask_embed actually see (V * n_bands
+        # when is_swt_input is on, else V).
+        self.raw_in_channels = in_channels
+        self.is_swt_input = config.is_swt_input
+        if config.is_swt_input:
+            levels = list(config.swt_input_levels)
+            self.swt_input_levels = levels
+            self.swt_input_include_approx = config.swt_input_include_approx
+            self.swt_num_bands = len(levels) + (
+                1 if config.swt_input_include_approx else 0
+            )
+            self.swt_transform: StationaryWaveletTransform1d | None = (
+                StationaryWaveletTransform1d(
+                    num_channels=in_channels,
+                    max_levels=max(levels) + 1,
+                    wavelet=config.swt_input_wavelet,
+                )
+            )
+            self.swt_channels = in_channels * self.swt_num_bands
+            self.swt_norm: nn.BatchNorm1d | None = (
+                nn.BatchNorm1d(self.swt_channels)
+                if config.swt_input_normalize
+                else None
+            )
+        else:
+            self.swt_input_levels = []
+            self.swt_input_include_approx = False
+            self.swt_num_bands = 1
+            self.swt_transform = None
+            self.swt_channels = in_channels
+            self.swt_norm = None
+
+        patch_in_channels = self.swt_channels
+
+        # Learned per-band mask embedding for reconstruction masking. Lives in
+        # the (possibly SWT) input space, so it has ``swt_channels`` entries.
         if config.use_mask_embed:
-            self.mask_embed = nn.Parameter(torch.zeros(1, 1, in_channels))
+            self.mask_embed = nn.Parameter(torch.zeros(1, 1, patch_in_channels))
             nn.init.trunc_normal_(self.mask_embed, std=0.02)
         else:
             self.mask_embed = None
@@ -244,7 +303,7 @@ class Era5DailyEncoder(nn.Module):
             mid = d_model // 2
             self.patch_embed: nn.Module = nn.Sequential(
                 nn.Conv1d(
-                    in_channels,
+                    patch_in_channels,
                     mid,
                     kernel_size=config.patch_kernel_size,
                     stride=config.patch_stride,
@@ -255,7 +314,7 @@ class Era5DailyEncoder(nn.Module):
             )
         else:
             self.patch_embed = nn.Conv1d(
-                in_channels=in_channels,
+                in_channels=patch_in_channels,
                 out_channels=d_model,
                 kernel_size=config.patch_kernel_size,
                 stride=config.patch_stride,
@@ -333,10 +392,11 @@ class Era5DailyEncoder(nn.Module):
             timestamps: ``[B, T, 3]`` per-step ``[day-of-year, month0, year]``.
             prior_tokens: Optional ``[B, K, D]`` prior tokens prepended to
                 the sequence (used by objective C).
-            corruption_mask: Optional ``[B, T, C]`` boolean tensor. ``True``
-                positions are replaced with the learned ``mask_embed``
-                before patchifying.  Only effective when ``use_mask_embed``
-                is enabled.
+            corruption_mask: Optional boolean tensor whose ``True`` positions
+                are replaced with the learned ``mask_embed`` before
+                patchifying.  Shape is ``[B, T, V]`` for a raw-input encoder,
+                or ``[B, T, V * n_bands]`` (band space) when ``is_swt_input`` is
+                enabled.  Only effective when ``use_mask_embed`` is enabled.
 
         Returns:
             Dict with keys:
@@ -354,6 +414,12 @@ class Era5DailyEncoder(nn.Module):
                 f"Expected [B, T, 3] timestamps, got shape {tuple(timestamps.shape)}"
             )
         b, _, _ = era5.shape
+
+        # --- Optional SWT input adapter: raw [B,T,V] -> band channels [B,T,C_swt] ---
+        # The raw signal is consumed here by a parameter-free transform and
+        # never reaches a learned layer; masking/patchify operate on the bands.
+        if self.is_swt_input:
+            era5 = self._apply_swt(era5)
 
         # Replace corrupted positions with learned mask embedding
         if corruption_mask is not None and self.mask_embed is not None:
@@ -414,6 +480,30 @@ class Era5DailyEncoder(nn.Module):
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _apply_swt(self, era5: Tensor) -> Tensor:
+        """Decompose raw ``[B, T, V]`` into var-major SWT bands ``[B, T, C_swt]``.
+
+        Uses ``target_start=0`` (no cropping): the early boundary-contaminated
+        coefficients are only ever consumed as encoder context, and the loss
+        window still starts after the SWT buffer.  When ``swt_norm`` is set,
+        the bands are normalized per channel before masking so BatchNorm sees
+        clean (pre-mask) statistics.
+        """
+        assert self.swt_transform is not None
+        # SWT expects [B, V, T].
+        bands = self.swt_transform(
+            era5.transpose(1, 2),
+            levels=self.swt_input_levels,
+            target_start=0,
+        )
+        x = swt_bands_to_channels(
+            bands, include_approx=self.swt_input_include_approx
+        )  # [B, T, C_swt]
+        if self.swt_norm is not None:
+            # BatchNorm1d normalizes per-channel over (B, T): [B, T, C] -> [B, C, T].
+            x = self.swt_norm(x.transpose(1, 2)).transpose(1, 2)
+        return x
 
     def _patchify(self, seq: Tensor) -> Tensor:
         """Conv1D patch embedding.

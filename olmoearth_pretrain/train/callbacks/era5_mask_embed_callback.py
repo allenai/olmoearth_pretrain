@@ -44,8 +44,23 @@ class Era5MaskEmbedVizCallback(Callback):
         values = mask_embed.detach().float().reshape(-1).cpu().tolist()
         bands = Modality.ERA5L_DAY_10.band_order
         wandb = wandb_callback.wandb
+
+        # The mask embedding has one entry per input channel. For a raw-input
+        # encoder that is one per band; for an SWT-input encoder it is
+        # ``V * n_bands`` entries in var-major layout (``c = v*n_bands + s``),
+        # so build composite ``<band>_s<scale>`` labels.
+        if len(values) == len(bands):
+            labels = list(bands)
+        elif len(bands) > 0 and len(values) % len(bands) == 0:
+            n_bands = len(values) // len(bands)
+            labels = [
+                f"{band}_s{scale}" for band in bands for scale in range(n_bands)
+            ]
+        else:
+            labels = [str(i) for i in range(len(values))]
+
         table = wandb.Table(
-            data=list(zip(bands, values)), columns=["band", "mask_embed"]
+            data=list(zip(labels, values)), columns=["band", "mask_embed"]
         )
         wandb.log(
             {"mask_embed/per_band": wandb.plot.bar(table, "band", "mask_embed")},

@@ -55,7 +55,9 @@ from olmoearth_pretrain.nn.transforms.era5_corruption import (
     GROUP_RECON_MODE,
     RECON_MODE_SPEC,
     MaskPolicy,
+    SwtNaiveMaskPolicy,
     corrupt_era5,
+    swt_naive_mask,
 )
 from olmoearth_pretrain.nn.transforms.era5_swt import StationaryWaveletTransform1d
 from olmoearth_pretrain.train.train_module.train_module import (
@@ -382,6 +384,11 @@ class ReconstructionObjectiveConfig(Config):
     group_recon_mode: dict[str, str] = field(
         default_factory=lambda: dict(GROUP_RECON_MODE)
     )
+    # -- SWT-input masking knob (only used when the encoder has is_swt_input=True) --
+    # How to reduce the band-space corruption mask over the scale/freq axis to a
+    # raw ``[B,T,V]`` loss mask: ``"any"`` (supervise where any scale/freq is
+    # masked) or ``"all"`` (supervise only fully-masked columns).
+    raw_loss_mask_reduce: str = "any"
 
     def build(self) -> ReconstructionObjective:
         """Instantiate decoder, SWT, and the objective."""
@@ -407,6 +414,7 @@ class ReconstructionObjectiveConfig(Config):
             swt_lambda=self.swt_lambda,
             swt_levels=self.swt_levels,
             swt_buffer_days=self.swt_buffer_days,
+            raw_loss_mask_reduce=self.raw_loss_mask_reduce,
         )
 
 
@@ -446,6 +454,7 @@ class ReconstructionObjective(_Objective):
         swt_lambda: float = 0.1,
         swt_levels: list[int] | None = None,
         swt_buffer_days: int = 83,
+        raw_loss_mask_reduce: str = "any",
     ) -> None:
         """Initialize the reconstruction objective."""
         self.name = name
@@ -460,6 +469,12 @@ class ReconstructionObjective(_Objective):
         self.swt_lambda = swt_lambda
         self.swt_levels = swt_levels or [0, 1, 2, 3, 4, 5]
         self.swt_buffer_days = swt_buffer_days
+        if raw_loss_mask_reduce not in ("any", "all"):
+            raise ValueError(
+                f"raw_loss_mask_reduce must be 'any' or 'all', got "
+                f"{raw_loss_mask_reduce!r}"
+            )
+        self.raw_loss_mask_reduce = raw_loss_mask_reduce
         # Static variable-count weights for loss averaging. Each (group, scale)
         # term is weighted by the number of variables in the group
         self._raw_weight, self._swt_weight = self._compute_loss_weights()
@@ -524,16 +539,44 @@ class ReconstructionObjective(_Objective):
         ``swt_buffer_days``).
         """
         x = batch.era5  # [B, T, V]
+        b, t, v = x.shape
         ts = self.swt_buffer_days  # target_start index
 
-        # 1. Generate corruption mask (only target window is masked)
-        mask = corrupt_era5(x, self.mask_policy, self.variable_groups, ts)
+        # 1. Generate corruption mask (only target window is masked).
+        # When the encoder works in wavelet space, the mask is band-space
+        # ``[B, T, V*n_bands]`` and the raw ``[B, T, V]`` loss mask is derived
+        # by reducing over the scale axis (``any`` / ``all``). Otherwise the
+        # mask is the usual raw ``[B, T, V]`` mask used for both.
+        band_mask: Tensor | None = None
+        if getattr(encoder, "is_swt_input", False):
+            if not isinstance(self.mask_policy, SwtNaiveMaskPolicy):
+                raise ValueError(
+                    "is_swt_input reconstruction requires a SwtNaiveMaskPolicy "
+                    f"(got {type(self.mask_policy).__name__})."
+                )
+            n_bands = encoder.swt_num_bands
+            # Simple budget: mask a fraction of all band elements at random.
+            band_mask = swt_naive_mask(b,t,v,n_bands,
+                self.mask_policy.budget,
+                ts,
+                x.device,
+            )
+            corruption_mask = band_mask
+            band4d = band_mask.view(b, t, v, n_bands)
+            mask = (
+                band4d.all(dim=-1)
+                if self.raw_loss_mask_reduce == "all"
+                else band4d.any(dim=-1)
+            )
+        else:
+            mask = corrupt_era5(x, self.mask_policy, self.variable_groups, ts)
+            corruption_mask = mask
 
         # 2. Encode with corruption mask
         out = encoder(
             era5=x,
             timestamps=batch.timestamps,
-            corruption_mask=mask,
+            corruption_mask=corruption_mask,
         )
 
         # 3. Decode
@@ -656,6 +699,10 @@ class ReconstructionObjective(_Objective):
             f"{self.name}/swt_loss": swt_loss.detach(),
             f"{self.name}/masked_fraction": mask_tgt.float().mean().detach(),
         }
+        if band_mask is not None:
+            metrics[f"{self.name}/band_masked_fraction"] = (
+                band_mask[:, ts:, :].float().mean().detach()
+            )
         for level in self.swt_levels:
             cnt = level_loss_counts.get(level, 0)
             if cnt > 0:

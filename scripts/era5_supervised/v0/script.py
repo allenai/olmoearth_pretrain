@@ -67,6 +67,7 @@ from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig, Era5Pooli
 from olmoearth_pretrain.nn.transforms.era5_corruption import (
     MaskPolicy,
     NaiveMaskPolicy,
+    SwtNaiveMaskPolicy,
     TemporalInterpolationStrategy,
     WholeGroupSpanStrategy,
     WithinGroupSingleVarStrategy,
@@ -159,6 +160,19 @@ class Era5SupervisedCommonComponents(CommonComponents):
     encoder_pooling: str = Era5Pooling.MEAN.value
     # Settled default (v0.3): the two-layer conv tokenizer stem was a large win.
     encoder_use_conv_stem: bool = True
+    # ------------------------------------------------------------------
+    # SWT-input encoder (objective B in wavelet space).  When enabled, the
+    # encoder decomposes the raw input into V*n_bands band channels before
+    # patchifying, and masking happens in that band space.  Off by default so
+    # raw-input behavior is unchanged.
+    # ------------------------------------------------------------------
+    encoder_swt_input: bool = False
+    encoder_swt_input_wavelet: str = "haar"
+    encoder_swt_input_levels: list[int] = field(
+        default_factory=lambda: [0, 1, 2, 3, 4, 5]
+    )
+    encoder_swt_input_include_approx: bool = True
+    encoder_swt_input_normalize: bool = True
     global_batch_size: int = 64
     rank_microbatch_size: int = 32
     num_workers: int = 4
@@ -202,6 +216,16 @@ class Era5SupervisedCommonComponents(CommonComponents):
     recon_naive_num_channels: list[int] = field(default_factory=lambda: [1, 7])
     # Naive-masking span length range in days (NaiveMaskPolicy.span_days).
     recon_naive_span_days: list[int] = field(default_factory=lambda: [1, 30])
+    # ------------------------------------------------------------------
+    # SWT-input reconstruction masking (only used when encoder_swt_input=True).
+    # The masker is always the simple budget masker (SwtNaiveMaskPolicy):
+    # ``recon_swt_naive_budget`` is the fraction of all (timestep x var x
+    # swt_band) elements masked uniformly at random.  ``recon_raw_loss_mask_reduce``
+    # reduces the band-space mask over the scale axis to a raw loss mask: "any"
+    # (supervise where any scale is masked) or "all" (only fully-masked columns).
+    # ------------------------------------------------------------------
+    recon_raw_loss_mask_reduce: str = "any"
+    recon_swt_naive_budget: float = 0.5
     recon_temporal_interpolation_prob: float = 1.0
     recon_cross_variable_prob: float = 1.0
     # When True, every sample gets at least one stage via a 50/50 competition
@@ -661,8 +685,16 @@ def build_model_config(
             swt_lambda=common.recon_swt_lambda,
             swt_levels=common.recon_swt_levels,
             swt_wavelet=common.recon_swt_wavelet,
+            raw_loss_mask_reduce=common.recon_raw_loss_mask_reduce,
             **(
+                # SWT-input runs always use the simple budget masker.
                 {
+                    "mask_policy": SwtNaiveMaskPolicy(
+                        budget=common.recon_swt_naive_budget,
+                    )
+                }
+                if common.encoder_swt_input
+                else {
                     "mask_policy": NaiveMaskPolicy(
                         max_num_masks=common.recon_naive_max_num_masks,
                         num_channels=tuple(common.recon_naive_num_channels),
@@ -708,6 +740,11 @@ def build_model_config(
         pooling=common.encoder_pooling,
         use_mask_embed=common.enable_reconstruction,
         use_conv_stem=common.encoder_use_conv_stem,
+        is_swt_input=common.encoder_swt_input,
+        swt_input_wavelet=common.encoder_swt_input_wavelet,
+        swt_input_levels=common.encoder_swt_input_levels,
+        swt_input_include_approx=common.encoder_swt_input_include_approx,
+        swt_input_normalize=common.encoder_swt_input_normalize,
     )
     return Era5MultiObjectiveModelConfig(
         encoder_config=encoder_config,

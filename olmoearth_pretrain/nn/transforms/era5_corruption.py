@@ -327,6 +327,21 @@ class NaiveMaskPolicy(MaskPolicy):
     num_channels: tuple[int, int] = (1, 7)
 
 
+@dataclass
+class SwtNaiveMaskPolicy(MaskPolicy):
+    """Budget-only masking for SWT-input reconstruction.
+
+    The single knob ``budget`` is the target fraction of the maskable band
+    elements — ``target_window_length * V * n_bands`` — that get corrupted.
+    Each element ``(timestep, variable, swt_band)`` in the target window is
+    masked independently with probability ``budget``, so masking is spread
+    uniformly at random across all three axes with no spans or per-group
+    structure.  Only meaningful when the encoder has ``is_swt_input=True``.
+    """
+
+    budget: float = 0.5
+
+
 def corrupt_era5(
     era5: Tensor,
     policy: MaskPolicy,
@@ -380,6 +395,45 @@ def _corrupt_naive(
             channels = torch.randperm(v, device=device)[:nc]
             mask[i, target_start:, channels] |= span_mask.unsqueeze(1)
 
+    return mask
+
+
+def swt_naive_mask(
+    b: int,
+    t: int,
+    v: int,
+    n_bands: int,
+    budget: float,
+    target_start: int,
+    device: torch.device,
+) -> Tensor:
+    """Budget-based random band-space mask for SWT-input reconstruction.
+
+    Every band element ``(timestep, variable, swt_band)`` in the target
+    window is masked independently with probability ``budget``, so the
+    expected masked fraction of the ``target_window_length * V * n_bands``
+    maskable elements equals ``budget``.  Masking is spread uniformly at
+    random across all three axes — no spans, no per-group structure.
+
+    Args:
+        b: Batch size.
+        t: Sequence length.
+        v: Number of raw variables.
+        n_bands: Number of SWT bands per variable (channels ``= v * n_bands``).
+        budget: Target masked fraction in ``[0, 1]``.
+        target_start: First maskable timestep; ``[:target_start]`` is never
+            masked.
+        device: Device for the returned tensor.
+
+    Returns:
+        ``mask`` — ``[B, T, V * n_bands]`` bool (True = corrupted position).
+    """
+    c = v * n_bands
+    mask = torch.zeros(b, t, c, dtype=torch.bool, device=device)
+    if budget <= 0.0:
+        return mask
+    window = t - target_start
+    mask[:, target_start:, :] = torch.rand(b, window, c, device=device) < budget
     return mask
 
 
