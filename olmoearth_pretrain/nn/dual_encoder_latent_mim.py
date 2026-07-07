@@ -129,8 +129,12 @@ class DualEncoderLatentMIM(nn.Module, DistributedMixins):
             unpack_encoder_output(main_output)
         )
 
-        # Separate NAIP encoder over only the (unmasked) NAIP patches.
-        naip_output = self.naip_encoder(x, patch_size=patch_size)
+        # Separate NAIP encoder over only the (unmasked) NAIP patches. Skip the pooled
+        # projection: it is unused here and instance-wise pooling errors on samples that
+        # have zero encoded NAIP tokens (e.g. a tiny NAIP grid or missing NAIP).
+        naip_output = self.naip_encoder(
+            x, patch_size=patch_size, compute_projection=False
+        )
         naip_latent, _, _ = unpack_encoder_output(naip_output)
 
         extra_metrics: dict[str, Any] = {}

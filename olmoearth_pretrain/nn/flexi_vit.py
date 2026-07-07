@@ -2017,6 +2017,7 @@ class Encoder(FlexiVitBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
+        compute_projection: bool = True,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -2026,6 +2027,10 @@ class Encoder(FlexiVitBase):
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
+            compute_projection: Whether to compute the pooled ``project_aggregated``
+                output (used for the contrastive loss). Set False for auxiliary encoders
+                whose pooled output is unused; this also avoids errors when a sample has
+                zero encoded (unmasked) tokens, which would break instance-wise pooling.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -2060,7 +2065,7 @@ class Encoder(FlexiVitBase):
         if token_norm_stats:
             output_dict["token_norm_stats"] = token_norm_stats
 
-        if not fast_pass:
+        if not fast_pass and compute_projection:
             output_dict["project_aggregated"] = self.project_and_aggregate(output)
 
         return output_dict
