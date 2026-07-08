@@ -27,7 +27,12 @@ from torch.distributed.fsdp import (
 )
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, TokensAndMasks
+from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
+from olmoearth_pretrain.datatypes import (
+    MaskedOlmoEarthSample,
+    MaskValue,
+    TokensAndMasks,
+)
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
 
 logger = logging.getLogger(__name__)
@@ -104,6 +109,49 @@ class DualEncoderLatentMIM(nn.Module, DistributedMixins):
         merged.update(naip_latent.as_dict(include_nones=False))
         return TokensAndMasks(**merged)
 
+    def _ensure_naip_present(self, x: MaskedOlmoEarthSample) -> MaskedOlmoEarthSample:
+        """Guarantee the NAIP modality is present.
+
+        This way the NAIP encoder + reconstructor run on every rank every step.
+
+        The dataloader includes NAIP only when a batch actually contains it (NAIP is
+        US-only), which varies per rank. Under FSDP a rank that skips the NAIP modules
+        would skip their parameter all-gathers and desync the process group. When NAIP is
+        absent we inject an all-missing NAIP tensor (sized from a present spatial
+        modality); it contributes zero encoded and zero decode tokens, so it adds no
+        learning signal but keeps module execution identical across ranks.
+        """
+        naip = self.naip_modality_name
+        if naip in x.modalities:
+            return x
+
+        naip_spec = Modality.get(naip)
+        ref_name = next((m for m in x.modalities if Modality.get(m).is_spatial), None)
+        if ref_name is None:
+            # No spatial modality to size against; nothing we can do safely.
+            return x
+        ref = getattr(x, ref_name)
+        ref_spec = Modality.get(ref_name)
+        scale = naip_spec.image_tile_size_factor // ref_spec.image_tile_size_factor
+
+        b, ref_h, ref_w = ref.shape[0], ref.shape[1], ref.shape[2]
+        h, w = ref_h * scale, ref_w * scale
+        data = torch.full(
+            (b, h, w, 1, naip_spec.num_bands),
+            float(MISSING_VALUE),
+            device=ref.device,
+            dtype=torch.float32,
+        )
+        mask = torch.full(
+            (b, h, w, 1, naip_spec.num_band_sets),
+            MaskValue.MISSING.value,
+            device=ref.device,
+            dtype=torch.long,
+        )
+        return x._replace(
+            **{naip: data, MaskedOlmoEarthSample.get_masked_modality_name(naip): mask}
+        )
+
     def forward(
         self, x: MaskedOlmoEarthSample, patch_size: int
     ) -> tuple[
@@ -122,6 +170,10 @@ class DualEncoderLatentMIM(nn.Module, DistributedMixins):
             reconstructed: reconstructed NAIP pixels (or None if no reconstructor).
             extra_metrics: extra metrics (e.g. token norm stats).
         """
+        # Ensure NAIP is always present so the NAIP encoder + reconstructor execute on
+        # every rank every step (FSDP requires identical module execution across ranks).
+        x = self._ensure_naip_present(x)
+
         # Main encoder over the non-NAIP modalities.
         main_output = self.encoder(x, patch_size=patch_size)
         token_norm_stats = main_output.pop("token_norm_stats", None)

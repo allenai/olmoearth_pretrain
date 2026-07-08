@@ -226,3 +226,50 @@ def test_mae_loss_finite_when_naip_all_missing() -> None:
     loss = MAELoss(loss_function="MSELoss").compute(reconstructed, x)
     assert torch.isfinite(loss)
     assert float(loss) == 0.0
+
+
+def test_forward_runs_when_naip_modality_absent() -> None:
+    """When NAIP is absent from the batch, the model still runs the NAIP path.
+
+    Under FSDP every rank must execute the same modules each step. NAIP is US-only, so
+    some ranks' batches lack it entirely; the model must inject a synthetic all-missing
+    NAIP so the NAIP encoder + reconstructor still run (avoiding a collective desync).
+    """
+    model = _build_config().build()
+    B, H, W, T = 2, 8, 8, 12
+    s2_bands = Modality.SENTINEL2_L2A.num_bands
+    timestamps = torch.stack(
+        [
+            torch.randint(1, 28, (B, T)),
+            torch.randint(1, 12, (B, T)),
+            torch.full((B, T), 2023),
+        ],
+        dim=-1,
+    )
+    # No NAIP modality at all in the sample.
+    sample = OlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_bands),
+        timestamps=timestamps,
+    )
+    strategy = MaskingConfig(
+        strategy_config={
+            "type": "random_time_with_decode_separate_encoder",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "random_ratio": 1.0,
+            "separate_encoder_modalities": [NAIP],
+            "separate_encode_ratio": 0.25,
+            "separate_decode_ratio": 0.75,
+        }
+    ).build()
+    x = strategy.apply_mask(sample, patch_size=PATCH_SIZE)
+    assert NAIP not in x.modalities  # NAIP genuinely absent from the batch
+
+    # The NAIP path still runs (synthetic all-missing NAIP injected) and reconstructs.
+    _, _, _, reconstructed, _ = model(x, patch_size=PATCH_SIZE)
+    assert reconstructed is not None
+    assert reconstructed.naip_10 is not None
+    loss = MAELoss(loss_function="MSELoss").compute(
+        reconstructed, model._ensure_naip_present(x)
+    )
+    assert torch.isfinite(loss)
