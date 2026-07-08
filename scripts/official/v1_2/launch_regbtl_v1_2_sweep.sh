@@ -26,19 +26,26 @@ IC_LSA="scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_ic_lsa.py"
 IC_NOLSA="scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_ic_nolsa.py"
 NOIC_LSA="scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa.py"
 NOIC_NOLSA="scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_noic_nolsa.py"
+# Single-forward-pass twin of NOIC_LSA: identical config, but the plain (non-contrastive)
+# train module runs one forward pass per batch instead of two (the contrastive loss is 0).
+NOIC_LSA_1FWD="scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_1fwd.py"
 
-python "$IC_LSA" launch "regbtl_v1_2_gdyn_d768_il_pdproj_ic_lsa" "$CLUSTER" \
-    $LAUNCH_ARGS \
-    --trainer.callbacks.wandb.project="$PROJECT"
+# python "$IC_LSA" launch "regbtl_v1_2_gdyn_d768_il_pdproj_ic_lsa" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$IC_NOLSA" launch "regbtl_v1_2_gdyn_d768_il_pdproj_ic_nolsa" "$CLUSTER" \
-    $LAUNCH_ARGS \
-    --trainer.callbacks.wandb.project="$PROJECT"
+# python "$IC_NOLSA" launch "regbtl_v1_2_gdyn_d768_il_pdproj_ic_nolsa" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$NOIC_LSA" launch "regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa" "$CLUSTER" \
-    $LAUNCH_ARGS \
-    --trainer.callbacks.wandb.project="$PROJECT"
+# python "$NOIC_LSA" launch "regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$NOIC_NOLSA" launch "regbtl_v1_2_gdyn_d768_il_pdproj_noic_nolsa" "$CLUSTER" \
+# python "$NOIC_NOLSA" launch "regbtl_v1_2_gdyn_d768_il_pdproj_noic_nolsa" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
+
+python "$NOIC_LSA_1FWD" launch "regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_1fwd" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
