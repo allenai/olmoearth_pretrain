@@ -462,6 +462,8 @@ class GeobenchV2Dataset(Dataset):
         partition: str,
         norm_stats_from_pretrained: bool = False,
         norm_method: str = "norm_no_clip_2_std",
+        norm_strategy: str = "computed",
+        tanh_gain: float = 1.0,
     ) -> None:
         """Initialize dataset for the given gb2 slug and split.
 
@@ -474,6 +476,9 @@ class GeobenchV2Dataset(Dataset):
                 published stats *when available* (see ``geobench2_norm_stats.json``),
                 falling back to the pretraining stats otherwise.
             norm_method: Normalization method applied when using dataset stats.
+            norm_strategy: Pretraining normalization strategy to use when
+                norm_stats_from_pretrained is True (e.g. "computed" or "arcsinh_tanh").
+            tanh_gain: The tanh gain, only used for the "arcsinh_tanh" strategy.
         """
         del partition  # splits are fixed per-dataset; partition is not applicable
         if not dataset.startswith("gb2-"):
@@ -486,7 +491,7 @@ class GeobenchV2Dataset(Dataset):
 
         self.config = dataset_to_config(dataset)
         self._slug = slug
-        self._normalizer = Normalizer(Strategy.COMPUTED)
+        self._normalizer = Normalizer(Strategy(norm_strategy), tanh_gain=tanh_gain)
         self._norm_method = norm_method
         # Use the dataset's own stats only when asked AND we actually have them;
         # otherwise leave None and fall back to OlmoEarth pretraining stats.

@@ -221,6 +221,8 @@ class MADOSDataset(Dataset):
         # Default to 2std no clip - this matches what our model sees in pretraining,
         # so when using dataset stats (e.g. for MADOS) consistency is important.
         norm_method: str = "norm_no_clip_2_std",
+        norm_strategy: str = "computed",
+        tanh_gain: float = 1.0,
     ):
         """Init MADOS dataset.
 
@@ -230,6 +232,9 @@ class MADOSDataset(Dataset):
             label_fraction: Fraction of train labels to use; must match a precomputed partition file
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
+            norm_strategy: Pretraining normalization strategy to use when
+                norm_stats_from_pretrained is True (e.g. "computed" or "arcsinh_tanh").
+            tanh_gain: The tanh gain, only used for the "arcsinh_tanh" strategy.
         """
         # NOTE: I imputed bands for this dataset before saving the tensors, so no imputation is necessary
         assert split in ["train", "val", "valid", "test"]
@@ -265,7 +270,9 @@ class MADOSDataset(Dataset):
         if self.norm_stats_from_pretrained:
             from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+            self.normalizer_computed = Normalizer(
+                Strategy(norm_strategy), tanh_gain=tanh_gain
+            )
 
         torch_obj = torch.load(path_to_splits / f"MADOS_{split}.pt")
         self.images = torch_obj["images"]

@@ -220,7 +220,47 @@ def build_config(
     )
     logger.info("Overrides: %s", overrides)
     config = config.merge(overrides)
+    _propagate_norm_strategy_to_evals(config.trainer, config.dataset)
     return config
+
+
+def _propagate_norm_strategy_to_evals(
+    trainer_config: TrainerConfig, dataset_config: Config | None
+) -> None:
+    """Propagate the training dataset's normalization strategy to downstream evals.
+
+    Ensures a model trained with a non-default normalization (e.g. ``arcsinh_tanh``)
+    is evaluated with the same normalization whenever an eval task uses
+    ``norm_stats_from_pretrained``. Individual eval tasks may still override via their
+    own ``norm_strategy`` / ``tanh_gain`` fields.
+    """
+    from olmoearth_pretrain.train.callbacks.evaluator_callback import (
+        DownstreamEvaluatorCallbackConfig,
+    )
+
+    if dataset_config is None:
+        return
+    norm_strategy = getattr(dataset_config, "norm_strategy", None)
+    tanh_gain = getattr(dataset_config, "tanh_gain", None)
+    # Concatenated datasets store their per-source configs in dataset_configs; use the
+    # first source's normalization (they are expected to be consistent).
+    if norm_strategy is None:
+        sub_configs = getattr(dataset_config, "dataset_configs", None)
+        if sub_configs:
+            norm_strategy = getattr(sub_configs[0], "norm_strategy", None)
+            tanh_gain = getattr(sub_configs[0], "tanh_gain", None)
+    if norm_strategy is None:
+        return
+    eval_cb = trainer_config.callbacks.get("downstream_evaluator")
+    if isinstance(eval_cb, DownstreamEvaluatorCallbackConfig):
+        eval_cb.norm_strategy = norm_strategy
+        if tanh_gain is not None:
+            eval_cb.tanh_gain = tanh_gain
+        logger.info(
+            "Propagated training norm_strategy=%s tanh_gain=%s to downstream evaluator",
+            norm_strategy,
+            tanh_gain,
+        )
 
 
 def build_evaluate_config(
@@ -231,6 +271,7 @@ def build_evaluate_config(
     train_module_config_builder: (
         Callable[[CommonComponents], OlmoEarthTrainModuleConfig] | None
     ) = None,
+    dataset_config_builder: (Callable[[CommonComponents], Config] | None) = None,
 ) -> OlmoEarthEvaluateConfig:
     """Build a OlmoEarth Evaluate experiment configuration."""
     common_overrides, overrides = split_common_overrides(overrides)
@@ -250,6 +291,19 @@ def build_evaluate_config(
         train_module=train_module_config,
     )
     config = config.merge(overrides)
+    # Match evals to the model's training normalization when the training script
+    # exposes a dataset config builder (skipped for external models without one).
+    if dataset_config_builder is not None:
+        try:
+            eval_dataset_config = dataset_config_builder(common)
+        except Exception as e:  # noqa: BLE001 - best effort; keep default strategy
+            logger.warning(
+                "Could not build dataset config to derive eval norm strategy (%s); "
+                "using the default.",
+                e,
+            )
+        else:
+            _propagate_norm_strategy_to_evals(config.trainer, eval_dataset_config)
     return config
 
 
@@ -573,6 +627,7 @@ If running command on a local machine ie from a session, you can use the [b]loca
             trainer_config_builder=trainer_config_builder,
             overrides=overrides,
             train_module_config_builder=train_module_config_builder,
+            dataset_config_builder=dataset_config_builder,
         )
     else:
         # Training mode

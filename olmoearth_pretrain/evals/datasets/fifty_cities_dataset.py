@@ -173,6 +173,8 @@ class FiftyCitiesDataset(Dataset):
         norm_method: str = "norm_no_clip_2_std",
         label_fraction: float = 1.0,
         label_fraction_seed: int = 42,
+        norm_strategy: str = "computed",
+        tanh_gain: float = 1.0,
     ):
         """Init the 50Cities dataset.
 
@@ -189,6 +191,9 @@ class FiftyCitiesDataset(Dataset):
             norm_method: Normalization method when not using pretrained stats.
             label_fraction: Fraction of train tiles to keep (low-label evals).
             label_fraction_seed: Seed for the label-fraction subsample.
+            norm_strategy: Pretraining normalization strategy to use when
+                norm_stats_from_pretrained is True (e.g. "computed" or "arcsinh_tanh").
+            tanh_gain: The tanh gain, only used for the "arcsinh_tanh" strategy.
         """
         if split == "val":
             split = "valid"
@@ -235,7 +240,9 @@ class FiftyCitiesDataset(Dataset):
         if self.norm_stats_from_pretrained:
             from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+            self.normalizer_computed = Normalizer(
+                Strategy(norm_strategy), tanh_gain=tanh_gain
+            )
         else:
             self._load_dataset_norm_stats()
 

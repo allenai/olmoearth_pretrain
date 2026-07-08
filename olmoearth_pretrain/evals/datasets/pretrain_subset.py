@@ -86,6 +86,8 @@ class PretrainSubsetDataset(Dataset):
         test_samples: int = DEFAULT_MAX_SAMPLES,
         split_strategy: str = "random",
         geographic_bin_size_deg: float = 5.0,
+        norm_strategy: str = "computed",
+        tanh_gain: float = 1.0,
     ) -> None:
         """Initialize a deterministic pretrain eval subset.
 
@@ -106,6 +108,11 @@ class PretrainSubsetDataset(Dataset):
             split_strategy: ``random`` for shuffled 80/10/10 sample splits or
                 ``geographic`` for shuffled 80/10/10 lat/lon-bin splits.
             geographic_bin_size_deg: Geographic bin size for spatial holdouts.
+            norm_strategy: Normalization strategy passed through to
+                ``OlmoEarthDataset`` (should match the pretrained model's training
+                normalization).
+            tanh_gain: The tanh gain passed through to ``OlmoEarthDataset``, only
+                used for the ``arcsinh_tanh`` strategy.
         """
         self.patch_size = patch_size
         self.hw_p = hw_p
@@ -117,6 +124,8 @@ class PretrainSubsetDataset(Dataset):
             training_modalities=training_modalities,
             dtype=np.float32,
             normalize=True,
+            norm_strategy=norm_strategy,
+            tanh_gain=tanh_gain,
         )
         self._dataset.prepare()
         self._label_dataset = None

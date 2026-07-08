@@ -114,6 +114,11 @@ class DownstreamTaskConfig:
     norm_method: NormMethod = field(
         default_factory=lambda: NormMethod.NORM_NO_CLIP_2_STD
     )
+    # Pretraining normalization strategy/gain applied when
+    # norm_stats_from_pretrained is True. None => inherit from the callback config
+    # (which is set from the model's training data config). Set to override per task.
+    norm_strategy: str | None = None
+    tanh_gain: float | None = None
     select_best_by_primary_metric: bool = False
     # Subsample train embeddings for faster probe training (None = use all)
     max_train_samples: int | None = None
@@ -165,6 +170,8 @@ class DownstreamEvaluator:
         run_on_test: bool = False,
         n_bootstrap: int = 0,
         bootstrap_seed: int = 42,
+        norm_strategy: str = "computed",
+        tanh_gain: float = 1.0,
     ) -> None:
         """Initialize the downstream evaluator.
 
@@ -177,6 +184,9 @@ class DownstreamEvaluator:
                 only (=False) or on the test and val set (=True)
             n_bootstrap: Number of bootstrap samples for uncertainty estimation (0 = no bootstrap)
             bootstrap_seed: Random seed for bootstrap sampling
+            norm_strategy: Pretraining normalization strategy to use when
+                norm_stats_from_pretrained is True (e.g. "computed" or "arcsinh_tanh").
+            tanh_gain: The tanh gain, only used for the "arcsinh_tanh" strategy.
         """
         self.evaluation_name = evaluation_name
         self.config = dataset_to_config(task.dataset)
@@ -206,6 +216,8 @@ class DownstreamEvaluator:
         self.probe_type = task.probe_type
         self.label_fraction = task.label_fraction
         self.norm_method = task.norm_method
+        self.norm_strategy = norm_strategy
+        self.tanh_gain = tanh_gain
         self.use_pooled_tokens = task.use_pooled_tokens
         self.use_center_token = task.use_center_token
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
@@ -340,6 +352,8 @@ class DownstreamEvaluator:
             norm_stats_from_pretrained=self.norm_stats_from_pretrained,
             input_modalities=self.input_modalities,
             norm_method=self.norm_method,
+            norm_strategy=self.norm_strategy,
+            tanh_gain=self.tanh_gain,
             **extra_kwargs,
         )
         is_iterable = isinstance(eval_ds, IterableDataset)
@@ -1186,6 +1200,13 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     enabled: bool = True
     # Whether to run the evaluators on startup
     eval_on_startup: bool = False
+    # Pretraining normalization strategy/gain applied to eval datasets that use
+    # norm_stats_from_pretrained. Set these from the model's training data config
+    # (OlmoEarthDatasetConfig.norm_strategy / tanh_gain) so evals normalize inputs
+    # exactly as the model was trained. Individual tasks may override via their own
+    # norm_strategy / tanh_gain fields.
+    norm_strategy: str = "computed"
+    tanh_gain: float = 1.0
     # Whether to cancel the training after the first evaluation
     # This combined with ``eval_on_startup=True`` is useful if you just want to run in-loop evals
     # without training any longer.
@@ -1283,6 +1304,14 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             # Sort to ensure consistent order
             task.input_modalities.sort()
             logger.info(f"Adding {evaluation_name} with eval mode {task.eval_mode}")
+            eff_norm_strategy = (
+                task.norm_strategy
+                if task.norm_strategy is not None
+                else self.norm_strategy
+            )
+            eff_tanh_gain = (
+                task.tanh_gain if task.tanh_gain is not None else self.tanh_gain
+            )
             evaluators.append(
                 DownstreamEvaluator(
                     evaluation_name=evaluation_name,
@@ -1292,6 +1321,8 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     run_on_test=self.run_on_test,
                     n_bootstrap=self.n_bootstrap,
                     bootstrap_seed=self.bootstrap_seed,
+                    norm_strategy=eff_norm_strategy,
+                    tanh_gain=eff_tanh_gain,
                 )
             )
         return DownstreamEvaluatorCallback(

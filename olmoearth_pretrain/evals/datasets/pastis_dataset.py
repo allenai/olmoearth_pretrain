@@ -75,6 +75,8 @@ class PASTISRDataset(Dataset):
         # so when using dataset stats (e.g. for MADOS) consistency is important.
         norm_method: str = "norm_no_clip_2_std",
         input_modalities: list[str] = [],
+        norm_strategy: str = "computed",
+        tanh_gain: float = 1.0,
     ):
         """Init PASTIS-R dataset.
 
@@ -86,6 +88,9 @@ class PASTISRDataset(Dataset):
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
             input_modalities: List of modalities to use, must be a subset of ["sentinel1", "sentinel2_l2a"]
+            norm_strategy: Pretraining normalization strategy to use when
+                norm_stats_from_pretrained is True (e.g. "computed" or "arcsinh_tanh").
+            tanh_gain: The tanh gain, only used for the "arcsinh_tanh" strategy.
         """
         assert split in ["train", "valid", "test"]
 
@@ -146,7 +151,9 @@ class PASTISRDataset(Dataset):
         if self.norm_stats_from_pretrained:
             from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+            self.normalizer_computed = Normalizer(
+                Strategy(norm_strategy), tanh_gain=tanh_gain
+            )
 
         self.s2_images_dir = path_to_splits / f"pastis_r_{split}" / "s2_images"
         self.s1_images_dir = path_to_splits / f"pastis_r_{split}" / "s1_images"

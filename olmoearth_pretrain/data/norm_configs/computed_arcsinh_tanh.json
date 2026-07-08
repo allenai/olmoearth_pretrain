@@ -1,0 +1,705 @@
+{
+  "cdl": {
+    "cdl": {
+      "mean": 118.06714720812182,
+      "std": 55.36483205346404,
+      "transform": "identity"
+    }
+  },
+  "gse": {
+    "A00": {
+      "mean": 8024.451193277311,
+      "std": 1015.8478121527057,
+      "transform": "identity"
+    },
+    "A01": {
+      "mean": 7451.959294117647,
+      "std": 1139.4021368399606,
+      "transform": "identity"
+    },
+    "A02": {
+      "mean": 8179.35006162465,
+      "std": 1211.88622678325,
+      "transform": "identity"
+    },
+    "A03": {
+      "mean": 7785.009927170869,
+      "std": 1114.9786524401486,
+      "transform": "identity"
+    },
+    "A04": {
+      "mean": 8251.3795070028,
+      "std": 1073.4311067497626,
+      "transform": "identity"
+    },
+    "A05": {
+      "mean": 7730.01924929972,
+      "std": 1156.3797041633397,
+      "transform": "identity"
+    },
+    "A06": {
+      "mean": 8446.160470588235,
+      "std": 1093.056185155847,
+      "transform": "identity"
+    },
+    "A07": {
+      "mean": 8880.103327731093,
+      "std": 1229.171485453153,
+      "transform": "identity"
+    },
+    "A08": {
+      "mean": 8214.193344537814,
+      "std": 1228.660133662708,
+      "transform": "identity"
+    },
+    "A09": {
+      "mean": 8033.1946554621845,
+      "std": 1021.7807865523379,
+      "transform": "identity"
+    },
+    "A10": {
+      "mean": 8579.486016806723,
+      "std": 1086.821356436867,
+      "transform": "identity"
+    },
+    "A11": {
+      "mean": 7961.811507002801,
+      "std": 990.2365249750989,
+      "transform": "identity"
+    },
+    "A12": {
+      "mean": 7154.257176470588,
+      "std": 982.425155940914,
+      "transform": "identity"
+    },
+    "A13": {
+      "mean": 8115.283966386554,
+      "std": 1026.1120425178074,
+      "transform": "identity"
+    },
+    "A14": {
+      "mean": 7544.1958767507,
+      "std": 1168.3312326829882,
+      "transform": "identity"
+    },
+    "A15": {
+      "mean": 8275.829927170867,
+      "std": 1104.4524747645812,
+      "transform": "identity"
+    },
+    "A16": {
+      "mean": 7831.665030812325,
+      "std": 985.0158350232872,
+      "transform": "identity"
+    },
+    "A17": {
+      "mean": 8562.226016806722,
+      "std": 1041.148948714544,
+      "transform": "identity"
+    },
+    "A18": {
+      "mean": 7989.85675070028,
+      "std": 1099.5812912580316,
+      "transform": "identity"
+    },
+    "A19": {
+      "mean": 8371.611764705882,
+      "std": 1095.6917641950665,
+      "transform": "identity"
+    },
+    "A20": {
+      "mean": 7902.077210084034,
+      "std": 1073.0839255382996,
+      "transform": "identity"
+    },
+    "A21": {
+      "mean": 8236.74162464986,
+      "std": 1223.5267981774757,
+      "transform": "identity"
+    },
+    "A22": {
+      "mean": 7968.731070028011,
+      "std": 1036.107955338847,
+      "transform": "identity"
+    },
+    "A23": {
+      "mean": 8489.852481792717,
+      "std": 1060.6890153957643,
+      "transform": "identity"
+    },
+    "A24": {
+      "mean": 8097.559854341736,
+      "std": 1114.2583254576255,
+      "transform": "identity"
+    },
+    "A25": {
+      "mean": 8881.062901960784,
+      "std": 1239.1555214727023,
+      "transform": "identity"
+    },
+    "A26": {
+      "mean": 8239.433512605043,
+      "std": 1110.8416090729468,
+      "transform": "identity"
+    },
+    "A27": {
+      "mean": 7701.2156414565825,
+      "std": 1113.811741656418,
+      "transform": "identity"
+    },
+    "A28": {
+      "mean": 8815.22667787115,
+      "std": 1252.5990630446727,
+      "transform": "identity"
+    },
+    "A29": {
+      "mean": 8205.261075630253,
+      "std": 1099.7912944747927,
+      "transform": "identity"
+    },
+    "A30": {
+      "mean": 7899.949736694678,
+      "std": 1082.7435571445465,
+      "transform": "identity"
+    },
+    "A31": {
+      "mean": 8092.533490196079,
+      "std": 1115.62486046743,
+      "transform": "identity"
+    },
+    "A32": {
+      "mean": 8474.669848739495,
+      "std": 1126.3310989626193,
+      "transform": "identity"
+    },
+    "A33": {
+      "mean": 8038.377221288515,
+      "std": 1083.2749688622382,
+      "transform": "identity"
+    },
+    "A34": {
+      "mean": 8071.2280784313725,
+      "std": 1112.6894328191493,
+      "transform": "identity"
+    },
+    "A35": {
+      "mean": 8557.401703081232,
+      "std": 1163.3724232618129,
+      "transform": "identity"
+    },
+    "A36": {
+      "mean": 7531.558453781513,
+      "std": 1178.9381313885724,
+      "transform": "identity"
+    },
+    "A37": {
+      "mean": 7973.515529411765,
+      "std": 977.4801164130793,
+      "transform": "identity"
+    },
+    "A38": {
+      "mean": 7808.879036414566,
+      "std": 1081.0032024148293,
+      "transform": "identity"
+    },
+    "A39": {
+      "mean": 8512.245042016806,
+      "std": 1139.7145400175955,
+      "transform": "identity"
+    },
+    "A40": {
+      "mean": 8086.480459383753,
+      "std": 1203.5171950928955,
+      "transform": "identity"
+    },
+    "A41": {
+      "mean": 7916.701613445378,
+      "std": 1091.2374540067294,
+      "transform": "identity"
+    },
+    "A42": {
+      "mean": 8262.151955182073,
+      "std": 1157.2414331510515,
+      "transform": "identity"
+    },
+    "A43": {
+      "mean": 8195.89168627451,
+      "std": 1203.7165182986398,
+      "transform": "identity"
+    },
+    "A44": {
+      "mean": 8155.795036414565,
+      "std": 1162.8785763840083,
+      "transform": "identity"
+    },
+    "A45": {
+      "mean": 8436.841266106443,
+      "std": 1162.094851479157,
+      "transform": "identity"
+    },
+    "A46": {
+      "mean": 8284.057098039215,
+      "std": 1123.3531057965874,
+      "transform": "identity"
+    },
+    "A47": {
+      "mean": 7944.604817927171,
+      "std": 1080.3019208229014,
+      "transform": "identity"
+    },
+    "A48": {
+      "mean": 8705.991327731092,
+      "std": 1318.8745298694023,
+      "transform": "identity"
+    },
+    "A49": {
+      "mean": 7375.475607843137,
+      "std": 1058.7897688946316,
+      "transform": "identity"
+    },
+    "A50": {
+      "mean": 7769.094901960784,
+      "std": 1173.7240414943597,
+      "transform": "identity"
+    },
+    "A51": {
+      "mean": 8404.044224089635,
+      "std": 1011.1710581193091,
+      "transform": "identity"
+    },
+    "A52": {
+      "mean": 7910.467338935574,
+      "std": 1074.039109936296,
+      "transform": "identity"
+    },
+    "A53": {
+      "mean": 8397.042151260504,
+      "std": 1191.1369333959979,
+      "transform": "identity"
+    },
+    "A54": {
+      "mean": 9045.415260504202,
+      "std": 1077.947367021469,
+      "transform": "identity"
+    },
+    "A55": {
+      "mean": 7860.995787114846,
+      "std": 1255.601169725652,
+      "transform": "identity"
+    },
+    "A56": {
+      "mean": 8196.17300840336,
+      "std": 1015.8019964517018,
+      "transform": "identity"
+    },
+    "A57": {
+      "mean": 8097.596425770308,
+      "std": 1010.3774784670269,
+      "transform": "identity"
+    },
+    "A58": {
+      "mean": 7766.179204481793,
+      "std": 985.3819152830979,
+      "transform": "identity"
+    },
+    "A59": {
+      "mean": 7845.858677871149,
+      "std": 1031.2442113729612,
+      "transform": "identity"
+    },
+    "A60": {
+      "mean": 8348.752717086834,
+      "std": 1066.6358045069567,
+      "transform": "identity"
+    },
+    "A61": {
+      "mean": 7556.136974789916,
+      "std": 1003.8202463908751,
+      "transform": "identity"
+    },
+    "A62": {
+      "mean": 8018.071339383754,
+      "std": 1020.4616765864629,
+      "transform": "identity"
+    },
+    "A63": {
+      "mean": 8231.36537815126,
+      "std": 1160.733421726941,
+      "transform": "identity"
+    }
+  },
+  "landsat": {
+    "B1": {
+      "c": 10411.0,
+      "mean": 0.967924681913998,
+      "std": 0.2825559776573461,
+      "transform": "arcsinh"
+    },
+    "B10": {
+      "mean": 22872.791012679627,
+      "std": 5845.1148810422255,
+      "transform": "identity"
+    },
+    "B11": {
+      "mean": 21442.244473863062,
+      "std": 4837.551438422906,
+      "transform": "identity"
+    },
+    "B2": {
+      "c": 9667.5,
+      "mean": 0.9809940650029941,
+      "std": 0.3036571834558995,
+      "transform": "arcsinh"
+    },
+    "B3": {
+      "c": 9166.0,
+      "mean": 0.979770102647565,
+      "std": 0.3138022964409426,
+      "transform": "arcsinh"
+    },
+    "B4": {
+      "c": 8861.0,
+      "mean": 0.9926634643579497,
+      "std": 0.344892409289281,
+      "transform": "arcsinh"
+    },
+    "B5": {
+      "c": 14652.0,
+      "mean": 0.900964648855867,
+      "std": 0.2948247972154553,
+      "transform": "arcsinh"
+    },
+    "B6": {
+      "c": 11645.0,
+      "mean": 0.8991780946632297,
+      "std": 0.27938044398145684,
+      "transform": "arcsinh"
+    },
+    "B7": {
+      "c": 9084.0,
+      "mean": 0.9346936252894384,
+      "std": 0.2734180229207692,
+      "transform": "arcsinh"
+    },
+    "B8": {
+      "c": 8958.0,
+      "mean": 0.988040574689637,
+      "std": 0.3274116671024499,
+      "transform": "arcsinh"
+    },
+    "B9": {
+      "c": 5060.0,
+      "mean": 0.9131518958663625,
+      "std": 0.1034297561345935,
+      "transform": "arcsinh"
+    }
+  },
+  "openstreetmap_raster": {
+    "aerialway_pylon": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "aerodrome": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "airstrip": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "amenity_fuel": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "building": {
+      "mean": 0.026563758389261744,
+      "std": 0.1608046178736751,
+      "transform": "identity"
+    },
+    "chimney": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "communications_tower": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "crane": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "flagpole": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "fountain": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "generator_wind": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "helipad": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "highway": {
+      "mean": 0.015718120805369128,
+      "std": 0.12438272180538962,
+      "transform": "identity"
+    },
+    "leisure": {
+      "mean": 0.02164765100671141,
+      "std": 0.14553016942408553,
+      "transform": "identity"
+    },
+    "lighthouse": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "obelisk": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "observatory": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "parking": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "petroleum_well": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "power_plant": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "power_substation": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "power_tower": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "river": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "runway": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "satellite_dish": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "silo": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "storage_tank": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "taxiway": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "water_tower": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "works": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    }
+  },
+  "sentinel1": {
+    "vh": {
+      "mean": -16.160642623410627,
+      "std": 4.048793177891934,
+      "transform": "identity"
+    },
+    "vv": {
+      "mean": -9.823970000412865,
+      "std": 4.175092213945788,
+      "transform": "identity"
+    }
+  },
+  "sentinel2_l2a": {
+    "B01": {
+      "c": 501.0,
+      "mean": 1.152034423666486,
+      "std": 0.893837288500031,
+      "transform": "arcsinh"
+    },
+    "B02": {
+      "c": 576.0,
+      "mean": 1.132506972275675,
+      "std": 0.8403303491102116,
+      "transform": "arcsinh"
+    },
+    "B03": {
+      "c": 820.0,
+      "mean": 1.08045718746911,
+      "std": 0.6972431796992927,
+      "transform": "arcsinh"
+    },
+    "B04": {
+      "c": 850.0,
+      "mean": 1.058256961821238,
+      "std": 0.7420528040678918,
+      "transform": "arcsinh"
+    },
+    "B05": {
+      "c": 1287.0,
+      "mean": 1.0121016789038553,
+      "std": 0.5749144378833961,
+      "transform": "arcsinh"
+    },
+    "B06": {
+      "c": 2220.0,
+      "mean": 0.9172764429741155,
+      "std": 0.4257643505351274,
+      "transform": "arcsinh"
+    },
+    "B07": {
+      "c": 2492.0,
+      "mean": 0.9087761456234305,
+      "std": 0.4049236153618024,
+      "transform": "arcsinh"
+    },
+    "B08": {
+      "c": 2610.0,
+      "mean": 0.9052204171926284,
+      "std": 0.4033856129991618,
+      "transform": "arcsinh"
+    },
+    "B09": {
+      "c": 2754.0,
+      "mean": 0.9281676362680374,
+      "std": 0.42240993588205394,
+      "transform": "arcsinh"
+    },
+    "B11": {
+      "c": 2048.0,
+      "mean": 0.875235039095978,
+      "std": 0.39486764344293795,
+      "transform": "arcsinh"
+    },
+    "B12": {
+      "c": 1345.0,
+      "mean": 0.9259537545254285,
+      "std": 0.48251474390783783,
+      "transform": "arcsinh"
+    },
+    "B8A": {
+      "c": 2703.0,
+      "mean": 0.8972272949750456,
+      "std": 0.38409934527136463,
+      "transform": "arcsinh"
+    }
+  },
+  "srtm": {
+    "srtm": {
+      "mean": 366.0195370274914,
+      "std": 513.6910884955093,
+      "transform": "identity"
+    }
+  },
+  "worldcereal": {
+    "tc-annual-temporarycrops-classification": {
+      "mean": 11.99463087248322,
+      "std": 32.48987407610554,
+      "transform": "identity"
+    },
+    "tc-maize-main-irrigation-classification": {
+      "mean": 0.825503355704698,
+      "std": 9.048142338634493,
+      "transform": "identity"
+    },
+    "tc-maize-main-maize-classification": {
+      "mean": 2.5258389261744965,
+      "std": 15.69089004283923,
+      "transform": "identity"
+    },
+    "tc-maize-second-irrigation-classification": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "tc-maize-second-maize-classification": {
+      "mean": 0.0,
+      "std": 1.0,
+      "transform": "identity"
+    },
+    "tc-springcereals-springcereals-classification": {
+      "mean": 0.6593959731543624,
+      "std": 8.093503213443736,
+      "transform": "identity"
+    },
+    "tc-wintercereals-irrigation-classification": {
+      "mean": 0.8731543624161073,
+      "std": 9.3033885063994,
+      "transform": "identity"
+    },
+    "tc-wintercereals-wintercereals-classification": {
+      "mean": 3.162751677852349,
+      "std": 17.500633405950683,
+      "transform": "identity"
+    }
+  },
+  "worldcover": {
+    "B1": {
+      "mean": 32.115,
+      "std": 20.35650858243296,
+      "transform": "identity"
+    }
+  },
+  "worldpop": {
+    "B1": {
+      "mean": 6.846156237186267,
+      "std": 21.07671862091186,
+      "transform": "identity"
+    }
+  },
+  "wri_canopy_height_map": {
+    "B1": {
+      "mean": 3.863752808988764,
+      "std": 5.958825827482071,
+      "transform": "identity"
+    }
+  }
+}

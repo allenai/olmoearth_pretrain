@@ -110,6 +110,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         start_time: str = "2022-09-01",
         end_time: str = "2023-09-01",
         num_timesteps: int = 12,
+        norm_strategy: str = "computed",
+        tanh_gain: float = 1.0,
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
@@ -122,6 +124,9 @@ class RslearnToOlmoEarthDataset(Dataset):
                 Determines how to parse the target dict.
             norm_stats_from_pretrained: Use pretrain normalization stats.
             norm_method: Normalization method when not using pretrain stats.
+            norm_strategy: Pretraining normalization strategy to use when
+                norm_stats_from_pretrained is True (e.g. "computed" or "arcsinh_tanh").
+            tanh_gain: The tanh gain, only used for the "arcsinh_tanh" strategy.
             ds_norm_stats_json: Path to dataset norm stats JSON.
             ds_norm_stats: Dataset norm stats blob (e.g. from registry entry).
             start_time: Start time for timestamp generation.
@@ -168,7 +173,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             )
 
         if self.norm_stats_from_pretrained:
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+            self.normalizer_computed = Normalizer(
+                Strategy(norm_strategy), tanh_gain=tanh_gain
+            )
         else:
             if ds_norm_stats is not None:
                 self.dataset_norm_stats = self._parse_norm_stats(ds_norm_stats)
@@ -195,6 +202,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         tags_override: dict[str, str] | None = None,
         label_fraction: float = 1.0,
         label_fraction_seed: int = 42,
+        norm_strategy: str = "computed",
+        tanh_gain: float = 1.0,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -221,6 +230,9 @@ class RslearnToOlmoEarthDataset(Dataset):
                 datasets. Non-train splits always use the full split.
             label_fraction_seed: Seed for the deterministic label_fraction
                 subsample so the same low-label subset is used across runs.
+            norm_strategy: Pretraining normalization strategy to use when
+                norm_stats_from_pretrained is True (e.g. "computed" or "arcsinh_tanh").
+            tanh_gain: The tanh gain, only used for the "arcsinh_tanh" strategy.
         """
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
@@ -275,6 +287,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             start_time=start_time,
             end_time=end_time,
             num_timesteps=num_timesteps,
+            norm_strategy=norm_strategy,
+            tanh_gain=tanh_gain,
         )
 
     @staticmethod
@@ -489,6 +503,8 @@ def from_registry_entry(
     tags_override: dict[str, str] | None = None,
     label_fraction: float = 1.0,
     label_fraction_seed: int = 42,
+    norm_strategy: str = "computed",
+    tanh_gain: float = 1.0,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -502,6 +518,9 @@ def from_registry_entry(
         split: Dataset split to load ("train", "val", "valid", "test").
         norm_method: Normalization method when not using pretrain stats.
         norm_stats_from_pretrained: Override for entry.use_pretrain_norm.
+        norm_strategy: Pretraining normalization strategy to use when
+            norm_stats_from_pretrained is True (e.g. "computed" or "arcsinh_tanh").
+        tanh_gain: The tanh gain, only used for the "arcsinh_tanh" strategy.
         max_samples: Optional limit on number of samples.
         input_modalities_override: Override modalities from entry. For multi-modal datasets,
             allows using only a subset (e.g., just S1 or just S2).
@@ -593,4 +612,6 @@ def from_registry_entry(
         tags_override=effective_tags,
         label_fraction=label_fraction,
         label_fraction_seed=label_fraction_seed,
+        norm_strategy=norm_strategy,
+        tanh_gain=tanh_gain,
     )

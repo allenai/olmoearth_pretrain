@@ -62,6 +62,8 @@ class BreizhCropsDataset(Dataset):
         # so when using dataset stats (e.g. for MADOS) consistency is important.
         norm_method: str = "norm_no_clip_2_std",
         monthly_average: bool = True,
+        norm_strategy: str = "computed",
+        tanh_gain: float = 1.0,
     ):
         """The Breizhcrops dataset.
 
@@ -81,6 +83,9 @@ class BreizhCropsDataset(Dataset):
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
             monthly_average: Whether to compute a monthly average of the timesteps
+            norm_strategy: Pretraining normalization strategy to use when
+                norm_stats_from_pretrained is True (e.g. "computed" or "arcsinh_tanh").
+            tanh_gain: The tanh gain, only used for the "arcsinh_tanh" strategy.
         """
         try:
             from breizhcrops import BreizhCrops
@@ -151,7 +156,9 @@ class BreizhCropsDataset(Dataset):
         if self.norm_stats_from_pretrained:
             from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+            self.normalizer_computed = Normalizer(
+                Strategy(norm_strategy), tanh_gain=tanh_gain
+            )
 
     @staticmethod
     def _get_norm_stats(

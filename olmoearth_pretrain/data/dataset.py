@@ -329,6 +329,8 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        norm_strategy: str = "computed",
+        tanh_gain: float = 1.0,
     ):
         """Initialize the dataset.
 
@@ -354,6 +356,12 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            norm_strategy: Which normalization strategy to apply, one of "computed"
+                (linear mean/std, the default) or "arcsinh_tanh" (per-band
+                variance-stabilizing transform -> z-score -> tanh). Only used when
+                ``normalize`` is True.
+            tanh_gain: The tanh gain passed to the normalizer, only used for the
+                "arcsinh_tanh" strategy.
 
         Returns:
             None
@@ -371,9 +379,16 @@ class OlmoEarthDataset(Dataset):
         self.normalize = normalize
         self.dataset_percentage = dataset_percentage
         self.seed = seed
+        self.norm_strategy = norm_strategy
+        self.tanh_gain = tanh_gain
         if self.normalize:
             self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+            # The primary normalizer applies the configured strategy; normalize_image
+            # falls back to the predefined min/max normalizer for modalities missing
+            # from the primary strategy's config.
+            self.normalizer_primary = Normalizer(
+                Strategy(norm_strategy), tanh_gain=tanh_gain
+            )
         self.max_sequence_length = max_sequence_length
 
         if samples_per_sec is None:
@@ -566,10 +581,10 @@ class OlmoEarthDataset(Dataset):
 
     def normalize_image(self, modality: ModalitySpec, image: np.ndarray) -> np.ndarray:
         """Normalize the image."""
-        # Try computed strategy first, if it fails, try predefined strategy
-        # TODO: we can also make modality norm strategy configurable later
+        # Try the configured (primary) strategy first, if it fails, try predefined
+        # strategy (e.g. for modalities missing from the primary strategy's config).
         try:
-            return self.normalizer_computed.normalize(modality, image)
+            return self.normalizer_primary.normalize(modality, image)
         except Exception:
             return self.normalizer_predefined.normalize(modality, image)
 
@@ -915,6 +930,8 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    norm_strategy: str = "computed"
+    tanh_gain: float = 1.0
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

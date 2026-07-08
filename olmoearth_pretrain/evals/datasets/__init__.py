@@ -38,6 +38,8 @@ def get_eval_dataset(
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: str = NormMethod.NORM_NO_CLIP_2_STD,
+    norm_strategy: str = "computed",
+    tanh_gain: float = 1.0,
     **kwargs: Any,
 ) -> Dataset:
     """Build the dataset wrapper for a downstream evaluation task.
@@ -49,6 +51,11 @@ def get_eval_dataset(
         input_modalities: Optional modality override for multimodal datasets.
         label_fraction: Fraction of training labels to use for low-label evals.
         norm_method: Dataset normalization strategy when not using pretrain stats.
+        norm_strategy: Which pretraining normalization strategy to apply when
+            ``norm_stats_from_pretrained`` is True (e.g. ``"computed"`` or
+            ``"arcsinh_tanh"``); should match the evaluated model's training config.
+        tanh_gain: The tanh gain passed to the pretraining normalizer, only used for
+            the ``arcsinh_tanh`` strategy.
         **kwargs: Dataset-family specific options, including pretrain probe target
             modality and split sizing.
 
@@ -73,6 +80,8 @@ def get_eval_dataset(
             test_samples=kwargs.get("pretrain_test_samples", 512),
             split_strategy=kwargs.get("pretrain_split_strategy", "random"),
             geographic_bin_size_deg=kwargs.get("pretrain_geographic_bin_size_deg", 5.0),
+            norm_strategy=norm_strategy,
+            tanh_gain=tanh_gain,
         )
     elif eval_dataset.startswith("gb2-"):
         return GeobenchV2Dataset(
@@ -81,6 +90,8 @@ def get_eval_dataset(
             partition=kwargs.get("partition", ""),
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
+            norm_strategy=norm_strategy,
+            tanh_gain=tanh_gain,
         )
     elif eval_dataset.startswith("m-"):
         # m- == "modified for geobench"
@@ -91,6 +102,8 @@ def get_eval_dataset(
             label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
+            norm_strategy=norm_strategy,
+            tanh_gain=tanh_gain,
         )
     elif eval_dataset == "mados":
         if norm_stats_from_pretrained:
@@ -103,6 +116,8 @@ def get_eval_dataset(
             label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
+            norm_strategy=norm_strategy,
+            tanh_gain=tanh_gain,
         )
     elif eval_dataset == "sen1floods11":
         return Sen1Floods11Dataset(
@@ -111,6 +126,8 @@ def get_eval_dataset(
             label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
+            norm_strategy=norm_strategy,
+            tanh_gain=tanh_gain,
         )
     elif eval_dataset.startswith("pastis"):
         kwargs = {
@@ -120,6 +137,8 @@ def get_eval_dataset(
             "input_modalities": input_modalities,
             "norm_method": norm_method,
             "dir_partition": paths.PASTIS_DIR_PARTITION,
+            "norm_strategy": norm_strategy,
+            "tanh_gain": tanh_gain,
         }
         if "128" in eval_dataset:
             # "pastis128"
@@ -144,6 +163,8 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
             label_fraction=label_fraction,
+            norm_strategy=norm_strategy,
+            tanh_gain=tanh_gain,
         )
     elif eval_dataset == "breizhcrops":
         return BreizhCropsDataset(
@@ -152,6 +173,8 @@ def get_eval_dataset(
             label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
+            norm_strategy=norm_strategy,
+            tanh_gain=tanh_gain,
         )
     else:
         eval_dataset_entry = get_dataset_entry(eval_dataset)
@@ -162,4 +185,6 @@ def get_eval_dataset(
             norm_method=norm_method,
             input_modalities_override=input_modalities if input_modalities else None,
             label_fraction=label_fraction,
+            norm_strategy=norm_strategy,
+            tanh_gain=tanh_gain,
         )

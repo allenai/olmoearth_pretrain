@@ -86,6 +86,8 @@ class GeobenchDataset(Dataset):
         # so when using dataset stats (e.g. for MADOS) consistency is important.
         norm_method: str = "norm_no_clip_2_std",
         visualize_samples: bool = False,
+        norm_strategy: str = "computed",
+        tanh_gain: float = 1.0,
     ):
         """Init GeoBench dataset.
 
@@ -97,6 +99,9 @@ class GeobenchDataset(Dataset):
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
             visualize_samples: Whether to visualize samples
+            norm_strategy: Pretraining normalization strategy to use when
+                norm_stats_from_pretrained is True (e.g. "computed" or "arcsinh_tanh").
+            tanh_gain: The tanh gain, only used for the "arcsinh_tanh" strategy.
         """
         if label_fraction not in _LABEL_FRACTION_TO_PARTITION:
             valid = ", ".join(
@@ -125,7 +130,9 @@ class GeobenchDataset(Dataset):
         if self.norm_stats_from_pretrained:
             from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+            self.normalizer_computed = Normalizer(
+                Strategy(norm_strategy), tanh_gain=tanh_gain
+            )
         # GEOBENCH cannot handle remote upath objects
         dataset_dir = geobench_dir / f"{config.task_type.value}_v1.0" / dataset
         task = load_task_specs(dataset_dir)  # Note: Cannot handle remote paths

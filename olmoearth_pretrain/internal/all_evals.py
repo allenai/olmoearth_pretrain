@@ -1557,9 +1557,13 @@ if __name__ == "__main__":
         build_train_module_config = None
 
     build_model_config = user_mod.build_model_config
+    # Optional: used to match eval normalization to the model's training normalization
+    # (arcsinh_tanh etc.). External models without a dataset config builder skip this.
+    build_dataset_config = getattr(user_mod, "build_dataset_config", None)
     main(
         common_components_builder=build_common_components,
         model_config_builder=build_model_config,
         trainer_config_builder=build_trainer_config,
         train_module_config_builder=build_train_module_config,
+        dataset_config_builder=build_dataset_config,
     )

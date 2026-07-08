@@ -202,6 +202,8 @@ class Sen1Floods11Dataset(Dataset):
         # so when using dataset stats (e.g. for MADOS) consistency is important.
         norm_method: str = "norm_no_clip_2_std",
         mode: str = "s1",  # not sure if we would ever want s2?
+        norm_strategy: str = "computed",
+        tanh_gain: float = 1.0,
     ):
         """Sen1Floods eval dataset."""
         assert split in ["train", "val", "valid", "test", "bolivia"]
@@ -264,7 +266,9 @@ class Sen1Floods11Dataset(Dataset):
         if self.norm_stats_from_pretrained:
             from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+            self.normalizer_computed = Normalizer(
+                Strategy(norm_strategy), tanh_gain=tanh_gain
+            )
 
         if mode != "s1":
             raise ValueError(f"Modes other than s1 not yet supported, got {mode}")

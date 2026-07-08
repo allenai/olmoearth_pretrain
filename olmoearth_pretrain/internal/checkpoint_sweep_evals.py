@@ -419,6 +419,7 @@ if __name__ == "__main__":
         trainer_config_builder=trainer_config_builder,
         overrides=overrides,
         train_module_config_builder=build_train_module_config,
+        dataset_config_builder=getattr(user_mod, "build_dataset_config", None),
     )
 
     if cmd == SubCmd.launch_evaluate:
