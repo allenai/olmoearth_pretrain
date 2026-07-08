@@ -1708,9 +1708,16 @@ class Encoder(FlexiVitBase):
             tokens: Tokens with removed tokens added
             mask: Mask with removed tokens added
         """
-        assert x.shape[1] > 0, (
-            "x must have at least one token we should not mask all tokens"
-        )
+        if x.shape[1] == 0:
+            # No tokens survived masking (e.g. an auxiliary single-modality encoder,
+            # such as the NAIP encoder, on a batch where that modality is entirely
+            # missing). Every original position is a (zero) masked token; return
+            # all-zero features and an all-zero (nothing-kept) mask instead of erroring.
+            out = x.new_zeros((x.shape[0], indices.shape[1], x.shape[-1]))
+            full_mask = torch.zeros(
+                (x.shape[0], indices.shape[1]), device=x.device, dtype=mask.dtype
+            )
+            return out, full_mask
         masked_tokens = repeat(
             torch.zeros_like(x[0, 0, :]), "d -> b t d", b=x.shape[0], t=indices.shape[1]
         )
