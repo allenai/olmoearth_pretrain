@@ -670,7 +670,10 @@ EVAL_TASKS = {
         primary_metric=EvalMetric.OVERALL_ACC,
     ),
     # Vessel attribute datasets (single-timestep, centered vessel). Length is a
-    # regression task (RMSE); type is a 9-class classification task.
+    # regression task (RMSE); type is a 9-class classification task. We enable
+    # use_center_token because the crops are centered at the vessel; this way, we
+    # use the token at the center spatial patch instead of pooling over all spatial
+    # patches.
     "small_landsat_vessel_type": DownstreamTaskConfig(
         dataset="small_landsat_vessel_type",
         embedding_batch_size=32,
