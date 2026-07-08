@@ -700,6 +700,7 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.RMSE,
+        use_center_token=True,
     ),
     "small_sentinel1_vessel_type": DownstreamTaskConfig(
         dataset="small_sentinel1_vessel_type",
@@ -730,6 +731,7 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.RMSE,
+        use_center_token=True,
     ),
     "small_sentinel2_vessel_type": DownstreamTaskConfig(
         dataset="small_sentinel2_vessel_type",
@@ -760,6 +762,7 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.RMSE,
+        use_center_token=True,
     ),
     # GeoBench v2 (`gb2-*` datasets; keys use underscores for Hydra)
     "gb2_benv2": DownstreamTaskConfig(

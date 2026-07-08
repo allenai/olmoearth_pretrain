@@ -36,7 +36,7 @@ class TestLinearProbeClassification:
     def test_output_shape_scalar_regression(self) -> None:
         """Scalar regression probe: (B, D) -> (B,)."""
         probe = LinearProbe(
-            in_dim=32, num_classes=1, task_type=TaskType.SCALAR_REGRESSION
+            in_dim=32, num_classes=1, task_type=TaskType.WINDOW_REGRESSION
         )
         x = torch.randn(4, 32)
         logits = probe(x)["logits"]

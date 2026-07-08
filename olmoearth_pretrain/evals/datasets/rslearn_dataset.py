@@ -160,8 +160,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         if self.target_task_type not in {
             TaskType.SEGMENTATION,
             TaskType.CLASSIFICATION,
-            TaskType.REGRESSION,
-            TaskType.SCALAR_REGRESSION,
+            TaskType.PER_PIXEL_REGRESSION,
+            TaskType.WINDOW_REGRESSION,
         }:
             raise ValueError(
                 f"Unsupported target task type: {self.target_task_type.value}"
@@ -426,7 +426,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         elif self.target_task_type == TaskType.CLASSIFICATION:
             classes = data_dict["class"]
             valid = data_dict["valid"]
-        elif self.target_task_type == TaskType.REGRESSION:
+        elif self.target_task_type == TaskType.PER_PIXEL_REGRESSION:
             values = torch.as_tensor(
                 data_dict["values"].image, dtype=torch.float32
             ).squeeze()
@@ -435,7 +435,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             ).squeeze()
             values[valid == 0] = float("nan")
             return masked_sample, values
-        elif self.target_task_type == TaskType.SCALAR_REGRESSION:
+        elif self.target_task_type == TaskType.WINDOW_REGRESSION:
             # Vector RegressionTask emits a single value/valid per window.
             value = torch.as_tensor(data_dict["value"], dtype=torch.float32).squeeze()
             valid = torch.as_tensor(data_dict["valid"], dtype=torch.float32).squeeze()

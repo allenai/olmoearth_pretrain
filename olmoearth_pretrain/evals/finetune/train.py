@@ -56,7 +56,7 @@ def _primary_metric_higher_is_better(
     task_type: TaskType, primary_metric: EvalMetric | None
 ) -> bool:
     """Whether validation primary should be maximized (scheduler / best checkpoint)."""
-    if task_type == TaskType.REGRESSION:
+    if task_type == TaskType.PER_PIXEL_REGRESSION:
         # Regression defaults to NEG_RMSE (higher is better); respect explicit overrides.
         metric = primary_metric or EvalMetric.NEG_RMSE
         return metric_higher_is_better(metric)
@@ -117,7 +117,7 @@ def compute_eval_metrics(
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
         )
-    elif task_config.task_type == TaskType.REGRESSION:
+    elif task_config.task_type == TaskType.PER_PIXEL_REGRESSION:
         val_result = eval_reg(
             ft,
             val_loader,
@@ -146,7 +146,7 @@ def compute_eval_metrics(
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
             )
-        elif task_config.task_type == TaskType.REGRESSION:
+        elif task_config.task_type == TaskType.PER_PIXEL_REGRESSION:
             test_result = eval_reg(
                 ft,
                 test_loader,
@@ -191,7 +191,7 @@ def run_finetune_eval(
     use_dice_loss: bool = False,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
-    if task_config.task_type == TaskType.SCALAR_REGRESSION:
+    if task_config.task_type == TaskType.WINDOW_REGRESSION:
         raise NotImplementedError(
             "Finetune eval does not support scalar (per-sample) regression yet; "
             "use eval_mode=LINEAR_PROBE for scalar regression tasks."
@@ -264,7 +264,7 @@ def run_finetune_eval(
             if task_config.is_multilabel
             else nn.CrossEntropyLoss()
         )
-    elif task_config.task_type == TaskType.REGRESSION:
+    elif task_config.task_type == TaskType.PER_PIXEL_REGRESSION:
         loss_fn = nn.MSELoss()
     elif use_dice_loss:
         num_classes = task_config.num_classes
@@ -355,7 +355,7 @@ def run_finetune_eval(
                         task_config.num_classes,
                         patch_size,
                     )
-                if task_config.task_type == TaskType.REGRESSION:
+                if task_config.task_type == TaskType.PER_PIXEL_REGRESSION:
                     reg_logits = _reg_logits_to_pixel(
                         logits, label, ft.pixel_space_output
                     )
@@ -387,7 +387,7 @@ def run_finetune_eval(
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
             )
-        elif task_config.task_type == TaskType.REGRESSION:
+        elif task_config.task_type == TaskType.PER_PIXEL_REGRESSION:
             val_result = eval_reg(
                 ft,
                 val_loader,

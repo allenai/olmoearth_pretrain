@@ -69,9 +69,12 @@ class EvalWrapper:
         self.pooling_type = pooling_type
         self.concat_features = concat_features
         # SEGMENTATION and (dense) REGRESSION keep the spatial grid for per-pixel
-        # heads. CLASSIFICATION and SCALAR_REGRESSION are per-sample, so they pool
+        # heads. CLASSIFICATION and WINDOW_REGRESSION are per-sample, so they pool
         # over space to a single (B, D) embedding.
-        self.spatial_pool = task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION)
+        self.spatial_pool = task_type in (
+            TaskType.SEGMENTATION,
+            TaskType.PER_PIXEL_REGRESSION,
+        )
         self.use_pooled_tokens = use_pooled_tokens
         self.use_center_token = use_center_token
         if self.use_center_token and self.spatial_pool:

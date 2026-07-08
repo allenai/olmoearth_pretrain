@@ -15,8 +15,8 @@ def get_eval_mode(task_type: TaskType) -> str:
         return "knn"
     if task_type in (
         TaskType.SEGMENTATION,
-        TaskType.REGRESSION,
-        TaskType.SCALAR_REGRESSION,
+        TaskType.PER_PIXEL_REGRESSION,
+        TaskType.WINDOW_REGRESSION,
     ):
         return "linear_probe"
     raise ValueError(f"Unsupported task type: {task_type}")
@@ -135,7 +135,7 @@ DATASET_TO_CONFIG = {
         ],
     ),
     "pretrain_subset_srtm": EvalDatasetConfig(
-        task_type=TaskType.REGRESSION,
+        task_type=TaskType.PER_PIXEL_REGRESSION,
         imputes=[],
         num_classes=1,
         is_multilabel=False,
@@ -147,7 +147,7 @@ DATASET_TO_CONFIG = {
         ],
     ),
     "pretrain_subset_canopy": EvalDatasetConfig(
-        task_type=TaskType.REGRESSION,
+        task_type=TaskType.PER_PIXEL_REGRESSION,
         imputes=[],
         num_classes=1,
         is_multilabel=False,
@@ -365,7 +365,7 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         source_imagery=[SourceImagery.SENTINEL2, SourceImagery.SENTINEL1],
     ),
     "gb2-biomassters": EvalDatasetConfig(
-        task_type=TaskType.REGRESSION,
+        task_type=TaskType.PER_PIXEL_REGRESSION,
         imputes=[],
         num_classes=1,
         is_multilabel=False,

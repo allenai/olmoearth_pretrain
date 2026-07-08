@@ -248,7 +248,10 @@ class DownstreamEvaluator:
         if self.eval_mode == EvalMode.LINEAR_PROBE:
             if self.probe_lr is None:
                 raise ValueError("probe_lr cannot be none for segmentation tasks.")
-            if self.config.task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION):
+            if self.config.task_type in (
+                TaskType.SEGMENTATION,
+                TaskType.PER_PIXEL_REGRESSION,
+            ):
                 if self.config.height_width is None:
                     raise ValueError(
                         "config.height_width cannot be none for segmentation tasks."
@@ -1266,8 +1269,8 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                 config.task_type
                 in (
                     TaskType.SEGMENTATION,
-                    TaskType.REGRESSION,
-                    TaskType.SCALAR_REGRESSION,
+                    TaskType.PER_PIXEL_REGRESSION,
+                    TaskType.WINDOW_REGRESSION,
                 )
                 and task.eval_mode != EvalMode.EMBEDDING_DIAGNOSTICS
             ):

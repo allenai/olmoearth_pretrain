@@ -82,7 +82,7 @@ def test_eval_dataset_entry_scalar_regression_no_height_width() -> None:
         name="test_scalar_regression",
         source_path="",
         weka_path="",
-        task_type=TaskType.SCALAR_REGRESSION.value,
+        task_type=TaskType.WINDOW_REGRESSION.value,
         num_classes=1,
         modalities=["SENTINEL1"],
         window_size=64,
@@ -90,7 +90,7 @@ def test_eval_dataset_entry_scalar_regression_no_height_width() -> None:
 
     config = entry.to_eval_config()
 
-    assert config.task_type == TaskType.SCALAR_REGRESSION
+    assert config.task_type == TaskType.WINDOW_REGRESSION
     assert config.height_width is None  # scalar regression pools to (B, D)
 
 
@@ -100,7 +100,7 @@ def test_eval_dataset_entry_dense_regression_has_height_width() -> None:
         name="test_dense_regression",
         source_path="",
         weka_path="",
-        task_type=TaskType.REGRESSION.value,
+        task_type=TaskType.PER_PIXEL_REGRESSION.value,
         num_classes=1,
         modalities=["SENTINEL2_L2A"],
         window_size=32,
@@ -108,5 +108,5 @@ def test_eval_dataset_entry_dense_regression_has_height_width() -> None:
 
     config = entry.to_eval_config()
 
-    assert config.task_type == TaskType.REGRESSION
+    assert config.task_type == TaskType.PER_PIXEL_REGRESSION
     assert config.height_width == 32

@@ -58,8 +58,8 @@ def rslearn_task_type_to_olmoearth_task_type(rslearn_task: Any) -> TaskType:
         # PerPixelRegressionTask is dense (per-pixel); plain RegressionTask reads a
         # vector target (one value per window) -> scalar regression.
         if "perpixel" in rslearn_name:
-            return TaskType.REGRESSION
-        return TaskType.SCALAR_REGRESSION
+            return TaskType.PER_PIXEL_REGRESSION
+        return TaskType.WINDOW_REGRESSION
     else:
         # Default/fallback; update if regression is to be supported etc.
         raise ValueError(f"Unknown rslearn task type: {type(rslearn_task)}")

@@ -33,7 +33,7 @@ class BackboneWithHead(nn.Module):
         """Initialize the backbone with head."""
         if head_type in _PIXEL_HEADS and task_type not in (
             TaskType.SEGMENTATION,
-            TaskType.REGRESSION,
+            TaskType.PER_PIXEL_REGRESSION,
         ):
             raise ValueError(
                 f"head_type={head_type!r} is only supported for SEGMENTATION and "
@@ -68,7 +68,7 @@ class BackboneWithHead(nn.Module):
                 num_classes=self.num_classes,
                 patch_size=self.patch_size,
             )
-        elif self.task_type in (TaskType.CLASSIFICATION, TaskType.REGRESSION):
+        elif self.task_type in (TaskType.CLASSIFICATION, TaskType.PER_PIXEL_REGRESSION):
             self._head = nn.Linear(emb_dim, self.num_classes, bias=True)
         else:
             logits_per_patch = int(self.num_classes * self.patch_size * self.patch_size)

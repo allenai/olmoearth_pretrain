@@ -6,14 +6,14 @@ from enum import StrEnum
 class TaskType(StrEnum):
     """Possible task types.
 
-    ``REGRESSION`` is dense (per-pixel) regression; ``SCALAR_REGRESSION`` is
-    per-sample regression (one target value per window, e.g. vessel length).
+    ``PER_PIXEL_REGRESSION`` is dense (per-pixel) regression; ``WINDOW_REGRESSION``
+    is per-sample regression (one target value per window, e.g. vessel length).
     """
 
     CLASSIFICATION = "classification"
     SEGMENTATION = "segmentation"
-    REGRESSION = "regression"
-    SCALAR_REGRESSION = "scalar_regression"
+    PER_PIXEL_REGRESSION = "regression"
+    WINDOW_REGRESSION = "scalar_regression"
 
 
 class SplitName(StrEnum):

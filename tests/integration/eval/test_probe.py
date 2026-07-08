@@ -136,7 +136,7 @@ def test_probe_regression() -> None:
     test_labels = torch.rand(32, h, w)
 
     config = EvalDatasetConfig(
-        task_type=TaskType.REGRESSION,
+        task_type=TaskType.PER_PIXEL_REGRESSION,
         imputes=[],
         num_classes=1,
         is_multilabel=False,
