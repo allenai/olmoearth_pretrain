@@ -79,6 +79,21 @@ class EvalDatasetConfig:
     target_mean: float | None = None
     target_std: float | None = None
 
+    def __post_init__(self) -> None:
+        """Validate task-type-specific invariants."""
+        # Regression heads and metrics only support a single output channel, so
+        # num_classes must be 1 for both dense (per-pixel) and per-sample
+        # (window) regression tasks.
+        if (
+            self.task_type
+            in (TaskType.PER_PIXEL_REGRESSION, TaskType.WINDOW_REGRESSION)
+            and self.num_classes != 1
+        ):
+            raise ValueError(
+                f"{self.task_type} only supports num_classes=1 "
+                f"(single regression target), got num_classes={self.num_classes}."
+            )
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict."""
         d = asdict(self)
