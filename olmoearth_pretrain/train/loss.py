@@ -1123,7 +1123,14 @@ class MAELoss(Loss):
             decode = label_masks != MaskValue.MISSING.value
         data = data * decode
         labels = labels * decode
-        return self.weight * self.loss(data, labels) / torch.count_nonzero(decode)
+        # Guard against microbatches with no decode tokens (e.g. a modality that is
+        # entirely missing across the batch, such as NAIP outside the US). Without this,
+        # dividing the (zero) masked loss by a zero token count yields NaN, which then
+        # aborts the step and desyncs distributed collectives. When there are no decode
+        # tokens the masked loss is already 0, so a denominator of 1 keeps it at 0.
+        num_decode = torch.count_nonzero(decode)
+        denom = torch.clamp(num_decode, min=1)
+        return self.weight * self.loss(data, labels) / denom
 
 
 @LOSS_REGISTRY.register("cross_entropy")

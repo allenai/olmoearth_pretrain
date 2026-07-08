@@ -175,3 +175,54 @@ def test_detach_isolates_main_encoder_from_reconstruction() -> None:
     loss.backward()
     assert all(p.grad is None for p in model.encoder.parameters())
     assert any(p.grad is not None for p in model.naip_encoder.parameters())
+
+
+def test_mae_loss_finite_when_naip_all_missing() -> None:
+    """MAE loss is finite (0) when NAIP is entirely missing (no decode tokens).
+
+    NAIP is US-only, so on a global dataset whole batches can have NAIP missing. That
+    yields zero decode tokens; the loss must not divide by zero and produce NaN (which
+    would abort the step and desync distributed collectives).
+    """
+    from olmoearth_pretrain.data.constants import MISSING_VALUE
+
+    model = _build_config().build()
+    B, H, W, T = 2, 8, 8, 12
+    s2_bands = Modality.SENTINEL2_L2A.num_bands
+    naip_bands = Modality.NAIP_10.num_bands
+    naip_hw = H * Modality.NAIP_10.image_tile_size_factor
+    timestamps = torch.stack(
+        [
+            torch.randint(1, 28, (B, T)),
+            torch.randint(1, 12, (B, T)),
+            torch.full((B, T), 2023),
+        ],
+        dim=-1,
+    )
+    # NAIP entirely missing -> masking marks every NAIP token MISSING (0 decode).
+    sample = OlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_bands),
+        naip_10=torch.full((B, naip_hw, naip_hw, 1, naip_bands), float(MISSING_VALUE)),
+        timestamps=timestamps,
+    )
+    strategy = MaskingConfig(
+        strategy_config={
+            "type": "random_time_with_decode_separate_encoder",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "random_ratio": 1.0,
+            "separate_encoder_modalities": [NAIP],
+            "separate_encode_ratio": 0.25,
+            "separate_decode_ratio": 0.75,
+        }
+    ).build()
+    x = strategy.apply_mask(sample, patch_size=PATCH_SIZE)
+
+    naip_mask = x.naip_10_mask
+    assert naip_mask is not None
+    assert not bool((naip_mask == MaskValue.DECODER.value).any())  # no decode tokens
+
+    _, _, _, reconstructed, _ = model(x, patch_size=PATCH_SIZE)
+    loss = MAELoss(loss_function="MSELoss").compute(reconstructed, x)
+    assert torch.isfinite(loss)
+    assert float(loss) == 0.0
