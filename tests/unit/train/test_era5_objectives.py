@@ -8,8 +8,10 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -17,6 +19,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+import olmoearth_pretrain.nn.era5_encoder as era5_encoder_mod
 import olmoearth_pretrain.train.train_module.era5_multiobjective as era5_multiobjective
 from olmoearth_pretrain.data.constants import ERA5_INPUT_SEQUENCE_LENGTH, Modality
 from olmoearth_pretrain.data.multi_task_era5_dataset import Era5SupervisedBatch
@@ -28,7 +31,10 @@ from olmoearth_pretrain.nn.transforms.era5_corruption import (
     NaiveMaskPolicy,
     corrupt_era5,
 )
-from olmoearth_pretrain.nn.transforms.era5_swt import StationaryWaveletTransform1d
+from olmoearth_pretrain.nn.transforms.era5_swt import (
+    StationaryWaveletTransform1d,
+    swt_bands_to_channels,
+)
 from olmoearth_pretrain.train.train_module.era5_multiobjective import (
     Era5MultiObjectiveModelConfig,
     ReconstructionObjectiveConfig,
@@ -40,6 +46,11 @@ from olmoearth_pretrain.train.train_module.era5_multiobjective import (
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+
+# Real stats file, resolved relative to the repo root (the dir with ``scripts/``).
+_REPO_ROOT = Path(era5_encoder_mod.__file__).resolve().parents[2]
+SWT_STATS_REL = "scripts/era5_supervised/v0/norm_configs/swt_input_stats.json"
+SWT_STATS_PATH = _REPO_ROOT / SWT_STATS_REL
 
 T = ERA5_INPUT_SEQUENCE_LENGTH  # 448
 V = Modality.ERA5L_DAY_10.num_bands  # 14
@@ -752,3 +763,95 @@ class TestReconstructionE2EBackward:
             if p.grad is not None
         )
         assert encoder_grads > 0
+
+
+# ---------------------------------------------------------------------------
+# SWT-input fixed normalization
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not SWT_STATS_PATH.is_file(),
+    reason=f"swt_input_stats.json not found at {SWT_STATS_PATH}",
+)
+class TestSwtInputNormalization:
+    """Fixed per-channel standardization of the encoder's SWT bands."""
+
+    def _swt_encoder(self, **overrides: Any):
+        overrides.setdefault("swt_input_stats_path", SWT_STATS_REL)
+        cfg = _small_encoder_cfg(is_swt_input=True, **overrides)
+        return cfg.build()
+
+    def test_buffers_match_stats_file(self):
+        """Registered buffers equal the JSON mean/std, shaped [1, 1, C]."""
+        with SWT_STATS_PATH.open() as f:
+            payload = json.load(f)
+        enc = self._swt_encoder()
+
+        assert not hasattr(enc, "swt_norm"), "BatchNorm swt_norm should be gone"
+        c = enc.swt_channels
+        assert c == len(payload["mean"]) == payload["num_channels"]
+        assert enc.swt_norm_mean.shape == (1, 1, c)
+        assert enc.swt_norm_std.shape == (1, 1, c)
+        torch.testing.assert_close(
+            enc.swt_norm_mean.view(-1),
+            torch.tensor(payload["mean"], dtype=torch.float32),
+        )
+        torch.testing.assert_close(
+            enc.swt_norm_std.view(-1),
+            torch.tensor(payload["std"], dtype=torch.float32).clamp_(min=1e-6),
+        )
+
+    def test_apply_swt_standardizes_bands(self):
+        """_apply_swt == (unnormalized bands - mean) / std, channel-aligned."""
+        torch.manual_seed(0)
+        enc = self._swt_encoder()
+        era5 = torch.randn(B, T, V)
+
+        out = enc._apply_swt(era5)
+
+        # Recompute the unnormalized bands independently and standardize.
+        swt = StationaryWaveletTransform1d(num_channels=V, max_levels=6, wavelet="haar")
+        bands = swt(era5.transpose(1, 2), levels=enc.swt_input_levels, target_start=0)
+        raw_bands = swt_bands_to_channels(bands, include_approx=True)
+        expected = (raw_bands - enc.swt_norm_mean) / enc.swt_norm_std
+
+        assert out.shape == (B, T, enc.swt_channels)
+        torch.testing.assert_close(out, expected)
+
+    def test_reference_channels_are_standardized(self):
+        """Bands drawn from the reference dist normalize to ~0 mean / ~1 std.
+
+        We synthesize unnormalized bands per channel as ``mean_c + std_c * z``
+        (z ~ N(0, 1)); applying the fixed normalization must recover ~unit
+        statistics per channel.
+        """
+        torch.manual_seed(0)
+        enc = self._swt_encoder()
+        mean = enc.swt_norm_mean.view(1, -1)
+        std = enc.swt_norm_std.view(1, -1)
+        z = torch.randn(20000, enc.swt_channels)
+        raw_bands = mean + std * z
+        normed = (raw_bands - mean) / std
+        assert normed.mean(dim=0).abs().max().item() < 0.1
+        assert (normed.std(dim=0) - 1.0).abs().max().item() < 0.1
+
+    def test_channel_count_mismatch_raises(self):
+        """include_approx=False -> 84 channels != 98 in stats -> ValueError."""
+        with pytest.raises(ValueError, match="channels|include_approx"):
+            self._swt_encoder(swt_input_include_approx=False)
+
+    def test_levels_mismatch_raises(self):
+        """Fewer levels changes the channel layout and must be rejected."""
+        with pytest.raises(ValueError, match="channels|levels"):
+            self._swt_encoder(swt_input_levels=[0, 1, 2])
+
+    def test_missing_stats_path_raises(self):
+        """is_swt_input without a stats path fails validation."""
+        with pytest.raises(ValueError, match="swt_input_stats_path"):
+            _small_encoder_cfg(is_swt_input=True).validate()
+
+    def test_bad_stats_path_raises(self):
+        """A non-existent stats path raises a clear FileNotFoundError."""
+        with pytest.raises(FileNotFoundError):
+            self._swt_encoder(swt_input_stats_path="does/not/exist.json")

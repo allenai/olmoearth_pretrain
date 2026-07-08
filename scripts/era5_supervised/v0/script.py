@@ -172,7 +172,7 @@ class Era5SupervisedCommonComponents(CommonComponents):
         default_factory=lambda: [0, 1, 2, 3, 4, 5]
     )
     encoder_swt_input_include_approx: bool = True
-    encoder_swt_input_normalize: bool = True
+    encoder_swt_input_stats_path: str | None = None
     global_batch_size: int = 64
     rank_microbatch_size: int = 32
     num_workers: int = 4
@@ -744,7 +744,7 @@ def build_model_config(
         swt_input_wavelet=common.encoder_swt_input_wavelet,
         swt_input_levels=common.encoder_swt_input_levels,
         swt_input_include_approx=common.encoder_swt_input_include_approx,
-        swt_input_normalize=common.encoder_swt_input_normalize,
+        swt_input_stats_path=common.encoder_swt_input_stats_path,
     )
     return Era5MultiObjectiveModelConfig(
         encoder_config=encoder_config,

@@ -23,10 +23,12 @@ sequence; the supervised objective A does not use this field.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -169,9 +171,8 @@ class Era5DailyEncoderConfig(Config):
         swt_input_include_approx: When True, append the deepest level's
             approximation band (complete representation): ``n_bands =
             len(levels) + 1``; otherwise ``n_bands = len(levels)``.
-        swt_input_normalize: When True, apply a ``BatchNorm1d`` over the band
-            channels before masking/patchifying (SWT coefficients differ in
-            magnitude across scales, so this conditions the patch conv).
+        swt_input_stats_path: Path to a ``swt_input_stats.json`` produced on the
+            raw-normalized signal.
         extras: Reserved for objective C plumbing.
     """
 
@@ -195,7 +196,7 @@ class Era5DailyEncoderConfig(Config):
     swt_input_wavelet: str = "haar"
     swt_input_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
     swt_input_include_approx: bool = True
-    swt_input_normalize: bool = True
+    swt_input_stats_path: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
@@ -218,11 +219,36 @@ class Era5DailyEncoderConfig(Config):
             raise ValueError(
                 "swt_input_levels must be non-empty when is_swt_input=True"
             )
+        if self.is_swt_input and not self.swt_input_stats_path:
+            raise ValueError(
+                "swt_input_stats_path is required for normalization \
+                when is_swt_input=True"
+            )
 
     def build(self) -> Era5DailyEncoder:
         """Build the corresponding encoder."""
         self.validate()
         return Era5DailyEncoder(config=self)
+
+
+# ---------------------------------------------------------------------------
+# SWT input stats loader
+# ---------------------------------------------------------------------------
+
+
+def _load_swt_input_stats(path: str) -> tuple[list[float], list[float]]:
+    """Load per-channel ``(mean, std)`` from a SWT input stats JSON.
+
+    ``path`` may be absolute, CWD-relative, or relative to the repo root.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    resolved = next((p for p in (Path(path), repo_root / path) if p.is_file()), None)
+    if resolved is None:
+        raise FileNotFoundError(f"swt_input_stats_path {path!r} not found")
+    stats = json.loads(resolved.read_text())
+    if "mean" not in stats or "std" not in stats:
+        raise ValueError(f"{resolved}: missing 'mean'/'std' in SWT input stats")
+    return [float(x) for x in stats["mean"]], [float(x) for x in stats["std"]]
 
 
 # ---------------------------------------------------------------------------
@@ -275,10 +301,25 @@ class Era5DailyEncoder(nn.Module):
                 )
             )
             self.swt_channels = in_channels * self.swt_num_bands
-            self.swt_norm: nn.BatchNorm1d | None = (
-                nn.BatchNorm1d(self.swt_channels)
-                if config.swt_input_normalize
-                else None
+            # Fixed (non-learned) per-channel standardization of the SWT bands,
+            # using stats precomputed on the raw-normalized signal. Registered as
+            # persistent buffers so the values are baked into checkpoints.
+            assert config.swt_input_stats_path is not None  # enforced by validate()
+            swt_mean, swt_std = _load_swt_input_stats(config.swt_input_stats_path)
+            if len(swt_mean) != self.swt_channels or len(swt_std) != self.swt_channels:
+                raise ValueError(
+                    f"SWT input stats have {len(swt_mean)} channels, "
+                    f"expected {self.swt_channels}"
+                )
+            self.register_buffer(
+                "swt_norm_mean",
+                torch.tensor(swt_mean, dtype=torch.float32).view(1, 1, -1),
+            )
+            self.register_buffer(
+                "swt_norm_std",
+                torch.tensor(swt_std, dtype=torch.float32)
+                .clamp_(min=1e-6)
+                .view(1, 1, -1),
             )
         else:
             self.swt_input_levels = []
@@ -286,7 +327,6 @@ class Era5DailyEncoder(nn.Module):
             self.swt_num_bands = 1
             self.swt_transform = None
             self.swt_channels = in_channels
-            self.swt_norm = None
 
         patch_in_channels = self.swt_channels
 
@@ -486,9 +526,9 @@ class Era5DailyEncoder(nn.Module):
 
         Uses ``target_start=0`` (no cropping): the early boundary-contaminated
         coefficients are only ever consumed as encoder context, and the loss
-        window still starts after the SWT buffer.  When ``swt_norm`` is set,
-        the bands are normalized per channel before masking so BatchNorm sees
-        clean (pre-mask) statistics.
+        window still starts after the SWT buffer.  The bands are standardized
+        per channel with fixed precomputed stats (computed on the
+        raw-normalized signal) before masking, so masking sees clean bands.
         """
         assert self.swt_transform is not None
         # SWT expects [B, V, T].
@@ -500,9 +540,8 @@ class Era5DailyEncoder(nn.Module):
         x = swt_bands_to_channels(
             bands, include_approx=self.swt_input_include_approx
         )  # [B, T, C_swt]
-        if self.swt_norm is not None:
-            # BatchNorm1d normalizes per-channel over (B, T): [B, T, C] -> [B, C, T].
-            x = self.swt_norm(x.transpose(1, 2)).transpose(1, 2)
+        # Fixed per-channel standardization; buffers broadcast over [B, T, C].
+        x = (x - self.swt_norm_mean) / self.swt_norm_std
         return x
 
     def _patchify(self, seq: Tensor) -> Tensor:

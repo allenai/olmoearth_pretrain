@@ -43,14 +43,14 @@ Run from the repo root (so ``import direct_registry`` resolves)::
     # Phase 1 (physical raw stats + unnormalized SWT reference):
     python3 scripts/era5_supervised/v0/compute_era5_norm_stats.py --phase raw \
         --task era5enc_pretrain_ssl --max-samples 4000 \
-        --output scripts/era5_supervised/v0/era5_raw_norm_stats.json
+        --output scripts/era5_supervised/v0/norm_configs/era5_raw_norm_stats.json
 
     # Phase 2 (SWT stats on the raw-normalized input), normalizing in-script
     # with the phase-'raw' stats (mirrors the rslearn Normalize transform):
     python3 scripts/era5_supervised/v0/compute_era5_norm_stats.py --phase swt \
         --task era5enc_pretrain_ssl --max-samples 4000 \
-        --raw-stats scripts/era5_supervised/v0/configs/era5_raw_norm_stats.json \
-        --output scripts/era5_supervised/v0/configs/swt_input_stats.json
+        --raw-stats scripts/era5_supervised/v0/norm_configs/era5_raw_norm_stats.json \
+        --output scripts/era5_supervised/v0/norm_configs/swt_input_stats.json
 
 Smoke test on the tiny 32-window subset (``--task era5enc_pretrain_ssl_test``).
 """
