@@ -199,6 +199,7 @@ class PatchTokenizer(nn.Module):
     def forward(self, data: torch.Tensor) -> torch.Tensor:
         """Patchify ``(b, t, c, h, w)`` data into ``(b, t, gh, gw, d)`` tokens."""
         b, t, c, h, w = data.shape
+        data = data.to(self.proj.weight.dtype)  # e.g. bf16 under FSDP
         x = self.proj(data.reshape(b * t, c, h, w))
         return x.reshape(b, t, x.shape[1], x.shape[2], x.shape[3]).permute(
             0, 1, 3, 4, 2
@@ -226,8 +227,8 @@ class TwoLayerEncoding(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Encode ``x``."""
-        return self.net(x)
+        """Encode ``x`` (cast to the layer's compute dtype, e.g. bf16 FSDP)."""
+        return self.net(x.to(self.net[0].weight.dtype))
 
 
 class CrossBlock(nn.Module):
@@ -574,8 +575,9 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
                 ],
                 dim=-1,
             )
-            meta = self.local_pos_proj(local)[None, None] + torch.zeros(
-                b, t, 1, 1, self.dim, device=device
+            local_enc = self.local_pos_proj(local.to(self.local_pos_proj.weight.dtype))
+            meta = local_enc[None, None] + torch.zeros(
+                b, t, 1, 1, self.dim, device=device, dtype=local_enc.dtype
             )
 
             # --- Global GPS (droppable): sample-level unit-sphere of latlon.
@@ -614,7 +616,7 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
             rel_time = self.rel_time_proj(
                 fourier_features(
                     rel_days, self.n_rel_time_freqs, REL_TIME_WAVELENGTHS_D
-                )
+                ).to(self.rel_time_proj.weight.dtype)
             )
             meta = meta + (abs_time + rel_time)[:, :, None, None]
             meta = meta + self.group_tokens.weight[self.group_index[g.name]]
@@ -1010,8 +1012,9 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
             ],
             dim=-1,
         )
-        queries = self.local_pos_proj(local)[None] + torch.zeros(
-            b, 1, 1, self.dim, device=device
+        local_enc = self.local_pos_proj(local.to(self.local_pos_proj.weight.dtype))
+        queries = local_enc[None] + torch.zeros(
+            b, 1, 1, self.dim, device=device, dtype=local_enc.dtype
         )
         coords = self._gps_coords(getattr(sample, "latlon", None), b, device)
         queries = queries + self.gps_encoding(coords)[:, None, None]
@@ -1024,13 +1027,13 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
                 torch.zeros(1, device=device),
                 self.n_rel_time_freqs,
                 REL_TIME_WAVELENGTHS_D,
-            )
+            ).to(self.rel_time_proj.weight.dtype)
         ).view(1, 1, 1, self.dim)
         queries = queries + self.extent_encoding(
             torch.log(torch.tensor([[extent_m]], device=device))
         ).view(1, 1, 1, self.dim)
         features = self._decode(queries.reshape(b, gh * gw, self.dim), latents)
-        return features.reshape(b, gh, gw, self.dim)
+        return features.reshape(b, gh, gw, self.dim).float()
 
     def encode_global(
         self, sample: OlmoEarthSample | MaskedOlmoEarthSample
@@ -1040,7 +1043,7 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
         A fully-trained global-feature baseline (no decoder).
         """
         _, latents, _, _ = self._encode_latents(sample)
-        return latents.mean(dim=1)
+        return latents.float().mean(dim=1)
 
     # ------------------------------------------------------------- distributed
 
@@ -1058,8 +1061,14 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
             register_fsdp_forward_method,
         )
 
+        # cast_forward_inputs=False: the model casts data at each parameterized
+        # boundary itself; a blanket input cast would crush timestamps/coords
+        # to bf16 (e.g. year 2021 is not representable) before the fp32
+        # encoding math runs.
         mp_policy = MixedPrecisionPolicy(
-            param_dtype=param_dtype, reduce_dtype=reduce_dtype
+            param_dtype=param_dtype,
+            reduce_dtype=reduce_dtype,
+            cast_forward_inputs=False,
         )
         fsdp_config = dict(mesh=dp_mesh, mp_policy=mp_policy)
         for blk in (
@@ -1146,7 +1155,9 @@ def prediction_loss(
     max_samples: int,
 ) -> tuple[torch.Tensor, int, int]:
     """Loss between predicted and (detached) target tokens + top-1 counts."""
-    target = target.detach()
+    # Compute losses in fp32 for numerical stability under bf16 training.
+    pred = pred.float()
+    target = target.detach().float()
     if mode == "infonce":
         return contrastive_loss(pred, target, temperature, max_samples)
     if pred.shape[0] > max_samples:
@@ -1171,6 +1182,8 @@ def contrastive_loss(
     max_samples: int,
 ) -> tuple[torch.Tensor, int, int]:
     """Hard InfoNCE with exact-duplicate dedup."""
+    pred = pred.float()
+    target = target.float()
     if pred.shape[0] > max_samples:
         idx = torch.randperm(pred.shape[0], device=pred.device)[:max_samples]
         pred = pred[idx]
@@ -1198,7 +1211,8 @@ def soft_target_contrastive_loss(
     distinct tokens remain hard negatives. ``correct`` counts hard top-1
     agreement with the anchor's own target.
     """
-    target = target.detach()
+    pred = pred.float()
+    target = target.detach().float()
     if pred.shape[0] > max_samples:
         idx = torch.randperm(pred.shape[0], device=pred.device)[:max_samples]
         pred = pred[idx]
@@ -1226,9 +1240,11 @@ def temporal_contrastive_loss(
     timesteps (no negatives).
     """
     b, t, h, w, d = pred.shape
+    pred = pred.float()
     P = F.normalize(pred.permute(0, 2, 3, 1, 4).reshape(b * h * w, t, d), dim=-1)
     Tt = F.normalize(
-        target.detach().permute(0, 2, 3, 1, 4).reshape(b * h * w, t, d), dim=-1
+        target.detach().float().permute(0, 2, 3, 1, 4).reshape(b * h * w, t, d),
+        dim=-1,
     )
     vm = masked.permute(0, 2, 3, 1).reshape(b * h * w, t)  # (L, T) bool
     logits = torch.bmm(P, Tt.transpose(1, 2)) / temperature  # (L, T, T)

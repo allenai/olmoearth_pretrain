@@ -12,10 +12,15 @@ the full design + integration map.
   soft-InfoNCE against frozen random-projection targets. Positionless latents, no
   RoPE, no fixed spatial/temporal budget, single-timestep supported.
 - **Where:** git worktree `/root/repos/olmoearth_pretrain-perceiver`, branch
-  **`joer/perceiver-encoder`** (off `origin/main`). Two commits; **not pushed**.
-- **Status:** implemented, self-verified, all tests green, single-batch overfit
-  works. NOT yet run on multi-GPU or real corpus data (out of the first pass's
-  scope). See "Next steps".
+  **`joer/perceiver-encoder`** (off `origin/main`). **Not pushed**.
+- **Status:** implemented, all tests green (25). A 2026-07-09 8-angle adversarial
+  code review confirmed 13 findings; 11 fixed in commit `26b4e795` (two FSDP2
+  crashes — the grad anchor made the loss a DTensor, and encode/encode_global
+  bypassed the unshard hook; the eval modality gate silently skipped ALL
+  downstream evals; eval zero-padding became phantom valid tokens; seed bugs;
+  era5 GSD; more — see the commit message). First real-data 4xH100 FSDP run
+  `slp_base_1` launched locally (log:
+  `experimentor/logs/pretrain/2026-07-09-slp-first-real-run.md`).
 
 ## Where the work lives
 
@@ -84,7 +89,18 @@ change against them.
 - **Cloud masking is OFF** — no per-token cloud/QA modality in the corpus.
   `_apply_cloud_mask` is implemented + unit-tested with synthetic grids; wire it up
   when a cloud modality exists.
-- **Not yet run on multi-GPU DDP or real corpus data.** Next: a small real-data run.
+- **GPS latlon normalization mismatch:** `_gps_coords` expects degrees, but the
+  dataloader min/max-normalizes a `latlon` modality to [0,1] (predefined.json).
+  Harmless now (latlon is not in the wired modalities → trained null only); fix
+  before ever adding `latlon` to `training_modalities`.
+- **`k_seed=None` fallback** uses the per-rank mask generator (matches the earthy
+  reference) — custom loops that pass `mask_seed` without `k_seed` get per-rank
+  divergent K. The wired train module always passes both.
+- **Efficiency follow-ups (confirmed by review, deferred):** static per-group
+  metadata (fourier freqs, local grids, extent MLP) is rebuilt every forward;
+  the decoder+head run over ALL queries though only `pred[mask]` reaches the
+  default global loss (~2-3x decoder FLOPs recoverable); forward CPU-syncs
+  metrics per microbatch.
 - **Branch not pushed** to `origin` (awaiting the go-ahead).
 
 ## How to run
