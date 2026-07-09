@@ -784,7 +784,10 @@ class DualResEncoder(Encoder):
         key_mask = loc.valid.repeat_interleave(p2, dim=0)  # [nl*P**2, max_units]
         x = self.pixel_self_blocks[block_idx](x, key_mask)
         buf = x.reshape(nl, p2, mu, d).permute(0, 2, 1, 3).reshape(nl * mu, p2, d)
-        out = pixels.new_empty(num_units, p2, d)
+        # Allocate ``out`` from ``buf`` (not ``pixels``): under autocast the attention
+        # block returns a lower-precision dtype (e.g. bf16) than the float32 input, and
+        # index_put requires the source and destination dtypes to match.
+        out = buf.new_empty(num_units, p2, d)
         out[loc.order] = buf[loc.scatter_pos]
         return out
 

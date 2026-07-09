@@ -327,7 +327,9 @@ class PixelReconstructionDecoder(nn.Module):
         q_flat = self.mask_token[None, :] + temporal[rg.decode_t]  # [num_dec, Dp]
         q_flat = q_flat[:, None, :].expand(-1, p2n, -1)  # [num_dec, P**2, Dp]
         queries = online_reps.new_zeros(ng * rg.max_qt, p2n, self.dp)
-        queries[rg.query_scatter] = q_flat[rg.query_order]
+        # Match the packed-rep dtype: under autocast the mask token / sincos encoding
+        # stay float32 while ``online_reps`` may be a lower-precision autocast dtype.
+        queries[rg.query_scatter] = q_flat[rg.query_order].to(queries.dtype)
         queries = rearrange(
             queries.view(ng, rg.max_qt, p2n, self.dp), "ng qt p d -> (ng p) qt d"
         )
@@ -388,7 +390,9 @@ class PixelReconstructionDecoder(nn.Module):
                 continue
             bands = getattr(self, f"{modality}__{idx}_recon_bands")
             pred = self.heads[modality][idx](preds[sel])  # [n, P**2, num_bands]
-            target = target_all[sel][..., bands]  # [n, P**2, num_bands]
+            # Cast the (float32) normalized target to the prediction dtype, which may be
+            # a lower-precision autocast dtype.
+            target = target_all[sel][..., bands].to(pred.dtype)  # [n, P**2, num_bands]
             loss = loss + F.mse_loss(pred, target, reduction="sum")
             count += pred.numel()
         if count == 0:
@@ -564,6 +568,7 @@ class PixelMapProbe(nn.Module):
         if kind == "bce":
             # Multi-label binary target (e.g. openstreetmap_raster, worldcereal): each
             # band is an independent 0/1 presence label. The maps normalize to ~[0, 1],
-            # so binarize at 0.5 and apply per-band binary cross-entropy.
-            return F.binary_cross_entropy_with_logits(pred, (tgt > 0.5).float())
-        return F.mse_loss(pred, tgt)
+            # so binarize at 0.5 and apply per-band binary cross-entropy. The target is
+            # cast to the prediction dtype (which may be a lower-precision autocast dtype).
+            return F.binary_cross_entropy_with_logits(pred, (tgt > 0.5).to(pred.dtype))
+        return F.mse_loss(pred, tgt.to(pred.dtype))
