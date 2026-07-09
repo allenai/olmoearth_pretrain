@@ -55,9 +55,10 @@ SWT_BUFFER = 83
 def _make_batch(
     task_name: str = "smoke_task",
     labels: Tensor | None = None,
+    valid_mask: Tensor | None = None,
     device: torch.device = torch.device("cpu"),
 ) -> Era5SupervisedBatch:
-    """Synthetic ERA5 batch with configurable labels."""
+    """Synthetic ERA5 batch with configurable labels / no-data mask."""
     era5 = torch.randn(B, T, V, device=device)
     timestamps = torch.zeros(B, T, 3, dtype=torch.long, device=device)
     timestamps[..., 0] = torch.arange(1, T + 1).unsqueeze(0)
@@ -65,9 +66,12 @@ def _make_batch(
     timestamps[..., 2] = 2020
     if labels is None:
         labels = torch.zeros(B, dtype=torch.long, device=device)
+    if valid_mask is None:
+        valid_mask = torch.ones(B, T, V, dtype=torch.bool, device=device)
     return Era5SupervisedBatch(
         era5=era5,
         timestamps=timestamps,
+        valid_mask=valid_mask,
         labels=labels,
         task_name=task_name,
     )
@@ -671,6 +675,107 @@ class TestLossComputationCorrectness:
         assert torch.allclose(
             metrics["reconstruction/raw_loss"], expected.detach(), rtol=1e-6, atol=1e-6
         )
+
+
+class TestReconstructionNoDataMasking:
+    """No-data cells (valid_mask False) are excluded from the reconstruction loss."""
+
+    def _build_raw_obj(self, prediction: Tensor):
+        model = Era5MultiObjectiveModelConfig(
+            encoder_config=_small_encoder_cfg(),
+            reconstruction_objective=ReconstructionObjectiveConfig(
+                decoder=_small_decoder_cfg(),
+                variable_groups={"c0": [0]},
+                group_recon_mode={"c0": "raw_plus_wavelet"},
+                swt_lambda=0.0,
+            ),
+        ).build()
+        obj = model.objective_list[0]
+        assert isinstance(obj, era5_multiobjective.ReconstructionObjective)
+        obj._module.decoder = _FixedDecoder(prediction)
+        return obj
+
+    def test_nodata_excluded_from_raw_loss(self, monkeypatch):
+        """Poisoning the prediction at no-data cells leaves the loss unchanged."""
+        torch.manual_seed(0)
+        target = torch.zeros(B, T, V)
+        target[:, :, 0] = torch.randn(B, T)
+        prediction = target.clone()
+        prediction[:, SWT_BUFFER:, 0] += 0.5  # nonzero error on channel 0
+
+        # Corrupt every target-window step of channel 0.
+        mask = torch.zeros(B, T, V, dtype=torch.bool)
+        mask[:, SWT_BUFFER:, 0] = True
+        monkeypatch.setattr(
+            era5_multiobjective,
+            "corrupt_era5",
+            lambda era5, policy, variable_groups, target_start: mask.clone(),
+        )
+
+        # Mark a run of channel-0 target-window steps as no-data.
+        valid = torch.ones(B, T, V, dtype=torch.bool)
+        nodata = slice(SWT_BUFFER, SWT_BUFFER + 100)
+        valid[:, nodata, 0] = False
+
+        obj = self._build_raw_obj(prediction)
+        loss_masked, metrics = obj.compute(
+            _FixedEncoder(), replace(_make_batch(), era5=target, valid_mask=valid)
+        )
+
+        # Poison the prediction at the no-data cells; excluded cells must not
+        # change the loss (target/std are unaffected since we poison pred).
+        prediction_poisoned = prediction.clone()
+        prediction_poisoned[:, nodata, 0] = 1e6
+        obj2 = self._build_raw_obj(prediction_poisoned)
+        loss_poisoned, _ = obj2.compute(
+            _FixedEncoder(), replace(_make_batch(), era5=target, valid_mask=valid)
+        )
+
+        assert torch.isfinite(loss_masked)
+        assert torch.allclose(loss_masked, loss_poisoned, rtol=1e-6, atol=1e-6)
+        assert metrics["reconstruction/nodata_fraction"].item() > 0
+
+        # Reference: Huber only over VALID and corrupted cells (std over the
+        # full target window, matching the production band normalization).
+        vc = (mask & valid)[:, SWT_BUFFER:, 0]
+        gp = prediction[:, SWT_BUFFER:, 0]
+        gt = target[:, SWT_BUFFER:, 0]
+        with torch.no_grad():
+            std = target[:, SWT_BUFFER:, [0]].std(dim=(0, 1)).clamp(min=1e-6)
+        expected = F.huber_loss(
+            (gp / std)[vc], (gt / std)[vc], reduction="mean", delta=1.0
+        )
+        assert torch.allclose(loss_masked, expected, rtol=1e-6, atol=1e-6)
+
+    def test_corruption_never_targets_nodata(self, monkeypatch):
+        """The corruption mask is intersected with validity (no no-data targets)."""
+        torch.manual_seed(0)
+        # corrupt_era5 tries to corrupt everything in the target window.
+        full = torch.zeros(B, T, V, dtype=torch.bool)
+        full[:, SWT_BUFFER:, :] = True
+        monkeypatch.setattr(
+            era5_multiobjective,
+            "corrupt_era5",
+            lambda era5, policy, variable_groups, target_start: full.clone(),
+        )
+        valid = torch.ones(B, T, V, dtype=torch.bool)
+        valid[:, SWT_BUFFER:, 0] = False  # channel 0 all no-data in target window
+
+        model = Era5MultiObjectiveModelConfig(
+            encoder_config=_small_encoder_cfg(),
+            reconstruction_objective=ReconstructionObjectiveConfig(
+                decoder=_small_decoder_cfg(),
+                swt_levels=[0, 1],
+                swt_lambda=0.1,
+            ),
+        ).build()
+        obj = model.objective_list[0]
+        batch = replace(_make_batch(), valid_mask=valid)
+        loss, metrics = obj.compute(model.encoder, batch)
+
+        assert torch.isfinite(loss)
+        # nodata_fraction reflects channel 0's target-window no-data.
+        assert metrics["reconstruction/nodata_fraction"].item() > 0
 
 
 class TestReconstructionE2EBackward:

@@ -171,6 +171,10 @@ class Era5SupervisedCommonComponents(CommonComponents):
     max_steps: int = -1
     save_interval: int = 1000
     eval_interval: int = 1000
+    # torch.compile the model. Default True (as before); set False for local
+    # smoke runs where the ~1.5 min compile isn't worth it or where the
+    # Inductor dynamic-shape path errors on the encoder patchify.
+    compile_model: bool = True
     # ------------------------------------------------------------------
     # Objective selection.  Both default to True/False respectively so
     # existing A-only launches are unaffected.
@@ -725,7 +729,7 @@ def build_train_module_config(
             lr=common.learning_rate, weight_decay=common.weight_decay, fused=False
         ),
         rank_microbatch_size=common.rank_microbatch_size,
-        compile_model=True,
+        compile_model=common.compile_model,
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(warmup_steps=common.warmup_steps),
         dp_config=DataParallelConfig(

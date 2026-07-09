@@ -526,8 +526,19 @@ class ReconstructionObjective(_Objective):
         x = batch.era5  # [B, T, V]
         ts = self.swt_buffer_days  # target_start index
 
+        # No-data validity ([B, T, V], True = valid). No-data cells were already
+        # mean-imputed (0 post z-score) in the dataset; here we use the mask to
+        # keep them out of the reconstruction loss.
+        valid = getattr(batch, "valid_mask", None)
+        if valid is None:
+            valid = torch.ones_like(x, dtype=torch.bool)
+        else:
+            valid = valid.to(dtype=torch.bool)
+
         # 1. Generate corruption mask (only target window is masked)
         mask = corrupt_era5(x, self.mask_policy, self.variable_groups, ts)
+        # Never spend the reconstruction budget on no-data cells.
+        mask = mask & valid
 
         # 2. Encode with corruption mask
         out = encoder(
@@ -559,6 +570,11 @@ class ReconstructionObjective(_Objective):
         x_hat_tgt = x_hat[:, ts:, :]
         x_tgt = x[:, ts:, :]
         mask_tgt = mask[:, ts:, :]
+        valid_tgt = valid[:, ts:, :]  # [B, T_win, V]
+        # Conservative SWT validity: drop an entire
+        # (sample, variable) from the SWT loss whenever that variable has ANY
+        # no-data over the full sequence.
+        var_valid = valid.all(dim=1)  # [B, V]
 
         variable_groups = self.variable_groups
 
@@ -578,7 +594,11 @@ class ReconstructionObjective(_Objective):
 
             g_pred = x_hat_tgt[:, :, bi]  # [B, T_win, |bi|]
             g_targ = x_tgt[:, :, bi]
-            g_mask = mask_tgt[:, :, bi] if self.raw_loss_on_masked_only else None
+            # Always exclude no-data cells
+            if self.raw_loss_on_masked_only:
+                g_mask = mask_tgt[:, :, bi] & valid_tgt[:, :, bi]
+            else:
+                g_mask = valid_tgt[:, :, bi]
 
             # Raw Huber (band-normalized like the SWT path)
             if include_raw and self.raw_lambda > 0:
@@ -592,11 +612,13 @@ class ReconstructionObjective(_Objective):
 
             # SWT wavelet loss (bands already cropped to target window)
             if pred_bands is not None and targ_bands is not None and allowed_levels:
-                g_mask_vt = (
-                    mask_tgt[:, :, bi].transpose(1, 2)
-                    if self.raw_loss_on_masked_only
-                    else None
-                )
+                # [B, |bi|, T_win] loss mask: drop invalid (sample, variable)
+                # rows; require corruption too when scoring masked-only.
+                gvar_valid_vt = var_valid[:, bi].unsqueeze(-1)  # [B, |bi|, 1]
+                if self.raw_loss_on_masked_only:
+                    g_mask_vt = mask_tgt[:, :, bi].transpose(1, 2) & gvar_valid_vt
+                else:
+                    g_mask_vt = gvar_valid_vt.expand(-1, -1, valid_tgt.shape[1])
                 deepest_allowed = max(allowed_levels)
                 for level_idx, level in enumerate(self.swt_levels):
                     if level not in allowed_levels:
@@ -655,6 +677,7 @@ class ReconstructionObjective(_Objective):
             f"{self.name}/raw_loss": raw_loss.detach(),
             f"{self.name}/swt_loss": swt_loss.detach(),
             f"{self.name}/masked_fraction": mask_tgt.float().mean().detach(),
+            f"{self.name}/nodata_fraction": (~valid).float().mean().detach(),
         }
         for level in self.swt_levels:
             cnt = level_loss_counts.get(level, 0)

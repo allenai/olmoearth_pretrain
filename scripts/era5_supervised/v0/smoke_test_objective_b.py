@@ -65,9 +65,11 @@ def _make_batch(device: torch.device = torch.device("cpu")) -> Era5SupervisedBat
     era5 = torch.randn(B, T, V, device=device)
     timestamps = _make_timestamps(device)
     labels = torch.zeros(B, dtype=torch.long, device=device)
+    valid_mask = torch.ones(B, T, V, dtype=torch.bool, device=device)
     return Era5SupervisedBatch(
         era5=era5,
         timestamps=timestamps,
+        valid_mask=valid_mask,
         labels=labels,
         task_name="smoke_task",
     )
@@ -77,9 +79,11 @@ def _make_ssl_batch(device: torch.device = torch.device("cpu")) -> Era5SslBatch:
     """Create a synthetic ERA5 SSL batch (no label, no S2)."""
     era5 = torch.randn(B, T, V, device=device)
     timestamps = _make_timestamps(device)
+    valid_mask = torch.ones(B, T, V, dtype=torch.bool, device=device)
     return Era5SslBatch(
         era5=era5,
         timestamps=timestamps,
+        valid_mask=valid_mask,
         task_name="smoke_ssl_task",
     )
 
