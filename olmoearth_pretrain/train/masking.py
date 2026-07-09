@@ -163,9 +163,11 @@ class MaskingStrategy:
 
         mask = flat_mask_tokens.view(*mask_shape)
         if modality.is_spatial:
+            # contiguous(): for a 1x1 patch grid the repeat is a pure broadcast
+            # and einops returns a stride-0 view, which pin_memory cannot copy.
             mask = repeat(
                 mask, "b h w ... -> b (h hp) (w wp) ...", hp=patch_size, wp=patch_size
-            )
+            ).contiguous()
 
         return mask
 
@@ -225,9 +227,11 @@ class MaskingStrategy:
         flat_mask[not_missing_tokens] = flat_mask_tokens
         mask = flat_mask.view(*original_shape)
         if modality.is_spatial:
+            # contiguous(): see _create_random_mask — a 1x1 patch grid yields a
+            # stride-0 broadcast view that pin_memory cannot copy.
             mask = repeat(
                 mask, "b h w ... -> b (h hp) (w wp) ...", hp=patch_size, wp=patch_size
-            )
+            ).contiguous()
 
         return mask
 
