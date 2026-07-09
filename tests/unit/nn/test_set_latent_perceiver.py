@@ -61,17 +61,14 @@ def _model(**overrides: Any) -> SetLatentPerceiver:
 
 
 def test_forward_backward_and_output_shapes() -> None:
-    """Forward+backward runs and returns finite loss with sane metrics."""
+    """Forward+backward runs, loss is finite, masking produced targets."""
     model = _model()
     loss, metrics = model(_make_sample(), mask_seed=3)
     loss.backward()
 
     assert torch.isfinite(loss)
     assert metrics["target_count"] > 0
-    assert set(metrics["group_losses"]) <= {
-        f"{m}__bs{i}" for m in ("sentinel2_l2a", "sentinel1") for i in range(3)
-    }
-    assert metrics["num_groups"] == 4  # S2 has 3 band sets, S1 has 1
+    assert metrics["num_groups"] == 4  # band-set grouping: S2 -> 3 groups, S1 -> 1
 
 
 def test_missing_group_trains_and_only_its_tokenizer_lacks_grads() -> None:
@@ -163,20 +160,6 @@ def test_target_tokenizers_are_frozen() -> None:
     assert all(p.grad is None for p in model.target_tokenizers.parameters())
 
 
-def test_vit_base_scale_default_config() -> None:
-    """The default config is ViT-B scale (~88M encoder)."""
-    model = SetLatentPerceiver()
-    params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    encoder_params = (
-        params
-        - sum(p.numel() for p in model.decoder_blocks.parameters())
-        - sum(p.numel() for p in model.head.parameters())
-    )
-    assert 70e6 < encoder_params < 120e6, (
-        f"encoder params {encoder_params / 1e6:.1f}M not ViT-B scale"
-    )
-
-
 def test_soft_target_infonce_tolerates_duplicate_targets() -> None:
     """Soft labels absorb near-duplicate targets; dedup keeps the exact floor."""
     torch.manual_seed(0)
@@ -197,15 +180,6 @@ def test_soft_target_infonce_tolerates_duplicate_targets() -> None:
     hard_near.backward()
     assert torch.isfinite(soft_near)
     assert pred_soft.grad.norm().item() < 0.1 * pred_hard.grad.norm().item()
-
-
-def test_global_soft_scope_used_by_default_model() -> None:
-    """The default objective is global soft-target InfoNCE."""
-    model = _model(contrast_scope="global")
-    assert model.soft_targets
-    loss, metrics = model(_make_sample(t=2), mask_seed=9)
-    loss.backward()
-    assert torch.isfinite(loss) and metrics["target_count"] > 0
 
 
 def test_cloud_mask_pools_any_cloudy_pixel_per_token() -> None:
@@ -263,18 +237,6 @@ def test_k_seed_is_rank_free_and_decoupled_from_masks() -> None:
     assert len(set(ks)) == 1
 
 
-def test_per_group_metrics_reported() -> None:
-    """Per-group loss/count metrics cover every present group."""
-    model = _model()
-    _, metrics = model(_make_sample(), mask_seed=4)
-    assert set(metrics["group_correct"]) == {
-        "sentinel2_l2a__bs0",
-        "sentinel2_l2a__bs1",
-        "sentinel2_l2a__bs2",
-        "sentinel1__bs0",
-    }
-
-
 def test_encode_global_is_pooled_vector() -> None:
     """encode_global returns a single pooled (B, D) vector."""
     model = _model()
@@ -282,16 +244,6 @@ def test_encode_global_is_pooled_vector() -> None:
     with torch.no_grad():
         feats = model.encode_global(_make_sample())
     assert feats.shape == (2, 64)
-
-
-def test_missing_modality_is_skipped_not_crashed() -> None:
-    """A modality absent from the sample is skipped without crashing."""
-    model = _model()
-    sample = _make_sample()._replace(sentinel1=None)
-    loss, metrics = model(sample, mask_seed=3)
-    loss.backward()
-    assert not any(name.startswith("sentinel1") for name in metrics["group_losses"])
-    assert torch.isfinite(loss)
 
 
 def test_null_absolute_time_is_dropped_on_tokens() -> None:

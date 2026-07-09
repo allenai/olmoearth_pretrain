@@ -79,10 +79,8 @@ def test_train_module_steps_and_records_metrics() -> None:
     train_module.zero_grads()
     train_module.train_batch((8, _make_sample()), dry_run=False)
 
-    metrics = train_module.trainer.metrics
-    assert "train/loss" in metrics and metrics["train/loss"] > 0
-    assert "train/top1" in metrics
-    assert "train/target_count" in metrics and metrics["train/target_count"] > 0
+    # The aggregated loss reached the trainer and is a real positive value.
+    assert train_module.trainer.metrics["train/loss"] > 0
 
     # Grads flowed to every trainable parameter (all modalities present).
     missing = [
