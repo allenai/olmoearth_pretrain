@@ -321,5 +321,33 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 target_output, _, _ = unpack_encoder_output(output_dict)
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None and reconstructed is not None:
-                loss += self.mae_loss.compute(reconstructed, batch)
+                loss = loss + self._masked_reconstruction_loss(reconstructed, batch)
             return loss, latent, decoded, target_output, latent_projected_and_pooled
+
+    def _masked_reconstruction_loss(
+        self, reconstructed: TokensAndMasks, batch: MaskedOlmoEarthSample
+    ) -> torch.Tensor:
+        """Compute the MAE reconstruction loss, robustly to a rank lacking the target.
+
+        Auxiliary reconstructed modalities (e.g. NAIP) are US-only, so on some ranks the
+        batch has no real target for them. We must NOT skip the reconstruction path
+        entirely on those ranks: under FSDP every rank has to run the reconstructor +
+        auxiliary-encoder backward all-gathers each step, or the process group desyncs
+        (NCCL collective timeout). So when the target for a reconstructed modality is
+        absent we add a zero-magnitude keep-alive term over the reconstructed tokens,
+        which keeps those FSDP-sharded blocks in the autograd graph (their backward
+        all-gathers fire) while contributing no learning signal.
+        """
+        assert self.mae_loss is not None
+        recon_modalities = reconstructed.modalities
+        target_present = bool(recon_modalities) and all(
+            getattr(batch, modality, None) is not None for modality in recon_modalities
+        )
+        if target_present:
+            return self.mae_loss.compute(reconstructed, batch)
+        # No real target on this rank: keep the reconstructor/auxiliary-encoder shards
+        # alive with a zero-weighted term so their backward collectives still fire.
+        keep_alive = torch.zeros([], device=self.device)
+        for modality in recon_modalities:
+            keep_alive = keep_alive + getattr(reconstructed, modality).sum()
+        return 0.0 * keep_alive

@@ -232,8 +232,8 @@ def test_forward_runs_when_naip_modality_absent() -> None:
     """When NAIP is absent from the batch, the model still runs the NAIP path.
 
     Under FSDP every rank must execute the same modules each step. NAIP is US-only, so
-    some ranks' batches lack it entirely; the model must inject a synthetic all-missing
-    NAIP so the NAIP encoder + reconstructor still run (avoiding a collective desync).
+    some ranks' batches lack it entirely; the model must inject a synthetic NAIP so the
+    NAIP encoder + reconstructor still run (avoiding a collective desync).
     """
     model = _build_config().build()
     B, H, W, T = 2, 8, 8, 12
@@ -265,7 +265,7 @@ def test_forward_runs_when_naip_modality_absent() -> None:
     x = strategy.apply_mask(sample, patch_size=PATCH_SIZE)
     assert NAIP not in x.modalities  # NAIP genuinely absent from the batch
 
-    # The NAIP path still runs (synthetic all-missing NAIP injected) and reconstructs.
+    # The NAIP path still runs (synthetic NAIP injected) and reconstructs.
     _, _, _, reconstructed, _ = model(x, patch_size=PATCH_SIZE)
     assert reconstructed is not None
     assert reconstructed.naip_10 is not None
@@ -273,3 +273,100 @@ def test_forward_runs_when_naip_modality_absent() -> None:
         reconstructed, model._ensure_naip_present(x)
     )
     assert torch.isfinite(loss)
+
+
+def test_injected_naip_yields_encode_and_decode_tokens() -> None:
+    """The synthetic NAIP injected for an absent batch has both encode + decode tokens.
+
+    A purely MISSING injection would leave the NAIP encoder + reconstructor with zero
+    surviving tokens (their block outputs get discarded), so their FSDP-sharded blocks
+    would get no gradient and skip their backward all-gathers -- desyncing from ranks
+    that do have NAIP. Injecting real encode (ONLINE_ENCODER) + decode (DECODER) tokens
+    keeps every NAIP block connected.
+    """
+    model = _build_config().build()
+    B, H, W, T = 2, 8, 8, 12
+    s2_bands = Modality.SENTINEL2_L2A.num_bands
+    timestamps = torch.stack(
+        [
+            torch.randint(1, 28, (B, T)),
+            torch.randint(1, 12, (B, T)),
+            torch.full((B, T), 2023),
+        ],
+        dim=-1,
+    )
+    sample = OlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_bands),
+        timestamps=timestamps,
+    )
+    strategy = MaskingConfig(
+        strategy_config={
+            "type": "random_time_with_decode_separate_encoder",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "random_ratio": 1.0,
+            "separate_encoder_modalities": [NAIP],
+            "separate_encode_ratio": 0.25,
+            "separate_decode_ratio": 0.75,
+        }
+    ).build()
+    x = strategy.apply_mask(sample, patch_size=PATCH_SIZE)
+    assert NAIP not in x.modalities
+
+    injected = model._ensure_naip_present(x)
+    naip_mask = injected.naip_10_mask
+    assert naip_mask is not None
+    # Injected data must be finite (benign zeros), never the MISSING_VALUE sentinel.
+    assert injected.naip_10 is not None
+    assert torch.isfinite(injected.naip_10).all()
+    # Both encoder-visible and to-be-decoded tokens are present.
+    assert bool((naip_mask == MaskValue.ONLINE_ENCODER.value).any())
+    assert bool((naip_mask == MaskValue.DECODER.value).any())
+
+
+def test_absent_naip_reconstruction_grads_reach_naip_modules() -> None:
+    """When NAIP is absent, a keep-alive on the reconstruction still trains NAIP modules.
+
+    This is the crux of the FSDP-desync fix: even on a rank whose batch has no NAIP, a
+    zero-magnitude term over the reconstructed NAIP must propagate gradient to every
+    NAIP encoder and reconstructor block, so their backward all-gathers fire and stay in
+    sync with ranks that have real NAIP.
+    """
+    model = _build_config(detach=False).build()
+    B, H, W, T = 2, 8, 8, 12
+    s2_bands = Modality.SENTINEL2_L2A.num_bands
+    timestamps = torch.stack(
+        [
+            torch.randint(1, 28, (B, T)),
+            torch.randint(1, 12, (B, T)),
+            torch.full((B, T), 2023),
+        ],
+        dim=-1,
+    )
+    sample = OlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_bands),
+        timestamps=timestamps,
+    )
+    strategy = MaskingConfig(
+        strategy_config={
+            "type": "random_time_with_decode_separate_encoder",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "random_ratio": 1.0,
+            "separate_encoder_modalities": [NAIP],
+            "separate_encode_ratio": 0.25,
+            "separate_decode_ratio": 0.75,
+        }
+    ).build()
+    x = strategy.apply_mask(sample, patch_size=PATCH_SIZE)
+    assert NAIP not in x.modalities
+
+    _, _, _, reconstructed, _ = model(x, patch_size=PATCH_SIZE)
+    assert reconstructed is not None and reconstructed.naip_10 is not None
+    # Mimic the train module's zero keep-alive when the batch has no real NAIP target.
+    keep_alive = 0.0 * reconstructed.naip_10.sum()
+    keep_alive.backward()
+
+    assert model.reconstructor is not None
+    assert any(p.grad is not None for p in model.naip_encoder.parameters())
+    assert any(p.grad is not None for p in model.reconstructor.parameters())

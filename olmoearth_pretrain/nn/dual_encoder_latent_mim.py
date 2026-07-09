@@ -27,7 +27,7 @@ from torch.distributed.fsdp import (
 )
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
+from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.datatypes import (
     MaskedOlmoEarthSample,
     MaskValue,
@@ -117,9 +117,20 @@ class DualEncoderLatentMIM(nn.Module, DistributedMixins):
         The dataloader includes NAIP only when a batch actually contains it (NAIP is
         US-only), which varies per rank. Under FSDP a rank that skips the NAIP modules
         would skip their parameter all-gathers and desync the process group. When NAIP is
-        absent we inject an all-missing NAIP tensor (sized from a present spatial
-        modality); it contributes zero encoded and zero decode tokens, so it adds no
-        learning signal but keeps module execution identical across ranks.
+        absent we inject a synthetic NAIP tensor (sized from a present spatial modality).
+
+        The injected tokens are marked as encoder-visible (``ONLINE_ENCODER``) and
+        to-be-decoded (``DECODER``) -- NOT ``MISSING`` -- and carry benign zero-valued
+        data. This matters: a purely ``MISSING`` NAIP would leave the NAIP encoder and
+        reconstructor with zero surviving tokens, whose block outputs are discarded (see
+        :meth:`FlexiVitBase.add_removed_tokens`). Those blocks would then receive no
+        gradient, so their FSDP backward all-gathers would not fire, desyncing the
+        process group from ranks that do have NAIP (manifesting as an NCCL collective
+        timeout). By injecting real (zero-valued) encode + decode tokens, every NAIP
+        block processes tokens and stays connected in the autograd graph. The
+        reconstruction loss for this synthetic NAIP is separately suppressed by the train
+        module (which skips it when the batch has no real NAIP target), so it adds no
+        learning signal.
         """
         naip = self.naip_modality_name
         if naip in x.modalities:
@@ -136,18 +147,26 @@ class DualEncoderLatentMIM(nn.Module, DistributedMixins):
 
         b, ref_h, ref_w = ref.shape[0], ref.shape[1], ref.shape[2]
         h, w = ref_h * scale, ref_w * scale
-        data = torch.full(
+        # Benign zero data (NOT MISSING_VALUE): these tokens are actually embedded by the
+        # NAIP encoder, so the sentinel MISSING_VALUE (-99999) could overflow to inf/nan.
+        data = torch.zeros(
             (b, h, w, 1, naip_spec.num_bands),
-            float(MISSING_VALUE),
             device=ref.device,
             dtype=torch.float32,
         )
+        # Mark tokens ONLINE_ENCODER (encoder-visible, also used as reconstructor context)
+        # with a DECODER region so the reconstructor also has query tokens. This keeps
+        # every NAIP encoder + reconstructor block connected to the autograd graph.
         mask = torch.full(
             (b, h, w, 1, naip_spec.num_band_sets),
-            MaskValue.MISSING.value,
+            MaskValue.ONLINE_ENCODER.value,
             device=ref.device,
             dtype=torch.long,
         )
+        if w >= 2:
+            mask[:, :, w // 2 :] = MaskValue.DECODER.value
+        elif h >= 2:
+            mask[:, h // 2 :] = MaskValue.DECODER.value
         return x._replace(
             **{naip: data, MaskedOlmoEarthSample.get_masked_modality_name(naip): mask}
         )
