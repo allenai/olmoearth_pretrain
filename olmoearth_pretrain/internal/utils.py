@@ -200,6 +200,20 @@ MODEL_SIZE_ARGS = {
         "decoder_num_heads": 12,
         "mlp_ratio": 4.0,
     },
+    # Dual-resolution encoder: coarse embedding shrunk 768 -> 512 to "pay for" a
+    # lightweight 128-d per-pixel branch (see nn/dual_res_encoder.py). Decoder stays
+    # at the coarse embedding size.
+    "base_dualres": {
+        "decoder_depth": 4,
+        "encoder_embedding_size": 512,
+        "decoder_embedding_size": 512,
+        "encoder_depth": 12,
+        "encoder_num_heads": 8,
+        "decoder_num_heads": 8,
+        "mlp_ratio": 4.0,
+        "pixel_embedding_size": 128,
+        "pixel_num_heads": 4,
+    },
 }
 
 

@@ -302,13 +302,17 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
+            outputs = self.model(batch, patch_size)
             (
                 latent,
                 decoded,
                 latent_projected_and_pooled,
                 reconstructed,
                 extra_metrics,
-            ) = self.model(batch, patch_size)
+            ) = outputs[:5]
+            # Models may return an optional 6th element: an auxiliary loss to add to
+            # the coarse loss (e.g. the dual-resolution pixel-branch loss).
+            aux_loss = outputs[5] if len(outputs) > 5 else None
             if extra_metrics is not None:
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
@@ -322,4 +326,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
+            if aux_loss is not None:
+                loss = loss + aux_loss
             return loss, latent, decoded, target_output, latent_projected_and_pooled
