@@ -86,7 +86,7 @@ def test_train_module_steps_and_records_metrics() -> None:
     # Per-group valid fraction logged for each group.
     assert any(k.startswith("train/valid_frac/") for k in metrics)
 
-    # Grads flowed to every trainable parameter (DDP grad anchor).
+    # Grads flowed to every trainable parameter (all modalities present).
     missing = [
         n for n, p in model.named_parameters() if p.requires_grad and p.grad is None
     ]

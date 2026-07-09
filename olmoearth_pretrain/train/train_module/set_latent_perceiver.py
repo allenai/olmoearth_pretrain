@@ -16,7 +16,7 @@ from logging import getLogger
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.distributed.parallel import DataParallelConfig
-from olmo_core.distributed.utils import get_local_rank, get_local_tensor
+from olmo_core.distributed.utils import get_local_tensor, get_rank
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
@@ -35,8 +35,10 @@ require_olmo_core("Set-Latent Perceiver training")
 
 logger = getLogger(__name__)
 
-# Per-rank stride for the mask seed (distinct data -> distinct masks per rank),
-# large enough not to collide across realistic step counts.
+# Strides keeping mask seeds disjoint across (step, microbatch, rank): steps
+# occupy the low bits, microbatches shift by 2**20 (no collision for runs under
+# ~1M steps), ranks by 2**40 (global rank, so multi-node ranks stay distinct).
+_MASK_SEED_MICROBATCH_STRIDE = 2**20
 _MASK_SEED_RANK_STRIDE = 2**40
 
 
@@ -53,8 +55,10 @@ class SetLatentPerceiverTrainModuleConfig(OlmoEarthTrainModuleConfig):
     ) -> "SetLatentPerceiverTrainModule":
         """Build the corresponding :class:`SetLatentPerceiverTrainModule`."""
         kwargs = self.prepare_kwargs()
-        # regularizer is not supported by the SLP train loop; drop it if present.
-        kwargs.pop("regularizer_config", None)
+        if kwargs.pop("regularizer_config", None) is not None:
+            raise ValueError(
+                "regularizer_config is not supported by the SLP train loop"
+            )
         return SetLatentPerceiverTrainModule(model=model, device=device, **kwargs)
 
 
@@ -113,7 +117,7 @@ class SetLatentPerceiverTrainModule(OlmoEarthTrainModule):
         # Rank-free K seed (same across ranks per step); per-rank mask seed.
         step = int(getattr(self.trainer, "global_step", 0))
         k_seed = step
-        mask_seed = step + get_local_rank() * _MASK_SEED_RANK_STRIDE
+        mask_seed = step + get_rank() * _MASK_SEED_RANK_STRIDE
 
         masked_microbatches = split_masked_batch(batch_data, self.rank_microbatch_size)
         num_microbatches = len(masked_microbatches)
@@ -133,7 +137,8 @@ class SetLatentPerceiverTrainModule(OlmoEarthTrainModule):
                     loss, metrics = self.model(
                         masked_batch,
                         patch_size,
-                        mask_seed=mask_seed + microbatch_idx,
+                        mask_seed=mask_seed
+                        + microbatch_idx * _MASK_SEED_MICROBATCH_STRIDE,
                         k_seed=k_seed,
                     )
                 loss = loss / num_microbatches
@@ -145,9 +150,11 @@ class SetLatentPerceiverTrainModule(OlmoEarthTrainModule):
                     valid_frac_count[name] = valid_frac_count.get(name, 0) + 1
 
                 if torch.isnan(loss).any() or torch.isinf(loss).any():
-                    logger.warning(
-                        f"NaN/Inf loss at microbatch {microbatch_idx}; rank "
-                        f"{get_local_rank()}"
+                    # Fail fast: backpropagating a non-finite loss NaNs the
+                    # clip coefficient and then every parameter, silently.
+                    raise RuntimeError(
+                        f"NaN/Inf loss at step {step}, microbatch "
+                        f"{microbatch_idx}, rank {get_rank()}"
                     )
                 loss.backward()
 

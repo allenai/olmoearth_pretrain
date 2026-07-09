@@ -236,6 +236,9 @@ def build_size_model_config(
     return SetLatentPerceiverConfig(
         supported_modality_names=list(common.training_modalities),
         token_extent_m=float(PATCH_SIZE * 10),  # 80 m tokens on the 10 m grid
+        # v1.2 corpus dates span 2015-2024; units are years since 2020. Eval
+        # dates outside this span fall back to the trained "unknown date" null.
+        trained_years=(-5.0, 5.0),
         **size,
     )
 

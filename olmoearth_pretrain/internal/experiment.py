@@ -333,9 +333,11 @@ def evaluate(config: OlmoEarthEvaluateConfig) -> None:
         if config.train_module is None:
             raise ValueError("train_module is not set so we can't load the checkpoint")
         train_module = config.train_module.build(model)
-        # Hack to satisfy init of a real train module
-        data_loader.min_patch_size = model.encoder.min_patch_size
-        data_loader.max_patch_size = model.encoder.max_patch_size
+        # Hack to satisfy init of a real train module (models without a
+        # separate encoder, e.g. the SLP, keep the mock loader's defaults)
+        if hasattr(model, "encoder"):
+            data_loader.min_patch_size = model.encoder.min_patch_size
+            data_loader.max_patch_size = model.encoder.max_patch_size
     else:
         train_module = MockLatentMIMTrainModule()
 

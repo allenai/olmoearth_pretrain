@@ -74,18 +74,25 @@ def test_forward_backward_and_output_shapes() -> None:
     assert metrics["num_groups"] == 4  # S2 has 3 band sets, S1 has 1
 
 
-def test_all_parameters_receive_grads_with_missing_group() -> None:
-    """DDP grad anchor: every trainable param gets grad even with a missing group."""
+def test_missing_group_trains_and_only_its_tokenizer_lacks_grads() -> None:
+    """A batch with an absent modality trains; only its params lack grads.
+
+    DDP handles the unused params via find_unused_parameters, FSDP2 natively —
+    there is deliberately no 0*sum(p) grad anchor, which would make the loss a
+    DTensor under FSDP2.
+    """
     model = _model()
     sample = _make_sample()._replace(sentinel1=None)  # S1 absent from the batch
 
     loss, _ = model(sample, mask_seed=1)
     loss.backward()
+    assert torch.isfinite(loss)
 
     missing = [
         n for n, p in model.named_parameters() if p.requires_grad and p.grad is None
     ]
-    assert missing == []
+    assert all("sentinel1" in n for n in missing)
+    assert any("sentinel1" in n for n, _ in model.named_parameters())
 
 
 def test_masked_tokens_cannot_influence_latents() -> None:
@@ -216,8 +223,23 @@ def test_cloud_mask_pools_any_cloudy_pixel_per_token() -> None:
         assert masks[name][:, :, -1, -1].all()  # far corner unaffected
 
 
+def test_cloud_mask_handles_non_multiple_grid() -> None:
+    """Cloud grids whose H/W are not a multiple of patch_px pad up like the data."""
+    model = _model(supported_modality_names=["sentinel2_l2a"])
+    sample = _make_sample(t=1, h=20, w=20)  # pads to 24 -> 3x3 tokens
+    per_group, b, device = model._tokenize(sample, generator=None)
+    cloud = torch.zeros(b, 1, 20, 20, dtype=torch.bool)
+    cloud[:, :, 19, 19] = True  # cloudy pixel in the padded edge token
+    masks = {name: g["valid"].clone() for name, g in per_group.items()}
+    masks = model._apply_cloud_mask(masks, per_group, {"sentinel2_l2a": cloud})
+    for name in masks:
+        assert masks[name].shape[-2:] == (3, 3)
+        assert not masks[name][:, :, 2, 2].any()  # edge token excluded
+        assert masks[name][:, :, 0, 0].all()  # clean token unaffected
+
+
 def test_no_parameter_is_dead_weight() -> None:
-    """Every trainable param gets a real (structural) gradient, not just the anchor."""
+    """Every trainable param gets a real (structural) gradient."""
     model = _model(cond_dropout=0.0)
     loss, _ = model(_make_sample(), mask_seed=11)
     loss.backward()

@@ -8,6 +8,7 @@ from einops import rearrange, reduce
 from torch import nn
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
+from olmoearth_pretrain.data.constants import MISSING_VALUE
 from olmoearth_pretrain.evals.datasets.configs import TaskType
 from olmoearth_pretrain.evals.models import (
     AnySat,
@@ -489,6 +490,24 @@ class SetLatentPerceiverEvalWrapper(EvalWrapper):
     missing ``latlon`` becomes the trained null (handled inside the model).
     """
 
+    def _mask_missing(self, sample: MaskedOlmoEarthSample) -> MaskedOlmoEarthSample:
+        """Write ``MISSING_VALUE`` into data marked ``MaskValue.MISSING``.
+
+        The eval collate pads variable-T batches with zero data and marks the
+        padding only in the mask tensors; the SLP derives validity from data
+        values, so without this the zero padding would count as real tokens.
+        """
+        updates: dict[str, torch.Tensor] = {}
+        for name in self.model.supported_modality_names:
+            data = getattr(sample, name, None)
+            mask = getattr(sample, f"{name}_mask", None)
+            if data is None or mask is None or mask.shape != data.shape:
+                continue
+            missing = mask == MaskValue.MISSING.value
+            if missing.any():
+                updates[name] = data.masked_fill(missing, MISSING_VALUE)
+        return sample._replace(**updates) if updates else sample
+
     def __call__(
         self,
         masked_olmoearth_sample: MaskedOlmoEarthSample,
@@ -496,6 +515,7 @@ class SetLatentPerceiverEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass producing the embedding specified by initialization."""
+        masked_olmoearth_sample = self._mask_missing(masked_olmoearth_sample)
         if self.spatial_pool:
             # (B, H, W, D) dense features for per-pixel heads.
             batch_embeddings = self.model.encode(masked_olmoearth_sample)

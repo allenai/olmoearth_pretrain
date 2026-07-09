@@ -32,10 +32,10 @@ from torch.distributed import DeviceMesh
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
     BASE_RESOLUTION,
+    IMAGE_TILE_SIZE,
     MISSING_VALUE,
     Modality,
     ModalitySpec,
-    get_modality_specs_from_names,
 )
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, OlmoEarthSample
 from olmoearth_pretrain.nn.encodings import timestamps_to_days
@@ -132,12 +132,13 @@ class SLPGroupSpec:
 
 
 def _modality_stored_gsd(spec: ModalitySpec) -> float:
-    """Stored (finest) GSD of a modality's grid in metres."""
-    factor = spec.image_tile_size_factor
-    gsd = BASE_RESOLUTION * spec.tile_resolution_factor
-    if factor > 1:
-        gsd = gsd / factor
-    return gsd
+    """Stored GSD of a modality's grid in metres.
+
+    Tile ground extent divided by stored pixels per side; uses the registry
+    helpers so the negative ``image_tile_size_factor`` convention (coarser
+    stored grids, e.g. era5_10 at -256 -> 2560 m) is honoured.
+    """
+    return spec.get_tile_resolution() * IMAGE_TILE_SIZE / spec.get_expected_tile_size()
 
 
 def build_groups(
@@ -414,9 +415,13 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
     # ------------------------------------------------------------- properties
 
     @property
-    def supported_modalities(self) -> list[ModalitySpec]:
-        """The repo modality specs this model tokenizes (for eval gating)."""
-        return get_modality_specs_from_names(self.supported_modality_names)
+    def supported_modalities(self) -> list[str]:
+        """Modality names this model tokenizes.
+
+        The eval callback's modality gate compares these against task
+        ``input_modalities`` strings.
+        """
+        return list(self.supported_modality_names)
 
     @property
     def device(self) -> torch.device:
@@ -746,6 +751,12 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
                 continue
             cm = cm[:, :t].float()
             if spec.patch_px > 1:
+                # Pad up like _pad_to_multiple (pad pixels clear) so the pooled
+                # grid matches the token grid for non-multiple H/W.
+                pad_h = (-cm.shape[2]) % spec.patch_px
+                pad_w = (-cm.shape[3]) % spec.patch_px
+                if pad_h or pad_w:
+                    cm = F.pad(cm, (0, pad_w, 0, pad_h))
                 cloudy = F.max_pool2d(
                     cm.reshape(-1, 1, cm.shape[2], cm.shape[3]),
                     kernel_size=spec.patch_px,
@@ -910,8 +921,10 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
                 group_total[name] = total
 
         loss = _mean_or_zero(group_losses, device)
-        # DDP grad anchor: every trainable parameter participates on every rank.
-        loss = loss + 0.0 * sum(p.sum() for p in self.parameters() if p.requires_grad)
+        # Unused params (tokenizers of modalities absent from a batch) are handled
+        # by the wrapper: DDP runs with find_unused_parameters=True and FSDP2
+        # tolerates them natively. A 0*sum(p.sum()) grad anchor would turn the
+        # loss into a DTensor under FSDP2 and crash backward.
 
         total_correct = sum(group_correct.values())
         total_total = sum(group_total.values())
@@ -1039,7 +1052,11 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
         prefetch_factor: int = 0,
     ) -> None:
         """Apply FSDP to the model."""
-        from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+        from torch.distributed.fsdp import (
+            MixedPrecisionPolicy,
+            fully_shard,
+            register_fsdp_forward_method,
+        )
 
         mp_policy = MixedPrecisionPolicy(
             param_dtype=param_dtype, reduce_dtype=reduce_dtype
@@ -1054,6 +1071,10 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
         fully_shard(self.read_block, **fsdp_config)
         fully_shard(self.down_block, **fsdp_config)
         fully_shard(self, **fsdp_config)
+        # Eval enters through these methods rather than forward(); register them
+        # so FSDP unshards/reshards around them instead of crashing on DTensors.
+        register_fsdp_forward_method(self, "encode")
+        register_fsdp_forward_method(self, "encode_global")
 
     def apply_compile(self) -> None:
         """Apply torch.compile to the transformer blocks."""
