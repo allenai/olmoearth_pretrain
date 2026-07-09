@@ -31,7 +31,11 @@ shared building blocks from ``flexi_vit`` / ``attention`` rather than modifying 
 
     * Attention uses SDPA with (small) padded group masks; flash-attn var-len packing
       is a later optimization. ``use_flash_attn`` and ``num_register_tokens`` are not
-      supported yet.
+      supported yet. The pixel branch runs one tiny attention problem per pixel (self
+      attention) or per ONLINE unit (cross attention); because CUDA caps a launch grid
+      dimension at 65535 and both the fused SDPA kernels and flash-attn map the
+      attention batch onto that dimension, the per-block attention batch is split into
+      chunks (see :func:`chunked_batch_attn`) to stay under the limit.
     * Cross-attention uses absolute positions (no RoPE); the pixel self-attention gets
       its temporal ordering signal from an additive 1D sin/cos encoding. Fractional-
       coordinate RoPE for pixels is a future refinement.
@@ -41,6 +45,7 @@ shared building blocks from ``flexi_vit`` / ``attention`` rather than modifying 
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -67,6 +72,44 @@ from olmoearth_pretrain.nn.flexi_vit import (
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 
 logger = logging.getLogger(__name__)
+
+# Max independent attention problems (batch rows) per kernel launch. CUDA caps the
+# grid ``.y``/``.z`` dimensions at 65535, and both the fused SDPA kernels and flash-attn
+# map the attention batch onto one of those dims -- so a single attention call with more
+# than ~65k rows raises ``CUDA error: invalid configuration argument``. The pixel branch
+# routinely blows past that (one row per pixel or per ONLINE unit), so we chunk it.
+ATTN_BATCH_CHUNK = 32768
+
+
+def chunked_batch_attn(
+    fn: Callable[..., Tensor],
+    *tensors: Tensor | None,
+    chunk: int = ATTN_BATCH_CHUNK,
+) -> Tensor:
+    """Run an attention block ``fn`` over dim-0 chunks of ``tensors`` and concatenate.
+
+    Every row of the attention batch is an independent problem (no row attends to
+    another), so slicing the leading dimension and concatenating the outputs is exact.
+    Chunking keeps each kernel launch under CUDA's 65535 grid-dimension cap. ``None``
+    tensors (e.g. an absent mask) are passed through to every chunk unchanged.
+
+    Args:
+        fn: Callable applied to a (chunk of the) argument tensors, returning a tensor
+            whose leading dimension matches the inputs'.
+        *tensors: Batched tensors (or ``None``) sharing the same leading dimension.
+        chunk: Max rows per call.
+
+    Returns:
+        The concatenation of ``fn``'s per-chunk outputs along dim 0.
+    """
+    batch = next(t.shape[0] for t in tensors if t is not None)
+    if batch <= chunk:
+        return fn(*tensors)
+    outputs = [
+        fn(*(None if t is None else t[start : start + chunk] for t in tensors))
+        for start in range(0, batch, chunk)
+    ]
+    return torch.cat(outputs, dim=0)
 
 
 def get_pixel_branch_modalities(supported_modalities: list[ModalitySpec]) -> list[str]:
@@ -745,8 +788,8 @@ class DualResEncoder(Encoder):
 
             # Pixel <- coarse cross-attention (per unit; 1 coarse KV).
             if self.pixel_to_coarse is not None:
-                pixels = pixels + self.pixel_to_coarse[block_idx](
-                    pixels, coarse_online[:, None]
+                pixels = pixels + chunked_batch_attn(
+                    self.pixel_to_coarse[block_idx], pixels, coarse_online[:, None]
                 )
                 st["packed_pixels"] = pixels
 
@@ -754,7 +797,9 @@ class DualResEncoder(Encoder):
             # Placed last so every pixel module feeds the coarse output this block,
             # keeping all pixel params on the autograd graph (FSDP-safe).
             if self.coarse_to_pixel is not None:
-                delta = self.coarse_to_pixel[block_idx](coarse_online[:, None], pixels)
+                delta = chunked_batch_attn(
+                    self.coarse_to_pixel[block_idx], coarse_online[:, None], pixels
+                )
                 coarse_online = coarse_online + delta[:, 0]
                 coarse_units = coarse_units.index_copy(0, flat_idx, coarse_online)
                 coarse_per_mod[modality] = coarse_units.view(
@@ -782,7 +827,7 @@ class DualResEncoder(Encoder):
         # -> [(nl * P**2), max_units, d]: one row per (location, pixel-offset).
         x = buf.view(nl, mu, p2, d).permute(0, 2, 1, 3).reshape(nl * p2, mu, d)
         key_mask = loc.valid.repeat_interleave(p2, dim=0)  # [nl*P**2, max_units]
-        x = self.pixel_self_blocks[block_idx](x, key_mask)
+        x = chunked_batch_attn(self.pixel_self_blocks[block_idx], x, key_mask)
         buf = x.reshape(nl, p2, mu, d).permute(0, 2, 1, 3).reshape(nl * mu, p2, d)
         # Allocate ``out`` from ``buf`` (not ``pixels``): under autocast the attention
         # block returns a lower-precision dtype (e.g. bf16) than the float32 input, and

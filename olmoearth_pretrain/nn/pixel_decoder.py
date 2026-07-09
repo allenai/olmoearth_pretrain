@@ -33,6 +33,7 @@ from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.decorators import experimental
 from olmoearth_pretrain.nn.dual_res_encoder import (
     CrossAttnBlock,
+    chunked_batch_attn,
     get_pixel_branch_modalities,
 )
 from olmoearth_pretrain.nn.encodings import get_1d_sincos_pos_encoding
@@ -337,7 +338,7 @@ class PixelReconstructionDecoder(nn.Module):
         # --- Cross-attend each query to the ONLINE keys at its location/offset. ---
         x = queries
         for blk in self.blocks:
-            x = x + blk(x, keys, key_mask=key_mask)
+            x = x + chunked_batch_attn(blk, x, keys, key_mask)
 
         # Gather the outputs back into DECODER-unit order [num_dec, P**2, Dp].
         out = rearrange(x, "(ng p) qt d -> ng qt p d", ng=ng, p=p2n)
