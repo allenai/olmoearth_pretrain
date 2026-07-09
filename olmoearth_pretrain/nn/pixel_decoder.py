@@ -409,7 +409,6 @@ class PixelMapProbe(nn.Module):
         pixel_embedding_size: int,
         map_targets: dict[str, str],
         num_classes: dict[str, int] | None = None,
-        tokenization_config: TokenizationConfig | None = None,
     ) -> None:
         """Initialize the map probe.
 
@@ -431,12 +430,10 @@ class PixelMapProbe(nn.Module):
             num_classes: Optional override of the class count for a ``"ce"`` modality.
                 Defaults to the modality's band count (one band per class for a one-hot
                 modality).
-            tokenization_config: Band-grouping config (unused; kept for symmetry).
         """
         super().__init__()
         self.dp = pixel_embedding_size
         self.map_targets = map_targets
-        self.tokenization_config = tokenization_config or TokenizationConfig()
         num_classes = num_classes or {}
         self.heads = nn.ModuleDict({})
         for modality, kind in map_targets.items():
@@ -468,7 +465,9 @@ class PixelMapProbe(nn.Module):
     ) -> Tensor:
         """Compute the map-prediction loss (summed over map modalities)."""
         pooled, loc_valid, shape = self._pool_online_by_location(pixel_branch)
-        total = 0.0 * sum(h.weight.sum() for h in self.heads.values())
+        # Zero term touching every head param (weights AND biases) so gradients always
+        # flow for maps absent from this microbatch, keeping all ranks in sync (FSDP).
+        total = 0.0 * sum(p.sum() for h in self.heads.values() for p in h.parameters())
         if pooled is None:
             return total
         assert loc_valid is not None and shape is not None

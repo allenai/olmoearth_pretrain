@@ -226,7 +226,6 @@ class DualResLatentMIMConfig(LatentMIMConfig):
                 pixel_embedding_size=encoder.pixel_embedding_size,
                 map_targets=self.map_targets,
                 num_classes=self.map_num_classes,
-                tokenization_config=encoder.tokenization_config,
             )
         return DualResLatentMIM(
             encoder=encoder,
