@@ -1,6 +1,8 @@
-"""v1.2 base with projection-only target + replicated DP: the combined candidate.
+"""v1.2 base with ALL speedups: fused AdamW + projection-only target + replicated DP.
 
-Stacks both speedups from the profiling work (see ``base_proj_target_e2e.py``
+This is the all-changes production candidate. Fused AdamW comes from base.py's
+default (fused=True, validated in 2026_07_09_compile_fused_ab); on top of that
+it stacks both speedups from the profiling work (see ``base_proj_target_e2e.py``
 and ``base_ddp_e2e.py`` for the single-change arms and their rationale):
 
 * ``projection_only_target=True`` -- the frozen exit-0 target is just the
