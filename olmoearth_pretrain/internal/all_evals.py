@@ -76,6 +76,25 @@ EVAL_TASKS = {
         eval_mode=EvalMode.KNN,
         primary_metric=EvalMetric.ACCURACY,
     ),
+    # Similar But Different: 10-class ESA WorldCover land-cover classification on
+    # single-timestamp Sentinel-2 L2A 32x32 patches, built so RGB is uninformative
+    # (a probe for spectral-band reliance). Linear probe on frozen embeddings -- the
+    # setting the dataset's headline foundation-model numbers report.
+    "similar_but_different": DownstreamTaskConfig(
+        dataset="similar_but_different",
+        embedding_batch_size=128,
+        probe_batch_size=128,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(5),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.ACCURACY,
+    ),
     "m_forestnet": DownstreamTaskConfig(
         dataset="m-forestnet",
         embedding_batch_size=64,
