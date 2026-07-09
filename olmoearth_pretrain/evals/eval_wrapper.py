@@ -28,6 +28,7 @@ from olmoearth_pretrain.nn.flexi_vit import (
 )
 from olmoearth_pretrain.nn.pooled_modality_predictor import EncodeEarlyAttnPool
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
+from olmoearth_pretrain.nn.set_latent_perceiver import SetLatentPerceiver
 from olmoearth_pretrain.nn.st_model import STBase
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
@@ -478,6 +479,34 @@ class TesseraEvalWrapper(EvalWrapper):
         return batch_embeddings, labels
 
 
+class SetLatentPerceiverEvalWrapper(EvalWrapper):
+    """Wrapper for the Set-Latent Perceiver.
+
+    Dense (segmentation / per-pixel) tasks use ``model.encode`` to read the token
+    grid; per-sample (classification / window regression) tasks use the global
+    pooled feature from ``model.encode_global`` (or the center token of the dense
+    grid when ``use_center_token`` is set). GPS is never fabricated at eval; a
+    missing ``latlon`` becomes the trained null (handled inside the model).
+    """
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass producing the embedding specified by initialization."""
+        if self.spatial_pool:
+            # (B, H, W, D) dense features for per-pixel heads.
+            batch_embeddings = self.model.encode(masked_olmoearth_sample)
+        elif self.use_center_token:
+            dense = self.model.encode(masked_olmoearth_sample)  # (B, H, W, D)
+            batch_embeddings = self._extract_center_token(dense)
+        else:
+            batch_embeddings = self.model.encode_global(masked_olmoearth_sample)
+        return batch_embeddings, labels
+
+
 def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     """Factory function to get the appropriate eval wrapper for a given model.
 
@@ -488,7 +517,10 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     Returns:
         The appropriate eval wrapper for the given model.
     """
-    if isinstance(model, FlexiVitBase) or isinstance(model, STBase):
+    if isinstance(model, SetLatentPerceiver):
+        logger.info("Using SetLatentPerceiverEvalWrapper")
+        return SetLatentPerceiverEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, FlexiVitBase) or isinstance(model, STBase):
         logger.info("Using OlmoEarthEvalWrapper")
         return OlmoEarthEvalWrapper(model=model, **kwargs)
     elif isinstance(model, Panopticon):

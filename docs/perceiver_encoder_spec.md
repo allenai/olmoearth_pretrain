@@ -322,3 +322,61 @@ handle unknowns). Run `uv` for env; ruff + pydocstyle(google) for lint.
   any conflict between the earthy reference and this repo's data format that you
   cannot resolve by reading code. Record blocking questions clearly; the managing
   agent will get answers.
+
+## 11. Implementation notes & integration decisions (initial pass)
+
+Files added: `olmoearth_pretrain/nn/set_latent_perceiver.py`
+(`SetLatentPerceiver` + `SetLatentPerceiverConfig`),
+`olmoearth_pretrain/train/train_module/set_latent_perceiver.py`,
+a `SetLatentPerceiverEvalWrapper` + `get_eval_wrapper` branch in
+`olmoearth_pretrain/evals/eval_wrapper.py`, launch configs under
+`scripts/vnext/perceiver/`, and tests under
+`tests/{unit,integration}/nn/test_set_latent_perceiver.py`.
+
+Decisions made while bridging earthy → this repo's data format:
+
+1. **Group = (modality, band set).** Each repo `BandSet` of each modality becomes
+   one SLP group (`"{modality}__bs{idx}"`), with its own conv tokenizer + frozen
+   target tokenizer + group embedding. This mirrors earthy's per-resolution
+   groups. Default modalities: S2 L2A (3 band sets) / S1 (1) / Landsat (2) /
+   ERA5 (1) = 7 groups; ViT-B is ~89 M encoder + ~14 M decoder.
+2. **Tokenized on the stored grid, not native GSD.** In this repo every band set
+   of a modality is co-registered on the modality's single stored `[B,H,W,T,C]`
+   grid (finest band-set resolution, 10 m for S2/S1/Landsat). So `patch_px` is
+   chosen per modality to hit `token_extent_m` (default 80 m → `patch_px=8` on the
+   10 m grid), and a token's `extent_m = patch_px * stored_gsd` is its *true*
+   ground footprint. Co-registered band sets therefore share the token grid and
+   extent (they differ only by conv weights + group embedding), which is more
+   correct than fabricating per-band-set extents for already-resampled data.
+   Inputs are padded up to a multiple of `patch_px` (padding marked invalid), so
+   the model accepts any H/W (eval task patch sizes included).
+3. **Global GPS is sample-level.** The repo sample carries a single `latlon`
+   (no per-token worker GPS grid), so global GPS is the unit-sphere of `latlon`
+   broadcast to all tokens; per-token spatial variation comes entirely from the
+   always-kept **local Fourier geometry** (patch-center Δeast/Δnorth), exactly as
+   the design intends. §6.4 preserved: missing/non-finite `latlon` → trained null
+   (zero) vector, never fabricated.
+4. **Validity from `MISSING_VALUE`, no `GroupInputNorm`.** The dataloader already
+   normalizes and re-inserts `MISSING_VALUE`, so the SLP has no input-norm module;
+   a token pixel is valid iff `isfinite(x) & (x > MISSING_VALUE/2)` (robust to the
+   float16 case where `-99999 → -inf`).
+5. **Masking is internal (deliberate §8.2.3 divergence).** The dataloader runs
+   `num_masked_views=1` with a trivial `{"type": "random"}` masking config whose
+   masks are ignored; the SLP's mask-family mixture runs inside `forward`.
+6. **Cloud masking is OFF.** The corpus exposes no per-token cloud/QA modality, so
+   `forward` passes `cloud=None` (no-op). `_apply_cloud_mask` is still implemented
+   (stored-grid max-pool over each token's footprint) and unit-tested directly
+   with synthetic cloud grids, ready to wire up if a cloud modality appears.
+7. **Static / timeless groups** (should any be added) get null absolute time and
+   `rel_time(0)`; the default modalities are all multitemporal.
+8. **Eval path.** The SLP intentionally exposes no `.encoder` attribute, so
+   `DownstreamEvaluatorCallback` reaches the model directly and `get_eval_wrapper`
+   routes to `SetLatentPerceiverEvalWrapper` (classification/window →
+   `encode_global` (B,D) or center token; segmentation/per-pixel → `encode`
+   (B,H,W,D)). `supported_modalities` is exposed for the callback's modality gate.
+
+Deferrals / not done this pass (per brief scope): multi-GPU DDP smoke and
+real-data training are handled separately; cloud masking wiring awaits a cloud
+modality; **ERA5 is absent from the current v1.2 corpus**, so the launch scripts
+(`scripts/vnext/perceiver/`) use S2/S1/Landsat only — add `era5_10` to both
+`training_modalities` and `supported_modality_names` when a corpus provides it.
