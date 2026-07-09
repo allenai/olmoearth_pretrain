@@ -941,10 +941,6 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
             },
             "group_correct": dict(group_correct),
             "group_total": dict(group_total),
-            "group_valid_frac": {
-                name: float(g["valid"].float().mean().item())
-                for name, g in per_group.items()
-            },
         }
         return loss, metrics
 

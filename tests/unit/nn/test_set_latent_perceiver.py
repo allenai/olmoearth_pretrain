@@ -263,17 +263,16 @@ def test_k_seed_is_rank_free_and_decoupled_from_masks() -> None:
     assert len(set(ks)) == 1
 
 
-def test_group_valid_frac_reported() -> None:
-    """Per-group valid-token fraction is reported for observability."""
+def test_per_group_metrics_reported() -> None:
+    """Per-group loss/count metrics cover every present group."""
     model = _model()
     _, metrics = model(_make_sample(), mask_seed=4)
-    assert set(metrics["group_valid_frac"]) == {
+    assert set(metrics["group_correct"]) == {
         "sentinel2_l2a__bs0",
         "sentinel2_l2a__bs1",
         "sentinel2_l2a__bs2",
         "sentinel1__bs0",
     }
-    assert all(0.0 < v <= 1.0 for v in metrics["group_valid_frac"].values())
 
 
 def test_encode_global_is_pooled_vector() -> None:
@@ -291,7 +290,7 @@ def test_missing_modality_is_skipped_not_crashed() -> None:
     sample = _make_sample()._replace(sentinel1=None)
     loss, metrics = model(sample, mask_seed=3)
     loss.backward()
-    assert not any(name.startswith("sentinel1") for name in metrics["group_valid_frac"])
+    assert not any(name.startswith("sentinel1") for name in metrics["group_losses"])
     assert torch.isfinite(loss)
 
 

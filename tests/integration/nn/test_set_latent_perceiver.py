@@ -83,8 +83,6 @@ def test_train_module_steps_and_records_metrics() -> None:
     assert "train/loss" in metrics and metrics["train/loss"] > 0
     assert "train/top1" in metrics
     assert "train/target_count" in metrics and metrics["train/target_count"] > 0
-    # Per-group valid fraction logged for each group.
-    assert any(k.startswith("train/valid_frac/") for k in metrics)
 
     # Grads flowed to every trainable parameter (all modalities present).
     missing = [

@@ -125,8 +125,6 @@ class SetLatentPerceiverTrainModule(OlmoEarthTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_correct = 0
         total_targets = 0
-        valid_frac_sum: dict[str, float] = {}
-        valid_frac_count: dict[str, int] = {}
 
         for microbatch_idx in range(num_microbatches):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
@@ -145,9 +143,6 @@ class SetLatentPerceiverTrainModule(OlmoEarthTrainModule):
                 total_batch_loss += get_local_tensor(loss.detach())
                 total_correct += sum(metrics["group_correct"].values())
                 total_targets += sum(metrics["group_total"].values())
-                for name, frac in metrics["group_valid_frac"].items():
-                    valid_frac_sum[name] = valid_frac_sum.get(name, 0.0) + frac
-                    valid_frac_count[name] = valid_frac_count.get(name, 0) + 1
 
                 if torch.isnan(loss).any() or torch.isinf(loss).any():
                     # Fail fast: backpropagating a non-finite loss NaNs the
@@ -171,11 +166,3 @@ class SetLatentPerceiverTrainModule(OlmoEarthTrainModule):
             torch.tensor(float(total_targets), device=self.device),
             ReduceType.mean,
         )
-        for name in valid_frac_sum:
-            self.trainer.record_metric(
-                f"train/valid_frac/{name}",
-                torch.tensor(
-                    valid_frac_sum[name] / valid_frac_count[name], device=self.device
-                ),
-                ReduceType.mean,
-            )
