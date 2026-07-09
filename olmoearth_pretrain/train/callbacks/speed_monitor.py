@@ -62,6 +62,12 @@ class OlmoEarthSpeedMonitorCallback(SpeedMonitorCallback):
                 "encoder ratio, and decoder ratio"
             )
         else:
+            # Ratios are only config-known for the modules above; default to 1
+            # so pre_step/post_step still run (encoded/decoded TPS then equal
+            # the full-token-budget throughput) instead of crashing on the
+            # unset attributes at step 2.
+            self._encoder_ratio = 1.0
+            self._decoder_ratio = 1.0
             logger.warning(
                 "Speed monitor callback only calculates token throughput with "
                 "MAETrainModule, LatentMIMTrainModule or GalileoTrainModule"
