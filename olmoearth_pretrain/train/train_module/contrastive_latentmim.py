@@ -262,10 +262,24 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
 
-                # Skip bad batches
-                if torch.isnan(loss).any() or torch.isinf(loss).any():
+                # Skip bad batches. The skip decision must be COLLECTIVE: if only the
+                # rank that saw a NaN/Inf skipped its backward pass, the other ranks
+                # would keep issuing FSDP backward collectives that never complete
+                # (NCCL collective timeout). All-reduce the flag so every rank takes
+                # the same branch.
+                loss_is_bad = (torch.isnan(loss) | torch.isinf(loss)).any()
+                if (
+                    torch.distributed.is_available()
+                    and torch.distributed.is_initialized()
+                ):
+                    loss_is_bad = get_local_tensor(loss_is_bad.detach()).clone()
+                    torch.distributed.all_reduce(
+                        loss_is_bad, op=torch.distributed.ReduceOp.MAX
+                    )
+                if loss_is_bad:
                     logger.warning(
-                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
+                        f"NaN or Inf detected in loss at microbatch {microbatch_idx} "
+                        "(on this or another rank), stopping training for this batch."
                     )
                     del latent_a, latent_b
                     break

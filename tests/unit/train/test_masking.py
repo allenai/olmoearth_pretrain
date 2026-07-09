@@ -1694,3 +1694,59 @@ def test_random_decode_masking_with_missing_modality_mask_in_instance() -> None:
             assert total_encoded_bandsets >= 1, (
                 f"Instance {idx} has no encoded bandsets across all modalities"
             )
+
+
+def test_separate_encoder_masking_small_grids_keep_encode_token() -> None:
+    """A separate-encoder modality with few tokens still gets >=1 encoder-visible token.
+
+    With separate_encode_ratio=0.25, a NAIP grid of 2-3 patch tokens used to round the
+    encode count down to zero (``int(2 * 0.25) == 0``), leaving the separate NAIP
+    encoder with no visible tokens for the sample. A rank whose whole batch hits this
+    gets no gradient in the NAIP encoder, desyncing FSDP collectives (NCCL timeout).
+    """
+    from olmoearth_pretrain.train.masking import MaskingConfig
+
+    strategy = MaskingConfig(
+        strategy_config={
+            "type": "random_time_with_decode_separate_encoder",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "random_ratio": 1.0,
+            "separate_encoder_modalities": [Modality.NAIP_10.name],
+            "separate_encode_ratio": 0.25,
+            "separate_decode_ratio": 0.75,
+        }
+    ).build()
+    patch_size = 4
+    naip_patch_px = patch_size * Modality.NAIP_10.image_tile_size_factor
+    s2_patch_px = patch_size * Modality.SENTINEL2_L2A.image_tile_size_factor
+    # 2x1 NAIP patch grid -> 2 tokens: int(2 * 0.25) == 0 without the fix.
+    for grid_h, grid_w in [(2, 1), (3, 1), (2, 2)]:
+        batch = OlmoEarthSample(
+            sentinel2_l2a=torch.randn(
+                (
+                    1,
+                    grid_h * s2_patch_px,
+                    grid_w * s2_patch_px,
+                    1,
+                    Modality.SENTINEL2_L2A.num_bands,
+                )
+            ),
+            naip_10=torch.randn(
+                (
+                    1,
+                    grid_h * naip_patch_px,
+                    grid_w * naip_patch_px,
+                    1,
+                    Modality.NAIP_10.num_bands,
+                )
+            ),
+            timestamps=torch.tensor([[[15, 6, 2023]]], dtype=torch.long),
+        )
+        masked = strategy.apply_mask(batch, patch_size=patch_size)
+        naip_mask = masked.naip_10_mask
+        assert naip_mask is not None
+        num_encode = int((naip_mask == MaskValue.ONLINE_ENCODER.value).sum())
+        num_decode = int((naip_mask == MaskValue.DECODER.value).sum())
+        assert num_encode >= 1, f"grid {grid_h}x{grid_w}: no encoder-visible NAIP token"
+        assert num_decode >= 1, f"grid {grid_h}x{grid_w}: no decode NAIP token"

@@ -1710,10 +1710,17 @@ class Encoder(FlexiVitBase):
         """
         if x.shape[1] == 0:
             # No tokens survived masking (e.g. an auxiliary single-modality encoder,
-            # such as the NAIP encoder, on a batch where that modality is entirely
-            # missing). Every original position is a (zero) masked token; return
-            # all-zero features and an all-zero (nothing-kept) mask instead of erroring.
+            # such as the NAIP encoder, on a batch where that modality has zero
+            # encoder-visible tokens). Every original position is a (zero) masked
+            # token; return all-zero features and an all-zero (nothing-kept) mask
+            # instead of erroring. The zeros must stay CONNECTED to the autograd
+            # graph (the `0.0 * x.sum()` term): under FSDP every rank has to backprop
+            # through the same modules each step, and `new_zeros` alone would cut the
+            # graph so this rank would skip the blocks' backward collectives and
+            # desync the process group (NCCL collective timeout).
             out = x.new_zeros((x.shape[0], indices.shape[1], x.shape[-1]))
+            if x.requires_grad:
+                out = out + 0.0 * x.sum()
             full_mask = torch.zeros(
                 (x.shape[0], indices.shape[1]), device=x.device, dtype=mask.dtype
             )

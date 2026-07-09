@@ -199,12 +199,28 @@ class MaskingStrategy:
         if decode_ratio is None:
             decode_ratio = self.decode_ratio
 
-        if num_not_missing_tokens == 1:
+        if num_not_missing_tokens == 0:
+            encode_tokens = 0
+            decode_tokens = 0
+        elif num_not_missing_tokens == 1:
             encode_tokens = 1
             decode_tokens = 0
         else:
             encode_tokens = int(num_not_missing_tokens * encode_ratio)
-            decode_tokens = int(num_not_missing_tokens * decode_ratio)
+            if encode_ratio > 0:
+                # Guarantee at least one encoder-visible token: with a small encode
+                # ratio and few tokens (e.g. 2-3 tokens at ratio 0.25), int() would
+                # round the encode count down to zero, starving the encoder of this
+                # sample. Under FSDP a separate per-modality encoder (e.g. NAIP) that
+                # gets zero visible tokens across a whole rank's batch receives no
+                # gradient, which desyncs the ranks' collectives (NCCL timeout).
+                # (encode_ratio == 0 means an intentionally decode-only split, e.g.
+                # RandomWithDecode's decode bandsets -- leave those fully unencoded.)
+                encode_tokens = max(1, encode_tokens)
+            decode_tokens = min(
+                int(num_not_missing_tokens * decode_ratio),
+                int(num_not_missing_tokens) - encode_tokens,
+            )
 
         target_tokens = int(num_not_missing_tokens - (encode_tokens + decode_tokens))
         flat_mask_tokens = torch.cat(

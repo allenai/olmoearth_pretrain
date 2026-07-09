@@ -370,3 +370,40 @@ def test_absent_naip_reconstruction_grads_reach_naip_modules() -> None:
     assert model.reconstructor is not None
     assert any(p.grad is not None for p in model.naip_encoder.parameters())
     assert any(p.grad is not None for p in model.reconstructor.parameters())
+
+
+def test_zero_visible_naip_tokens_grads_reach_every_naip_block() -> None:
+    """NAIP present but with ZERO encoder-visible tokens still trains every NAIP block.
+
+    This is the exact case behind the step-7048 NCCL hang: the batch HAS real NAIP (so
+    no synthetic injection and a real MAE target), but masking left no ONLINE_ENCODER
+    NAIP token (e.g. tiny NAIP grids where ``int(n * 0.25) == 0``). The NAIP encoder
+    then runs on zero tokens; its (empty) block outputs must stay CONNECTED to the
+    autograd graph so that, under FSDP, every per-block backward collective still fires
+    on this rank. Each transformer block is its own FSDP unit, so every single block
+    must receive gradient -- ``any()`` is not enough.
+    """
+    model = _build_config(detach=False).build()
+    x = _build_masked_sample()
+    naip_mask = x.naip_10_mask
+    assert naip_mask is not None
+    # Force the poison mask: every encoder-visible NAIP token becomes decode-only.
+    poison_mask = naip_mask.clone()
+    poison_mask[poison_mask == MaskValue.ONLINE_ENCODER.value] = MaskValue.DECODER.value
+    x = x._replace(naip_10_mask=poison_mask)
+    assert not bool((poison_mask == MaskValue.ONLINE_ENCODER.value).any())
+
+    _, _, _, reconstructed, _ = model(x, patch_size=PATCH_SIZE)
+    assert reconstructed is not None and reconstructed.naip_10 is not None
+    # Real NAIP target present -> the train module computes the REAL MAE loss (no
+    # keep-alive), so the loss itself must reach the NAIP encoder.
+    loss = MAELoss(loss_function="MSELoss").compute(reconstructed, x)
+    loss.backward()
+
+    for i, block in enumerate(model.naip_encoder.blocks):
+        assert any(p.grad is not None for p in block.parameters()), (
+            f"NAIP encoder block {i} received no gradient; under FSDP its backward "
+            "collectives would not fire and the process group would desync."
+        )
+    assert model.reconstructor is not None
+    assert any(p.grad is not None for p in model.reconstructor.parameters())
