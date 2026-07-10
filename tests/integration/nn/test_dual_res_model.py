@@ -121,7 +121,9 @@ def test_dual_res_model_returns_pixel_loss() -> None:
     assert any(p.grad is not None for p in model.encoder.pixel_self_blocks.parameters())
 
 
-@pytest.mark.parametrize("pixel_branch_type", ["conv", "window", "perceiver"])
+@pytest.mark.parametrize(
+    "pixel_branch_type", ["conv", "window", "perceiver", "pixeldit"]
+)
 def test_dual_res_model_variant_pixel_heads(pixel_branch_type: str) -> None:
     """Both pixel heads consume every variant's pixel state and train end-to-end."""
     model = _model_config(

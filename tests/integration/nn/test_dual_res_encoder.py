@@ -15,10 +15,12 @@ from olmoearth_pretrain.nn.dual_res_encoder import (
     DualResEncoderConfig,
     PerceiverPixelStep,
     PixelAttentionBlock,
+    PixelDiTStep,
     PixelFiLM,
     WindowPixelStep,
     build_location_groupings,
     unit_grid_coords,
+    within_patch_offset_index,
 )
 from olmoearth_pretrain.train.masking import MaskingConfig
 
@@ -392,6 +394,8 @@ def _masked_two_modality_sample() -> MaskedOlmoEarthSample:
         ("window", {"pixel_every_k_blocks": 2}),
         ("perceiver", {}),
         ("perceiver", {"pixel_coarse_read_interval": 2}),
+        ("pixeldit", {"pixel_dit_depth": 2}),
+        ("pixeldit", {"pixel_dit_depth": 1, "pixel_embedding_size": 8}),
     ],
 )
 def test_variant_forward_and_grads(pixel_branch_type: str, overrides: dict) -> None:
@@ -524,6 +528,106 @@ def test_perceiver_step_never_mixes_pixels() -> None:
     assert delta is not None and delta_p is not None
     assert not torch.allclose(delta[0], delta_p[0], atol=1e-6)
     torch.testing.assert_close(delta[1], delta_p[1])
+
+
+def test_pixeldit_output_gated_by_zero_init_fusion() -> None:
+    """PixelDiT output tokens equal the pixel-free path until the fusion opens.
+
+    The pathway conditions on the final coarse tokens but only touches the OUTPUT
+    through the zero-initialized fusion: at init (and even with randomized pixel
+    steps) the encoder output must be identical; once the fusion projection is
+    nonzero, ONLINE tokens change while masked positions stay untouched.
+    """
+    torch.manual_seed(0)
+    model = _build_variant_config("pixeldit", pixel_dit_depth=2).build().eval()
+    x = _masked_two_modality_sample()
+
+    with torch.no_grad():
+        out0 = model(x, patch_size=PATCH_SIZE)
+        # Randomize every pixel-step parameter: the fusion (still zero) must block
+        # any effect on the output tokens.
+        assert model.pixel_steps is not None and model.pixel_fusion is not None
+        for p in model.pixel_steps.parameters():
+            p.add_(torch.randn_like(p) * 0.05)
+        out1 = model(x, patch_size=PATCH_SIZE)
+        torch.testing.assert_close(
+            out0["tokens_and_masks"].sentinel2_l2a,
+            out1["tokens_and_masks"].sentinel2_l2a,
+        )
+        # ...but the pixel states themselves DID change (the pathway ran).
+        assert not torch.allclose(
+            out0["pixel_branch"][S2].pixels,
+            out1["pixel_branch"][S2].pixels,
+            atol=1e-5,
+        )
+        # Open the fusion: ONLINE output tokens change, masked ones stay zero.
+        torch.nn.init.normal_(model.pixel_fusion.compact, std=0.05)
+        out2 = model(x, patch_size=PATCH_SIZE)
+    assert x.sentinel2_l2a_mask is not None
+    online = x.sentinel2_l2a_mask[:, ::PATCH_SIZE, ::PATCH_SIZE] == (
+        MaskValue.ONLINE_ENCODER.value
+    )
+    tok1 = out1["tokens_and_masks"].sentinel2_l2a
+    tok2 = out2["tokens_and_masks"].sentinel2_l2a
+    assert not torch.allclose(tok1[online], tok2[online], atol=1e-5)
+    torch.testing.assert_close(tok1[~online], tok2[~online])
+
+
+def test_pixeldit_adaln_is_pixel_wise() -> None:
+    """Each within-patch offset gets its own AdaLN parameters (not a broadcast)."""
+    torch.manual_seed(0)
+    step = PixelDiTStep(
+        coarse_dim=EMB,
+        pixel_dim=PIXEL_EMB,
+        max_patch_size=8,
+        num_heads=4,
+        mlp_ratio=2.0,
+        position_encoding="absolute",
+        rope_base=10000.0,
+        rope_mixed_base=10.0,
+        temporal_rope_dim_frac=0.25,
+        rope_temporal_base=None,
+    )
+    torch.nn.init.normal_(step.to_adaln.weight, std=0.05)
+    torch.nn.init.normal_(step.to_adaln.bias, std=0.05)
+    coarse = torch.randn(3, EMB)
+    offset_idx = within_patch_offset_index((4, 4), 8, coarse.device)
+
+    with torch.no_grad():
+        s1, g1, a1, *_ = step.adaln_params(coarse, offset_idx)
+
+    # Different offsets of the SAME unit get different modulations...
+    assert not torch.allclose(s1[0, 0], s1[0, 1], atol=1e-5)
+    assert not torch.allclose(g1[0, 0], g1[0, 1], atol=1e-5)
+    # ...and the modulation depends on the unit's coarse token.
+    assert not torch.allclose(a1[0, 0], a1[1, 0], atol=1e-5)
+    # The offset rows address the max-patch-size table row-major: (i, j) -> i*8+j.
+    assert offset_idx.tolist() == [i * 8 + j for i in range(4) for j in range(4)]
+
+
+def test_pixeldit_step_is_identity_at_init() -> None:
+    """With a zeroed AdaLN projection, the step passes pixels through unchanged."""
+    torch.manual_seed(0)
+    step = PixelDiTStep(
+        coarse_dim=EMB,
+        pixel_dim=PIXEL_EMB,
+        max_patch_size=8,
+        num_heads=4,
+        mlp_ratio=2.0,
+        position_encoding="absolute",
+        rope_base=10000.0,
+        rope_mixed_base=10.0,
+        temporal_rope_dim_frac=0.25,
+        rope_temporal_base=None,
+    ).eval()
+    step.zero_init()
+    pixels = torch.randn(5, 16, PIXEL_EMB)
+    coarse = torch.randn(5, EMB)
+    packed_pos = torch.arange(5)  # 1 instance, 5 slots
+
+    with torch.no_grad():
+        out = step(pixels, coarse, (4, 4), packed_pos, 1, 5, None, None)
+    torch.testing.assert_close(out, pixels)
 
 
 def test_pixel_every_k_blocks_builds_reduced_steps() -> None:

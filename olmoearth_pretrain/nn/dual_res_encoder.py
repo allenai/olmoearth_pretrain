@@ -39,7 +39,17 @@ available (``pixel_branch_type``), trading fine-branch expressivity against spee
   steps (and always on the last) the coarse token attention-pools over its unit's
   pixels (:class:`CrossAttnBlock`) to read fine detail back up.
 
-The non-``joint`` types can also run at a reduced cadence: with
+* ``"pixeldit"`` (:class:`PixelDiTStep` / :class:`PixelDiTFusion`): a post-trunk
+  pathway following `PixelDiT <https://arxiv.org/abs/2511.20645>`_ -- the coarse
+  trunk runs unmodified to completion, then ``pixel_dit_depth`` tiny PiT blocks
+  refine the pixel tokens, conditioned on the final coarse tokens via *pixel-wise*
+  AdaLN (each pixel offset gets its own modulation) with global context via token
+  compaction attention. Unlike the paper (whose pixel pathway directly produces the
+  diffusion output), the pixel tokens are finally re-aggregated per unit and added
+  (zero-init) to the output tokens, so the latent-MIM loss and downstream evals
+  consume pixel-refined tokens.
+
+The interleaved non-``joint`` types can also run at a reduced cadence: with
 ``pixel_every_k_blocks = k`` the pixel branch executes only after every ``k``-th
 coarse block (always including the last), cutting its cost by ``1/k``.
 
@@ -106,6 +116,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 import torch.utils.checkpoint
 from einops import rearrange, reduce
 from torch import Tensor, nn
@@ -935,6 +946,252 @@ class PerceiverPixelStep(nn.Module):
         return pixels, self.read(coarse, pixels)
 
 
+def within_patch_offset_index(
+    patch_shape: tuple[int, int], max_patch_size: int, device: torch.device
+) -> Tensor:
+    """Rows of a ``max_patch_size**2``-entry per-offset table for a smaller patch.
+
+    Per-offset parameter tables (PixelDiT AdaLN / compaction / expansion weights) are
+    sized for the maximum patch; a ``(P1, P2)`` patch's pixel at within-patch offset
+    ``(i, j)`` uses row ``i * max_patch_size + j``. The returned index follows the
+    packed pixel order (row-major ``(p1, p2)``, as produced by
+    :meth:`DualResEncoder._build_pixel_context`).
+
+    Args:
+        patch_shape: ``(P1, P2)`` pixels per patch side.
+        max_patch_size: Table side length (the encoder's maximum patch size).
+        device: Device for the index tensor.
+
+    Returns:
+        ``[P1 * P2]`` long tensor of table rows.
+    """
+    p1, p2 = patch_shape
+    i = torch.arange(p1, device=device)
+    j = torch.arange(p2, device=device)
+    return (i[:, None] * max_patch_size + j[None, :]).reshape(-1)
+
+
+class PixelDiTStep(nn.Module):
+    """One PixelDiT "PiT" block: pixel-wise AdaLN + token-compaction attention + MLP.
+
+    Follows `PixelDiT <https://arxiv.org/abs/2511.20645>`_'s pixel pathway, adapted to
+    the packed ONLINE-unit layout and flexi patch sizes:
+
+    1. **Pixel-wise AdaLN**: the unit's (final) coarse token is projected to
+       ``P**2`` *distinct* per-offset ``(shift, scale, gate)`` pairs -- unlike
+       :class:`PixelFiLM`, every pixel of the patch gets its own modulation. The
+       projection weight covers ``max_patch_size**2`` offsets and is row-gathered for
+       the actual patch size, so smaller patches compute proportionally less.
+    2. **Token compaction attention**: each unit's ``P**2 x Dp`` pixel tokens are
+       compacted by a learned per-offset flattening into ONE coarse-width token; the
+       compacted tokens attend over the same packed per-instance sequence (same
+       attention mask and RoPE positions) as the coarse trunk, then a learned
+       per-offset expansion distributes the result back to the pixels (gated
+       residual). This gives every pixel a global receptive field at
+       patch-sequence attention cost.
+    3. **Pointwise MLP** at the (tiny) pixel width, with its own AdaLN modulation.
+
+    The step is conditioned on the coarse tokens but never writes to them (the fusion
+    into the encoder output happens once, after all steps -- see
+    :class:`PixelDiTFusion`). ``zero_init`` closes every gate so the step is exactly
+    the identity on the pixel stream at initialization.
+    """
+
+    def __init__(
+        self,
+        coarse_dim: int,
+        pixel_dim: int,
+        max_patch_size: int,
+        num_heads: int,
+        mlp_ratio: float,
+        position_encoding: str,
+        rope_base: float,
+        rope_mixed_base: float,
+        temporal_rope_dim_frac: float,
+        rope_temporal_base: float | None,
+    ) -> None:
+        """Initialize the step.
+
+        Args:
+            coarse_dim: Coarse-token embedding dimension (compaction/attention width).
+            pixel_dim: Pixel embedding dimension (Dp).
+            max_patch_size: Maximum patch side length (sizes the per-offset tables).
+            num_heads: Attention heads for the compacted-token attention.
+            mlp_ratio: Hidden-dim ratio of the pointwise pixel MLP.
+            position_encoding: The coarse trunk's position-encoding mode (the
+                compacted tokens attend with the same RoPE variant/positions).
+            rope_base: RoPE frequency base (matches the trunk).
+            rope_mixed_base: RoPE-Mixed initialization base (matches the trunk).
+            temporal_rope_dim_frac: Temporal RoPE head-dim fraction (matches trunk).
+            rope_temporal_base: Temporal RoPE base (matches the trunk).
+        """
+        super().__init__()
+        self.max_patch_size = max_patch_size
+        self.pixel_dim = pixel_dim
+        n_off = max_patch_size**2
+        self.norm_coarse = nn.LayerNorm(coarse_dim)
+        # 6 groups per offset: (shift1, scale1, gate1, shift2, scale2, gate2).
+        self.to_adaln = nn.Linear(coarse_dim, n_off * 6 * pixel_dim)
+        self.norm1 = nn.LayerNorm(pixel_dim, elementwise_affine=False)
+        self.norm2 = nn.LayerNorm(pixel_dim, elementwise_affine=False)
+        self.compact = nn.Parameter(torch.empty(n_off, pixel_dim, coarse_dim))
+        self.expand = nn.Parameter(torch.empty(n_off, coarse_dim, pixel_dim))
+        self.norm_attn = nn.LayerNorm(coarse_dim)
+        self.attn = Attention(
+            coarse_dim,
+            num_heads=num_heads,
+            qkv_bias=True,
+            position_encoding=position_encoding,
+            rope_base=rope_base,
+            rope_mixed_base=rope_mixed_base,
+            temporal_rope_dim_frac=temporal_rope_dim_frac,
+            rope_temporal_base=rope_temporal_base,
+        )
+        self.mlp = Mlp(pixel_dim, hidden_features=int(pixel_dim * mlp_ratio))
+        # The compaction acts as a Linear over the flattened (offset, Dp) axis; the
+        # expansion as a per-offset Linear from the coarse width. Xavier bounds with
+        # the matching fan-in/fan-out (raw Parameters are skipped by the blanket
+        # module init).
+        bound_c = (6.0 / (n_off * pixel_dim + coarse_dim)) ** 0.5
+        nn.init.uniform_(self.compact, -bound_c, bound_c)
+        bound_e = (6.0 / (coarse_dim + pixel_dim)) ** 0.5
+        nn.init.uniform_(self.expand, -bound_e, bound_e)
+
+    def zero_init(self) -> None:
+        """Zero the AdaLN projection: all gates closed, the step starts as identity.
+
+        Both residual branches (compaction attention and MLP) are multiplied by the
+        AdaLN gates, so with a zeroed projection the pixel stream passes through
+        untouched while every parameter still receives gradient through the gates.
+        """
+        nn.init.zeros_(self.to_adaln.weight)
+        nn.init.zeros_(self.to_adaln.bias)
+
+    def adaln_params(
+        self, coarse: Tensor, offset_idx: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        """Compute the per-pixel AdaLN parameters for the given patch offsets.
+
+        The projection weight is row-gathered BEFORE the matmul so only the actual
+        ``P**2`` offsets are computed (a patch-size-1 unit computes 1/64th of the
+        full table).
+
+        Args:
+            coarse: ``[num_units, Dc]`` coarse token per unit.
+            offset_idx: ``[P**2]`` per-offset table rows
+                (:func:`within_patch_offset_index`).
+
+        Returns:
+            Six ``[num_units, P**2, Dp]`` tensors:
+            ``(shift1, scale1, gate1, shift2, scale2, gate2)``.
+        """
+        n_off = self.max_patch_size**2
+        dp = self.pixel_dim
+        w = self.to_adaln.weight.view(n_off, 6 * dp, -1)[offset_idx].flatten(0, 1)
+        bias = self.to_adaln.bias.view(n_off, 6 * dp)[offset_idx].flatten()
+        adaln = F.linear(self.norm_coarse(coarse), w, bias)
+        adaln = adaln.view(coarse.shape[0], offset_idx.numel(), 6, dp)
+        s1, g1, a1, s2, g2, a2 = adaln.unbind(dim=2)
+        return s1, g1, a1, s2, g2, a2
+
+    def forward(
+        self,
+        pixels: Tensor,
+        coarse: Tensor,
+        patch_shape: tuple[int, int],
+        packed_pos: Tensor,
+        batch: int,
+        seqlen: int,
+        attn_mask: Tensor | None,
+        positions_packed: Tensor | None,
+    ) -> Tensor:
+        """Run the step.
+
+        Args:
+            pixels: ``[num_units, P**2, Dp]`` packed ONLINE pixel tokens.
+            coarse: ``[num_units, Dc]`` final coarse token of each unit (fixed
+                conditioning; not updated by this step).
+            patch_shape: ``(P1, P2)`` pixels per patch side.
+            packed_pos: ``[num_units]`` slot of each unit in the flattened
+                ``[batch * seqlen]`` packed coarse layout.
+            batch: Number of instances.
+            seqlen: Packed sequence length (the trunk's ``max_seqlen``).
+            attn_mask: The trunk's broadcastable attention mask (or ``None``).
+            positions_packed: The trunk's packed RoPE positions (or ``None``).
+
+        Returns:
+            ``[num_units, P**2, Dp]`` updated pixel tokens.
+        """
+        offset_idx = within_patch_offset_index(
+            patch_shape, self.max_patch_size, pixels.device
+        )
+        s1, g1, a1, s2, g2, a2 = self.adaln_params(coarse, offset_idx)
+
+        # Compaction -> packed attention (same sequence/mask/RoPE as the trunk;
+        # slots of non-pixel units keep zero content and are ordinary masked-or-zero
+        # keys) -> expansion, gated residual.
+        h = self.norm1(pixels) * (1 + g1) + s1
+        comp = torch.einsum("upd,pdc->uc", h, self.compact[offset_idx])
+        buf = comp.new_zeros(batch * seqlen, comp.shape[-1])
+        buf[packed_pos] = comp
+        x = buf.view(batch, seqlen, -1)
+        x = x + self.attn(
+            self.norm_attn(x), attn_mask=attn_mask, rope_positions=positions_packed
+        )
+        out_units = x.reshape(batch * seqlen, -1)[packed_pos]
+        expanded = torch.einsum("uc,pcd->upd", out_units, self.expand[offset_idx])
+        pixels = pixels + a1 * expanded
+
+        # Pointwise MLP with its own pixel-wise modulation.
+        pixels = pixels + a2 * self.mlp(self.norm2(pixels) * (1 + g2) + s2)
+        return pixels
+
+
+class PixelDiTFusion(nn.Module):
+    """Fuse the pixel pathway's output into the encoder's final coarse tokens.
+
+    This is the piece PixelDiT does not need (its pixel pathway directly produces the
+    diffusion output): our downstream losses and evals consume patch tokens, so each
+    unit's ``P**2`` pixel tokens are re-aggregated by a learned per-offset compaction
+    and added residually to the unit's final coarse token. Zero-initialized: the
+    encoder output starts exactly equal to the pixel-free coarse encoder's.
+    """
+
+    def __init__(self, coarse_dim: int, pixel_dim: int, max_patch_size: int) -> None:
+        """Initialize the fusion.
+
+        Args:
+            coarse_dim: Coarse-token embedding dimension.
+            pixel_dim: Pixel embedding dimension.
+            max_patch_size: Maximum patch side length (sizes the per-offset table).
+        """
+        super().__init__()
+        self.max_patch_size = max_patch_size
+        self.norm = nn.LayerNorm(pixel_dim, elementwise_affine=False)
+        self.compact = nn.Parameter(
+            torch.zeros(max_patch_size**2, pixel_dim, coarse_dim)
+        )
+
+    def zero_init(self) -> None:
+        """Zero the compaction: the encoder output starts unperturbed."""
+        nn.init.zeros_(self.compact)
+
+    def forward(self, pixels: Tensor, patch_shape: tuple[int, int]) -> Tensor:
+        """Compute the per-unit residual update for the final coarse tokens.
+
+        Args:
+            pixels: ``[num_units, P**2, Dp]`` final pixel tokens.
+            patch_shape: ``(P1, P2)`` pixels per patch side.
+
+        Returns:
+            ``[num_units, Dc]`` residual updates.
+        """
+        offset_idx = within_patch_offset_index(
+            patch_shape, self.max_patch_size, pixels.device
+        )
+        return torch.einsum("upd,pdc->uc", self.norm(pixels), self.compact[offset_idx])
+
+
 @experimental("Dual-resolution (pixel branch) encoder is experimental.")
 class DualResEncoder(Encoder):
     """Encoder with a coarse patch branch plus a lightweight per-pixel branch."""
@@ -949,6 +1206,7 @@ class DualResEncoder(Encoder):
         pixel_every_k_blocks: int = 1,
         pixel_conv_kernel: int = 3,
         pixel_coarse_read_interval: int = 1,
+        pixel_dit_depth: int = 4,
         pixel_film_from_coarse: bool = True,
         coarse_cross_attn_to_pixel: bool = True,
         pixel_grad_checkpointing: bool = True,
@@ -964,15 +1222,20 @@ class DualResEncoder(Encoder):
                 joint spatio-temporal attention), ``"conv"`` (ConvNeXt-style dense
                 convolutional branch, :class:`ConvPixelStep`), ``"window"`` (per-unit
                 window attention with a coarse register token,
-                :class:`WindowPixelStep`), or ``"perceiver"`` (cross-attention-only
-                pixel tokens, :class:`PerceiverPixelStep`). See the module docstring.
+                :class:`WindowPixelStep`), ``"perceiver"`` (cross-attention-only
+                pixel tokens, :class:`PerceiverPixelStep`), or ``"pixeldit"``
+                (post-trunk PixelDiT-style pathway with pixel-wise AdaLN and token
+                compaction, fused into the output tokens; :class:`PixelDiTStep` /
+                :class:`PixelDiTFusion`). See the module docstring.
             pixel_every_k_blocks: Run the pixel branch only after every ``k``-th
                 coarse block (the last block always runs it). Requires
-                ``depth % k == 0``; ``"joint"`` supports only 1.
+                ``depth % k == 0``; ``"joint"`` and ``"pixeldit"`` support only 1
+                (``"pixeldit"`` runs after the trunk, not interleaved).
             pixel_conv_kernel: Depthwise kernel size (``"conv"`` type only).
             pixel_coarse_read_interval: For ``"perceiver"``: the coarse <- pixel
                 attention-pool read runs every this-many pixel steps (the last pixel
                 step always reads).
+            pixel_dit_depth: For ``"pixeldit"``: number of post-trunk PiT blocks (M).
             pixel_film_from_coarse: (``"joint"`` only) If True, each block conditions
                 a unit's pixel tokens on its coarse token via gated FiLM (see
                 :class:`PixelFiLM`) -- the coarse branch reasons at full width, the
@@ -1025,6 +1288,7 @@ class DualResEncoder(Encoder):
         self.pixel_film: nn.ModuleList | None = None
         self.coarse_to_pixel: nn.ModuleList | None = None
         self.pixel_steps: nn.ModuleList | None = None
+        self.pixel_fusion: PixelDiTFusion | None = None
         if pixel_branch_type == "joint":
             self.pixel_self_blocks = nn.ModuleList(
                 [
@@ -1094,6 +1358,25 @@ class DualResEncoder(Encoder):
                     )
                     for s in range(num_steps)
                 ]
+            elif pixel_branch_type == "pixeldit":
+                steps = [
+                    PixelDiTStep(
+                        coarse_dim,
+                        pixel_embedding_size,
+                        max_patch_size=self.max_patch_size,
+                        num_heads=coarse_heads,
+                        mlp_ratio=pixel_mlp_ratio,
+                        position_encoding=self.position_encoding,
+                        rope_base=self.rope_base,
+                        rope_mixed_base=self.rope_mixed_base,
+                        temporal_rope_dim_frac=self.temporal_rope_dim_frac,
+                        rope_temporal_base=self.rope_temporal_base,
+                    )
+                    for _ in range(pixel_dit_depth)
+                ]
+                self.pixel_fusion = PixelDiTFusion(
+                    coarse_dim, pixel_embedding_size, self.max_patch_size
+                )
             else:
                 raise ValueError(f"Unknown pixel_branch_type {pixel_branch_type!r}")
             self.pixel_steps = nn.ModuleList(steps)
@@ -1107,6 +1390,8 @@ class DualResEncoder(Encoder):
         if self.pixel_steps is not None:
             for step in self.pixel_steps:
                 step.zero_init()
+        if self.pixel_fusion is not None:
+            self.pixel_fusion.zero_init()
 
     def _pixel_modules(self) -> list[nn.Module]:
         modules: list[nn.Module] = [self.pixel_embeddings]
@@ -1115,6 +1400,7 @@ class DualResEncoder(Encoder):
             self.pixel_film,
             self.coarse_to_pixel,
             self.pixel_steps,
+            self.pixel_fusion,
         ):
             if maybe is not None:
                 modules.append(maybe)
@@ -1122,6 +1408,9 @@ class DualResEncoder(Encoder):
 
     def _is_pixel_block(self, block_idx: int) -> bool:
         """Whether the pixel branch runs after coarse block ``block_idx``."""
+        if self.pixel_branch_type == "pixeldit":
+            # The PixelDiT pathway runs once, after the whole trunk.
+            return False
         return (block_idx + 1) % self.pixel_every_k_blocks == 0
 
     def forward(
@@ -1263,21 +1552,32 @@ class DualResEncoder(Encoder):
                         i, coarse_dense, pixels, pixel_ctx
                     )
 
-        if pixel_ctx is not None:
+        if pixel_ctx is not None and self.pixel_branch_type != "pixeldit":
             assert pixels is not None
             if self.pixel_branch_type == "conv":
                 self._pack_conv_frames(pixels, pixel_ctx)
             else:
-                for state, updated in zip(
-                    pixel_ctx.states.values(), pixels.split(pixel_ctx.split_sizes)
-                ):
-                    state.pixels = updated
+                self._assign_pixel_states(pixel_ctx, pixels)
 
         packed = self._pack(coarse_dense, indices, new_mask, max_seqlen)
         if exit_ids_seq is not None:
             packed = torch.where(exit_packed == num_blocks, packed, exited_packed)
         packed = self.norm(packed)
         coarse_dense, _ = self.add_removed_tokens(packed, indices, new_mask)
+
+        if pixel_ctx is not None and self.pixel_branch_type == "pixeldit":
+            assert pixels is not None
+            coarse_dense, pixels = self._pixeldit_pathway(
+                coarse_dense,
+                pixels,
+                pixel_ctx,
+                indices,
+                new_mask,
+                max_seqlen,
+                attn_mask,
+                positions_packed,
+            )
+            self._assign_pixel_states(pixel_ctx, pixels)
 
         tokens_per_modality = self.split_and_expand_per_modality(
             coarse_dense, dims_dict
@@ -1451,6 +1751,97 @@ class DualResEncoder(Encoder):
                 p2=p2,
             )
             st.pixels = units[st.flat_idx]
+
+    @staticmethod
+    def _assign_pixel_states(ctx: PixelBranchContext, pixels: Tensor) -> None:
+        """Split the concatenated packed pixel tensor back into per-modality states."""
+        for state, updated in zip(ctx.states.values(), pixels.split(ctx.split_sizes)):
+            state.pixels = updated
+
+    def _pixeldit_pathway(
+        self,
+        coarse_dense: Tensor,
+        pixels: Tensor,
+        ctx: PixelBranchContext,
+        indices: Tensor,
+        new_mask: Tensor,
+        max_seqlen: Tensor,
+        attn_mask: Tensor | None,
+        positions_packed: Tensor | None,
+    ) -> tuple[Tensor, Tensor]:
+        """Run the post-trunk PixelDiT pathway and fuse it into the output tokens.
+
+        Every :class:`PixelDiTStep` is conditioned on the same post-norm final coarse
+        tokens (PixelDiT's ``s_N``) and attends -- after token compaction -- over the
+        same packed per-instance sequence (mask + RoPE positions) as the trunk. The
+        coarse tokens are only modified once, at the very end, by the zero-initialized
+        :class:`PixelDiTFusion` residual at the ONLINE units.
+
+        Args:
+            coarse_dense: ``[B, N, Dc]`` final (post-norm) coarse tokens.
+            pixels: ``[num_units, P**2, Dp]`` packed ONLINE pixel tokens (as embedded;
+                untouched during the trunk).
+            ctx: The pixel-branch context.
+            indices: The trunk's ONLINE-packing gather indices.
+            new_mask: The trunk's packed-slot validity mask.
+            max_seqlen: The trunk's packed sequence length.
+            attn_mask: The trunk's broadcastable attention mask (or ``None``).
+            positions_packed: The trunk's packed RoPE positions (or ``None``).
+
+        Returns:
+            ``(coarse_dense, pixels)``: the fused output tokens and final pixel
+            tokens.
+        """
+        assert self.pixel_steps is not None and self.pixel_fusion is not None
+        b, n, d = coarse_dense.shape
+        s = int(max_seqlen)
+        patch_shape = next(iter(ctx.states.values())).patch_shape
+
+        # Packed slot of each ONLINE unit: invert the dense -> packed gather once so
+        # the steps can scatter/gather compacted tokens without rebuilding the dense
+        # layout. (Every ONLINE token sits within the first ``s`` slots of its row.)
+        device = coarse_dense.device
+        rows = torch.arange(b, device=device)[:, None]
+        inv = torch.zeros(b * n, dtype=torch.long, device=device)
+        inv[(rows * n + indices[:, :s]).reshape(-1)] = (
+            rows * s + torch.arange(s, device=device)[None, :]
+        ).reshape(-1)
+        packed_pos = inv[ctx.coarse_idx]
+
+        coarse_flat = coarse_dense.reshape(b * n, d)
+        coarse_units = coarse_flat[ctx.coarse_idx]  # fixed s_N conditioning
+
+        for step in self.pixel_steps:
+            if self.pixel_grad_checkpointing and torch.is_grad_enabled():
+                pixels = torch.utils.checkpoint.checkpoint(
+                    step,
+                    pixels,
+                    coarse_units,
+                    patch_shape,
+                    packed_pos,
+                    b,
+                    s,
+                    attn_mask,
+                    positions_packed,
+                    use_reentrant=False,
+                )
+            else:
+                pixels = step(
+                    pixels,
+                    coarse_units,
+                    patch_shape,
+                    packed_pos,
+                    b,
+                    s,
+                    attn_mask,
+                    positions_packed,
+                )
+
+        delta = self.pixel_fusion(pixels, patch_shape)
+        coarse_flat = coarse_flat.index_add(
+            0, ctx.coarse_idx, delta.to(coarse_flat.dtype)
+        )
+        return coarse_flat.view(b, n, d), pixels
 
     def _interleave_pixels(
         self,
@@ -1661,6 +2052,7 @@ class DualResEncoderConfig(EncoderConfig):
     pixel_every_k_blocks: int = 1
     pixel_conv_kernel: int = 3
     pixel_coarse_read_interval: int = 1
+    pixel_dit_depth: int = 4
     pixel_film_from_coarse: bool = True
     coarse_cross_attn_to_pixel: bool = True
     pixel_grad_checkpointing: bool = True
@@ -1680,18 +2072,29 @@ class DualResEncoderConfig(EncoderConfig):
                 "DualResEncoder requires at least one spatial, multitemporal "
                 "modality for the pixel branch."
             )
-        if self.pixel_branch_type not in ("joint", "conv", "window", "perceiver"):
+        if self.pixel_branch_type not in (
+            "joint",
+            "conv",
+            "window",
+            "perceiver",
+            "pixeldit",
+        ):
             raise ValueError(
                 f"Unknown pixel_branch_type {self.pixel_branch_type!r}; expected "
-                "'joint', 'conv', 'window' or 'perceiver'."
+                "'joint', 'conv', 'window', 'perceiver' or 'pixeldit'."
             )
         if self.pixel_every_k_blocks < 1:
             raise ValueError("pixel_every_k_blocks must be >= 1")
-        if self.pixel_branch_type == "joint" and self.pixel_every_k_blocks != 1:
+        if (
+            self.pixel_branch_type in ("joint", "pixeldit")
+            and self.pixel_every_k_blocks != 1
+        ):
             raise ValueError(
-                "pixel_every_k_blocks > 1 is only supported for the non-'joint' "
-                "pixel branch types."
+                "pixel_every_k_blocks > 1 is only supported for the interleaved "
+                "non-'joint' pixel branch types ('pixeldit' runs after the trunk)."
             )
+        if self.pixel_dit_depth < 1:
+            raise ValueError("pixel_dit_depth must be >= 1")
         if self.depth % self.pixel_every_k_blocks != 0:
             raise ValueError(
                 f"depth ({self.depth}) must be divisible by pixel_every_k_blocks "

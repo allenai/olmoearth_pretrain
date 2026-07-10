@@ -337,6 +337,28 @@ VARIANTS: dict[str, dict] = {
         pixel_mlp_ratio=2.0,
         pixel_every_k_blocks=4,
     ),
+    # PixelDiT-style post-trunk pathway (pixel-wise AdaLN + token compaction).
+    "pixeldit_d16_m2": dict(
+        pixel_branch_type="pixeldit",
+        pixel_embedding_size=16,
+        pixel_num_heads=2,
+        pixel_mlp_ratio=4.0,
+        pixel_dit_depth=2,
+    ),
+    "pixeldit_d16_m4": dict(
+        pixel_branch_type="pixeldit",
+        pixel_embedding_size=16,
+        pixel_num_heads=2,
+        pixel_mlp_ratio=4.0,
+        pixel_dit_depth=4,
+    ),
+    "pixeldit_d32_m2": dict(
+        pixel_branch_type="pixeldit",
+        pixel_embedding_size=32,
+        pixel_num_heads=2,
+        pixel_mlp_ratio=4.0,
+        pixel_dit_depth=2,
+    ),
 }
 
 
