@@ -14,7 +14,7 @@ from olmoearth_pretrain.nn.dual_res_encoder import (
     DualResEncoderConfig,
     PixelTemporalBlock,
     build_location_groupings,
-    build_pixel_groupings,
+    unit_grid_coords,
 )
 from olmoearth_pretrain.train.masking import MaskingConfig
 
@@ -93,17 +93,21 @@ def test_builds_and_forward() -> None:
     assert out["project_aggregated"].shape == (B, EMB)
 
 
-def test_build_pixel_groupings_online_only() -> None:
-    """build_pixel_groupings selects exactly the ONLINE units (flat indices)."""
-    torch.manual_seed(0)
-    b, g, t, bs = 2, 2, 4, 1
-    online = torch.rand(b, g, g, t, bs) > 0.5
-    gr = build_pixel_groupings(online, p2=16)
+def test_unit_grid_coords_roundtrip() -> None:
+    """unit_grid_coords decodes flat unit indices back to their grid coordinates."""
+    grid = (2, 3, 2, 4, 2)  # (B, G1, G2, T, band_sets)
+    b, g1, g2, t, bs = grid
+    u = g1 * g2 * t * bs
+    flat_idx = torch.arange(b * u)
+    coords = unit_grid_coords(flat_idx, grid)
 
-    assert gr.num_online == int(online.sum())
-    assert gr.flat_idx.numel() == int(online.sum())
-    # Flat indices point at exactly the ONLINE entries of the row-major mask.
-    assert bool((online.reshape(-1)[gr.flat_idx]).all())
+    # Rebuild the flat index from the decoded coordinates.
+    rebuilt = coords.instance * u + (coords.patch * t + coords.t) * bs + coords.bandset
+    assert bool((rebuilt == flat_idx).all())
+    assert bool((coords.within == flat_idx % u).all())
+    assert int(coords.patch.max()) == g1 * g2 - 1
+    assert int(coords.t.max()) == t - 1
+    assert int(coords.bandset.max()) == bs - 1
 
 
 def test_build_location_groupings_by_pixel_location() -> None:
@@ -124,16 +128,19 @@ def test_encoder_processes_online_units_only() -> None:
     x = _masked_sample()
     coarse = model.patch_embeddings.forward(x, PATCH_SIZE)
     pixels = model.pixel_embeddings.forward(x, PATCH_SIZE)
-    _, masks, _ = model.split_tokens_masks_and_dims(coarse)
+    _, masks, dims = model.split_tokens_masks_and_dims(coarse)
 
-    state = model._init_pixel_state(pixels, masks)[S2]
-    groupings = state["groupings"]
+    ctx = model._build_pixel_context(pixels, masks, dims)
+    assert ctx is not None
+    state = ctx.states[S2]
     online = masks[f"{S2}_mask"] == MaskValue.ONLINE_ENCODER.value
     p2 = PATCH_SIZE**2
 
-    assert groupings.num_online == int(online.sum())
-    assert state["packed_pixels"].shape[0] == groupings.num_online
-    assert state["packed_pixels"].shape[1] == p2
+    assert state.num_online == int(online.sum())
+    # Flat indices point at exactly the ONLINE entries of the row-major mask.
+    assert bool((online.reshape(-1)[state.flat_idx]).all())
+    assert state.pixels.shape[0] == state.num_online
+    assert state.pixels.shape[1] == p2
 
 
 def test_pixel_temporal_block_runs() -> None:
@@ -150,8 +157,8 @@ def test_pixel_temporal_block_runs() -> None:
 def test_grads_reach_every_pixel_module() -> None:
     """A coarse-only loss trains the pixel embed and every pixel/cross-attn block.
 
-    Under FSDP each block is its own unit, so every single pixel module must receive
-    gradient or its backward collectives would desync from other ranks.
+    Every pixel module must feed the coarse output each block (via the coarse<-pixel
+    cross-attention) so the whole pixel branch trains even from coarse-only losses.
     """
     model = _build_config().build()
     x = _masked_sample()

@@ -21,7 +21,6 @@ into the main branch (the two branches cross-attend inside the encoder).
 
 import logging
 from dataclasses import dataclass
-from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -33,8 +32,10 @@ from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.decorators import experimental
 from olmoearth_pretrain.nn.dual_res_encoder import (
     CrossAttnBlock,
+    PixelModalityState,
     chunked_batch_attn,
     get_pixel_branch_modalities,
+    unit_grid_coords,
 )
 from olmoearth_pretrain.nn.encodings import get_1d_sincos_pos_encoding
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
@@ -123,7 +124,8 @@ def build_recon_groupings(online_mask: Tensor, decode_mask: Tensor) -> ReconGrou
 
     A "unit" is one ``(instance, patch, timestep, band set)`` cell, referenced by its
     flat index into ``[B * U]`` (``U = G*G*T*band_sets``, row-major ``(g1,g2,t,bs)``) --
-    the same canonical order the encoder used to pack its ONLINE pixel reps.
+    the same canonical order the encoder used to pack its ONLINE pixel reps (see
+    :func:`~olmoearth_pretrain.nn.dual_res_encoder.unit_grid_coords`).
 
     Args:
         online_mask: ``[B, G, G, T, band_sets]`` bool (ONLINE_ENCODER units).
@@ -132,30 +134,19 @@ def build_recon_groupings(online_mask: Tensor, decode_mask: Tensor) -> ReconGrou
     Returns:
         A :class:`ReconGroupings`.
     """
-    b, g1, g2, t, bs = online_mask.shape
-    u = g1 * g2 * t * bs
+    grid = online_mask.shape
+    b, g1, g2, t, bs = grid
     num_patches = g1 * g2
 
-    def unit_coords(flat: Tensor) -> tuple[Tensor, Tensor, Tensor]:
-        """Decode flat unit indices -> (location key, timestep, band set).
-
-        ``flat`` indexes ``[B * U]`` in row-major ``(b, g1, g2, t, bs)`` order. The
-        location key ``b * num_patches + patch`` drops band set + timestep so every unit
-        at one patch shares a group.
-        """
-        within = flat % u  # position within the instance
-        b_of = flat // u  # instance index
-        bs_of = within % bs  # band set
-        patch_t = within // bs  # (patch, timestep) flattened
-        t_of = patch_t % t  # timestep
-        patch = patch_t // t  # patch index in 0..G*G-1
-        return b_of * num_patches + patch, t_of, bs_of
-
-    # Flat indices of the ONLINE (key) and DECODER (query) units.
+    # Flat indices of the ONLINE (key) and DECODER (query) units. The location key
+    # ``instance * num_patches + patch`` drops band set + timestep so every unit at one
+    # patch shares a group.
     online_flat = torch.nonzero(online_mask.reshape(-1), as_tuple=False).squeeze(-1)
     decode_flat = torch.nonzero(decode_mask.reshape(-1), as_tuple=False).squeeze(-1)
-    key_loc, t_on, _ = unit_coords(online_flat)
-    dec_loc, t_de, bs_de = unit_coords(decode_flat)
+    on = unit_grid_coords(online_flat, grid)
+    de = unit_grid_coords(decode_flat, grid)
+    key_loc, t_on = on.instance * num_patches + on.patch, on.t
+    dec_loc, t_de, bs_de = de.instance * num_patches + de.patch, de.t, de.bandset
 
     # Groups = the distinct locations (sorted) that contain >= 1 ONLINE unit; only these
     # can provide reconstruction context.
@@ -265,7 +256,7 @@ class PixelReconstructionDecoder(nn.Module):
 
     def forward(
         self,
-        pixel_branch: dict[str, dict[str, Any]],
+        pixel_branch: dict[str, PixelModalityState],
         sample: MaskedOlmoEarthSample,
         patch_size: int,
     ) -> Tensor:
@@ -289,13 +280,13 @@ class PixelReconstructionDecoder(nn.Module):
         return term
 
     def _reconstruct_modality(
-        self, modality: str, st: dict[str, Any], sample: MaskedOlmoEarthSample
+        self, modality: str, st: PixelModalityState, sample: MaskedOlmoEarthSample
     ) -> Tensor:
         """Reconstruct one modality's masked pixels from its ONLINE pixel reps."""
-        online_reps = st["packed_pixels"]  # [num_online, P**2, Dp] (encoder output)
-        b, g1, g2, t, bs = st["shape"]
-        p1, p2 = st["p"]
-        p2n = p1 * p2  # pixels per unit (P**2)
+        online_reps = st.pixels  # [num_online, P**2, Dp] (encoder output)
+        b, g1, g2, t, bs = st.grid
+        p1, p2 = st.patch_shape
+        p2n = st.pixels_per_unit  # pixels per unit (P**2)
 
         # Recover the coarse-grid (per-unit) ONLINE/DECODER masks by sampling the
         # top-left pixel of each patch (all pixels in a unit share one mask value). This
@@ -354,11 +345,11 @@ class PixelReconstructionDecoder(nn.Module):
         preds: Tensor,
         rg: ReconGroupings,
         sample: MaskedOlmoEarthSample,
-        st: dict[str, Any],
+        st: PixelModalityState,
     ) -> Tensor:
         """Token-averaged MSE between predicted and true (normalized) pixels."""
-        b, g1, g2, t, bs = st["shape"]
-        p1, p2 = st["p"]
+        b, g1, g2, t, bs = st.grid
+        p1, p2 = st.patch_shape
         data = getattr(sample, modality)  # [B, H, W, T, C] (normalized inputs)
 
         # Reshape raw pixels into per-(instance, patch, timestep) units, each with its
@@ -372,13 +363,8 @@ class PixelReconstructionDecoder(nn.Module):
             p2=p2,
         )
         # Row index into ``data_units`` for each DECODER unit (its instance/patch/time).
-        u = g1 * g2 * t * bs
-        within = rg.decode_flat % u
-        b_of = rg.decode_flat // u
-        patch_t = within // bs
-        t_of = patch_t % t
-        patch = patch_t // t
-        unit_bt = (b_of * (g1 * g2) + patch) * t + t_of  # index into B*G2*T
+        coords = unit_grid_coords(rg.decode_flat, st.grid)
+        unit_bt = (coords.instance * (g1 * g2) + coords.patch) * t + coords.t
         target_all = data_units[unit_bt]  # [num_dec, P**2, C]
 
         # Each band set has its own linear head predicting that band set's channels.
@@ -460,7 +446,7 @@ class PixelMapProbe(nn.Module):
 
     def forward(
         self,
-        pixel_branch: dict[str, dict[str, Any]],
+        pixel_branch: dict[str, PixelModalityState],
         sample: MaskedOlmoEarthSample,
         patch_size: int,
     ) -> Tensor:
@@ -481,7 +467,7 @@ class PixelMapProbe(nn.Module):
         return total
 
     def _pool_online_by_location(
-        self, pixel_branch: dict[str, dict[str, Any]]
+        self, pixel_branch: dict[str, PixelModalityState]
     ) -> tuple[Tensor | None, Tensor | None, tuple | None]:
         """Mean-pool ONLINE pixel reps over (timestep, band set, modality) per location.
 
@@ -497,23 +483,18 @@ class PixelMapProbe(nn.Module):
         counts: Tensor | None = None
         shape: tuple | None = None
         for st in pixel_branch.values():
-            groupings = st["groupings"]
-            if groupings.num_online == 0:
+            if st.num_online == 0:
                 continue
-            b, g1, g2, t, bs = st["shape"]
-            p1, p2 = st["p"]
-            p2n = p1 * p2
-            reps = st["packed_pixels"]  # [num_online, P**2, Dp]
+            b, g1, g2, t, bs = st.grid
+            p1, p2 = st.patch_shape
+            p2n = st.pixels_per_unit
+            reps = st.pixels  # [num_online, P**2, Dp]
 
             # Location id of each ONLINE unit's pixels: flatten (b, patch, offset) to
             # ``b * (G2 * P**2) + patch * P**2 + offset``. ``base`` is offset 0 of each
             # unit; adding arange(P**2) enumerates the unit's P**2 pixel locations.
-            flat = groupings.flat_idx
-            u = g1 * g2 * t * bs
-            within = flat % u
-            b_of = flat // u
-            patch = (within // bs) // t
-            base = (b_of * (g1 * g2) + patch) * p2n  # [num_online]
+            coords = unit_grid_coords(st.flat_idx, st.grid)
+            base = (coords.instance * (g1 * g2) + coords.patch) * p2n  # [num_online]
             offset = torch.arange(p2n, device=reps.device)
             loc = (base[:, None] + offset[None, :]).reshape(-1)  # [num_online * P**2]
 

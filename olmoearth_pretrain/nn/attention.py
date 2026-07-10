@@ -263,8 +263,12 @@ class Attention(nn.Module):
             # matching the transpose of the other attention implementations that need to be transposed back
             x = x.transpose(1, 2)
         elif self.fast_attn:
-            if attn_mask is not None:
+            if attn_mask is not None and attn_mask.dim() == 2:
                 attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, n, 1))
+            # A 4-dim attn_mask is passed through as-is: callers can provide a
+            # broadcastable [B, 1, 1, N_k] key mask, which SDPA broadcasts internally
+            # without materializing (and saving for backward) the full
+            # [B, num_heads, N_q, N_k] tensor the repeat above creates.
             x = F.scaled_dot_product_attention(
                 q,
                 k,

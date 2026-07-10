@@ -30,7 +30,10 @@ from torch.distributed.fsdp import (
 )
 
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.nn.dual_res_encoder import DualResEncoder
+from olmoearth_pretrain.nn.dual_res_encoder import (
+    DualResEncoder,
+    PixelModalityState,
+)
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.nn.pixel_decoder import (
@@ -125,7 +128,7 @@ class DualResLatentMIM(nn.Module, DistributedMixins):
 
     def _pixel_loss(
         self,
-        pixel_branch: dict[str, dict[str, Any]],
+        pixel_branch: dict[str, PixelModalityState],
         x: MaskedOlmoEarthSample,
         patch_size: int,
         extra_metrics: dict[str, Any],

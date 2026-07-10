@@ -314,7 +314,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             # the coarse loss (e.g. the dual-resolution pixel-branch loss).
             aux_loss = outputs[5] if len(outputs) > 5 else None
             if extra_metrics is not None:
-                self.log_extra_metrics(extra_metrics)
+                # Mean-reduce: model_forward runs once per (masked view, microbatch),
+                # so the same metric is recorded several times per step.
+                self.log_extra_metrics(extra_metrics, reduce_type=ReduceType.mean)
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
                 output_dict = self.model.target_encoder.forward(

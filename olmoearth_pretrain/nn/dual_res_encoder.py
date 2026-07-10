@@ -15,13 +15,30 @@ Optionally the coarse branch also cross-attends to the (pooled) pixel features o
 its unit, so the fine detail flows back into the coarse tokens that downstream
 tasks consume.
 
-**Masked-patch handling.** Masking is applied at the ``(patch, timestep, band set)``
-*unit* granularity: within a unit either all ``P**2`` pixels are visible
-(``ONLINE_ENCODER``) or all are masked. The encoder therefore operates on **ONLINE
-units only** -- the coarse branch packs them via ``remove_masked_tokens`` and the
-pixel branch gathers each ONLINE unit's ``P**2`` pixels into a packed
-``[num_online_units, P**2, Dp]`` tensor. No pixel token is ever created for a masked
-unit, so no compute is spent on (and no signal leaks from) masked patches.
+**Vocabulary** (used consistently across this module and ``pixel_decoder.py``):
+
+* A **unit** is one ``(spatial patch, timestep, band set)`` cell of one modality's
+  ``[B, G1, G2, T, band_sets]`` grid. Its **flat index** is its position in the
+  row-major ``reshape(B * U)`` flattening (``U = G1*G2*T*band_sets``); decode it with
+  :func:`unit_grid_coords`. This canonical order is shared between the packed pixel
+  tensors and the collapsed coarse token layout.
+* A **location** is one ``(instance, spatial patch)`` cell, shared by all pixel
+  modalities (they must live on the same grid).
+* An **offset** is a pixel's position within its patch (``P**2`` per unit). Offsets
+  are always a batched dimension: pixels never attend across offsets.
+
+**Masked-patch handling.** Masking is applied at the unit granularity: within a unit
+either all ``P**2`` pixels are visible (``ONLINE_ENCODER``) or all are masked. The
+encoder therefore operates on **ONLINE units only** -- the coarse branch packs them via
+``remove_masked_tokens`` and the pixel branch gathers each ONLINE unit's ``P**2``
+pixels into a packed ``[num_online_units, P**2, Dp]`` tensor. No pixel token is ever
+created for a masked unit, so no compute is spent on (and no signal leaks from) masked
+patches.
+
+**FSDP.** The pixel modules are intentionally *not* wrapped as individual FSDP units
+(see :meth:`DualResEncoder.apply_fsdp`): they are invoked a data-dependent number of
+times per step, which would desync the all-gather sequence across ranks and deadlock
+NCCL. They live in the enclosing model's root FSDP unit instead.
 
 This module follows the ``st_model.py`` pattern: it lives on its own and reuses the
 shared building blocks from ``flexi_vit`` / ``attention`` rather than modifying them.
@@ -30,12 +47,11 @@ shared building blocks from ``flexi_vit`` / ``attention`` rather than modifying 
     First-version limitations (documented, not silently ignored):
 
     * Attention uses SDPA with (small) padded group masks; flash-attn var-len packing
-      is a later optimization. ``use_flash_attn`` and ``num_register_tokens`` are not
-      supported yet. The pixel branch runs one tiny attention problem per pixel (self
-      attention) or per ONLINE unit (cross attention); because CUDA caps a launch grid
-      dimension at 65535 and both the fused SDPA kernels and flash-attn map the
-      attention batch onto that dimension, the per-block attention batch is split into
-      chunks (see :func:`chunked_batch_attn`) to stay under the limit.
+      is a later optimization. ``use_flash_attn``, ``num_register_tokens`` and
+      ``torch.compile`` of the pixel blocks (their shapes change every batch) are not
+      supported yet. Because CUDA caps a launch grid dimension at 65535 and the fused
+      SDPA kernels map the attention batch onto that dimension, the pixel branch's
+      large attention batches are split into chunks (see :func:`chunked_batch_attn`).
     * Cross-attention uses absolute positions (no RoPE); the pixel self-attention gets
       its temporal ordering signal from an additive 1D sin/cos encoding. Fractional-
       coordinate RoPE for pixels is a future refinement.
@@ -45,14 +61,15 @@ shared building blocks from ``flexi_vit`` / ``attention`` rather than modifying 
 """
 
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import torch
+import torch.utils.checkpoint
 from einops import rearrange
 from torch import Tensor, nn
-from torch.distributed.fsdp import fully_shard
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.datatypes import (
@@ -118,73 +135,93 @@ def get_pixel_branch_modalities(supported_modalities: list[ModalitySpec]) -> lis
 
 
 @dataclass
-class PixelGroupings:
-    """The set of ONLINE ``(patch, timestep, band set)`` units for one modality.
+class UnitCoords:
+    """Grid coordinates of flat unit indices (see :func:`unit_grid_coords`)."""
 
-    Attributes:
-        flat_idx: ``[num_online]`` indices of the ONLINE units into the flattened
-            per-instance unit axis ``[B * U]`` (``U = G * G * T * band_sets``, ordered
-            ``(g1, g2, t, band set)`` to match ``online_mask.reshape(B, U)``). This
-            defines the packed order shared by the pixel tokens and the coarse tokens.
-        p2: number of pixels per unit (``P**2``).
+    instance: Tensor
+    """Instance (batch) index of each unit."""
+    patch: Tensor
+    """Flat spatial patch index within the instance, in ``[0, G1*G2)``."""
+    t: Tensor
+    """Timestep index."""
+    bandset: Tensor
+    """Band-set index."""
+    within: Tensor
+    """Flat unit index within the instance, in ``[0, U)``."""
+
+
+def unit_grid_coords(
+    flat_idx: Tensor, grid: tuple[int, int, int, int, int]
+) -> UnitCoords:
+    """Decode flat unit indices into their grid coordinates.
+
+    ``flat_idx`` indexes the row-major ``reshape(B * U)`` flattening of a modality's
+    ``[B, G1, G2, T, band_sets]`` unit grid (``U = G1*G2*T*band_sets``). Every consumer
+    of the packed unit order (encoder groupings, pixel decoders) derives positions with
+    this one helper, so the layout convention lives in a single place.
+
+    Args:
+        flat_idx: ``[N]`` flat unit indices.
+        grid: The ``(B, G1, G2, T, band_sets)`` grid shape.
+
+    Returns:
+        The per-unit :class:`UnitCoords`.
+    """
+    _, g1, g2, t, band_sets = grid
+    u = g1 * g2 * t * band_sets
+    within = flat_idx % u
+    return UnitCoords(
+        instance=flat_idx // u,
+        patch=within // (t * band_sets),
+        t=(within // band_sets) % t,
+        bandset=within % band_sets,
+        within=within,
+    )
+
+
+@dataclass
+class PixelModalityState:
+    """Packed pixel tokens for one modality's ONLINE units.
+
+    ``pixels`` holds the ``P**2`` pixels of every ONLINE unit in ascending
+    flat-unit-index order. The encoder fills it with the final (post-block) pixel
+    representations, which the pixel decoders (``pixel_decoder.py``) consume.
     """
 
+    pixels: Tensor
+    """``[num_online, P**2, Dp]`` pixel tokens of the ONLINE units."""
     flat_idx: Tensor
-    p2: int
+    """``[num_online]`` flat indices into the ``[B * U]`` unit axis (ascending)."""
+    grid: tuple[int, int, int, int, int]
+    """The ``(B, G1, G2, T, band_sets)`` unit grid shape."""
+    patch_shape: tuple[int, int]
+    """``(P1, P2)`` pixels per patch side."""
 
     @property
     def num_online(self) -> int:
         """Number of ONLINE units for this modality."""
         return int(self.flat_idx.numel())
 
-
-def build_pixel_groupings(online_mask: Tensor, p2: int) -> PixelGroupings:
-    """Find the ONLINE ``(patch, timestep, band set)`` units for one modality.
-
-    The coarse branch masks at the *unit* granularity -- a unit being one
-    ``(spatial patch, timestep, band set)`` cell of the ``[B, G, G, T, band_sets]``
-    mask. Every pixel inside an ONLINE unit is visible; every pixel inside a
-    non-ONLINE unit is dropped. So all we need here is the flat list of ONLINE units;
-    each of them expands to ``P**2`` pixels downstream.
-
-    We flatten the mask to ``[B * U]`` with ``U = G * G * T * band_sets`` in row-major
-    ``(instance, g1, g2, t, band set)`` order (the natural ``reshape`` order), then take
-    the indices where the mask is ``ONLINE_ENCODER``. Keeping this canonical flat order
-    means the pixel tokens (``pixels.reshape(B*U, ...)[flat_idx]``) and the coarse tokens
-    (``coarse.reshape(B*U, ...)[flat_idx]``) line up index-for-index without any extra
-    bookkeeping.
-
-    Args:
-        online_mask: ``[B, G, G, T, band_sets]`` bool, True where the unit is ONLINE.
-        p2: pixels per unit (``P**2``), carried through for convenience.
-
-    Returns:
-        A :class:`PixelGroupings` holding the flat ONLINE-unit indices.
-    """
-    online_flat = online_mask.reshape(-1)  # [B * U], row-major (b, g1, g2, t, band set)
-    flat_idx = torch.nonzero(online_flat, as_tuple=False).squeeze(-1)  # [num_online]
-    return PixelGroupings(flat_idx=flat_idx, p2=p2)
+    @property
+    def pixels_per_unit(self) -> int:
+        """Number of pixels per unit (``P**2``)."""
+        return self.patch_shape[0] * self.patch_shape[1]
 
 
 @dataclass
 class LocationGroupings:
     """Groups ONLINE units by *pixel location* for the pixel self-attention.
 
-    A "location" is a single ``(instance, patch)`` cell; the ``P**2`` intra-patch
-    offsets are handled as a batched dimension, so each physical pixel attends only to
-    its own ``(modality, band set, timestep)`` observations. Units from *all* pixel
-    modalities are pooled into these groups (that is what makes the self-attention span
-    modalities), which requires every pixel modality to share the same ``G`` and ``P``.
-
     The fields describe how to scatter a packed ``[num_units, P**2, Dp]`` tensor (the
-    concatenation of every modality's ONLINE units, in modality-iteration order) into a
-    padded ``[num_locations, max_units, P**2, Dp]`` buffer and back.
+    concatenation of every modality's ONLINE units) into a padded
+    ``[num_locations, max_units, P**2, Dp]`` buffer and back. Grouping by location is
+    what makes the self-attention span modalities while never mixing pixel locations.
 
     Attributes:
         order: ``[num_units]`` permutation sorting units by their location id.
         scatter_pos: ``[num_units]`` slot of each (sorted) unit in the flattened
             ``[num_locations * max_units]`` buffer.
-        num_locations: number of distinct ``(instance, patch)`` cells with >=1 unit.
+        num_locations: number of distinct locations with >= 1 unit.
         max_units: max number of units at any single location (pad length).
         valid: ``[num_locations, max_units]`` bool mask of populated slots.
     """
@@ -200,8 +237,8 @@ def build_location_groupings(location_ids: Tensor) -> LocationGroupings:
     """Group units by location id for padded per-location attention.
 
     Args:
-        location_ids: ``[num_units]`` integer location id per unit (``b * G**2 + patch``),
-            in the same order as the concatenated packed pixel tensor.
+        location_ids: ``[num_units]`` integer location id per unit
+            (``instance * G1*G2 + patch``), in packed unit order.
 
     Returns:
         A :class:`LocationGroupings`.
@@ -237,6 +274,30 @@ def build_location_groupings(location_ids: Tensor) -> LocationGroupings:
         max_units=max_units,
         valid=valid.view(num_locations, max_units),
     )
+
+
+@dataclass
+class PixelBranchContext:
+    """Fixed per-forward bookkeeping for the pixel branch.
+
+    Everything here is computed once, before the transformer blocks run, so the
+    per-block work in :meth:`DualResEncoder._interleave_pixels` is pure tensor compute.
+    All cross-modality tensors concatenate the modalities in ``states`` iteration
+    order; ``split_sizes`` splits them back.
+
+    Attributes:
+        states: Per-modality packed ONLINE pixel tokens (updated block by block).
+        split_sizes: ``num_online`` per modality.
+        loc: Per-location grouping of the concatenated units (self-attention).
+        coarse_idx: ``[total_units]`` position of each unit's coarse token in the
+            flattened ``[B * N]`` coarse token tensor (``N`` = tokens per instance),
+            so cross-attention gathers/scatters coarse partners with one index op.
+    """
+
+    states: dict[str, PixelModalityState]
+    split_sizes: list[int]
+    loc: LocationGroupings
+    coarse_idx: Tensor
 
 
 class PixelPatchEmbed(nn.Module):
@@ -342,6 +403,10 @@ class PixelPatchEmbed(nn.Module):
             torch.arange(t, device=tokens.device, dtype=torch.float32),
             self.pixel_embedding_size,
         )  # [T, Dp]
+        # Cast to the token dtype: under FSDP mixed precision the tokens are bf16 and
+        # a float32 addition would silently promote the whole pixel branch to float32
+        # (and then fail against the bf16 LayerNorm/Linear params downstream).
+        enc = enc.to(tokens.dtype)
         return tokens + enc[None, None, None, :, None, :]
 
 
@@ -382,6 +447,11 @@ class PixelTemporalBlock(nn.Module):
         Returns:
             ``[N, S, D]`` updated tokens.
         """
+        # Broadcastable [N, 1, 1, S] form: N is huge here, so materializing the
+        # [N, heads, S, S] mask (what Attention does with a 2-dim mask) would dominate
+        # the pixel branch's memory.
+        if key_mask is not None:
+            key_mask = key_mask[:, None, None, :]
         x = x + self.attn(self.norm1(x), attn_mask=key_mask)
         x = x + self.mlp(self.norm2(x))
         return x
@@ -426,6 +496,9 @@ class CrossAttnBlock(nn.Module):
         Returns:
             ``[B', N_q, q_dim]`` residual update (to be added by the caller).
         """
+        # Broadcastable [B', 1, 1, N_k] form; see PixelTemporalBlock.forward.
+        if key_mask is not None:
+            key_mask = key_mask[:, None, None, :]
         kv = self.kv_proj(kv)
         out = self.attn(self.norm_q(q), y=self.norm_kv(kv), attn_mask=key_mask)
         out = out + self.mlp(self.norm_mlp(out))
@@ -444,6 +517,7 @@ class DualResEncoder(Encoder):
         pixel_mlp_ratio: float = 4.0,
         pixel_cross_attn_to_coarse: bool = True,
         coarse_cross_attn_to_pixel: bool = True,
+        pixel_grad_checkpointing: bool = True,
         **encoder_kwargs: Any,
     ) -> None:
         """Initialize the dual-resolution encoder.
@@ -456,6 +530,12 @@ class DualResEncoder(Encoder):
                 coarse token.
             coarse_cross_attn_to_pixel: If True, coarse tokens cross-attend to their
                 unit's pixel features so fine detail flows into the output.
+            pixel_grad_checkpointing: Recompute each pixel-branch block in backward
+                instead of storing its activations. The pixel branch holds one token
+                per pixel (up to ``P**2 = 64`` times the coarse token count), so
+                storing all its intermediate activations OOMs at large patch sizes;
+                checkpointing keeps only each block's inputs. The pixel branch has no
+                dropout/drop-path, so recomputation is deterministic.
             **encoder_kwargs: Forwarded to :class:`Encoder` for the coarse branch.
         """
         if encoder_kwargs.get("use_flash_attn", False):
@@ -472,6 +552,7 @@ class DualResEncoder(Encoder):
         self.pixel_num_heads = pixel_num_heads
         self.pixel_cross_attn_to_coarse = pixel_cross_attn_to_coarse
         self.coarse_cross_attn_to_pixel = coarse_cross_attn_to_pixel
+        self.pixel_grad_checkpointing = pixel_grad_checkpointing
         self.pixel_modality_names = get_pixel_branch_modalities(
             self.supported_modalities
         )
@@ -550,7 +631,7 @@ class DualResEncoder(Encoder):
         coarse_patchified = self.patch_embeddings.forward(x, patch_size)
         pixel_patchified = self.pixel_embeddings.forward(x, patch_size)
 
-        pixel_state: dict[str, dict[str, Any]] = {}
+        pixel_state: dict[str, PixelModalityState] = {}
         if token_exit_cfg is None or any(
             exit_depth > 0 for exit_depth in token_exit_cfg.values()
         ):
@@ -573,9 +654,8 @@ class DualResEncoder(Encoder):
         output_dict: dict[str, Any] = {"tokens_and_masks": output}
         if not fast_pass:
             output_dict["project_aggregated"] = self.project_and_aggregate(output)
-        # The pixel branch is consumed by the pixel decoders (Phase 2+); it is NOT a
-        # coarse-decoder kwarg, so the dual-res model wrapper must pop it before
-        # calling the coarse decoder.
+        # The pixel branch is consumed by the pixel decoders; it is NOT a coarse-decoder
+        # kwarg, so the dual-res model wrapper must pop it before calling the decoder.
         output_dict["pixel_branch"] = pixel_state
         return output_dict
 
@@ -588,11 +668,11 @@ class DualResEncoder(Encoder):
         input_res: int,
         token_exit_cfg: dict[str, int] | None,
         fast_pass: bool,
-    ) -> tuple[dict[str, Tensor], dict[str, dict[str, Any]]]:
+    ) -> tuple[dict[str, Tensor], dict[str, PixelModalityState]]:
         """Run interleaved coarse (packed full attn) + pixel (per-location) blocks.
 
         Returns the per-modality coarse tokens/masks and the pixel-branch state
-        (final ONLINE-unit pixel reps + groupings) for the pixel decoders.
+        (final ONLINE-unit pixel reps per modality) for the pixel decoders.
         """
         tokens_only_dict, original_masks_dict, dims_dict = (
             self.split_tokens_masks_and_dims(coarse_x)
@@ -634,10 +714,14 @@ class DualResEncoder(Encoder):
                 exited_dense, bool_mask
             )
 
-        # Pixel branch bookkeeping: per-modality ONLINE units + a single cross-modality
-        # per-location grouping used by the pixel self-attention.
-        pixel_state = self._init_pixel_state(pixel_x, original_masks_dict)
-        location_grouping = self._build_pixel_location_grouping(pixel_state)
+        # Precompute the pixel-branch bookkeeping (packed ONLINE pixels + groupings).
+        # ``pixels`` (all modalities' ONLINE units, concatenated) is carried through
+        # the block loop alongside the coarse tokens and split back into per-modality
+        # state once at the end.
+        pixel_ctx = self._build_pixel_context(pixel_x, original_masks_dict, dims_dict)
+        pixels = None
+        if pixel_ctx is not None:
+            pixels = torch.cat([st.pixels for st in pixel_ctx.states.values()], dim=0)
 
         num_blocks = len(self.blocks)
         for i, blk in enumerate(self.blocks):
@@ -646,13 +730,27 @@ class DualResEncoder(Encoder):
                 exited_packed = torch.where(exit_packed == i, packed, exited_packed)
             packed = blk(x=packed, attn_mask=attn_mask, rope_positions=positions_packed)
             coarse_dense, _ = self.add_removed_tokens(packed, indices, new_mask)
-            coarse_dense = self._interleave_pixels(
-                block_idx=i,
-                coarse_dense=coarse_dense,
-                dims_dict=dims_dict,
-                pixel_state=pixel_state,
-                location_grouping=location_grouping,
-            )
+            if pixel_ctx is not None:
+                if self.pixel_grad_checkpointing and torch.is_grad_enabled():
+                    coarse_dense, pixels = torch.utils.checkpoint.checkpoint(
+                        self._interleave_pixels,
+                        i,
+                        coarse_dense,
+                        pixels,
+                        pixel_ctx,
+                        use_reentrant=False,
+                    )
+                else:
+                    coarse_dense, pixels = self._interleave_pixels(
+                        i, coarse_dense, pixels, pixel_ctx
+                    )
+
+        if pixel_ctx is not None:
+            assert pixels is not None
+            for state, updated in zip(
+                pixel_ctx.states.values(), pixels.split(pixel_ctx.split_sizes)
+            ):
+                state.pixels = updated
 
         packed = self._pack(coarse_dense, indices, new_mask, max_seqlen)
         if exit_ids_seq is not None:
@@ -664,6 +762,7 @@ class DualResEncoder(Encoder):
             coarse_dense, dims_dict
         )
         tokens_per_modality.update(original_masks_dict)
+        pixel_state = pixel_ctx.states if pixel_ctx is not None else {}
         return tokens_per_modality, pixel_state
 
     @staticmethod
@@ -675,13 +774,36 @@ class DualResEncoder(Encoder):
         packed = dense.gather(1, indices[:, :, None].expand(-1, -1, d))[:, :max_seqlen]
         return packed * new_mask.unsqueeze(-1)
 
-    def _init_pixel_state(
+    def _build_pixel_context(
         self,
         pixel_x: dict[str, Tensor],
         original_masks_dict: dict[str, Tensor],
-    ) -> dict[str, dict[str, Any]]:
-        """Gather ONLINE-unit pixel tokens (per modality) into packed tensors."""
-        state: dict[str, dict[str, Any]] = {}
+        dims_dict: dict[str, tuple],
+    ) -> PixelBranchContext | None:
+        """Pack each modality's ONLINE-unit pixels and precompute all groupings.
+
+        For every pixel modality this gathers the ``P**2`` pixels of each ONLINE unit
+        into a packed ``[num_online, P**2, Dp]`` tensor (ascending flat-unit-index
+        order). Across modalities it additionally precomputes, in concatenation order:
+
+        * the location id of every unit (for the per-location self-attention), and
+        * the index of every unit's coarse token in the collapsed coarse layout
+          (``dims_dict`` order matches ``collapse_and_combine_hwtc``), so the
+          cross-attentions can gather/scatter coarse partners with a single index op.
+
+        Returns ``None`` when no modality has any ONLINE unit.
+        """
+        # Where each modality's tokens start on the collapsed coarse token axis.
+        coarse_offsets: dict[str, int] = {}
+        tokens_per_instance = 0
+        for modality, dims in dims_dict.items():
+            coarse_offsets[modality] = tokens_per_instance
+            tokens_per_instance += math.prod(dims[1:-1])
+
+        states: dict[str, PixelModalityState] = {}
+        location_ids: list[Tensor] = []
+        coarse_idx: list[Tensor] = []
+        shared_grid: tuple[int, int] | None = None  # (G1*G2, P**2)
         pixel_modalities = get_modalities_to_process(
             [m for m in pixel_x if not m.endswith("_mask")], self.pixel_modality_names
         )
@@ -689,9 +811,16 @@ class DualResEncoder(Encoder):
             mask_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             online = original_masks_dict[mask_name] == MaskValue.ONLINE_ENCODER.value
             b, g1, g2, t, bs = online.shape
-            pixels = pixel_x[modality]  # [B, L, L, T, bs, Dp]
+            pixels = pixel_x[modality]  # [B, H, W, T, bs, Dp]
             p1 = pixels.shape[1] // g1
             p2 = pixels.shape[2] // g2
+            if shared_grid is None:
+                shared_grid = (g1 * g2, p1 * p2)
+            elif shared_grid != (g1 * g2, p1 * p2):
+                raise NotImplementedError(
+                    "Cross-modality pixel self-attention requires all pixel modalities "
+                    "to share the same spatial grid (G) and patch size (P)."
+                )
             # Group each unit's P**2 pixels: [B * U, P**2, Dp], U ordered (g1,g2,t,bs).
             units = rearrange(
                 pixels,
@@ -701,112 +830,75 @@ class DualResEncoder(Encoder):
                 p1=p1,
                 p2=p2,
             )
-            groupings = build_pixel_groupings(online, p1 * p2)
-            packed_pixels = units[groupings.flat_idx]  # [num_online, P**2, Dp]
-            state[modality] = {
-                "groupings": groupings,
-                "packed_pixels": packed_pixels,
-                "shape": (b, g1, g2, t, bs),
-                "p": (p1, p2),
-            }
-        return state
+            flat_idx = torch.nonzero(online.reshape(-1), as_tuple=False).squeeze(-1)
+            state = PixelModalityState(
+                pixels=units[flat_idx],
+                flat_idx=flat_idx,
+                grid=(b, g1, g2, t, bs),
+                patch_shape=(p1, p2),
+            )
+            coords = unit_grid_coords(flat_idx, state.grid)
+            location_ids.append(coords.instance * (g1 * g2) + coords.patch)
+            coarse_idx.append(
+                coords.instance * tokens_per_instance
+                + coarse_offsets[modality]
+                + coords.within
+            )
+            states[modality] = state
 
-    def _build_pixel_location_grouping(
-        self, pixel_state: dict[str, dict[str, Any]]
-    ) -> LocationGroupings:
-        """Build the cross-modality per-location grouping for pixel self-attention.
-
-        Pools the ONLINE units of every pixel modality (in ``pixel_state`` iteration
-        order, matching how :meth:`_interleave_pixels` concatenates their pixels) and
-        groups them by location id ``b * G**2 + patch``. Requires all pixel modalities
-        to share the same ``G`` and ``P``.
-        """
-        location_ids: list[Tensor] = []
-        g2_count: int | None = None
-        p2n: int | None = None
-        for st in pixel_state.values():
-            b, g1, g2, t, bs = st["shape"]
-            p1, p2 = st["p"]
-            if g2_count is None:
-                g2_count, p2n = g1 * g2, p1 * p2
-            elif g1 * g2 != g2_count or p1 * p2 != p2n:
-                raise NotImplementedError(
-                    "Cross-modality pixel self-attention requires all pixel modalities "
-                    "to share the same spatial grid (G) and patch size (P)."
-                )
-            flat = st["groupings"].flat_idx
-            u = g1 * g2 * t * bs
-            within = flat % u
-            b_of = flat // u
-            patch = (within // bs) // t  # (g1 * g2) patch index within the instance
-            location_ids.append(b_of * (g1 * g2) + patch)
-        if not location_ids:
-            return build_location_groupings(torch.empty(0, dtype=torch.long))
-        return build_location_groupings(torch.cat(location_ids))
+        if not states or sum(st.num_online for st in states.values()) == 0:
+            return None
+        return PixelBranchContext(
+            states=states,
+            split_sizes=[st.num_online for st in states.values()],
+            loc=build_location_groupings(torch.cat(location_ids)),
+            coarse_idx=torch.cat(coarse_idx),
+        )
 
     def _interleave_pixels(
         self,
         block_idx: int,
         coarse_dense: Tensor,
-        dims_dict: dict[str, tuple],
-        pixel_state: dict[str, dict[str, Any]],
-        location_grouping: LocationGroupings,
-    ) -> Tensor:
-        """Run the pixel branch + coarse<-pixel enrichment for one block."""
-        if not pixel_state or location_grouping.num_locations == 0:
-            return coarse_dense
+        pixels: Tensor,
+        ctx: PixelBranchContext,
+    ) -> tuple[Tensor, Tensor]:
+        """Run one pixel-branch block and exchange information with the coarse tokens.
 
-        modalities = list(pixel_state.keys())
+        All modalities' ONLINE units are processed as one concatenated tensor
+        (``pixels``, in ``ctx.states`` order), so each module below runs exactly once
+        per block:
 
-        # 1) Cross-modality per-location self-attention. Pool every modality's ONLINE
-        #    units into one tensor (concat order == the location-grouping order), attend
-        #    per pixel location across (modality, band set, timestep), then split back.
-        all_pixels = torch.cat(
-            [pixel_state[m]["packed_pixels"] for m in modalities], dim=0
-        )
-        all_pixels = self._pixel_location_attn(block_idx, all_pixels, location_grouping)
-        offset = 0
-        for modality in modalities:
-            n = pixel_state[modality]["packed_pixels"].shape[0]
-            pixel_state[modality]["packed_pixels"] = all_pixels[offset : offset + n]
-            offset += n
+        1. per-location self-attention across ``(modality, band set, timestep)``;
+        2. pixel <- coarse: each unit's ``P**2`` pixels query its coarse token;
+        3. coarse <- pixel: each ONLINE coarse token queries its unit's pixels and the
+           result is written back into ``coarse_dense``. Placed last so every pixel
+           module feeds the coarse output each block (keeping all pixel params on the
+           autograd graph).
 
-        # 2/3) Per-modality cross-attention with the coarse tokens (per unit).
-        coarse_per_mod = self.split_and_expand_per_modality(coarse_dense, dims_dict)
-        for modality in modalities:
-            st = pixel_state[modality]
-            flat_idx = st["groupings"].flat_idx
-            if flat_idx.numel() == 0:
-                continue
-            b, g1, g2, t, bs = st["shape"]
-            coarse_dim = coarse_per_mod[modality].shape[-1]
-            coarse_units = rearrange(
-                coarse_per_mod[modality], "b g1 g2 t bs d -> (b g1 g2 t bs) d"
+        This method is (optionally) wrapped in gradient checkpointing by the caller,
+        so it must stay a pure ``(coarse_dense, pixels) -> (coarse_dense, pixels)``
+        function of its tensor inputs.
+        """
+        pixels = self._pixel_location_attn(block_idx, pixels, ctx.loc)
+
+        b, n, d = coarse_dense.shape
+        coarse_flat = coarse_dense.reshape(b * n, d)
+        coarse_units = coarse_flat[ctx.coarse_idx][:, None]  # [total_units, 1, Dc]
+
+        if self.pixel_to_coarse is not None:
+            pixels = pixels + chunked_batch_attn(
+                self.pixel_to_coarse[block_idx], pixels, coarse_units
             )
-            coarse_online = coarse_units[flat_idx]  # [num_online, Dc]
-            pixels = st["packed_pixels"]  # [num_online, P**2, Dp]
+        if self.coarse_to_pixel is not None:
+            delta = chunked_batch_attn(
+                self.coarse_to_pixel[block_idx], coarse_units, pixels
+            )
+            coarse_flat = coarse_flat.index_copy(
+                0, ctx.coarse_idx, (coarse_units + delta)[:, 0]
+            )
+            coarse_dense = coarse_flat.view(b, n, d)
 
-            # Pixel <- coarse cross-attention (per unit; 1 coarse KV).
-            if self.pixel_to_coarse is not None:
-                pixels = pixels + chunked_batch_attn(
-                    self.pixel_to_coarse[block_idx], pixels, coarse_online[:, None]
-                )
-                st["packed_pixels"] = pixels
-
-            # Coarse <- pixel cross-attention (per unit; P**2 pixel KV), written back.
-            # Placed last so every pixel module feeds the coarse output this block,
-            # keeping all pixel params on the autograd graph (FSDP-safe).
-            if self.coarse_to_pixel is not None:
-                delta = chunked_batch_attn(
-                    self.coarse_to_pixel[block_idx], coarse_online[:, None], pixels
-                )
-                coarse_online = coarse_online + delta[:, 0]
-                coarse_units = coarse_units.index_copy(0, flat_idx, coarse_online)
-                coarse_per_mod[modality] = coarse_units.view(
-                    b, g1, g2, t, bs, coarse_dim
-                )
-
-        return self._recombine_coarse(coarse_per_mod, dims_dict)
+        return coarse_dense, pixels
 
     def _pixel_location_attn(
         self, block_idx: int, pixels: Tensor, loc: LocationGroupings
@@ -836,32 +928,27 @@ class DualResEncoder(Encoder):
         out[loc.order] = buf[loc.scatter_pos]
         return out
 
-    def _recombine_coarse(
-        self, coarse_per_mod: dict[str, Tensor], dims_dict: dict[str, tuple]
-    ) -> Tensor:
-        """Collapse per-modality coarse tokens back to [B, N, D] (collapse order)."""
-        chunks = [
-            rearrange(coarse_per_mod[m], "b ... d -> b (...) d") for m in dims_dict
-        ]
-        return torch.cat(chunks, dim=1)
-
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
-        """Apply FSDP to the coarse and pixel branches."""
-        for block in self.pixel_self_blocks:
-            fully_shard(block, **fsdp_kwargs)
-        if self.pixel_to_coarse is not None:
-            for block in self.pixel_to_coarse:
-                fully_shard(block, **fsdp_kwargs)
-        if self.coarse_to_pixel is not None:
-            for block in self.coarse_to_pixel:
-                fully_shard(block, **fsdp_kwargs)
+        """Apply FSDP to the coarse blocks; keep pixel modules in the root unit.
+
+        The pixel modules are deliberately NOT wrapped as their own FSDP units. FSDP2
+        issues one all-gather per wrapped-module forward call, and the pixel modules
+        are invoked a *data-dependent* number of times per step (once per
+        :func:`chunked_batch_attn` chunk, and only when a rank has ONLINE pixel units).
+        Ranks see different pixel counts, so per-module wrapping desyncs the collective
+        sequence across ranks and deadlocks NCCL. Left unwrapped, the pixel params join
+        the enclosing model's root FSDP unit (all-gathered once per model forward, like
+        the patch embeddings), which is rank-uniform regardless of chunking.
+        """
         super().apply_fsdp(**fsdp_kwargs)
 
     def apply_compile(self) -> None:
-        """Apply torch.compile to the coarse and pixel blocks."""
+        """Apply torch.compile to the coarse blocks only.
+
+        The pixel blocks see different shapes every batch (data-dependent unit counts
+        and chunk sizes), so compiling them would trigger constant recompilation.
+        """
         super().apply_compile()
-        for block in self.pixel_self_blocks:
-            block.compile(dynamic=False)
 
 
 @dataclass
@@ -877,6 +964,7 @@ class DualResEncoderConfig(EncoderConfig):
     pixel_mlp_ratio: float = 4.0
     pixel_cross_attn_to_coarse: bool = True
     coarse_cross_attn_to_pixel: bool = True
+    pixel_grad_checkpointing: bool = True
 
     def validate(self) -> None:
         """Validate the configuration."""

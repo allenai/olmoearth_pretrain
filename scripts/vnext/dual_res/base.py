@@ -37,6 +37,7 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelConfig,
     DataParallelType,
 )
+from olmo_core.launch.beaker import BeakerEnvVar
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
@@ -189,6 +190,15 @@ def build_common_components(
 ) -> CommonComponents:
     """Build the common components for an experiment."""
     config = build_common_components_default(script, cmd, run_name, cluster, overrides)
+    if config.launch is not None:
+        # The pixel branch's tensor sizes swing by up to 64x between batches (P**2
+        # pixels per token, patch size sampled 1..8), which fragments the CUDA caching
+        # allocator; expandable segments avoid OOMing from that fragmentation.
+        config.launch.env_vars.append(
+            BeakerEnvVar(
+                name="PYTORCH_CUDA_ALLOC_CONF", value="expandable_segments:True"
+            )
+        )
     config.training_modalities = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
