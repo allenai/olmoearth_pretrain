@@ -338,6 +338,50 @@ def test_encode_without_latlon_uses_trained_null_channel() -> None:
     assert not torch.allclose(from_absent, from_real, atol=1e-4)
 
 
+def test_band_stats_standardize_input_and_decorrelate_targets() -> None:
+    """band_stats re-standardizes offset data; invalid stays 0; targets separate.
+
+    Guards against the corpus-normalization degeneracy: data with a large
+    shared offset makes frozen random-projection targets nearly collinear.
+    """
+    stats = {
+        "sentinel2_l2a": [[0.45] * 12, [0.1] * 12],
+        "sentinel1": [[0.5] * 2, [0.1] * 2],
+    }
+    torch.manual_seed(0)
+    sample = _make_sample()
+    assert sample.sentinel2_l2a is not None and sample.sentinel1 is not None
+    # Corpus-like inputs: [0,1]-ish with a large shared offset.
+    offsetish = sample._replace(
+        sentinel2_l2a=torch.rand_like(sample.sentinel2_l2a) * 0.3 + 0.3,
+        sentinel1=torch.rand_like(sample.sentinel1) * 0.3 + 0.35,
+    )
+    plain = _model()
+    standardized = _model(band_stats=stats)
+
+    g = next(iter(standardized.groups))
+    got = standardized._group_data(offsetish, g)
+    assert got is not None and offsetish.sentinel2_l2a is not None
+    data, valid = got
+    assert abs(float(data[valid].mean())) < 0.6  # offset removed
+    missing = offsetish.sentinel2_l2a.clone()
+    missing[0, 0, 0] = MISSING_VALUE
+    got_m = standardized._group_data(offsetish._replace(sentinel2_l2a=missing), g)
+    assert got_m is not None
+    data_m, _ = got_m
+    assert (data_m[0, :, :, 0, 0] == 0).all()  # invalid positions stay zero
+
+    def mean_target_sim(model: SetLatentPerceiver) -> float:
+        per_group, _, _ = model._tokenize(offsetish, generator=None)
+        g0 = per_group["sentinel2_l2a__bs0"]
+        tgt = torch.nn.functional.normalize(g0["target"][g0["valid"]], dim=-1)
+        sim = tgt @ tgt.T
+        return float(sim[~torch.eye(len(tgt), dtype=torch.bool)].mean())
+
+    assert mean_target_sim(plain) > 0.8  # degenerate without standardization
+    assert mean_target_sim(standardized) < 0.5  # separated with it
+
+
 def test_config_build_roundtrips() -> None:
     """The config builds the model and serializes/deserializes (old-ckpt safe)."""
     cfg = SetLatentPerceiverConfig(

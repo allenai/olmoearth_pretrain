@@ -21,6 +21,7 @@ integral to the architecture. It consumes the repo's ``MaskedOlmoEarthSample`` /
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -322,6 +323,7 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
         valid_token_threshold: float = 0.5,
         cond_dropout: float = 0.5,
         trained_years: tuple[float, float] | None = None,
+        band_stats: dict[str, Sequence[Sequence[float]]] | None = None,
     ) -> None:
         """Initialize the Set-Latent Perceiver. See ``SetLatentPerceiverConfig``."""
         super().__init__()
@@ -380,6 +382,23 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
         )
         for param in self.target_tokenizers.parameters():
             param.requires_grad = False
+
+        # Per-band input standardization (earthy's input_norm, ported): the
+        # corpus loader normalizes to roughly [0,1] with a large shared offset,
+        # which makes the frozen random-projection targets of different patches
+        # nearly collinear (soft labels ~uniform -> no training signal). These
+        # (loc, scale) stats re-standardize per band; snapshotted as buffers so
+        # checkpoints and eval share them.
+        self.band_stats_modalities = sorted(band_stats) if band_stats else []
+        if band_stats:
+            for mod, (loc, scale) in band_stats.items():
+                self.register_buffer(
+                    f"_band_loc_{mod}", torch.tensor(list(loc), dtype=torch.float32)
+                )
+                self.register_buffer(
+                    f"_band_scale_{mod}",
+                    torch.tensor(list(scale), dtype=torch.float32),
+                )
 
         # Metadata encoders. Global GPS + absolute time are droppable; local /
         # relative Fourier channels are always kept.
@@ -469,6 +488,14 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
         # Validity: robust to float16 (MISSING_VALUE -> -inf) via a threshold.
         valid = torch.isfinite(data) & (data > MISSING_VALUE / 2)
         data = torch.nan_to_num(data.where(valid, torch.zeros_like(data)))
+        loc = getattr(self, f"_band_loc_{g.modality}", None)
+        if loc is not None:
+            # Per-band standardization (see __init__): invalid positions stay 0.
+            scale = getattr(self, f"_band_scale_{g.modality}")
+            idx = list(g.band_indices)
+            loc_g = loc[idx].view(1, 1, -1, 1, 1)
+            scale_g = scale[idx].view(1, 1, -1, 1, 1)
+            data = ((data - loc_g) / scale_g).where(valid, torch.zeros_like(data))
         return data, valid
 
     def _pad_to_multiple(
@@ -1298,6 +1325,8 @@ class SetLatentPerceiverConfig(Config):
     valid_token_threshold: float = 0.5
     cond_dropout: float = 0.5
     trained_years: tuple[float, float] | None = None
+    # modality -> [per-band loc, per-band scale] (lists for omegaconf compat)
+    band_stats: dict[str, list[list[float]]] | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -1305,6 +1334,12 @@ class SetLatentPerceiverConfig(Config):
             raise ValueError("At least one modality must be supported")
         for modality in self.supported_modality_names:
             Modality.get(modality)  # raises if unknown
+        for mod, stats in (self.band_stats or {}).items():
+            n = Modality.get(mod).num_bands
+            if len(stats) != 2 or len(stats[0]) != n or len(stats[1]) != n:
+                raise ValueError(
+                    f"band_stats[{mod!r}] must be [loc, scale] with {n} bands each"
+                )
         if self.contrast_scope not in ("global", "temporal"):
             raise ValueError("contrast_scope must be 'global' or 'temporal'")
         if self.loss_mode not in ("infonce", "cosine", "smooth_l1"):

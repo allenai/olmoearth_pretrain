@@ -74,6 +74,78 @@ SLP_MODALITIES = [
     Modality.LANDSAT.name,
 ]
 
+# Per-band (median, IQR/1.349) of the loader's normalized output, computed from
+# 300 random v1.2-corpus samples (2026-07-10). The loader normalizes to ~[0,1]
+# with a large shared offset; without re-standardization the SLP's frozen
+# random-projection targets are nearly collinear (soft labels ~uniform, no
+# training signal). Scales are floored at 0.02 so near-constant bands (e.g.
+# landsat band 8, IQR ~0.008) don't amplify quantization noise. Recompute if
+# the corpus or its normalization changes.
+CORPUS_BAND_STATS = {
+    "sentinel2_l2a": [
+        [
+            0.4207,
+            0.4167,
+            0.4084,
+            0.484,
+            0.4152,
+            0.4664,
+            0.4729,
+            0.4788,
+            0.4138,
+            0.3991,
+            0.4247,
+            0.4544,
+        ],
+        [
+            0.0838,
+            0.0964,
+            0.1369,
+            0.1871,
+            0.117,
+            0.1542,
+            0.1801,
+            0.1871,
+            0.1738,
+            0.1838,
+            0.0693,
+            0.1087,
+        ],
+    ],
+    "sentinel1": [
+        [0.5483, 0.5514],
+        [0.0855, 0.0958],
+    ],
+    "landsat": [
+        [
+            0.4639,
+            0.4832,
+            0.4759,
+            0.4701,
+            0.4584,
+            0.5095,
+            0.4844,
+            0.475,
+            0.5465,
+            0.5547,
+            0.5652,
+        ],
+        [
+            0.098,
+            0.0753,
+            0.0795,
+            0.0896,
+            0.1104,
+            0.1619,
+            0.1547,
+            0.1526,
+            0.02,
+            0.1388,
+            0.1225,
+        ],
+    ],
+}
+
 # ViT-B scale (spec S3): d=768, heads=12, K=1024.
 SLP_SIZES = {
     "nano": dict(
@@ -239,6 +311,11 @@ def build_size_model_config(
         # v1.2 corpus dates span 2015-2024; units are years since 2020. Eval
         # dates outside this span fall back to the trained "unknown date" null.
         trained_years=(-5.0, 5.0),
+        band_stats={
+            m: CORPUS_BAND_STATS[m]
+            for m in common.training_modalities
+            if m in CORPUS_BAND_STATS
+        },
         **size,
     )
 

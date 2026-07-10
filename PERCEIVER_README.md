@@ -73,8 +73,17 @@ change against them.
 2. **Global GPS is sample-level** (`latlon`), broadcast; per-token spatial variation
    is the always-kept local Fourier geometry. Missing latlon → trained null vector
    (never fabricated — the eurosat lesson).
-3. **Validity from `MISSING_VALUE`** (`isfinite & x > MISSING_VALUE/2`); the loader
-   pre-normalizes, so there is no `GroupInputNorm`.
+3. **Validity from `MISSING_VALUE`** (`isfinite & x > MISSING_VALUE/2`).
+   **REVISED 2026-07-10:** "the loader pre-normalizes, so no input norm" was
+   wrong in kind — the loader normalizes to ~[0,1] with a large shared offset
+   (not earthy's robust z-scores), which made the frozen random-projection
+   targets nearly collinear (cos-sim 0.91-0.997, soft labels ~uniform → flat
+   loss, first run's evals stalled at m-eurosat ~0.56-0.58 vs baseline 0.67 →
+   0.83). Earthy's `input_norm` is now ported: per-band (median, IQR/1.349)
+   stats of the loader's output, baked in `scripts/vnext/perceiver/base.py`
+   `CORPUS_BAND_STATS`, applied in `_group_data` via the `band_stats` config
+   (buffers, checkpoint-snapshotted). Recompute the stats if the corpus or its
+   normalization changes.
 4. **Masking is internal** to `forward` (deliberate divergence from
    `MASKING_STRATEGY_REGISTRY`); dataloader masking is a trivial ignored config.
 5. **Eval:** the model exposes no `.encoder`, so `get_eval_wrapper` routes to
