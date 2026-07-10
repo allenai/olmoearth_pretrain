@@ -494,13 +494,34 @@ class CrossAttnBlock(nn.Module):
             key_mask: Optional ``[B', N_k]`` bool mask (True = attend).
 
         Returns:
-            ``[B', N_q, q_dim]`` residual update (to be added by the caller).
+            The residual update (to be added by the caller): ``[B', N_q, q_dim]``, or
+            ``[B', 1, q_dim]`` (broadcastable against the queries) when the single-key
+            fast path applies.
         """
+        if kv.shape[1] == 1 and key_mask is None and self.attn.attn_drop.p == 0.0:
+            return self._single_key_forward(kv)
         # Broadcastable [B', 1, 1, N_k] form; see PixelTemporalBlock.forward.
         if key_mask is not None:
             key_mask = key_mask[:, None, None, :]
         kv = self.kv_proj(kv)
         out = self.attn(self.norm_q(q), y=self.norm_kv(kv), attn_mask=key_mask)
+        out = out + self.mlp(self.norm_mlp(out))
+        return out
+
+    def _single_key_forward(self, kv: Tensor) -> Tensor:
+        """Exact fast path for a single key/value token per row.
+
+        Softmax over one key is identically 1 whatever the query--key logits are, so
+        the attention output is just the (projected) value: ``proj(v(norm(kv_proj)))``,
+        independent of the queries, and identical for every query of the row. Compute
+        it once per row at ``[B', 1, q_dim]`` and let the caller's residual add
+        broadcast it, instead of running SDPA over every query token (for the pixel <-
+        coarse cross-attention that is a ``P**2``-fold saving). The query/key
+        projections receive zero gradient on this path -- exactly as they do through
+        the softmax in the general path.
+        """
+        out = self.attn.proj(self.attn.v(self.norm_kv(self.kv_proj(kv))))
+        out = self.attn.proj_drop(out)
         out = out + self.mlp(self.norm_mlp(out))
         return out
 
