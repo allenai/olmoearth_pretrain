@@ -359,6 +359,78 @@ VARIANTS: dict[str, dict] = {
         pixel_mlp_ratio=4.0,
         pixel_dit_depth=2,
     ),
+    # Recon-depth-1 ablations (the cross-modality recon decoder does real work now).
+    "pixeldit_d16_m4_r1": dict(
+        pixel_branch_type="pixeldit",
+        pixel_embedding_size=16,
+        pixel_num_heads=2,
+        pixel_mlp_ratio=4.0,
+        pixel_dit_depth=4,
+        pixel_recon_depth=1,
+    ),
+    "window_d64_every4_r1": dict(
+        pixel_branch_type="window",
+        pixel_embedding_size=64,
+        pixel_num_heads=4,
+        pixel_mlp_ratio=2.0,
+        pixel_every_k_blocks=4,
+        pixel_recon_depth=1,
+    ),
+    "pixeldit_d16_m4_r1l25": dict(
+        pixel_branch_type="pixeldit",
+        pixel_embedding_size=16,
+        pixel_num_heads=2,
+        pixel_mlp_ratio=4.0,
+        pixel_dit_depth=4,
+        pixel_recon_depth=1,
+        pixel_recon_location_ratio=0.25,
+    ),
+    "pixeldit_d16_m4_r1l50": dict(
+        pixel_branch_type="pixeldit",
+        pixel_embedding_size=16,
+        pixel_num_heads=2,
+        pixel_mlp_ratio=4.0,
+        pixel_dit_depth=4,
+        pixel_recon_depth=1,
+        pixel_recon_location_ratio=0.5,
+    ),
+    "window_d64_every4_r1l25": dict(
+        pixel_branch_type="window",
+        pixel_embedding_size=64,
+        pixel_num_heads=4,
+        pixel_mlp_ratio=2.0,
+        pixel_every_k_blocks=4,
+        pixel_recon_depth=1,
+        pixel_recon_location_ratio=0.25,
+    ),
+    "pixeldit_d32_m2_r1l50": dict(
+        pixel_branch_type="pixeldit",
+        pixel_embedding_size=32,
+        pixel_num_heads=2,
+        pixel_mlp_ratio=4.0,
+        pixel_dit_depth=2,
+        pixel_recon_depth=1,
+        pixel_recon_location_ratio=0.5,
+    ),
+    "window_d64_every4_r1l50": dict(
+        pixel_branch_type="window",
+        pixel_embedding_size=64,
+        pixel_num_heads=4,
+        pixel_mlp_ratio=2.0,
+        pixel_every_k_blocks=4,
+        pixel_recon_depth=1,
+        pixel_recon_location_ratio=0.5,
+    ),
+    "conv_d64_every4_r1l50": dict(
+        pixel_branch_type="conv",
+        pixel_embedding_size=64,
+        pixel_num_heads=4,
+        pixel_mlp_ratio=2.0,
+        pixel_conv_kernel=3,
+        pixel_every_k_blocks=4,
+        pixel_recon_depth=1,
+        pixel_recon_location_ratio=0.5,
+    ),
 }
 
 
@@ -401,15 +473,18 @@ def build_model(variant: str, pixel_heads: bool = True) -> torch.nn.Module:
         return config.build()
 
     pixel_kwargs = dict(VARIANTS[variant])
+    recon_depth = pixel_kwargs.pop("pixel_recon_depth", 2)
+    recon_location_ratio = pixel_kwargs.pop("pixel_recon_location_ratio", 1.0)
     encoder_config = DualResEncoderConfig(**coarse_kwargs, **pixel_kwargs)
     config = DualResLatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
         pixel_reconstruction=pixel_heads,
-        pixel_recon_depth=2,
+        pixel_recon_depth=recon_depth,
         pixel_recon_num_heads=pixel_kwargs.get("pixel_num_heads", 4),
         pixel_recon_mlp_ratio=pixel_kwargs.get("pixel_mlp_ratio", 4.0),
         pixel_recon_weight=1.0,
+        pixel_recon_location_ratio=recon_location_ratio,
         map_targets=MAP_TARGETS if pixel_heads else {},
         pixel_map_weight=1.0,
     )

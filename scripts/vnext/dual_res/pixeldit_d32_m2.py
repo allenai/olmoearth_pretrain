@@ -5,7 +5,8 @@ paper-proportioned 16) and the pathway is 2 PiT blocks deep instead of 4 -- a
 wider-but-shallower point of the same design. See that script and
 ``olmoearth_pretrain/nn/dual_res_encoder.py`` for the architecture.
 
-Measured ~1.35x a coarse-only model per training step on a typical batch mix
+Measured ~1.45x a coarse-only model per training step on a typical batch mix, with
+the (cross-modality) pixel reconstruction loss active at depth 1
 (single-GPU benchmark, ``benchmark_pixel_branch.py`` variant ``pixeldit_d32_m2``).
 """
 
@@ -35,6 +36,9 @@ PIXEL_EMBEDDING_SIZE = 32
 PIXEL_NUM_HEADS = 2
 PIXEL_MLP_RATIO = 4.0
 PIXEL_DIT_DEPTH = 2
+# One cross-attention block in the (cross-modality) pixel reconstruction decoder
+# -- depth 2 measurably slows the step now that the decoder does real work.
+PIXEL_RECON_DEPTH = 1
 
 
 def build_model_config(common: CommonComponents) -> DualResLatentMIMConfig:
@@ -47,6 +51,7 @@ def build_model_config(common: CommonComponents) -> DualResLatentMIMConfig:
     encoder.pixel_mlp_ratio = PIXEL_MLP_RATIO
     encoder.pixel_dit_depth = PIXEL_DIT_DEPTH
     config.pixel_recon_num_heads = PIXEL_NUM_HEADS
+    config.pixel_recon_depth = PIXEL_RECON_DEPTH
     config.pixel_recon_mlp_ratio = PIXEL_MLP_RATIO
     return config
 

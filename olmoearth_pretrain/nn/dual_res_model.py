@@ -197,6 +197,7 @@ class DualResLatentMIMConfig(LatentMIMConfig):
     pixel_recon_num_heads: int = 4
     pixel_recon_mlp_ratio: float = 4.0
     pixel_recon_weight: float = 1.0
+    pixel_recon_location_ratio: float = 1.0
     map_targets: dict[str, str] = field(default_factory=dict)
     map_num_classes: dict[str, int] = field(default_factory=dict)
     pixel_map_weight: float = 1.0
@@ -221,6 +222,7 @@ class DualResLatentMIMConfig(LatentMIMConfig):
                 num_heads=self.pixel_recon_num_heads,
                 mlp_ratio=self.pixel_recon_mlp_ratio,
                 depth=self.pixel_recon_depth,
+                location_ratio=self.pixel_recon_location_ratio,
                 tokenization_config=encoder.tokenization_config,
             )
         pixel_map_probe = None

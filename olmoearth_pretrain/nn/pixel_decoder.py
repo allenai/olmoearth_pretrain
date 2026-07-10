@@ -7,10 +7,13 @@ existing v1.2 coarse-decoding losses rather than replacing them, and both back-p
 into the main branch (the two branches cross-attend inside the encoder).
 
 * :class:`PixelReconstructionDecoder` -- SSL. For every masked (``DECODER``) imagery
-  pixel that has at least one visible timestep at the same location, a learned query
-  cross-attends to the ONLINE pixel representations at that location (other timesteps)
-  and predicts the raw (normalized) pixel value with MSE. Locations with no visible
-  timestep are skipped.
+  pixel whose location has at least one visible pixel -- of ANY pixel modality, band
+  set or timestep -- a learned per-``(modality, band set)`` query cross-attends to
+  all ONLINE pixel representations at that location and predicts the raw (normalized)
+  pixel value with MSE. Cross-modality context is essential:
+  ``random_time_with_decode`` assigns whole band sets encode-only or decode-only
+  roles per instance, so with single-band-set tokenization a modality never contains
+  both ONLINE and DECODER units itself. Locations with no visible pixel are skipped.
 * :class:`PixelMapProbe` -- auxiliary supervised. Pools the ONLINE pixel
   representations over timestep + modality at each location and applies a linear head
   per map modality: cross-entropy for one-hot categorical maps, multi-label binary
@@ -85,22 +88,22 @@ class ReconGroupings:
     """Grouping to reconstruct DECODER pixels from ONLINE pixels at the same location.
 
     Groups are (instance, patch) cells that contain at least one ONLINE unit (pooling
-    across band sets and timesteps). Within a group the ONLINE units are the attention
-    keys and the DECODER units are the queries, so a masked pixel only sees visible
-    pixels at its own location. The ``P**2`` intra-patch offsets are handled as a
-    batched dimension by the decoder, not by these groups.
+    across band sets, timesteps AND modalities). Within a group the ONLINE units are
+    the attention keys and the DECODER units are the queries, so a masked pixel only
+    sees visible pixels at its own location. The ``P**2`` intra-patch offsets are
+    handled as a batched dimension by the decoder, not by these groups.
     """
 
     num_groups: int
-    # Keys (ONLINE units), aligned to nonzero(online_mask) order (== encoder packing).
+    # Keys (ONLINE units), aligned to the caller's key order (== encoder packing,
+    # concatenated over modalities).
     key_order: Tensor
     key_scatter: Tensor
     key_valid: Tensor  # [num_groups, max_kt]
     max_kt: int
-    # Queries (DECODER units in groups that have >=1 ONLINE unit).
-    decode_flat: Tensor  # [num_dec] indices into [B * U]
-    decode_t: Tensor  # [num_dec] timestep of each decode unit
-    decode_bs: Tensor  # [num_dec] bandset of each decode unit
+    # Queries: ``keep`` marks the input DECODER units whose location has >= 1 ONLINE
+    # key; the query fields below index the KEPT units only.
+    keep: Tensor  # [num_queries_in] bool
     query_order: Tensor
     query_scatter: Tensor
     query_valid: Tensor  # [num_groups, max_qt]
@@ -108,78 +111,88 @@ class ReconGroupings:
 
     @property
     def num_decode(self) -> int:
-        """Number of DECODER units to reconstruct."""
-        return int(self.decode_flat.numel())
+        """Number of DECODER units to reconstruct (kept queries)."""
+        return int(self.query_order.numel())
 
 
-def build_recon_groupings(online_mask: Tensor, decode_mask: Tensor) -> ReconGroupings:
+def build_recon_groupings(
+    key_loc: Tensor,
+    key_t: Tensor,
+    query_loc: Tensor,
+    query_t: Tensor,
+    t_mult: int,
+    location_ratio: float = 1.0,
+) -> ReconGroupings:
     """Build the ONLINE-key / DECODER-query grouping for pixel reconstruction.
 
-    We reconstruct each masked (``DECODER``) pixel from the visible (``ONLINE``) pixels
-    at the *same location*. Because ``random_time_with_decode`` makes whole band sets
-    encode- or decode-only, a decode pixel's context comes from *other band sets /
-    timesteps* at its patch -- so we group by **(instance, patch)** (pooling across band
-    sets and timesteps). Within a group, ONLINE units are the keys, DECODER units the
-    queries.
-
-    A "unit" is one ``(instance, patch, timestep, band set)`` cell, referenced by its
-    flat index into ``[B * U]`` (``U = G*G*T*band_sets``, row-major ``(g1,g2,t,bs)``) --
-    the same canonical order the encoder used to pack its ONLINE pixel reps (see
-    :func:`~olmoearth_pretrain.nn.dual_res_encoder.unit_grid_coords`).
+    We reconstruct each masked (``DECODER``) pixel from the visible (``ONLINE``)
+    pixels at the *same location*. ``random_time_with_decode`` assigns whole band sets
+    an encode-only or decode-only role per instance, so a decode pixel's context comes
+    from **other band sets / modalities / timesteps** at its patch: the caller passes
+    flat per-unit location ids spanning ALL pixel modalities (they share the spatial
+    grid), and we group by location id (``instance * num_patches + patch``).
 
     Args:
-        online_mask: ``[B, G, G, T, band_sets]`` bool (ONLINE_ENCODER units).
-        decode_mask: ``[B, G, G, T, band_sets]`` bool (DECODER units).
+        key_loc: ``[K]`` location id of every ONLINE (key) unit, in the caller's
+            (packed, modality-concatenated) key order.
+        key_t: ``[K]`` timestep of each key unit (within-group ordering only).
+        query_loc: ``[Q]`` location id of every DECODER (query) unit.
+        query_t: ``[Q]`` timestep of each query unit.
+        t_mult: Value strictly greater than any timestep (composite sort key).
+        location_ratio: Fraction of eligible locations to reconstruct, sampled
+            uniformly at random per call. The recon loss stays an unbiased (if
+            noisier) estimate of the full loss while its cost -- which is dominated
+            by per-location attention rows and padded buffers -- scales linearly.
 
     Returns:
         A :class:`ReconGroupings`.
     """
-    grid = online_mask.shape
-    b, g1, g2, t, bs = grid
-    num_patches = g1 * g2
-
-    # Flat indices of the ONLINE (key) and DECODER (query) units. The location key
-    # ``instance * num_patches + patch`` drops band set + timestep so every unit at one
-    # patch shares a group.
-    online_flat = torch.nonzero(online_mask.reshape(-1), as_tuple=False).squeeze(-1)
-    decode_flat = torch.nonzero(decode_mask.reshape(-1), as_tuple=False).squeeze(-1)
-    on = unit_grid_coords(online_flat, grid)
-    de = unit_grid_coords(decode_flat, grid)
-    key_loc, t_on = on.instance * num_patches + on.patch, on.t
-    dec_loc, t_de, bs_de = de.instance * num_patches + de.patch, de.t, de.bandset
-
-    # Groups = the distinct locations (sorted) that contain >= 1 ONLINE unit; only these
-    # can provide reconstruction context.
+    # Groups = the distinct locations (sorted) that contain >= 1 ONLINE unit; only
+    # these can provide reconstruction context. Optionally subsample them.
     group_locations = torch.unique(key_loc)
+    if location_ratio < 1.0 and group_locations.numel() > 0:
+        n_keep = max(1, int(group_locations.numel() * location_ratio))
+        sel = torch.randperm(group_locations.numel(), device=group_locations.device)
+        group_locations = group_locations[sel[:n_keep]].sort().values
     num_groups = int(group_locations.numel())
 
-    # Drop DECODER units whose location has no ONLINE context (nothing to attend to).
-    # searchsorted finds each decode location's slot in the sorted group list; it is a
-    # real group iff the value there matches.
-    if decode_flat.numel() > 0 and num_groups > 0:
-        pos = torch.searchsorted(group_locations, dec_loc).clamp(max=num_groups - 1)
-        keep = group_locations[pos] == dec_loc
-        decode_flat = decode_flat[keep]
-        t_de = t_de[keep]
-        bs_de = bs_de[keep]
-        gid_de = torch.searchsorted(group_locations, dec_loc[keep])
+    # With subsampled locations, keys outside the kept groups are dropped too.
+    if location_ratio < 1.0 and key_loc.numel() > 0 and num_groups > 0:
+        pos_k = torch.searchsorted(group_locations, key_loc).clamp(max=num_groups - 1)
+        key_member = group_locations[pos_k] == key_loc
+        key_idx = torch.nonzero(key_member, as_tuple=False).squeeze(-1)
+        key_loc = key_loc[key_idx]
+        key_t = key_t[key_idx]
     else:
-        decode_flat = decode_flat[:0]
-        t_de = t_de[:0]
-        bs_de = bs_de[:0]
-        gid_de = decode_flat[:0]
+        key_idx = None
+
+    # Drop DECODER units whose location has no ONLINE context (nothing to attend to).
+    # searchsorted finds each query location's slot in the sorted group list; it is a
+    # real group iff the value there matches.
+    if query_loc.numel() > 0 and num_groups > 0:
+        pos = torch.searchsorted(group_locations, query_loc).clamp(max=num_groups - 1)
+        keep = group_locations[pos] == query_loc
+        gid_q = torch.searchsorted(group_locations, query_loc[keep])
+        t_q = query_t[keep]
+    else:
+        keep = torch.zeros_like(query_loc, dtype=torch.bool)
+        gid_q = query_loc[:0]
+        t_q = query_t[:0]
 
     # Group id (0..num_groups-1) for each ONLINE unit.
-    gid_on = (
+    gid_k = (
         torch.searchsorted(group_locations, key_loc) if num_groups > 0 else key_loc[:0]
     )
 
     # Scatter keys and queries into padded [num_groups, max_*] rows (ordered by time).
     key_order, key_scatter, max_kt, key_valid = _scatter_by_group(
-        gid_on, t_on, num_groups, t
+        gid_k, key_t, num_groups, t_mult
     )
+    if key_idx is not None:
+        # Map back to the caller's (unfiltered) key indexing.
+        key_order = key_idx[key_order]
     query_order, query_scatter, max_qt, query_valid = _scatter_by_group(
-        gid_de, t_de, num_groups, t
+        gid_q, t_q, num_groups, t_mult
     )
 
     return ReconGroupings(
@@ -188,9 +201,7 @@ def build_recon_groupings(online_mask: Tensor, decode_mask: Tensor) -> ReconGrou
         key_scatter=key_scatter,
         key_valid=key_valid,
         max_kt=max_kt,
-        decode_flat=decode_flat,
-        decode_t=t_de,
-        decode_bs=bs_de,
+        keep=keep,
         query_order=query_order,
         query_scatter=query_scatter,
         query_valid=query_valid,
@@ -200,7 +211,18 @@ def build_recon_groupings(online_mask: Tensor, decode_mask: Tensor) -> ReconGrou
 
 @experimental("Pixel reconstruction decoder is experimental.")
 class PixelReconstructionDecoder(nn.Module):
-    """MAE-style per-pixel reconstruction of masked imagery from ONLINE pixels."""
+    """MAE-style per-pixel reconstruction of masked imagery from ONLINE pixels.
+
+    Cross-modality: each masked (``DECODER``) unit's queries attend to the ONLINE
+    pixel representations of **every** pixel modality at the same location (all pixel
+    modalities share the spatial grid). This matters because
+    ``random_time_with_decode`` assigns whole band sets an encode-only or decode-only
+    role per instance -- with single-band-set tokenization a modality never contains
+    both ONLINE and DECODER units, so the reconstruction context necessarily comes
+    from the OTHER modalities (and, for mixed-masked single-band-set instances, other
+    timesteps). Queries carry a learned per-``(modality, band set)`` embedding plus a
+    timestep encoding so one shared attention stack can serve every target.
+    """
 
     def __init__(
         self,
@@ -209,6 +231,7 @@ class PixelReconstructionDecoder(nn.Module):
         num_heads: int = 4,
         mlp_ratio: float = 4.0,
         depth: int = 2,
+        location_ratio: float = 1.0,
         tokenization_config: TokenizationConfig | None = None,
     ) -> None:
         """Initialize the reconstruction decoder.
@@ -219,15 +242,32 @@ class PixelReconstructionDecoder(nn.Module):
             num_heads: Cross-attention heads.
             mlp_ratio: MLP ratio in the decoder blocks.
             depth: Number of cross-attention blocks.
+            location_ratio: Fraction of eligible (instance, patch) locations to
+                reconstruct per step, sampled uniformly at random -- an unbiased,
+                proportionally cheaper estimate of the full loss (its cost is
+                dominated by per-location attention rows).
             tokenization_config: Band-grouping config (shared with the encoder).
         """
         super().__init__()
         self.dp = pixel_embedding_size
+        self.location_ratio = location_ratio
         self.tokenization_config = tokenization_config or TokenizationConfig()
         specs = [Modality.get(n) for n in supported_modality_names]
         self.modality_names = get_pixel_branch_modalities(specs)
 
-        self.mask_token = nn.Parameter(torch.zeros(pixel_embedding_size))
+        # Learned query embedding per (modality, band set): with mixed-modality
+        # location groups the query must say WHICH band set it is reconstructing.
+        self.mask_tokens = nn.ParameterDict(
+            {
+                modality: nn.Parameter(
+                    torch.zeros(
+                        self.tokenization_config.get_num_bandsets(modality),
+                        pixel_embedding_size,
+                    )
+                )
+                for modality in self.modality_names
+            }
+        )
         self.blocks = nn.ModuleList(
             [
                 CrossAttnBlock(
@@ -235,6 +275,9 @@ class PixelReconstructionDecoder(nn.Module):
                     kv_dim=pixel_embedding_size,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
+                    # Affine-free: these norms run over (millions of) query-pixel
+                    # rows, where the gamma/beta grad reduction dominates backward.
+                    norm_affine=False,
                 )
                 for _ in range(depth)
             ]
@@ -252,7 +295,8 @@ class PixelReconstructionDecoder(nn.Module):
                     torch.tensor(band, dtype=torch.long),
                     persistent=False,
                 )
-        nn.init.normal_(self.mask_token, std=0.02)
+        for token in self.mask_tokens.values():
+            nn.init.normal_(token, std=0.02)
 
     def forward(
         self,
@@ -260,17 +304,16 @@ class PixelReconstructionDecoder(nn.Module):
         sample: MaskedOlmoEarthSample,
         patch_size: int,
     ) -> Tensor:
-        """Compute the masked-pixel reconstruction MSE (summed over modalities)."""
+        """Compute the masked-pixel reconstruction MSE (over all pixel modalities)."""
         total = self._keep_alive()
-        for modality, st in pixel_branch.items():
-            if modality not in self.modality_names:
-                continue
-            total = total + self._reconstruct_modality(modality, st, sample)
-        return total
+        states = {m: st for m, st in pixel_branch.items() if m in self.modality_names}
+        if not states:
+            return total
+        return total + self._reconstruct(states, sample)
 
     def _keep_alive(self) -> Tensor:
         """Zero term touching every decoder param so grads always flow (FSDP)."""
-        term = 0.0 * self.mask_token.sum()
+        term = sum(0.0 * token.sum() for token in self.mask_tokens.values())
         for p in self.blocks.parameters():
             term = term + 0.0 * p.sum()
         for heads in self.heads.values():
@@ -279,48 +322,80 @@ class PixelReconstructionDecoder(nn.Module):
                     term = term + 0.0 * p.sum()
         return term
 
-    def _reconstruct_modality(
-        self, modality: str, st: PixelModalityState, sample: MaskedOlmoEarthSample
+    def _reconstruct(
+        self, states: dict[str, PixelModalityState], sample: MaskedOlmoEarthSample
     ) -> Tensor:
-        """Reconstruct one modality's masked pixels from its ONLINE pixel reps."""
-        online_reps = st.pixels  # [num_online, P**2, Dp] (encoder output)
-        b, g1, g2, t, bs = st.grid
-        p1, p2 = st.patch_shape
-        p2n = st.pixels_per_unit  # pixels per unit (P**2)
+        """Reconstruct every modality's masked pixels from ALL ONLINE pixel reps.
 
-        # Recover the coarse-grid (per-unit) ONLINE/DECODER masks by sampling the
-        # top-left pixel of each patch (all pixels in a unit share one mask value). This
-        # matches the encoder's ONLINE-unit ordering.
-        mask_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
-        full_mask = getattr(sample, mask_name)  # [B, H, W, T, band_sets]
-        online = full_mask[:, 0::p1, 0::p2, ...] == MaskValue.ONLINE_ENCODER.value
-        decode = full_mask[:, 0::p1, 0::p2, ...] == MaskValue.DECODER.value
-        rg = build_recon_groupings(online, decode)
+        Keys are the concatenation of every modality's packed ONLINE pixel reps
+        (matching the encoder's per-modality ``flat_idx`` order); queries are every
+        modality's DECODER units. Both are grouped by (instance, patch) so a masked
+        pixel sees exactly the visible pixels -- of any modality, band set or
+        timestep -- at its own location and offset.
+        """
+        first = next(iter(states.values()))
+        p1, p2 = first.patch_shape
+        p2n = first.pixels_per_unit
+        num_patches = first.grid[1] * first.grid[2]
+        t_max = max(st.grid[3] for st in states.values())
+        device = first.pixels.device
+
+        # --- Keys: every modality's ONLINE units, in concatenation order. ---
+        key_reps = torch.cat([st.pixels for st in states.values()], dim=0)
+        key_loc, key_t = [], []
+        for st in states.values():
+            coords = unit_grid_coords(st.flat_idx, st.grid)
+            key_loc.append(coords.instance * num_patches + coords.patch)
+            key_t.append(coords.t)
+
+        # --- Queries: every modality's DECODER units (per-unit masks recovered by
+        #     sampling the top-left pixel of each patch, as in the encoder). ---
+        q_loc, q_t, q_embed, q_meta = [], [], [], []
+        for modality, st in states.items():
+            mask_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+            full_mask = getattr(sample, mask_name)  # [B, H, W, T, band_sets]
+            decode = full_mask[:, 0::p1, 0::p2, ...] == MaskValue.DECODER.value
+            decode_flat = torch.nonzero(decode.reshape(-1), as_tuple=False).squeeze(-1)
+            coords = unit_grid_coords(decode_flat, st.grid)
+            q_loc.append(coords.instance * num_patches + coords.patch)
+            q_t.append(coords.t)
+            temporal = get_1d_sincos_pos_encoding(
+                torch.arange(st.grid[3], device=device, dtype=torch.float32), self.dp
+            )  # [T, Dp]
+            q_embed.append(
+                self.mask_tokens[modality][coords.bandset] + temporal[coords.t]
+            )
+            q_meta.append((modality, st, decode_flat, coords.bandset))
+
+        rg = build_recon_groupings(
+            torch.cat(key_loc),
+            torch.cat(key_t),
+            torch.cat(q_loc),
+            torch.cat(q_t),
+            t_mult=t_max,
+            location_ratio=self.location_ratio,
+        )
         if rg.num_decode == 0 or rg.num_groups == 0:
-            return online_reps.new_zeros(())  # nothing to reconstruct
-
+            return key_reps.new_zeros(())  # nothing to reconstruct
         ng = rg.num_groups
 
         # --- Keys: scatter the ONLINE pixel reps into padded per-location rows
         #     [ng, max_kt, P**2, Dp], then fold the P**2 offsets into the batch so each
         #     physical pixel attends only to keys at its own offset. ---
-        keys = online_reps.new_zeros(ng * rg.max_kt, p2n, self.dp)
-        keys[rg.key_scatter] = online_reps[rg.key_order]
+        keys = key_reps.new_zeros(ng * rg.max_kt, p2n, self.dp)
+        keys[rg.key_scatter] = key_reps[rg.key_order]
         keys = rearrange(
             keys.view(ng, rg.max_kt, p2n, self.dp), "ng kt p d -> (ng p) kt d"
         )
         key_mask = rg.key_valid.repeat_interleave(p2n, dim=0)  # [ng*P**2, max_kt]
 
-        # --- Queries: one learned mask token per masked pixel, plus its timestep
-        #     encoding, scattered into padded per-location rows the same way. ---
-        temporal = get_1d_sincos_pos_encoding(
-            torch.arange(t, device=online_reps.device, dtype=torch.float32), self.dp
-        )  # [T, Dp]
-        q_flat = self.mask_token[None, :] + temporal[rg.decode_t]  # [num_dec, Dp]
+        # --- Queries: the kept units' (modality, band set) embeddings + timestep
+        #     encodings, scattered into padded per-location rows the same way. ---
+        q_flat = torch.cat(q_embed, dim=0)[rg.keep]  # [num_dec, Dp]
         q_flat = q_flat[:, None, :].expand(-1, p2n, -1)  # [num_dec, P**2, Dp]
-        queries = online_reps.new_zeros(ng * rg.max_qt, p2n, self.dp)
-        # Match the packed-rep dtype: under autocast the mask token / sincos encoding
-        # stay float32 while ``online_reps`` may be a lower-precision autocast dtype.
+        queries = key_reps.new_zeros(ng * rg.max_qt, p2n, self.dp)
+        # Match the packed-rep dtype: under autocast the mask tokens / sincos encoding
+        # stay float32 while ``key_reps`` may be a lower-precision autocast dtype.
         queries[rg.query_scatter] = q_flat[rg.query_order].to(queries.dtype)
         queries = rearrange(
             queries.view(ng, rg.max_qt, p2n, self.dp), "ng qt p d -> (ng p) qt d"
@@ -331,23 +406,48 @@ class PixelReconstructionDecoder(nn.Module):
         for blk in self.blocks:
             x = x + chunked_batch_attn(blk, x, keys, key_mask)
 
-        # Gather the outputs back into DECODER-unit order [num_dec, P**2, Dp].
+        # Gather the outputs back into kept-DECODER-unit order [num_dec, P**2, Dp].
         out = rearrange(x, "(ng p) qt d -> ng qt p d", ng=ng, p=p2n)
         out = out.reshape(ng * rg.max_qt, p2n, self.dp)
         preds = out.new_empty(rg.num_decode, p2n, self.dp)
         preds[rg.query_order] = out[rg.query_scatter]
 
-        return self._recon_loss(modality, preds, rg, sample, st)
+        # --- Per-(modality, band set) heads and MSE, token-averaged overall. ---
+        loss = preds.new_zeros(())
+        count = 0
+        offset = 0
+        for (modality, st, decode_flat, bandsets), loc in zip(q_meta, q_loc):
+            n_in = int(loc.numel())
+            keep_m = rg.keep[offset : offset + n_in]
+            # Positions of this modality's kept queries within ``preds``.
+            pred_pos = int(rg.keep[:offset].sum()) + torch.cumsum(keep_m.long(), 0) - 1
+            loss_m, count_m = self._recon_loss(
+                modality,
+                st,
+                preds,
+                pred_pos[keep_m],
+                decode_flat[keep_m],
+                bandsets[keep_m],
+                sample,
+            )
+            loss = loss + loss_m
+            count += count_m
+            offset += n_in
+        if count == 0:
+            return preds.new_zeros(())
+        return loss / count
 
     def _recon_loss(
         self,
         modality: str,
-        preds: Tensor,
-        rg: ReconGroupings,
-        sample: MaskedOlmoEarthSample,
         st: PixelModalityState,
-    ) -> Tensor:
-        """Token-averaged MSE between predicted and true (normalized) pixels."""
+        preds: Tensor,
+        pred_pos: Tensor,
+        decode_flat: Tensor,
+        bandsets: Tensor,
+        sample: MaskedOlmoEarthSample,
+    ) -> tuple[Tensor, int]:
+        """Summed squared error (+ element count) for one modality's kept queries."""
         b, g1, g2, t, bs = st.grid
         p1, p2 = st.patch_shape
         data = getattr(sample, modality)  # [B, H, W, T, C] (normalized inputs)
@@ -362,29 +462,25 @@ class PixelReconstructionDecoder(nn.Module):
             p1=p1,
             p2=p2,
         )
-        # Row index into ``data_units`` for each DECODER unit (its instance/patch/time).
-        coords = unit_grid_coords(rg.decode_flat, st.grid)
+        # Row index into ``data_units`` for each kept DECODER unit.
+        coords = unit_grid_coords(decode_flat, st.grid)
         unit_bt = (coords.instance * (g1 * g2) + coords.patch) * t + coords.t
-        target_all = data_units[unit_bt]  # [num_dec, P**2, C]
+        target_all = data_units[unit_bt]  # [num_dec_m, P**2, C]
 
-        # Each band set has its own linear head predicting that band set's channels.
-        # Sum squared error over all queries, then divide by the element count.
         loss = preds.new_zeros(())
         count = 0
         for idx in range(self.tokenization_config.get_num_bandsets(modality)):
-            sel = rg.decode_bs == idx  # queries belonging to band set idx
+            sel = bandsets == idx  # queries belonging to band set idx
             if not bool(sel.any()):
                 continue
             bands = getattr(self, f"{modality}__{idx}_recon_bands")
-            pred = self.heads[modality][idx](preds[sel])  # [n, P**2, num_bands]
-            # Cast the (float32) normalized target to the prediction dtype, which may be
-            # a lower-precision autocast dtype.
+            pred = self.heads[modality][idx](preds[pred_pos[sel]])
+            # Cast the (float32) normalized target to the prediction dtype, which may
+            # be a lower-precision autocast dtype.
             target = target_all[sel][..., bands].to(pred.dtype)  # [n, P**2, num_bands]
             loss = loss + F.mse_loss(pred, target, reduction="sum")
             count += pred.numel()
-        if count == 0:
-            return preds.new_zeros(())
-        return loss / count
+        return loss, count
 
 
 @experimental("Pixel map probe is experimental.")

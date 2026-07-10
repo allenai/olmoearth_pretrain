@@ -615,7 +615,12 @@ class CrossAttnBlock(nn.Module):
     """Generic cross-attention block: queries attend to (projected) key/value tokens."""
 
     def __init__(
-        self, q_dim: int, kv_dim: int, num_heads: int, mlp_ratio: float
+        self,
+        q_dim: int,
+        kv_dim: int,
+        num_heads: int,
+        mlp_ratio: float,
+        norm_affine: bool = True,
     ) -> None:
         """Initialize the cross-attention block.
 
@@ -624,11 +629,16 @@ class CrossAttnBlock(nn.Module):
             kv_dim: Key/value source embedding dimension (projected to ``q_dim``).
             num_heads: Number of attention heads.
             mlp_ratio: MLP hidden-dim ratio.
+            norm_affine: Learn LayerNorm scale/shift. Pass False for pixel-scale
+                inputs: the affine is redundant before the following linears, and its
+                gamma/beta gradient reduction over millions of pixel rows dominates
+                the backward otherwise. (Default True preserves the original "joint"
+                branch behavior.)
         """
         super().__init__()
         self.kv_proj = nn.Linear(kv_dim, q_dim)
-        self.norm_q = nn.LayerNorm(q_dim)
-        self.norm_kv = nn.LayerNorm(q_dim)
+        self.norm_q = nn.LayerNorm(q_dim, elementwise_affine=norm_affine)
+        self.norm_kv = nn.LayerNorm(q_dim, elementwise_affine=norm_affine)
         self.attn = Attention(
             q_dim,
             num_heads=num_heads,
@@ -636,7 +646,7 @@ class CrossAttnBlock(nn.Module):
             cross_attn=True,
             position_encoding=PositionEncoding.ABSOLUTE,
         )
-        self.norm_mlp = nn.LayerNorm(q_dim)
+        self.norm_mlp = nn.LayerNorm(q_dim, elementwise_affine=norm_affine)
         self.mlp = Mlp(q_dim, hidden_features=int(q_dim * mlp_ratio))
 
     def forward(self, q: Tensor, kv: Tensor, key_mask: Tensor | None = None) -> Tensor:
