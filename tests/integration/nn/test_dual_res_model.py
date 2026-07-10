@@ -2,6 +2,7 @@
 
 import logging
 
+import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import Modality
@@ -25,7 +26,10 @@ B, H, W, T = 2, 8, 8, 12
 WC_CLASSES = Modality.get(WC).num_bands
 
 
-def _model_config(map_targets: dict[str, str] | None = None) -> DualResLatentMIMConfig:
+def _model_config(
+    map_targets: dict[str, str] | None = None,
+    pixel_branch_type: str = "joint",
+) -> DualResLatentMIMConfig:
     encoder_config = DualResEncoderConfig(
         supported_modality_names=[S2],
         embedding_size=EMB,
@@ -39,6 +43,7 @@ def _model_config(map_targets: dict[str, str] | None = None) -> DualResLatentMIM
         pixel_embedding_size=PIXEL_EMB,
         pixel_num_heads=4,
         pixel_mlp_ratio=2.0,
+        pixel_branch_type=pixel_branch_type,
     )
     decoder_config = PredictorConfig(
         supported_modality_names=[S2],
@@ -112,7 +117,24 @@ def test_dual_res_model_returns_pixel_loss() -> None:
     assert any(
         p.grad is not None for p in model.pixel_reconstruction_decoder.parameters()
     )
+    assert model.encoder.pixel_self_blocks is not None
     assert any(p.grad is not None for p in model.encoder.pixel_self_blocks.parameters())
+
+
+@pytest.mark.parametrize("pixel_branch_type", ["conv", "window", "perceiver"])
+def test_dual_res_model_variant_pixel_heads(pixel_branch_type: str) -> None:
+    """Both pixel heads consume every variant's pixel state and train end-to-end."""
+    model = _model_config(
+        map_targets={WC: "ce", SRTM: "mse"}, pixel_branch_type=pixel_branch_type
+    ).build()
+    x = _sample(with_maps=True)
+
+    *_, extra, pixel_loss = model(x, patch_size=PATCH_SIZE)
+    assert pixel_loss is not None and torch.isfinite(pixel_loss)
+    assert {"recon", "map"} <= set(extra["pixel_loss"])
+    pixel_loss.backward()
+    assert model.encoder.pixel_steps is not None
+    assert any(p.grad is not None for p in model.encoder.pixel_steps.parameters())
 
 
 def test_dual_res_model_with_map_probe() -> None:

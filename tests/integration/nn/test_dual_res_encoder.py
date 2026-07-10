@@ -2,6 +2,7 @@
 
 import logging
 
+import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import Modality
@@ -12,8 +13,10 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.dual_res_encoder import (
     DualResEncoderConfig,
+    PerceiverPixelStep,
     PixelAttentionBlock,
     PixelFiLM,
+    WindowPixelStep,
     build_location_groupings,
     unit_grid_coords,
 )
@@ -268,6 +271,9 @@ def test_grads_reach_every_pixel_module() -> None:
     out["tokens_and_masks"].sentinel2_l2a.sum().backward()
 
     assert any(p.grad is not None for p in model.pixel_embeddings.parameters())
+    assert model.pixel_self_blocks is not None
+    assert model.pixel_film is not None
+    assert model.coarse_to_pixel is not None
     for i, block in enumerate(model.pixel_self_blocks):
         assert any(p.grad is not None for p in block.parameters()), (
             f"pixel_self_blocks[{i}] received no gradient"
@@ -322,6 +328,7 @@ def test_cross_modality_pixel_self_attention() -> None:
         + out["tokens_and_masks"].sentinel1.sum()
     ).backward()
     # The single shared pixel self-attention is trained by both modalities.
+    assert model.pixel_self_blocks is not None
     assert any(p.grad is not None for p in model.pixel_self_blocks.parameters())
 
 
@@ -335,6 +342,197 @@ def test_pixels_do_not_affect_output_when_disconnected() -> None:
 
     # Pixel modules are disconnected from the coarse output -> no gradient.
     assert all(p.grad is None for p in model.pixel_embeddings.parameters())
+
+
+def _build_variant_config(
+    pixel_branch_type: str, **overrides: object
+) -> DualResEncoderConfig:
+    kwargs: dict = dict(
+        supported_modality_names=[S2, Modality.SENTINEL1.name],
+        embedding_size=EMB,
+        max_patch_size=8,
+        min_patch_size=1,
+        num_heads=4,
+        mlp_ratio=2.0,
+        depth=2,
+        drop_path=0.0,
+        max_sequence_length=T,
+        pixel_embedding_size=PIXEL_EMB,
+        pixel_num_heads=4,
+        pixel_mlp_ratio=2.0,
+        pixel_branch_type=pixel_branch_type,
+    )
+    kwargs.update(overrides)
+    return DualResEncoderConfig(**kwargs)
+
+
+def _masked_two_modality_sample() -> MaskedOlmoEarthSample:
+    sample = OlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, Modality.SENTINEL2_L2A.num_bands),
+        sentinel1=torch.randn(B, H, W, T, Modality.SENTINEL1.num_bands),
+        timestamps=_timestamps(),
+    )
+    strategy = MaskingConfig(
+        strategy_config={
+            "type": "random_time_with_decode",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "random_ratio": 1.0,
+        }
+    ).build()
+    return strategy.apply_mask(sample, patch_size=PATCH_SIZE)
+
+
+@pytest.mark.parametrize(
+    "pixel_branch_type,overrides",
+    [
+        ("conv", {"pixel_conv_kernel": 3}),
+        ("conv", {"pixel_every_k_blocks": 2}),
+        ("window", {}),
+        ("window", {"pixel_every_k_blocks": 2}),
+        ("perceiver", {}),
+        ("perceiver", {"pixel_coarse_read_interval": 2}),
+    ],
+)
+def test_variant_forward_and_grads(pixel_branch_type: str, overrides: dict) -> None:
+    """Every pixel-branch variant forwards finitely and trains every pixel module.
+
+    A coarse-only loss must reach every pixel parameter (the pixel -> coarse fusion
+    keeps the branch on the coarse loss path each step), so FSDP grad reduction stays
+    rank-uniform even when a microbatch produces no pixel-head loss.
+    """
+    torch.manual_seed(0)
+    model = _build_variant_config(pixel_branch_type, **overrides).build()
+    x = _masked_two_modality_sample()
+
+    out = model(x, patch_size=PATCH_SIZE)
+    tokens = out["tokens_and_masks"]
+    assert torch.isfinite(tokens.sentinel2_l2a).all()
+    for state in out["pixel_branch"].values():
+        assert state.pixels.shape[1] == PATCH_SIZE**2
+        assert torch.isfinite(state.pixels).all()
+
+    (tokens.sentinel2_l2a.sum() + tokens.sentinel1.sum()).backward()
+    missing = [
+        name
+        for name, p in model.named_parameters()
+        if name.startswith("pixel_") and p.grad is None
+    ]
+    assert not missing, f"pixel params without gradient: {missing}"
+
+
+def test_conv_branch_no_masked_data_leakage() -> None:
+    """Perturbing a non-ONLINE unit's raw pixels cannot change any ONLINE output.
+
+    The conv branch runs on the dense pixel grid and its depthwise convolutions mix
+    across patch boundaries, so masked-unit inputs MUST be zeroed before the first
+    conv -- otherwise masked imagery would leak into the visible pixels used to
+    reconstruct it.
+
+    ``max_patch_size`` is pinned to the tested patch size: at any other patch size the
+    COARSE branch's FlexiPatchEmbed bicubic-resizes the raw input (an intentional,
+    pre-existing cross-patch mix that would fail the coarse-token assertion for
+    reasons unrelated to the pixel branch).
+    """
+    torch.manual_seed(0)
+    model = _build_variant_config("conv", max_patch_size=PATCH_SIZE).build().eval()
+    x = _masked_two_modality_sample()
+
+    assert x.sentinel2_l2a is not None and x.sentinel2_l2a_mask is not None
+    mask = x.sentinel2_l2a_mask  # [B, H, W, T, bs] pixel-level mask values
+    online_px = mask == MaskValue.ONLINE_ENCODER.value
+    # Only perturb pixels where EVERY band set is masked: a channel can be shared by
+    # several band sets, and perturbing a channel under an ONLINE band set would
+    # legitimately change the outputs.
+    masked_all = (~online_px).all(dim=-1)  # [B, H, W, T]
+    assert bool(masked_all.any()) and bool(online_px.any())
+
+    perturbed = torch.where(
+        masked_all[..., None].expand_as(x.sentinel2_l2a),
+        x.sentinel2_l2a + 100.0,
+        x.sentinel2_l2a,
+    )
+    x_perturbed = x._replace(sentinel2_l2a=perturbed)
+
+    with torch.no_grad():
+        out = model(x, patch_size=PATCH_SIZE)
+        out_p = model(x_perturbed, patch_size=PATCH_SIZE)
+
+    for modality in (S2, Modality.SENTINEL1.name):
+        st, st_p = out["pixel_branch"][modality], out_p["pixel_branch"][modality]
+        assert torch.equal(st.flat_idx, st_p.flat_idx)
+        torch.testing.assert_close(st.pixels, st_p.pixels, atol=1e-5, rtol=1e-4)
+    # ONLINE coarse tokens are also unaffected (masked ones are zeroed anyway).
+    online_units = mask[:, ::PATCH_SIZE, ::PATCH_SIZE] == (
+        MaskValue.ONLINE_ENCODER.value
+    )
+    tok, tok_p = (
+        out["tokens_and_masks"].sentinel2_l2a,
+        out_p["tokens_and_masks"].sentinel2_l2a,
+    )
+    torch.testing.assert_close(
+        tok[online_units], tok_p[online_units], atol=1e-5, rtol=1e-4
+    )
+
+
+def test_window_step_isolates_units() -> None:
+    """Window attention mixes pixels within a unit but never across units."""
+    torch.manual_seed(0)
+    step = WindowPixelStep(
+        coarse_dim=EMB, pixel_dim=PIXEL_EMB, num_heads=4, mlp_ratio=2.0
+    ).eval()
+    pixels = torch.randn(3, PATCH_SIZE**2, PIXEL_EMB)
+    coarse = torch.randn(3, EMB)
+    perturbed = pixels.clone()
+    perturbed[0, 0, 0] += 10.0
+
+    with torch.no_grad():
+        out, delta = step(pixels, coarse)
+        out_p, delta_p = step(perturbed, coarse)
+
+    # Within-unit spatial mixing happens...
+    assert not torch.allclose(out[0, 1], out_p[0, 1], atol=1e-5)
+    # ...the unit's register (-> coarse update) sees it...
+    assert not torch.allclose(delta[0], delta_p[0], atol=1e-6)
+    # ...but other units are untouched.
+    torch.testing.assert_close(out[1:], out_p[1:])
+    torch.testing.assert_close(delta[1:], delta_p[1:])
+
+
+def test_perceiver_step_never_mixes_pixels() -> None:
+    """Perceiver pixels are pointwise: no pixel ever sees another pixel."""
+    torch.manual_seed(0)
+    step = PerceiverPixelStep(
+        coarse_dim=EMB, pixel_dim=PIXEL_EMB, num_heads=4, mlp_ratio=2.0, with_read=True
+    ).eval()
+    pixels = torch.randn(2, PATCH_SIZE**2, PIXEL_EMB)
+    coarse = torch.randn(2, EMB)
+    perturbed = pixels.clone()
+    # Single channel: a constant added to ALL channels of a pixel is a LayerNorm null
+    # direction and would vanish before the read's key/value projection.
+    perturbed[0, 0, 0] += 10.0
+
+    with torch.no_grad():
+        out, delta = step(pixels, coarse)
+        out_p, delta_p = step(perturbed, coarse)
+
+    # Only the perturbed pixel itself changes...
+    torch.testing.assert_close(out[0, 1:], out_p[0, 1:])
+    torch.testing.assert_close(out[1], out_p[1])
+    assert not torch.allclose(out[0, 0], out_p[0, 0], atol=1e-5)
+    # ...while its unit's coarse read sees the change; the other unit's does not.
+    assert delta is not None and delta_p is not None
+    assert not torch.allclose(delta[0], delta_p[0], atol=1e-6)
+    torch.testing.assert_close(delta[1], delta_p[1])
+
+
+def test_pixel_every_k_blocks_builds_reduced_steps() -> None:
+    """pixel_every_k_blocks=k builds depth/k steps and still runs the last block."""
+    model = _build_variant_config("window", pixel_every_k_blocks=2).build()
+    assert model.pixel_steps is not None
+    assert len(model.pixel_steps) == 1  # depth 2 // k 2
+    assert model._is_pixel_block(1)
+    assert not model._is_pixel_block(0)
 
 
 def test_token_exit_cfg_target_encoder_path() -> None:

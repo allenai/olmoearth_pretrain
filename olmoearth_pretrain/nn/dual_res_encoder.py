@@ -2,17 +2,46 @@
 
 The coarse branch is the existing :class:`~olmoearth_pretrain.nn.flexi_vit.Encoder`
 (full spatio-temporal attention at ``embedding_size``). Alongside it we keep a
-per-pixel branch at a smaller ``pixel_embedding_size`` that, per transformer block,
+per-pixel branch at a smaller ``pixel_embedding_size``. Four pixel-branch designs are
+available (``pixel_branch_type``), trading fine-branch expressivity against speed:
 
-1. conditions each unit's pixel tokens on its coarse token via gated FiLM
-   (:class:`PixelFiLM`) -- the coarse branch does the contextual reasoning at full
-   width; the pixels are told how to reinterpret their local detail;
-2. runs joint spatio-temporal self-attention *within each coarse patch*: every pixel
-   attends over all ``(pixel offset, modality, band set, timestep)`` tokens at its
-   patch -- but never across *other* patches (cross-patch reasoning is the coarse
-   branch's job). Modality/band-set identity is carried by the separate
-   per-``(modality, band set)`` projection weights; timestep and within-patch offset
-   by additive sin/cos encodings.
+* ``"joint"`` (the original design; the slowest): per coarse block,
+
+  1. conditions each unit's pixel tokens on its coarse token via gated FiLM
+     (:class:`PixelFiLM`) -- the coarse branch does the contextual reasoning at full
+     width; the pixels are told how to reinterpret their local detail;
+  2. runs joint spatio-temporal self-attention *within each coarse patch*: every pixel
+     attends over all ``(pixel offset, modality, band set, timestep)`` tokens at its
+     patch -- but never across *other* patches (cross-patch reasoning is the coarse
+     branch's job). Modality/band-set identity is carried by the separate
+     per-``(modality, band set)`` projection weights; timestep and within-patch offset
+     by additive sin/cos encodings;
+  3. optionally lets each coarse token cross-attend to its unit's pixels.
+
+* ``"conv"`` (:class:`ConvPixelStep`): a BiSeNet / MobileViT-style shallow
+  high-resolution convolutional branch. Each step is a ConvNeXt-style unit (depthwise
+  conv over each ``(instance, timestep, band set)`` frame + pointwise MLP) on the
+  *dense* pixel grid, so spatial mixing crosses patch boundaries (non-ONLINE pixels
+  are zeroed at input, so no masked data leaks). Fusion: coarse -> pixel by FiLM
+  (per-patch modulation broadcast over the patch's pixels), pixel -> coarse by
+  mean-pooling each patch's pixels through a zero-initialized linear, added
+  residually. Temporal/cross-modal mixing stays in the coarse branch.
+
+* ``"window"`` (:class:`WindowPixelStep`): ViTDet/Swin-style window attention where a
+  window is exactly one unit's ``P**2`` pixels plus its (projected) coarse token as a
+  per-window register -- sequence length ``P**2 + 1``, batched over units, no padding
+  and no mask. Both fusion directions come free: pixels read the register, and the
+  register's update is projected back up (zero-init) onto the coarse token.
+
+* ``"perceiver"`` (:class:`PerceiverPixelStep`): the cheapest true branch -- pixel
+  tokens never mix with each other. Each step FiLM-conditions the pixels on their
+  coarse token and applies a pointwise MLP; every ``pixel_coarse_read_interval``
+  steps (and always on the last) the coarse token attention-pools over its unit's
+  pixels (:class:`CrossAttnBlock`) to read fine detail back up.
+
+The non-``joint`` types can also run at a reduced cadence: with
+``pixel_every_k_blocks = k`` the pixel branch executes only after every ``k``-th
+coarse block (always including the last), cutting its cost by ``1/k``.
 
 FiLM (rather than attention) for the pixel <- coarse direction is deliberate: a
 pixel's coarse context is a *single* token (its own unit's), so there is nothing to
@@ -73,12 +102,12 @@ shared building blocks from ``flexi_vit`` / ``attention`` rather than modifying 
 import logging
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import torch
 import torch.utils.checkpoint
-from einops import rearrange
+from einops import rearrange, reduce
 from torch import Tensor, nn
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
@@ -302,16 +331,23 @@ class PixelBranchContext:
     Attributes:
         states: Per-modality packed ONLINE pixel tokens (updated block by block).
         split_sizes: ``num_online`` per modality.
-        loc: Per-location grouping of the concatenated units (self-attention).
+        loc: Per-location grouping of the concatenated units (``"joint"`` pixel
+            self-attention only; ``None`` for the other branch types).
         coarse_idx: ``[total_units]`` position of each unit's coarse token in the
             flattened ``[B * N]`` coarse token tensor (``N`` = tokens per instance),
             so cross-attention gathers/scatters coarse partners with one index op.
+        coarse_offsets: Start of each modality's token slab on the per-instance
+            coarse token axis (``"conv"`` branch: whole-slab gather/scatter).
+        frame_splits: Frames (``B * T * band_sets``) per modality in the concatenated
+            dense frame tensor (``"conv"`` branch only).
     """
 
     states: dict[str, PixelModalityState]
     split_sizes: list[int]
-    loc: LocationGroupings
+    loc: LocationGroupings | None
     coarse_idx: Tensor
+    coarse_offsets: dict[str, int] = field(default_factory=dict)
+    frame_splits: list[int] = field(default_factory=list)
 
 
 class PixelPatchEmbed(nn.Module):
@@ -455,23 +491,30 @@ class PixelAttentionBlock(nn.Module):
     ``max_units * P**2``), so tokens mix within a single patch, never across patches.
     """
 
-    def __init__(self, dim: int, num_heads: int, mlp_ratio: float) -> None:
+    def __init__(
+        self, dim: int, num_heads: int, mlp_ratio: float, norm_affine: bool = True
+    ) -> None:
         """Initialize the block.
 
         Args:
             dim: Pixel embedding dimension.
             num_heads: Number of attention heads.
             mlp_ratio: MLP hidden-dim ratio.
+            norm_affine: Learn LayerNorm scale/shift. Pass False for pixel-scale
+                inputs: the affine is redundant before the qkv/MLP linears, and its
+                gamma/beta gradient reduction over millions of pixel rows dominates
+                the backward otherwise. (Default True preserves the original "joint"
+                branch behavior.)
         """
         super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
+        self.norm1 = nn.LayerNorm(dim, elementwise_affine=norm_affine)
         self.attn = Attention(
             dim,
             num_heads=num_heads,
             qkv_bias=True,
             position_encoding=PositionEncoding.ABSOLUTE,
         )
-        self.norm2 = nn.LayerNorm(dim)
+        self.norm2 = nn.LayerNorm(dim, elementwise_affine=norm_affine)
         self.mlp = Mlp(dim, hidden_features=int(dim * mlp_ratio))
 
     def forward(self, x: Tensor, key_mask: Tensor | None) -> Tensor:
@@ -513,16 +556,23 @@ class PixelFiLM(nn.Module):
     from the unconditioned pixel branch and the gate opens gradually.
     """
 
-    def __init__(self, coarse_dim: int, pixel_dim: int) -> None:
+    def __init__(
+        self, coarse_dim: int, pixel_dim: int, pixel_norm_affine: bool = True
+    ) -> None:
         """Initialize the FiLM module.
 
         Args:
             coarse_dim: Coarse-token embedding dimension.
             pixel_dim: Pixel-token embedding dimension.
+            pixel_norm_affine: Learn the pixel LayerNorm's scale/shift. Pass False for
+                pixel-scale inputs -- the affine is redundant with the FiLM
+                modulation, and its gamma/beta gradient reduction over millions of
+                pixel rows is expensive in backward. (Default True preserves the
+                original "joint" branch behavior.)
         """
         super().__init__()
         self.norm_coarse = nn.LayerNorm(coarse_dim)
-        self.norm_pixel = nn.LayerNorm(pixel_dim)
+        self.norm_pixel = nn.LayerNorm(pixel_dim, elementwise_affine=pixel_norm_affine)
         self.to_film = nn.Linear(coarse_dim, 3 * pixel_dim)
 
     def zero_init(self) -> None:
@@ -620,6 +670,271 @@ class CrossAttnBlock(nn.Module):
         return out
 
 
+class ConvPixelStep(nn.Module):
+    """One convolutional pixel-branch step with bidirectional coarse fusion.
+
+    Runs on the *dense* pixel frames of every pixel modality (concatenated on the
+    frame axis) as a single DiT-style adaptively-modulated ConvNeXt unit:
+
+    ``frames += gate * mlp(dwconv(norm(frames) * (1 + scale) + shift))``
+
+    with per-patch ``(scale, shift, gate)`` produced from the patch's coarse token
+    (coarse -> pixel fusion, broadcast over the patch's pixels) -- so one step costs a
+    single pixel-resolution LayerNorm, one depthwise conv (local spatial mixing,
+    including across patch boundaries) and one pointwise MLP. Pixel -> coarse fusion
+    mean-pools each patch's pixels through a zero-initialized linear that the caller
+    adds residually to the coarse tokens.
+
+    All pixel-resolution norms are affine-free (DiT-style): their scale/shift is
+    subsumed by the FiLM modulation / following linear layer, and the LayerNorm
+    gamma/beta gradient reduction over millions of pixel rows would otherwise dominate
+    the whole branch's backward time.
+    """
+
+    def __init__(
+        self, coarse_dim: int, pixel_dim: int, kernel_size: int, mlp_ratio: float
+    ) -> None:
+        """Initialize the step.
+
+        Args:
+            coarse_dim: Coarse-token embedding dimension.
+            pixel_dim: Pixel embedding dimension.
+            kernel_size: Depthwise convolution kernel size (odd).
+            mlp_ratio: Pointwise MLP hidden-dim ratio.
+        """
+        super().__init__()
+        self.norm_coarse = nn.LayerNorm(coarse_dim)
+        self.to_film = nn.Linear(coarse_dim, 3 * pixel_dim)
+        self.norm = nn.LayerNorm(pixel_dim, elementwise_affine=False)
+        self.dwconv = nn.Conv2d(
+            pixel_dim,
+            pixel_dim,
+            kernel_size,
+            padding=kernel_size // 2,
+            groups=pixel_dim,
+        )
+        self.mlp = Mlp(pixel_dim, hidden_features=int(pixel_dim * mlp_ratio))
+        self.norm_pool = nn.LayerNorm(pixel_dim, elementwise_affine=False)
+        self.to_coarse = nn.Linear(pixel_dim, coarse_dim)
+
+    def zero_init(self) -> None:
+        """Zero the fusion projections so the step starts as (near-)identity.
+
+        The FiLM gate starts closed (the whole conv unit's output is gated to zero)
+        and the pixel -> coarse projection starts at zero, so at step 0 both streams
+        pass through unchanged while gradients still reach every parameter.
+        """
+        nn.init.zeros_(self.to_film.weight)
+        nn.init.zeros_(self.to_film.bias)
+        nn.init.zeros_(self.to_coarse.weight)
+        nn.init.zeros_(self.to_coarse.bias)
+
+    def forward(
+        self, frames: Tensor, coarse: Tensor, patch_shape: tuple[int, int]
+    ) -> tuple[Tensor, Tensor]:
+        """Run the step.
+
+        Args:
+            frames: ``[F, H, W, Dp]`` dense pixel frames (all modalities, concatenated
+                on the frame axis).
+            coarse: ``[F, G1, G2, Dc]`` coarse token of each frame's patches.
+            patch_shape: ``(P1, P2)`` pixels per patch side.
+
+        Returns:
+            ``(frames, coarse_delta)``: the updated frames and a ``[F, G1, G2, Dc]``
+            residual update for the coarse tokens.
+        """
+        p1, p2 = patch_shape
+        f, h, w, dp = frames.shape
+        film = self.to_film(self.norm_coarse(coarse))  # [F, G1, G2, 3 * Dp]
+        # Broadcast the per-patch params over the patch's pixels through a 6D view
+        # (no [F, H, W, 3 * Dp] materialization).
+        scale, shift, gate = film[:, :, None, :, None, :].chunk(3, dim=-1)
+        grid = frames.view(f, h // p1, p1, w // p2, p2, dp)
+        y = (self.norm(grid) * (1 + scale) + shift).view(f, h, w, dp)
+        y = self.dwconv(y.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+        y = self.mlp(y)
+        frames = (grid + gate * y.view_as(grid)).view(f, h, w, dp)
+        pooled = reduce(
+            frames, "f (g1 p1) (g2 p2) d -> f g1 g2 d", "mean", p1=p1, p2=p2
+        )
+        return frames, self.to_coarse(self.norm_pool(pooled))
+
+
+class WindowPixelStep(nn.Module):
+    """Per-unit window attention with the coarse token as a per-window register.
+
+    Each window is exactly one unit's ``P**2`` pixel tokens plus the unit's coarse
+    token projected down to the pixel width (a learned register embedding marks it) --
+    a ``[num_units, P**2 + 1, Dp]`` batched attention with no padding and no mask.
+    Pixels never attend across units (cross-patch/temporal/modal reasoning stays in
+    the coarse branch), and the fusion is bidirectional for free: pixels read the
+    register, and the register's post-attention state is projected back up through a
+    zero-initialized linear that the caller adds residually to the coarse token.
+    """
+
+    def __init__(
+        self, coarse_dim: int, pixel_dim: int, num_heads: int, mlp_ratio: float
+    ) -> None:
+        """Initialize the step.
+
+        Args:
+            coarse_dim: Coarse-token embedding dimension.
+            pixel_dim: Pixel embedding dimension.
+            num_heads: Attention heads for the window attention.
+            mlp_ratio: MLP hidden-dim ratio for the window attention block.
+        """
+        super().__init__()
+        self.norm_coarse = nn.LayerNorm(coarse_dim)
+        self.down = nn.Linear(coarse_dim, pixel_dim)
+        self.register_embed = nn.Parameter(torch.zeros(pixel_dim))
+        self.block = PixelAttentionBlock(
+            pixel_dim, num_heads, mlp_ratio, norm_affine=False
+        )
+        self.up = nn.Linear(pixel_dim, coarse_dim)
+        nn.init.normal_(self.register_embed, std=0.02)
+
+    def zero_init(self) -> None:
+        """Zero the register -> coarse projection: coarse tokens start unperturbed."""
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, pixels: Tensor, coarse: Tensor) -> tuple[Tensor, Tensor]:
+        """Run the step.
+
+        Args:
+            pixels: ``[num_units, P**2, Dp]`` packed ONLINE pixel tokens.
+            coarse: ``[num_units, Dc]`` coarse token of each unit.
+
+        Returns:
+            ``(pixels, coarse_delta)``: the updated pixel tokens and a
+            ``[num_units, Dc]`` residual update for the coarse tokens.
+        """
+        reg = self.down(self.norm_coarse(coarse)) + self.register_embed.to(pixels.dtype)
+        x = torch.cat([pixels, reg[:, None]], dim=1)  # [U, P**2 + 1, Dp]
+        x = chunked_batch_attn(self.block, x, None)
+        return x[:, :-1], self.up(x[:, -1])
+
+
+class PixelReadPool(nn.Module):
+    """Cheap coarse <- pixel attention pool, computed at the pixel width.
+
+    The coarse token is projected DOWN to the pixel width and used as a single query
+    over its unit's ``P**2`` pixels; the pooled result is projected back up through a
+    zero-initialized linear that the caller adds residually to the coarse token. This
+    keeps the per-pixel work at ``O(Dp**2)`` -- unlike a coarse-width
+    :class:`CrossAttnBlock`, whose ``kv_proj`` alone costs ``Dp * Dc`` per pixel (with
+    ``Dc = 512`` that one projection dwarfs the entire pixel branch).
+    """
+
+    def __init__(self, coarse_dim: int, pixel_dim: int, num_heads: int) -> None:
+        """Initialize the pool.
+
+        Args:
+            coarse_dim: Coarse-token embedding dimension.
+            pixel_dim: Pixel embedding dimension.
+            num_heads: Attention heads (over the pixel width).
+        """
+        super().__init__()
+        self.num_heads = num_heads
+        self.norm_q = nn.LayerNorm(coarse_dim)
+        self.to_q = nn.Linear(coarse_dim, pixel_dim)
+        # Affine-free: redundant with to_kv, and the gamma/beta grad reduction over
+        # millions of pixel rows is expensive in backward.
+        self.norm_kv = nn.LayerNorm(pixel_dim, elementwise_affine=False)
+        self.to_kv = nn.Linear(pixel_dim, 2 * pixel_dim)
+        self.up = nn.Linear(pixel_dim, coarse_dim)
+
+    def zero_init(self) -> None:
+        """Zero the up-projection: coarse tokens start unperturbed."""
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, coarse: Tensor, pixels: Tensor) -> Tensor:
+        """Pool each unit's pixels with its coarse token as the query.
+
+        Args:
+            coarse: ``[U, Dc]`` coarse token of each unit.
+            pixels: ``[U, P**2, Dp]`` pixel tokens.
+
+        Returns:
+            ``[U, Dc]`` residual update for the coarse tokens.
+        """
+
+        def attend(q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+            heads = self.num_heads
+            q = rearrange(q, "u s (h d) -> u h s d", h=heads)
+            k = rearrange(k, "u s (h d) -> u h s d", h=heads)
+            v = rearrange(v, "u s (h d) -> u h s d", h=heads)
+            out = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+            return rearrange(out, "u h s d -> u s (h d)")
+
+        q = self.to_q(self.norm_q(coarse))[:, None]  # [U, 1, Dp]
+        k, v = self.to_kv(self.norm_kv(pixels)).chunk(2, dim=-1)
+        pooled = chunked_batch_attn(attend, q, k, v)  # [U, 1, Dp]
+        return self.up(pooled[:, 0])
+
+
+class PerceiverPixelStep(nn.Module):
+    """Cross-attention-only pixel step: pixels never mix with each other.
+
+    Each step FiLM-conditions the unit's pixels on its coarse token and applies a
+    pointwise MLP -- the pixel branch is a steered high-resolution "memory" that
+    preserves and sharpens local evidence while the coarse branch does all the
+    reasoning. On read steps the coarse token additionally attention-pools over its
+    unit's pixels (:class:`PixelReadPool`, linear in the pixel count and computed at
+    the pixel width) so fine detail flows back up.
+    """
+
+    def __init__(
+        self,
+        coarse_dim: int,
+        pixel_dim: int,
+        num_heads: int,
+        mlp_ratio: float,
+        with_read: bool,
+    ) -> None:
+        """Initialize the step.
+
+        Args:
+            coarse_dim: Coarse-token embedding dimension.
+            pixel_dim: Pixel embedding dimension.
+            num_heads: Attention heads for the coarse <- pixel read (pixel width).
+            mlp_ratio: Hidden-dim ratio of the pointwise pixel MLP.
+            with_read: Whether this step includes the coarse <- pixel read.
+        """
+        super().__init__()
+        self.film = PixelFiLM(coarse_dim, pixel_dim, pixel_norm_affine=False)
+        self.norm = nn.LayerNorm(pixel_dim, elementwise_affine=False)
+        self.mlp = Mlp(pixel_dim, hidden_features=int(pixel_dim * mlp_ratio))
+        self.read = (
+            PixelReadPool(coarse_dim, pixel_dim, num_heads) if with_read else None
+        )
+
+    def zero_init(self) -> None:
+        """Zero the FiLM modulation and the read's coarse update (identity at init)."""
+        self.film.zero_init()
+        if self.read is not None:
+            self.read.zero_init()
+
+    def forward(self, pixels: Tensor, coarse: Tensor) -> tuple[Tensor, Tensor | None]:
+        """Run the step.
+
+        Args:
+            pixels: ``[num_units, P**2, Dp]`` packed ONLINE pixel tokens.
+            coarse: ``[num_units, Dc]`` coarse token of each unit.
+
+        Returns:
+            ``(pixels, coarse_delta)``: the updated pixel tokens and, on read steps, a
+            ``[num_units, Dc]`` residual update for the coarse tokens (else ``None``).
+        """
+        pixels = self.film(pixels, coarse)
+        pixels = pixels + self.mlp(self.norm(pixels))
+        if self.read is None:
+            return pixels, None
+        return pixels, self.read(coarse, pixels)
+
+
 @experimental("Dual-resolution (pixel branch) encoder is experimental.")
 class DualResEncoder(Encoder):
     """Encoder with a coarse patch branch plus a lightweight per-pixel branch."""
@@ -630,6 +945,10 @@ class DualResEncoder(Encoder):
         pixel_embedding_size: int = 128,
         pixel_num_heads: int = 4,
         pixel_mlp_ratio: float = 4.0,
+        pixel_branch_type: str = "joint",
+        pixel_every_k_blocks: int = 1,
+        pixel_conv_kernel: int = 3,
+        pixel_coarse_read_interval: int = 1,
         pixel_film_from_coarse: bool = True,
         coarse_cross_attn_to_pixel: bool = True,
         pixel_grad_checkpointing: bool = True,
@@ -641,14 +960,29 @@ class DualResEncoder(Encoder):
             pixel_embedding_size: Per-pixel embedding dimension (Dp).
             pixel_num_heads: Attention heads for the pixel branch.
             pixel_mlp_ratio: MLP ratio for the pixel branch.
-            pixel_film_from_coarse: If True, each block conditions a unit's pixel
-                tokens on its coarse token via gated FiLM (see :class:`PixelFiLM`) --
-                the coarse branch reasons at full width, the pixels are told how to
-                reinterpret their local detail. (Cross-attention formulations
-                degenerate here: a pixel's coarse context is a single token, and
-                softmax over one key ignores the query.)
-            coarse_cross_attn_to_pixel: If True, coarse tokens cross-attend to their
-                unit's pixel features so fine detail flows into the output.
+            pixel_branch_type: Pixel-branch design: ``"joint"`` (original per-patch
+                joint spatio-temporal attention), ``"conv"`` (ConvNeXt-style dense
+                convolutional branch, :class:`ConvPixelStep`), ``"window"`` (per-unit
+                window attention with a coarse register token,
+                :class:`WindowPixelStep`), or ``"perceiver"`` (cross-attention-only
+                pixel tokens, :class:`PerceiverPixelStep`). See the module docstring.
+            pixel_every_k_blocks: Run the pixel branch only after every ``k``-th
+                coarse block (the last block always runs it). Requires
+                ``depth % k == 0``; ``"joint"`` supports only 1.
+            pixel_conv_kernel: Depthwise kernel size (``"conv"`` type only).
+            pixel_coarse_read_interval: For ``"perceiver"``: the coarse <- pixel
+                attention-pool read runs every this-many pixel steps (the last pixel
+                step always reads).
+            pixel_film_from_coarse: (``"joint"`` only) If True, each block conditions
+                a unit's pixel tokens on its coarse token via gated FiLM (see
+                :class:`PixelFiLM`) -- the coarse branch reasons at full width, the
+                pixels are told how to reinterpret their local detail.
+                (Cross-attention formulations degenerate here: a pixel's coarse
+                context is a single token, and softmax over one key ignores the
+                query.)
+            coarse_cross_attn_to_pixel: (``"joint"`` only) If True, coarse tokens
+                cross-attend to their unit's pixel features so fine detail flows into
+                the output.
             pixel_grad_checkpointing: Recompute each pixel-branch block in backward
                 instead of storing its activations. The pixel branch holds one token
                 per pixel (up to ``P**2 = 64`` times the coarse token count), so
@@ -669,6 +1003,8 @@ class DualResEncoder(Encoder):
 
         self.pixel_embedding_size = pixel_embedding_size
         self.pixel_num_heads = pixel_num_heads
+        self.pixel_branch_type = pixel_branch_type
+        self.pixel_every_k_blocks = pixel_every_k_blocks
         self.pixel_film_from_coarse = pixel_film_from_coarse
         self.coarse_cross_attn_to_pixel = coarse_cross_attn_to_pixel
         self.pixel_grad_checkpointing = pixel_grad_checkpointing
@@ -685,51 +1021,108 @@ class DualResEncoder(Encoder):
             pixel_embedding_size,
             tokenization_config=self.tokenization_config,
         )
-        self.pixel_self_blocks = nn.ModuleList(
-            [
-                PixelAttentionBlock(
-                    pixel_embedding_size, pixel_num_heads, pixel_mlp_ratio
-                )
-                for _ in range(depth)
-            ]
-        )
-        self.pixel_film = (
-            nn.ModuleList(
-                [PixelFiLM(coarse_dim, pixel_embedding_size) for _ in range(depth)]
-            )
-            if pixel_film_from_coarse
-            else None
-        )
-        self.coarse_to_pixel = (
-            nn.ModuleList(
+        self.pixel_self_blocks: nn.ModuleList | None = None
+        self.pixel_film: nn.ModuleList | None = None
+        self.coarse_to_pixel: nn.ModuleList | None = None
+        self.pixel_steps: nn.ModuleList | None = None
+        if pixel_branch_type == "joint":
+            self.pixel_self_blocks = nn.ModuleList(
                 [
-                    CrossAttnBlock(
-                        q_dim=coarse_dim,
-                        kv_dim=pixel_embedding_size,
-                        num_heads=coarse_heads,
-                        mlp_ratio=1.0,
+                    PixelAttentionBlock(
+                        pixel_embedding_size, pixel_num_heads, pixel_mlp_ratio
                     )
                     for _ in range(depth)
                 ]
             )
-            if coarse_cross_attn_to_pixel
-            else None
-        )
+            self.pixel_film = (
+                nn.ModuleList(
+                    [PixelFiLM(coarse_dim, pixel_embedding_size) for _ in range(depth)]
+                )
+                if pixel_film_from_coarse
+                else None
+            )
+            self.coarse_to_pixel = (
+                nn.ModuleList(
+                    [
+                        CrossAttnBlock(
+                            q_dim=coarse_dim,
+                            kv_dim=pixel_embedding_size,
+                            num_heads=coarse_heads,
+                            mlp_ratio=1.0,
+                        )
+                        for _ in range(depth)
+                    ]
+                )
+                if coarse_cross_attn_to_pixel
+                else None
+            )
+        else:
+            num_steps = depth // pixel_every_k_blocks
+            if pixel_branch_type == "conv":
+                steps: list[nn.Module] = [
+                    ConvPixelStep(
+                        coarse_dim,
+                        pixel_embedding_size,
+                        kernel_size=pixel_conv_kernel,
+                        mlp_ratio=pixel_mlp_ratio,
+                    )
+                    for _ in range(num_steps)
+                ]
+            elif pixel_branch_type == "window":
+                steps = [
+                    WindowPixelStep(
+                        coarse_dim,
+                        pixel_embedding_size,
+                        num_heads=pixel_num_heads,
+                        mlp_ratio=pixel_mlp_ratio,
+                    )
+                    for _ in range(num_steps)
+                ]
+            elif pixel_branch_type == "perceiver":
+                steps = [
+                    PerceiverPixelStep(
+                        coarse_dim,
+                        pixel_embedding_size,
+                        num_heads=pixel_num_heads,
+                        mlp_ratio=pixel_mlp_ratio,
+                        # The last step always reads so fine detail reaches the coarse
+                        # output (and every pixel param stays on the coarse loss path).
+                        with_read=(
+                            (s + 1) % pixel_coarse_read_interval == 0
+                            or s == num_steps - 1
+                        ),
+                    )
+                    for s in range(num_steps)
+                ]
+            else:
+                raise ValueError(f"Unknown pixel_branch_type {pixel_branch_type!r}")
+            self.pixel_steps = nn.ModuleList(steps)
 
         for module in self._pixel_modules():
             module.apply(self._init_weights)
-        # After the blanket init: FiLM modulations start at zero (identity module).
+        # After the blanket init: fusion modulations start at zero (identity modules).
         if self.pixel_film is not None:
             for film in self.pixel_film:
                 film.zero_init()
+        if self.pixel_steps is not None:
+            for step in self.pixel_steps:
+                step.zero_init()
 
     def _pixel_modules(self) -> list[nn.Module]:
-        modules: list[nn.Module] = [self.pixel_embeddings, self.pixel_self_blocks]
-        if self.pixel_film is not None:
-            modules.append(self.pixel_film)
-        if self.coarse_to_pixel is not None:
-            modules.append(self.coarse_to_pixel)
+        modules: list[nn.Module] = [self.pixel_embeddings]
+        for maybe in (
+            self.pixel_self_blocks,
+            self.pixel_film,
+            self.coarse_to_pixel,
+            self.pixel_steps,
+        ):
+            if maybe is not None:
+                modules.append(maybe)
         return modules
+
+    def _is_pixel_block(self, block_idx: int) -> bool:
+        """Whether the pixel branch runs after coarse block ``block_idx``."""
+        return (block_idx + 1) % self.pixel_every_k_blocks == 0
 
     def forward(
         self,
@@ -744,12 +1137,15 @@ class DualResEncoder(Encoder):
             raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
 
         coarse_patchified = self.patch_embeddings.forward(x, patch_size)
-        pixel_patchified = self.pixel_embeddings.forward(x, patch_size)
 
         pixel_state: dict[str, PixelModalityState] = {}
         if token_exit_cfg is None or any(
             exit_depth > 0 for exit_depth in token_exit_cfg.values()
         ):
+            # Only embed pixels when the blocks (and so the pixel branch) run at all:
+            # the target-encoder path uses an all-zero token_exit_cfg, and embedding
+            # the unmasked batch's pixels there would be pure waste.
+            pixel_patchified = self.pixel_embeddings.forward(x, patch_size)
             coarse_tokens_dict, pixel_state = self.apply_dual_attn(
                 coarse_x=coarse_patchified,
                 pixel_x=pixel_patchified,
@@ -830,13 +1226,20 @@ class DualResEncoder(Encoder):
             )
 
         # Precompute the pixel-branch bookkeeping (packed ONLINE pixels + groupings).
-        # ``pixels`` (all modalities' ONLINE units, concatenated) is carried through
-        # the block loop alongside the coarse tokens and split back into per-modality
+        # ``pixels`` is carried through the block loop alongside the coarse tokens:
+        # for the packed branch types it concatenates all modalities' ONLINE units
+        # ([num_units, P**2, Dp]); for the "conv" type it is the dense frame tensor
+        # ([F, H, W, Dp], non-ONLINE pixels zeroed). Split back into per-modality
         # state once at the end.
         pixel_ctx = self._build_pixel_context(pixel_x, original_masks_dict, dims_dict)
         pixels = None
         if pixel_ctx is not None:
-            pixels = torch.cat([st.pixels for st in pixel_ctx.states.values()], dim=0)
+            if self.pixel_branch_type == "conv":
+                pixels = self._build_conv_frames(pixel_x, pixel_ctx)
+            else:
+                pixels = torch.cat(
+                    [st.pixels for st in pixel_ctx.states.values()], dim=0
+                )
 
         num_blocks = len(self.blocks)
         for i, blk in enumerate(self.blocks):
@@ -845,7 +1248,7 @@ class DualResEncoder(Encoder):
                 exited_packed = torch.where(exit_packed == i, packed, exited_packed)
             packed = blk(x=packed, attn_mask=attn_mask, rope_positions=positions_packed)
             coarse_dense, _ = self.add_removed_tokens(packed, indices, new_mask)
-            if pixel_ctx is not None:
+            if pixel_ctx is not None and self._is_pixel_block(i):
                 if self.pixel_grad_checkpointing and torch.is_grad_enabled():
                     coarse_dense, pixels = torch.utils.checkpoint.checkpoint(
                         self._interleave_pixels,
@@ -862,10 +1265,13 @@ class DualResEncoder(Encoder):
 
         if pixel_ctx is not None:
             assert pixels is not None
-            for state, updated in zip(
-                pixel_ctx.states.values(), pixels.split(pixel_ctx.split_sizes)
-            ):
-                state.pixels = updated
+            if self.pixel_branch_type == "conv":
+                self._pack_conv_frames(pixels, pixel_ctx)
+            else:
+                for state, updated in zip(
+                    pixel_ctx.states.values(), pixels.split(pixel_ctx.split_sizes)
+                ):
+                    state.pixels = updated
 
         packed = self._pack(coarse_dense, indices, new_mask, max_seqlen)
         if exit_ids_seq is not None:
@@ -936,18 +1342,26 @@ class DualResEncoder(Encoder):
                     "Cross-modality pixel self-attention requires all pixel modalities "
                     "to share the same spatial grid (G) and patch size (P)."
                 )
-            # Group each unit's P**2 pixels: [B * U, P**2, Dp], U ordered (g1,g2,t,bs).
-            units = rearrange(
-                pixels,
-                "b (g1 p1) (g2 p2) t bs d -> (b g1 g2 t bs) (p1 p2) d",
-                g1=g1,
-                g2=g2,
-                p1=p1,
-                p2=p2,
-            )
             flat_idx = torch.nonzero(online.reshape(-1), as_tuple=False).squeeze(-1)
+            if self.pixel_branch_type == "conv":
+                # The conv branch carries DENSE frames through the blocks (see
+                # _build_conv_frames) and packs the ONLINE units only at the end, so
+                # skip the packed gather here (pixels is a placeholder until then).
+                packed_units = pixels.new_zeros(0, p1 * p2, pixels.shape[-1])
+            else:
+                # Group each unit's P**2 pixels: [B * U, P**2, Dp], U ordered
+                # (g1, g2, t, bs).
+                units = rearrange(
+                    pixels,
+                    "b (g1 p1) (g2 p2) t bs d -> (b g1 g2 t bs) (p1 p2) d",
+                    g1=g1,
+                    g2=g2,
+                    p1=p1,
+                    p2=p2,
+                )
+                packed_units = units[flat_idx]
             state = PixelModalityState(
-                pixels=units[flat_idx],
+                pixels=packed_units,
                 flat_idx=flat_idx,
                 grid=(b, g1, g2, t, bs),
                 patch_shape=(p1, p2),
@@ -966,9 +1380,77 @@ class DualResEncoder(Encoder):
         return PixelBranchContext(
             states=states,
             split_sizes=[st.num_online for st in states.values()],
-            loc=build_location_groupings(torch.cat(location_ids)),
+            # The per-location grouping is only used by the "joint" per-patch
+            # self-attention; skip the sort/unique work for the other branch types.
+            loc=(
+                build_location_groupings(torch.cat(location_ids))
+                if self.pixel_branch_type == "joint"
+                else None
+            ),
             coarse_idx=torch.cat(coarse_idx),
+            coarse_offsets=coarse_offsets,
+            frame_splits=[
+                st.grid[0] * st.grid[3] * st.grid[4] for st in states.values()
+            ],
         )
+
+    def _build_conv_frames(
+        self, pixel_x: dict[str, Tensor], ctx: PixelBranchContext
+    ) -> Tensor:
+        """Build the dense frame tensor for the convolutional pixel branch.
+
+        Every modality's ``[B, H, W, T, band_sets, Dp]`` pixel tokens are flattened to
+        per-``(instance, timestep, band set)`` frames and concatenated (in
+        ``ctx.states`` order, matching ``ctx.frame_splits``). Non-ONLINE pixels are
+        zeroed FIRST, so no masked-unit data ever enters the branch: whatever the
+        depthwise convolutions later propagate across patch boundaries is derived from
+        visible pixels only, and reconstruction of masked units cannot cheat.
+
+        Args:
+            pixel_x: The :class:`PixelPatchEmbed` output (tokens + pixel-level masks).
+            ctx: The pixel-branch context.
+
+        Returns:
+            ``[F, H, W, Dp]`` dense frames (``F`` = total frames over modalities).
+        """
+        frames = []
+        for modality in ctx.states:
+            tokens = pixel_x[modality]  # [B, H, W, T, bs, Dp]
+            mask_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+            online = pixel_x[mask_name] == MaskValue.ONLINE_ENCODER.value
+            tokens = tokens * online[..., None].to(tokens.dtype)
+            frames.append(rearrange(tokens, "b h w t bs d -> (b t bs) h w d"))
+        return torch.cat(frames, dim=0)
+
+    def _pack_conv_frames(self, frames: Tensor, ctx: PixelBranchContext) -> None:
+        """Pack final dense frames into each modality's ONLINE-unit pixel state.
+
+        Inverts :meth:`_build_conv_frames`: split the frame tensor per modality,
+        regroup each patch's ``P**2`` pixels into units (canonical row-major
+        ``(g1, g2, t, bs)`` order) and gather the ONLINE units, giving the same packed
+        ``[num_online, P**2, Dp]`` layout the pixel decoders consume.
+
+        Args:
+            frames: ``[F, H, W, Dp]`` final dense frames.
+            ctx: The pixel-branch context (its ``states`` are updated in place).
+        """
+        for (modality, st), frames_m in zip(
+            ctx.states.items(), frames.split(ctx.frame_splits)
+        ):
+            b, g1, g2, t, bs = st.grid
+            p1, p2 = st.patch_shape
+            units = rearrange(
+                frames_m,
+                "(b t bs) (g1 p1) (g2 p2) d -> (b g1 g2 t bs) (p1 p2) d",
+                b=b,
+                t=t,
+                bs=bs,
+                g1=g1,
+                g2=g2,
+                p1=p1,
+                p2=p2,
+            )
+            st.pixels = units[st.flat_idx]
 
     def _interleave_pixels(
         self,
@@ -977,7 +1459,32 @@ class DualResEncoder(Encoder):
         pixels: Tensor,
         ctx: PixelBranchContext,
     ) -> tuple[Tensor, Tensor]:
-        """Run one pixel-branch block and exchange information with the coarse tokens.
+        """Run one pixel-branch step and exchange information with the coarse tokens.
+
+        Dispatches on ``pixel_branch_type``; see :meth:`_interleave_joint` (the
+        original design), :meth:`_interleave_conv`, and :meth:`_interleave_packed`
+        (window/perceiver). This method is (optionally) wrapped in gradient
+        checkpointing by the caller, so it must stay a pure
+        ``(coarse_dense, pixels) -> (coarse_dense, pixels)`` function of its tensor
+        inputs.
+        """
+        if self.pixel_branch_type == "joint":
+            return self._interleave_joint(block_idx, coarse_dense, pixels, ctx)
+        assert self.pixel_steps is not None
+        step_idx = (block_idx + 1) // self.pixel_every_k_blocks - 1
+        step = self.pixel_steps[step_idx]
+        if self.pixel_branch_type == "conv":
+            return self._interleave_conv(step, coarse_dense, pixels, ctx)
+        return self._interleave_packed(step, coarse_dense, pixels, ctx)
+
+    def _interleave_joint(
+        self,
+        block_idx: int,
+        coarse_dense: Tensor,
+        pixels: Tensor,
+        ctx: PixelBranchContext,
+    ) -> tuple[Tensor, Tensor]:
+        """Run one ``"joint"`` pixel-branch block (the original design).
 
         All modalities' ONLINE units are processed as one concatenated tensor
         (``pixels``, in ``ctx.states`` order), so each module below runs exactly once
@@ -991,10 +1498,6 @@ class DualResEncoder(Encoder):
            result is written back into ``coarse_dense``. Placed last so every pixel
            module feeds the coarse output each block (keeping all pixel params on the
            autograd graph).
-
-        This method is (optionally) wrapped in gradient checkpointing by the caller,
-        so it must stay a pure ``(coarse_dense, pixels) -> (coarse_dense, pixels)``
-        function of its tensor inputs.
         """
         b, n, d = coarse_dense.shape
         coarse_flat = coarse_dense.reshape(b * n, d)
@@ -1002,18 +1505,90 @@ class DualResEncoder(Encoder):
 
         if self.pixel_film is not None:
             pixels = self.pixel_film[block_idx](pixels, coarse_units)
+        assert ctx.loc is not None
         pixels = self._pixel_patch_attn(block_idx, pixels, ctx.loc)
 
         if self.coarse_to_pixel is not None:
             delta = chunked_batch_attn(
                 self.coarse_to_pixel[block_idx], coarse_units[:, None], pixels
             )
-            coarse_flat = coarse_flat.index_copy(
-                0, ctx.coarse_idx, coarse_units + delta[:, 0]
+            # index_add (indices are unique) rather than index_copy of
+            # ``coarse_units + delta``: same result, far cheaper backward. The cast
+            # matches the coarse dtype (under autocast the delta may be bf16 while
+            # the dense coarse tokens are float32).
+            coarse_flat = coarse_flat.index_add(
+                0, ctx.coarse_idx, delta[:, 0].to(coarse_flat.dtype)
             )
             coarse_dense = coarse_flat.view(b, n, d)
 
         return coarse_dense, pixels
+
+    def _interleave_packed(
+        self,
+        step: nn.Module,
+        coarse_dense: Tensor,
+        pixels: Tensor,
+        ctx: PixelBranchContext,
+    ) -> tuple[Tensor, Tensor]:
+        """Run one packed (``"window"`` / ``"perceiver"``) pixel-branch step.
+
+        The step consumes the packed ONLINE units and each unit's coarse token, and
+        returns the updated pixels plus an optional residual update for the ONLINE
+        coarse tokens (scattered back with one index op).
+        """
+        b, n, d = coarse_dense.shape
+        coarse_flat = coarse_dense.reshape(b * n, d)
+        coarse_units = coarse_flat[ctx.coarse_idx]  # [total_units, Dc]
+        pixels, delta = step(pixels, coarse_units)
+        if delta is not None:
+            # index_add (indices are unique) rather than index_copy of
+            # ``coarse_units + delta``: same result, far cheaper backward. The cast
+            # matches the coarse dtype (under autocast the delta may be bf16 while
+            # the dense coarse tokens are float32).
+            coarse_flat = coarse_flat.index_add(
+                0, ctx.coarse_idx, delta.to(coarse_flat.dtype)
+            )
+            coarse_dense = coarse_flat.view(b, n, d)
+        return coarse_dense, pixels
+
+    def _interleave_conv(
+        self,
+        step: nn.Module,
+        coarse_dense: Tensor,
+        frames: Tensor,
+        ctx: PixelBranchContext,
+    ) -> tuple[Tensor, Tensor]:
+        """Run one ``"conv"`` pixel-branch step on the dense frames.
+
+        Gathers each frame's coarse tokens from the collapsed coarse layout (whole
+        per-modality slabs -- masked positions are zeros there, and their FiLM /
+        pooled outputs land on masked pixels / coarse positions that are never read),
+        runs :class:`ConvPixelStep`, and adds the pooled pixel -> coarse update back
+        onto the same slabs.
+        """
+        b, n, d = coarse_dense.shape
+        patch_shape = next(iter(ctx.states.values())).patch_shape
+
+        coarse_frames = []
+        for modality, st in ctx.states.items():
+            _, g1, g2, t, bs = st.grid
+            off = ctx.coarse_offsets[modality]
+            u = g1 * g2 * t * bs
+            slab = coarse_dense[:, off : off + u].view(b, g1, g2, t, bs, d)
+            coarse_frames.append(rearrange(slab, "b g1 g2 t bs d -> (b t bs) g1 g2 d"))
+        frames, pooled = step(frames, torch.cat(coarse_frames, dim=0), patch_shape)
+
+        delta_full = torch.zeros_like(coarse_dense)
+        for (modality, st), pooled_m in zip(
+            ctx.states.items(), pooled.split(ctx.frame_splits)
+        ):
+            _, g1, g2, t, bs = st.grid
+            off = ctx.coarse_offsets[modality]
+            u = g1 * g2 * t * bs
+            delta_full[:, off : off + u] = rearrange(
+                pooled_m, "(b t bs) g1 g2 d -> b (g1 g2 t bs) d", b=b, t=t, bs=bs
+            )
+        return coarse_dense + delta_full, frames
 
     def _pixel_patch_attn(
         self, block_idx: int, pixels: Tensor, loc: LocationGroupings
@@ -1029,6 +1604,7 @@ class DualResEncoder(Encoder):
         Offsets are told apart by the within-patch positional encoding added in
         :class:`PixelPatchEmbed`.
         """
+        assert self.pixel_self_blocks is not None
         num_units, p2, d = pixels.shape
         nl, mu = loc.num_locations, loc.max_units
         pix_sorted = pixels[loc.order]
@@ -1081,6 +1657,10 @@ class DualResEncoderConfig(EncoderConfig):
     pixel_embedding_size: int = 128
     pixel_num_heads: int = 4
     pixel_mlp_ratio: float = 4.0
+    pixel_branch_type: str = "joint"
+    pixel_every_k_blocks: int = 1
+    pixel_conv_kernel: int = 3
+    pixel_coarse_read_interval: int = 1
     pixel_film_from_coarse: bool = True
     coarse_cross_attn_to_pixel: bool = True
     pixel_grad_checkpointing: bool = True
@@ -1100,6 +1680,28 @@ class DualResEncoderConfig(EncoderConfig):
                 "DualResEncoder requires at least one spatial, multitemporal "
                 "modality for the pixel branch."
             )
+        if self.pixel_branch_type not in ("joint", "conv", "window", "perceiver"):
+            raise ValueError(
+                f"Unknown pixel_branch_type {self.pixel_branch_type!r}; expected "
+                "'joint', 'conv', 'window' or 'perceiver'."
+            )
+        if self.pixel_every_k_blocks < 1:
+            raise ValueError("pixel_every_k_blocks must be >= 1")
+        if self.pixel_branch_type == "joint" and self.pixel_every_k_blocks != 1:
+            raise ValueError(
+                "pixel_every_k_blocks > 1 is only supported for the non-'joint' "
+                "pixel branch types."
+            )
+        if self.depth % self.pixel_every_k_blocks != 0:
+            raise ValueError(
+                f"depth ({self.depth}) must be divisible by pixel_every_k_blocks "
+                f"({self.pixel_every_k_blocks}) so the last block runs the pixel "
+                "branch."
+            )
+        if self.pixel_coarse_read_interval < 1:
+            raise ValueError("pixel_coarse_read_interval must be >= 1")
+        if self.pixel_conv_kernel % 2 != 1:
+            raise ValueError("pixel_conv_kernel must be odd")
 
     def build(self) -> "DualResEncoder":
         """Build the dual-resolution encoder."""
