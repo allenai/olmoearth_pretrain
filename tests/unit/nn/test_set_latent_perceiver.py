@@ -382,6 +382,42 @@ def test_band_stats_standardize_input_and_decorrelate_targets() -> None:
     assert mean_target_sim(standardized) < 0.5  # separated with it
 
 
+def test_band_dropout_augments_content_but_not_targets() -> None:
+    """Band dropout zeroes encoder-input bands; frozen targets stay full-band."""
+    torch.manual_seed(0)
+    model = _model(
+        band_dropout_modalities=("sentinel2_l2a",),
+        band_dropout_rate=0.9,
+        cond_dropout=0.0,
+    )
+    model.train()
+    sample = _make_sample()
+    dropped, _, _ = model._tokenize(sample, generator=torch.Generator().manual_seed(3))
+    model.band_dropout_rate = 0.0
+    clean, _, _ = model._tokenize(sample, generator=torch.Generator().manual_seed(3))
+    name = "sentinel2_l2a__bs0"
+    assert torch.equal(dropped[name]["target"], clean[name]["target"])
+    assert not torch.allclose(dropped[name]["content"], clean[name]["content"])
+    model.band_dropout_rate = 0.9
+    model.eval()
+    ev, _, _ = model._tokenize(sample, generator=None)
+    assert torch.allclose(ev[name]["content"], clean[name]["content"])  # eval: off
+
+
+def test_patch_embed_hidden_layer_trains() -> None:
+    """The hidden-layer tokenizer trains; frozen targets stay single-conv."""
+    model = _model(patch_embed_hidden_size=32)
+    loss, _ = model(_make_sample(), mask_seed=3)
+    loss.backward()
+    tok = model.tokenizers["sentinel2_l2a__bs0"]
+    assert isinstance(tok.proj, torch.nn.Sequential)
+    assert tok.proj[0].weight.grad is not None
+    assert tok.proj[2].weight.grad is not None
+    assert not isinstance(
+        model.target_tokenizers["sentinel2_l2a__bs0"].proj, torch.nn.Sequential
+    )
+
+
 def test_config_build_roundtrips() -> None:
     """The config builds the model and serializes/deserializes (old-ckpt safe)."""
     cfg = SetLatentPerceiverConfig(

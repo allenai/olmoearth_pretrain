@@ -189,18 +189,40 @@ class PatchTokenizer(nn.Module):
     """
 
     def __init__(
-        self, in_channels: int, dim: int, patch_px: int, valid_threshold: float
+        self,
+        in_channels: int,
+        dim: int,
+        patch_px: int,
+        valid_threshold: float,
+        hidden_size: int | None = None,
     ) -> None:
-        """Initialize the patch tokenizer."""
+        """Initialize the patch tokenizer.
+
+        ``hidden_size`` inserts a hidden layer in the patch projection
+        (conv -> GELU -> 1x1 conv), matching the mainline FlexiViT's
+        ``patch_embed_hidden_sizes``.
+        """
         super().__init__()
         self.patch_px = patch_px
         self.valid_threshold = valid_threshold
-        self.proj = nn.Conv2d(in_channels, dim, kernel_size=patch_px, stride=patch_px)
+        if hidden_size is None:
+            self.proj: nn.Module = nn.Conv2d(
+                in_channels, dim, kernel_size=patch_px, stride=patch_px
+            )
+        else:
+            self.proj = nn.Sequential(
+                nn.Conv2d(
+                    in_channels, hidden_size, kernel_size=patch_px, stride=patch_px
+                ),
+                nn.GELU(),
+                nn.Conv2d(hidden_size, dim, kernel_size=1),
+            )
 
     def forward(self, data: torch.Tensor) -> torch.Tensor:
         """Patchify ``(b, t, c, h, w)`` data into ``(b, t, gh, gw, d)`` tokens."""
         b, t, c, h, w = data.shape
-        data = data.to(self.proj.weight.dtype)  # e.g. bf16 under FSDP
+        first = self.proj[0] if isinstance(self.proj, nn.Sequential) else self.proj
+        data = data.to(first.weight.dtype)  # e.g. bf16 under FSDP
         x = self.proj(data.reshape(b * t, c, h, w))
         return x.reshape(b, t, x.shape[1], x.shape[2], x.shape[3]).permute(
             0, 1, 3, 4, 2
@@ -324,6 +346,9 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
         cond_dropout: float = 0.5,
         trained_years: tuple[float, float] | None = None,
         band_stats: dict[str, Sequence[Sequence[float]]] | None = None,
+        band_dropout_modalities: tuple[str, ...] | list[str] = (),
+        band_dropout_rate: float = 0.0,
+        patch_embed_hidden_size: int | None = None,
     ) -> None:
         """Initialize the Set-Latent Perceiver. See ``SetLatentPerceiverConfig``."""
         super().__init__()
@@ -362,12 +387,18 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
         self.valid_token_threshold = valid_token_threshold
         self.cond_dropout = cond_dropout
         self.trained_years = trained_years
+        self.band_dropout_modalities = set(band_dropout_modalities)
+        self.band_dropout_rate = band_dropout_rate
 
         # Online + frozen random-projection tokenizers (one per band-set group).
         self.tokenizers = nn.ModuleDict(
             {
                 g.name: PatchTokenizer(
-                    g.num_bands, dim, g.patch_px, valid_token_threshold
+                    g.num_bands,
+                    dim,
+                    g.patch_px,
+                    valid_token_threshold,
+                    hidden_size=patch_embed_hidden_size,
                 )
                 for g in self.groups
             }
@@ -574,9 +605,23 @@ class SetLatentPerceiver(nn.Module, DistributedMixins):
 
             valid_pixels = valid.all(dim=2)  # (b,t,h,w): all bands valid
             tok = self.tokenizers[g.name]
-            content = tok(data)  # (b,t,gh,gw,d)
             with torch.no_grad():
                 target = self.target_tokenizers[g.name](data)  # (b,t,gh,gw,d_t)
+            if (
+                self.training
+                and self.band_dropout_rate > 0.0
+                and g.modality in self.band_dropout_modalities
+            ):
+                # Band-dropout augmentation on the encoder path only; the
+                # frozen targets keep the full-band signature.
+                keep = (
+                    torch.rand(
+                        bg, 1, data.shape[2], 1, 1, device=device, generator=generator
+                    )
+                    >= self.band_dropout_rate
+                )
+                data = data * keep
+            content = tok(data)  # (b,t,gh,gw,d)
             valid_tok = tok.valid_tokens(valid_pixels)
             time_mask = valid_pixels.flatten(2).any(dim=2)  # (b,t)
             valid_tok = valid_tok & time_mask[:, :, None, None]
@@ -1327,6 +1372,9 @@ class SetLatentPerceiverConfig(Config):
     trained_years: tuple[float, float] | None = None
     # modality -> [per-band loc, per-band scale] (lists for omegaconf compat)
     band_stats: dict[str, list[list[float]]] | None = None
+    band_dropout_modalities: tuple[str, ...] = ()
+    band_dropout_rate: float = 0.0
+    patch_embed_hidden_size: int | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""

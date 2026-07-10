@@ -190,7 +190,7 @@ def build_train_module_config(
     """Build the SLP train module config."""
     return SetLatentPerceiverTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
-        rank_microbatch_size=16,
+        rank_microbatch_size=64,
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(warmup_steps=8000),
         dp_config=DataParallelConfig(
@@ -205,7 +205,7 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     """Build the dataloader config (single masked view; SLP masks internally)."""
     return OlmoEarthDataLoaderConfig(
         num_workers=16,
-        global_batch_size=256,
+        global_batch_size=512,
         token_budget=2250,
         prefetch_factor=4,
         sampled_hw_p_list=list(range(1, 13)),
@@ -236,6 +236,9 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         entity="eai-ai2",
         enabled=True,
     )
+    # Eval suite copied from the mainline reference run trope_mixed_tscale_months
+    # (wandb eai-ai2/2026_04_22_add_hidden_layer_to_initial_projection/nd3xh7py).
+    S2 = [Modality.SENTINEL2_L2A.name]
     EVAL_TASKS = {
         "m-eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
@@ -244,24 +247,10 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             norm_method=NormMethod.NORM_NO_CLIP_2_STD,
-            input_modalities=[Modality.SENTINEL2_L2A.name],
+            input_modalities=S2,
             eval_mode=EvalMode.KNN,
             primary_metric=EvalMetric.ACCURACY,
             eval_interval=Duration.steps(4000),
-        ),
-        "pastis": DownstreamTaskConfig(
-            dataset="pastis",
-            embedding_batch_size=32,
-            probe_batch_size=8,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.steps(20000),
-            input_modalities=[Modality.SENTINEL2_L2A.name],
-            epochs=50,
-            eval_mode=EvalMode.LINEAR_PROBE,
-            primary_metric=EvalMetric.MIOU,
         ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
@@ -273,9 +262,78 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_method=NormMethod.NORM_NO_CLIP_2_STD,
             probe_lr=0.01,
             eval_interval=Duration.steps(4000),
-            input_modalities=[Modality.SENTINEL2_L2A.name],
+            input_modalities=S2,
             eval_mode=EvalMode.LINEAR_PROBE,
             primary_metric=EvalMetric.MICRO_F1,
+        ),
+        "pastis": DownstreamTaskConfig(
+            dataset="pastis",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+            probe_lr=0.1,
+            eval_interval=Duration.steps(20000),
+            input_modalities=S2,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            primary_metric=EvalMetric.MIOU,
+        ),
+        "m_so2sat": DownstreamTaskConfig(
+            dataset="m-so2sat",
+            embedding_batch_size=128,
+            num_workers=4,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+            input_modalities=S2,
+            eval_mode=EvalMode.KNN,
+            primary_metric=EvalMetric.ACCURACY,
+            eval_interval=Duration.steps(20000),
+        ),
+        "canada_wildfire_sat_eval_split": DownstreamTaskConfig(
+            dataset="canada_wildfire_sat_eval_split",
+            embedding_batch_size=32,
+            probe_batch_size=16,
+            num_workers=2,
+            patch_size=5,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+            probe_lr=0.1,
+            use_dice_loss=True,
+            input_modalities=S2,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            primary_metric=EvalMetric.CLASS_F1,
+            primary_metric_class=1,
+            eval_interval=Duration.steps(20000),
+        ),
+        "geo_ecosystem_annual_test": DownstreamTaskConfig(
+            dataset="geo_ecosystem_annual_test",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+            probe_lr=0.01,
+            input_modalities=S2,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            eval_interval=Duration.steps(20000),
+        ),
+        "yemen_crop": DownstreamTaskConfig(
+            dataset="yemen_crop",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+            probe_lr=0.001,
+            input_modalities=S2,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            eval_interval=Duration.steps(20000),
         ),
     }
     return (
@@ -330,6 +388,15 @@ def build_size_model_config(
             for m in common.training_modalities
             if m in CORPUS_BAND_STATS
         },
+        # Mainline input-path tricks (trope_mixed_tscale_months): band-dropout
+        # augmentation on the optical modalities + a hidden layer in the patch
+        # projection (patch_embed_hidden_sizes=[64] analog).
+        band_dropout_modalities=(
+            Modality.SENTINEL2_L2A.name,
+            Modality.LANDSAT.name,
+        ),
+        band_dropout_rate=0.2,
+        patch_embed_hidden_size=64,
         **size,
     )
 
