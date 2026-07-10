@@ -7,9 +7,9 @@ InfoNCE -- and swaps in the dual-resolution model:
 
 * a 512-dim coarse encoder (:class:`DualResEncoder`), shrunk from the v1.2 768 to "pay
   for" ...
-* a 128-dim per-pixel branch that attends per pixel location across its
-  ``(modality, band set, timestep)`` observations plus those units' coarse tokens
-  (as extra keys of the same attention), and
+* a 128-dim per-pixel branch that self-attends per pixel location across
+  ``(modality, band set, timestep)`` and is conditioned on its unit's coarse token
+  via gated FiLM each block, and
 * two pixel heads on top (:class:`DualResLatentMIM`):
     - :class:`PixelReconstructionDecoder` -- SSL per-pixel reconstruction of masked
       imagery timesteps, and
@@ -458,7 +458,7 @@ def build_model_config(common: CommonComponents) -> DualResLatentMIMConfig:
         pixel_embedding_size=model_size["pixel_embedding_size"],
         pixel_num_heads=model_size["pixel_num_heads"],
         pixel_mlp_ratio=model_size["mlp_ratio"],
-        pixel_cross_attn_to_coarse=True,
+        pixel_film_from_coarse=True,
         coarse_cross_attn_to_pixel=True,
     )
     decoder_config = PredictorConfig(

@@ -4,19 +4,21 @@ The coarse branch is the existing :class:`~olmoearth_pretrain.nn.flexi_vit.Encod
 (full spatio-temporal attention at ``embedding_size``). Alongside it we keep a
 per-pixel branch at a smaller ``pixel_embedding_size`` that, per transformer block,
 
-runs *per-location* attention: at each individual pixel location, its tokens attend
-across all its ``(modality, band set, timestep)`` pixel observations **and** (as extra
-keys/values, projected to the pixel width) the coarse tokens of those same units --
-but never across *other* pixel locations. Modality/band-set identity is carried by the
-separate per-``(modality, band set)`` projection weights + an additive temporal
-encoding.
+1. conditions each unit's pixel tokens on its coarse token via gated FiLM
+   (:class:`PixelFiLM`) -- the coarse branch does the contextual reasoning at full
+   width; the pixels are told how to reinterpret their local detail;
+2. runs *per-location* self-attention: at each individual pixel location, its tokens
+   attend across all its ``(modality, band set, timestep)`` observations -- but never
+   across *other* pixel locations. (Modality/band-set identity is carried by the
+   separate per-``(modality, band set)`` projection weights + an additive temporal
+   encoding.)
 
-Injecting the coarse context as extra keys of the location attention (rather than a
-separate pixel -> coarse cross-attention) is deliberate: cross-attending to the single
-coarse token of a pixel's own unit is degenerate -- softmax over one key is identically
-1, so the "attention" reduces to a query-independent broadcast. As joint keys, the
-pixel/coarse mixing is query-dependent even in the minimal fine-tuning configuration
-(one modality, one timestep: two keys per pixel).
+FiLM (rather than attention) for the pixel <- coarse direction is deliberate: a
+pixel's coarse context is a *single* token (its own unit's), so there is nothing to
+retrieve, and softmax over one key is identically 1 -- cross-attention degenerates to
+a query-independent broadcast. FiLM's multiplicative term instead rescales each
+pixel's own feature channels by the coarse context, so the shared per-unit
+conditioning still acts differently on every pixel.
 
 Optionally the coarse branch also cross-attends to the pixel features of its unit
 (``P**2`` keys -- real attention), so the fine detail flows back into the coarse
@@ -418,13 +420,11 @@ class PixelPatchEmbed(nn.Module):
 
 
 class PixelTemporalBlock(nn.Module):
-    """Transformer block over a (padded) sequence axis with optional extra keys.
+    """Transformer block that self-attends over a (padded) sequence axis with a mask.
 
     Used for the pixel branch's per-location attention: each row is one pixel location's
     ONLINE ``(modality, band set, timestep)`` observations (padded to ``max_units``), so
     tokens mix across observations of a single pixel, never across pixel locations.
-    ``extra_kv`` appends additional key/value tokens that the queries can attend to but
-    that are not themselves updated -- the coarse tokens of the row's units.
     """
 
     def __init__(self, dim: int, num_heads: int, mlp_ratio: float) -> None:
@@ -437,29 +437,21 @@ class PixelTemporalBlock(nn.Module):
         """
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
-        # cross_attn=True gives separate q vs k/v inputs; with extra_kv=None the k/v
-        # input is the same normed tensor as q, which is exactly self-attention.
         self.attn = Attention(
             dim,
             num_heads=num_heads,
             qkv_bias=True,
-            cross_attn=True,
             position_encoding=PositionEncoding.ABSOLUTE,
         )
         self.norm2 = nn.LayerNorm(dim)
         self.mlp = Mlp(dim, hidden_features=int(dim * mlp_ratio))
 
-    def forward(
-        self, x: Tensor, key_mask: Tensor | None, extra_kv: Tensor | None = None
-    ) -> Tensor:
-        """Attend over the sequence axis (and optional extra keys).
+    def forward(self, x: Tensor, key_mask: Tensor | None) -> Tensor:
+        """Apply self-attention over the sequence axis.
 
         Args:
             x: ``[N, S, D]`` tokens (S = padded sequence length).
-            key_mask: Optional ``[N, S + S_extra]`` bool (True = attend), covering the
-                concatenated key sequence.
-            extra_kv: Optional ``[N, S_extra, D]`` additional key/value tokens
-                (already normalized/projected; appended after the ``x`` keys).
+            key_mask: Optional ``[N, S]`` bool (True = attend).
 
         Returns:
             ``[N, S, D]`` updated tokens.
@@ -469,11 +461,65 @@ class PixelTemporalBlock(nn.Module):
         # the pixel branch's memory.
         if key_mask is not None:
             key_mask = key_mask[:, None, None, :]
-        xn = self.norm1(x)
-        kv = xn if extra_kv is None else torch.cat([xn, extra_kv], dim=1)
-        x = x + self.attn(xn, y=kv, attn_mask=key_mask)
+        x = x + self.attn(self.norm1(x), attn_mask=key_mask)
         x = x + self.mlp(self.norm2(x))
         return x
+
+
+class PixelFiLM(nn.Module):
+    """Gated FiLM conditioning of a unit's pixel tokens on its coarse token.
+
+    The coarse branch does the heavy contextual reasoning at the full embedding width;
+    this module injects that context into the unit's ``P**2`` pixel tokens as an
+    AdaLN-Zero-style modulation (`DiT <https://arxiv.org/abs/2212.09748>`_):
+
+    ``pixels += gate * (norm(pixels) * (1 + scale) + shift)``
+
+    with ``(scale, shift, gate)`` produced per unit from its coarse token. The
+    conditioning is shared by the unit's pixels, but the *effect* is pixel-dependent
+    through the multiplicative ``scale`` term (the coarse context rescales each pixel's
+    own feature channels) -- unlike cross-attention to a single coarse token, whose
+    softmax over one key collapses to a query-independent broadcast.
+
+    The projection is zero-initialized (see :meth:`zero_init`), so training starts
+    from the unconditioned pixel branch and the gate opens gradually.
+    """
+
+    def __init__(self, coarse_dim: int, pixel_dim: int) -> None:
+        """Initialize the FiLM module.
+
+        Args:
+            coarse_dim: Coarse-token embedding dimension.
+            pixel_dim: Pixel-token embedding dimension.
+        """
+        super().__init__()
+        self.norm_coarse = nn.LayerNorm(coarse_dim)
+        self.norm_pixel = nn.LayerNorm(pixel_dim)
+        self.to_film = nn.Linear(coarse_dim, 3 * pixel_dim)
+
+    def zero_init(self) -> None:
+        """Zero the modulation projection (AdaLN-Zero): the module starts as identity.
+
+        Call *after* any blanket weight init. With zeros, ``gate == 0`` so the pixel
+        stream is untouched at step 0, while ``d(update)/d(gate weights)`` is nonzero,
+        so the gate (and then scale/shift) can still learn.
+        """
+        nn.init.zeros_(self.to_film.weight)
+        nn.init.zeros_(self.to_film.bias)
+
+    def forward(self, pixels: Tensor, coarse: Tensor) -> Tensor:
+        """Modulate ``pixels`` by their unit's coarse token.
+
+        Args:
+            pixels: ``[num_units, P**2, Dp]`` pixel tokens.
+            coarse: ``[num_units, Dc]`` coarse token of each unit.
+
+        Returns:
+            ``[num_units, P**2, Dp]`` modulated pixel tokens.
+        """
+        film = self.to_film(self.norm_coarse(coarse))[:, None]  # [units, 1, 3 * Dp]
+        scale, shift, gate = film.chunk(3, dim=-1)
+        return pixels + gate * (self.norm_pixel(pixels) * (1 + scale) + shift)
 
 
 class CrossAttnBlock(nn.Module):
@@ -556,7 +602,7 @@ class DualResEncoder(Encoder):
         pixel_embedding_size: int = 128,
         pixel_num_heads: int = 4,
         pixel_mlp_ratio: float = 4.0,
-        pixel_cross_attn_to_coarse: bool = True,
+        pixel_film_from_coarse: bool = True,
         coarse_cross_attn_to_pixel: bool = True,
         pixel_grad_checkpointing: bool = True,
         **encoder_kwargs: Any,
@@ -567,12 +613,12 @@ class DualResEncoder(Encoder):
             pixel_embedding_size: Per-pixel embedding dimension (Dp).
             pixel_num_heads: Attention heads for the pixel branch.
             pixel_mlp_ratio: MLP ratio for the pixel branch.
-            pixel_cross_attn_to_coarse: If True, the coarse tokens of each location's
-                ONLINE units are added (projected to the pixel width) as extra
-                keys/values of the per-location pixel attention, so pixels read coarse
-                context with query-dependent weights. (A separate cross-attention to
-                the unit's single coarse token would be degenerate -- softmax over one
-                key -- hence this formulation.)
+            pixel_film_from_coarse: If True, each block conditions a unit's pixel
+                tokens on its coarse token via gated FiLM (see :class:`PixelFiLM`) --
+                the coarse branch reasons at full width, the pixels are told how to
+                reinterpret their local detail. (Cross-attention formulations
+                degenerate here: a pixel's coarse context is a single token, and
+                softmax over one key ignores the query.)
             coarse_cross_attn_to_pixel: If True, coarse tokens cross-attend to their
                 unit's pixel features so fine detail flows into the output.
             pixel_grad_checkpointing: Recompute each pixel-branch block in backward
@@ -595,7 +641,7 @@ class DualResEncoder(Encoder):
 
         self.pixel_embedding_size = pixel_embedding_size
         self.pixel_num_heads = pixel_num_heads
-        self.pixel_cross_attn_to_coarse = pixel_cross_attn_to_coarse
+        self.pixel_film_from_coarse = pixel_film_from_coarse
         self.coarse_cross_attn_to_pixel = coarse_cross_attn_to_pixel
         self.pixel_grad_checkpointing = pixel_grad_checkpointing
         self.pixel_modality_names = get_pixel_branch_modalities(
@@ -619,19 +665,11 @@ class DualResEncoder(Encoder):
                 for _ in range(depth)
             ]
         )
-        # Per-block projection of coarse tokens into the pixel width, used as extra
-        # keys/values of the per-location pixel attention.
-        self.coarse_kv_projs = (
+        self.pixel_film = (
             nn.ModuleList(
-                [
-                    nn.Sequential(
-                        nn.LayerNorm(coarse_dim),
-                        nn.Linear(coarse_dim, pixel_embedding_size),
-                    )
-                    for _ in range(depth)
-                ]
+                [PixelFiLM(coarse_dim, pixel_embedding_size) for _ in range(depth)]
             )
-            if pixel_cross_attn_to_coarse
+            if pixel_film_from_coarse
             else None
         )
         self.coarse_to_pixel = (
@@ -652,11 +690,15 @@ class DualResEncoder(Encoder):
 
         for module in self._pixel_modules():
             module.apply(self._init_weights)
+        # After the blanket init: FiLM modulations start at zero (identity module).
+        if self.pixel_film is not None:
+            for film in self.pixel_film:
+                film.zero_init()
 
     def _pixel_modules(self) -> list[nn.Module]:
         modules: list[nn.Module] = [self.pixel_embeddings, self.pixel_self_blocks]
-        if self.coarse_kv_projs is not None:
-            modules.append(self.coarse_kv_projs)
+        if self.pixel_film is not None:
+            modules.append(self.pixel_film)
         if self.coarse_to_pixel is not None:
             modules.append(self.coarse_to_pixel)
         return modules
@@ -913,10 +955,11 @@ class DualResEncoder(Encoder):
         (``pixels``, in ``ctx.states`` order), so each module below runs exactly once
         per block:
 
-        1. per-location attention across ``(modality, band set, timestep)`` pixel
-           observations, with the units' coarse tokens (projected to the pixel width)
-           as extra keys/values -- this is how pixels read coarse context;
-        2. coarse <- pixel: each ONLINE coarse token queries its unit's pixels and the
+        1. pixel <- coarse: gated FiLM conditioning of each unit's pixels on its
+           coarse token (see :class:`PixelFiLM`);
+        2. per-location attention across ``(modality, band set, timestep)`` pixel
+           observations;
+        3. coarse <- pixel: each ONLINE coarse token queries its unit's pixels and the
            result is written back into ``coarse_dense``. Placed last so every pixel
            module feeds the coarse output each block (keeping all pixel params on the
            autograd graph).
@@ -929,10 +972,9 @@ class DualResEncoder(Encoder):
         coarse_flat = coarse_dense.reshape(b * n, d)
         coarse_units = coarse_flat[ctx.coarse_idx]  # [total_units, Dc]
 
-        coarse_kv = None
-        if self.coarse_kv_projs is not None:
-            coarse_kv = self.coarse_kv_projs[block_idx](coarse_units)  # [units, Dp]
-        pixels = self._pixel_location_attn(block_idx, pixels, ctx.loc, coarse_kv)
+        if self.pixel_film is not None:
+            pixels = self.pixel_film[block_idx](pixels, coarse_units)
+        pixels = self._pixel_location_attn(block_idx, pixels, ctx.loc)
 
         if self.coarse_to_pixel is not None:
             delta = chunked_batch_attn(
@@ -946,25 +988,15 @@ class DualResEncoder(Encoder):
         return coarse_dense, pixels
 
     def _pixel_location_attn(
-        self,
-        block_idx: int,
-        pixels: Tensor,
-        loc: LocationGroupings,
-        coarse_kv: Tensor | None,
+        self, block_idx: int, pixels: Tensor, loc: LocationGroupings
     ) -> Tensor:
-        """Attention over each pixel location's ONLINE observations (+ coarse keys).
+        """Self-attention over each pixel location's ONLINE observations.
 
         ``pixels`` is the concatenation of every modality's ONLINE units,
         ``[num_units, P**2, Dp]``. Units are scattered into a padded
         ``[num_locations, max_units, P**2, Dp]`` buffer; the ``P**2`` intra-patch offsets
         are then folded into the batch so each physical pixel attends across the
         ``(modality, band set, timestep)`` units at its location only.
-
-        ``coarse_kv`` (``[num_units, Dp]``, the units' coarse tokens projected to the
-        pixel width) is scattered with the same grouping and appended as extra
-        keys/values, so every pixel also attends to the coarse context of its location.
-        The coarse keys are shared by the location's ``P**2`` offsets (expanded view,
-        not materialized).
         """
         num_units, p2, d = pixels.shape
         nl, mu = loc.num_locations, loc.max_units
@@ -973,18 +1005,8 @@ class DualResEncoder(Encoder):
         buf[loc.scatter_pos] = pix_sorted
         # -> [(nl * P**2), max_units, d]: one row per (location, pixel-offset).
         x = buf.view(nl, mu, p2, d).permute(0, 2, 1, 3).reshape(nl * p2, mu, d)
-        key_mask = loc.valid  # [nl, max_units]
-        extra_kv = None
-        if coarse_kv is not None:
-            cbuf = coarse_kv.new_zeros(nl * mu, d)
-            cbuf[loc.scatter_pos] = coarse_kv[loc.order]
-            extra_kv = (
-                cbuf.view(nl, 1, mu, d).expand(nl, p2, mu, d).reshape(nl * p2, mu, d)
-            )
-            # Coarse-key slots are valid exactly where the unit slots are.
-            key_mask = torch.cat([key_mask, key_mask], dim=1)  # [nl, 2 * max_units]
-        key_mask = key_mask.repeat_interleave(p2, dim=0)  # [nl*P**2, ...]
-        x = chunked_batch_attn(self.pixel_self_blocks[block_idx], x, key_mask, extra_kv)
+        key_mask = loc.valid.repeat_interleave(p2, dim=0)  # [nl*P**2, max_units]
+        x = chunked_batch_attn(self.pixel_self_blocks[block_idx], x, key_mask)
         buf = x.reshape(nl, p2, mu, d).permute(0, 2, 1, 3).reshape(nl * mu, p2, d)
         # Allocate ``out`` from ``buf`` (not ``pixels``): under autocast the attention
         # block returns a lower-precision dtype (e.g. bf16) than the float32 input, and
@@ -1027,7 +1049,7 @@ class DualResEncoderConfig(EncoderConfig):
     pixel_embedding_size: int = 128
     pixel_num_heads: int = 4
     pixel_mlp_ratio: float = 4.0
-    pixel_cross_attn_to_coarse: bool = True
+    pixel_film_from_coarse: bool = True
     coarse_cross_attn_to_pixel: bool = True
     pixel_grad_checkpointing: bool = True
 

@@ -12,6 +12,7 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.dual_res_encoder import (
     DualResEncoderConfig,
+    PixelFiLM,
     PixelTemporalBlock,
     build_location_groupings,
     unit_grid_coords,
@@ -28,7 +29,7 @@ B, H, W, T = 2, 8, 8, 12  # base-res 8x8 -> coarse grid 2x2 at patch size 4
 
 
 def _build_config(
-    pixel_cross_attn_to_coarse: bool = True,
+    pixel_film_from_coarse: bool = True,
     coarse_cross_attn_to_pixel: bool = True,
 ) -> DualResEncoderConfig:
     return DualResEncoderConfig(
@@ -44,7 +45,7 @@ def _build_config(
         pixel_embedding_size=PIXEL_EMB,
         pixel_num_heads=4,
         pixel_mlp_ratio=2.0,
-        pixel_cross_attn_to_coarse=pixel_cross_attn_to_coarse,
+        pixel_film_from_coarse=pixel_film_from_coarse,
         coarse_cross_attn_to_pixel=coarse_cross_attn_to_pixel,
     )
 
@@ -154,29 +155,40 @@ def test_pixel_temporal_block_runs() -> None:
     assert torch.isfinite(out).all()
 
 
-def test_coarse_keys_are_read_query_dependently() -> None:
-    """The coarse contribution to a pixel depends on the pixel (query) itself.
+def test_film_conditioning_is_pixel_dependent() -> None:
+    """FiLM starts as identity and, once trained, affects each pixel differently.
 
-    This is the property the joint-key design exists for: cross-attending to a
-    *single* coarse token is degenerate (softmax over one key ignores the query and
-    broadcasts one update to every pixel). With the coarse token as an extra key of
-    the location attention, two different pixels reading the SAME coarse token must
-    receive DIFFERENT coarse contributions -- even in the minimal fine-tuning
-    configuration of one modality, one band set, one timestep (one pixel observation
-    plus one coarse key).
+    Cross-attending to a pixel's single coarse token is degenerate (softmax over one
+    key broadcasts the same update to every pixel). FiLM's multiplicative term instead
+    rescales each pixel's own feature channels by the coarse context, so the shared
+    per-unit conditioning must produce DIFFERENT updates for different pixels of the
+    same unit.
     """
     torch.manual_seed(0)
-    block = PixelTemporalBlock(PIXEL_EMB, num_heads=4, mlp_ratio=2.0).eval()
-    x = torch.randn(2, 1, PIXEL_EMB)  # two different pixels, one observation each
-    coarse_kv = torch.randn(1, 1, PIXEL_EMB).expand(2, 1, PIXEL_EMB)  # same coarse key
+    film = PixelFiLM(coarse_dim=EMB, pixel_dim=PIXEL_EMB).eval()
+
+    pixels = torch.randn(1, 4, PIXEL_EMB)  # one unit, 4 different pixels
+    coarse = torch.randn(1, EMB)
+
+    # Zero-initialized: the module is the identity (training starts unconditioned).
+    film.zero_init()
     with torch.no_grad():
-        with_coarse = block(x, torch.ones(2, 2, dtype=torch.bool), coarse_kv)
-        without = block(x, torch.ones(2, 1, dtype=torch.bool), None)
-    contribution = with_coarse - without
-    # The coarse token influences the output...
-    assert not torch.allclose(contribution, torch.zeros_like(contribution))
-    # ...and differently for different query pixels (not a broadcast).
-    assert not torch.allclose(contribution[0], contribution[1], atol=1e-5)
+        assert torch.equal(film(pixels, coarse), pixels)
+
+    # With (simulated) trained weights, the shared coarse token modulates each pixel
+    # of the unit differently, and the modulation depends on the coarse token.
+    torch.manual_seed(1)
+    torch.nn.init.normal_(film.to_film.weight, std=0.2)
+    torch.nn.init.normal_(film.to_film.bias, std=0.2)
+    with torch.no_grad():
+        out = film(pixels, coarse)
+        update = out - pixels
+        other = film(pixels, torch.randn(1, EMB)) - pixels
+    assert not torch.allclose(update, torch.zeros_like(update))
+    # Different pixels of the SAME unit get different updates (not a broadcast)...
+    assert not torch.allclose(update[0, 0], update[0, 1], atol=1e-5)
+    # ...and the update depends on the coarse context.
+    assert not torch.allclose(update, other, atol=1e-5)
 
 
 def test_grads_reach_every_pixel_module() -> None:
@@ -196,9 +208,9 @@ def test_grads_reach_every_pixel_module() -> None:
         assert any(p.grad is not None for p in block.parameters()), (
             f"pixel_self_blocks[{i}] received no gradient"
         )
-    for i, proj in enumerate(model.coarse_kv_projs):
-        assert any(p.grad is not None for p in proj.parameters()), (
-            f"coarse_kv_projs[{i}] received no gradient"
+    for i, film in enumerate(model.pixel_film):
+        assert any(p.grad is not None for p in film.parameters()), (
+            f"pixel_film[{i}] received no gradient"
         )
     for i, block in enumerate(model.coarse_to_pixel):
         assert any(p.grad is not None for p in block.parameters()), (
