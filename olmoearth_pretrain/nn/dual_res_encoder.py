@@ -4,16 +4,23 @@ The coarse branch is the existing :class:`~olmoearth_pretrain.nn.flexi_vit.Encod
 (full spatio-temporal attention at ``embedding_size``). Alongside it we keep a
 per-pixel branch at a smaller ``pixel_embedding_size`` that, per transformer block,
 
-1. runs *per-location* self-attention: at each individual pixel location, its tokens
-   attend across all its ``(modality, band set, timestep)`` observations -- but never
-   to *other* pixel locations. (Modality/band-set identity is carried by the separate
-   per-``(modality, band set)`` projection weights + an additive temporal encoding.)
-2. cross-attends to the coarse token of the ``(patch, timestep, band set)`` unit it
-   belongs to.
+runs *per-location* attention: at each individual pixel location, its tokens attend
+across all its ``(modality, band set, timestep)`` pixel observations **and** (as extra
+keys/values, projected to the pixel width) the coarse tokens of those same units --
+but never across *other* pixel locations. Modality/band-set identity is carried by the
+separate per-``(modality, band set)`` projection weights + an additive temporal
+encoding.
 
-Optionally the coarse branch also cross-attends to the (pooled) pixel features of
-its unit, so the fine detail flows back into the coarse tokens that downstream
-tasks consume.
+Injecting the coarse context as extra keys of the location attention (rather than a
+separate pixel -> coarse cross-attention) is deliberate: cross-attending to the single
+coarse token of a pixel's own unit is degenerate -- softmax over one key is identically
+1, so the "attention" reduces to a query-independent broadcast. As joint keys, the
+pixel/coarse mixing is query-dependent even in the minimal fine-tuning configuration
+(one modality, one timestep: two keys per pixel).
+
+Optionally the coarse branch also cross-attends to the pixel features of its unit
+(``P**2`` keys -- real attention), so the fine detail flows back into the coarse
+tokens that downstream tasks consume.
 
 **Vocabulary** (used consistently across this module and ``pixel_decoder.py``):
 
@@ -411,11 +418,13 @@ class PixelPatchEmbed(nn.Module):
 
 
 class PixelTemporalBlock(nn.Module):
-    """Transformer block that self-attends over a (padded) sequence axis with a mask.
+    """Transformer block over a (padded) sequence axis with optional extra keys.
 
     Used for the pixel branch's per-location attention: each row is one pixel location's
     ONLINE ``(modality, band set, timestep)`` observations (padded to ``max_units``), so
     tokens mix across observations of a single pixel, never across pixel locations.
+    ``extra_kv`` appends additional key/value tokens that the queries can attend to but
+    that are not themselves updated -- the coarse tokens of the row's units.
     """
 
     def __init__(self, dim: int, num_heads: int, mlp_ratio: float) -> None:
@@ -428,21 +437,29 @@ class PixelTemporalBlock(nn.Module):
         """
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
+        # cross_attn=True gives separate q vs k/v inputs; with extra_kv=None the k/v
+        # input is the same normed tensor as q, which is exactly self-attention.
         self.attn = Attention(
             dim,
             num_heads=num_heads,
             qkv_bias=True,
+            cross_attn=True,
             position_encoding=PositionEncoding.ABSOLUTE,
         )
         self.norm2 = nn.LayerNorm(dim)
         self.mlp = Mlp(dim, hidden_features=int(dim * mlp_ratio))
 
-    def forward(self, x: Tensor, key_mask: Tensor | None) -> Tensor:
-        """Apply self-attention over the sequence axis.
+    def forward(
+        self, x: Tensor, key_mask: Tensor | None, extra_kv: Tensor | None = None
+    ) -> Tensor:
+        """Attend over the sequence axis (and optional extra keys).
 
         Args:
             x: ``[N, S, D]`` tokens (S = padded sequence length).
-            key_mask: Optional ``[N, S]`` bool (True = attend).
+            key_mask: Optional ``[N, S + S_extra]`` bool (True = attend), covering the
+                concatenated key sequence.
+            extra_kv: Optional ``[N, S_extra, D]`` additional key/value tokens
+                (already normalized/projected; appended after the ``x`` keys).
 
         Returns:
             ``[N, S, D]`` updated tokens.
@@ -452,7 +469,9 @@ class PixelTemporalBlock(nn.Module):
         # the pixel branch's memory.
         if key_mask is not None:
             key_mask = key_mask[:, None, None, :]
-        x = x + self.attn(self.norm1(x), attn_mask=key_mask)
+        xn = self.norm1(x)
+        kv = xn if extra_kv is None else torch.cat([xn, extra_kv], dim=1)
+        x = x + self.attn(xn, y=kv, attn_mask=key_mask)
         x = x + self.mlp(self.norm2(x))
         return x
 
@@ -515,8 +534,9 @@ class CrossAttnBlock(nn.Module):
         the attention output is just the (projected) value: ``proj(v(norm(kv_proj)))``,
         independent of the queries, and identical for every query of the row. Compute
         it once per row at ``[B', 1, q_dim]`` and let the caller's residual add
-        broadcast it, instead of running SDPA over every query token (for the pixel <-
-        coarse cross-attention that is a ``P**2``-fold saving). The query/key
+        broadcast it, instead of running SDPA over every query token. This applies to
+        the coarse <- pixel cross-attention at patch size 1 (one pixel per unit) and to
+        single-key groups in the pixel reconstruction decoder. The query/key
         projections receive zero gradient on this path -- exactly as they do through
         the softmax in the general path.
         """
@@ -547,8 +567,12 @@ class DualResEncoder(Encoder):
             pixel_embedding_size: Per-pixel embedding dimension (Dp).
             pixel_num_heads: Attention heads for the pixel branch.
             pixel_mlp_ratio: MLP ratio for the pixel branch.
-            pixel_cross_attn_to_coarse: If True, pixels cross-attend to their unit's
-                coarse token.
+            pixel_cross_attn_to_coarse: If True, the coarse tokens of each location's
+                ONLINE units are added (projected to the pixel width) as extra
+                keys/values of the per-location pixel attention, so pixels read coarse
+                context with query-dependent weights. (A separate cross-attention to
+                the unit's single coarse token would be degenerate -- softmax over one
+                key -- hence this formulation.)
             coarse_cross_attn_to_pixel: If True, coarse tokens cross-attend to their
                 unit's pixel features so fine detail flows into the output.
             pixel_grad_checkpointing: Recompute each pixel-branch block in backward
@@ -595,14 +619,14 @@ class DualResEncoder(Encoder):
                 for _ in range(depth)
             ]
         )
-        self.pixel_to_coarse = (
+        # Per-block projection of coarse tokens into the pixel width, used as extra
+        # keys/values of the per-location pixel attention.
+        self.coarse_kv_projs = (
             nn.ModuleList(
                 [
-                    CrossAttnBlock(
-                        q_dim=pixel_embedding_size,
-                        kv_dim=coarse_dim,
-                        num_heads=pixel_num_heads,
-                        mlp_ratio=pixel_mlp_ratio,
+                    nn.Sequential(
+                        nn.LayerNorm(coarse_dim),
+                        nn.Linear(coarse_dim, pixel_embedding_size),
                     )
                     for _ in range(depth)
                 ]
@@ -631,8 +655,8 @@ class DualResEncoder(Encoder):
 
     def _pixel_modules(self) -> list[nn.Module]:
         modules: list[nn.Module] = [self.pixel_embeddings, self.pixel_self_blocks]
-        if self.pixel_to_coarse is not None:
-            modules.append(self.pixel_to_coarse)
+        if self.coarse_kv_projs is not None:
+            modules.append(self.coarse_kv_projs)
         if self.coarse_to_pixel is not None:
             modules.append(self.coarse_to_pixel)
         return modules
@@ -889,9 +913,10 @@ class DualResEncoder(Encoder):
         (``pixels``, in ``ctx.states`` order), so each module below runs exactly once
         per block:
 
-        1. per-location self-attention across ``(modality, band set, timestep)``;
-        2. pixel <- coarse: each unit's ``P**2`` pixels query its coarse token;
-        3. coarse <- pixel: each ONLINE coarse token queries its unit's pixels and the
+        1. per-location attention across ``(modality, band set, timestep)`` pixel
+           observations, with the units' coarse tokens (projected to the pixel width)
+           as extra keys/values -- this is how pixels read coarse context;
+        2. coarse <- pixel: each ONLINE coarse token queries its unit's pixels and the
            result is written back into ``coarse_dense``. Placed last so every pixel
            module feeds the coarse output each block (keeping all pixel params on the
            autograd graph).
@@ -900,37 +925,46 @@ class DualResEncoder(Encoder):
         so it must stay a pure ``(coarse_dense, pixels) -> (coarse_dense, pixels)``
         function of its tensor inputs.
         """
-        pixels = self._pixel_location_attn(block_idx, pixels, ctx.loc)
-
         b, n, d = coarse_dense.shape
         coarse_flat = coarse_dense.reshape(b * n, d)
-        coarse_units = coarse_flat[ctx.coarse_idx][:, None]  # [total_units, 1, Dc]
+        coarse_units = coarse_flat[ctx.coarse_idx]  # [total_units, Dc]
 
-        if self.pixel_to_coarse is not None:
-            pixels = pixels + chunked_batch_attn(
-                self.pixel_to_coarse[block_idx], pixels, coarse_units
-            )
+        coarse_kv = None
+        if self.coarse_kv_projs is not None:
+            coarse_kv = self.coarse_kv_projs[block_idx](coarse_units)  # [units, Dp]
+        pixels = self._pixel_location_attn(block_idx, pixels, ctx.loc, coarse_kv)
+
         if self.coarse_to_pixel is not None:
             delta = chunked_batch_attn(
-                self.coarse_to_pixel[block_idx], coarse_units, pixels
+                self.coarse_to_pixel[block_idx], coarse_units[:, None], pixels
             )
             coarse_flat = coarse_flat.index_copy(
-                0, ctx.coarse_idx, (coarse_units + delta)[:, 0]
+                0, ctx.coarse_idx, coarse_units + delta[:, 0]
             )
             coarse_dense = coarse_flat.view(b, n, d)
 
         return coarse_dense, pixels
 
     def _pixel_location_attn(
-        self, block_idx: int, pixels: Tensor, loc: LocationGroupings
+        self,
+        block_idx: int,
+        pixels: Tensor,
+        loc: LocationGroupings,
+        coarse_kv: Tensor | None,
     ) -> Tensor:
-        """Self-attention over each pixel location's ONLINE observations.
+        """Attention over each pixel location's ONLINE observations (+ coarse keys).
 
         ``pixels`` is the concatenation of every modality's ONLINE units,
         ``[num_units, P**2, Dp]``. Units are scattered into a padded
         ``[num_locations, max_units, P**2, Dp]`` buffer; the ``P**2`` intra-patch offsets
         are then folded into the batch so each physical pixel attends across the
         ``(modality, band set, timestep)`` units at its location only.
+
+        ``coarse_kv`` (``[num_units, Dp]``, the units' coarse tokens projected to the
+        pixel width) is scattered with the same grouping and appended as extra
+        keys/values, so every pixel also attends to the coarse context of its location.
+        The coarse keys are shared by the location's ``P**2`` offsets (expanded view,
+        not materialized).
         """
         num_units, p2, d = pixels.shape
         nl, mu = loc.num_locations, loc.max_units
@@ -939,8 +973,18 @@ class DualResEncoder(Encoder):
         buf[loc.scatter_pos] = pix_sorted
         # -> [(nl * P**2), max_units, d]: one row per (location, pixel-offset).
         x = buf.view(nl, mu, p2, d).permute(0, 2, 1, 3).reshape(nl * p2, mu, d)
-        key_mask = loc.valid.repeat_interleave(p2, dim=0)  # [nl*P**2, max_units]
-        x = chunked_batch_attn(self.pixel_self_blocks[block_idx], x, key_mask)
+        key_mask = loc.valid  # [nl, max_units]
+        extra_kv = None
+        if coarse_kv is not None:
+            cbuf = coarse_kv.new_zeros(nl * mu, d)
+            cbuf[loc.scatter_pos] = coarse_kv[loc.order]
+            extra_kv = (
+                cbuf.view(nl, 1, mu, d).expand(nl, p2, mu, d).reshape(nl * p2, mu, d)
+            )
+            # Coarse-key slots are valid exactly where the unit slots are.
+            key_mask = torch.cat([key_mask, key_mask], dim=1)  # [nl, 2 * max_units]
+        key_mask = key_mask.repeat_interleave(p2, dim=0)  # [nl*P**2, ...]
+        x = chunked_batch_attn(self.pixel_self_blocks[block_idx], x, key_mask, extra_kv)
         buf = x.reshape(nl, p2, mu, d).permute(0, 2, 1, 3).reshape(nl * mu, p2, d)
         # Allocate ``out`` from ``buf`` (not ``pixels``): under autocast the attention
         # block returns a lower-precision dtype (e.g. bf16) than the float32 input, and

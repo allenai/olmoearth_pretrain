@@ -154,6 +154,31 @@ def test_pixel_temporal_block_runs() -> None:
     assert torch.isfinite(out).all()
 
 
+def test_coarse_keys_are_read_query_dependently() -> None:
+    """The coarse contribution to a pixel depends on the pixel (query) itself.
+
+    This is the property the joint-key design exists for: cross-attending to a
+    *single* coarse token is degenerate (softmax over one key ignores the query and
+    broadcasts one update to every pixel). With the coarse token as an extra key of
+    the location attention, two different pixels reading the SAME coarse token must
+    receive DIFFERENT coarse contributions -- even in the minimal fine-tuning
+    configuration of one modality, one band set, one timestep (one pixel observation
+    plus one coarse key).
+    """
+    torch.manual_seed(0)
+    block = PixelTemporalBlock(PIXEL_EMB, num_heads=4, mlp_ratio=2.0).eval()
+    x = torch.randn(2, 1, PIXEL_EMB)  # two different pixels, one observation each
+    coarse_kv = torch.randn(1, 1, PIXEL_EMB).expand(2, 1, PIXEL_EMB)  # same coarse key
+    with torch.no_grad():
+        with_coarse = block(x, torch.ones(2, 2, dtype=torch.bool), coarse_kv)
+        without = block(x, torch.ones(2, 1, dtype=torch.bool), None)
+    contribution = with_coarse - without
+    # The coarse token influences the output...
+    assert not torch.allclose(contribution, torch.zeros_like(contribution))
+    # ...and differently for different query pixels (not a broadcast).
+    assert not torch.allclose(contribution[0], contribution[1], atol=1e-5)
+
+
 def test_grads_reach_every_pixel_module() -> None:
     """A coarse-only loss trains the pixel embed and every pixel/cross-attn block.
 
@@ -171,9 +196,9 @@ def test_grads_reach_every_pixel_module() -> None:
         assert any(p.grad is not None for p in block.parameters()), (
             f"pixel_self_blocks[{i}] received no gradient"
         )
-    for i, block in enumerate(model.pixel_to_coarse):
-        assert any(p.grad is not None for p in block.parameters()), (
-            f"pixel_to_coarse[{i}] received no gradient"
+    for i, proj in enumerate(model.coarse_kv_projs):
+        assert any(p.grad is not None for p in proj.parameters()), (
+            f"coarse_kv_projs[{i}] received no gradient"
         )
     for i, block in enumerate(model.coarse_to_pixel):
         assert any(p.grad is not None for p in block.parameters()), (
