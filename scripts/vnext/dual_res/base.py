@@ -7,9 +7,10 @@ InfoNCE -- and swaps in the dual-resolution model:
 
 * a 512-dim coarse encoder (:class:`DualResEncoder`), shrunk from the v1.2 768 to "pay
   for" ...
-* a 128-dim per-pixel branch that self-attends per pixel location across
-  ``(modality, band set, timestep)`` and is conditioned on its unit's coarse token
-  via gated FiLM each block, and
+* a 128-dim per-pixel branch with joint spatio-temporal attention within each coarse
+  patch (every pixel attends over the patch's ``(offset, modality, band set,
+  timestep)`` tokens), conditioned on its unit's coarse token via gated FiLM each
+  block, and
 * two pixel heads on top (:class:`DualResLatentMIM`):
     - :class:`PixelReconstructionDecoder` -- SSL per-pixel reconstruction of masked
       imagery timesteps, and

@@ -12,8 +12,8 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.dual_res_encoder import (
     DualResEncoderConfig,
+    PixelAttentionBlock,
     PixelFiLM,
-    PixelTemporalBlock,
     build_location_groupings,
     unit_grid_coords,
 )
@@ -144,15 +144,79 @@ def test_encoder_processes_online_units_only() -> None:
     assert state.pixels.shape[1] == p2
 
 
-def test_pixel_temporal_block_runs() -> None:
-    """The temporal block maps [N, S, D] -> [N, S, D] and respects the key mask."""
+def test_pixel_attention_block_runs() -> None:
+    """The attention block maps [N, S, D] -> [N, S, D] and respects the key mask."""
     torch.manual_seed(0)
-    block = PixelTemporalBlock(PIXEL_EMB, num_heads=4, mlp_ratio=2.0).eval()
+    block = PixelAttentionBlock(PIXEL_EMB, num_heads=4, mlp_ratio=2.0).eval()
     x = torch.randn(5, T, PIXEL_EMB)
     key_mask = torch.ones(5, T, dtype=torch.bool)
     out = block(x, key_mask)
     assert out.shape == x.shape
     assert torch.isfinite(out).all()
+
+
+def test_joint_patch_attention_mixes_space_and_time_within_patch_only() -> None:
+    """Pixels mix across offsets AND units of their patch, never across patches.
+
+    The joint per-patch attention exists so the pixel branch is non-degenerate with a
+    single modality and timestep: spatial mixing within the patch must happen (it was
+    structurally blocked when offsets were a pure batch dimension), while patch
+    isolation is preserved.
+    """
+    torch.manual_seed(0)
+    model = _build_config().build().eval()
+    # Units 0 and 1 share location 0 (e.g. two timesteps); unit 2 is another patch.
+    loc = build_location_groupings(torch.tensor([0, 0, 1]))
+    pixels = torch.randn(3, PATCH_SIZE**2, PIXEL_EMB)
+    perturbed = pixels.clone()
+    # Perturb a single channel of one pixel of unit 0. (A constant added to ALL
+    # channels would be removed by the pre-attention LayerNorm and prove nothing.)
+    perturbed[0, 0, 0] += 10.0
+
+    with torch.no_grad():
+        out = model._pixel_patch_attn(0, pixels, loc)
+        out_p = model._pixel_patch_attn(0, perturbed, loc)
+
+    # Spatial mixing: another pixel of the SAME unit sees the perturbation.
+    assert not torch.allclose(out[0, 1], out_p[0, 1], atol=1e-5)
+    # Temporal/modal mixing: the other unit at the same location sees it too.
+    assert not torch.allclose(out[1, 0], out_p[1, 0], atol=1e-5)
+    # Patch isolation: the unit at the other location is untouched.
+    assert torch.allclose(out[2], out_p[2], atol=1e-5)
+
+
+def test_pixel_embed_encodes_within_patch_offset() -> None:
+    """Identical inputs at different within-patch offsets get different embeddings.
+
+    Without an offset signal the joint spatial attention could not tell pixels apart.
+    The encoding is offset-relative: the same offset in different patches (and the
+    same offset at any patch position) must embed identically.
+    """
+    model = _build_config().build()
+    sample = OlmoEarthSample(
+        sentinel2_l2a=torch.ones(B, H, W, T, Modality.SENTINEL2_L2A.num_bands),
+        timestamps=_timestamps(),
+    )
+    strategy = MaskingConfig(
+        strategy_config={
+            "type": "random_time_with_decode",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "random_ratio": 1.0,
+        }
+    ).build()
+    x = strategy.apply_mask(sample, patch_size=PATCH_SIZE)
+
+    with torch.no_grad():
+        tokens = model.pixel_embeddings.forward(x, PATCH_SIZE)[S2]
+    tok = tokens[0, :, :, 0, 0]  # [H, W, Dp] at one (instance, timestep, band set)
+
+    # Different offsets within a patch differ (constant input, so encoding-only).
+    assert not torch.allclose(tok[0, 0], tok[0, 1], atol=1e-5)
+    assert not torch.allclose(tok[0, 0], tok[1, 0], atol=1e-5)
+    # The same offset in the neighboring patch (PATCH_SIZE away) is identical.
+    assert torch.allclose(tok[0, 0], tok[PATCH_SIZE, PATCH_SIZE], atol=1e-6)
+    assert torch.allclose(tok[1, 2], tok[1 + PATCH_SIZE, 2 + PATCH_SIZE], atol=1e-6)
 
 
 def test_film_conditioning_is_pixel_dependent() -> None:

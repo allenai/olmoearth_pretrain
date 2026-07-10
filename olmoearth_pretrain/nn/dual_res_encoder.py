@@ -7,11 +7,12 @@ per-pixel branch at a smaller ``pixel_embedding_size`` that, per transformer blo
 1. conditions each unit's pixel tokens on its coarse token via gated FiLM
    (:class:`PixelFiLM`) -- the coarse branch does the contextual reasoning at full
    width; the pixels are told how to reinterpret their local detail;
-2. runs *per-location* self-attention: at each individual pixel location, its tokens
-   attend across all its ``(modality, band set, timestep)`` observations -- but never
-   across *other* pixel locations. (Modality/band-set identity is carried by the
-   separate per-``(modality, band set)`` projection weights + an additive temporal
-   encoding.)
+2. runs joint spatio-temporal self-attention *within each coarse patch*: every pixel
+   attends over all ``(pixel offset, modality, band set, timestep)`` tokens at its
+   patch -- but never across *other* patches (cross-patch reasoning is the coarse
+   branch's job). Modality/band-set identity is carried by the separate
+   per-``(modality, band set)`` projection weights; timestep and within-patch offset
+   by additive sin/cos encodings.
 
 FiLM (rather than attention) for the pixel <- coarse direction is deliberate: a
 pixel's coarse context is a *single* token (its own unit's), so there is nothing to
@@ -33,8 +34,8 @@ tokens that downstream tasks consume.
   tensors and the collapsed coarse token layout.
 * A **location** is one ``(instance, spatial patch)`` cell, shared by all pixel
   modalities (they must live on the same grid).
-* An **offset** is a pixel's position within its patch (``P**2`` per unit). Offsets
-  are always a batched dimension: pixels never attend across offsets.
+* An **offset** is a pixel's position within its patch (``P**2`` per unit), carried
+  by an additive 2D sin/cos encoding of the integer offset.
 
 **Masked-patch handling.** Masking is applied at the unit granularity: within a unit
 either all ``P**2`` pixels are visible (``ONLINE_ENCODER``) or all are masked. The
@@ -61,9 +62,9 @@ shared building blocks from ``flexi_vit`` / ``attention`` rather than modifying 
       supported yet. Because CUDA caps a launch grid dimension at 65535 and the fused
       SDPA kernels map the attention batch onto that dimension, the pixel branch's
       large attention batches are split into chunks (see :func:`chunked_batch_attn`).
-    * Cross-attention uses absolute positions (no RoPE); the pixel self-attention gets
-      its temporal ordering signal from an additive 1D sin/cos encoding. Fractional-
-      coordinate RoPE for pixels is a future refinement.
+    * Cross-attention uses absolute positions (no RoPE); the pixel attention gets its
+      temporal and within-patch spatial signals from additive sin/cos encodings.
+      RoPE for pixels is a future refinement.
     * The pixel branch only applies to spatial, multitemporal modalities, and
       cross-modality self-attention requires those modalities to share the same pixel
       grid (same ``G`` and ``P``).
@@ -88,7 +89,11 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.decorators import experimental
 from olmoearth_pretrain.nn.attention import Attention, Mlp
-from olmoearth_pretrain.nn.encodings import PositionEncoding, get_1d_sincos_pos_encoding
+from olmoearth_pretrain.nn.encodings import (
+    PositionEncoding,
+    get_1d_sincos_pos_encoding,
+    get_2d_sincos_pos_encoding,
+)
 from olmoearth_pretrain.nn.flexi_vit import (
     BASE_GSD,
     Encoder,
@@ -219,12 +224,12 @@ class PixelModalityState:
 
 @dataclass
 class LocationGroupings:
-    """Groups ONLINE units by *pixel location* for the pixel self-attention.
+    """Groups ONLINE units by *location* (spatial patch) for the pixel attention.
 
     The fields describe how to scatter a packed ``[num_units, P**2, Dp]`` tensor (the
     concatenation of every modality's ONLINE units) into a padded
     ``[num_locations, max_units, P**2, Dp]`` buffer and back. Grouping by location is
-    what makes the self-attention span modalities while never mixing pixel locations.
+    what makes the attention span modalities while never mixing patches.
 
     Attributes:
         order: ``[num_units]`` permutation sorting units by their location id.
@@ -243,7 +248,7 @@ class LocationGroupings:
 
 
 def build_location_groupings(location_ids: Tensor) -> LocationGroupings:
-    """Group units by location id for padded per-location attention.
+    """Group units by location id for padded per-patch attention.
 
     Args:
         location_ids: ``[num_units]`` integer location id per unit
@@ -372,7 +377,8 @@ class PixelPatchEmbed(nn.Module):
 
         Args:
             input_data: The masked input sample.
-            patch_size: Coarse patch size (unused for pixels; kept for symmetry).
+            patch_size: Coarse patch size (defines the within-patch offsets encoded
+                into the tokens).
 
         Returns:
             Dict mapping ``modality`` -> ``[B, H, W, T, band_sets, Dp]`` and
@@ -398,33 +404,55 @@ class PixelPatchEmbed(nn.Module):
                 tokens.append(embed(inp))  # [B, H, W, T, Dp]
                 masks.append(modality_mask[..., idx])  # [B, H, W, T]
             modality_tokens = torch.stack(tokens, dim=-2)  # [B, H, W, T, bs, Dp]
-            modality_tokens = self._add_temporal_encoding(modality_tokens)
+            modality_tokens = self._add_positional_encodings(
+                modality_tokens, patch_size
+            )
             output[modality] = modality_tokens
             output[input_data.get_masked_modality_name(modality)] = torch.stack(
                 masks, dim=-1
             )  # [B, H, W, T, bs]
         return output
 
-    def _add_temporal_encoding(self, tokens: Tensor) -> Tensor:
-        """Add an additive 1D sin/cos temporal encoding over the time axis."""
-        t = tokens.shape[3]
-        enc = get_1d_sincos_pos_encoding(
+    def _add_positional_encodings(self, tokens: Tensor, patch_size: int) -> Tensor:
+        """Add additive sin/cos encodings: temporal (1D over T) + within-patch (2D).
+
+        The 2D encoding is over the *integer* pixel offset within the coarse patch
+        ``(h % P, w % P)``, so a pixel pair one ground-sample apart looks identical at
+        every patch size, and the per-patch joint attention can tell offsets apart.
+        Patch-to-patch position is deliberately NOT encoded -- pixels never attend
+        across patches, and their patch's location is carried by the coarse branch.
+        """
+        _, h, w, t, _, _ = tokens.shape
+        temporal = get_1d_sincos_pos_encoding(
             torch.arange(t, device=tokens.device, dtype=torch.float32),
             self.pixel_embedding_size,
         )  # [T, Dp]
+        offsets = torch.stack(
+            torch.meshgrid(
+                torch.arange(h, device=tokens.device) % patch_size,
+                torch.arange(w, device=tokens.device) % patch_size,
+                indexing="ij",
+            ),
+            dim=0,
+        ).float()  # [2, H, W] within-patch integer offsets
+        spatial = get_2d_sincos_pos_encoding(offsets, self.pixel_embedding_size).view(
+            h, w, self.pixel_embedding_size
+        )  # [H, W, Dp]
         # Cast to the token dtype: under FSDP mixed precision the tokens are bf16 and
         # a float32 addition would silently promote the whole pixel branch to float32
         # (and then fail against the bf16 LayerNorm/Linear params downstream).
-        enc = enc.to(tokens.dtype)
-        return tokens + enc[None, None, None, :, None, :]
+        enc = (
+            temporal[None, None, :, None, :] + spatial[:, :, None, None, :]
+        )  # [H, W, T, bs=1, Dp]
+        return tokens + enc.to(tokens.dtype)[None]
 
 
-class PixelTemporalBlock(nn.Module):
+class PixelAttentionBlock(nn.Module):
     """Transformer block that self-attends over a (padded) sequence axis with a mask.
 
-    Used for the pixel branch's per-location attention: each row is one pixel location's
-    ONLINE ``(modality, band set, timestep)`` observations (padded to ``max_units``), so
-    tokens mix across observations of a single pixel, never across pixel locations.
+    Used for the pixel branch's per-patch attention: each row is one patch's ONLINE
+    ``(pixel offset, modality, band set, timestep)`` tokens (padded to
+    ``max_units * P**2``), so tokens mix within a single patch, never across patches.
     """
 
     def __init__(self, dim: int, num_heads: int, mlp_ratio: float) -> None:
@@ -565,7 +593,7 @@ class CrossAttnBlock(nn.Module):
         """
         if kv.shape[1] == 1 and key_mask is None and self.attn.attn_drop.p == 0.0:
             return self._single_key_forward(kv)
-        # Broadcastable [B', 1, 1, N_k] form; see PixelTemporalBlock.forward.
+        # Broadcastable [B', 1, 1, N_k] form; see PixelAttentionBlock.forward.
         if key_mask is not None:
             key_mask = key_mask[:, None, None, :]
         kv = self.kv_proj(kv)
@@ -659,7 +687,7 @@ class DualResEncoder(Encoder):
         )
         self.pixel_self_blocks = nn.ModuleList(
             [
-                PixelTemporalBlock(
+                PixelAttentionBlock(
                     pixel_embedding_size, pixel_num_heads, pixel_mlp_ratio
                 )
                 for _ in range(depth)
@@ -756,7 +784,7 @@ class DualResEncoder(Encoder):
         token_exit_cfg: dict[str, int] | None,
         fast_pass: bool,
     ) -> tuple[dict[str, Tensor], dict[str, PixelModalityState]]:
-        """Run interleaved coarse (packed full attn) + pixel (per-location) blocks.
+        """Run interleaved coarse (packed full attn) + pixel (per-patch) blocks.
 
         Returns the per-modality coarse tokens/masks and the pixel-branch state
         (final ONLINE-unit pixel reps per modality) for the pixel decoders.
@@ -873,7 +901,7 @@ class DualResEncoder(Encoder):
         into a packed ``[num_online, P**2, Dp]`` tensor (ascending flat-unit-index
         order). Across modalities it additionally precomputes, in concatenation order:
 
-        * the location id of every unit (for the per-location self-attention), and
+        * the location id of every unit (for the per-patch joint attention), and
         * the index of every unit's coarse token in the collapsed coarse layout
           (``dims_dict`` order matches ``collapse_and_combine_hwtc``), so the
           cross-attentions can gather/scatter coarse partners with a single index op.
@@ -957,8 +985,8 @@ class DualResEncoder(Encoder):
 
         1. pixel <- coarse: gated FiLM conditioning of each unit's pixels on its
            coarse token (see :class:`PixelFiLM`);
-        2. per-location attention across ``(modality, band set, timestep)`` pixel
-           observations;
+        2. joint spatio-temporal attention over all (offset, modality, band set,
+           timestep) tokens at the patch;
         3. coarse <- pixel: each ONLINE coarse token queries its unit's pixels and the
            result is written back into ``coarse_dense``. Placed last so every pixel
            module feeds the coarse output each block (keeping all pixel params on the
@@ -974,7 +1002,7 @@ class DualResEncoder(Encoder):
 
         if self.pixel_film is not None:
             pixels = self.pixel_film[block_idx](pixels, coarse_units)
-        pixels = self._pixel_location_attn(block_idx, pixels, ctx.loc)
+        pixels = self._pixel_patch_attn(block_idx, pixels, ctx.loc)
 
         if self.coarse_to_pixel is not None:
             delta = chunked_batch_attn(
@@ -987,27 +1015,31 @@ class DualResEncoder(Encoder):
 
         return coarse_dense, pixels
 
-    def _pixel_location_attn(
+    def _pixel_patch_attn(
         self, block_idx: int, pixels: Tensor, loc: LocationGroupings
     ) -> Tensor:
-        """Self-attention over each pixel location's ONLINE observations.
+        """Joint spatio-temporal self-attention over each patch's ONLINE pixels.
 
         ``pixels`` is the concatenation of every modality's ONLINE units,
         ``[num_units, P**2, Dp]``. Units are scattered into a padded
-        ``[num_locations, max_units, P**2, Dp]`` buffer; the ``P**2`` intra-patch offsets
-        are then folded into the batch so each physical pixel attends across the
-        ``(modality, band set, timestep)`` units at its location only.
+        ``[num_locations, max_units, P**2, Dp]`` buffer whose last two axes are then
+        flattened into one sequence: every pixel attends over ALL
+        ``(offset, modality, band set, timestep)`` tokens at its patch -- spatial and
+        temporal mixing in a single attention -- but never across other patches.
+        Offsets are told apart by the within-patch positional encoding added in
+        :class:`PixelPatchEmbed`.
         """
         num_units, p2, d = pixels.shape
         nl, mu = loc.num_locations, loc.max_units
         pix_sorted = pixels[loc.order]
         buf = pixels.new_zeros(nl * mu, p2, d)
         buf[loc.scatter_pos] = pix_sorted
-        # -> [(nl * P**2), max_units, d]: one row per (location, pixel-offset).
-        x = buf.view(nl, mu, p2, d).permute(0, 2, 1, 3).reshape(nl * p2, mu, d)
-        key_mask = loc.valid.repeat_interleave(p2, dim=0)  # [nl*P**2, max_units]
+        # -> [nl, max_units * P**2, d]: one row per location, all of its tokens as one
+        # sequence. A unit's P**2 pixels are valid keys exactly iff the unit is.
+        x = buf.view(nl, mu * p2, d)
+        key_mask = loc.valid.repeat_interleave(p2, dim=1)  # [nl, max_units * P**2]
         x = chunked_batch_attn(self.pixel_self_blocks[block_idx], x, key_mask)
-        buf = x.reshape(nl, p2, mu, d).permute(0, 2, 1, 3).reshape(nl * mu, p2, d)
+        buf = x.reshape(nl * mu, p2, d)
         # Allocate ``out`` from ``buf`` (not ``pixels``): under autocast the attention
         # block returns a lower-precision dtype (e.g. bf16) than the float32 input, and
         # index_put requires the source and destination dtypes to match.
