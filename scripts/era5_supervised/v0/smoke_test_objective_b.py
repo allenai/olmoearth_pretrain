@@ -68,6 +68,7 @@ def _make_batch(device: torch.device = torch.device("cpu")) -> Era5SupervisedBat
     return Era5SupervisedBatch(
         era5=era5,
         timestamps=timestamps,
+        valid_mask=torch.ones(B, T, V, dtype=torch.bool, device=device),
         labels=labels,
         task_name="smoke_task",
     )
@@ -80,6 +81,7 @@ def _make_ssl_batch(device: torch.device = torch.device("cpu")) -> Era5SslBatch:
     return Era5SslBatch(
         era5=era5,
         timestamps=timestamps,
+        valid_mask=torch.ones(B, T, V, dtype=torch.bool, device=device),
         task_name="smoke_ssl_task",
     )
 
@@ -178,7 +180,11 @@ def test_decoder_forward():
 
     batch = _make_batch()
     with torch.no_grad():
-        out = encoder(era5=batch.era5, timestamps=batch.timestamps)
+        out = encoder(
+            era5=batch.era5,
+            timestamps=batch.timestamps,
+            valid_mask=batch.valid_mask,
+        )
         x_hat = decoder(
             tokens=out["tokens"],
             timestamps=batch.timestamps,

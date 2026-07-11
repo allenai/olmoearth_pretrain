@@ -421,6 +421,7 @@ class Era5DailyEncoder(nn.Module):
         timestamps: Tensor,
         prior_tokens: Tensor | None = None,
         corruption_mask: Tensor | None = None,
+        valid_mask: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Encode a batch of daily ERA5 sequences.
 
@@ -437,6 +438,13 @@ class Era5DailyEncoder(nn.Module):
                 patchifying.  Shape is ``[B, T, V]`` for a raw-input encoder,
                 or ``[B, T, V * n_bands]`` (band space) when ``is_swt_input`` is
                 enabled.  Only effective when ``use_mask_embed`` is enabled.
+            valid_mask: Optional ``[B, T, V]`` boolean no-data mask in raw
+                variable space (True = valid). When ``is_swt_input`` is enabled,
+                any variable with ANY no-data in a sample has ALL of its SWT band
+                channels 0-filled (post-standardization mean) so the imputation
+                artifacts the SWT spreads never reach the patch conv. Applies to
+                every objective (A/B/C) and the downstream probe. No effect on
+                the raw-input encoder (no-data is already imputed upstream).
 
         Returns:
             Dict with keys:
@@ -459,7 +467,7 @@ class Era5DailyEncoder(nn.Module):
         # The raw signal is consumed here by a parameter-free transform and
         # never reaches a learned layer; masking/patchify operate on the bands.
         if self.is_swt_input:
-            era5 = self._apply_swt(era5)
+            era5 = self._apply_swt(era5, valid_mask)
 
         # Replace corrupted positions with learned mask embedding
         if corruption_mask is not None and self.mask_embed is not None:
@@ -521,7 +529,7 @@ class Era5DailyEncoder(nn.Module):
     # Internals
     # ------------------------------------------------------------------
 
-    def _apply_swt(self, era5: Tensor) -> Tensor:
+    def _apply_swt(self, era5: Tensor, valid_mask: Tensor | None = None) -> Tensor:
         """Decompose raw ``[B, T, V]`` into var-major SWT bands ``[B, T, C_swt]``.
 
         Uses ``target_start=0`` (no cropping): the early boundary-contaminated
@@ -529,6 +537,14 @@ class Era5DailyEncoder(nn.Module):
         window still starts after the SWT buffer.  The bands are standardized
         per channel with fixed precomputed stats (computed on the
         raw-normalized signal) before masking, so masking sees clean bands.
+
+        ``valid_mask`` (``[B, T, V]`` raw-space, True = valid) drives a
+        conservative no-data 0-fill: since a single missing timestep smears
+        across a wide SWT halo (and across scales), any variable with ANY
+        no-data in a sample has ALL of its band channels 0-filled. This mirrors
+        the raw post-normalization 0-fill (``era5[~valid_mask] = 0``); after
+        standardization 0 is the per-channel mean, so the patch conv can gate
+        the whole variable out.
         """
         assert self.swt_transform is not None
         # SWT expects [B, V, T].
@@ -542,6 +558,15 @@ class Era5DailyEncoder(nn.Module):
         )  # [B, T, C_swt]
         # Fixed per-channel standardization; buffers broadcast over [B, T, C].
         x = (x - self.swt_norm_mean) / self.swt_norm_std
+        if valid_mask is not None:
+            # Conservative whole-variable 0-fill (var-major ``c = v*n_bands + s``).
+            var_valid = valid_mask.bool().all(dim=1)  # [B, V] fully-valid vars
+            band_valid = (
+                var_valid.unsqueeze(-1)
+                .expand(-1, -1, self.swt_num_bands)
+                .reshape(var_valid.shape[0], self.swt_channels)
+            )  # [B, C_swt]
+            x = x * band_valid.unsqueeze(1).to(x.dtype)  # broadcast over T
         return x
 
     def _patchify(self, seq: Tensor) -> Tensor:

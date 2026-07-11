@@ -40,6 +40,7 @@ class Strategy(Enum):
     # Whether to use predefined or computed values for normalization
     PREDEFINED = "predefined"
     COMPUTED = "computed"
+    ZSCORE = "zscore"
     # No-op: return the data unchanged. Used when normalization is defined
     # elsewhere (e.g. an rslearn `Normalize` transform in the model.yaml) so the
     # shared computed.json is not tied to that pipeline.
@@ -72,7 +73,7 @@ class Normalizer:
         """Load the appropriate config based on the modality strategy."""
         if self.strategy == Strategy.PREDEFINED:
             return load_predefined_config()
-        elif self.strategy == Strategy.COMPUTED:
+        elif self.strategy in (Strategy.COMPUTED, Strategy.ZSCORE):
             return load_computed_config()
         elif self.strategy == Strategy.IDENTITY:
             return {}
@@ -119,6 +120,25 @@ class Normalizer:
         max_vals = np.array(mean_vals) + self.std_multiplier * np.array(std_vals)
         return (data - min_vals) / (max_vals - min_vals)  # type: ignore
 
+    def _normalize_zscore(self, modality: ModalitySpec, data: np.ndarray) -> np.ndarray:
+        """Standardize each band with computed ``(x - mean) / std``.
+
+        Uses the same computed mean/std as ``COMPUTED`` but standardizes
+        (zero-mean/unit-std) instead of min-max scaling, so the output mean is
+        exactly 0. ``std`` is clamped away from 0 to avoid division by zero.
+        """
+        modality_bands = modality.band_order
+        modality_norm_values = self.norm_config[modality.name]
+        mean_vals = []
+        std_vals = []
+        for band in modality_bands:
+            if band not in modality_norm_values:
+                raise ValueError(f"Band {band} not found in config")
+            mean_vals.append(modality_norm_values[band]["mean"])
+            std_vals.append(modality_norm_values[band]["std"])
+        std_arr = np.clip(np.array(std_vals), 1e-12, None)
+        return (data - np.array(mean_vals)) / std_arr
+
     def normalize(self, modality: ModalitySpec, data: np.ndarray) -> np.ndarray:
         """Normalize the data.
 
@@ -133,6 +153,8 @@ class Normalizer:
             return self._normalize_predefined(modality, data)
         elif self.strategy == Strategy.COMPUTED:
             return self._normalize_computed(modality, data)
+        elif self.strategy == Strategy.ZSCORE:
+            return self._normalize_zscore(modality, data)
         elif self.strategy == Strategy.IDENTITY:
             return data
         else:

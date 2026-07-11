@@ -301,6 +301,7 @@ class SupervisedObjective(_Objective):
         out = encoder(
             era5=batch.era5,
             timestamps=batch.timestamps,
+            valid_mask=getattr(batch, "valid_mask", None),
         )
         pooled = out["pooled"]
         loss, head_metrics = self.registry.compute_loss(
@@ -542,6 +543,18 @@ class ReconstructionObjective(_Objective):
         b, t, v = x.shape
         ts = self.swt_buffer_days  # target_start index
 
+        # No-data validity ([B, T, V], True = valid). No-data cells were already
+        # mean-imputed (0 post z-score) in the dataset; here we use the mask to
+        # keep them out of the reconstruction (input + loss).
+        valid = getattr(batch, "valid_mask", None)
+        if valid is None:
+            valid = torch.ones_like(x, dtype=torch.bool)
+        else:
+            valid = valid.to(dtype=torch.bool)
+        # A variable is dropped WHOLE whenever it has ANY no-data in the sample:
+        # var_valid is only used to gate the loss.
+        var_valid = valid.all(dim=1)  # [B, V] True if variable fully valid
+
         # 1. Generate corruption mask (only target window is masked).
         # When the encoder works in wavelet space, the mask is band-space
         # ``[B, T, V*n_bands]`` and the raw ``[B, T, V]`` loss mask is derived
@@ -556,27 +569,39 @@ class ReconstructionObjective(_Objective):
                 )
             n_bands = encoder.swt_num_bands
             # Simple budget: mask a fraction of all band elements at random.
-            band_mask = swt_naive_mask(b,t,v,n_bands,
+            band_mask = swt_naive_mask(
+                b,
+                t,
+                v,
+                n_bands,
                 self.mask_policy.budget,
                 ts,
                 x.device,
             )
-            corruption_mask = band_mask
+            # Raw ``[B, T, V]`` reconstruction targets come from the random
+            # budget only; never target no-data cells.
             band4d = band_mask.view(b, t, v, n_bands)
             mask = (
                 band4d.all(dim=-1)
                 if self.raw_loss_mask_reduce == "all"
                 else band4d.any(dim=-1)
             )
+            mask = mask & valid
+            # No-data band 0-fill is handled inside the encoder (universal across
+            # objectives); the corruption mask carries only the random budget.
+            corruption_mask = band_mask
         else:
             mask = corrupt_era5(x, self.mask_policy, self.variable_groups, ts)
+            # Never spend the reconstruction budget on no-data cells.
+            mask = mask & valid
             corruption_mask = mask
 
-        # 2. Encode with corruption mask
+        # 2. Encode with corruption mask (encoder 0-fills no-data bands via valid)
         out = encoder(
             era5=x,
             timestamps=batch.timestamps,
             corruption_mask=corruption_mask,
+            valid_mask=valid,
         )
 
         # 3. Decode
@@ -602,6 +627,8 @@ class ReconstructionObjective(_Objective):
         x_hat_tgt = x_hat[:, ts:, :]
         x_tgt = x[:, ts:, :]
         mask_tgt = mask[:, ts:, :]
+        valid_tgt = valid[:, ts:, :]  # [B, T_win, V]
+        is_swt_input = getattr(encoder, "is_swt_input", False)
 
         variable_groups = self.variable_groups
 
@@ -621,7 +648,18 @@ class ReconstructionObjective(_Objective):
 
             g_pred = x_hat_tgt[:, :, bi]  # [B, T_win, |bi|]
             g_targ = x_tgt[:, :, bi]
-            g_mask = mask_tgt[:, :, bi] if self.raw_loss_on_masked_only else None
+            # Raw-loss validity: exclude no-data cells per-cell. On the SWT-input
+            # path, additionally drop any variable that has ANY no-data (its
+            # bands were fully hidden from the encoder), so we never score a
+            # variable we did not feed.
+            g_valid = valid_tgt[:, :, bi]  # [B, T_win, |bi|]
+            if is_swt_input:
+                g_valid = g_valid & var_valid[:, bi].unsqueeze(1)
+            g_mask = (
+                mask_tgt[:, :, bi] & g_valid
+                if self.raw_loss_on_masked_only
+                else g_valid
+            )
 
             # Raw Huber (band-normalized like the SWT path)
             if include_raw and self.raw_lambda > 0:
@@ -635,11 +673,14 @@ class ReconstructionObjective(_Objective):
 
             # SWT wavelet loss (bands already cropped to target window)
             if pred_bands is not None and targ_bands is not None and allowed_levels:
-                g_mask_vt = (
-                    mask_tgt[:, :, bi].transpose(1, 2)
-                    if self.raw_loss_on_masked_only
-                    else None
-                )
+                # [B, |bi|, T_win] loss mask: drop invalid (sample, variable)
+                # rows whole (SWT smears a gap over time); require corruption
+                # too when scoring masked-only.
+                gvar_valid_vt = var_valid[:, bi].unsqueeze(-1)  # [B, |bi|, 1]
+                if self.raw_loss_on_masked_only:
+                    g_mask_vt = mask_tgt[:, :, bi].transpose(1, 2) & gvar_valid_vt
+                else:
+                    g_mask_vt = gvar_valid_vt.expand(-1, -1, mask_tgt.shape[1])
                 deepest_allowed = max(allowed_levels)
                 for level_idx, level in enumerate(self.swt_levels):
                     if level not in allowed_levels:
@@ -698,6 +739,7 @@ class ReconstructionObjective(_Objective):
             f"{self.name}/raw_loss": raw_loss.detach(),
             f"{self.name}/swt_loss": swt_loss.detach(),
             f"{self.name}/masked_fraction": mask_tgt.float().mean().detach(),
+            f"{self.name}/nodata_fraction": (~valid).float().mean().detach(),
         }
         if band_mask is not None:
             metrics[f"{self.name}/band_masked_fraction"] = (

@@ -58,6 +58,9 @@ logger = logging.getLogger(__name__)
 
 _ERA5_MODALITY = Modality.ERA5L_DAY_10
 
+# ERA5-Land fills missing / ocean / coast cells with this exact sentinel.
+_NODATA = -9999.0
+
 
 @dataclass
 class Era5Sample:
@@ -68,11 +71,13 @@ class Era5Sample:
     Shapes:
         era5         : ``[T, C]``       float32
         timestamps   : ``[T, 3]``       int64    ``[day-of-year, month0, year]``
+        valid_mask   : ``[T, C]``       bool     (True = valid, False = no-data)
         task_name    : str
     """
 
     era5: Tensor
     timestamps: Tensor
+    valid_mask: Tensor
     task_name: str
 
 
@@ -111,6 +116,7 @@ class Era5Batch:
 
     era5: Tensor  # [B, T_max, C]
     timestamps: Tensor  # [B, T_max, 3]
+    valid_mask: Tensor  # [B, T_max, C] bool (True = valid, False = no-data)
     task_name: str
 
     def to_device(self, device: Any) -> Era5Batch:
@@ -394,7 +400,9 @@ class Era5TaskDataset(Dataset):
         self.task_spec = spec
         self.dataset = model_dataset
         self.max_sequence_length = max_sequence_length
-        self.normalizer = normalizer or Normalizer(Strategy.IDENTITY)
+        # ERA5 raw-signal normalization is applied here by the olmoearth
+        # Normalizer using z-score stats from computed.json (era5l_day_10).
+        self.normalizer = normalizer or Normalizer(Strategy.ZSCORE)
         # SSL tasks carry no label, so no extractor (and no target) is needed.
         self._label_extractor = None if spec.ssl else spec.get_label_extractor()
         self._num_bands = _ERA5_MODALITY.num_bands
@@ -403,8 +411,8 @@ class Era5TaskDataset(Dataset):
         """Return number of samples in the underlying dataset."""
         return len(self.dataset)
 
-    def _extract_era5(self, inputs: dict[str, Any]) -> tuple[Tensor, Tensor]:
-        """Return ``(era5[T, C], timestamps[T, 3])``."""
+    def _extract_era5(self, inputs: dict[str, Any]) -> tuple[Tensor, Tensor, Tensor]:
+        """Return ``(era5[T, C], timestamps[T, 3], valid_mask[T, C])``."""
         layer_name = self.task_spec.modality_layer_name
         if layer_name not in inputs:
             raise KeyError(
@@ -438,9 +446,19 @@ class Era5TaskDataset(Dataset):
                 f"Task {self.task_spec.name!r}: ERA5 sample has {era5.shape[-1]} bands "
                 f"but ERA5L_DAY_10 expects {self._num_bands}."
             )
+        # Flag no-data on the PHYSICAL signal, before any normalization runs.
+        valid_mask = era5 != _NODATA  # [T, C] bool
         # Normalize per band using the configured normalizer.
+        strategy = getattr(self.normalizer, "strategy", None)
+        if strategy != Strategy.ZSCORE:
+            raise ValueError(
+                "ERA5 requires Strategy.ZSCORE normalization (no-data cells are "
+                "mean-imputed to 0 = the post-z-score per-band mean); got "
+                f"{strategy!r}."
+            )
         np_era5 = self.normalizer.normalize(_ERA5_MODALITY, era5.numpy())
         era5 = torch.as_tensor(np_era5, dtype=torch.float32)
+        era5[~valid_mask] = 0.0
         timestamps = self._build_timestamps(t, per_step_timestamps)
 
         if t != self.max_sequence_length:
@@ -449,7 +467,7 @@ class Era5TaskDataset(Dataset):
                 f"{self.max_sequence_length}, got {t}. ERA5 is a dense "
                 f"reanalysis product — all samples must have uniform length."
             )
-        return era5, timestamps
+        return era5, timestamps, valid_mask
 
     @staticmethod
     def _build_timestamps(
@@ -488,12 +506,13 @@ class Era5TaskDataset(Dataset):
                 f"Unexpected rslearn sample type for task {self.task_spec.name!r}: "
                 f"{type(sample).__name__}"
             )
-        era5, timestamps = self._extract_era5(inputs)
+        era5, timestamps, valid_mask = self._extract_era5(inputs)
         if self.task_spec.ssl:
             # SSL: no label extraction; the rslearn target is ignored.
             return Era5SslSample(
                 era5=era5,
                 timestamps=timestamps,
+                valid_mask=valid_mask,
                 task_name=self.task_spec.name,
             )
         assert self._label_extractor is not None
@@ -501,6 +520,7 @@ class Era5TaskDataset(Dataset):
         return Era5SupervisedSample(
             era5=era5,
             timestamps=timestamps,
+            valid_mask=valid_mask,
             labels=labels,
             task_name=self.task_spec.name,
         )
@@ -559,12 +579,9 @@ def _build_task_dataset(
         tags_override=spec.tags_override,
         max_samples=spec.max_samples,
     )
-    # ERA5 normalization is defined per-task in the rslearn model.yaml (a
-    # `Normalize` transform with hardcoded per-band mean/std), so the olmoearth
-    # Normalizer is a no-op here: the shared computed.json is intentionally NOT
-    # tied to the ERA5 pretraining pipeline. (spec.norm_stats_from_pretrained is
-    # therefore unused for ERA5 normalization.)
-    normalizer = Normalizer(Strategy.IDENTITY)
+    # ERA5 raw-signal normalization is applied here by the olmoearth Normalizer
+    # using z-score stats from computed.json (era5l_day_10).
+    normalizer = Normalizer(Strategy.ZSCORE)
     return Era5TaskDataset(
         spec=spec,
         model_dataset=model_dataset,
@@ -861,10 +878,12 @@ class MultiTaskEra5DataLoader(DataLoaderBase):
         timestamps[..., 0] = torch.arange(1, t_max + 1).unsqueeze(0)
         timestamps[..., 1] = (timestamps[..., 0] - 1) * 12 // 365
         timestamps[..., 2] = 1970
+        valid_mask = torch.ones(bsz, t_max, c, dtype=torch.bool)
         if spec.ssl:
             return Era5SslBatch(
                 era5=era5,
                 timestamps=timestamps,
+                valid_mask=valid_mask,
                 task_name=task_name,
             )
         if TaskType(spec.task_type) == TaskType.CLASSIFICATION:
@@ -874,6 +893,7 @@ class MultiTaskEra5DataLoader(DataLoaderBase):
         return Era5SupervisedBatch(
             era5=era5,
             timestamps=timestamps,
+            valid_mask=valid_mask,
             labels=labels,
             task_name=task_name,
         )

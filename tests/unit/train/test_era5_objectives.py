@@ -29,6 +29,7 @@ from olmoearth_pretrain.nn.transforms.era5_corruption import (
     DEFAULT_VARIABLE_GROUPS,
     MaskPolicy,
     NaiveMaskPolicy,
+    SwtNaiveMaskPolicy,
     corrupt_era5,
 )
 from olmoearth_pretrain.nn.transforms.era5_swt import (
@@ -79,6 +80,7 @@ def _make_batch(
     return Era5SupervisedBatch(
         era5=era5,
         timestamps=timestamps,
+        valid_mask=torch.ones(B, T, V, dtype=torch.bool, device=device),
         labels=labels,
         task_name=task_name,
     )
@@ -118,8 +120,9 @@ class _FixedEncoder:
         era5: Tensor,
         timestamps: Tensor,
         corruption_mask: Tensor | None = None,
+        valid_mask: Tensor | None = None,
     ) -> dict[str, Tensor]:
-        del timestamps, corruption_mask
+        del timestamps, corruption_mask, valid_mask
         b = era5.shape[0]
         return {
             "tokens": torch.zeros(b, 1, D, device=era5.device, dtype=era5.dtype),
@@ -855,3 +858,162 @@ class TestSwtInputNormalization:
         """A non-existent stats path raises a clear FileNotFoundError."""
         with pytest.raises(FileNotFoundError):
             self._swt_encoder(swt_input_stats_path="does/not/exist.json")
+
+
+# ---------------------------------------------------------------------------
+# No-data (-9999) handling in SWT space (conservative whole-variable drop)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not SWT_STATS_PATH.is_file(),
+    reason=f"swt_input_stats.json not found at {SWT_STATS_PATH}",
+)
+class TestSwtInputNoDataHandling:
+    """No-data variable handling in SWT space.
+
+    A variable with any no-data is 0-filled in SWT band space inside the encoder
+    (universal, all objectives) and dropped from the reconstruction loss.
+    """
+
+    _NODATA_VAR = 7  # str: the only ERA5-Land variable with real no-data
+    _NODATA_SAMPLE = 0
+
+    def _build(self):
+        model_cfg = Era5MultiObjectiveModelConfig(
+            encoder_config=_small_encoder_cfg(
+                is_swt_input=True,
+                swt_input_stats_path=SWT_STATS_REL,
+            ),
+            reconstruction_objective=ReconstructionObjectiveConfig(
+                decoder=_small_decoder_cfg(),
+                mask_policy=SwtNaiveMaskPolicy(budget=0.5),
+                swt_levels=[0, 1, 2],
+                swt_lambda=1.0,
+                raw_lambda=1.0,
+            ),
+        )
+        model = model_cfg.build()
+        obj = model.objective_list[0]
+        assert isinstance(obj, era5_multiobjective.ReconstructionObjective)
+        return model, obj
+
+    def _nodata_batch(self) -> Era5SupervisedBatch:
+        """Batch whose `str` variable has a 27-day gap in one sample."""
+        batch = _make_batch()
+        valid = torch.ones(B, T, V, dtype=torch.bool)
+        valid[self._NODATA_SAMPLE, 200:227, self._NODATA_VAR] = False
+        era5 = batch.era5.clone()
+        era5[self._NODATA_SAMPLE, 200:227, self._NODATA_VAR] = 0.0  # mirror impute
+        return replace(batch, era5=era5, valid_mask=valid)
+
+    def test_nodata_variable_zero_filled_in_swt_space(self):
+        """`_apply_swt` 0-fills every band channel of a no-data variable."""
+        torch.manual_seed(0)
+        model, _obj = self._build()
+        enc = model.encoder
+        n_bands = enc.swt_num_bands
+        batch = self._nodata_batch()
+
+        bands = enc._apply_swt(batch.era5, batch.valid_mask)  # [B, T, C_swt]
+        assert bands.shape == (B, T, V * n_bands)
+        j = self._NODATA_VAR
+        # The no-data variable's bands are entirely zero for the affected sample.
+        nodata_bands = bands[self._NODATA_SAMPLE, :, j * n_bands : (j + 1) * n_bands]
+        assert torch.count_nonzero(nodata_bands) == 0
+        # A valid sample's same variable is present (non-zero).
+        other_sample = bands[1, :, j * n_bands : (j + 1) * n_bands]
+        assert torch.count_nonzero(other_sample) > 0
+        # An unaffected variable in the no-data sample is untouched.
+        other_var = bands[self._NODATA_SAMPLE, :, 0:n_bands]
+        assert torch.count_nonzero(other_var) > 0
+
+    def test_encoder_ignores_nodata_variable_content(self):
+        """Encoder output is invariant to a fully-no-data variable's raw values.
+
+        Uses the no-corruption_mask path (objective A / eval probe), proving the
+        0-fill is universal, not reconstruction-specific.
+        """
+        torch.manual_seed(0)
+        model, _obj = self._build()
+        enc = model.encoder
+        batch = _make_batch()
+        valid = torch.ones(B, T, V, dtype=torch.bool)
+        valid[:, :, self._NODATA_VAR] = False
+
+        era5_a = batch.era5.clone()
+        era5_a[:, :, self._NODATA_VAR] = 0.0
+        era5_b = era5_a.clone()
+        era5_b[:, :, self._NODATA_VAR] = 12345.0  # arbitrary garbage in dropped var
+
+        enc.eval()
+        with torch.no_grad():
+            out_a = enc(era5=era5_a, timestamps=batch.timestamps, valid_mask=valid)
+            out_b = enc(era5=era5_b, timestamps=batch.timestamps, valid_mask=valid)
+        torch.testing.assert_close(out_a["pooled"], out_b["pooled"])
+        torch.testing.assert_close(out_a["tokens"], out_b["tokens"])
+
+    def test_nodata_fraction_metric(self):
+        torch.manual_seed(0)
+        model, obj = self._build()
+        batch = self._nodata_batch()
+        _loss, metrics = obj.compute(model.encoder, batch)
+        assert "reconstruction/nodata_fraction" in metrics
+        expected = 27.0 / (B * T * V)
+        assert metrics["reconstruction/nodata_fraction"].item() == pytest.approx(
+            expected, rel=1e-5
+        )
+
+    def test_dropped_variable_not_scored(self):
+        """A fully-no-data variable must not contribute to the loss.
+
+        Perturbing its predictions must not change the loss (it is excluded from
+        both the raw and SWT terms).
+        """
+        torch.manual_seed(0)
+        model, obj = self._build()
+        # Make the target variable no-data across ALL samples/timesteps so it is
+        # globally dropped, then confirm its decoder output does not affect loss.
+        batch = _make_batch()
+        valid = torch.ones(B, T, V, dtype=torch.bool)
+        valid[:, :, self._NODATA_VAR] = False
+        era5 = batch.era5.clone()
+        era5[:, :, self._NODATA_VAR] = 0.0
+        batch = replace(batch, era5=era5, valid_mask=valid)
+
+        j = self._NODATA_VAR
+        decoder = obj._module.decoder
+        real_forward = decoder.forward
+
+        def make_pred(scale: float):
+            def fwd(tokens: Tensor, timestamps: Tensor) -> Tensor:
+                out = real_forward(tokens, timestamps)
+                perturbed = out.clone()
+                perturbed[:, :, j] = perturbed[:, :, j] + scale
+                return perturbed
+
+            return fwd
+
+        torch.manual_seed(1)
+        decoder.forward = make_pred(0.0)  # type: ignore[method-assign]
+        loss_a, _ = obj.compute(model.encoder, batch)
+        torch.manual_seed(1)
+        decoder.forward = make_pred(1000.0)  # type: ignore[method-assign]
+        loss_b, _ = obj.compute(model.encoder, batch)
+        decoder.forward = real_forward  # type: ignore[method-assign]
+
+        torch.testing.assert_close(loss_a, loss_b)
+
+    def test_loss_finite_and_backward(self):
+        torch.manual_seed(0)
+        model, obj = self._build()
+        batch = self._nodata_batch()
+        loss, _ = obj.compute(model.encoder, batch)
+        assert loss.ndim == 0 and torch.isfinite(loss) and loss.item() > 0
+        loss.backward()
+        enc_grads = sum(
+            p.grad.abs().sum().item()
+            for p in model.encoder.parameters()
+            if p.grad is not None
+        )
+        assert enc_grads > 0
