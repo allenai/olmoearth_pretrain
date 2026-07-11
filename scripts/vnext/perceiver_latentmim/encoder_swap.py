@@ -22,11 +22,13 @@ from base import (  # noqa: E402
     build_common_components,
     build_dataloader_config,
     build_dataset_config,
-    build_train_module_config,
     build_visualize_config,
 )
 from base import (
     build_model_config as build_model_config_base,
+)
+from base import (
+    build_train_module_config as build_train_module_config_base,
 )
 from base import (
     build_trainer_config as build_trainer_config_base,
@@ -71,6 +73,18 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         num_latents=NUM_LATENTS,
         num_input_reads=NUM_INPUT_READS,
     )
+    return config
+
+
+def build_train_module_config(common: CommonComponents):  # noqa: ANN201
+    """v1.1 train module with a halved microbatch.
+
+    The perceiver read-in's expanded key-padding mask (B x heads x K x N)
+    roughly doubles activation memory vs the trunk it replaces; batch 512 is
+    kept via 2 accumulation passes per rank.
+    """
+    config = build_train_module_config_base(common)
+    config.rank_microbatch_size = 32
     return config
 
 
