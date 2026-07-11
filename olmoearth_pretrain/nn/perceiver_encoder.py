@@ -147,6 +147,20 @@ class PerceiverTrunk(nn.Module):
             rope_positions_y=latent_positions,
         )
 
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP per sub-block (the hook FlexiVitBase calls per 'block')."""
+        self.read_block.apply_fsdp(**fsdp_kwargs)
+        for blk in self.self_blocks:
+            blk.apply_fsdp(**fsdp_kwargs)
+        self.read_out_block.apply_fsdp(**fsdp_kwargs)
+
+    def apply_compile(self) -> None:
+        """Apply torch.compile per sub-block."""
+        self.read_block.apply_compile()
+        for blk in self.self_blocks:
+            blk.apply_compile()
+        self.read_out_block.apply_compile()
+
 
 class PerceiverEncoder(Encoder):
     """FlexiViT ``Encoder`` with the trunk swapped for a set-latent bottleneck.
