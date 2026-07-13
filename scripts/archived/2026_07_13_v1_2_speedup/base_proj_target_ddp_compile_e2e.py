@@ -47,7 +47,9 @@ from olmoearth_pretrain.internal.experiment import CommonComponents, main
 
 logger = logging.getLogger(__name__)
 
-MODULE_PATH = "scripts/official/v1_2/base_proj_target_ddp_compile_e2e.py"
+MODULE_PATH = (
+    "scripts/archived/2026_07_13_v1_2_speedup/base_proj_target_ddp_compile_e2e.py"
+)
 WANDB_PROJECT = "2026_07_08_fused_adamw_e2e"
 LOOP_EVAL_CLUSTERS = ["ai2/jupiter", "ai2/ceres"]
 

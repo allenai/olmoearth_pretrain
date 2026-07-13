@@ -35,7 +35,7 @@ from olmoearth_pretrain.internal.experiment import CommonComponents, main
 
 logger = logging.getLogger(__name__)
 
-MODULE_PATH = "scripts/official/v1_2/base_fused_e2e.py"
+MODULE_PATH = "scripts/archived/2026_07_13_v1_2_speedup/base_fused_e2e.py"
 WANDB_PROJECT = "2026_07_08_fused_adamw_e2e"
 # Clusters the in-loop eval Beaker jobs may run on (same as the regbtl runs).
 LOOP_EVAL_CLUSTERS = ["ai2/jupiter", "ai2/ceres"]

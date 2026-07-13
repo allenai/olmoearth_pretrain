@@ -17,9 +17,9 @@ CLUSTER="ai2/jupiter"
 LAUNCH_ARGS="--launch.num_gpus=8 --launch.priority=urgent --launch.clusters=[$CLUSTER]"
 COMMON_OVERRIDES="--trainer.callbacks.wandb.project=$PROJECT"
 
-python scripts/official/v1_2/base_fused_e2e.py launch v1_2_base_fused_adamw $CLUSTER \
+python scripts/archived/2026_07_13_v1_2_speedup/base_fused_e2e.py launch v1_2_base_fused_adamw $CLUSTER \
     $LAUNCH_ARGS $COMMON_OVERRIDES
 
-python scripts/official/v1_2/base_fused_e2e.py launch v1_2_base_unfused_baseline $CLUSTER \
+python scripts/archived/2026_07_13_v1_2_speedup/base_fused_e2e.py launch v1_2_base_unfused_baseline $CLUSTER \
     $LAUNCH_ARGS $COMMON_OVERRIDES \
     --train_module.optim_config.fused=false
