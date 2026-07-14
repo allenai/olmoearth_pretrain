@@ -4,10 +4,12 @@ import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from beaker import Experiment
 
 import numpy as np
-from beaker import Experiment
 from olmo_core.config import StrEnum
 from olmo_core.distributed.utils import get_local_rank
 from olmo_core.launch.beaker import BeakerLaunchConfig, ExperimentSpec
@@ -368,8 +370,13 @@ def visualize(config: OlmoEarthExperimentConfig) -> None:
     logger.info("Done visualizing the dataset")
 
 
-def launch(config: OlmoEarthExperimentConfig) -> Experiment:
-    """Launch an experiment and return the submitted Beaker experiment."""
+def launch(config: OlmoEarthExperimentConfig) -> "Experiment":  # noqa: F821
+    """Launch an experiment and return the submitted Beaker experiment.
+
+    The ``beaker`` import is intentionally lazy (annotation only) so that
+    local subcommands (train_single, dry_run, ...) work in environments
+    without the beaker-py 1.x client installed.
+    """
     logger.info("Launching the experiment")
     logger.info(config)
     # Set follow=False if you don't want to stream the logs to the terminal
