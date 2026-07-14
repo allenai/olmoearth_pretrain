@@ -81,6 +81,7 @@ class PerceiverEncoder(Encoder):
         num_reads: int = 2,
         readout_depth: int = 2,
         readout_skip_tokens: bool = False,
+        readout_spatial_only: bool = False,
         num_class_latents: int = 0,
         **kwargs: Any,
     ) -> None:
@@ -102,6 +103,13 @@ class PerceiverEncoder(Encoder):
                 that relaxes the strict bottleneck to help dense
                 prediction). Masked tokens remain excluded, so there is no
                 leakage.
+            readout_spatial_only: If True, the dense read-out emits ONE
+                token per spatial location (h, w) instead of one per
+                (h, w, t): queries carry (t=0, row, col) coordinates (the
+                static-modality convention) and no month embedding, and the
+                resulting [B,H,W,1,D] map is broadcast across each
+                modality's timesteps. Timestep-specific decoding must then
+                come from the decoder's own temporal conditioning.
             num_class_latents: Number of position-less learned class latents
                 prepended to the anchored latent set (zero RoPE coordinates,
                 the register-token convention). When > 0, the first class
@@ -137,6 +145,7 @@ class PerceiverEncoder(Encoder):
         self.num_reads = num_reads
         self.readout_depth = readout_depth
         self.readout_skip_tokens = readout_skip_tokens
+        self.readout_spatial_only = readout_spatial_only
         self.num_class_latents = num_class_latents
 
         depth = len(self.blocks)
@@ -239,8 +248,12 @@ class PerceiverEncoder(Encoder):
         gsd_ratio: float,
         batch_size: int,
         device: torch.device,
+        spatial_only: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Build query/latent content and RoPE coords for a (rows, cols, slots) grid.
+
+        With ``spatial_only=True`` the month embedding is skipped and the
+        temporal coordinate is fixed to 0 (static-modality convention).
 
         Content = seed token + month embedding of the slot's timestamp, added
         into the third embedding quarter (mirroring CompositeEncodings).
@@ -263,10 +276,11 @@ class PerceiverEncoder(Encoder):
             w=n_cols,
             t=n_slots,
         ).clone()
-        n = self._month_quarter
-        content[..., 2 * n : 3 * n] += repeat(
-            month_embed, "b t d -> b h w t d", h=n_rows, w=n_cols
-        ).to(content.dtype)
+        if not spatial_only:
+            n = self._month_quarter
+            content[..., 2 * n : 3 * n] += repeat(
+                month_embed, "b t d -> b h w t d", h=n_rows, w=n_cols
+            ).to(content.dtype)
         content = content.flatten(1, 3)  # [B, N, D]
 
         rows = row_idx.to(device=device, dtype=torch.float32) * gsd_ratio
@@ -279,6 +293,8 @@ class PerceiverEncoder(Encoder):
                 self.rope_temporal_coordinate_scale
             )  # [B, T_max]
             t_vals = days[:, t_slots]  # [B, n_slots]
+            if spatial_only:
+                t_vals = torch.zeros_like(t_vals)
             coords = torch.zeros(
                 (batch_size, n_rows, n_cols, n_slots, 3),
                 dtype=torch.float32,
@@ -416,15 +432,21 @@ class PerceiverEncoder(Encoder):
 
         # Dense read-out: one query per (h, w, t); strict bottleneck (K/V =
         # latents only).
+        readout_slots = (
+            torch.zeros(1, dtype=torch.long)
+            if self.readout_spatial_only
+            else torch.arange(timesteps, dtype=torch.long)
+        )
         queries, query_pos = self._build_query_grid(
             self.readout_query_token,
             torch.arange(height, dtype=torch.float32),
             torch.arange(width, dtype=torch.float32),
-            torch.arange(timesteps, dtype=torch.long),
+            readout_slots,
             timestamps,
             gsd_ratio,
             batch_size,
             device,
+            spatial_only=self.readout_spatial_only,
         )
         if self.readout_skip_tokens:
             # Skip path: dense queries also attend to visible tokens
@@ -449,8 +471,9 @@ class PerceiverEncoder(Encoder):
                 rope_positions=query_pos,
                 rope_positions_y=kv_pos,
             )
+        dense_t = 1 if self.readout_spatial_only else timesteps
         dense = self.norm(queries).view(
-            batch_size, height, width, timesteps, self.embedding_size
+            batch_size, height, width, dense_t, self.embedding_size
         )
         aux: dict[str, torch.Tensor] = {
             "dense_map": dense,
@@ -466,10 +489,12 @@ class PerceiverEncoder(Encoder):
         for modality, dims in modalities_to_dims_dict.items():
             if len(dims) == 6:
                 t_m, bandsets = dims[3], dims[4]
-                output_dict[modality] = (
-                    dense[:, :, :, :t_m]
-                    .unsqueeze(4)
-                    .expand(-1, -1, -1, -1, bandsets, -1)
+                if dense.shape[3] == 1 and t_m > 1:
+                    src = dense.expand(-1, -1, -1, t_m, -1)
+                else:
+                    src = dense[:, :, :, :t_m]
+                output_dict[modality] = src.unsqueeze(4).expand(
+                    -1, -1, -1, -1, bandsets, -1
                 )
             elif len(dims) == 5:
                 bandsets = dims[3]
@@ -796,6 +821,7 @@ class PerceiverEncoderConfig(EncoderConfig):
     num_reads: int = 2
     readout_depth: int = 2
     readout_skip_tokens: bool = False
+    readout_spatial_only: bool = False
     num_class_latents: int = 0
 
     def validate(self) -> None:

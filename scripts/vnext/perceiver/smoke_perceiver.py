@@ -319,6 +319,34 @@ def check_cross_predictor() -> None:
     )
 
 
+def check_spatial_only_readout() -> None:
+    """readout_spatial_only: one token per location, shared across timesteps."""
+    torch.manual_seed(0)
+    encoder = _make_encoder(readout_spatial_only=True)
+    encoder.train()
+    sample = _make_sample()
+    out_dict = encoder.forward(sample, patch_size=PATCH)
+    latent, _, _ = unpack_encoder_output(out_dict)
+    s2 = latent.sentinel2_l2a
+    s2_bandsets = len(Modality.SENTINEL2_L2A.band_sets)
+    _check(
+        "sread: output keeps [B,PH,PW,T,bs,D] shape",
+        tuple(s2.shape) == (2, 2, 2, 4, s2_bandsets, D),
+        f"got {tuple(s2.shape)}",
+    )
+    _check(
+        "sread: all timesteps share one location token",
+        torch.allclose(s2[:, :, :, 0], s2[:, :, :, -1]),
+    )
+    _check(
+        "sread: locations remain distinct",
+        not torch.allclose(s2[:, 0, 0], s2[:, 1, 1]),
+    )
+    s2.float().pow(2).mean().backward()
+    g = encoder.readout_query_token.grad
+    _check("sread: grads flow", g is not None and g.abs().sum() > 0)
+
+
 def check_frozen_target_path() -> None:
     """token_exit_cfg all zeros bypasses attention (frozen projection targets)."""
     torch.manual_seed(0)
@@ -369,6 +397,7 @@ def main() -> None:
         ("skip path", check_skip_path),
         ("class latent", check_class_latent),
         ("cross predictor", check_cross_predictor),
+        ("spatial-only readout", check_spatial_only_readout),
         ("frozen-target path", check_frozen_target_path),
         ("fast_pass eval", check_fast_pass_eval),
     ]
