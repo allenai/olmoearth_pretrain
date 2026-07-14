@@ -535,11 +535,7 @@ class Era5DailyEncoder(nn.Module):
 
         Kept out of ``torch.compile`` (``@torch.compiler.disable``): the SWT
         adapter is a fixed, parameter-free transform whose band list is built
-        with data-dependent Python control flow (``for j in range(max(levels))``
-        / ``if j in levels``). Under dynamo (``dynamic=True``) that list collapses
-        to empty, so ``swt_bands_to_channels`` raises. Running it eagerly (one
-        graph break before any learned layer) is correct and costs nothing, since
-        there are no learnable parameters here.
+        with data-dependent Python control flow.
 
         Uses ``target_start=0`` (no cropping): the early boundary-contaminated
         coefficients are only ever consumed as encoder context, and the loss
