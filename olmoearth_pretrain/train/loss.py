@@ -666,6 +666,159 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         return self.weight * total_loss
 
 
+@LOSS_REGISTRY.register("modality_patch_discrimination_centroid_vec")
+class ModalityPatchDiscriminationCentroidVec(
+    ModalityPatchDiscriminationMaskedNegativesVec
+):
+    """Patch discrimination against target-GROUP CENTROIDS.
+
+    Near-duplicate targets (cosine >= ``group_threshold``) are merged into
+    groups via connected components of the within-sample target-similarity
+    graph, and predictions contrast against the re-normalized group
+    centroids instead of all raw targets. This structurally removes false
+    negatives for ALL modalities (the parent's >=0.999 masking only covers
+    decode-only maps) and collapses banks of near-identical easy negatives
+    into single representatives.
+
+    Grouping runs on the frozen targets only (no grad); the prediction side
+    is unchanged and fully differentiable. Contrast scope matches the
+    parent: within sample, within modality. Samples whose targets collapse
+    into fewer than two groups carry no signal and are skipped (mirroring
+    the parent's zero-valid-negative skip).
+    """
+
+    name = "ModalityPatchDiscCentroidVec"
+
+    def __init__(
+        self,
+        tau: float = 0.1,
+        pred2unit: bool = False,
+        weight: float = 1.0,
+        modality_weights: dict[str, float] | None = None,
+        group_threshold: float = 0.90,
+        max_grouping_iters: int = 32,
+        center_targets: bool = True,
+    ) -> None:
+        """Initialize.
+
+        ``group_threshold`` is the merge cutoff on target cosines;
+        ``center_targets`` computes them on per-(sample, modality)
+        MEAN-CENTERED targets. Centering is essential: raw frozen-projection
+        targets within a sample share a dominant mean direction (raw cosines
+        ~0.99 for most pairs), which is exactly the constant component the
+        row softmax cancels — the discriminative geometry is the centered
+        one, and thresholds are only meaningful there (calibrated on real
+        corpus targets: theta=0.90 centered).
+        """
+        super().__init__(
+            tau=tau,
+            pred2unit=pred2unit,
+            weight=weight,
+            modality_weights=modality_weights,
+        )
+        self.group_threshold = group_threshold
+        self.max_grouping_iters = max_grouping_iters
+        self.center_targets = center_targets
+
+    def _compute_modality_loss_parallel(
+        self,
+        all_preds: Tensor,
+        all_masks: Tensor,
+        all_targets: Tensor,
+        modality: str,
+    ) -> Tensor:
+        batch_size, num_tokens, dim = all_preds.shape
+        decoder_mask = all_masks == MaskValue.DECODER.value
+        count = decoder_mask.sum(dim=-1)  # (batch,)
+
+        # Sort so decoder tokens come first per sample (as parent).
+        _, sort_indices = decoder_mask.long().sort(dim=1, descending=True, stable=True)
+        sort_expanded = sort_indices.unsqueeze(-1).expand(-1, -1, dim)
+        sorted_preds = all_preds.gather(1, sort_expanded).float()
+        sorted_targets = all_targets.gather(1, sort_expanded).float()
+
+        range_tensor = torch.arange(num_tokens, device=count.device)
+        valid_mask = range_tensor.unsqueeze(0) < count.unsqueeze(1)  # (batch, T)
+
+        if self.pred2unit:
+            mask_float = valid_mask.unsqueeze(-1).float()
+            total_decoder = mask_float.sum().clamp(min=1)
+            pred_mu = (sorted_preds * mask_float).sum(
+                dim=(0, 1), keepdim=True
+            ) / total_decoder
+            centered = sorted_preds - pred_mu
+            pred_var = (centered**2 * mask_float).sum(dim=(0, 1), keepdim=True) / (
+                total_decoder - 1
+            ).clamp(min=1)
+            sorted_preds = (sorted_preds - pred_mu) / (pred_var.sqrt() + 1e-4)
+
+        preds = F.normalize(sorted_preds, p=2, dim=-1)
+        grouping_targets = sorted_targets
+        if self.center_targets:
+            valid_f = valid_mask.unsqueeze(-1).float()
+            mean = (sorted_targets * valid_f).sum(dim=1, keepdim=True) / (
+                count.view(-1, 1, 1).float().clamp(min=1)
+            )
+            grouping_targets = sorted_targets - mean
+        targets = F.normalize(grouping_targets, p=2, dim=-1)
+
+        # --- group targets: connected components of (sim >= threshold) ---
+        target_sim = torch.bmm(targets, targets.transpose(1, 2))  # (batch, T, T)
+        valid_2d = valid_mask.unsqueeze(1) & valid_mask.unsqueeze(2)
+        adjacency = (target_sim >= self.group_threshold) & valid_2d
+        diag = torch.eye(num_tokens, dtype=torch.bool, device=adjacency.device)
+        adjacency = adjacency | (diag.unsqueeze(0) & valid_mask.unsqueeze(1))
+
+        # Iterative min-label propagation; near-duplicate clusters are dense,
+        # so convergence is typically a handful of iterations.
+        sentinel = num_tokens
+        labels = torch.where(
+            valid_mask, range_tensor.unsqueeze(0).expand(batch_size, -1), sentinel
+        )
+        for _ in range(self.max_grouping_iters):
+            neighbor_labels = torch.where(adjacency, labels.unsqueeze(1), sentinel)
+            new_labels = torch.minimum(labels, neighbor_labels.min(dim=-1).values)
+            if torch.equal(new_labels, labels):
+                break
+            labels = new_labels
+
+        # --- centroids, indexed by group-root token id (columns 0..T-1) ---
+        member = F.one_hot(labels.clamp(max=num_tokens - 1), num_tokens).to(
+            targets.dtype
+        )
+        member = member * valid_mask.unsqueeze(-1).to(targets.dtype)
+        group_sizes = member.sum(dim=1)  # (batch, T)
+        group_valid = group_sizes > 0
+        centroids = F.normalize(torch.bmm(member.transpose(1, 2), targets), p=2, dim=-1)
+
+        scores = torch.bmm(preds, centroids.transpose(1, 2)) / self.tau
+        scores = scores.masked_fill(
+            ~group_valid.unsqueeze(1), -torch.finfo(scores.dtype).max
+        )
+        # Zero entire invalid prediction rows AFTER column masking so they
+        # yield finite CE that is then weighted out.
+        scores = scores.masked_fill(~valid_mask.unsqueeze(2), 0.0)
+
+        ce_labels = labels.clamp(max=num_tokens - 1)
+        loss_per_pos = F.cross_entropy(
+            scores.reshape(-1, num_tokens), ce_labels.reshape(-1), reduction="none"
+        ) * (self.tau * 2)
+        loss_per_pos = loss_per_pos.reshape(batch_size, num_tokens)
+
+        # Samples need at least two groups to carry contrastive signal.
+        num_groups = group_valid.sum(dim=-1)
+        sample_contributes = (count > 0) & (num_groups >= 2)
+        effective_valid = valid_mask.float() * sample_contributes.unsqueeze(1).float()
+        effective_count = count.float() * sample_contributes.float()
+        num_contributing = sample_contributes.sum()
+
+        loss_per_sample = (loss_per_pos * effective_valid).sum(
+            dim=1
+        ) / effective_count.clamp(min=1)
+        loss = loss_per_sample.sum() / num_contributing.float().clamp(min=1)
+        return loss
+
+
 @LOSS_REGISTRY.register("modality_patch_discrimination_vec")
 class ModalityPatchDiscriminationLossVec(Loss):
     """Loss function for per-modality patch discrimination task.
