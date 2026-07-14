@@ -246,6 +246,36 @@ def check_skip_path() -> None:
     )
 
 
+def check_class_latent() -> None:
+    """num_class_latents=1: cls_token exposed, InfoNCE path uses it, grads flow."""
+    torch.manual_seed(0)
+    encoder = _make_encoder(num_class_latents=1)
+    encoder.train()
+    sample = _make_sample()
+    out_dict = encoder.forward(sample, patch_size=PATCH)
+    _check(
+        "cls: cls_token exposed with shape [B, D]",
+        tuple(out_dict["cls_token"].shape) == (2, D),
+    )
+    _check(
+        "cls: project_aggregated is cls projection [B, D]",
+        tuple(out_dict["project_aggregated"].shape) == (2, D),
+    )
+    # InfoNCE-like loss on the projected cls only: gradient must reach the
+    # class latent (via the trunk) — and the read blocks (via the reads).
+    out_dict["project_aggregated"].float().pow(2).mean().backward()
+    _check(
+        "cls: grad flows into class_latent",
+        encoder.class_latent.grad is not None
+        and encoder.class_latent.grad.abs().sum().item() > 0,
+    )
+    # fast_pass still exposes cls_token for CLS-pooled evals.
+    encoder.eval()
+    with torch.inference_mode():
+        out_fp = encoder.forward(sample.unmask(), patch_size=PATCH, fast_pass=True)
+    _check("cls: fast_pass exposes cls_token", "cls_token" in out_fp)
+
+
 def check_frozen_target_path() -> None:
     """token_exit_cfg all zeros bypasses attention (frozen projection targets)."""
     torch.manual_seed(0)
@@ -294,6 +324,7 @@ def main() -> None:
         ("latent grid size", check_latent_grid_size),
         ("grad flow", check_grad_flow),
         ("skip path", check_skip_path),
+        ("class latent", check_class_latent),
         ("frozen-target path", check_frozen_target_path),
         ("fast_pass eval", check_fast_pass_eval),
     ]

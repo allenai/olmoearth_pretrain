@@ -80,6 +80,7 @@ class PerceiverEncoder(Encoder):
         num_reads: int = 2,
         readout_depth: int = 2,
         readout_skip_tokens: bool = False,
+        num_class_latents: int = 0,
         **kwargs: Any,
     ) -> None:
         """Initialize the PerceiverEncoder.
@@ -100,6 +101,14 @@ class PerceiverEncoder(Encoder):
                 that relaxes the strict bottleneck to help dense
                 prediction). Masked tokens remain excluded, so there is no
                 leakage.
+            num_class_latents: Number of position-less learned class latents
+                prepended to the anchored latent set (zero RoPE coordinates,
+                the register-token convention). When > 0, the first class
+                latent's final state is exposed as ``cls_token`` and its
+                projection replaces the pooled instance embedding used by
+                the contrastive (InfoNCE) loss. It also stays in the dense
+                read-out's K/V, so the token-level loss keeps training it
+                even after the instance loss saturates.
             kwargs: Keyword args forwarded to ``Encoder``.
         """
         super().__init__(*args, **kwargs)
@@ -127,6 +136,7 @@ class PerceiverEncoder(Encoder):
         self.num_reads = num_reads
         self.readout_depth = readout_depth
         self.readout_skip_tokens = readout_skip_tokens
+        self.num_class_latents = num_class_latents
 
         depth = len(self.blocks)
         if num_reads > depth:
@@ -173,6 +183,11 @@ class PerceiverEncoder(Encoder):
 
         self.latent_token = nn.Parameter(torch.zeros(self.embedding_size))
         self.readout_query_token = nn.Parameter(torch.zeros(self.embedding_size))
+        if num_class_latents > 0:
+            self.class_latent = nn.Parameter(
+                torch.zeros(num_class_latents, self.embedding_size)
+            )
+            self.cls_projection = nn.Linear(self.embedding_size, self.embedding_size)
 
         # Re-run the shared linear init over the newly added blocks, then the
         # perceiver-style trunc-normal init for the learned token seeds.
@@ -180,6 +195,9 @@ class PerceiverEncoder(Encoder):
         self.readout_blocks.apply(self._init_weights)
         nn.init.trunc_normal_(self.latent_token, std=0.02, a=-2.0, b=2.0)
         nn.init.trunc_normal_(self.readout_query_token, std=0.02, a=-2.0, b=2.0)
+        if num_class_latents > 0:
+            self.cls_projection.apply(self._init_weights)
+            nn.init.trunc_normal_(self.class_latent, std=0.02, a=-2.0, b=2.0)
 
     def _grid_dims(
         self, modalities_to_dims_dict: dict[str, tuple]
@@ -288,6 +306,21 @@ class PerceiverEncoder(Encoder):
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
     ) -> tuple[dict[str, torch.Tensor], dict[str, Any] | None]:
+        """Guard: the perceiver path lives in ``_apply_perceiver_attn``."""
+        raise NotImplementedError(
+            "PerceiverEncoder does not use Encoder.apply_attn; its forward "
+            "calls _apply_perceiver_attn (different return signature)."
+        )
+
+    def _apply_perceiver_attn(
+        self,
+        x: dict[str, torch.Tensor],
+        timestamps: torch.Tensor,
+        patch_size: int,
+        input_res: int,
+        token_exit_cfg: dict[str, int] | None = None,
+        fast_pass: bool = False,
+    ) -> tuple[dict[str, torch.Tensor], dict[str, Any] | None, torch.Tensor | None]:
         """Cross-attend tokens into latents, process, and read out densely."""
         if token_exit_cfg is not None and any(
             depth > 0 for depth in token_exit_cfg.values()
@@ -351,6 +384,19 @@ class PerceiverEncoder(Encoder):
             device,
         )
 
+        if self.num_class_latents > 0:
+            cls_latents = repeat(self.class_latent, "n d -> b n d", b=batch_size)
+            latents = torch.cat([cls_latents, latents], dim=1)
+            latent_pos = torch.cat(
+                [
+                    latent_pos.new_zeros(
+                        batch_size, self.num_class_latents, latent_pos.shape[-1]
+                    ),
+                    latent_pos,
+                ],
+                dim=1,
+            )
+
         # Latent trunk with interleaved reads.
         read_i = 0
         for i_blk, blk in enumerate(self.blocks):
@@ -365,6 +411,7 @@ class PerceiverEncoder(Encoder):
                 read_i += 1
             latents = blk(x=latents, rope_positions=latent_pos)
         latents = self.latent_norm(latents)
+        cls_token = latents[:, 0] if self.num_class_latents > 0 else None
 
         # Dense read-out: one query per (h, w, t); strict bottleneck (K/V =
         # latents only).
@@ -425,7 +472,55 @@ class PerceiverEncoder(Encoder):
             else:  # pragma: no cover - guarded in _grid_dims
                 raise NotImplementedError
         output_dict.update(original_masks_dict)
-        return output_dict, None
+        return output_dict, None, cls_token
+
+    def forward(
+        self,
+        x: Any,
+        patch_size: int,
+        input_res: int = BASE_GSD,
+        token_exit_cfg: dict | None = None,
+        fast_pass: bool = False,
+    ) -> dict[str, Any]:
+        """Encoder forward; mirrors ``Encoder.forward`` plus class-latent output.
+
+        When ``num_class_latents > 0``: exposes the raw class latent as
+        ``cls_token`` (also under ``fast_pass``, for CLS-pooled evals) and
+        uses its projection as ``project_aggregated`` (the instance
+        embedding consumed by the contrastive loss). The frozen-target
+        exit-at-0 path is unchanged (attention skipped entirely).
+        """
+        if fast_pass and token_exit_cfg is not None:
+            raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
+
+        patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
+        cls_token = None
+        if token_exit_cfg is None or any(
+            exit_depth > 0 for exit_depth in token_exit_cfg.values()
+        ):
+            patchified_tokens_and_masks, _token_norm_stats, cls_token = (
+                self._apply_perceiver_attn(
+                    x=patchified_tokens_and_masks,
+                    timestamps=x.timestamps,
+                    patch_size=patch_size,
+                    input_res=input_res,
+                    token_exit_cfg=token_exit_cfg,
+                    fast_pass=fast_pass,
+                )
+            )
+        output = TokensAndMasks(**patchified_tokens_and_masks)
+        if self.embedding_projector is not None:
+            output = self.embedding_projector(output)
+
+        output_dict: dict[str, Any] = {"tokens_and_masks": output}
+        if cls_token is not None:
+            output_dict["cls_token"] = cls_token
+        if not fast_pass:
+            if cls_token is not None:
+                output_dict["project_aggregated"] = self.cls_projection(cls_token)
+            else:
+                output_dict["project_aggregated"] = self.project_and_aggregate(output)
+        return output_dict
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP, sharding read/read-out blocks individually.
@@ -490,8 +585,13 @@ class PerceiverPredictor(PredictorBase):
         timestamps: torch.Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        cls_token: torch.Tensor | None = None,
     ) -> TokensAndMasks:
-        """Decode per-modality predictions from the fused dense map."""
+        """Decode per-modality predictions from the fused dense map.
+
+        ``cls_token`` arrives via encoder-output decoder kwargs; currently
+        unused — reserved for conditioning the decode on the class latent.
+        """
         available_modalities = x.modalities
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
@@ -539,6 +639,7 @@ class PerceiverEncoderConfig(EncoderConfig):
     num_reads: int = 2
     readout_depth: int = 2
     readout_skip_tokens: bool = False
+    num_class_latents: int = 0
 
     def validate(self) -> None:
         """Validate the configuration."""
