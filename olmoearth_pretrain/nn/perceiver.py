@@ -79,6 +79,7 @@ class PerceiverEncoder(Encoder):
         latent_stride_t: int = 2,
         num_reads: int = 2,
         readout_depth: int = 2,
+        readout_skip_tokens: bool = False,
         **kwargs: Any,
     ) -> None:
         """Initialize the PerceiverEncoder.
@@ -94,6 +95,11 @@ class PerceiverEncoder(Encoder):
                 latents, spread evenly through the latent trunk.
             readout_depth: Number of cross-attention blocks in the dense
                 read-out (queries -> latents).
+            readout_skip_tokens: If True, dense read-out queries attend to
+                the visible tokens in addition to the latents (a skip path
+                that relaxes the strict bottleneck to help dense
+                prediction). Masked tokens remain excluded, so there is no
+                leakage.
             kwargs: Keyword args forwarded to ``Encoder``.
         """
         super().__init__(*args, **kwargs)
@@ -120,6 +126,7 @@ class PerceiverEncoder(Encoder):
         self.latent_stride_t = latent_stride_t
         self.num_reads = num_reads
         self.readout_depth = readout_depth
+        self.readout_skip_tokens = readout_skip_tokens
 
         depth = len(self.blocks)
         if num_reads > depth:
@@ -371,12 +378,28 @@ class PerceiverEncoder(Encoder):
             batch_size,
             device,
         )
+        if self.readout_skip_tokens:
+            # Skip path: dense queries also attend to visible tokens
+            # (legitimate context — masked tokens were removed above), on top
+            # of the latents. Relaxes the strict bottleneck for dense tasks.
+            kv = torch.cat([latents, tokens.to(latents.dtype)], dim=1)
+            kv_pos = torch.cat([latent_pos, positions], dim=1)
+            if attn_mask is not None:
+                kv_mask = torch.cat(
+                    [attn_mask.new_ones(batch_size, latents.shape[1]), attn_mask],
+                    dim=1,
+                )
+            else:
+                kv_mask = None
+        else:
+            kv, kv_pos, kv_mask = latents, latent_pos, None
         for rblk in self.readout_blocks:
             queries = rblk(
                 x=queries,
-                y=latents,
+                y=kv,
+                attn_mask=kv_mask,
                 rope_positions=query_pos,
-                rope_positions_y=latent_pos,
+                rope_positions_y=kv_pos,
             )
         dense = self.norm(queries).view(
             batch_size, height, width, timesteps, self.embedding_size
@@ -515,6 +538,7 @@ class PerceiverEncoderConfig(EncoderConfig):
     latent_stride_t: int = 2
     num_reads: int = 2
     readout_depth: int = 2
+    readout_skip_tokens: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""

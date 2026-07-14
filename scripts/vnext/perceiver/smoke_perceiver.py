@@ -230,6 +230,22 @@ def check_grad_flow() -> None:
     )
 
 
+def check_skip_path() -> None:
+    """readout_skip_tokens=True: forward/backward work, K/V includes tokens."""
+    torch.manual_seed(0)
+    encoder = _make_encoder(readout_skip_tokens=True)
+    encoder.train()
+    sample = _make_sample()
+    out_dict = encoder.forward(sample, patch_size=PATCH)
+    latent, _, _ = unpack_encoder_output(out_dict)
+    latent.sentinel2_l2a.float().pow(2).mean().backward()
+    g = encoder.readout_blocks[0].attn.k.weight.grad
+    _check(
+        "skip path: forward+backward with token K/V",
+        g is not None and g.abs().sum().item() > 0,
+    )
+
+
 def check_frozen_target_path() -> None:
     """token_exit_cfg all zeros bypasses attention (frozen projection targets)."""
     torch.manual_seed(0)
@@ -277,6 +293,7 @@ def main() -> None:
         ("shapes + strict bottleneck", check_shapes_and_bottleneck),
         ("latent grid size", check_latent_grid_size),
         ("grad flow", check_grad_flow),
+        ("skip path", check_skip_path),
         ("frozen-target path", check_frozen_target_path),
         ("fast_pass eval", check_fast_pass_eval),
     ]
