@@ -404,6 +404,21 @@ class PerceiverEncoder(Encoder):
         output_dict.update(original_masks_dict)
         return output_dict, None
 
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP, sharding read/read-out blocks individually.
+
+        Individual sharding matters beyond memory: FSDP2's
+        ``cast_forward_inputs`` casts each block's inputs (tokens, RoPE
+        coordinates) to the compute dtype at the block boundary, exactly like
+        the baseline's trunk blocks. Under the root shard alone, fp32 tensors
+        built inside ``apply_attn`` would hit bf16 weights and crash.
+        """
+        for block in self.read_blocks:
+            block.apply_fsdp(**fsdp_kwargs)
+        for block in self.readout_blocks:
+            block.apply_fsdp(**fsdp_kwargs)
+        super().apply_fsdp(**fsdp_kwargs)
+
 
 class PerceiverPredictor(PredictorBase):
     """Per-location modality decoder over the fused dense map.
@@ -475,7 +490,10 @@ class PerceiverPredictor(PredictorBase):
 
         output_dict: dict[str, torch.Tensor] = {}
         for modality in modalities_to_process:
-            tokens = tokens_dict[modality]
+            # Composite encodings can promote to fp32 (frozen sinusoid
+            # tables); cast back so the head Linears match the FSDP compute
+            # dtype. There is no sharded block downstream to do it for us.
+            tokens = tokens_dict[modality].to(tokens_only_dict[modality].dtype)
             for norm, mlp in zip(self.head_norms, self.head_mlps):
                 tokens = tokens + mlp(norm(tokens))
             num_band_sets = self.tokenization_config.get_num_bandsets(modality)
