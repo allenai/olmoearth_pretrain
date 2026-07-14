@@ -260,9 +260,14 @@ def _classify_task(task: Any) -> dict[str, Any]:
 
 def _task_type_from_class(class_name: str) -> str:
     name = class_name.lower()
-    for kind in ("segmentation", "classification", "regression"):
-        if kind in name:
-            return kind
+    if "segmentation" in name:
+        return "segmentation"
+    if "classification" in name:
+        return "classification"
+    if "regression" in name:
+        # PerPixelRegressionTask is dense (per-pixel); plain RegressionTask reads a
+        # vector target (one value per window) -> scalar regression.
+        return "regression" if "perpixel" in name else "scalar_regression"
     raise ValueError(f"Cannot determine task type from class name: {class_name}")
 
 

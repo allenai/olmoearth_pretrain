@@ -226,7 +226,7 @@ def test_linear_probe_regression() -> None:
     test_lbl = torch.rand(B, H, W)
 
     config = EvalDatasetConfig(
-        task_type=TaskType.REGRESSION,
+        task_type=TaskType.PER_PIXEL_REGRESSION,
         imputes=[],
         num_classes=1,
         is_multilabel=False,
@@ -299,14 +299,14 @@ def _make_loader(slug: str, split: str, batch_size: int = 2) -> DataLoader:
         ("benv2", TaskType.CLASSIFICATION, 19, [Modality.SENTINEL2_L2A.name], "linear"),
         (
             "biomassters",
-            TaskType.REGRESSION,
+            TaskType.PER_PIXEL_REGRESSION,
             1,
             [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
             "linear",
         ),
         (
             "biomassters",
-            TaskType.REGRESSION,
+            TaskType.PER_PIXEL_REGRESSION,
             1,
             [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
             "unet",

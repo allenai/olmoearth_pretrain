@@ -317,7 +317,7 @@ def _extract_label(
     task_type: Any,
     num_classes: int,
 ) -> torch.Tensor:
-    if task_type == TaskType.REGRESSION and "mask" in sample:
+    if task_type == TaskType.PER_PIXEL_REGRESSION and "mask" in sample:
         return sample["mask"].float()
 
     if "mask" in sample:
@@ -535,7 +535,7 @@ class GeobenchV2Dataset(Dataset):
         # Z-score regression targets when train-split stats are configured, so
         # reported RMSE is in standardized units (comparable to GeoBench-2).
         if (
-            self.config.task_type == TaskType.REGRESSION
+            self.config.task_type == TaskType.PER_PIXEL_REGRESSION
             and self.config.target_mean is not None
             and self.config.target_std is not None
         ):

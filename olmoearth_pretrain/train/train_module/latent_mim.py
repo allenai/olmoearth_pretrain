@@ -311,23 +311,29 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                     token_exit_cfg=token_exit_cfg,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
-            loss = self.loss_fn(decoded, target_output)
-            if self.mae_loss is not None:
-                loss += self.mae_loss.compute(reconstructed, batch)
+            # Compute losses outside autocast: the loss internals cast to fp32
+            # explicitly, but under autocast ops like bmm get re-cast to bf16,
+            # silently changing the loss values (e.g. the same_target_threshold
+            # similarity masking). This keeps the loss identical across
+            # FSDP-param-cast and autocast (ddp) precision modes.
+            with torch.autocast(torch.device(self.device).type, enabled=False):
+                loss = self.loss_fn(decoded, target_output)
+                if self.mae_loss is not None:
+                    loss += self.mae_loss.compute(reconstructed, batch)
 
-            if (
-                supervision_preds is not None
-                and self.model.supervision_head is not None
-            ):
-                sup_loss, per_modality_losses = compute_supervision_loss(
-                    supervision_preds,
-                    batch,
-                    self.model.supervision_head,
-                )
-                loss = loss + sup_loss
-                for mod_name, mod_loss in per_modality_losses.items():
-                    if extra_metrics is None:
-                        extra_metrics = {}
-                    extra_metrics[f"supervision/{mod_name}"] = mod_loss
+                if (
+                    supervision_preds is not None
+                    and self.model.supervision_head is not None
+                ):
+                    sup_loss, per_modality_losses = compute_supervision_loss(
+                        supervision_preds,
+                        batch,
+                        self.model.supervision_head,
+                    )
+                    loss = loss + sup_loss
+                    for mod_name, mod_loss in per_modality_losses.items():
+                        if extra_metrics is None:
+                            extra_metrics = {}
+                        extra_metrics[f"supervision/{mod_name}"] = mod_loss
 
             return loss, latent, decoded, target_output, extra_metrics

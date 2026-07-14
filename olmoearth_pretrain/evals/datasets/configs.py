@@ -13,7 +13,11 @@ def get_eval_mode(task_type: TaskType) -> str:
     """Get the eval mode for a given task type."""
     if task_type == TaskType.CLASSIFICATION:
         return "knn"
-    if task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION):
+    if task_type in (
+        TaskType.SEGMENTATION,
+        TaskType.PER_PIXEL_REGRESSION,
+        TaskType.WINDOW_REGRESSION,
+    ):
         return "linear_probe"
     raise ValueError(f"Unsupported task type: {task_type}")
 
@@ -75,6 +79,21 @@ class EvalDatasetConfig:
     target_mean: float | None = None
     target_std: float | None = None
 
+    def __post_init__(self) -> None:
+        """Validate task-type-specific invariants."""
+        # Regression heads and metrics only support a single output channel, so
+        # num_classes must be 1 for both dense (per-pixel) and per-sample
+        # (window) regression tasks.
+        if (
+            self.task_type
+            in (TaskType.PER_PIXEL_REGRESSION, TaskType.WINDOW_REGRESSION)
+            and self.num_classes != 1
+        ):
+            raise ValueError(
+                f"{self.task_type} only supports num_classes=1 "
+                f"(single regression target), got num_classes={self.num_classes}."
+            )
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict."""
         d = asdict(self)
@@ -131,7 +150,7 @@ DATASET_TO_CONFIG = {
         ],
     ),
     "pretrain_subset_srtm": EvalDatasetConfig(
-        task_type=TaskType.REGRESSION,
+        task_type=TaskType.PER_PIXEL_REGRESSION,
         imputes=[],
         num_classes=1,
         is_multilabel=False,
@@ -143,7 +162,7 @@ DATASET_TO_CONFIG = {
         ],
     ),
     "pretrain_subset_canopy": EvalDatasetConfig(
-        task_type=TaskType.REGRESSION,
+        task_type=TaskType.PER_PIXEL_REGRESSION,
         imputes=[],
         num_classes=1,
         is_multilabel=False,
@@ -361,7 +380,7 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         source_imagery=[SourceImagery.SENTINEL2, SourceImagery.SENTINEL1],
     ),
     "gb2-biomassters": EvalDatasetConfig(
-        task_type=TaskType.REGRESSION,
+        task_type=TaskType.PER_PIXEL_REGRESSION,
         imputes=[],
         num_classes=1,
         is_multilabel=False,

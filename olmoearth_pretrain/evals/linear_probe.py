@@ -256,7 +256,7 @@ class BilinearConvProbe(nn.Module):
             raise ValueError(
                 "num_output_pixels_per_side_of_patch is required for BilinearConvProbe"
             )
-        out_channels = 1 if task_type == TaskType.REGRESSION else num_classes
+        out_channels = 1 if task_type == TaskType.PER_PIXEL_REGRESSION else num_classes
         self.upsample = nn.Upsample(
             scale_factor=num_output_pixels_per_side_of_patch,
             mode="bilinear",
@@ -323,6 +323,9 @@ class LinearProbe(nn.Module):
                 i=self.num_output_pixels_per_side_of_patch,
                 j=self.num_output_pixels_per_side_of_patch,
             )
+        elif self.task_type == TaskType.WINDOW_REGRESSION:
+            # Single value per sample: (B, 1) -> (B,).
+            logits = logits.squeeze(-1)
         return {"logits": logits}
 
 
@@ -378,7 +381,7 @@ def train_and_eval_probe(
     # kept on CPU; NaN-masked invalid pixels stay NaN through the affine map.
     target_mean: torch.Tensor | None = None
     target_std: torch.Tensor | None = None
-    if config.task_type == TaskType.REGRESSION:
+    if config.task_type in (TaskType.PER_PIXEL_REGRESSION, TaskType.WINDOW_REGRESSION):
         target_mean, target_std = _compute_regression_target_stats(train_labels)
         if target_mean is not None and target_std is not None:
             logger.info(
@@ -395,7 +398,7 @@ def train_and_eval_probe(
                 "skipping target normalization."
             )
     output_pixels_per_side_of_patch = None
-    if config.task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION):
+    if config.task_type in (TaskType.SEGMENTATION, TaskType.PER_PIXEL_REGRESSION):
         assert config.height_width is not None, (
             "Height width is required for spatial probe tasks"
         )
@@ -408,14 +411,20 @@ def train_and_eval_probe(
 
     # Regression auto-upgrades a plain LINEAR probe to the spatially-aware
     # BilinearConvProbe; attention pooling is not supported for regression.
-    if config.task_type == TaskType.REGRESSION and probe_type == ProbeType.LINEAR:
+    if (
+        config.task_type == TaskType.PER_PIXEL_REGRESSION
+        and probe_type == ProbeType.LINEAR
+    ):
         probe_type = ProbeType.BILINEAR_CONV
         logger.info(
             "Auto-upgrading probe from LINEAR to BILINEAR_CONV for regression "
             "(shared 1×1 conv with bilinear upsampling is better regularized "
             "for sparse per-pixel regression targets)."
         )
-    if probe_type == ProbeType.ATTNPOOL and config.task_type == TaskType.REGRESSION:
+    if probe_type == ProbeType.ATTNPOOL and config.task_type in (
+        TaskType.PER_PIXEL_REGRESSION,
+        TaskType.WINDOW_REGRESSION,
+    ):
         raise ValueError("Attention pooling is not supported for regression.")
 
     probe_cls = PROBE_TYPE_TO_CLASS[probe_type]
@@ -537,7 +546,7 @@ def train_and_eval_probe(
             batch_size=batch_size,
             shuffle=False,
         )
-        all_preds, all_labels = get_probe_predictions(
+        all_preds, all_labels, all_scores = get_probe_predictions(
             data_loader=test_data_loader,
             probe=probe,
             device=device,
@@ -548,7 +557,10 @@ def train_and_eval_probe(
         # Map regression preds/labels back to original target units so the
         # downstream metrics (and bootstrap resamples of them) are reported
         # on the same scale as the raw labels.
-        if config.task_type == TaskType.REGRESSION:
+        if config.task_type in (
+            TaskType.PER_PIXEL_REGRESSION,
+            TaskType.WINDOW_REGRESSION,
+        ):
             all_preds = _unnormalize_regression(all_preds, target_mean, target_std)
             all_labels = _unnormalize_regression(all_labels, target_mean, target_std)
 
@@ -570,6 +582,9 @@ def train_and_eval_probe(
 
                 bootstrap_preds = all_preds[bootstrap_indices]
                 bootstrap_labels = all_labels[bootstrap_indices]
+                bootstrap_iter_scores = (
+                    all_scores[bootstrap_indices] if all_scores is not None else None
+                )
 
                 # Compute metric on resampled predictions
                 result = compute_metric(
@@ -579,6 +594,7 @@ def train_and_eval_probe(
                     task_type=config.task_type,
                     primary_metric=primary_metric,
                     primary_metric_class=primary_metric_class,
+                    scores=bootstrap_iter_scores,
                 )
                 bootstrap_scores.append(result.primary)
 
@@ -611,6 +627,7 @@ def train_and_eval_probe(
             task_type=config.task_type,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
+            scores=all_scores,
         )
         if n_bootstrap == 0:
             logger.info(f"Test result: {test_result}")
@@ -702,7 +719,7 @@ def train_probe(
 
     probe = probe.train()
     loss_function: nn.Module | functools.partial
-    if task_type == TaskType.REGRESSION:
+    if task_type in (TaskType.PER_PIXEL_REGRESSION, TaskType.WINDOW_REGRESSION):
         loss_function = MaskedMSELoss()
     elif use_dice_loss:
         loss_function = functools.partial(weighted_dice_loss, num_classes=num_classes)
@@ -730,7 +747,7 @@ def train_probe(
                             align_corners=True,
                         )
                     targets = batch_labels.to(device)
-                elif task_type == TaskType.REGRESSION:
+                elif task_type == TaskType.PER_PIXEL_REGRESSION:
                     if logits.shape[-2:] != batch_labels.shape[-2:]:
                         logits = F.interpolate(
                             logits.unsqueeze(1),
@@ -738,6 +755,9 @@ def train_probe(
                             mode="bilinear",
                             align_corners=True,
                         ).squeeze(1)
+                    targets = batch_labels.to(device).float()
+                elif task_type == TaskType.WINDOW_REGRESSION:
+                    # Pooled (B,) prediction vs (B,) scalar target; no interp.
                     targets = batch_labels.to(device).float()
                 else:
                     targets = batch_labels.to(device)
@@ -765,17 +785,24 @@ def get_probe_predictions(
     device: torch.device,
     probe_type: ProbeType,
     task_type: TaskType,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     """Get predictions from a trained linear probe.
 
     Returns:
-        tuple[torch.Tensor, torch.Tensor]: (predictions, labels)
+        tuple of (predictions, labels, scores). ``scores`` holds per-class
+        softmax scores (shape (N, C) for classification, (N, C, H, W) for
+        segmentation) and is None for regression.
     """
     probe = probe.eval()
 
     all_preds = []
     all_labels = []
+    all_scores: list[torch.Tensor] = []
     all_attn_weights = []
+    collect_scores = task_type not in (
+        TaskType.PER_PIXEL_REGRESSION,
+        TaskType.WINDOW_REGRESSION,
+    )
     with torch.no_grad():
         for batch in data_loader:
             batch_emb, batch_labels = batch
@@ -797,7 +824,9 @@ def get_probe_predictions(
                         align_corners=True,
                     )
 
-            if task_type == TaskType.REGRESSION:
+            if task_type == TaskType.WINDOW_REGRESSION:
+                preds = logits.float().cpu()
+            elif task_type == TaskType.PER_PIXEL_REGRESSION:
                 if (
                     logits.shape[-2] != batch_labels.shape[-2]
                     or logits.shape[-1] != batch_labels.shape[-1]
@@ -811,6 +840,8 @@ def get_probe_predictions(
                 preds = logits.float().cpu()
             else:
                 preds = torch.argmax(logits, dim=1).cpu()
+                if collect_scores:
+                    all_scores.append(torch.softmax(logits.float(), dim=1).cpu())
             all_preds.append(preds)
             all_labels.append(batch_labels)
             if probe_type == ProbeType.ATTNPOOL:
@@ -825,7 +856,8 @@ def get_probe_predictions(
 
     all_preds = torch.cat(all_preds)
     all_labels = torch.cat(all_labels)
-    return all_preds, all_labels
+    scores = torch.cat(all_scores) if collect_scores else None
+    return all_preds, all_labels, scores
 
 
 def compute_metric(
@@ -835,6 +867,7 @@ def compute_metric(
     task_type: TaskType,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    scores: torch.Tensor | None = None,
 ) -> EvalResult:
     """Compute metric from predictions and labels."""
     if task_type == TaskType.SEGMENTATION:
@@ -843,10 +876,14 @@ def compute_metric(
             labels,
             num_classes=num_classes,
             ignore_label=SEGMENTATION_IGNORE_LABEL,
+            scores=scores,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
         )
-    if task_type == TaskType.REGRESSION:
+    if (
+        task_type == TaskType.PER_PIXEL_REGRESSION
+        or task_type == TaskType.WINDOW_REGRESSION
+    ):
         return regression_metrics(
             predictions=preds,
             labels=labels,
@@ -855,6 +892,7 @@ def compute_metric(
     return classification_metrics(
         predictions=preds,
         labels=labels,
+        scores=scores,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
     )
@@ -878,14 +916,14 @@ def evaluate_probe(
     to normalize labels before training; they're applied in reverse here so the
     reported metrics stay in original target units.
     """
-    preds, labels = get_probe_predictions(
+    preds, labels, scores = get_probe_predictions(
         data_loader=data_loader,
         probe=probe,
         device=device,
         probe_type=probe_type,
         task_type=task_type,
     )
-    if task_type == TaskType.REGRESSION:
+    if task_type in (TaskType.PER_PIXEL_REGRESSION, TaskType.WINDOW_REGRESSION):
         preds = _unnormalize_regression(preds, target_mean, target_std)
         labels = _unnormalize_regression(labels, target_mean, target_std)
     return compute_metric(
@@ -895,4 +933,5 @@ def evaluate_probe(
         task_type,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
+        scores=scores,
     )

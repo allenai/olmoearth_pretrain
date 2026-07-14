@@ -1,6 +1,7 @@
 """Training and optimizer abstraction for OlmoEarth Pretrain."""
 
 import contextlib
+import itertools
 import json
 from collections.abc import Generator
 from dataclasses import dataclass, field
@@ -37,6 +38,7 @@ from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.nn.latent_mim import FrozenTargetProjection
 from olmoearth_pretrain.train.loss import LossConfig
 
 logger = getLogger(__name__)
@@ -265,6 +267,7 @@ class OlmoEarthTrainModule(TrainModule):
 
         # Maybe shard/replicate according to data parallel config.
         self._dp_config = dp_config
+        self._replicate_grad_sync = False
         if dp_config is not None:
             dp_mesh = get_dp_mesh(self.world_mesh)
             if dp_config.name in (DataParallelType.fsdp):
@@ -281,12 +284,21 @@ class OlmoEarthTrainModule(TrainModule):
                 )
                 logger.info("Applied FSDP to the model")
             elif dp_config.name == DataParallelType.ddp:
-                self.model.apply_ddp(
-                    dp_mesh=dp_mesh,
-                    compile_enabled=compile_model,
-                    find_unused_parameters=find_unused_parameters,
+                # NOTE: We intentionally do NOT wrap with torch DDP / composable
+                # replicate(). Our train modules can run multiple forwards per
+                # backward (e.g. the two contrastive views in
+                # ContrastiveLatentMIMTrainModule), which the DDP reducer does not
+                # support (params get marked ready twice). Instead the model stays
+                # a plain replicated module (already materialized on-device) and we
+                # all-reduce gradients once per step in optim_step(). This matches
+                # DDP numerics (mean-reduced gradients, like FSDP) with a single
+                # coalesced collective per step.
+                self._replicate_grad_sync = True
+                self._broadcast_params()
+                logger.info(
+                    "Applied replicated data parallelism (manual gradient "
+                    "all-reduce) to the model"
                 )
-                logger.info("Applied DDP to the model")
             else:
                 raise NotImplementedError(dp_config.name)
 
@@ -418,6 +430,11 @@ class OlmoEarthTrainModule(TrainModule):
 
     def optim_step(self) -> None:
         """Optimize the model."""
+        # For replicated data parallelism, average gradients across ranks first
+        # so clipping and the optimizer step see the same gradients DDP/FSDP would.
+        if self._replicate_grad_sync:
+            self._all_reduce_grads()
+
         # Maybe clip gradients.
         if self.max_grad_norm is not None:
             grad_norm = self._clip_grad_norm(self.max_grad_norm)
@@ -442,6 +459,39 @@ class OlmoEarthTrainModule(TrainModule):
             self.trainer.record_metric(
                 "step skipped", self.optimizer.step_skipped, namespace="optim"
             )
+
+    def _broadcast_params(self) -> None:
+        """Broadcast params and buffers from rank 0 so replicas start identical."""
+        if not (dist.is_available() and dist.is_initialized()):
+            return
+        group = self.dp_process_group
+        for t in itertools.chain(self.model.parameters(), self.model.buffers()):
+            dist.broadcast(t.detach(), src=0, group=group)
+
+    def _all_reduce_grads(self) -> None:
+        """Mean-reduce gradients across the data parallel group.
+
+        Gradients are flattened into one buffer per dtype so the sync is a
+        couple of large collectives instead of one per parameter.
+        """
+        if not (dist.is_available() and dist.is_initialized()):
+            return
+        group = self.dp_process_group
+        world_size = get_world_size(group)
+        if world_size == 1:
+            return
+        grads_by_dtype: dict[torch.dtype, list[torch.Tensor]] = {}
+        for p in self.model.parameters():
+            if p.grad is not None:
+                grads_by_dtype.setdefault(p.grad.dtype, []).append(p.grad)
+        for grads in grads_by_dtype.values():
+            flat = torch.cat([g.reshape(-1) for g in grads])
+            dist.all_reduce(flat, group=group)
+            flat.div_(world_size)
+            offset = 0
+            for g in grads:
+                g.copy_(flat[offset : offset + g.numel()].view_as(g))
+                offset += g.numel()
 
     @contextlib.contextmanager
     def _train_microbatch_context(
@@ -546,6 +596,14 @@ class OlmoEarthTrainModule(TrainModule):
         # Update target encoder with EMA this should be a callback
         if self.start_ema == 1.0 and self.end_ema == 1.0:
             return
+
+        if isinstance(
+            getattr(self.model, "target_encoder", None), FrozenTargetProjection
+        ):
+            raise OLMoConfigurationError(
+                "EMA updates require a full target-encoder copy: "
+                "projection_only_target=True only supports ema_decay=(1.0, 1.0)."
+            )
 
         cur_ema_value = (
             self.start_ema
