@@ -31,6 +31,11 @@ NOIC_NOLSA="scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_noic_nolsa.py"
 NOIC_LSA_1FWD="scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_1fwd.py"
 # Same single-forward-pass run, but with the fused AdamW kernel (fused=True) for extra speed.
 NOIC_LSA_1FWD_FUSEDADAMW="scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_1fwd_fusedadamw.py"
+# Register-width sweep on the noic_lsa recipe with ALL validated speedups (base_faster.py):
+# 1fwd + fused AdamW + projection-only target + replicated DP (ddp) + bf16 autocast.
+D128_FASTER="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_il_pdproj_noic_lsa_faster.py"
+D256_FASTER="scripts/official/v1_2/regbtl_v1_2_gdyn_d256_il_pdproj_noic_lsa_faster.py"
+D512_FASTER="scripts/official/v1_2/regbtl_v1_2_gdyn_d512_il_pdproj_noic_lsa_faster.py"
 
 # python "$IC_LSA" launch "regbtl_v1_2_gdyn_d768_il_pdproj_ic_lsa" "$CLUSTER" \
 #     $LAUNCH_ARGS \
@@ -52,6 +57,18 @@ NOIC_LSA_1FWD_FUSEDADAMW="scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_
 #     $LAUNCH_ARGS \
 #     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$NOIC_LSA_1FWD_FUSEDADAMW" launch "regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_1fwd_fusedadamw" "$CLUSTER" \
+# python "$NOIC_LSA_1FWD_FUSEDADAMW" launch "regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_1fwd_fusedadamw" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
+
+python "$D128_FASTER" launch "regbtl_v1_2_gdyn_d128_il_pdproj_noic_lsa_faster" "$CLUSTER" \
+    $LAUNCH_ARGS \
+    --trainer.callbacks.wandb.project="$PROJECT"
+
+python "$D256_FASTER" launch "regbtl_v1_2_gdyn_d256_il_pdproj_noic_lsa_faster" "$CLUSTER" \
+    $LAUNCH_ARGS \
+    --trainer.callbacks.wandb.project="$PROJECT"
+
+python "$D512_FASTER" launch "regbtl_v1_2_gdyn_d512_il_pdproj_noic_lsa_faster" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"

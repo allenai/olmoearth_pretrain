@@ -75,13 +75,17 @@ FIFTY_CITIES_LOOP_EVAL_TASKS = {
 
 
 def build_regbtl_model_config(
-    common: CommonComponents, *, latent_self_attn: bool
+    common: CommonComponents,
+    *,
+    latent_self_attn: bool,
+    register_dim: int = REGISTER_DIM,
 ) -> LatentMIMConfig:
-    """v1.2 base + spatial register bottleneck: ``gdyn`` + ``il`` + ``pdproj``, d768.
+    """v1.2 base + spatial register bottleneck: ``gdyn`` + ``il`` + ``pdproj``.
 
     The encoder keeps v1.2's 3D mixed RoPE; the bottleneck reads spatially (2D). The
     decoder is switched to 2D RoPE so its mask tokens cross-attend the register grid.
-    ``latent_self_attn`` toggles the bottleneck's latent self-attention (lsa / nolsa).
+    ``latent_self_attn`` toggles the bottleneck's latent self-attention (lsa / nolsa);
+    ``register_dim`` sets the bottleneck width (d768 is the original frontier).
     """
     config = _base_build_model_config(common)
     encoder_config = config.encoder_config
@@ -89,7 +93,7 @@ def build_regbtl_model_config(
 
     for sub_config in (encoder_config, decoder_config):
         sub_config.use_register_bottleneck = True
-        sub_config.register_dim = REGISTER_DIM
+        sub_config.register_dim = register_dim
 
     # gdyn: dynamic single-latent grid that matches the patch grid at forward time.
     encoder_config.register_grid_size = 0
