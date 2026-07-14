@@ -319,7 +319,13 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     token_exit_cfg=token_exit_cfg,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
-            loss = self.loss_fn(decoded, target_output)
-            if self.mae_loss is not None and reconstructed is not None:
-                loss += self.mae_loss.compute(reconstructed, batch)
+            # Compute losses outside autocast: the loss internals cast to fp32
+            # explicitly, but under autocast ops like bmm get re-cast to bf16,
+            # silently changing the loss values (e.g. the same_target_threshold
+            # similarity masking). This keeps the loss identical across
+            # FSDP-param-cast and autocast (ddp) precision modes.
+            with torch.autocast(torch.device(self.device).type, enabled=False):
+                loss = self.loss_fn(decoded, target_output)
+                if self.mae_loss is not None and reconstructed is not None:
+                    loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output, latent_projected_and_pooled
