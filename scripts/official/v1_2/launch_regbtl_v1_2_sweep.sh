@@ -61,14 +61,14 @@ D512_FASTER="scripts/official/v1_2/regbtl_v1_2_gdyn_d512_il_pdproj_noic_lsa_fast
 #     $LAUNCH_ARGS \
 #     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D128_FASTER" launch "regbtl_v1_2_gdyn_d128_il_pdproj_noic_lsa_faster" "$CLUSTER" \
+python "$D128_FASTER" launch "regbtl_v1_2_gdyn_d128_il_pdproj_noic_lsa_faster_v2" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D256_FASTER" launch "regbtl_v1_2_gdyn_d256_il_pdproj_noic_lsa_faster" "$CLUSTER" \
+python "$D256_FASTER" launch "regbtl_v1_2_gdyn_d256_il_pdproj_noic_lsa_faster_v2" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D512_FASTER" launch "regbtl_v1_2_gdyn_d512_il_pdproj_noic_lsa_faster" "$CLUSTER" \
+python "$D512_FASTER" launch "regbtl_v1_2_gdyn_d512_il_pdproj_noic_lsa_faster_v2" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
