@@ -53,6 +53,7 @@ from olmoearth_pretrain.nn.flexi_vit import (
     CompositeEncodings,
     Encoder,
     EncoderConfig,
+    Predictor,
     PredictorBase,
     PredictorConfig,
     get_modalities_to_process,
@@ -320,7 +321,7 @@ class PerceiverEncoder(Encoder):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
-    ) -> tuple[dict[str, torch.Tensor], dict[str, Any] | None, torch.Tensor | None]:
+    ) -> tuple[dict[str, torch.Tensor], dict[str, Any] | None, dict[str, torch.Tensor]]:
         """Cross-attend tokens into latents, process, and read out densely."""
         if token_exit_cfg is not None and any(
             depth > 0 for depth in token_exit_cfg.values()
@@ -451,6 +452,12 @@ class PerceiverEncoder(Encoder):
         dense = self.norm(queries).view(
             batch_size, height, width, timesteps, self.embedding_size
         )
+        aux: dict[str, torch.Tensor] = {
+            "dense_map": dense,
+            "dense_map_positions": query_pos,
+        }
+        if cls_token is not None:
+            aux["cls_token"] = cls_token
 
         # Broadcast the fused dense map to each modality's token layout.
         # Static (T=1) modalities read the first temporal plane, matching the
@@ -472,7 +479,7 @@ class PerceiverEncoder(Encoder):
             else:  # pragma: no cover - guarded in _grid_dims
                 raise NotImplementedError
         output_dict.update(original_masks_dict)
-        return output_dict, None, cls_token
+        return output_dict, None, aux
 
     def forward(
         self,
@@ -494,11 +501,11 @@ class PerceiverEncoder(Encoder):
             raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
 
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
-        cls_token = None
+        aux: dict[str, torch.Tensor] = {}
         if token_exit_cfg is None or any(
             exit_depth > 0 for exit_depth in token_exit_cfg.values()
         ):
-            patchified_tokens_and_masks, _token_norm_stats, cls_token = (
+            patchified_tokens_and_masks, _token_norm_stats, aux = (
                 self._apply_perceiver_attn(
                     x=patchified_tokens_and_masks,
                     timestamps=x.timestamps,
@@ -513,9 +520,14 @@ class PerceiverEncoder(Encoder):
             output = self.embedding_projector(output)
 
         output_dict: dict[str, Any] = {"tokens_and_masks": output}
+        cls_token = aux.get("cls_token")
         if cls_token is not None:
             output_dict["cls_token"] = cls_token
         if not fast_pass:
+            # Extras flow to the decoder as kwargs via unpack_encoder_output.
+            for key in ("dense_map", "dense_map_positions"):
+                if key in aux:
+                    output_dict[key] = aux[key]
             if cls_token is not None:
                 output_dict["project_aggregated"] = self.cls_projection(cls_token)
             else:
@@ -586,6 +598,8 @@ class PerceiverPredictor(PredictorBase):
         patch_size: int,
         input_res: int = BASE_GSD,
         cls_token: torch.Tensor | None = None,
+        dense_map: torch.Tensor | None = None,
+        dense_map_positions: torch.Tensor | None = None,
     ) -> TokensAndMasks:
         """Decode per-modality predictions from the fused dense map.
 
@@ -630,6 +644,149 @@ class PerceiverPredictor(PredictorBase):
         return TokensAndMasks(**output_dict)
 
 
+class PerceiverCrossPredictor(Predictor):
+    """Baseline-style cross-attention decoder over the fused dense map.
+
+    Queries are exactly the baseline ``Predictor``'s: a learned mask token
+    plus channel/month encodings and RoPE positions at DECODER locations.
+    The only change is the attention context: the encoder's fused dense map
+    at ALL grid positions (one token per (h, w, t), built from visible
+    tokens only — no leakage) instead of per-modality visible tokens. This
+    restores decode-time gathering and modality-specific querying while
+    keeping the latent-bottleneck encoder.
+    """
+
+    cross_attn = True
+
+    def _apply_cross_attn(
+        self,
+        x: dict[str, torch.Tensor],
+        timestamps: torch.Tensor,
+        patch_size: int,
+        input_res: int,
+        context: torch.Tensor,
+        context_positions: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """``Predictor.apply_attn`` with the dense map as attention context."""
+        if self.use_flash_attn:
+            raise NotImplementedError(
+                "PerceiverCrossPredictor supports only the SDPA path"
+            )
+        tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
+            self.split_tokens_masks_and_dims(x)
+        )
+        tokens_dict = self.composite_encodings(
+            tokens_only_dict, timestamps, patch_size, input_res
+        )
+        positions = self.build_rope_positions(
+            tokens_only_dict,
+            original_masks_dict,
+            patch_size,
+            input_res,
+            timestamps=timestamps,
+        )
+        tokens_dict.update(original_masks_dict)
+        all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+        (
+            tokens_to_decode,
+            unmasked_tokens,
+            tokens_to_decode_mask,
+            unmasked_tokens_mask,
+            indices,
+            _seqlens_decode,
+            _seqlens_unmasked,
+            max_length_of_tokens_to_decode,
+            max_length_of_unmasked_tokens,
+        ) = self.split_x_y(all_tokens, mask)
+        if positions is not None:
+            positions_to_decode, _ = self.split_x_y_positions(
+                positions,
+                indices,
+                max_length_of_tokens_to_decode,
+                max_length_of_unmasked_tokens,
+            )
+        else:
+            positions_to_decode = None
+
+        for blk in self.blocks:
+            tokens_to_decode = blk(
+                x=tokens_to_decode,
+                y=context,
+                attn_mask=None,  # every dense position is valid context
+                rope_positions=positions_to_decode,
+                rope_positions_y=context_positions,
+            )
+
+        combined = self.combine_x_y(
+            tokens_to_decode=tokens_to_decode,
+            unmasked_tokens=unmasked_tokens,
+            tokens_to_decode_mask=tokens_to_decode_mask,
+            unmasked_tokens_mask=unmasked_tokens_mask,
+            indices=indices,
+        )
+        tokens_per_modality_dict = self.split_and_expand_per_modality(
+            combined, modalities_to_dims_dict
+        )
+        tokens_per_modality_dict.update(original_masks_dict)
+        return tokens_per_modality_dict
+
+    def forward(
+        self,
+        x: TokensAndMasks,
+        timestamps: torch.Tensor,
+        patch_size: int,
+        input_res: int = BASE_GSD,
+        cls_token: torch.Tensor | None = None,
+        dense_map: torch.Tensor | None = None,
+        dense_map_positions: torch.Tensor | None = None,
+    ) -> TokensAndMasks:
+        """Decode masked-position queries against the fused dense map."""
+        if dense_map is None or dense_map_positions is None:
+            raise ValueError(
+                "PerceiverCrossPredictor requires dense_map and "
+                "dense_map_positions from a PerceiverEncoder"
+            )
+        context = self.encoder_to_decoder_embed(
+            self.input_norm(dense_map.flatten(1, 3))
+        )
+
+        decoder_embedded_dict = x.as_dict()
+        modalities_to_process = get_modalities_to_process(
+            x.modalities, self.supported_modality_names
+        )
+        for modality in modalities_to_process:
+            x_modality = self.encoder_to_decoder_embed(
+                self.input_norm(getattr(x, modality))
+            )
+            masked_name = x.get_masked_modality_name(modality)
+            decoder_embedded_dict[modality] = x_modality
+            decoder_embedded_dict[masked_name] = getattr(x, masked_name)
+        tokens_only_dict = self.add_masks(decoder_embedded_dict)
+        decoder_embedded_dict.update(tokens_only_dict)
+
+        tokens_and_masks = self._apply_cross_attn(
+            decoder_embedded_dict,
+            timestamps,
+            patch_size,
+            input_res,
+            context,
+            dense_map_positions,
+        )
+
+        output_dict: dict[str, torch.Tensor] = {}
+        for modality in modalities_to_process:
+            masked_name = x.get_masked_modality_name(modality)
+            modality_data = tokens_and_masks[modality]
+            num_band_sets = self.tokenization_config.get_num_bandsets(modality)
+            per_bandset_outputs = []
+            for idx in range(num_band_sets):
+                per_bandset = modality_data[..., idx, :]
+                per_bandset_outputs.append(self.to_output_embed(self.norm(per_bandset)))
+            output_dict[modality] = torch.stack(per_bandset_outputs, dim=-2)
+            output_dict[masked_name] = tokens_and_masks[masked_name]
+        return TokensAndMasks(**output_dict)
+
+
 @dataclass
 class PerceiverEncoderConfig(EncoderConfig):
     """Configuration for the PerceiverEncoder."""
@@ -658,6 +815,22 @@ class PerceiverEncoderConfig(EncoderConfig):
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"PerceiverEncoder kwargs: {kwargs}")
         return PerceiverEncoder(**kwargs)
+
+
+@dataclass
+class PerceiverCrossPredictorConfig(PredictorConfig):
+    """Configuration for the PerceiverCrossPredictor (baseline-depth default)."""
+
+    depth: int = 4
+
+    def build(self) -> "PerceiverCrossPredictor":
+        """Build the PerceiverCrossPredictor."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"PerceiverCrossPredictor kwargs: {kwargs}")
+        return PerceiverCrossPredictor(**kwargs)
 
 
 @dataclass

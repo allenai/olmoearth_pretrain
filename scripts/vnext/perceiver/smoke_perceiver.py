@@ -276,6 +276,49 @@ def check_class_latent() -> None:
     _check("cls: fast_pass exposes cls_token", "cls_token" in out_fp)
 
 
+def check_cross_predictor() -> None:
+    """xdec: baseline-style decoder over the dense map trains end-to-end."""
+    from olmoearth_pretrain.nn.perceiver import PerceiverCrossPredictor
+
+    torch.manual_seed(0)
+    encoder = _make_encoder()
+    predictor = PerceiverCrossPredictor(
+        supported_modalities=MODALITIES,
+        encoder_embedding_size=D,
+        decoder_embedding_size=D,
+        depth=2,
+        mlp_ratio=2.0,
+        num_heads=2,
+        max_sequence_length=12,
+        position_encoding="rope_3d_mixed",
+        rope_temporal_coordinate_scale=1.0 / 30.0,
+    )
+    encoder.train()
+    predictor.train()
+    sample = _make_sample()
+    out_dict = encoder.forward(sample, patch_size=PATCH)
+    latent, _, kwargs = unpack_encoder_output(out_dict)
+    decoded = predictor.forward(latent, sample.timestamps, patch_size=PATCH, **kwargs)
+    s2_bandsets = len(Modality.SENTINEL2_L2A.band_sets)
+    _check(
+        "xdec: output shape matches targets",
+        tuple(decoded.sentinel2_l2a.shape) == (2, 2, 2, 4, s2_bandsets, D),
+        f"got {tuple(decoded.sentinel2_l2a.shape)}",
+    )
+    decoded.sentinel2_l2a.float().pow(2).mean().backward()
+    q = predictor.blocks[0].attn.q.weight.grad
+    mt = predictor.mask_token.grad
+    _check(
+        "xdec: grads flow into decoder blocks and mask token",
+        q is not None and q.abs().sum() > 0 and mt is not None and mt.abs().sum() > 0,
+    )
+    _check(
+        "xdec: grads reach encoder read-out via dense context",
+        encoder.readout_blocks[0].attn.q.weight.grad is not None
+        and encoder.readout_blocks[0].attn.q.weight.grad.abs().sum() > 0,
+    )
+
+
 def check_frozen_target_path() -> None:
     """token_exit_cfg all zeros bypasses attention (frozen projection targets)."""
     torch.manual_seed(0)
@@ -325,6 +368,7 @@ def main() -> None:
         ("grad flow", check_grad_flow),
         ("skip path", check_skip_path),
         ("class latent", check_class_latent),
+        ("cross predictor", check_cross_predictor),
         ("frozen-target path", check_frozen_target_path),
         ("fast_pass eval", check_fast_pass_eval),
     ]
