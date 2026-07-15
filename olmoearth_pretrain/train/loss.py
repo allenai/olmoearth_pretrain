@@ -772,15 +772,24 @@ class ModalityPatchDiscriminationCentroidVec(
         # Iterative min-label propagation; near-duplicate clusters are dense,
         # so convergence is typically a handful of iterations.
         sentinel = num_tokens
+        range32 = range_tensor.to(torch.int32)
+        sentinel32 = torch.tensor(sentinel, dtype=torch.int32, device=count.device)
         labels = torch.where(
-            valid_mask, range_tensor.unsqueeze(0).expand(batch_size, -1), sentinel
+            valid_mask, range32.unsqueeze(0).expand(batch_size, -1), sentinel32
         )
         for _ in range(self.max_grouping_iters):
-            neighbor_labels = torch.where(adjacency, labels.unsqueeze(1), sentinel)
+            # hook: min over neighbors' labels
+            neighbor_labels = torch.where(adjacency, labels.unsqueeze(1), sentinel32)
             new_labels = torch.minimum(labels, neighbor_labels.min(dim=-1).values)
+            # pointer jumping (path compression): label <- label of my root;
+            # turns diameter-many sweeps into ~log(T) sweeps
+            safe = new_labels.clamp(max=num_tokens - 1).long()
+            new_labels = torch.minimum(new_labels, new_labels.gather(1, safe))
+            new_labels = torch.where(valid_mask, new_labels, sentinel32)
             if torch.equal(new_labels, labels):
                 break
             labels = new_labels
+        labels = labels.long()
 
         # --- centroids, indexed by group-root token id (columns 0..T-1) ---
         member = F.one_hot(labels.clamp(max=num_tokens - 1), num_tokens).to(
