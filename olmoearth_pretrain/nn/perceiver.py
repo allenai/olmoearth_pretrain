@@ -83,6 +83,8 @@ class PerceiverEncoder(Encoder):
         readout_skip_tokens: bool = False,
         readout_spatial_only: bool = False,
         num_class_latents: int = 0,
+        spawn_layer: int | None = None,
+        spawn_children: int = 8,
         **kwargs: Any,
     ) -> None:
         """Initialize the PerceiverEncoder.
@@ -118,6 +120,19 @@ class PerceiverEncoder(Encoder):
                 the contrastive (InfoNCE) loss. It also stays in the dense
                 read-out's K/V, so the token-level loss keeps training it
                 even after the instance loss saturates.
+            spawn_layer: If set, just before latent block ``spawn_layer``
+                each anchored latent PREDICTS ``spawn_children`` new child
+                queries: a content vector plus a free (t, row, col)
+                coordinate. Child coordinates are ``parent_anchor +
+                tanh(pred) * (sample_extent / 2)`` in the shared RoPE frame,
+                so a child can travel anywhere in the sample — the model
+                decides where to spend fine-grained queries. Children join
+                the latent set for all subsequent reads/blocks and the dense
+                read-out K/V; the anchored parents remain as a coverage
+                floor. Coordinate heads are zero-init with direction-coded
+                biases so children start on a jittered subgrid.
+            spawn_children: Number of child queries predicted per anchored
+                latent when ``spawn_layer`` is set.
             kwargs: Keyword args forwarded to ``Encoder``.
         """
         super().__init__(*args, **kwargs)
@@ -147,12 +162,19 @@ class PerceiverEncoder(Encoder):
         self.readout_skip_tokens = readout_skip_tokens
         self.readout_spatial_only = readout_spatial_only
         self.num_class_latents = num_class_latents
+        self.spawn_layer = spawn_layer
+        self.spawn_children = spawn_children
 
         depth = len(self.blocks)
         if num_reads > depth:
             raise ValueError(
                 f"num_reads ({num_reads}) cannot exceed encoder depth ({depth})"
             )
+        if spawn_layer is not None:
+            if not 1 <= spawn_layer < depth:
+                raise ValueError(f"spawn_layer ({spawn_layer}) must be in [1, {depth})")
+            if spawn_children < 1:
+                raise ValueError("spawn_children must be >= 1")
         # Read i happens just before latent block read_layers[i].
         self.read_layers = [round(i * depth / num_reads) for i in range(num_reads)]
 
@@ -191,6 +213,13 @@ class PerceiverEncoder(Encoder):
         month_tab = get_month_encoding_table(n_quarter)
         self.anchor_month_embed = nn.Embedding.from_pretrained(month_tab, freeze=True)
 
+        if spawn_layer is not None:
+            self.spawn_norm = nn.LayerNorm(self.embedding_size)
+            self.spawn_content = nn.Linear(
+                self.embedding_size, spawn_children * self.embedding_size
+            )
+            self.spawn_coord = nn.Linear(self.embedding_size, spawn_children * 3)
+
         self.latent_token = nn.Parameter(torch.zeros(self.embedding_size))
         self.readout_query_token = nn.Parameter(torch.zeros(self.embedding_size))
         if num_class_latents > 0:
@@ -203,6 +232,22 @@ class PerceiverEncoder(Encoder):
         # perceiver-style trunc-normal init for the learned token seeds.
         self.read_blocks.apply(self._init_weights)
         self.readout_blocks.apply(self._init_weights)
+        if spawn_layer is not None:
+            self.spawn_content.apply(self._init_weights)
+            # Zero-init the coordinate head so predicted offsets start at the
+            # bias; direction-coded biases (the 8 sign patterns of (t, row,
+            # col), cycled for K > 8) place children on a jittered subgrid
+            # around their parent at init: tanh(atanh(0.25)) * extent/2 =
+            # extent/8 per axis.
+            nn.init.zeros_(self.spawn_coord.weight)
+            dirs = torch.tensor(
+                [
+                    [1.0 if j >> b & 1 else -1.0 for b in range(3)]
+                    for j in range(spawn_children)
+                ]
+            )
+            with torch.no_grad():
+                self.spawn_coord.bias.copy_((math.atanh(0.25) * dirs).flatten())
         nn.init.trunc_normal_(self.latent_token, std=0.02, a=-2.0, b=2.0)
         nn.init.trunc_normal_(self.readout_query_token, std=0.02, a=-2.0, b=2.0)
         if num_class_latents > 0:
@@ -314,6 +359,46 @@ class PerceiverEncoder(Encoder):
         coords = coords.flatten(1, 3)  # [B, N, coord_dim]
         return content, coords
 
+    def _spawn_children(
+        self,
+        latents: torch.Tensor,
+        latent_pos: torch.Tensor,
+        positions: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Predict child queries (content + free coords) from each latent.
+
+        Child coordinate = parent anchor + tanh(pred) * (sample extent / 2),
+        per axis, in the shared RoPE frame — a child can move anywhere in the
+        sample. Children are appended to the latent set; class latents (if
+        any) do not spawn.
+
+        Returns:
+            (latents, latent_pos, child_pos): the augmented latent set, its
+            coordinates, and the child coordinates alone [B, M, K, 3] for
+            diagnostics.
+        """
+        n_cls = self.num_class_latents
+        parents = latents[:, n_cls:]
+        parent_pos = latent_pos[:, n_cls:]
+        b, m, d = parents.shape
+        k = self.spawn_children
+
+        h = self.spawn_norm(parents)
+        content = self.spawn_content(h).view(b, m, k, d)
+        coord_pred = self.spawn_coord(h).float().view(b, m, k, 3)
+        pos32 = positions.float()
+        travel = (pos32.amax(dim=1) - pos32.amin(dim=1)) / 2.0  # [B, 3]
+        child_pos = (
+            parent_pos.unsqueeze(2).float()
+            + torch.tanh(coord_pred) * travel[:, None, None, :]
+        )
+
+        latents = torch.cat([latents, content.flatten(1, 2)], dim=1)
+        latent_pos = torch.cat(
+            [latent_pos, child_pos.flatten(1, 2).to(latent_pos.dtype)], dim=1
+        )
+        return latents, latent_pos, child_pos
+
     def apply_attn(
         self,
         x: dict[str, torch.Tensor],
@@ -414,9 +499,14 @@ class PerceiverEncoder(Encoder):
                 dim=1,
             )
 
-        # Latent trunk with interleaved reads.
+        # Latent trunk with interleaved reads (and optional child spawning).
         read_i = 0
+        spawn_coords: torch.Tensor | None = None
         for i_blk, blk in enumerate(self.blocks):
+            if self.spawn_layer is not None and i_blk == self.spawn_layer:
+                latents, latent_pos, spawn_coords = self._spawn_children(
+                    latents, latent_pos, positions
+                )
             while read_i < len(self.read_layers) and self.read_layers[read_i] == i_blk:
                 latents = self.read_blocks[read_i](
                     x=latents,
@@ -481,6 +571,8 @@ class PerceiverEncoder(Encoder):
         }
         if cls_token is not None:
             aux["cls_token"] = cls_token
+        if spawn_coords is not None:
+            aux["spawn_coords"] = spawn_coords
 
         # Broadcast the fused dense map to each modality's token layout.
         # Static (T=1) modalities read the first temporal plane, matching the
@@ -548,6 +640,8 @@ class PerceiverEncoder(Encoder):
         cls_token = aux.get("cls_token")
         if cls_token is not None:
             output_dict["cls_token"] = cls_token
+        if "spawn_coords" in aux:
+            output_dict["spawn_coords"] = aux["spawn_coords"]
         if not fast_pass:
             # Extras flow to the decoder as kwargs via unpack_encoder_output.
             for key in ("dense_map", "dense_map_positions"):
@@ -625,11 +719,13 @@ class PerceiverPredictor(PredictorBase):
         cls_token: torch.Tensor | None = None,
         dense_map: torch.Tensor | None = None,
         dense_map_positions: torch.Tensor | None = None,
+        spawn_coords: torch.Tensor | None = None,
     ) -> TokensAndMasks:
         """Decode per-modality predictions from the fused dense map.
 
-        ``cls_token`` arrives via encoder-output decoder kwargs; currently
-        unused — reserved for conditioning the decode on the class latent.
+        ``cls_token`` and ``spawn_coords`` arrive via encoder-output decoder
+        kwargs; both currently unused here — ``spawn_coords`` is a
+        diagnostic output (child query coordinates).
         """
         available_modalities = x.modalities
         modalities_to_process = get_modalities_to_process(
@@ -764,6 +860,7 @@ class PerceiverCrossPredictor(Predictor):
         cls_token: torch.Tensor | None = None,
         dense_map: torch.Tensor | None = None,
         dense_map_positions: torch.Tensor | None = None,
+        spawn_coords: torch.Tensor | None = None,
     ) -> TokensAndMasks:
         """Decode masked-position queries against the fused dense map."""
         if dense_map is None or dense_map_positions is None:
@@ -823,6 +920,8 @@ class PerceiverEncoderConfig(EncoderConfig):
     readout_skip_tokens: bool = False
     readout_spatial_only: bool = False
     num_class_latents: int = 0
+    spawn_layer: int | None = None
+    spawn_children: int = 8
 
     def validate(self) -> None:
         """Validate the configuration."""
