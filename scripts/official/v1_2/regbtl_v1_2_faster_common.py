@@ -72,3 +72,28 @@ def build_faster_train_module_config(
     config.dp_config = DataParallelConfig(name=DataParallelType.ddp)
     config.autocast_precision = DType.bfloat16
     return config
+
+
+def build_wideread_regbtl_model_config(
+    common: CommonComponents, *, latent_self_attn: bool, register_dim: int
+) -> LatentMIMConfig:
+    """Register-bottleneck model whose bottleneck attention runs at ENCODER width.
+
+    ``register_attn_dim = embedding_size`` decouples the bottleneck's attention from
+    ``register_dim``: reads and latent self-attention run with the encoder's own head
+    shape (12 x 64 at base) and consume the K/V source at full encoder width, while the
+    register residual stream / outputs stay at ``register_dim`` -- which therefore
+    becomes PURELY the storage bottleneck. This resolves the narrow-register corner
+    found in the 2026-07 width sweep, where ``register_dim`` alone could not fund both
+    >=8 heads (throughput: 2/4-head runs trained at half speed) and 64-dim heads (RoPE
+    anchoring: 16/32-dim-head runs stagnated or degraded on spatial evals).
+
+    ``register_num_heads`` is deliberately left unset so the bottleneck inherits the
+    encoder's head count. Projection-only target included (all exits 0, no EMA).
+    """
+    config = build_regbtl_model_config(
+        common, latent_self_attn=latent_self_attn, register_dim=register_dim
+    )
+    config.encoder_config.register_attn_dim = config.encoder_config.embedding_size
+    config.projection_only_target = True
+    return config

@@ -36,6 +36,13 @@ NOIC_LSA_1FWD_FUSEDADAMW="scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_
 D128_FASTER="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_il_pdproj_noic_lsa_faster.py"
 D256_FASTER="scripts/official/v1_2/regbtl_v1_2_gdyn_d256_il_pdproj_noic_lsa_faster.py"
 D512_FASTER="scripts/official/v1_2/regbtl_v1_2_gdyn_d512_il_pdproj_noic_lsa_faster.py"
+# Width sweep with the bottleneck attention DECOUPLED to encoder width (register_attn_dim
+# =768, 12x64 heads, reads consume full-width K/V): register_dim is purely the storage
+# bottleneck. Supersedes the _faster head-count variants (2/4-head runs were 2x slow;
+# 16/32-dim-head runs degraded on spatial evals).
+D128_WIDEREAD="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_il_pdproj_noic_lsa_wideread.py"
+D256_WIDEREAD="scripts/official/v1_2/regbtl_v1_2_gdyn_d256_il_pdproj_noic_lsa_wideread.py"
+D512_WIDEREAD="scripts/official/v1_2/regbtl_v1_2_gdyn_d512_il_pdproj_noic_lsa_wideread.py"
 
 # python "$IC_LSA" launch "regbtl_v1_2_gdyn_d768_il_pdproj_ic_lsa" "$CLUSTER" \
 #     $LAUNCH_ARGS \
@@ -61,14 +68,26 @@ D512_FASTER="scripts/official/v1_2/regbtl_v1_2_gdyn_d512_il_pdproj_noic_lsa_fast
 #     $LAUNCH_ARGS \
 #     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D128_FASTER" launch "regbtl_v1_2_gdyn_d128_il_pdproj_noic_lsa_faster_v2" "$CLUSTER" \
+# python "$D128_FASTER" launch "regbtl_v1_2_gdyn_d128_il_pdproj_noic_lsa_faster_v2" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
+
+# python "$D256_FASTER" launch "regbtl_v1_2_gdyn_d256_il_pdproj_noic_lsa_faster_v2" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
+
+# python "$D512_FASTER" launch "regbtl_v1_2_gdyn_d512_il_pdproj_noic_lsa_faster_v2" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
+
+python "$D128_WIDEREAD" launch "regbtl_v1_2_gdyn_d128_wideread" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D256_FASTER" launch "regbtl_v1_2_gdyn_d256_il_pdproj_noic_lsa_faster_v2" "$CLUSTER" \
+python "$D256_WIDEREAD" launch "regbtl_v1_2_gdyn_d256_wideread" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D512_FASTER" launch "regbtl_v1_2_gdyn_d512_il_pdproj_noic_lsa_faster_v2" "$CLUSTER" \
+python "$D512_WIDEREAD" launch "regbtl_v1_2_gdyn_d512_wideread" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"

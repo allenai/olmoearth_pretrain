@@ -1514,6 +1514,115 @@ def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
         assert proj.weight.grad is not None
 
 
+def test_encoder_register_bottleneck_decoupled_attn_dim(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """register_attn_dim decouples the bottleneck attention width from register_dim.
+
+    The read + latent blocks run attention internally at attn_dim (here the encoder
+    width) while the register stream stays at register_dim; the K/V down-projections
+    become Identity so reads consume the encoder tokens at full width.
+    """
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    embedding_size, register_dim, latent_depth, num_heads = 16, 8, 4, 2
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=embedding_size,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=num_heads,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=4,
+        drop_path=0.0,
+        position_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=0,
+        register_dim=register_dim,
+        register_interleave=True,
+        register_latent_depth=latent_depth,
+        register_per_depth_read_proj=True,
+        register_attn_dim=embedding_size,
+    )
+    bottleneck = encoder.register_bottleneck
+    assert bottleneck is not None
+    assert bottleneck.attn_dim == embedding_size
+    # K/V down-projections are dropped (Identity); the per-depth norms remain.
+    for proj in bottleneck.kv_projs:
+        assert isinstance(proj, torch.nn.Identity)
+    for norm in bottleneck.input_norms:
+        assert norm.weight.shape == (embedding_size,)
+    # Reads: q register_dim -> attn_dim, k/v encoder width -> attn_dim, out -> register_dim.
+    read_attn = bottleneck.read_blocks[0].attn
+    assert read_attn.num_heads == num_heads
+    assert read_attn.head_dim == embedding_size // num_heads
+    assert read_attn.q.weight.shape == (embedding_size, register_dim)
+    assert read_attn.k.weight.shape == (embedding_size, embedding_size)
+    assert read_attn.proj.weight.shape == (register_dim, embedding_size)
+    # Latent self-attention: q/k/v register_dim -> attn_dim, out -> register_dim.
+    latent_attn = bottleneck.latent_blocks[0].attn
+    assert latent_attn.k.weight.shape == (embedding_size, register_dim)
+    assert latent_attn.proj.weight.shape == (register_dim, embedding_size)
+
+    B, H, W = 2, 8, 8
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, 2, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, 2, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    patch_size = 2
+    output_dict = encoder.forward(sample, patch_size=patch_size, input_res=10)
+    grid = (H // patch_size, W // patch_size)
+    assert output_dict["registers"].shape == (B, grid[0] * grid[1], register_dim)
+    output_dict["registers"].sum().backward()
+    assert read_attn.q.weight.grad is not None
+    assert read_attn.k.weight.grad is not None
+    assert latent_attn.q.weight.grad is not None
+
+
+def test_encoder_register_bottleneck_attn_dim_default_unchanged(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Default register_attn_dim=None keeps the classic tied-width parameter set."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    embedding_size, register_dim = 16, 8
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=embedding_size,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=4,
+        drop_path=0.0,
+        position_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=0,
+        register_dim=register_dim,
+        register_interleave=True,
+        register_latent_depth=4,
+        register_per_depth_read_proj=True,
+    )
+    bottleneck = encoder.register_bottleneck
+    assert bottleneck is not None
+    assert bottleneck.attn_dim is None
+    for proj in bottleneck.kv_projs:
+        assert proj.weight.shape == (register_dim, embedding_size)
+    read_attn = bottleneck.read_blocks[0].attn
+    assert read_attn.q.weight.shape == (register_dim, register_dim)
+    assert read_attn.proj.weight.shape == (register_dim, register_dim)
+
+
 @pytest.mark.parametrize("fused_read", ["uniform", "learned"])
 def test_encoder_register_bottleneck_fused_read(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],

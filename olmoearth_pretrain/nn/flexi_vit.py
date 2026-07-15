@@ -1535,6 +1535,7 @@ class SpatialRegisterBottleneck(nn.Module):
         learned_read_weighting: bool = False,
         fused_read: str | None = None,
         latent_self_attn: bool = True,
+        attn_dim: int | None = None,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1618,6 +1619,21 @@ class SpatialRegisterBottleneck(nn.Module):
                 register-to-register mixing. The read blocks (and their count) are
                 unchanged, so this cleanly isolates the latent self-attention's
                 contribution. Backwards compatible (default True).
+            attn_dim: If set, DECOUPLE the attention width from ``register_dim``: the
+                read and latent blocks run their attention internally at ``attn_dim``
+                (typically the encoder width, giving encoder-shaped heads, e.g. 12x64)
+                while the register residual stream, MLPs, and outputs stay at
+                ``register_dim``. The read K/V source is consumed at the FULL encoder
+                width -- the ``kv_proj`` down-projections are dropped (the per-depth /
+                shared ``input_norm`` LayerNorms remain, at encoder width) and the read
+                blocks' internal K/V projections map ``encoder_embedding_size ->
+                attn_dim`` directly, so read *selection* sees uncompressed token
+                content. Rationale: ``register_dim`` alone cannot fund both routing
+                diversity (head count) and RoPE anchoring (head dim) at narrow widths
+                -- observed as 2x slowdowns at <8 heads and degrading spatial evals at
+                head_dim <64. ``None`` (default) keeps the classic tied-width blocks
+                (backwards compatible). Incompatible with ``fused_read`` (the fusion
+                projections are register_dim-specific).
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1640,7 +1656,13 @@ class SpatialRegisterBottleneck(nn.Module):
                     "fused_read replaces the per-depth read projections; it cannot be "
                     "combined with per_depth_read_proj"
                 )
+            if attn_dim is not None:
+                raise ValueError(
+                    "attn_dim (decoupled attention width) is not supported with "
+                    "fused_read (the fusion projections are register_dim-specific)"
+                )
         self.fused_read = fused_read
+        self.attn_dim = attn_dim
         # Per-depth contribution norms from the most recent fused read, for logging.
         self.last_read_source_norms: Tensor | None = None
         self.interleave = interleave or (self.multi_depth and fused_read is None)
@@ -1720,13 +1742,20 @@ class SpatialRegisterBottleneck(nn.Module):
                 ]
             )
         elif self.per_depth_read_proj:
-            # One norm + projection per read block.
+            # One norm + projection per read block. With a decoupled attn_dim the K/V
+            # source stays at encoder width (the read blocks' internal K/V projections
+            # consume it directly), so the down-projection becomes an Identity and only
+            # the per-depth norms remain.
             self.input_norms = nn.ModuleList(
                 [nn.LayerNorm(encoder_embedding_size) for _ in range(num_read_blocks)]
             )
             self.kv_projs = nn.ModuleList(
                 [
-                    nn.Linear(encoder_embedding_size, register_dim)
+                    (
+                        nn.Identity()
+                        if attn_dim is not None
+                        else nn.Linear(encoder_embedding_size, register_dim)
+                    )
                     for _ in range(num_read_blocks)
                 ]
             )
@@ -1738,7 +1767,11 @@ class SpatialRegisterBottleneck(nn.Module):
                     encoder_embedding_size, elementwise_affine=False
                 )
             self.input_norm = nn.LayerNorm(encoder_embedding_size)
-            self.kv_proj = nn.Linear(encoder_embedding_size, register_dim)
+            self.kv_proj: nn.Module = (
+                nn.Identity()
+                if attn_dim is not None
+                else nn.Linear(encoder_embedding_size, register_dim)
+            )
         self.read_blocks = nn.ModuleList(
             [
                 Block(
@@ -1755,6 +1788,12 @@ class SpatialRegisterBottleneck(nn.Module):
                         else PositionEncoding.ABSOLUTE
                     ),
                     rope_base=rope_base,
+                    attn_dim=attn_dim,
+                    # Decoupled mode consumes the K/V source at full encoder width
+                    # (input_norm already normalizes it; Block does not norm ``y``).
+                    kv_in_dim=(
+                        encoder_embedding_size if attn_dim is not None else None
+                    ),
                 )
                 for _ in range(num_read_blocks)
             ]
@@ -1775,6 +1814,7 @@ class SpatialRegisterBottleneck(nn.Module):
                         else PositionEncoding.ABSOLUTE
                     ),
                     rope_base=rope_base,
+                    attn_dim=attn_dim,
                 )
                 for _ in range(num_latent_blocks)
             ]
@@ -2084,6 +2124,7 @@ class Encoder(FlexiVitBase):
         register_learned_read_weighting: bool = False,
         register_fused_read: str | None = None,
         register_latent_self_attn: bool = True,
+        register_attn_dim: int | None = None,
         register_contrastive_source: str = "registers",
     ):
         """Initialize the encoder.
@@ -2164,6 +2205,11 @@ class Encoder(FlexiVitBase):
                 over the register grid.
             register_num_heads: Number of attention heads in the bottleneck blocks.
                 Defaults to ``num_heads`` when None.
+            register_attn_dim: If set, the bottleneck's read + latent attention runs
+                internally at this width (e.g. ``embedding_size`` for encoder-shaped
+                heads) while the register stream stays at ``register_dim``; the read
+                K/V source is consumed at full encoder width (no down-projection).
+                See :class:`SpatialRegisterBottleneck`. Defaults to None (tied widths).
             register_interleave: If True, interleave the cross-attention reads with the
                 latent self-attention (``[read -> self] x register_latent_depth``) so the
                 registers re-query the input after each refinement, instead of reading once
@@ -2324,6 +2370,7 @@ class Encoder(FlexiVitBase):
                 learned_read_weighting=register_learned_read_weighting,
                 fused_read=register_fused_read,
                 latent_self_attn=register_latent_self_attn,
+                attn_dim=register_attn_dim,
             )
 
         if register_contrastive_source not in ("registers", "encoder_tokens"):
@@ -3610,6 +3657,13 @@ class EncoderConfig(Config):
     # (cross-attention reads only, no register-to-register mixing). The read count is
     # unchanged. Default True keeps the latent transformer (backwards compatible).
     register_latent_self_attn: bool = True
+    # If set, decouple the bottleneck's attention width from register_dim: the read +
+    # latent blocks run attention internally at this width (typically embedding_size,
+    # giving encoder-shaped heads, e.g. 12x64) while the register residual stream stays
+    # at register_dim, and reads consume the K/V source at full encoder width. Fixes the
+    # narrow-register corner where register_dim cannot fund both >=8 heads (throughput)
+    # and >=64-dim heads (RoPE anchoring). None (default) keeps tied widths.
+    register_attn_dim: int | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -3694,18 +3748,25 @@ class EncoderConfig(Config):
                 if self.register_num_heads is not None
                 else self.num_heads
             )
-            if register_dim % register_heads != 0:
+            # With a decoupled register_attn_dim the heads live at that width, not at
+            # register_dim (which only sizes the residual stream).
+            attn_width = (
+                self.register_attn_dim
+                if self.register_attn_dim is not None
+                else register_dim
+            )
+            if attn_width % register_heads != 0:
                 raise ValueError(
-                    f"register_dim ({register_dim}) must be divisible by "
+                    f"register attention width ({attn_width}) must be divisible by "
                     f"register_num_heads ({register_heads})"
                 )
             if (
                 PositionEncoding.is_rope(self.position_encoding)
-                and (register_dim // register_heads) % 4 != 0
+                and (attn_width // register_heads) % 4 != 0
             ):
                 raise ValueError(
                     "2D RoPE requires register head_dim divisible by 4, got "
-                    f"{register_dim // register_heads}"
+                    f"{attn_width // register_heads}"
                 )
             if self.register_read_layers is not None:
                 if sorted(set(self.register_read_layers)) != list(
