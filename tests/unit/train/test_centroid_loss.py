@@ -155,3 +155,23 @@ def test_centering_separates_shared_mean_component() -> None:
     # centered: two groups ({d1-ish}, {d2-ish}) -> real contrastive signal
     loss_c = centered.compute(_tam(preds, masks), _tam(t, masks))
     assert torch.isfinite(loss_c) and loss_c.item() > 0.0
+
+
+def test_raw_positive_mode() -> None:
+    """Positive = own raw target; negatives = other groups' centroids."""
+    torch.manual_seed(0)
+    preds, targets, masks, d = _make_case()
+    loss_fn = ModalityPatchDiscriminationCentroidVec(
+        tau=0.1, group_threshold=0.95, center_targets=False, positive_mode="raw"
+    )
+    loss = loss_fn.compute(_tam(preds, masks), _tam(targets, masks))
+
+    t = targets[0]
+    centroids = torch.stack([F.normalize((t[0] + t[1]) / 2, dim=-1), t[2], t[3]])
+    labels = torch.tensor([0, 0, 1, 2])
+    scores = preds[0] @ centroids.T
+    # positive logits replaced by pred_i . t_i
+    for i in range(4):
+        scores[i, labels[i]] = preds[0, i] @ t[i]
+    expected = F.cross_entropy(scores / 0.1, labels) * 0.2
+    assert math.isclose(loss.item(), expected.item(), rel_tol=1e-5)

@@ -10,7 +10,7 @@ SAVE=/weka/dfive-default/helios/checkpoints/joer/$NAME
 CACHE=/weka/dfive-default/helios/checkpoints/joer/smoke-dataloader-cache
 rm -rf "$SAVE"
 CUDA_VISIBLE_DEVICES=${SMOKE_GPU:-0} PYTHONPATH=. \
-  /root/dev/.venv/bin/torchrun --nproc_per_node=1 "$SCRIPT" train "$NAME" local \
+  /root/dev/.venv/bin/torchrun --nproc_per_node=1 --master_port=$((20000 + RANDOM % 20000)) "$SCRIPT" train "$NAME" local \
   --trainer.save_folder="$SAVE" --trainer.work_dir="$SAVE" \
   --trainer.checkpointer.work_dir="$SAVE" \
   --data_loader.work_dir="$CACHE" \

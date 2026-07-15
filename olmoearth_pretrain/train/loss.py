@@ -698,6 +698,7 @@ class ModalityPatchDiscriminationCentroidVec(
         group_threshold: float = 0.90,
         max_grouping_iters: int = 32,
         center_targets: bool = True,
+        positive_mode: str = "centroid",
     ) -> None:
         """Initialize.
 
@@ -719,6 +720,13 @@ class ModalityPatchDiscriminationCentroidVec(
         self.group_threshold = group_threshold
         self.max_grouping_iters = max_grouping_iters
         self.center_targets = center_targets
+        if positive_mode not in ("centroid", "raw"):
+            raise ValueError(f"positive_mode must be centroid|raw, got {positive_mode}")
+        # "centroid": positive = own group's centroid (denoised representative).
+        # "raw": positive = own (centered, normalized) target; negatives are
+        # still the OTHER groups' centroids — keeps sub-threshold detail in
+        # the positive direction while compressing the negative bank.
+        self.positive_mode = positive_mode
 
     def _compute_modality_loss_parallel(
         self,
@@ -786,24 +794,36 @@ class ModalityPatchDiscriminationCentroidVec(
             safe = new_labels.clamp(max=num_tokens - 1).long()
             new_labels = torch.minimum(new_labels, new_labels.gather(1, safe))
             new_labels = torch.where(valid_mask, new_labels, sentinel32)
-            if torch.equal(new_labels, labels):
+            # host-sync convergence check only every 2nd sweep
+            if _ % 2 == 1 and torch.equal(new_labels, labels):
+                labels = new_labels
                 break
             labels = new_labels
         labels = labels.long()
 
         # --- centroids, indexed by group-root token id (columns 0..T-1) ---
-        member = F.one_hot(labels.clamp(max=num_tokens - 1), num_tokens).to(
-            targets.dtype
+        idx = labels.clamp(max=num_tokens - 1)
+        valid_f = valid_mask.to(targets.dtype)
+        centroid_sum = torch.zeros_like(targets)
+        centroid_sum.scatter_add_(
+            1,
+            idx.unsqueeze(-1).expand(-1, -1, dim),
+            targets * valid_f.unsqueeze(-1),
         )
-        member = member * valid_mask.unsqueeze(-1).to(targets.dtype)
-        group_sizes = member.sum(dim=1)  # (batch, T)
+        group_sizes = torch.zeros(
+            batch_size, num_tokens, device=targets.device, dtype=targets.dtype
+        )
+        group_sizes.scatter_add_(1, idx, valid_f)
         group_valid = group_sizes > 0
-        centroids = F.normalize(torch.bmm(member.transpose(1, 2), targets), p=2, dim=-1)
+        centroids = F.normalize(centroid_sum, p=2, dim=-1)
 
         scores = torch.bmm(preds, centroids.transpose(1, 2)) / self.tau
         scores = scores.masked_fill(
             ~group_valid.unsqueeze(1), -torch.finfo(scores.dtype).max
         )
+        if self.positive_mode == "raw":
+            pos_logits = (preds * targets).sum(dim=-1) / self.tau  # (batch, T)
+            scores = scores.scatter(2, idx.unsqueeze(-1), pos_logits.unsqueeze(-1))
         # Zero entire invalid prediction rows AFTER column masking so they
         # yield finite CE that is then weighted out.
         scores = scores.masked_fill(~valid_mask.unsqueeze(2), 0.0)
