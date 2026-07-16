@@ -43,6 +43,15 @@ D512_FASTER="scripts/official/v1_2/regbtl_v1_2_gdyn_d512_il_pdproj_noic_lsa_fast
 D128_WIDEREAD="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_il_pdproj_noic_lsa_wideread.py"
 D256_WIDEREAD="scripts/official/v1_2/regbtl_v1_2_gdyn_d256_il_pdproj_noic_lsa_wideread.py"
 D512_WIDEREAD="scripts/official/v1_2/regbtl_v1_2_gdyn_d512_il_pdproj_noic_lsa_wideread.py"
+# Register-grid supervision (SupervisionHead, register_supervision=True) at low weight
+# (0.01, classification/BCE scaled a further 10x down) on full width (d768) and d128
+# wideread. regsup supervises the decode-only map modalities from the register grid;
+# regsup_latlon additionally regresses the sample's location (unit-sphere xyz) from
+# the mean-pooled registers -- location as a supervised target, never a model input.
+D768_REGSUP="scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_regsup.py"
+D768_REGSUP_LATLON="scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_regsup_latlon.py"
+D128_REGSUP="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_il_pdproj_noic_lsa_wideread_regsup.py"
+D128_REGSUP_LATLON="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_il_pdproj_noic_lsa_wideread_regsup_latlon.py"
 
 # python "$IC_LSA" launch "regbtl_v1_2_gdyn_d768_il_pdproj_ic_lsa" "$CLUSTER" \
 #     $LAUNCH_ARGS \
@@ -80,14 +89,30 @@ D512_WIDEREAD="scripts/official/v1_2/regbtl_v1_2_gdyn_d512_il_pdproj_noic_lsa_wi
 #     $LAUNCH_ARGS \
 #     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D128_WIDEREAD" launch "regbtl_v1_2_gdyn_d128_wideread" "$CLUSTER" \
+# python "$D128_WIDEREAD" launch "regbtl_v1_2_gdyn_d128_wideread" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
+
+# python "$D256_WIDEREAD" launch "regbtl_v1_2_gdyn_d256_wideread" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
+
+# python "$D512_WIDEREAD" launch "regbtl_v1_2_gdyn_d512_wideread" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
+
+python "$D768_REGSUP" launch "regbtl_v1_2_gdyn_d768_regsup" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D256_WIDEREAD" launch "regbtl_v1_2_gdyn_d256_wideread" "$CLUSTER" \
+python "$D768_REGSUP_LATLON" launch "regbtl_v1_2_gdyn_d768_regsup_latlon" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D512_WIDEREAD" launch "regbtl_v1_2_gdyn_d512_wideread" "$CLUSTER" \
+python "$D128_REGSUP" launch "regbtl_v1_2_gdyn_d128_wideread_regsup" "$CLUSTER" \
+    $LAUNCH_ARGS \
+    --trainer.callbacks.wandb.project="$PROJECT"
+
+python "$D128_REGSUP_LATLON" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_latlon" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"

@@ -9,6 +9,12 @@ the predictions are *downsampled* to match the target -- never upsampled.
 
 Operates on decoder output to avoid pressuring the encoder to encode spatial
 details at the expense of global semantic features.
+
+The ``latlon`` modality is a special case: the sample's (lat, lon) is regressed
+as cartesian coordinates on the unit sphere (``LATLON_TARGET_DIM = 3``) from the
+pooled features, so the target has no dateline discontinuity or pole degeneracy.
+Since latlon is never a decoder modality, it is only supervisable with
+``register_supervision=True`` (the non-spatial register path mean-pools the grid).
 """
 
 from __future__ import annotations
@@ -29,6 +35,9 @@ from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 
 logger = logging.getLogger(__name__)
+
+# The latlon supervision target is a point on the unit sphere: (x, y, z).
+LATLON_TARGET_DIM = 3
 
 
 class SupervisionTaskType(StrEnum):
@@ -159,6 +168,16 @@ class SupervisionHead(nn.Module):
         self._non_spatial_modalities: set[str] = set()
         self.heads = nn.ModuleDict()
         for name, cfg in modality_configs.items():
+            if name == Modality.LATLON.name and (
+                cfg.task_type != SupervisionTaskType.REGRESSION
+                or cfg.num_output_channels != LATLON_TARGET_DIM
+            ):
+                raise ValueError(
+                    "latlon supervision must be a regression onto unit-sphere xyz "
+                    f"(num_output_channels={LATLON_TARGET_DIM}), got "
+                    f"task_type={cfg.task_type} num_output_channels="
+                    f"{cfg.num_output_channels}"
+                )
             modality_spec = Modality.get(name)
             if modality_spec.is_spatial:
                 # TODO: the max_patch_size^2 unfold is a holdover from decoder-token
@@ -324,6 +343,14 @@ def _compute_per_modality_losses(
             per_modality_losses[name] = (0 * pred.sum()).to(dtype)
             continue
 
+        # latlon targets are [B, 2] (lat, lon) but the prediction is [B, 3]
+        # unit-sphere xyz, so the generic shape-matched paths below don't apply.
+        if name == Modality.LATLON.name:
+            per_modality_losses[name] = _latlon_regression_loss(
+                pred, raw_target, regression_loss_type=cfg.regression_loss_type
+            )
+            continue
+
         valid_mask = _build_valid_mask(raw_target)
 
         if not valid_mask.any():
@@ -388,6 +415,42 @@ def compute_supervision_loss(
 def _build_valid_mask(raw_target: Tensor) -> Tensor:
     """Bool mask that is True where all bands are non-missing [B, H, W]."""
     return (raw_target != MISSING_VALUE).all(dim=-1)
+
+
+def _latlon_unit_xyz_target(raw_latlon: Tensor) -> Tensor:
+    """Convert normalized (lat, lon) [B, 2] to unit-sphere xyz [B, 3].
+
+    The dataloader normalizes latlon with the predefined min/max config
+    (norm_configs/predefined.json: lat [-90, 90] -> [0, 1], lon [-180, 180] ->
+    [0, 1]); undo that, then map to cartesian coordinates on the unit sphere.
+    xyz is bounded in [-1, 1] and, unlike raw lat/lon, has no +-180 dateline
+    discontinuity or pole degeneracy, so it is well-scaled for MSE/L1.
+    """
+    lat = torch.deg2rad(raw_latlon[..., 0].float() * 180.0 - 90.0)
+    lon = torch.deg2rad(raw_latlon[..., 1].float() * 360.0 - 180.0)
+    cos_lat = torch.cos(lat)
+    return torch.stack(
+        (cos_lat * torch.cos(lon), cos_lat * torch.sin(lon), torch.sin(lat)),
+        dim=-1,
+    )
+
+
+def _latlon_regression_loss(
+    pred: Tensor,
+    raw_latlon: Tensor,
+    regression_loss_type: str = "mse",
+) -> Tensor:
+    """Regression loss between predicted [B, 3] xyz and the sample's location.
+
+    Samples whose latlon is missing-valued are excluded; if none are valid the
+    loss is ``0 * pred.sum()`` so DDP/FSDP still see gradients for the head.
+    """
+    valid = (raw_latlon != MISSING_VALUE).all(dim=-1)  # [B]
+    if not valid.any():
+        return (0 * pred.sum()).to(pred.dtype)
+    target = _latlon_unit_xyz_target(raw_latlon[valid])
+    loss_fn = F.l1_loss if regression_loss_type == "l1" else F.mse_loss
+    return loss_fn(pred[valid].float(), target).to(pred.dtype)
 
 
 def _classification_loss(

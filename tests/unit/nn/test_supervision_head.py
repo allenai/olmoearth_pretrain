@@ -7,11 +7,14 @@ from olmoearth_pretrain.data.constants import MISSING_VALUE
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.supervision_head import (
+    LATLON_TARGET_DIM,
     SupervisionHead,
     SupervisionHeadConfig,
     SupervisionModalityConfig,
     SupervisionTaskType,
     _build_valid_mask,
+    _latlon_regression_loss,
+    _latlon_unit_xyz_target,
     compute_supervision_loss,
 )
 
@@ -202,7 +205,7 @@ class TestSupervisionHead:
         cfg = {
             "latlon": SupervisionModalityConfig(
                 task_type=SupervisionTaskType.REGRESSION,
-                num_output_channels=2,
+                num_output_channels=LATLON_TARGET_DIM,
             ),
         }
         head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
@@ -214,14 +217,14 @@ class TestSupervisionHead:
         batch = MaskedOlmoEarthSample(timestamps=timestamps, latlon=torch.rand(B, 2))
         preds = head(decoded, batch)
         assert "latlon" in preds
-        assert preds["latlon"].shape == (B, 2)
+        assert preds["latlon"].shape == (B, LATLON_TARGET_DIM)
 
     def test_non_spatial_missing_tokens(self) -> None:
         """Non-spatial head runs with dummy zeros when tokens are absent (FSDP)."""
         cfg = {
             "latlon": SupervisionModalityConfig(
                 task_type=SupervisionTaskType.REGRESSION,
-                num_output_channels=2,
+                num_output_channels=LATLON_TARGET_DIM,
             ),
         }
         head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
@@ -234,6 +237,80 @@ class TestSupervisionHead:
         preds = head(decoded, batch)
         assert "latlon" in preds
         assert preds["latlon"].requires_grad
+
+
+class TestLatlonSupervision:
+    """Test the latlon unit-sphere xyz target conversion and loss."""
+
+    def _normalize(self, lat: float, lon: float) -> list[float]:
+        """Apply the predefined latlon normalization (degrees -> [0, 1])."""
+        return [(lat + 90.0) / 180.0, (lon + 180.0) / 360.0]
+
+    def test_unit_xyz_target_matches_trig(self) -> None:
+        """Normalized (lat, lon) converts to the expected unit-sphere point."""
+        import math
+
+        cases = [(0.0, 0.0), (90.0, 0.0), (-45.0, 0.0), (47.6, -122.3)]
+        raw = torch.tensor([self._normalize(lat, lon) for lat, lon in cases])
+        xyz = _latlon_unit_xyz_target(raw)
+        for (lat, lon), got in zip(cases, xyz):
+            la, lo = math.radians(lat), math.radians(lon)
+            expected = torch.tensor(
+                [
+                    math.cos(la) * math.cos(lo),
+                    math.cos(la) * math.sin(lo),
+                    math.sin(la),
+                ]
+            )
+            assert torch.allclose(got, expected, atol=1e-5)
+        assert torch.allclose(xyz.norm(dim=-1), torch.ones(len(cases)), atol=1e-5)
+
+    def test_unit_xyz_target_no_dateline_discontinuity(self) -> None:
+        """Lon = +180 and lon = -180 map to the same point on the sphere."""
+        raw = torch.tensor(
+            [self._normalize(10.0, 180.0), self._normalize(10.0, -180.0)]
+        )
+        xyz = _latlon_unit_xyz_target(raw)
+        assert torch.allclose(xyz[0], xyz[1], atol=1e-5)
+
+    def test_loss_zero_for_perfect_prediction(self) -> None:
+        """Predicting the exact xyz target gives zero loss."""
+        raw = torch.rand(B, 2)
+        pred = _latlon_unit_xyz_target(raw)
+        assert _latlon_regression_loss(pred, raw).item() == pytest.approx(0.0)
+
+    def test_loss_excludes_missing_rows(self) -> None:
+        """Missing-valued latlon rows do not contribute to the loss."""
+        raw = torch.rand(B, 2)
+        pred = _latlon_unit_xyz_target(raw)
+        raw[0] = MISSING_VALUE
+        pred[0] = 99.0  # garbage on the missing row must not matter
+        assert _latlon_regression_loss(pred, raw).item() == pytest.approx(0.0)
+
+    def test_loss_all_missing_keeps_grad_path(self) -> None:
+        """All-missing latlon yields zero loss that still touches the prediction."""
+        pred = torch.randn(B, LATLON_TARGET_DIM, requires_grad=True)
+        raw = torch.full((B, 2), float(MISSING_VALUE))
+        loss = _latlon_regression_loss(pred, raw)
+        assert loss.item() == 0.0
+        assert loss.requires_grad
+
+    def test_head_rejects_wrong_latlon_config(self) -> None:
+        """Latlon must be a 3-channel regression head."""
+        for bad in (
+            SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION, num_output_channels=2
+            ),
+            SupervisionModalityConfig(
+                task_type=SupervisionTaskType.CLASSIFICATION,
+                num_output_channels=LATLON_TARGET_DIM,
+                class_values=[0.0, 1.0],
+            ),
+        ):
+            with pytest.raises(ValueError, match="unit-sphere"):
+                SupervisionHead(
+                    {"latlon": bad}, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
+                )
 
 
 class TestBuildValidMask:
@@ -330,12 +407,12 @@ class TestComputeSupervisionLoss:
         cfg = {
             "latlon": SupervisionModalityConfig(
                 task_type=SupervisionTaskType.REGRESSION,
-                num_output_channels=2,
+                num_output_channels=LATLON_TARGET_DIM,
                 weight=0.3,
             ),
         }
         head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
-        pred = torch.randn(B, 2)
+        pred = torch.randn(B, LATLON_TARGET_DIM)
         timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
         batch = MaskedOlmoEarthSample(timestamps=timestamps, latlon=torch.rand(B, 2))
         total_loss, per_mod = compute_supervision_loss({"latlon": pred}, batch, head)
@@ -426,12 +503,12 @@ class TestSupervisionHeadConfig:
             modality_configs={
                 "latlon": SupervisionModalityConfig(
                     task_type=SupervisionTaskType.REGRESSION,
-                    num_output_channels=2,
+                    num_output_channels=LATLON_TARGET_DIM,
                 ),
             }
         )
         head = config.build(embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
-        assert head.heads["latlon"].out_features == 2
+        assert head.heads["latlon"].out_features == LATLON_TARGET_DIM
         assert "latlon" in head._non_spatial_modalities
 
     def test_classification_requires_class_values(self) -> None:
