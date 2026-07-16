@@ -236,6 +236,37 @@ python -m olmoearth_pretrain.dataset_creation.scripts.sentinel2_l1c.launch_jobs 
 python -m olmoearth_pretrain.dataset_creation.scripts.sentinel2_l1c.launch_jobs --ds_path $GCS_DATASET_PATH --image us-west1-docker.pkg.dev/GCP_PROJECT/olmoearth/olmoearth-sentinel2-l1c --project GCP_PROJECT --region us-west1 --workers 128
 ```
 
+## Predicted WorldCover (time-aligned land cover)
+
+The `worldcover` modality above uses the static ESA WorldCover 2021 map regardless of a
+sample's year. The `worldcover_pred` modality instead runs a Sentinel-2 -> land-cover
+segmentation model on each window's own monthly S2 stack, producing a land-cover map
+aligned with the sample's time range.
+
+Prerequisite: a trained checkpoint for `data/worldcover_model/model.yaml` (train with
+`rslearn model fit --config data/worldcover_model/model.yaml` on the labeled worldcover
+dataset). Prediction reuses the monthly Sentinel-2 layers already materialized in
+`$DATASET_PATH` (see the Sentinel-2 L2A step above), so no extra materialization is
+needed.
+
+Run prediction over the pretraining windows. The 12 monthly layers are fed as 12 inputs
+(only `mo01` is `required`; the rest are `required: false`) and combined with a
+`Concatenate` transform, so windows missing a month or two still get a prediction. The
+result is written to the `output` layer, whose schema is defined inline in the model
+config:
+
+```
+rslearn model predict --config data/worldcover_model/config_predict.yaml --data.init_args.path $DATASET_PATH
+```
+
+The `worldcover_pred` converter and metadata-summary commands appear in the sections
+below (grouped with the modalities not used in the original final dataset). To train on
+it, include `worldcover_pred` in the H5 conversion `--supported_modality_names`, and add
+`worldcover_pred`/`worldcover_pred_onehot` to a new experiment's `training_modalities`
+(and to `ONLY_DECODE_MODALITIES`). Note the existing `scripts/official/v1_2/base.py` is
+pinned to a prebuilt H5 dataset that does not contain `worldcover_pred`, so it is not
+modified here.
+
 ## Convert Data to OlmoEarth Format
 
 Now convert the data from the rslearn dataset to OlmoEarth format.
@@ -260,6 +291,8 @@ python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.gse --ds_path
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.naip --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.sentinel2 --ds_path $GCS_DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.worldpop --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
+# worldcover_pred requires running `rslearn model predict` first (see "Predicted WorldCover").
+python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.worldcover_pred --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 ```
 
 The conversions yield individual metadata CSV files for each window. Concatenate them
@@ -290,6 +323,7 @@ python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality naip
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality sentinel2 --time_span two_week
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality sentinel2 --time_span year
+python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality worldcover_pred
 ```
 
 We use a rasterized version of the OpenStreetMap vector data for pre-training, produced
