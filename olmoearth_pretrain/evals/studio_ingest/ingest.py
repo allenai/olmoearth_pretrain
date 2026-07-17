@@ -68,7 +68,7 @@ from olmoearth_pretrain.evals.studio_ingest.schema import (
     rslearn_task_type_to_olmoearth_task_type,
     rslearn_to_olmoearth,
 )
-from olmoearth_pretrain.evals.task_types import SplitName
+from olmoearth_pretrain.evals.task_types import SplitName, TaskType
 
 logger = logging.getLogger(__name__)
 
@@ -471,37 +471,73 @@ def _copy_filtered_windows(
 ) -> None:
     """Copy only the matched windows from source to destination.
 
-    Uses shutil.copytree per window for simplicity and correctness on Weka.
+    Copies the matched windows using several ``tar | tar`` pipes running in
+    parallel, each handling a shard of the window list (via ``--files-from``).
+
+    rslearn windows are many tiny files, so this copy is latency-bound on
+    networked filesystems (e.g. Weka): a single serial reader spends almost all
+    its time blocked on per-file ``open()`` round-trips. Sharding across several
+    concurrent tar pipes keeps many reads in flight at once, which hides that
+    latency and is far faster than either a single tar pipe or a per-window
+    Python copy. tar also keeps per-file overhead low and runs in subprocesses
+    that fully release the GIL.
 
     Args:
         source_path: Source dataset path
         dest_path: Destination dataset path
         matched_windows: List of (group, window_name) to copy
     """
+    import tempfile
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    num_workers = int(os.environ.get("OLMOEARTH_INGEST_WORKERS", "8"))
     total = len(matched_windows)
-    logger.info("  Copying %d matched windows (workers=%d)...", total, num_workers)
+    src_windows = Path(source_path) / "windows"
+    dst_windows = Path(dest_path) / "windows"
+    dst_windows.mkdir(parents=True, exist_ok=True)
 
-    def _copy_one(group: str, wname: str) -> str:
-        src = Path(source_path) / "windows" / group / wname
-        dst = Path(dest_path) / "windows" / group / wname
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(str(src), str(dst))
-        return wname
+    # Pre-create all group subdirs so parallel tar extractors don't race on mkdir.
+    groups_seen = {group for group, _ in matched_windows}
+    for group in groups_seen:
+        (dst_windows / group).mkdir(parents=True, exist_ok=True)
 
+    num_shards = int(os.environ.get("OLMOEARTH_INGEST_WORKERS", "32"))
+    num_shards = max(1, min(num_shards, total))
+    logger.info(
+        "  Copying %d matched windows via %d parallel tar pipes...",
+        total,
+        num_shards,
+    )
+
+    # Round-robin windows into shards so each tar pipe gets a similar load.
+    shards: list[list[tuple[str, str]]] = [[] for _ in range(num_shards)]
+    for i, win in enumerate(matched_windows):
+        shards[i % num_shards].append(win)
+
+    def _copy_shard(shard: list[tuple[str, str]]) -> int:
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:
+            for group, wname in shard:
+                fh.write(f"{group}/{wname}\n")
+            filelist = fh.name
+        try:
+            cmd = (
+                f"tar -C {src_windows} -cf - -T {filelist} | tar -C {dst_windows} -xf -"
+            )
+            subprocess.run(cmd, shell=True, check=True)  # nosec B602
+        finally:
+            os.unlink(filelist)
+        return len(shard)
+
+    copied = 0
     pbar = tqdm(total=total, desc="Copying windows", unit="win")
-    with ThreadPoolExecutor(max_workers=num_workers) as pool:
-        futures = [
-            pool.submit(_copy_one, group, wname) for group, wname in matched_windows
-        ]
+    with ThreadPoolExecutor(max_workers=num_shards) as pool:
+        futures = [pool.submit(_copy_shard, shard) for shard in shards if shard]
         for future in as_completed(futures):
-            future.result()
-            pbar.update(1)
+            n = future.result()
+            copied += n
+            pbar.update(n)
     pbar.close()
 
-    logger.info("  Finished copying %d windows", total)
+    logger.info("  Finished copying %d windows", copied)
 
 
 def _copy_local(
@@ -1104,10 +1140,12 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     logger.info("[Step 0b] Model config loaded and validated successfully")
 
     # Step 0c: Extract modalities from dataset config
+    # Multiple rslearn layers can map to the same OlmoEarth modality (e.g.
+    # sentinel2_l2a_feb, _may, _aug, _nov all resolve to sentinel2_l2a).
+    # We deduplicate and aggregate max_matches across temporal layers.
     logger.info("[Step 0c] Extracting modalities from dataset config...")
-    modalities = []
+    modality_max_timesteps: dict[str, int] = {}
     modality_layer_names = []
-    max_timesteps_modalities = []
     for layer_name, layer_config in dataset_config.layers.items():
         if layer_config.data_source is None:
             continue
@@ -1118,12 +1156,16 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
                 f"  Skipping layer {layer_name!r}: no OlmoEarth modality mapping"
             )
             continue
-        modalities.append(olmoearth_modality.name)
         modality_layer_names.append(layer_name)
         query_config = layer_config.data_source.query_config
-        max_timesteps_modalities.append(query_config.max_matches)
+        mod_name = olmoearth_modality.name
+        prev = modality_max_timesteps.get(mod_name, 0)
+        modality_max_timesteps[mod_name] = max(prev, query_config.max_matches)
 
-    num_timesteps = max(max_timesteps_modalities) if max_timesteps_modalities else 1
+    modalities = list(modality_max_timesteps.keys())
+    num_timesteps = (
+        max(modality_max_timesteps.values()) if modality_max_timesteps else 1
+    )
     timeseries = num_timesteps > 1
     logger.info(
         f"[Step 0c] Modalities: {modalities}, timeseries: {timeseries}, num_timesteps: {num_timesteps}"
@@ -1166,11 +1208,15 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         num_classes = len(task_init_args["classes"])
 
     if num_classes is None:
-        raise ValueError(
-            f"Could not determine num_classes from task config '{task_name}' "
-            f"(class_path: {task_class_path}). "
-            "Expected 'num_classes' or 'classes' in init_args."
-        )
+        task_type = rslearn_task_type_to_olmoearth_task_type(rslearn_task)
+        if task_type in (TaskType.PER_PIXEL_REGRESSION, TaskType.WINDOW_REGRESSION):
+            num_classes = 1
+        else:
+            raise ValueError(
+                f"Could not determine num_classes from task config '{task_name}' "
+                f"(class_path: {task_class_path}). "
+                "Expected 'num_classes' or 'classes' in init_args."
+            )
 
     # Assume 0-indexed consecutive labels (0 to num_classes-1)
     label_values = [str(i) for i in range(num_classes)]

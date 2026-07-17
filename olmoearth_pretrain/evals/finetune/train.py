@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import math
 import os
 import random
@@ -11,8 +12,6 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from einops import rearrange
 from olmo_core.train.trainer import Trainer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
@@ -30,14 +29,39 @@ from olmoearth_pretrain.evals.finetune.constants import (
     SCHEDULER_PATIENCE,
     UNFREEZE_LR_FACTOR,
 )
-from olmoearth_pretrain.evals.finetune.evaluate import eval_cls, eval_seg
+from olmoearth_pretrain.evals.finetune.evaluate import (
+    _reg_logits_to_pixel,
+    _seg_logits_to_pixel,
+    eval_cls,
+    eval_reg,
+    eval_seg,
+)
 from olmoearth_pretrain.evals.finetune.model import (
     BackboneWithHead,
+    HeadType,
     set_backbone_trainable,
     snapshot_state_dict,
     to_device,
 )
-from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
+from olmoearth_pretrain.evals.linear_probe import weighted_dice_loss
+from olmoearth_pretrain.evals.metrics import (
+    EvalMetric,
+    EvalResult,
+    EvalTaskResult,
+    metric_higher_is_better,
+)
+
+
+def _primary_metric_higher_is_better(
+    task_type: TaskType, primary_metric: EvalMetric | None
+) -> bool:
+    """Whether validation primary should be maximized (scheduler / best checkpoint)."""
+    if task_type == TaskType.PER_PIXEL_REGRESSION:
+        # Regression defaults to NEG_RMSE (higher is better); respect explicit overrides.
+        metric = primary_metric or EvalMetric.NEG_RMSE
+        return metric_higher_is_better(metric)
+    return True
+
 
 logger = getLogger(__name__)
 
@@ -93,6 +117,13 @@ def compute_eval_metrics(
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
         )
+    elif task_config.task_type == TaskType.PER_PIXEL_REGRESSION:
+        val_result = eval_reg(
+            ft,
+            val_loader,
+            device,
+            primary_metric=primary_metric,
+        )
     else:
         val_result = eval_seg(
             ft,
@@ -114,6 +145,13 @@ def compute_eval_metrics(
                 task_config.is_multilabel,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
+            )
+        elif task_config.task_type == TaskType.PER_PIXEL_REGRESSION:
+            test_result = eval_reg(
+                ft,
+                test_loader,
+                device,
+                primary_metric=primary_metric,
             )
         else:
             test_result = eval_seg(
@@ -148,8 +186,17 @@ def run_finetune_eval(
     resume_checkpoint_path: str | None = None,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    ft_grad_accum_steps: int = 1,
+    head_type: HeadType = "linear",
+    use_dice_loss: bool = False,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
+    if task_config.task_type == TaskType.WINDOW_REGRESSION:
+        raise NotImplementedError(
+            "Finetune eval does not support scalar (per-sample) regression yet; "
+            "use eval_mode=LINEAR_PROBE for scalar regression tasks."
+        )
+    accum_steps = max(1, ft_grad_accum_steps)
     if seed is not None:
         logger.info(f"Setting finetune random seed to {seed}")
         random.seed(seed)
@@ -165,6 +212,7 @@ def run_finetune_eval(
         pooling_type=pooling_type,
         num_classes=task_config.num_classes,
         use_pooled_tokens=use_pooled_tokens,
+        head_type=head_type,
     ).to(device)
 
     # Trigger _init_head once with a tiny dry pass which initializes the head with the correct dimension.
@@ -199,25 +247,33 @@ def run_finetune_eval(
 
     current_lr = lr
     opt = torch.optim.AdamW(ft.parameters(), lr=current_lr)
+    higher_is_better = _primary_metric_higher_is_better(
+        task_config.task_type, primary_metric
+    )
     scheduler = ReduceLROnPlateau(
         opt,
-        mode="max",
+        mode="max" if higher_is_better else "min",
         factor=SCHEDULER_FACTOR,
         patience=SCHEDULER_PATIENCE,
         min_lr=SCHEDULER_MIN_LR,
         cooldown=SCHEDULER_COOLDOWN,
     )
     if task_config.task_type == TaskType.CLASSIFICATION:
-        loss_fn: nn.Module = (
+        loss_fn: Any = (
             nn.MultiLabelSoftMarginLoss()
             if task_config.is_multilabel
             else nn.CrossEntropyLoss()
         )
+    elif task_config.task_type == TaskType.PER_PIXEL_REGRESSION:
+        loss_fn = nn.MSELoss()
+    elif use_dice_loss:
+        num_classes = task_config.num_classes
+        loss_fn = functools.partial(weighted_dice_loss, num_classes=num_classes)
     else:
         loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
 
     best_state = snapshot_state_dict(ft)
-    best_val_metric = float("-inf")
+    best_val_metric = float("-inf") if higher_is_better else float("inf")
     start_epoch = 0
 
     # Resume from checkpoint if it exists
@@ -261,6 +317,14 @@ def run_finetune_eval(
     ft.train()
     wandb_logger = _get_wandb_logger(trainer)
     num_batches = len(train_loader)
+    if accum_steps > 1:
+        eff_bs = train_loader.batch_size
+        if eff_bs is not None:
+            logger.info(
+                "Finetune grad accumulation: "
+                f"batch_size={eff_bs}, accum_steps={accum_steps}, "
+                f"effective batch_size={eff_bs * accum_steps}"
+            )
 
     for epoch in range(start_epoch, epochs):
         # Reset epoch and global step
@@ -284,37 +348,35 @@ def run_finetune_eval(
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 logits, label = ft(masked, label)
                 if task_config.task_type == TaskType.SEGMENTATION:
-                    H, W = logits.shape[1], logits.shape[2]
-                    logits = rearrange(
+                    logits = _seg_logits_to_pixel(
                         logits,
-                        "b h w (c i j) -> b c (h i) (w j)",
-                        h=H,
-                        w=W,
-                        c=task_config.num_classes,
-                        i=patch_size,
-                        j=patch_size,
+                        label,
+                        ft.pixel_space_output,
+                        task_config.num_classes,
+                        patch_size,
                     )
-                    if logits.shape[-2:] != label.shape[-2:]:
-                        logits = F.interpolate(
-                            logits.float(),
-                            size=label.shape[-2:],
-                            mode="bilinear",
-                            align_corners=True,
-                        )
-                loss = loss_fn(logits, label)
+                if task_config.task_type == TaskType.PER_PIXEL_REGRESSION:
+                    reg_logits = _reg_logits_to_pixel(
+                        logits, label, ft.pixel_space_output
+                    )
+                    raw_loss = loss_fn(reg_logits, label.float())
+                else:
+                    raw_loss = loss_fn(logits, label)
+                loss = raw_loss / accum_steps
                 if wandb_logger is not None:
                     wandb_logger.log(
                         {
                             f"{task_name}_step": epoch * num_batches + i,
-                            f"{task_name}/train_loss": loss.item(),
+                            f"{task_name}/train_loss": raw_loss.item(),
                         }
                     )
                 logger.info(
-                    f"Finetune Epoch [{epoch + 1}/{epochs}] Step [{i + 1}/{len(train_loader)}] Loss: {loss.item():.4f}"
+                    f"Finetune Epoch [{epoch + 1}/{epochs}] Step [{i + 1}/{len(train_loader)}] Loss: {raw_loss.item():.4f}"
                 )
             loss.backward()
-            opt.step()
-            opt.zero_grad()
+            if (i + 1) % accum_steps == 0 or (i + 1) == num_batches:
+                opt.step()
+                opt.zero_grad()
 
         if task_config.task_type == TaskType.CLASSIFICATION:
             val_result = eval_cls(
@@ -324,6 +386,13 @@ def run_finetune_eval(
                 task_config.is_multilabel,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
+            )
+        elif task_config.task_type == TaskType.PER_PIXEL_REGRESSION:
+            val_result = eval_reg(
+                ft,
+                val_loader,
+                device,
+                primary_metric=primary_metric,
             )
         else:
             val_result = eval_seg(
@@ -336,20 +405,29 @@ def run_finetune_eval(
                 primary_metric_class=primary_metric_class,
             )
 
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
         if wandb_logger is not None:
-            wandb_logger.log(
-                {
-                    f"{task_name}_step": (epoch + 1) * num_batches,
-                    f"{task_name}/val_metric": val_result.primary,
-                }
-            )
+            log_dict: dict[str, float] = {
+                f"{task_name}_step": (epoch + 1) * num_batches,
+                f"{task_name}/val_metric": val_result.primary,
+            }
+            for metric_key, metric_val in val_result.metrics.items():
+                if metric_key != val_result.primary_metric_key:
+                    log_dict[f"{task_name}/val_{metric_key}"] = metric_val
+            wandb_logger.log(log_dict)
         logger.info(
             f"Finetune Epoch [{epoch + 1}/{epochs}] Validation Metric: {val_result.primary:.4f}"
         )
         scheduler.step(val_result.primary)
 
-        # This assumes that the validation metric is the higher the better.
-        if val_result.primary > best_val_metric:
+        improved = (
+            val_result.primary > best_val_metric
+            if higher_is_better
+            else val_result.primary < best_val_metric
+        )
+        if improved:
             best_val_metric = val_result.primary
             best_state = snapshot_state_dict(ft)
             logger.info(

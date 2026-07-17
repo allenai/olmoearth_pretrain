@@ -10,8 +10,10 @@ from olmoearth_pretrain.evals.studio_ingest.registry import get_dataset_entry
 
 from .breizhcrops import BreizhCropsDataset
 from .configs import dataset_to_config
+from .fifty_cities_dataset import FiftyCitiesDataset
 from .floods_dataset import Sen1Floods11Dataset
 from .geobench_dataset import GeobenchDataset
+from .geobench_v2_dataset import GeobenchV2Dataset
 from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset
@@ -77,6 +79,14 @@ def get_eval_dataset(
             geographic_bin_size_deg=kwargs.get("pretrain_geographic_bin_size_deg", 5.0),
             filter_idx_file=kwargs.get("filter_idx_file"),
         )
+    elif eval_dataset.startswith("gb2-"):
+        return GeobenchV2Dataset(
+            dataset=eval_dataset,
+            split=split,
+            partition=kwargs.get("partition", ""),
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
+        )
     elif eval_dataset.startswith("m-"):
         # m- == "modified for geobench"
         return GeobenchDataset(
@@ -122,6 +132,24 @@ def get_eval_dataset(
         else:
             kwargs["path_to_splits"] = paths.PASTIS_DIR
         return PASTISRDataset(**kwargs)  # type: ignore
+    elif eval_dataset.startswith("fifty_cities"):
+        # Split mode is encoded in the dataset-name suffix; "fifty_cities" alone
+        # is the random split.
+        if eval_dataset.endswith("by_continent"):
+            split_mode = "by_continent"
+        elif eval_dataset.endswith("by_city"):
+            split_mode = "by_city"
+        else:
+            split_mode = "random"
+        return FiftyCitiesDataset(
+            path_to_splits=paths.FIFTY_CITIES_DIR,
+            split=split,
+            split_mode=split_mode,
+            input_modalities=input_modalities,
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
+            label_fraction=label_fraction,
+        )
     elif eval_dataset == "breizhcrops":
         return BreizhCropsDataset(
             path_to_splits=paths.BREIZHCROPS_DIR,
