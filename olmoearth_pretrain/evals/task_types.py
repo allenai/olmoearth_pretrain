@@ -12,6 +12,7 @@ class TaskType(StrEnum):
 
     CLASSIFICATION = "classification"
     SEGMENTATION = "segmentation"
+    DIAGNOSTIC = "diagnostic"
     PER_PIXEL_REGRESSION = "regression"
     WINDOW_REGRESSION = "scalar_regression"
 

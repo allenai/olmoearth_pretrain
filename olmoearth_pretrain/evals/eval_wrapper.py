@@ -68,11 +68,12 @@ class EvalWrapper:
         self.patch_size = patch_size
         self.pooling_type = pooling_type
         self.concat_features = concat_features
-        # SEGMENTATION and (dense) REGRESSION keep the spatial grid for per-pixel
-        # heads. CLASSIFICATION and WINDOW_REGRESSION are per-sample, so they pool
-        # over space to a single (B, D) embedding.
+        # SEGMENTATION, DIAGNOSTIC, and (dense) PER_PIXEL_REGRESSION keep the
+        # spatial grid for per-pixel heads. CLASSIFICATION and WINDOW_REGRESSION
+        # are per-sample, so they pool over space to a single (B, D) embedding.
         self.spatial_pool = task_type in (
             TaskType.SEGMENTATION,
+            TaskType.DIAGNOSTIC,
             TaskType.PER_PIXEL_REGRESSION,
         )
         self.use_pooled_tokens = use_pooled_tokens
