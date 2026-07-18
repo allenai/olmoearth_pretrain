@@ -37,25 +37,25 @@ D128_REGSUP_LATLON="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_il_pdproj_noic_l
 D768_NOSUP="scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_wideread.py"
 D128_NOSUP="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_il_pdproj_noic_lsa_wideread.py"
 
-python "$D768_REGSUP" launch "regbtl_v1_2_gdyn_d768_regsup_${SUFFIX}" "$CLUSTER" \
-    $LAUNCH_ARGS \
-    --trainer.max_duration.value=$MAX_EPOCHS \
-    --trainer.callbacks.wandb.project="$PROJECT"
+# python "$D768_REGSUP" launch "regbtl_v1_2_gdyn_d768_regsup_${SUFFIX}" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.max_duration.value=$MAX_EPOCHS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D768_REGSUP_LATLON" launch "regbtl_v1_2_gdyn_d768_regsup_latlon_${SUFFIX}" "$CLUSTER" \
-    $LAUNCH_ARGS \
-    --trainer.max_duration.value=$MAX_EPOCHS \
-    --trainer.callbacks.wandb.project="$PROJECT"
+# python "$D768_REGSUP_LATLON" launch "regbtl_v1_2_gdyn_d768_regsup_latlon_${SUFFIX}" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.max_duration.value=$MAX_EPOCHS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D128_REGSUP" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_${SUFFIX}" "$CLUSTER" \
-    $LAUNCH_ARGS \
-    --trainer.max_duration.value=$MAX_EPOCHS \
-    --trainer.callbacks.wandb.project="$PROJECT"
+# python "$D128_REGSUP" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_${SUFFIX}" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.max_duration.value=$MAX_EPOCHS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D128_REGSUP_LATLON" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_latlon_${SUFFIX}" "$CLUSTER" \
-    $LAUNCH_ARGS \
-    --trainer.max_duration.value=$MAX_EPOCHS \
-    --trainer.callbacks.wandb.project="$PROJECT"
+# python "$D128_REGSUP_LATLON" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_latlon_${SUFFIX}" "$CLUSTER" \
+#     $LAUNCH_ARGS \
+#     --trainer.max_duration.value=$MAX_EPOCHS \
+#     --trainer.callbacks.wandb.project="$PROJECT"
 
 python "$D768_NOSUP" launch "regbtl_v1_2_gdyn_d768_nosup_${SUFFIX}" "$CLUSTER" \
     $LAUNCH_ARGS \
