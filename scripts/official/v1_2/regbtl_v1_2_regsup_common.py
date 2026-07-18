@@ -114,15 +114,18 @@ _CDL_CODES = [
 CDL_CLASS_VALUES = [code / 200 for code in _CDL_CODES]
 
 
-def build_supervision_head_config(*, include_latlon: bool) -> SupervisionHeadConfig:
+def build_supervision_head_config(
+    *, include_latlon: bool, base_weight: float = SUPERVISION_WEIGHT
+) -> SupervisionHeadConfig:
     """Register-grid supervision head config over the decode-only map modalities.
 
     ``include_latlon`` adds the unit-sphere location regression read from the
-    mean-pooled register grid.
+    mean-pooled register grid. ``base_weight`` overrides the low ``SUPERVISION_WEIGHT``
+    nudge (kept as the default); it is still scaled per-task by ``TASK_TYPE_WEIGHTS``.
     """
 
     def _weight(task_type: SupervisionTaskType) -> float:
-        return SUPERVISION_WEIGHT * TASK_TYPE_WEIGHTS[task_type]
+        return base_weight * TASK_TYPE_WEIGHTS[task_type]
 
     modality_configs = {
         "worldcover": SupervisionModalityConfig(
@@ -175,11 +178,14 @@ def build_supervision_head_config(*, include_latlon: bool) -> SupervisionHeadCon
 
 
 def add_register_supervision(
-    config: LatentMIMConfig, *, include_latlon: bool
+    config: LatentMIMConfig,
+    *,
+    include_latlon: bool,
+    base_weight: float = SUPERVISION_WEIGHT,
 ) -> LatentMIMConfig:
     """Attach the register-grid supervision head to a regbtl model config."""
     config.supervision_head_config = build_supervision_head_config(
-        include_latlon=include_latlon
+        include_latlon=include_latlon, base_weight=base_weight
     )
     return config
 
