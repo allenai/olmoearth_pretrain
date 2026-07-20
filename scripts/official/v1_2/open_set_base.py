@@ -85,10 +85,7 @@ SUP_LOSS_WEIGHT = 1.0
 # live under /weka/dfive-default/helios/dataset/open_set_dataset/... The layout mirrors
 # the grid pipeline but with the ..._128_x_1 suffix (one H5 sample per 128x128 window)
 # and must include the open_set / open_set_regression label datasets.
-OPEN_SET_H5_DIR = (
-    "/weka/dfive-default/helios/dataset/open_set_dataset/"
-    "h5py_data_w_missing_timesteps_zstd_3_128_x_1/TODO_MODALITIES/TODO_COUNT"
-)
+OPEN_SET_H5_DIR = "/weka/dfive-default/helios/dataset/open_set_dataset/h5py_data_w_missing_timesteps_zstd_3_128_x_1/cdl_landsat_open_set_open_set_regression_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/905874"
 
 
 def build_common_components(
