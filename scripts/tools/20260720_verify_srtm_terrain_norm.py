@@ -1,20 +1,20 @@
-"""Verify the srtm_terrain normalization values against real data.
+"""Verify the srtm normalization values against real data.
 
-srtm_terrain (slope + aspect_sin + aspect_cos) is a derived modality computed at load
-time from the raw SRTM elevation band, so it is not covered by the machine-generated
-computed.json. Its committed norm values were seeded from theoretical bounds:
-  - predefined.json: slope in [0, pi/2], aspect_sin/cos in [-1, 1]
-  - computed.json:   slope mean=pi/4 std=pi/8, aspect_sin/cos mean=0 std=0.5
-This script measures the *actual* per-band statistics over the dataset so you can check
-whether those seeds are reasonable and, if not, replace them.
+srtm is a single terrain modality [elevation, slope, aspect_sin, aspect_cos]; only the
+elevation band is stored on disk, the rest are derived from it at load time
+(compute_srtm_bands). The slope/aspect stats are therefore not produced by the standard
+machine-generated compute_h5_norm run, so this script measures the *actual* per-band
+statistics over the dataset to check whether the committed norm values are reasonable
+and, if not, replace them. Elevation is measured too, as a sanity check against the
+existing committed values.
 
-It reads the raw ``srtm`` band straight out of the per-sample h5 files and runs the same
-``compute_srtm_terrain`` used at train time, rather than going through the full sample
-pipeline. That is both faster (one band, no subsetting) and avoids the missing-modality
-fill step, which cannot determine a tile's H/W when srtm_terrain is the only modality
-requested and a given sample happens to lack srtm.
+It reads the stored ``srtm`` elevation band straight out of the per-sample h5 files and
+runs the same ``compute_srtm_bands`` used at train time, rather than going through the
+full sample pipeline. That is both faster (one band read, no subsetting) and avoids the
+missing-modality fill step, which cannot determine a tile's H/W when srtm is the only
+modality requested and a given sample happens to lack it.
 
-It reports, per band (slope, aspect_sin, aspect_cos):
+It reports, per band (elevation, slope, aspect_sin, aspect_cos):
   - streaming mean / std over all valid (non-missing) pixels
   - min / max and percentiles (p0.1, p1, p50, p99, p99.9) from a random pixel reservoir
   - the fraction of pixels that were missing (the slope/aspect missing-halo)
@@ -25,7 +25,7 @@ Example usage:
     python3 scripts/tools/20260720_verify_srtm_terrain_norm.py \
         --h5py_dir /path/to/h5py_data \
         --estimate_from 500 \
-        --output_path srtm_terrain_norm_report.json
+        --output_path srtm_norm_report.json
 """
 
 import argparse
@@ -46,13 +46,13 @@ from tqdm import tqdm
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
-from olmoearth_pretrain.data.dataset import compute_srtm_terrain
+from olmoearth_pretrain.data.dataset import compute_srtm_bands
 from olmoearth_pretrain.data.utils import update_streaming_stats
 from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
 
 logger = logging.getLogger(__name__)
 
-MODALITY = Modality.SRTM_TERRAIN
+MODALITY = Modality.SRTM
 # Cap on the number of pixel values kept per band for percentile/min/max estimation.
 # 4M float64 values ~= 32 MB per band, which is plenty for stable percentiles.
 RESERVOIR_CAP = 4_000_000
@@ -99,7 +99,7 @@ def measure(
     estimate_from: int | None,
     seed: int = 0,
 ) -> dict[str, Any]:
-    """Measure per-band statistics for srtm_terrain over the dataset.
+    """Measure per-band statistics for the srtm modality over the dataset.
 
     Missing pixels are masked out per band (rather than skipping whole samples) because
     the derived slope/aspect always has a missing halo wherever the elevation had voids
@@ -129,10 +129,10 @@ def measure(
         if raw is None:
             samples_missing_srtm += 1
             continue
-        terrain = compute_srtm_terrain(raw, np.dtype(np.float32))  # [H, W, T, 3]
+        srtm_bands = compute_srtm_bands(raw, np.dtype(np.float32))  # [H, W, T, 4]
         samples_with_data += 1
         for idx, band in enumerate(bands):
-            band_data = np.asarray(terrain[..., idx]).reshape(-1)
+            band_data = np.asarray(srtm_bands[..., idx]).reshape(-1)
             missing = band_data == MISSING_VALUE
             total_pixels[band] += band_data.size
             missing_pixels[band] += int(missing.sum())
@@ -197,10 +197,7 @@ def report(result: dict[str, Any]) -> None:
     computed = _load_committed("computed.json").get(MODALITY.name, {})
 
     print("\n" + "=" * 78)
-    print(
-        f"srtm_terrain norm verification  "
-        f"({result['samples_with_srtm']} tiles measured)"
-    )
+    print(f"srtm norm verification  ({result['samples_with_srtm']} tiles measured)")
     print("=" * 78)
     for band, m in result["bands"].items():
         pc = m["percentiles"]

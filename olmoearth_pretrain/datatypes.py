@@ -90,10 +90,9 @@ class OlmoEarthSample(NamedTuple):
         None  # [B, H, W, 1, len(WORLDCOVER_CLASSES)]
     )
     openstreetmap_raster: ArrayTensor | None = None  # [B, H, W, 1, len(OSM_bands)]
+    # srtm carries [elevation, slope, aspect_sin, aspect_cos]; only elevation is stored,
+    # the rest are derived from it at load time (see compute_srtm_bands).
     srtm: ArrayTensor | None = None  # [B, H, W, 1, len(SRTM_bands)]
-    # srtm_terrain is derived from the raw srtm elevation band at load time
-    # (slope + aspect encoded as sine/cosine).
-    srtm_terrain: ArrayTensor | None = None  # [B, H, W, 1, 3]
     landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
     # naip with different tile resolution is currently not used in favor of naip_10.
     naip: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
@@ -373,8 +372,6 @@ class MaskedOlmoEarthSample(NamedTuple):
     openstreetmap_raster_mask: Tensor | None = None
     srtm: Tensor | None = None
     srtm_mask: Tensor | None = None
-    srtm_terrain: Tensor | None = None
-    srtm_terrain_mask: Tensor | None = None
     landsat: Tensor | None = None
     landsat_mask: Tensor | None = None
     naip: Tensor | None = None
@@ -517,8 +514,6 @@ class TokensAndMasks(NamedTuple):
     openstreetmap_raster_mask: Tensor | None = None
     srtm: Tensor | None = None
     srtm_mask: Tensor | None = None
-    srtm_terrain: Tensor | None = None
-    srtm_terrain_mask: Tensor | None = None
     landsat: Tensor | None = None
     landsat_mask: Tensor | None = None
     naip: Tensor | None = None

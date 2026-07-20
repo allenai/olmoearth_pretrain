@@ -302,28 +302,34 @@ def one_hot_worldcover(raw: np.ndarray, dtype: np.dtype) -> np.ndarray:
     return onehot
 
 
-def compute_srtm_terrain(elevation: np.ndarray, dtype: np.dtype) -> np.ndarray:
-    """Compute slope and aspect from the raw SRTM elevation band.
+def compute_srtm_bands(elevation: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    """Expand the stored SRTM elevation band into the full terrain modality.
+
+    On disk SRTM is a single elevation band; the model consumes it as one modality
+    [elevation, slope, aspect_sin, aspect_cos] (Modality.SRTM.band_order). Slope and
+    aspect are derived here from the elevation grid so they never need to be stored.
 
     Slope is the steepest gradient angle (radians, in [0, pi/2]). Aspect is the compass
     direction that steepest gradient points in; because it is circular it is returned as
     its sine and cosine (each in [-1, 1]) rather than a raw angle, so there is no
-    discontinuity at 0/2*pi. Bands are returned in Modality.SRTM_TERRAIN.band_order:
-    (slope, aspect_sin, aspect_cos).
+    discontinuity at 0/2*pi.
 
     Gradients are taken on the elevation grid using the modality's ground resolution as
-    the pixel spacing, so slope is a true angle. Any pixel that is MISSING_VALUE - and
-    the one-pixel halo around it, since the central difference reads its neighbours - is
-    MISSING_VALUE across all output bands so the missing-value handling downstream keeps
-    working.
+    the pixel spacing, so slope is a true angle. np.gradient uses a central difference,
+    so a one-pixel "halo" around every elevation void reads the missing neighbour and has
+    no well-defined slope/aspect. Both the void pixels and that halo are set to
+    MISSING_VALUE across ALL bands (elevation included, so the modality's missing pattern
+    stays coherent), which routes them through the normal missing-value handling. Tile
+    edges are NOT lost: np.gradient falls back to one-sided differences at the array
+    boundary, so only internal voids produce a halo.
 
     Args:
-        elevation: raw (un-normalized) SRTM data, shape [H, W, T, 1]. T is 1 for the
-            static SRTM modality but the calculation is done per timestep regardless.
+        elevation: raw (un-normalized) stored SRTM data, shape [H, W, T, 1]. T is 1 for
+            the static SRTM modality but the calculation is done per timestep regardless.
         dtype: the dtype of the output array.
 
     Returns:
-        Array of shape [H, W, T, 3] holding (slope, aspect_sin, aspect_cos).
+        Array of shape [H, W, T, 4] holding (elevation, slope, aspect_sin, aspect_cos).
     """
     ground_resolution_m = Modality.SRTM.band_sets[0].get_resolution()
 
@@ -341,9 +347,19 @@ def compute_srtm_terrain(elevation: np.ndarray, dtype: np.dtype) -> np.ndarray:
     slope = np.arctan(np.sqrt(grad_x**2 + grad_y**2))
     aspect = np.arctan2(grad_y, -grad_x)
 
-    terrain = np.stack([slope, np.sin(aspect), np.cos(aspect)], axis=-1)  # [H, W, T, 3]
-    terrain = np.where(np.isnan(terrain), MISSING_VALUE, terrain)
-    return terrain.astype(dtype)
+    # A pixel is missing if its own elevation is a void (elev is NaN there) OR it sits in
+    # the one-pixel halo where the central difference read a void neighbour (slope is NaN
+    # there; the void pixel's own slope is finite since it is built from valid neighbours,
+    # so both terms are needed). Mark the whole pixel missing across all four bands so the
+    # modality shares one missing pattern.
+    pixel_missing = np.isnan(elev) | np.isnan(slope)  # [H, W, T]
+
+    # Band order must match Modality.SRTM.band_order: elevation first, then terrain.
+    bands = np.stack(
+        [elev, slope, np.sin(aspect), np.cos(aspect)], axis=-1
+    )  # [H, W, T, 4]
+    bands[pixel_missing] = MISSING_VALUE
+    return bands.astype(dtype)
 
 
 class GetItemArgs(NamedTuple):
@@ -825,16 +841,13 @@ class OlmoEarthDataset(Dataset):
                         h5file[Modality.WORLDCOVER.name][()], self.dtype
                     )
 
-                # srtm_terrain is derived from the raw srtm elevation band: it is not
-                # stored on disk, so read the elevation and compute slope/aspect on the
-                # full tile (before any spatial cropping) so the gradients are correct.
-                # If srtm is absent the modality is treated as missing downstream.
-                if (
-                    Modality.SRTM_TERRAIN.name in self.training_modalities
-                    and Modality.SRTM.name in h5file
-                ):
-                    sample_dict[Modality.SRTM_TERRAIN.name] = compute_srtm_terrain(
-                        h5file[Modality.SRTM.name][()], self.dtype
+                # Only the elevation band of srtm is stored; expand it into the full
+                # [elevation, slope, aspect_sin, aspect_cos] modality here, on the whole
+                # tile (before any spatial cropping) so the slope/aspect gradients are
+                # correct. If srtm is absent it is treated as missing downstream.
+                if Modality.SRTM.name in sample_dict:
+                    sample_dict[Modality.SRTM.name] = compute_srtm_bands(
+                        sample_dict[Modality.SRTM.name], self.dtype
                     )
 
                 if (

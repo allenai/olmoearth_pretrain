@@ -322,25 +322,18 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # SRTM is a single terrain modality. Only the elevation band ("srtm") is stored on
+    # disk / parsed from the csv; the slope and aspect bands are derived from elevation
+    # at load time (see compute_srtm_bands in OlmoEarthDataset) and appended so the whole
+    # modality is [elevation, slope, aspect]. Aspect is circular, so it is encoded as its
+    # sine and cosine to avoid the 0/2*pi discontinuity. Ingestion (dataset_creation/.../
+    # srtm.py) only ever reads/writes the elevation band.
     SRTM = ModalitySpec(
         name="srtm",
         tile_resolution_factor=16,
-        band_sets=[BandSet(["srtm"], 16)],
+        band_sets=[BandSet(["srtm", "slope", "aspect_sin", "aspect_cos"], 16)],
         is_multitemporal=False,
         ignore_when_parsing=False,
-    )
-
-    # Terrain derivatives (slope + aspect) computed from the raw SRTM elevation band at
-    # load time. This is a derived modality: it is not stored on disk or parsed from the
-    # csv (ignore_when_parsing=True). Instead it is computed in OlmoEarthDataset from the
-    # elevation grid (see compute_srtm_terrain). Aspect is a circular quantity, so it is
-    # encoded as its sine and cosine to avoid the 0/2*pi discontinuity.
-    SRTM_TERRAIN = ModalitySpec(
-        name="srtm_terrain",
-        tile_resolution_factor=16,
-        band_sets=[BandSet(["slope", "aspect_sin", "aspect_cos"], 16)],
-        is_multitemporal=False,
-        ignore_when_parsing=True,
     )
 
     OPENSTREETMAP = ModalitySpec(
