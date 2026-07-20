@@ -259,6 +259,14 @@ class Era5SupervisedCommonComponents(CommonComponents):
     # ------------------------------------------------------------------
     enable_downstream_eval: bool = True
     eval_probe_lr: float = 1e-3
+    # When set, this LR wins over BOTH the registry entry's per-task probe_lr
+    # and `eval_probe_lr`. Use for probe-LR sweeps where every task must run
+    # at the same, forced LR.
+    eval_probe_lr_override: float | None = None
+    # When set, the probe's weight init and training-batch shuffle order are
+    # pinned to this seed at every eval (see Era5DownstreamEvaluatorCallback),
+    # making probe results comparable across runs / probe-LR values.
+    eval_probe_seed: int | None = None
     eval_probe_epochs: int = 50
     eval_probe_batch_size: int = 256
     eval_embedding_batch_size: int = 128
@@ -608,10 +616,15 @@ def _resolve_eval_task_configs(
                 test_groups=entry.test_groups,
                 test_tags=entry.test_tags or None,
                 probe_lr=(
-                    entry.probe_lr
-                    if entry.probe_lr is not None
-                    else common.eval_probe_lr
+                    common.eval_probe_lr_override
+                    if common.eval_probe_lr_override is not None
+                    else (
+                        entry.probe_lr
+                        if entry.probe_lr is not None
+                        else common.eval_probe_lr
+                    )
                 ),
+                probe_seed=common.eval_probe_seed,
                 probe_epochs=common.eval_probe_epochs,
                 probe_batch_size=common.eval_probe_batch_size,
                 embedding_batch_size=common.eval_embedding_batch_size,

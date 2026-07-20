@@ -14,6 +14,7 @@ Flow per eval step:
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import logging
 import time
@@ -68,6 +69,11 @@ class Era5LinearProbeTaskConfig:
     test_groups: list[str] | None = None
     test_tags: dict[str, str] | None = None
     probe_lr: float = 1e-3
+    # When set, the probe's weight init AND the training DataLoader's shuffle
+    # order are pinned to this seed (see `_run_eval`), making probe results
+    # comparable across runs / probe-LR values. None keeps legacy behavior
+    # (both drawn from the ambient global RNG state).
+    probe_seed: int | None = None
     probe_epochs: int = 50
     probe_batch_size: int = 256
     embedding_batch_size: int = 128
@@ -347,21 +353,38 @@ class Era5DownstreamEvaluatorCallback(Callback):
             test_embeddings.shape[0] if test_embeddings is not None else "N/A",
         )
 
-        result: EvalTaskResult = train_and_eval_probe(
-            config=eval_config,
-            lr=task.probe_lr,
-            train_embeddings=train_embeddings,
-            train_labels=train_labels,
-            val_embeddings=val_embeddings,
-            val_labels=val_labels,
-            test_embeddings=test_embeddings,
-            test_labels=test_labels,
-            device=device,
-            batch_size=task.probe_batch_size,
-            epochs=task.probe_epochs,
-            eval_interval=task.probe_epochs,
-            probe_type=ProbeType.LINEAR,
-        )
+        # When probe_seed is set, pin the probe's init and batch ordering:
+        # both the nn.Linear/Conv init and the shuffling DataLoader's
+        # RandomSampler draw from the process-global torch RNG, so seeding it
+        # here makes the probe fully deterministic in those two respects.
+        # fork_rng restores the global RNG afterwards so a mid-training eval
+        # doesn't perturb the pretraining RNG stream.
+        if task.probe_seed is not None:
+            rng_context = torch.random.fork_rng(
+                devices=[device] if device.type == "cuda" else []
+            )
+        else:
+            rng_context = contextlib.nullcontext()
+        with rng_context:
+            if task.probe_seed is not None:
+                torch.manual_seed(task.probe_seed)
+                if device.type == "cuda":
+                    torch.cuda.manual_seed_all(task.probe_seed)
+            result: EvalTaskResult = train_and_eval_probe(
+                config=eval_config,
+                lr=task.probe_lr,
+                train_embeddings=train_embeddings,
+                train_labels=train_labels,
+                val_embeddings=val_embeddings,
+                val_labels=val_labels,
+                test_embeddings=test_embeddings,
+                test_labels=test_labels,
+                device=device,
+                batch_size=task.probe_batch_size,
+                epochs=task.probe_epochs,
+                eval_interval=task.probe_epochs,
+                probe_type=ProbeType.LINEAR,
+            )
 
         eval_time = time.monotonic() - start_time
         step = self.step

@@ -956,6 +956,9 @@ class MultiObjectiveEra5TrainModule(OlmoEarthTrainModule):
         executed; their weighted losses are summed and a single backward
         pass is performed per microbatch.
         """
+        if batch is None:
+            # Eval-only runs (`experiment.evaluate`)
+            return
         # When DDP wraps via `replicate` (composable), `self.model` is still
         # the original `Era5MultiObjectiveModel`, so the encoder is accessible
         # directly. For classic nn.parallel.DDP, peel `.module` to reach it.

@@ -412,6 +412,25 @@ class Era5DailyEncoder(nn.Module):
         self.final_norm = nn.LayerNorm(d_model)
 
     # ------------------------------------------------------------------
+    # Compatibility with the generic eval-only path
+    # ------------------------------------------------------------------
+    # `experiment.evaluate()` copies `encoder.{min,max}_patch_size` onto its
+    # mock dataloader (image-encoder plumbing). The temporal patch kernel is
+    # the closest analogue for this 1-D encoder; the values are otherwise
+    # unused because `MultiObjectiveEra5TrainModule.on_attach` skips the
+    # image-style patch-size checks.
+
+    @property
+    def min_patch_size(self) -> int:
+        """Temporal patch kernel size (eval-path compatibility)."""
+        return self.patch_kernel_size
+
+    @property
+    def max_patch_size(self) -> int:
+        """Temporal patch kernel size (eval-path compatibility)."""
+        return self.patch_kernel_size
+
+    # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
 
