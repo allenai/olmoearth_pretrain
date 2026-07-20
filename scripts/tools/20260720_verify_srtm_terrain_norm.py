@@ -8,6 +8,12 @@ computed.json. Its committed norm values were seeded from theoretical bounds:
 This script measures the *actual* per-band statistics over the dataset so you can check
 whether those seeds are reasonable and, if not, replace them.
 
+It reads the raw ``srtm`` band straight out of the per-sample h5 files and runs the same
+``compute_srtm_terrain`` used at train time, rather than going through the full sample
+pipeline. That is both faster (one band, no subsetting) and avoids the missing-modality
+fill step, which cannot determine a tile's H/W when srtm_terrain is the only modality
+requested and a given sample happens to lack srtm.
+
 It reports, per band (slope, aspect_sin, aspect_cos):
   - streaming mean / std over all valid (non-missing) pixels
   - min / max and percentiles (p0.1, p1, p50, p99, p99.9) from a random pixel reservoir
@@ -29,21 +35,20 @@ import random
 from importlib.resources import files
 from typing import Any
 
+import h5py
+
+# hdf5 plugin is needed to decompress the data for certain compression types (e.g. zstd)
+import hdf5plugin  # noqa: F401
 import numpy as np
+import pandas as pd
 from olmo_core.utils import prepare_cli_environment
 from tqdm import tqdm
+from upath import UPath
 
-from olmoearth_pretrain.data.constants import (
-    IMAGE_TILE_SIZE,
-    MISSING_VALUE,
-    Modality,
-)
-from olmoearth_pretrain.data.dataset import (
-    GetItemArgs,
-    OlmoEarthDataset,
-    OlmoEarthDatasetConfig,
-)
+from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
+from olmoearth_pretrain.data.dataset import compute_srtm_terrain
 from olmoearth_pretrain.data.utils import update_streaming_stats
+from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +65,37 @@ def _load_committed(config_name: str) -> dict[str, Any]:
         return json.load(f)
 
 
+def _srtm_present_indices(h5py_dir: UPath) -> list[int]:
+    """Row indices (== h5 filename indices) of samples whose raw srtm band is present.
+
+    File names are ``sample_{index}.h5`` where index is the row position in the metadata
+    CSV (see OlmoEarthDataset.prepare, which sets sample_indices = arange(num_samples)).
+    The CSV has a per-modality presence column, so we select rows where srtm is nonzero
+    to avoid opening files we know have no elevation to derive from.
+    """
+    meta_path = h5py_dir / ConvertToH5py.sample_metadata_fname
+    metadata_df = pd.read_csv(str(meta_path))
+    if Modality.SRTM.name not in metadata_df.columns:
+        raise ValueError(
+            f"metadata CSV at {meta_path} has no '{Modality.SRTM.name}' column; "
+            f"columns are {list(metadata_df.columns)}"
+        )
+    present = pd.to_numeric(metadata_df[Modality.SRTM.name], errors="coerce").fillna(0)
+    return metadata_df.index[present > 0].tolist()
+
+
+def _read_srtm(h5py_dir: UPath, index: int) -> np.ndarray | None:
+    """Read the raw srtm band for one sample, or None if it is absent in the file."""
+    fpath = h5py_dir / ConvertToH5py.sample_file_pattern.format(index=index)
+    with fpath.open("rb") as f:
+        with h5py.File(f, "r") as h5file:
+            if Modality.SRTM.name not in h5file:
+                return None
+            return h5file[Modality.SRTM.name][()]
+
+
 def measure(
-    dataset: OlmoEarthDataset,
+    h5py_dir: UPath,
     estimate_from: int | None,
     seed: int = 0,
 ) -> dict[str, Any]:
@@ -74,11 +108,13 @@ def measure(
     rng = np.random.default_rng(seed)
     bands = MODALITY.band_order
 
-    dataset_len = len(dataset)
-    if estimate_from is not None and estimate_from < dataset_len:
-        indices = random.sample(range(dataset_len), k=estimate_from)
+    candidates = _srtm_present_indices(h5py_dir)
+    logger.info(f"{len(candidates)} samples have a raw srtm band")
+    if estimate_from is not None and estimate_from < len(candidates):
+        random.Random(seed).shuffle(candidates)
+        indices = candidates[:estimate_from]
     else:
-        indices = list(range(dataset_len))
+        indices = candidates
 
     stats = {b: {"count": 0, "mean": 0.0, "var": 0.0} for b in bands}
     reservoir: dict[str, list[np.ndarray]] = {b: [] for b in bands}
@@ -86,16 +122,17 @@ def measure(
     total_pixels = {b: 0 for b in bands}
     missing_pixels = {b: 0 for b in bands}
     samples_with_data = 0
+    samples_missing_srtm = 0
 
     for i in tqdm(indices):
-        get_item_args = GetItemArgs(idx=i, patch_size=1, sampled_hw_p=IMAGE_TILE_SIZE)
-        _, sample = dataset[get_item_args]
-        data = sample.as_dict().get(MODALITY.name)
-        if data is None:
+        raw = _read_srtm(h5py_dir, i)
+        if raw is None:
+            samples_missing_srtm += 1
             continue
+        terrain = compute_srtm_terrain(raw, np.dtype(np.float32))  # [H, W, T, 3]
         samples_with_data += 1
         for idx, band in enumerate(bands):
-            band_data = np.asarray(data[..., idx]).reshape(-1)
+            band_data = np.asarray(terrain[..., idx]).reshape(-1)
             missing = band_data == MISSING_VALUE
             total_pixels[band] += band_data.size
             missing_pixels[band] += int(missing.sum())
@@ -148,9 +185,9 @@ def measure(
             ),
         }
     result["samples_sampled"] = len(indices)
-    result["samples_with_srtm_terrain"] = samples_with_data
-    result["dataset_len"] = dataset_len
-    result["h5py_dir"] = str(dataset.h5py_dir)
+    result["samples_with_srtm"] = samples_with_data
+    result["samples_missing_srtm"] = samples_missing_srtm
+    result["h5py_dir"] = str(h5py_dir)
     return result
 
 
@@ -162,8 +199,7 @@ def report(result: dict[str, Any]) -> None:
     print("\n" + "=" * 78)
     print(
         f"srtm_terrain norm verification  "
-        f"({result['samples_with_srtm_terrain']}/{result['samples_sampled']} "
-        f"sampled tiles had data)"
+        f"({result['samples_with_srtm']} tiles measured)"
     )
     print("=" * 78)
     for band, m in result["bands"].items():
@@ -175,13 +211,11 @@ def report(result: dict[str, Any]) -> None:
         )
         if pc:
             print("  quantiles: " + "  ".join(f"{k}={v:.4f}" for k, v in pc.items()))
-        # Committed computed (mean/std) — this is what actually drives normalization.
         c = computed.get(band)
         if c:
             print(
                 f"  committed computed.json : mean={c['mean']:.5f}  std={c['std']:.5f}"
             )
-        # Committed predefined (min/max) — the fallback strategy.
         p = predefined.get(band)
         if p:
             print(f"  committed predefined.json: min={p['min']}  max={p['max']}")
@@ -222,7 +256,7 @@ if __name__ == "__main__":
         "--estimate_from",
         type=int,
         default=None,
-        help="Number of random tiles to sample (default: all).",
+        help="Number of random srtm-bearing tiles to sample (default: all).",
     )
     parser.add_argument(
         "--output_path",
@@ -233,18 +267,11 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
-    # srtm_terrain is derived in read_h5_file whenever it is a training modality and the
-    # raw srtm band is present in the h5. normalize=False so we measure raw values.
-    dataset_config = OlmoEarthDatasetConfig(
-        h5py_dir=args.h5py_dir,
-        training_modalities=[MODALITY.name],
-        normalize=False,
-        seed=args.seed,
-    )
-    dataset = dataset_config.build()
-    dataset.prepare()
+    h5py_dir = UPath(args.h5py_dir)
+    if not h5py_dir.exists():
+        raise FileNotFoundError(f"H5PY directory does not exist: {h5py_dir}")
 
-    result = measure(dataset, estimate_from=args.estimate_from, seed=args.seed)
+    result = measure(h5py_dir, estimate_from=args.estimate_from, seed=args.seed)
     report(result)
 
     if args.output_path:
