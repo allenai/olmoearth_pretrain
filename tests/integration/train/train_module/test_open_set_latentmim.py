@@ -47,6 +47,7 @@ class MockTrainer:
     def __init__(self) -> None:
         """Initialize an empty metric store and minimal step state."""
         self._metrics: dict[str, float] = {}
+        self._metric_record_counts: dict[str, int] = {}
         self.global_step = 0
         self.max_steps = 100
 
@@ -54,6 +55,9 @@ class MockTrainer:
         self, name: str, value: float, reduce_type: object = None, **kwargs: object
     ) -> None:
         """Record the latest value for a metric."""
+        self._metric_record_counts[name] = self._metric_record_counts.get(name, 0) + 1
+        if self._metric_record_counts[name] > 1:
+            raise AssertionError(f"duplicate metric recorded: {name}")
         self._metrics[name] = value
 
 
@@ -122,10 +126,12 @@ def model(set_random_seeds: None) -> OpenSetLatentMIMConfig:
 
 
 @pytest.mark.parametrize("autocast_precision", [None, DType.bfloat16])
+@pytest.mark.parametrize("rank_microbatch_size", [1, 3])
 def test_open_set_train_batch_records_supervised_loss(
     model: OpenSetLatentMIMConfig,
     set_random_seeds: None,
     autocast_precision: DType | None,
+    rank_microbatch_size: int,
 ) -> None:
     """train_batch runs and records a finite supervised CE loss."""
     masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
@@ -138,7 +144,7 @@ def test_open_set_train_batch_records_supervised_loss(
 
     config = OpenSetLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=1e-4, weight_decay=0.0),
-        rank_microbatch_size=3,
+        rank_microbatch_size=rank_microbatch_size,
         loss_config=LossConfig(loss_config={"type": "patch_discrimination"}),
         contrastive_config=LossConfig(loss_config={"type": "InfoNCE", "weight": 0.1}),
         masking_config=MaskingConfig(strategy_config={"type": "random"}),
@@ -164,3 +170,10 @@ def test_open_set_train_batch_records_supervised_loss(
     assert mock_trainer._metrics["train/open_set_ce_patches"] > 0
     # Regression had no labels, so no patches contributed.
     assert mock_trainer._metrics["train/open_set_mse_patches"] == 0.0
+    for metric_name in (
+        "train/open_set_ce",
+        "train/open_set_ce_patches",
+        "train/open_set_mse",
+        "train/open_set_mse_patches",
+    ):
+        assert mock_trainer._metric_record_counts[metric_name] == 1

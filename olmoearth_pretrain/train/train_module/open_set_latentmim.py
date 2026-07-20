@@ -30,6 +30,8 @@ logger = getLogger(__name__)
 class OpenSetLatentMIMTrainModule(ContrastiveLatentMIMTrainModule):
     """Contrastive latent-MIM plus a supervised open-set probe loss."""
 
+    _NUM_AUGMENTED_VIEWS = 2
+
     def __init__(self, *args: Any, sup_loss_weight: float = 1.0, **kwargs: Any) -> None:
         """Initialize, extracting the supervised loss weight.
 
@@ -41,6 +43,46 @@ class OpenSetLatentMIMTrainModule(ContrastiveLatentMIMTrainModule):
         """
         super().__init__(*args, **kwargs)
         self.sup_loss_weight = sup_loss_weight
+        self._supervised_metrics: dict[str, tuple[float, int]] | None = None
+
+    def train_batch(
+        self,
+        batch: tuple[int, MaskedOlmoEarthSample, MaskedOlmoEarthSample],
+        dry_run: bool = False,
+    ) -> None:
+        """Train a batch and record supervised metrics once for the full batch."""
+        self._supervised_metrics = {}
+        try:
+            super().train_batch(batch, dry_run=dry_run)
+            if not dry_run:
+                self._flush_supervised_metrics()
+        finally:
+            self._supervised_metrics = None
+
+    def _accumulate_supervised_metrics(self, metrics: dict[str, float]) -> None:
+        """Accumulate metrics emitted by each view and microbatch forward."""
+        if self._supervised_metrics is None:
+            raise RuntimeError(
+                "supervised metrics can only be recorded during train_batch"
+            )
+        for key, value in metrics.items():
+            total, count = self._supervised_metrics.get(key, (0.0, 0))
+            self._supervised_metrics[key] = (total + value, count + 1)
+
+    def _flush_supervised_metrics(self) -> None:
+        """Reduce local forwards and submit each metric once to the trainer."""
+        if not self._supervised_metrics:
+            return
+        metrics = {}
+        for key, (total, count) in self._supervised_metrics.items():
+            if key.endswith("_patches"):
+                metrics[key] = total / self._NUM_AUGMENTED_VIEWS
+            else:
+                metrics[key] = total / count
+        self.log_extra_metrics(
+            {f"train/{key}": value for key, value in metrics.items()},
+            reduce_type=ReduceType.mean,
+        )
 
     def model_forward(
         self,
@@ -64,10 +106,7 @@ class OpenSetLatentMIMTrainModule(ContrastiveLatentMIMTrainModule):
             sup_loss, sup_metrics = self.model.open_set_probe(latent, batch)
         loss = loss + self.sup_loss_weight * sup_loss
         if sup_metrics:
-            self.log_extra_metrics(
-                {f"train/{key}": value for key, value in sup_metrics.items()},
-                reduce_type=ReduceType.mean,
-            )
+            self._accumulate_supervised_metrics(sup_metrics)
         return loss, latent, decoded, target_output, pooled
 
 
