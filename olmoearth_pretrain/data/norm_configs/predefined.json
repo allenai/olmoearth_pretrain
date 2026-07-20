@@ -677,6 +677,20 @@
       "min": 0
     }
   },
+  "srtm_terrain": {
+    "aspect_cos": {
+      "max": 1,
+      "min": -1
+    },
+    "aspect_sin": {
+      "max": 1,
+      "min": -1
+    },
+    "slope": {
+      "max": 1.5707963267948966,
+      "min": 0
+    }
+  },
   "worldcereal": {
     "tc-annual-temporarycrops-classification": {
       "max": 100,

@@ -330,6 +330,19 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # Terrain derivatives (slope + aspect) computed from the raw SRTM elevation band at
+    # load time. This is a derived modality: it is not stored on disk or parsed from the
+    # csv (ignore_when_parsing=True). Instead it is computed in OlmoEarthDataset from the
+    # elevation grid (see compute_srtm_terrain). Aspect is a circular quantity, so it is
+    # encoded as its sine and cosine to avoid the 0/2*pi discontinuity.
+    SRTM_TERRAIN = ModalitySpec(
+        name="srtm_terrain",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["slope", "aspect_sin", "aspect_cos"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=True,
+    )
+
     OPENSTREETMAP = ModalitySpec(
         name="openstreetmap",
         tile_resolution_factor=16,

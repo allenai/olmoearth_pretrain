@@ -656,6 +656,23 @@
       "var": 6612037978190837.0
     }
   },
+  "srtm_terrain": {
+    "aspect_cos": {
+      "mean": 0.0,
+      "std": 0.5,
+      "var": 0.25
+    },
+    "aspect_sin": {
+      "mean": 0.0,
+      "std": 0.5,
+      "var": 0.25
+    },
+    "slope": {
+      "mean": 0.7853981633974483,
+      "std": 0.39269908169872414,
+      "var": 0.15421256876702122
+    }
+  },
   "tile_path": "/weka/dfive-default/helios/dataset/presto/h5py_data",
   "total_n": 103896,
   "worldcover": {

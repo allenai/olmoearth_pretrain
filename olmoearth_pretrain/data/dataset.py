@@ -302,6 +302,50 @@ def one_hot_worldcover(raw: np.ndarray, dtype: np.dtype) -> np.ndarray:
     return onehot
 
 
+def compute_srtm_terrain(elevation: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    """Compute slope and aspect from the raw SRTM elevation band.
+
+    Slope is the steepest gradient angle (radians, in [0, pi/2]). Aspect is the compass
+    direction that steepest gradient points in; because it is circular it is returned as
+    its sine and cosine (each in [-1, 1]) rather than a raw angle, so there is no
+    discontinuity at 0/2*pi. Bands are returned in Modality.SRTM_TERRAIN.band_order:
+    (slope, aspect_sin, aspect_cos).
+
+    Gradients are taken on the elevation grid using the modality's ground resolution as
+    the pixel spacing, so slope is a true angle. Any pixel that is MISSING_VALUE - and
+    the one-pixel halo around it, since the central difference reads its neighbours - is
+    MISSING_VALUE across all output bands so the missing-value handling downstream keeps
+    working.
+
+    Args:
+        elevation: raw (un-normalized) SRTM data, shape [H, W, T, 1]. T is 1 for the
+            static SRTM modality but the calculation is done per timestep regardless.
+        dtype: the dtype of the output array.
+
+    Returns:
+        Array of shape [H, W, T, 3] holding (slope, aspect_sin, aspect_cos).
+    """
+    ground_resolution_m = Modality.SRTM.band_sets[0].get_resolution()
+
+    # Drop the single-band axis and promote to a float type so NaN can mark missing
+    # pixels. float32 is plenty for elevation (<= ~9000 m) and roughly halves the cost
+    # versus float64.
+    elev = elevation[..., 0].astype(np.float32)  # [H, W, T]
+    elev = np.where(elev == MISSING_VALUE, np.nan, elev)
+
+    # axis 0 is rows (north-south), axis 1 is columns (east-west). NaNs propagate one
+    # pixel into the central difference, giving the missing halo for free.
+    grad_y, grad_x = np.gradient(
+        elev, ground_resolution_m, ground_resolution_m, axis=(0, 1)
+    )
+    slope = np.arctan(np.sqrt(grad_x**2 + grad_y**2))
+    aspect = np.arctan2(grad_y, -grad_x)
+
+    terrain = np.stack([slope, np.sin(aspect), np.cos(aspect)], axis=-1)  # [H, W, T, 3]
+    terrain = np.where(np.isnan(terrain), MISSING_VALUE, terrain)
+    return terrain.astype(dtype)
+
+
 class GetItemArgs(NamedTuple):
     """Arguments for the __getitem__ method of the OlmoEarthDataset."""
 
@@ -779,6 +823,18 @@ class OlmoEarthDataset(Dataset):
                 ):
                     sample_dict[Modality.WORLDCOVER_ONEHOT.name] = one_hot_worldcover(
                         h5file[Modality.WORLDCOVER.name][()], self.dtype
+                    )
+
+                # srtm_terrain is derived from the raw srtm elevation band: it is not
+                # stored on disk, so read the elevation and compute slope/aspect on the
+                # full tile (before any spatial cropping) so the gradients are correct.
+                # If srtm is absent the modality is treated as missing downstream.
+                if (
+                    Modality.SRTM_TERRAIN.name in self.training_modalities
+                    and Modality.SRTM.name in h5file
+                ):
+                    sample_dict[Modality.SRTM_TERRAIN.name] = compute_srtm_terrain(
+                        h5file[Modality.SRTM.name][()], self.dtype
                     )
 
                 if (
