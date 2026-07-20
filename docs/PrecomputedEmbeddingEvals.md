@@ -79,21 +79,38 @@ python -m olmoearth_pretrain.internal.full_eval_sweep --checkpoint_path=<olmoear
 - Unit tests: `tests/unit/eval/test_precomputed_embedding.py` (+ balanced
   accuracy test in `test_metrics.py`). Full unit suite green.
 
-### In flight (uncommitted output may exist under `evals/embedding_materializer/`)
+### Done (code-complete; needs a real-data run to validate the fetchers)
 
 - **Embedding materializer** — `olmoearth_pretrain/evals/embedding_materializer/`:
-  `EmbeddingFetcher` protocol with `AEFFetcher` (wraps rslearn's
-  `GoogleSatelliteEmbeddingV1`: AWS Open Data COGs, streamed reads, int8→
-  float dequantization, returns [-1,1] float32) and `TesseraFetcher`
-  (wraps `geotessera`, lazy-imported — not in the venv yet);
-  `RslearnWindowProvider` writes a fetched array as a per-window raster
-  layer named after the modality; idempotent CLI
-  (`python -m olmoearth_pretrain.evals.embedding_materializer
-  --dataset_path <p> --products aef,tessera [--year YYYY] [--overwrite]`);
-  provenance manifest JSON per (dataset, product) recording product
-  version, year policy, and coverage gaps. Was being built by an agent
-  when this doc was written — review its files and tests before
-  committing.
+  `EmbeddingFetcher` ABC returning float32 (C, H, W) on the window's grid
+  (or None for coverage gaps); `AEFFetcher` wraps rslearn's
+  `GoogleSatelliteEmbeddingV1` (AWS Open Data COGs, warped reads, int8→
+  float dequantization to [-1,1], nodata -1.0, index CSV cached under
+  `~/.cache/olmoearth_pretrain/aef_index`); `TesseraFetcher` wraps
+  `geotessera` (lazy-imported — NOT in the venv yet, `pip install
+  geotessera`), NaN nodata; shared tested mosaic/warp helper.
+  `RslearnWindowProvider` writes per-window raster layers named after the
+  modality (band dir is a sha256 hash — rslearn's own behavior for >64-char
+  band lists; always resolve via `window.get_raster_dir`) and marks layers
+  completed. Idempotent CLI:
+  `python -m olmoearth_pretrain.evals.embedding_materializer
+  --dataset_path <p> --products aef,tessera [--year YYYY] [--overwrite]
+  [--workers N]`. Year policy: explicit `--year`, else window time-range
+  midpoint; windows with no time range are recorded separately from
+  coverage gaps in the per-product provenance manifest
+  (`<dataset>/embedding_materializer_manifest_<product>.json`).
+  14 unit tests (`tests/unit/eval/test_embedding_materializer.py`).
+
+  **Verify on first real run** (written against docs, not a live service):
+  geotessera's `registry.load_blocks_for_region(bounds=..., year=...)` and
+  `fetch_embeddings(tiles)` yielding
+  `(year, lon, lat, (H,W,128) float32, crs, transform)`; `GeoTessera()`
+  kwargs for pinning dataset version/variant (pass via `client_kwargs`,
+  update the recorded `product_version`, default "v1.1"). AEF years are
+  2018–2024 on the AWS bucket; out-of-range years surface as coverage gaps.
+  Also note: for rslearn `ModelDataset` to *read* the new layers, each eval
+  dataset's on-WEKA `config.json`/`model.yaml` needs a `gse`/`tessera`
+  layer entry — dataset-side change at onboarding time (remaining work #2).
 
 ### Remaining work
 
