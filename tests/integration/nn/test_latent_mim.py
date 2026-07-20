@@ -6,8 +6,13 @@ import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
-from olmoearth_pretrain.nn.flexi_vit import Encoder, Predictor
-from olmoearth_pretrain.nn.latent_mim import LatentMIM
+from olmoearth_pretrain.nn.flexi_vit import (
+    Encoder,
+    EncoderConfig,
+    Predictor,
+    PredictorConfig,
+)
+from olmoearth_pretrain.nn.latent_mim import LatentMIM, LatentMIMConfig
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import PatchDiscriminationLoss
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
@@ -174,5 +179,96 @@ def test_latentmim_with_loss(
             ]
         ):
             assert param.grad is not None, name
+    for name, param in latentmim.target_encoder.named_parameters():
+        assert param.grad is None, name
+
+
+@pytest.mark.parametrize(
+    "encoder_width, output_embedding_size, target_embedding_size, expect_expander",
+    [
+        # Approach 1: base bottleneck. Encoder emits a small deliverable
+        # embedding; target width == encoder width, so it is the raw
+        # patch-embedding with no expander.
+        (16, 8, 16, False),
+        # Approach 2: native small encoder projected up to the loss dim via a
+        # frozen expander MLP.
+        (16, None, 24, True),
+    ],
+)
+def test_latentmim_smaller_embedding_loss_at_target_dim(
+    masked_sample_dict: dict[str, torch.Tensor],
+    encoder_width: int,
+    output_embedding_size: int | None,
+    target_embedding_size: int,
+    expect_expander: bool,
+) -> None:
+    """Encoder emits a compact embedding while the loss/target run at 768-analog."""
+    supported_modalities = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.LATLON.name,
+        Modality.WORLDCOVER.name,
+    ]
+    x = MaskedOlmoEarthSample(**masked_sample_dict)
+    patch_size = 4
+
+    deliverable_size = output_embedding_size or encoder_width
+    encoder_config = EncoderConfig(
+        supported_modality_names=supported_modalities,
+        embedding_size=encoder_width,
+        max_patch_size=8,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=4.0,
+        depth=2,
+        drop_path=0.1,
+        max_sequence_length=12,
+        output_embedding_size=output_embedding_size,
+    )
+    decoder_config = PredictorConfig(
+        supported_modality_names=supported_modalities,
+        encoder_embedding_size=deliverable_size,
+        decoder_embedding_size=encoder_width,
+        depth=2,
+        mlp_ratio=4.0,
+        num_heads=2,
+        max_sequence_length=12,
+        output_embedding_size=target_embedding_size,
+    )
+    latentmim = LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        projection_only_target=True,
+        target_embedding_size=target_embedding_size,
+        target_expander_num_layers=2,
+    ).build()
+
+    assert (latentmim.target_encoder.expander is not None) == expect_expander
+    # Target must skip the encoder's compressing projector.
+    assert latentmim.target_encoder.embedding_projector is None
+
+    latent, decoded, _, _, _ = latentmim.forward(x, patch_size)
+
+    assert latent.sentinel2_l2a is not None
+    assert decoded.sentinel2_l2a is not None
+    # Encoder emits the compact deliverable embedding...
+    assert latent.sentinel2_l2a.shape[-1] == deliverable_size
+    # ...while the decoder predicts at the loss dimension.
+    assert decoded.sentinel2_l2a.shape[-1] == target_embedding_size
+
+    with torch.no_grad():
+        output_dict = latentmim.target_encoder.forward(
+            x.unmask(),
+            patch_size=patch_size,
+            token_exit_cfg={m: 0 for m in latentmim.encoder.supported_modality_names},
+        )
+        target_output, _, _ = unpack_encoder_output(output_dict)
+    # Target operates at the loss dimension too.
+    assert target_output.sentinel2_l2a is not None
+    assert target_output.sentinel2_l2a.shape[-1] == target_embedding_size
+
+    loss = PatchDiscriminationLoss().compute(decoded, target_output)
+    loss.backward()
+
+    # Frozen target (including any expander) never accumulates gradients.
     for name, param in latentmim.target_encoder.named_parameters():
         assert param.grad is None, name

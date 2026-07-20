@@ -16,7 +16,7 @@ from torch.distributed.fsdp import (
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.nn.flexi_vit import ProjectAndAggregate, TokensAndMasks
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
 
 logger = logging.getLogger(__name__)
@@ -34,13 +34,39 @@ class FrozenTargetProjection(nn.Module):
 
     ``project_aggregated`` is intentionally not computed: both latent-MIM train
     modules only consume ``tokens_and_masks`` from the target output.
+
+    When ``use_encoder_projection`` is False the encoder's ``embedding_projector``
+    (which compresses tokens down to a small deliverable embedding) is skipped so
+    the target stays at the full patch-embedding width. An optional frozen
+    ``expander`` can then map that width up to the loss dimension, keeping the
+    patch-discrimination loss high-dimensional while the online encoder still
+    emits a compact embedding.
     """
 
-    def __init__(self, encoder: nn.Module):
-        """Copy and freeze the projection submodules of ``encoder``."""
+    def __init__(
+        self,
+        encoder: nn.Module,
+        use_encoder_projection: bool = True,
+        expander: nn.Module | None = None,
+    ):
+        """Copy and freeze the projection submodules of ``encoder``.
+
+        Args:
+            encoder: The online encoder whose projection submodules are copied.
+            use_encoder_projection: If True, copy and apply the encoder's
+                ``embedding_projector``. If False, skip it so the target is the
+                raw patch-embedding width.
+            expander: Optional frozen module applied after the patch embeddings
+                (in place of the encoder projector) to map the target up to the
+                loss dimension.
+        """
         super().__init__()
         self.patch_embeddings = deepcopy(encoder.patch_embeddings)
-        self.embedding_projector = deepcopy(encoder.embedding_projector)
+        self.use_encoder_projection = use_encoder_projection
+        self.embedding_projector = (
+            deepcopy(encoder.embedding_projector) if use_encoder_projection else None
+        )
+        self.expander = expander
         for p in self.parameters():
             p.requires_grad = False
 
@@ -51,7 +77,7 @@ class FrozenTargetProjection(nn.Module):
         token_exit_cfg: dict[str, int] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Compute exit-0 targets: patch embeddings + optional projector."""
+        """Compute exit-0 targets: patch embeddings + optional projector/expander."""
         if token_exit_cfg is not None and any(
             exit_depth > 0 for exit_depth in token_exit_cfg.values()
         ):
@@ -64,6 +90,8 @@ class FrozenTargetProjection(nn.Module):
         output = TokensAndMasks(**patchified_tokens_and_masks)
         if self.embedding_projector is not None:
             output = self.embedding_projector(output)
+        if self.expander is not None:
+            output = self.expander(output)
         return {"tokens_and_masks": output}
 
 
@@ -78,6 +106,8 @@ class LatentMIM(nn.Module, DistributedMixins):
         decoder: nn.Module,
         reconstructor: torch.nn.Module | None = None,
         projection_only_target: bool = False,
+        target_use_encoder_projection: bool = True,
+        target_expander: nn.Module | None = None,
     ):
         """Initialize the Latent MIM Style.
 
@@ -90,13 +120,23 @@ class LatentMIM(nn.Module, DistributedMixins):
                 instead of a full copy of the encoder. Only valid when all token
                 exit depths are 0 and the target is never EMA-updated
                 (ema_decay=(1.0, 1.0)).
+            target_use_encoder_projection: If False (and projection_only_target),
+                the frozen target skips the encoder's compressing
+                ``embedding_projector`` so it stays at the full patch-embedding
+                width. Ignored unless ``projection_only_target`` is True.
+            target_expander: Optional frozen module mapping the target up to the
+                loss dimension. Ignored unless ``projection_only_target`` is True.
         """
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.reconstructor = reconstructor
         if projection_only_target:
-            self.target_encoder: nn.Module = FrozenTargetProjection(self.encoder)
+            self.target_encoder: nn.Module = FrozenTargetProjection(
+                self.encoder,
+                use_encoder_projection=target_use_encoder_projection,
+                expander=target_expander,
+            )
         else:
             self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
@@ -189,6 +229,14 @@ class LatentMIMConfig(Config):
     decoder_config: Config
     reconstructor_config: Config | None = None
     projection_only_target: bool = False
+    # When set, the frozen exit-0 target operates at this (loss) dimension: it
+    # skips the encoder's compressing ``embedding_projector`` and, if the
+    # patch-embedding width differs, applies a frozen expander up to this size.
+    # The decoder must output at this size too. This lets the encoder emit a
+    # compact deliverable embedding while the patch-discrimination loss runs at
+    # ``target_embedding_size``. Requires ``projection_only_target=True``.
+    target_embedding_size: int | None = None
+    target_expander_num_layers: int = 2
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -210,6 +258,20 @@ class LatentMIMConfig(Config):
         )
         if encoder_output_size != self.decoder_config.encoder_embedding_size:
             raise ValueError("Encoder embedding size must be consistent!")
+        if self.target_embedding_size is not None:
+            if not self.projection_only_target:
+                raise ValueError(
+                    "target_embedding_size requires projection_only_target=True."
+                )
+            decoder_output_size = (
+                self.decoder_config.output_embedding_size
+                or self.decoder_config.encoder_embedding_size
+            )
+            if decoder_output_size != self.target_embedding_size:
+                raise ValueError(
+                    "Decoder output_embedding_size must equal target_embedding_size "
+                    f"({self.target_embedding_size}), got {decoder_output_size}."
+                )
 
     def build(self) -> "LatentMIM":
         """Build the Latent Predictor."""
@@ -221,9 +283,26 @@ class LatentMIMConfig(Config):
             if self.reconstructor_config is not None
             else None
         )
+        target_use_encoder_projection = True
+        target_expander: nn.Module | None = None
+        if self.target_embedding_size is not None:
+            # Target bypasses the compressing projector and expands the raw
+            # patch-embedding width up to the loss dimension (identity when they
+            # already match, i.e. no expander).
+            target_use_encoder_projection = False
+            patch_embed_size = self.encoder_config.embedding_size
+            if patch_embed_size != self.target_embedding_size:
+                target_expander = ProjectAndAggregate(
+                    embedding_size=patch_embed_size,
+                    num_layers=self.target_expander_num_layers,
+                    output_embedding_size=self.target_embedding_size,
+                    only_project=True,
+                )
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
             projection_only_target=self.projection_only_target,
+            target_use_encoder_projection=target_use_encoder_projection,
+            target_expander=target_expander,
         )
