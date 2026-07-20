@@ -4,6 +4,7 @@ e.g. python -m olmoearth_pretrain.internal.full_eval_sweep --cluster=ai2/saturn-
 """
 
 import argparse
+import dataclasses
 import json
 import os
 import subprocess  # nosec
@@ -12,6 +13,7 @@ from collections.abc import Generator
 from logging import getLogger
 from typing import Any
 
+from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config, get_eval_mode
 from olmoearth_pretrain.evals.models import (
     MODELS_WITH_MULTIPLE_SIZES,
@@ -202,6 +204,65 @@ def get_tessera_args(pretrained_normalizer: bool = True) -> str:
             ]
         )
     return tessera_args
+
+
+def _modality_capable_tasks(modality_name: str) -> list[str]:
+    """Task names whose dataset carries the given precomputed embedding modality.
+
+    Tasks that differ only by input imagery (e.g. the _sentinel1 variants of a
+    probe) collapse into identical evals once input_modalities is overridden to
+    the embedding modality, so only the first task of each such group is kept.
+    """
+    seen: set[str] = set()
+    task_names: list[str] = []
+    for task_name, task in EVAL_TASKS.items():
+        if modality_name not in dataset_to_config(task.dataset).supported_modalities:
+            continue
+        key = repr(dataclasses.replace(task, input_modalities=[]))
+        if key in seen:
+            continue
+        seen.add(key)
+        task_names.append(task_name)
+    return task_names
+
+
+def _get_precomputed_embedding_args(modality_name: str) -> str:
+    """Get the arguments for a precomputed embedding product baseline.
+
+    Embedding products are consumed exactly as stored: no re-normalization, and
+    each capable task reads the precomputed modality instead of imagery. Tasks
+    whose dataset has no such modality baked in keep their imagery
+    input_modalities and are skipped at runtime by the modality check.
+    """
+    capable_tasks = _modality_capable_tasks(modality_name)
+    args = dataset_args
+    args += " " + " ".join(
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+        for task_name in capable_tasks
+    )
+    args += " " + " ".join(
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.input_modalities=[{modality_name}]"
+        for task_name in capable_tasks
+    )
+    return args
+
+
+def get_aef_args(pretrained_normalizer: bool = True) -> str:
+    """Get the AlphaEarth (GSE) arguments.
+
+    ``pretrained_normalizer`` has no effect (there is no runnable model); it is
+    accepted for interface parity with the other baseline arg functions.
+    """
+    return _get_precomputed_embedding_args(Modality.GSE.name)
+
+
+def get_tessera_precomputed_args(pretrained_normalizer: bool = True) -> str:
+    """Get the precomputed-Tessera arguments.
+
+    ``pretrained_normalizer`` has no effect (there is no runnable model); it is
+    accepted for interface parity with the other baseline arg functions.
+    """
+    return _get_precomputed_embedding_args(Modality.TESSERA.name)
 
 
 def get_panopticon_args() -> str:
@@ -454,6 +515,8 @@ def _get_model_specific_args(model: BaselineModelName | None) -> str:
         BaselineModelName.PRITHVI_V2: get_prithviv2_args,
         BaselineModelName.TERRAMIND: get_terramind_args,
         BaselineModelName.CLAY: get_clay_args,
+        BaselineModelName.AEF: get_aef_args,
+        BaselineModelName.TESSERA_PRECOMPUTED: get_tessera_precomputed_args,
     }
     if model is None or model not in model_args_map:
         return ""
@@ -490,6 +553,8 @@ def _get_normalization_args(model: BaselineModelName | None, norm_mode: str) -> 
         BaselineModelName.PRESTO: get_presto_args,
         BaselineModelName.TERRAMIND: get_terramind_args,
         BaselineModelName.CLAY: get_clay_args,
+        BaselineModelName.AEF: get_aef_args,
+        BaselineModelName.TESSERA_PRECOMPUTED: get_tessera_precomputed_args,
     }
 
     if model in model_map:

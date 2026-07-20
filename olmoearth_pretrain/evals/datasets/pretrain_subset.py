@@ -86,6 +86,7 @@ class PretrainSubsetDataset(Dataset):
         test_samples: int = DEFAULT_MAX_SAMPLES,
         split_strategy: str = "random",
         geographic_bin_size_deg: float = 5.0,
+        require_input_modalities_present: bool = True,
     ) -> None:
         """Initialize a deterministic pretrain eval subset.
 
@@ -106,6 +107,11 @@ class PretrainSubsetDataset(Dataset):
             split_strategy: ``random`` for shuffled 80/10/10 sample splits or
                 ``geographic`` for shuffled 80/10/10 lat/lon-bin splits.
             geographic_bin_size_deg: Geographic bin size for spatial holdouts.
+            require_input_modalities_present: Drop samples missing any input
+                modality. Applied after split assignment so split membership
+                stays aligned with runs using other input modalities. Only
+                filters sparsely-present modalities (e.g. gse); samples missing
+                every input modality would otherwise fail to load.
         """
         self.patch_size = patch_size
         self.hw_p = hw_p
@@ -173,6 +179,49 @@ class PretrainSubsetDataset(Dataset):
                     f"Unsupported split_strategy '{split_strategy}'. "
                     f"Expected 'random' or 'geographic'."
                 )
+
+        if require_input_modalities_present:
+            self._indices = self._filter_positions_with_inputs_present(
+                self._dataset, self._indices, training_modalities
+            )
+
+    @staticmethod
+    def _filter_positions_with_inputs_present(
+        dataset: OlmoEarthDataset,
+        positions: list[int],
+        training_modalities: list[str],
+    ) -> list[int]:
+        """Drop positions whose H5 sample lacks any of the input modalities.
+
+        Sparsely-present modalities (e.g. gse) are absent from some samples;
+        those samples cannot be loaded when such a modality is the input. This
+        runs after split assignment so split membership stays aligned with runs
+        that use other input modalities (matching the manual filter in
+        scripts/tools/20260528_gse_linear_probe.py).
+        """
+        metadata_df = _read_sample_metadata(str(dataset.sample_metadata_path))
+        assert dataset.sample_indices is not None
+        h5_idxs = np.asarray(dataset.sample_indices)[np.asarray(positions, dtype=int)]
+        keep = np.ones(len(positions), dtype=bool)
+        for modality in training_modalities:
+            if modality not in metadata_df.columns:
+                logger.warning(
+                    f"Input modality '{modality}' has no presence column in "
+                    f"{dataset.sample_metadata_path}; skipping presence filter for it."
+                )
+                continue
+            keep &= metadata_df[modality].to_numpy()[h5_idxs] > 0
+        if not keep.any():
+            raise ValueError(
+                f"No samples remain after filtering for input modalities "
+                f"{training_modalities}."
+            )
+        if not keep.all():
+            logger.info(
+                f"Filtered {int((~keep).sum())}/{len(positions)} samples missing "
+                f"input modalities {training_modalities}."
+            )
+        return [pos for pos, k in zip(positions, keep) if k]
 
     @staticmethod
     def _positions_with_target_present(
