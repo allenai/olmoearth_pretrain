@@ -58,18 +58,24 @@ Output GeoTIFFs: single-band **uint8**, local UTM, **10 m/pixel**, **64x64**, no
 ## Time range / change label
 
 Landslide is an event label. For each tile:
-- `change_time` = `options.event_date` (the landslide event date).
-- `time_range` = a **1-year window centered on `change_time`** (spec §5), so pretraining
-  only pairs the tile with imagery whose window spans the event.
+- `change_time` = `options.event_date` (the landslide event date), retained as the
+  reference date used to build the windows.
+- `change_time` is split into two adjacent six-month windows via
+  `io.pre_post_time_ranges(change_time, ...)`: `pre_time_range` — the ~6 months (≤183 days)
+  immediately before `change_time` — and `post_time_range` — the ~6 months (≤183 days)
+  immediately after (spec §5). The two windows are adjacent, split exactly at `change_time`
+  (total span still ~1 year), and `time_range` is set to null. Pretraining pairs a "before"
+  image stack with an "after" stack and probes on their difference.
 All event dates are 2016-2023 (Sentinel era). Pre-2016 windows are defensively filtered
-(none were present). Event dates are specific days, so a 1-year centered window is
-appropriate (the pre/post-event imagery lies within it).
+(none were present). Event dates are specific days, so an adjacent before/after split at
+the event is appropriate (the pre/post-event imagery lies in the respective windows).
 
 ## Verification
 
 - 1000 `.tif` + 1000 matching `.json`. All tifs: single band, uint8, UTM CRS, 10 m,
   64x64, nodata 255, pixel values ⊆ {0, 1, 255}.
-- Every sample JSON has `change_time` set and a `time_range` of exactly 365 days.
+- Every sample JSON has `change_time` set, null `time_range`, and an adjacent
+  `pre_time_range`/`post_time_range` pair (each ≤183 days) split at `change_time`.
 - Georeferencing exact: output tile bounds == source window bounds; label content ==
   source with `2 -> 255` remap; tile center lon/lat matches the source window's encoded
   coordinates.

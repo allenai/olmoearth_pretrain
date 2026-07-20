@@ -8,7 +8,7 @@ dtype with a recorded nodata sentinel (default -99999).
 import json
 import math
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -103,14 +103,51 @@ def centered_time_range(
     date, rather than a static year. Default +/-15 days => a ~1-month window. The
     span stays well under the 360-day pretraining cap.
     """
-    from datetime import timedelta
-
     if center.tzinfo is None:
         center = center.replace(tzinfo=UTC)
     return (
         center - timedelta(days=half_window_days),
         center + timedelta(days=half_window_days),
     )
+
+
+# Six months, used as the default half-span for change pre/post windows.
+SIX_MONTHS_DAYS = 183
+
+
+def pre_post_time_ranges(
+    change_time: datetime,
+    pre_months_days: int = SIX_MONTHS_DAYS,
+    post_months_days: int = SIX_MONTHS_DAYS,
+    gap_days: int = 0,
+    pre_offset_days: int = 0,
+) -> tuple[tuple[datetime, datetime], tuple[datetime, datetime]]:
+    """Two ~6-month observation windows around a change event.
+
+    Change/event labels are a mask of *where* a change occurred; pretraining pairs each
+    with a "before" and an "after" image stack and probes on their difference. Instead of
+    one ~1-year window centered on ``change_time`` (the old scheme), we emit two independent
+    six-month windows so the pre period need not be adjacent to the post period:
+
+        post = [change_time + gap_days, change_time + gap_days + post_months_days)
+        pre  = [change_time - pre_offset_days - gap_days - pre_months_days,
+                change_time - pre_offset_days - gap_days)
+
+    With the defaults (``gap_days=0``, ``pre_offset_days=0``) the two windows are adjacent
+    and split exactly at ``change_time`` (total span ~1 year, matching the old scheme).
+    ``gap_days`` inserts a guard gap on both sides of ``change_time`` to absorb change-date
+    imprecision. ``pre_offset_days`` additionally pushes the pre window earlier -- use it
+    when ``change_time`` is a *post*-event acquisition date (the event itself is somewhat
+    earlier) so the pre window ends before the true event. Each window stays <= 183 days,
+    well under the 360-day pretraining cap. Returns ``(pre_range, post_range)``.
+    """
+    if change_time.tzinfo is None:
+        change_time = change_time.replace(tzinfo=UTC)
+    post_start = change_time + timedelta(days=gap_days)
+    post = (post_start, post_start + timedelta(days=post_months_days))
+    pre_end = change_time - timedelta(days=pre_offset_days + gap_days)
+    pre = (pre_end - timedelta(days=pre_months_days), pre_end)
+    return pre, post
 
 
 def write_label_geotiff(
@@ -138,6 +175,17 @@ def write_label_geotiff(
     (d / tmp_name).rename(d / f"{sample_id}.tif")
 
 
+def _iso_range(
+    tr: tuple[datetime, datetime] | list[str] | None,
+) -> list[str] | None:
+    """Normalize a (datetime, datetime) tuple or [iso, iso] list to [iso, iso]."""
+    if tr is None:
+        return None
+    if isinstance(tr[0], str):
+        return list(tr)  # type: ignore[arg-type]
+    return [t.isoformat() for t in tr]  # type: ignore[union-attr]
+
+
 def write_sample_json(
     slug: str,
     sample_id: str,
@@ -147,15 +195,27 @@ def write_sample_json(
     change_time: datetime | None = None,
     source_id: str | None = None,
     classes_present: list[int] | None = None,
+    pre_time_range: tuple[datetime, datetime] | None = None,
+    post_time_range: tuple[datetime, datetime] | None = None,
 ) -> None:
-    """Write the per-sample sidecar JSON."""
+    """Write the per-sample sidecar JSON.
+
+    For change/event datasets pass ``pre_time_range``/``post_time_range`` (the two
+    six-month windows from ``pre_post_time_ranges``); ``time_range`` is then forced to
+    ``null`` because the two windows may be far apart (up to several years) and no single
+    <=360-day window can represent them -- pretraining reads pre/post directly. Non-change
+    datasets pass ``time_range`` and leave pre/post as None.
+    """
     d = locations_dir(slug)
     d.mkdir(parents=True, exist_ok=True)
+    has_prepost = pre_time_range is not None or post_time_range is not None
     obj: dict[str, Any] = {
         "crs": projection.crs.to_string(),
         "pixel_bounds": list(bounds),
-        "time_range": [t.isoformat() for t in time_range] if time_range else None,
+        "time_range": None if has_prepost else _iso_range(time_range),
         "change_time": change_time.isoformat() if change_time else None,
+        "pre_time_range": _iso_range(pre_time_range),
+        "post_time_range": _iso_range(post_time_range),
     }
     if source_id is not None:
         obj["source_id"] = source_id
@@ -187,11 +247,26 @@ def write_points_table(slug: str, task_type: str, points: list[dict[str, Any]]) 
     dataset/task_type/count are FeatureCollection-level foreign members. Pure sparse-point
     datasets use this INSTEAD of per-point GeoTIFFs.
 
+    Change/event point datasets additionally pass ``pre_time_range``/``post_time_range``
+    (the two six-month windows from ``pre_post_time_ranges``); ``time_range`` is then
+    written as ``null`` (see write_sample_json).
+
     Any extra keys in a point dict beyond the reserved set (id/lon/lat/label/time_range/
-    change_time/source_id) are copied verbatim into that feature's ``properties`` as
-    auxiliary fields (e.g. a raw regression value alongside a classification ``label``).
+    change_time/source_id/pre_time_range/post_time_range) are copied verbatim into that
+    feature's ``properties`` as auxiliary fields (e.g. a raw regression value alongside a
+    classification ``label``).
     """
-    reserved = {"id", "lon", "lat", "label", "time_range", "change_time", "source_id"}
+    reserved = {
+        "id",
+        "lon",
+        "lat",
+        "label",
+        "time_range",
+        "change_time",
+        "source_id",
+        "pre_time_range",
+        "post_time_range",
+    }
     d = dataset_dir(slug)
     d.mkdir(parents=True, exist_ok=True)
     features = []
@@ -202,11 +277,17 @@ def write_points_table(slug: str, task_type: str, points: list[dict[str, Any]]) 
         ct = p.get("change_time")
         if ct is not None and not isinstance(ct, str):
             ct = ct.isoformat()
+        pre = _iso_range(p.get("pre_time_range"))
+        post = _iso_range(p.get("post_time_range"))
+        # Change points carry pre/post; a single <=360-day time_range can't represent two
+        # possibly-far-apart windows, so it is null when pre/post are present.
         props = {
             "id": p["id"],
             "label": p["label"],
-            "time_range": tr,
+            "time_range": None if (pre or post) else tr,
             "change_time": ct,
+            "pre_time_range": pre,
+            "post_time_range": post,
             "source_id": p.get("source_id"),
         }
         for k, v in p.items():

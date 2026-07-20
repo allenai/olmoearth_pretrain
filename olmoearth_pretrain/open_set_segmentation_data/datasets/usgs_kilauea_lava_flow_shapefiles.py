@@ -32,12 +32,15 @@ over the sequence, giving genuine multi-temporal signal.
 
 Change timing (spec §5): the mapping dates are precise (single calendar dates, <= ~1 month
 apart), well inside the "known to within ~1-2 months" requirement, so we DO set a
-per-sample ``change_time`` = the mapping date and make ``time_range`` a 360-day window
-CENTERED on it. This lets pretraining pair each mask with imagery spanning the flow's
-appearance/growth around that date; because the fresh basalt persists, the cumulative mask
-also remains a valid presence mask after the date. (Caveat: the mask is the extent AS OF
-the date, so imagery late in a window may show the flow having grown a little beyond the
-mask near the active toe -- a minor, conservative under-count noted in the summary.)
+per-sample ``change_time`` = the mapping date and emit two adjacent six-month windows split
+exactly at it (via ``io.pre_post_time_ranges``): ``pre_time_range`` = the ~6 months
+(<=183 days) immediately before the date and ``post_time_range`` = the ~6 months (<=183 days)
+immediately after, with ``time_range`` = null. This lets pretraining pair the "before" image
+stack with the "after" stack and probe on their difference; because the fresh basalt
+persists, the cumulative mask also remains a valid presence mask after the date. (Caveat:
+the mask is the extent AS OF the date, so imagery in the post window may show the flow having
+grown a little beyond the mask near the active toe -- a minor, conservative under-count noted
+in the summary.)
 
 Tiling: geometries are reprojected from EPSG:32605 metres into 10 m/pixel pixel space in
 the SAME UTM zone (no CRS change; just a resolution scaling), then the flow's pixel bbox is
@@ -57,7 +60,7 @@ import multiprocessing
 import os
 import zipfile
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -82,7 +85,6 @@ SHAPE_SUBDIR = "PuuOo_Ep61g_20160524-20170531_Shapefiles"
 SRC_EPSG = 32605  # WGS84 / UTM zone 5N (metres) -- native shapefile CRS
 TILE = 64
 CONTACT_BUFFER_PX = 1.5  # half-width in 10 m pixels => ~30 m wide contact ribbon
-HALF_WINDOW = timedelta(days=180)  # +/-180 d => 360-day window centered on the map date
 MAX_SAMPLES = sampling.MAX_SAMPLES_PER_DATASET  # 25000 (not reached; ~538 tiles total)
 
 BG, LAVA, CONTACT = 0, 1, 2
@@ -264,7 +266,8 @@ def _write_one(rec: dict[str, Any]) -> list[int] | None:
     present = sorted(int(v) for v in np.unique(label))
 
     change_time = datetime.fromtimestamp(rec["change_ms"] / 1000.0, tz=UTC)
-    time_range = (change_time - HALF_WINDOW, change_time + HALF_WINDOW)
+    pre_range, post_range = io.pre_post_time_ranges(change_time)
+    time_range = (pre_range[0], post_range[1])  # outer bounding span
 
     io.write_label_geotiff(SLUG, sample_id, label, proj, bounds, nodata=io.CLASS_NODATA)
     io.write_sample_json(
@@ -276,6 +279,8 @@ def _write_one(rec: dict[str, Any]) -> list[int] | None:
         change_time=change_time,
         source_id=rec["source_id"],
         classes_present=present,
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
     return present
 

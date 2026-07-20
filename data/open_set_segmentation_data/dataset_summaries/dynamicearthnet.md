@@ -80,9 +80,10 @@ UTM 11N; `6466_3380_13_48N` → Sichuan, China, UTM 48N).
 ## Time range / change handling (task-spec §5)
 
 Each monthly label is the per-month **land-cover state**, not a dated change event.
-Therefore `change_time = null` and `time_range` is a **1-year window anchored on the label's
-year** (2018 labels → [2018-01-01, 2019-01-01); 2019 labels → [2019-01-01, 2020-01-01)). All
-labels are 2018–2019, well within the Sentinel era.
+Therefore `change_time = null` and `time_range` is a **~3-month window centered on the
+label's month** (built as `centered_time_range(center = 15th of the label month,
+half_window_days=45)`, i.e. ~90 days bracketing that calendar month). All labels are
+2018–2019, well within the Sentinel era.
 
 ## Class tile counts (a tile counts toward every class present)
 
@@ -106,8 +107,9 @@ classes.
   (see class mapping).
 - Monthly labels of the same AOI are near-identical from month to month; the shuffled
   tiles-per-class selection spreads picks across AOIs/months, but some spatial/temporal
-  redundancy remains (55 distinct AOIs). Within a year window, up to 12 monthly labels of the
-  same footprint share the same 1-year `time_range`.
+  redundancy remains (55 distinct AOIs). Each monthly label now gets its own ~3-month
+  `time_range` centered on that month, so the up-to-12 monthly labels of the same footprint
+  no longer collapse onto a single shared year-long window.
 - The finest land-cover distinctions (individual buildings, narrow roads) are folded into
   neighbouring classes by mode resampling at 10 m; zone-level land cover is well preserved.
 

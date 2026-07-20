@@ -26,10 +26,15 @@ fields used: `Longitude`/`Latitude` (source glacier-lake point), `Date`/`Date_Mi
 - **Post-2016 filter.** Event dates span 1100–2022. Per the Sentinel-era rule, only events
   with a usable year ≥ 2016 **and** valid coordinates are kept: **249** of ~3,150 (verifies the
   prior run's ~259 estimate). The ~2,900 pre-2016 / coordinate-less events are dropped.
-- **Change labels.** A GLOF is a sudden dated event. `change_time` = the event date when a
-  full `YYYY-MM-DD` is known (**182 of 249**), else `null`. `time_range` = a 1-year window
-  **centered** on the event date (or the calendar year for year-only events). Pretraining uses
-  a sample when the input window spans the event (lake drainage before/after).
+- **Change labels.** A GLOF is a sudden dated event. When a full `YYYY-MM-DD` is known
+  (**182 of 249**), `change_time` = the event date and the sample gets two adjacent
+  six-month windows split exactly at `change_time`: `pre_time_range` = the ~6 months
+  (≤183 days) immediately before the event and `post_time_range` = the ~6 months (≤183 days)
+  immediately after (`time_range` = null, total span still ~1 year, built via
+  `io.pre_post_time_ranges`). Pretraining pairs the "before" image stack with the "after"
+  stack and probes on their difference (lake drainage before/after). Undated (year-only)
+  events keep a single 1-year `time_range` for the calendar year with `change_time` = null
+  and **no** pre/post windows — only samples with a known full date get pre/post windows.
 - **Positive-only.** These are presence points with no "no-GLOF" class; no negatives are
   fabricated (assembly supplies them per spec §5).
 
@@ -70,7 +75,9 @@ assembly drops too-small ones). Year distribution: 2016:46, 2017:48, 2018:57, 20
 ## Verification
 
 - `points.geojson` structure valid; all 249 coordinates in range and (spot-checked) in
-  glaciated regions (e.g. Greenland ~77 N/74 N); every `time_range` is ~365 days.
+  glaciated regions (e.g. Greenland ~77 N/74 N); dated samples carry two adjacent ≤183-day
+  pre/post windows split at `change_time` (`time_range` = null) and undated samples carry a
+  single ~365-day `time_range`.
 - Class ids in features match `metadata.json` (0–11). No S2 overlay was rendered; point
   locations are the source-published lake coordinates.
 

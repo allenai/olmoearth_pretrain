@@ -23,10 +23,14 @@ S2/S1/Landsat imagery (a burn scar looks the same regardless of ignition cause),
 are recorded as provenance metadata only, not as label classes.
 
 Change semantics: a fire is a dated CHANGE event. We set the per-sample ``change_time``
-to the fire's ALARM_DATE and make ``time_range`` a ~1-year window CENTERED on it (spec
-§5), so pretraining can pair the burned-area mask with imagery spanning the fire (before
-+ after the scar appears). Only fires with YEAR_ >= 2016 (Sentinel era) are used; FRAP's
-pre-2016 perimeters are filtered out.
+to the fire's ALARM_DATE (kept as the reference for building the windows) and, instead of
+a single centered window, emit two adjacent six-month windows split at ``change_time``:
+``pre_time_range`` (the <=183 days immediately before) and ``post_time_range`` (the <=183
+days immediately after), with ``time_range`` set to null. The windows are built via
+``io.pre_post_time_ranges(change_time, ...)``, so pretraining pairs a "before" image stack
+with an "after" stack spanning the fire (before + after the scar appears) and probes on
+their difference. Only fires with YEAR_ >= 2016 (Sentinel era) are used; FRAP's pre-2016
+perimeters are filtered out.
 
 Tiling: perimeters are reprojected to a local UTM projection at 10 m/pixel. A fire whose
 footprint fits in a 64x64 tile (640 m) yields one centered tile; larger fires are gridded
@@ -47,7 +51,7 @@ import random
 import time
 import urllib.request
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -76,9 +80,6 @@ TILE = 64
 MIN_YEAR = 2016
 MAX_TILES_PER_FIRE = 40
 MAX_SAMPLES = sampling.MAX_SAMPLES_PER_DATASET  # 25000
-HALF_WINDOW = timedelta(
-    days=180
-)  # +/-180 d => 360-day (<=1 year) window centered on fire
 
 BG, FIRE = 0, 1
 CLASSES = [
@@ -262,7 +263,8 @@ def _write_one(rec: dict[str, Any]) -> str | None:
     )[0]
 
     change_time = datetime.fromtimestamp(rec["alarm_ms"] / 1000.0, tz=UTC)
-    time_range = (change_time - HALF_WINDOW, change_time + HALF_WINDOW)
+    pre_range, post_range = io.pre_post_time_ranges(change_time)
+    time_range = (pre_range[0], post_range[1])  # outer bounding span
 
     present = sorted(int(v) for v in np.unique(label))
     io.write_label_geotiff(SLUG, sample_id, label, proj, bounds, nodata=io.CLASS_NODATA)
@@ -275,6 +277,8 @@ def _write_one(rec: dict[str, Any]) -> str | None:
         change_time=change_time,
         source_id=rec["source_id"],
         classes_present=present,
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
     return "with_bg" if BG in present else "fire_only"
 

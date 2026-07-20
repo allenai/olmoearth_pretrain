@@ -59,10 +59,14 @@ outside the perimeter → 255.
 ## Time-range / change handling (§5)
 
 A fire is a dated **CHANGE** event. `change_time` = `ig_date` (day precision, well within
-the ≤1-2 month requirement); `time_range` is a **360-day window centered on** `change_time`
-(±180 d). Verified: sampled tiles have `time_range` span = 360 d and center offset = 0 d
-from `change_time`. Pretraining will only use a sample when the sampled input window spans
-the fire date, so the where-severity mask aligns with before/after imagery.
+the ≤1-2 month requirement), retained as the reference used to build the windows. Instead
+of a single centered window, each sample emits two independent six-month windows: a
+`pre_time_range` (the ≤183 days immediately **before** `change_time`) and a
+`post_time_range` (the ≤183 days immediately **after** it), with `time_range` set to null.
+The windows are adjacent and split exactly at `change_time` (built via
+`io.pre_post_time_ranges(change_time, ...)`), so pretraining pairs a "before" image stack
+with an "after" stack — bracketing the fire date so the severity mask aligns with
+before/after imagery — and probes on their difference.
 
 Only `ig_date` years **2016-2024** are used: pre-2016 perimeters are filtered out
 (Sentinel era), and 2025-2026 (26 fires, no mosaic yet) are dropped.
@@ -90,7 +94,8 @@ Only `ig_date` years **2016-2024** are used: pre-2016 perimeters are filtered ou
 - All 1,886 `.tif`: single band, `uint8`, local UTM at 10 m, ≤64×64, nodata 255; pixel
   values only in {0,1,2,3,4,255}. Every `.tif` has a matching `.json`.
 - `metadata.json` class ids cover all values in the tifs.
-- `change_time` set on every sample; `time_range` = 360 d centered on it (offset 0 d).
+- `change_time` set on every sample; `time_range` null, with adjacent `pre_time_range` /
+  `post_time_range` (each ≤183 d) split at `change_time`.
 - Geolocation spot-check: tile centers match each fire's state and the lat/lon embedded in
   its `event_id` (e.g. CO CalWood Fire → (-105.33, 40.13); AK Telaquana River →
   (-154.26, 61.00); FL prescribed burn → (-84.78, 30.06)).

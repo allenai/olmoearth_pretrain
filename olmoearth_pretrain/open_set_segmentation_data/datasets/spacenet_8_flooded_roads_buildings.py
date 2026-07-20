@@ -27,9 +27,12 @@ datasets; we do NOT fabricate a background class.
 Change label (spec S5 change-timing rule): flooding is a transient/event state (water
 recedes), so a persistent-state recast is NOT valid; we use the dated-event approach. Both
 events are resolvable to well within ~1-2 months: Germany = mid-July 2021 (2021-07-15),
-Louisiana = Hurricane Ida landfall (2021-08-30). ``change_time`` is set per AOI and
-``time_range`` is a 360-day window centered on it (spans the event so pretraining input can
-see the flood; <= 360-day cap).
+Louisiana = Hurricane Ida landfall (2021-08-30). ``change_time`` is set per AOI and kept as
+the reference date used to build two adjacent windows via ``io.pre_post_time_ranges``:
+``pre_time_range`` (the ~6 months, <=183 days, immediately before ``change_time``) and
+``post_time_range`` (the ~6 months, <=183 days, immediately after); ``time_range`` is null.
+Pretraining pairs a "before" image stack with an "after" stack and probes on their
+difference, so it always straddles the flood.
 
 Run: python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.spacenet_8_flooded_roads_buildings
 """
@@ -37,7 +40,7 @@ Run: python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.spacenet_
 import argparse
 import math
 import multiprocessing
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -225,12 +228,6 @@ def _scan_file(path: str, aoi: str) -> list[dict[str, Any]]:
     return recs
 
 
-def _window(aoi: str) -> tuple[datetime, datetime]:
-    """360-day window centered on the AOI's flood event date."""
-    center = AOIS[aoi]
-    return (center - timedelta(days=180), center + timedelta(days=180))
-
-
 def _write_one(rec: dict[str, Any]) -> int:
     from rasterio.crs import CRS
 
@@ -239,6 +236,9 @@ def _write_one(rec: dict[str, Any]) -> int:
         return 0
     proj = Projection(CRS.from_string(rec["crs"]), io.RESOLUTION, -io.RESOLUTION)
     bounds = tuple(rec["bounds"])
+    change_time = AOIS[rec["aoi"]]
+    pre_range, post_range = io.pre_post_time_ranges(change_time)
+    time_range = (pre_range[0], post_range[1])  # outer bounding span
     io.write_label_geotiff(
         SLUG, sample_id, rec["array"], proj, bounds, nodata=io.CLASS_NODATA
     )
@@ -247,10 +247,12 @@ def _write_one(rec: dict[str, Any]) -> int:
         sample_id,
         proj,
         bounds,
-        _window(rec["aoi"]),
-        change_time=AOIS[rec["aoi"]],
+        time_range,
+        change_time=change_time,
         source_id=rec["source_id"],
         classes_present=rec["classes_present"],
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
     return 1
 

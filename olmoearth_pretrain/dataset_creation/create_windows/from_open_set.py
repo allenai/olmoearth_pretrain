@@ -20,6 +20,7 @@ the resulting dataset afterwards.
 
 import argparse
 import functools
+import hashlib
 import json
 import logging
 import multiprocessing
@@ -97,8 +98,24 @@ class ClassLookup:
 
 def _parse_time_range(
     tr: list[str] | None,
-) -> tuple[datetime, datetime]:
+    pre_time_range: list[str] | None = None,
+    post_time_range: list[str] | None = None,
+    paired_change_policy: str = "error",
+) -> tuple[datetime, datetime] | None:
     """Parse an [iso, iso] time range, falling back to a default if absent."""
+    if not tr and (pre_time_range or post_time_range):
+        if paired_change_policy == "skip":
+            return None
+        if paired_change_policy != "error":
+            raise ValueError(
+                f"invalid paired_change_policy {paired_change_policy!r}; "
+                "expected error or skip"
+            )
+        raise ValueError(
+            "pre/post change samples cannot be represented by one rslearn window; "
+            "paired-window materialization and training support must be implemented "
+            "before creating this sample"
+        )
     if not tr:
         return _FALLBACK_TIME_RANGE
     return (datetime.fromisoformat(tr[0]), datetime.fromisoformat(tr[1]))
@@ -110,9 +127,13 @@ def load_class_lookup(class_mapping_path: str) -> ClassLookup:
         mapping = json.load(f)
     local_to_global: dict[str, dict[int, int]] = {}
     for c in mapping["open_set"]["classes"]:
-        local_to_global.setdefault(c["slug"], {})[int(c["local_id"])] = int(
-            c["global_id"]
-        )
+        global_id = int(c["global_id"])
+        # Merged presence-only classes carry their (slug, local_id) provenance in
+        # ``members`` (top-level slug/local_id are null); every member maps to the one
+        # merged global id. Non-merged classes have a single slug/local_id.
+        members = c.get("members") or [{"slug": c["slug"], "local_id": c["local_id"]}]
+        for m in members:
+            local_to_global.setdefault(m["slug"], {})[int(m["local_id"])] = global_id
     regression: dict[str, dict] = {}
     for d in mapping["open_set_regression"]["datasets"]:
         regression[d["slug"]] = {
@@ -162,8 +183,12 @@ def _centered_window_bounds(
 
 
 def _sanitize_name(name: str) -> str:
-    """Make a filesystem-safe window name."""
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+    """Make a filesystem-safe, collision-resistant window/example name."""
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+    if safe_name == name:
+        return safe_name
+    digest = hashlib.sha256(name.encode()).hexdigest()[:12]
+    return f"{safe_name}_{digest}"
 
 
 def normalize_regression(values: np.ndarray, value_range: list[float]) -> np.ndarray:
@@ -224,6 +249,8 @@ def iter_sparse_samples(datasets_root: UPath, slug: str) -> Iterator[dict]:
             "lat": float(lat),
             "label": props.get("label"),
             "time_range": props.get("time_range"),
+            "pre_time_range": props.get("pre_time_range"),
+            "post_time_range": props.get("post_time_range"),
         }
 
 
@@ -275,6 +302,8 @@ def _hydrate_sample(sample: dict, datasets_root: UPath) -> dict:
     sample["crs"] = meta["crs"]
     sample["pixel_bounds"] = meta["pixel_bounds"]
     sample["time_range"] = meta.get("time_range")
+    sample["pre_time_range"] = meta.get("pre_time_range")
+    sample["post_time_range"] = meta.get("post_time_range")
     return sample
 
 
@@ -403,6 +432,7 @@ def create_sample_window(
     lookup: ClassLookup,
     datasets_root: UPath,
     exclusion: STRtree | None,
+    paired_change_policy: str = "error",
 ) -> str:
     """Create one window (+ label layer) for a sample. Returns a status string."""
     sample = _hydrate_sample(sample, datasets_root)
@@ -413,17 +443,23 @@ def create_sample_window(
         if len(exclusion.query(box, predicate="intersects")) > 0:
             return "excluded"
 
-    time_range = _parse_time_range(sample["time_range"])
+    time_range = _parse_time_range(
+        sample.get("time_range"),
+        sample.get("pre_time_range"),
+        sample.get("post_time_range"),
+        paired_change_policy=paired_change_policy,
+    )
+    if time_range is None:
+        return "skipped_paired_change"
     center_time = time_range[0] + (time_range[1] - time_range[0]) / 2
-    example_id = f"{sample['slug']}_{sample['sample_id']}"
-    name = _sanitize_name(example_id)
+    name = _sanitize_name(f"{sample['slug']}_{sample['sample_id']}")
     options = {
         "crs": projection.crs.to_string(),
         "resolution": OPEN_SET_RESOLUTION,
         "col": int(center_col),
         "row": int(center_row),
         "time": center_time.isoformat(),
-        "example_id": example_id,
+        "example_id": name,
         "source_slug": sample["slug"],
     }
     window = Window(
@@ -484,12 +520,18 @@ def _process_sample_job(
     exclude_geojson_path: str | None,
     datasets_root: str,
     sample: dict,
+    paired_change_policy: str,
 ) -> str:
     dataset = _get_dataset(ds_path)
     lookup = _get_lookup(class_mapping_path)
     exclusion = _get_exclusion(exclude_geojson_path)
     return create_sample_window(
-        dataset, sample, lookup, UPath(datasets_root), exclusion
+        dataset,
+        sample,
+        lookup,
+        UPath(datasets_root),
+        exclusion,
+        paired_change_policy=paired_change_policy,
     )
 
 
@@ -531,6 +573,15 @@ def main() -> None:
         default=None,
         help="Optional comma-separated list of dataset slugs to process (default: all completed)",
     )
+    parser.add_argument(
+        "--paired_change_policy",
+        choices=["error", "skip"],
+        default="error",
+        help=(
+            "How to handle paired pre/post change samples, which this single-window "
+            "build cannot represent"
+        ),
+    )
     parser.add_argument("--workers", type=int, default=32)
     args = parser.parse_args()
 
@@ -555,6 +606,7 @@ def main() -> None:
                     exclude_geojson_path=args.exclude_geojson,
                     datasets_root=str(datasets_root),
                     sample=sample,
+                    paired_change_policy=args.paired_change_policy,
                 )
             )
         logger.info(
@@ -574,7 +626,12 @@ def main() -> None:
         dataset = Dataset(UPath(args.ds_path))
         for job in tqdm.tqdm(jobs):
             status = create_sample_window(
-                dataset, job["sample"], lookup, datasets_root, exclusion
+                dataset,
+                job["sample"],
+                lookup,
+                datasets_root,
+                exclusion,
+                paired_change_policy=args.paired_change_policy,
             )
             counts[status] = counts.get(status, 0) + 1
     else:

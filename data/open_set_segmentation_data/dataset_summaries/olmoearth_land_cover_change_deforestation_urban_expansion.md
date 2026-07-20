@@ -69,21 +69,23 @@ as coarse full-tile change labels.
 
 ## Time range & change handling (spec §5)
 
-- `time_range` = each window's own **1-year post observation window** (all spans are exactly
-  1 year; post years range 2020–2027, concentrated 2020–2025).
-- `change_time` = **midpoint** of that window's time_range (so `time_range` is centered on
-  `change_time`, as required).
+The change is defined by comparing a **post mosaic** against a **pre mosaic ~3 years
+earlier** (`time_offset: -1095d`), so it is encoded under the **pre/post change scheme**:
+each sample carries two independent six-month windows (each ≤ 183 days) with `time_range` =
+**null**.
 
-**Flagged temporal-precision caveat (§5):** the change is defined by comparing the post
-mosaic to a pre mosaic **~3 years earlier** (`time_offset: -1095d`). The precise transition
-moment is therefore **not resolvable to within the 1-year window** — the true change could
-have happened up to ~3 years before the post year. We anchor `change_time` to the
-post-observation year (when the changed state is fully visible and matches the annotation),
-which is the most defensible single-year anchor and matches the intended pre/post eval. We
-did **not** reject: the binary tile-level change task is well-posed and is exactly the
-intended use; only the *sub-year event date* is unresolvable, and it cannot be narrowed
-(the source provides no finer date). Consumers needing an exact change date should not use
-this dataset.
+- `post_time_range` = a ~6-month window **centered in the post-observation year** (post
+  years range 2020–2027, concentrated 2020–2025).
+- `pre_time_range` = a ~6-month window **centered ~3 years earlier** (season-aligned to the
+  post window).
+- `change_time` = **midpoint** of the two windows (a reference only).
+
+**Previously rejected; now resolved by pre/post windows.** The precise transition moment is
+not resolvable to within ~1–2 months (the true change could have happened anywhere in the
+~3-year span between the mosaics), which is why this dataset was originally **rejected** on
+change-timing grounds. That imprecision is no longer a problem under the pre/post scheme:
+the coarse timing simply sits in the gap between the two far-apart windows, so the dataset is
+**completed / usable**.
 
 ## Sampling
 
@@ -95,8 +97,9 @@ No fabricated negatives, no dropped classes.
 
 - 2000 `.tif` + 2000 `.json`; opened samples: single band, uint8, UTM CRS at 10 m, 64×64,
   values ∈ {0} (neg) or {1} (pos).
-- All 2000 JSONs: `time_range` span = 1 year, `change_time` inside range (0 failures);
-  `metadata.json` class ids {0,1} cover all raster values.
+- All 2000 JSONs: `time_range` = **null**, `pre_time_range` and `post_time_range` each ≤ 183
+  days with `change_time` set between them (0 failures); `metadata.json` class ids {0,1}
+  cover all raster values.
 - Spatial sanity: place-named windows resolve correctly (Toronto ≈ −79.4/43.8, Abu Dhabi
   ≈ 54.5/24.3, matching the `source_id` city hints).
 - Idempotent: re-running skips existing `{id}.tif`.

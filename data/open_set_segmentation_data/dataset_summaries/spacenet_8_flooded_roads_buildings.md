@@ -67,16 +67,22 @@ events are resolvable to well within the ~1–2-month requirement:
 - Germany → `change_time = 2021-07-15` (Ahr/Erft flood peak, mid-July 2021).
 - Louisiana-East → `change_time = 2021-08-30` (Hurricane Ida landfall 2021-08-29/30).
 
-`time_range` is a **360-day window centered on** `change_time` (e.g. Germany
-2021-01-16 → 2022-01-11), so the sampled pretraining input window spans the flood; the
-label is the where-mask of flooded/non-flooded structures. All labels are post-2016.
+`change_time` is retained as the reference date used to build two adjacent six-month
+windows via `io.pre_post_time_ranges(change_time, ...)`: `pre_time_range` — the ~6 months
+(≤183 days) immediately before `change_time` — and `post_time_range` — the ~6 months
+(≤183 days) immediately after. The two windows are adjacent, split exactly at `change_time`
+(total span still ~1 year), and `time_range` is set to null. Pretraining pairs a "before"
+image stack with an "after" stack and probes on their difference, so it always straddles
+the flood; the label is the where-mask of flooded/non-flooded structures. All labels are
+post-2016.
 
 ## Verification (spec §9)
 
 - Opened multiple output tifs: single band, `uint8`, 64×64, UTM at 10 m (EPSG:32632 for
   Germany, EPSG:32615 for Louisiana), values ⊆ {0,1,2,3,255}. Global scan of all 856 tifs:
   union of values = `[0,1,2,3,255]`, zero files with unexpected values.
-- Every `.tif` has a matching `.json` (856/856) with a 360-day `time_range` and
+- Every `.tif` has a matching `.json` (856/856) with null `time_range`, an adjacent
+  `pre_time_range`/`post_time_range` pair (each ≤183 days) split at `change_time`, and
   `change_time` set; `metadata.json` covers all 4 class ids.
 - **Georeferencing sanity**: tile centers reproject to ~6.9°E/50.5°N (Rhineland/Ahr flood
   zone) and ~90.0°W/29.8°N (SE Louisiana/Ida zone) — exactly the two flood events. Labels

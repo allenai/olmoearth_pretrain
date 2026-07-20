@@ -13,14 +13,19 @@ Why this is a CHANGE dataset (unlike the sibling ``unosat_conflict_damage_assess
 each point carries a specific day-precise post-event image date in 2022, and the damage it
 records occurred during the war (after 2022-02-24) within weeks of that dated image. So the
 change date is known to well within ~1-2 months (spec S5 timing rule): we set
-``change_time`` = the assessment/image date and center a 1-year window on it. (The HDX-sourced
-sibling could not, because those comprehensive products compare against baselines 1-3 years
-earlier, so it recast to static presence/state instead.)
+``change_time`` = the assessment/image date (a post-event date) and emit two independent
+six-month windows via ``io.pre_post_time_ranges(change_time, pre_offset_days=45)``:
+``post_time_range`` starts at ``change_time`` and runs ~6 months (<=183 days) forward, and
+``pre_time_range`` ends 45 days before ``change_time`` (a guard offset, since the imagery
+follows the destruction by weeks) and spans ~6 months (<=183 days) backward from there,
+placing the pre window before the event; ``time_range`` = null. (The HDX-sourced sibling
+could not date its events, because those comprehensive products compare against baselines
+1-3 years earlier, so it recast to static presence/state instead.)
 
 Encoding: sparse point segmentation -> one dataset-wide GeoJSON point table (spec S2a), one
 Point feature per building-damage location, ``properties.label`` = damage-grade class id,
-per-feature ``change_time`` + centered 1-year ``time_range``. Balanced to <=1000 per class
-(spec S5).
+per-feature ``change_time`` + a ``pre_time_range`` / ``post_time_range`` pair
+(``time_range`` null). Balanced to <=1000 per class (spec S5).
 
 10 m observability caveat: an individual building is ~1 pixel at 10 m, so a single
 destroyed/damaged structure is near the resolution limit. Destroyed / severe damage of
@@ -35,7 +40,7 @@ Run: python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.ukraine_w
 import argparse
 import json
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from olmoearth_pretrain.open_set_segmentation_data import download, io, manifest
 from olmoearth_pretrain.open_set_segmentation_data.sampling import balance_by_class
@@ -49,7 +54,6 @@ LABELS_FILE = "unosat_labels.geojson"
 AOIS_FILE = "unosat_aois.geojson"
 
 PER_CLASS = 1000
-HALF_WINDOW_DAYS = 180  # +/-180d -> 360-day window centered on change_time (<= cap)
 MIN_YEAR = 2016  # Sentinel era (all labels are 2022, so nothing is filtered).
 
 # Unified UNOSAT building-damage grades -> class ids (most severe first). Numeric domain of
@@ -127,16 +131,16 @@ def main() -> None:
     points = []
     for i, r in enumerate(selected):
         ct = r["change_time"]
+        pre_range, post_range = io.pre_post_time_ranges(ct, pre_offset_days=45)
         points.append(
             {
                 "id": f"{i:06d}",
                 "lon": r["lon"],
                 "lat": r["lat"],
                 "label": r["label"],
-                "time_range": (
-                    ct - timedelta(days=HALF_WINDOW_DAYS),
-                    ct + timedelta(days=HALF_WINDOW_DAYS),
-                ),
+                "time_range": (pre_range[0], post_range[1]),
+                "pre_time_range": pre_range,
+                "post_time_range": post_range,
                 "change_time": ct,
                 "source_id": r["source_id"],
             }

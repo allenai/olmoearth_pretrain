@@ -50,9 +50,13 @@ S2/Landsat SWIR (manifest note), so the flow surface is a strong per-pixel signa
 ## Time range & change handling (§5)
 
 Mapping dates are **precise single calendar dates ≤ ~1 month apart**, satisfying the §5
-"change date known to within ~1–2 months" requirement, so each sample sets
-`change_time` = its mapping date and `time_range` = **±180 d (360-day window) centered** on
-it. All windows fall in the Sentinel era (2015-11 … 2017-11).
+"change date known to within ~1–2 months" requirement, so each sample keeps its mapping date
+as `change_time` and emits two adjacent six-month windows split exactly at it (via
+`io.pre_post_time_ranges`): `pre_time_range` = the ~6 months (≤183 days) immediately before
+the date and `post_time_range` = the ~6 months (≤183 days) immediately after, with
+`time_range` = null (total span still ~1 year). Pretraining pairs the "before" image stack
+with the "after" stack and probes on their difference. All windows fall in the Sentinel era
+(2015-11 … 2017-11).
 
 A solidified lava flow is a **persistent** surface (fresh basalt visible for years), so the
 cumulative extent polygon doubles as a presence/state mask that stays valid after the date.
@@ -60,9 +64,9 @@ All 14 dated snapshots are kept as **separate temporal samples**: at a fixed loc
 label legitimately transitions background→lava over the sequence as the flow grows, giving
 genuine multi-temporal signal.
 
-**Caveat:** the mask is the extent *as of* each date, so imagery late in a centered window
-may show the active flow toe grown slightly beyond the mask — a minor, conservative
-*under-count* (never an over-count) at the growing margin.
+**Caveat:** the mask is the extent *as of* each date, so imagery in the post window may show
+the active flow toe grown slightly beyond the mask — a minor, conservative *under-count*
+(never an over-count) at the growing margin.
 
 ## Tiling
 
@@ -83,8 +87,9 @@ polygon or a contact. Output tiles are single-band uint8, EPSG:32605, 10 m, ≤6
 ## Verification
 
 - 549 `.tif` each with a matching `.json`; all single-band uint8, EPSG:32605 at 10 m, 64×64,
-  nodata 255. Pixel values across the whole dataset are exactly {0, 1, 2}. All `time_range`s
-  are 360 days with `change_time` set.
+  nodata 255. Pixel values across the whole dataset are exactly {0, 1, 2}. Every sample has
+  `change_time` set with adjacent ≤183-day `pre_time_range`/`post_time_range` windows split
+  at it and `time_range` = null.
 - Geographic sanity: tile centers run from ~(-155.10, 19.39) at the Puʻu ʻŌʻō vent down to
   ~(-155.04, 19.32) at the Kamokuna coast — the exact known episode-61g flow path from vent
   to ocean entry. Because the data is authoritative field-GPS mapping used in its native
@@ -105,8 +110,8 @@ first run.
 - **Treated as presence/state segmentation** (not per-increment change masks). The
   cumulative flow polygon is a persistent fresh-basalt surface; masking only the monthly
   increment would discard the strong whole-flow SWIR signal.
-- **`change_time` set** (dates are precise), with the §5 centered window — leveraging the
-  dataset's monthly temporal precision rather than a static window.
+- **`change_time` set** (dates are precise), with §5 adjacent pre/post windows split at it —
+  leveraging the dataset's monthly temporal precision rather than a static window.
 - **All 14 dated snapshots kept** as distinct temporal samples despite heavy spatial overlap
   among later, near-stable extents; the differing extents + windows are legitimate
   multi-temporal training pairs.

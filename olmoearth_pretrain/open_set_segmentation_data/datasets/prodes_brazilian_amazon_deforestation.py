@@ -20,10 +20,12 @@ PRODES yearly increment).
 
 This is a dated CHANGE dataset (forest -> clear-cut). Per spec 5 we use the change_time
 scheme: each sample's ``change_time`` is the polygon's ``image_date`` (day-precise, well
-within the required ~1-2 month timing precision) and its ``time_range`` is a 360-day window
-centered on that date. The label is a **mask of where** the clear-cut happened. A completed
-clear-cut persists in imagery, so a 1-year window centered on the confirmation date is
-well-posed for change pairing.
+within the required ~1-2 month timing precision), which splits the sample into two adjacent
+six-month windows (via ``io.pre_post_time_ranges``): ``pre_time_range`` = the ~6 months
+(<=183 days) immediately before the clear-cut and ``post_time_range`` = the ~6 months
+(<=183 days) immediately after, with ``time_range`` = null. The label is a **mask of where**
+the clear-cut happened. A completed clear-cut persists in imagery, so the pre/post split at
+the confirmation date is well-posed for change pairing (before vs after).
 
 Post-2016 rule: we keep only polygons whose ``image_date`` is on/after 2016-01-01 (the
 Sentinel era). PRODES-year-2016 polygons imaged in late 2015 are dropped.
@@ -50,7 +52,7 @@ import random
 import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import shapely
@@ -223,11 +225,6 @@ def _sample(by_year: dict[int, list[dict[str, Any]]]) -> list[dict[str, Any]]:
     return picked
 
 
-def _time_range(image_date: str) -> tuple[datetime, datetime]:
-    ct = datetime.strptime(image_date, "%Y-%m-%d").replace(tzinfo=UTC)
-    return ct - timedelta(days=WINDOW_HALF_DAYS), ct + timedelta(days=WINDOW_HALF_DAYS)
-
-
 def _write_tile(rec: dict[str, Any]) -> int:
     sample_id = rec["sample_id"]
     tif = io.locations_dir(SLUG) / f"{sample_id}.tif"
@@ -250,7 +247,8 @@ def _write_tile(rec: dict[str, Any]) -> int:
     if int(arr.max()) != DEFOR_ID:
         return -1  # polygon fell outside the centered tile (shouldn't happen); skip
     ct = datetime.strptime(rec["image_date"], "%Y-%m-%d").replace(tzinfo=UTC)
-    tr = _time_range(rec["image_date"])
+    pre_range, post_range = io.pre_post_time_ranges(ct)
+    tr = (pre_range[0], post_range[1])  # outer bounding span
     present = (
         [BACKGROUND_ID, DEFOR_ID] if int((arr == BACKGROUND_ID).sum()) else [DEFOR_ID]
     )
@@ -264,6 +262,8 @@ def _write_tile(rec: dict[str, Any]) -> int:
         change_time=ct,
         source_id=f"{rec['state']}:{rec['year']}:{rec['gid']}",
         classes_present=present,
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
     return DEFOR_ID
 

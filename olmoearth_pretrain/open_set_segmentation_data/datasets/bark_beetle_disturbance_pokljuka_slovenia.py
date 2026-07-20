@@ -19,17 +19,21 @@ Recipe (label_type = dense_raster, single positive class -> POSITIVE-ONLY, spec 
   Per spec 5 we do NOT fabricate a "no disturbance" negative class for a positive-only
   dataset; downstream assembly supplies negatives from other datasets.
 
-Time range: the mask is a cumulative 2017-2021 disturbance product; per-pixel disturbance
-dates are NOT recoverable from the single aggregate raster, so a dated-change encoding is
-not possible. Bark-beetle die-off is persistent (dead/cleared spruce), so by the end of the
-period the cumulative disturbance is fully expressed in the imagery. We therefore treat it
-as annual disturbance-PRESENCE classification anchored on the final year 2021 (1-year window,
-change_time = null). See the summary for this judgment call.
+Time range (pre/post scheme): the mask is a cumulative 2017-2021 disturbance product with no
+per-pixel disturbance dates, so the disturbance occurred somewhere in that span. Under the
+pre/post change scheme we bracket the whole span with two fixed six-month windows (each <=
+183 days) and ``time_range`` = null: ``pre_time_range`` = summer 2016 and ``post_time_range``
+= summer 2022; ``change_time`` stays null (the exact date is unknown). Summer windows avoid
+snow-cover confusion. This replaces the previous "annual disturbance-presence anchored on
+2021 (1-year window, change_time = null)" encoding and the change-timing rejection: with the
+disturbance bracketed between a genuine before/after image pair the timing imprecision is no
+longer a problem, so the dataset is now usable. See the summary.
 """
 
 import argparse
 import multiprocessing
 import os
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -53,6 +57,13 @@ T = 64  # output tile size (64 px * 10 m = 640 m)
 LABELED_YEAR = (
     2021  # end of the 2017-2021 period (cumulative disturbance fully expressed)
 )
+# Cumulative 2017-2021 disturbance mask with no per-pixel dates: the disturbance occurred
+# somewhere in that span. Under the pre/post scheme we bracket the whole span -- a "before"
+# window in summer 2016 and an "after" window in summer 2022 -- so the mask of where
+# disturbance occurred is aligned with a genuine before/after image pair (change_time stays
+# null; the exact date is unknown). Summer windows avoid snow-cover confusion.
+PRE_WINDOW = (datetime(2016, 6, 1, tzinfo=UTC), datetime(2016, 9, 1, tzinfo=UTC))
+POST_WINDOW = (datetime(2022, 6, 1, tzinfo=UTC), datetime(2022, 9, 1, tzinfo=UTC))
 
 # Source grid constants (EPSG:32633, res 10 m, origin from the file transform).
 ORIGIN_X = 410000
@@ -109,10 +120,12 @@ def _write_one(rec: dict[str, Any]) -> None:
         sample_id,
         proj,
         bounds,
-        io.year_range(LABELED_YEAR),
+        None,
         change_time=None,
         source_id=f"{SRC_NAME}:tile_{iy}_{jx}",
         classes_present=[CLASS_DISTURBANCE],
+        pre_time_range=PRE_WINDOW,
+        post_time_range=POST_WINDOW,
     )
 
 

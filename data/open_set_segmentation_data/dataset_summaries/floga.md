@@ -59,11 +59,15 @@ convention (cf. `cabuar_california_burned_areas`: 0 unburned, 1 burned).
 Burnt area is a **change/event** label with a **day-precise ignition date**, so this is
 processed as a change label (spec §5), not a static presence class:
 - `change_time` = the event's `Start date` (ignition), known to the day (≪ the ~1–2-month
-  timing-precision requirement).
-- `time_range` = a **360-day window centered on `change_time`** (≤ 1 year). The post-fire
-  Sentinel-2 acquisition recorded in the shapefile (`S2_e`) lands a few weeks after
-  ignition, comfortably inside the window, so imagery sampled from the window spans the
-  burn and the where-mask stays aligned.
+  timing-precision requirement); retained as the reference used to build the windows.
+- Instead of a single centered window, each sample emits two independent six-month windows:
+  a `pre_time_range` (the ≤183 days immediately **before** `change_time`) and a
+  `post_time_range` (the ≤183 days immediately **after** it), with `time_range` set to null.
+  The windows are adjacent and split exactly at `change_time` (built via
+  `io.pre_post_time_ranges(change_time, ...)`), so pretraining pairs a "before" image stack
+  with an "after" stack and probes on their difference. The post-fire Sentinel-2 acquisition
+  recorded in the shapefile (`S2_e`) lands a few weeks after ignition, comfortably inside the
+  post window, so the after-stack spans the burn and the where-mask stays aligned.
 
 ## Output
 
@@ -76,7 +80,8 @@ processed as a change label (spec §5), not a static presence class:
 
 - All 1057 `.tif` are single-band **uint8, 64×64, UTM (EPSG:32634/32635) at 10 m**; pixel
   values ∈ {0, 1, 255}; every `.tif` has a matching `.json`.
-- All `time_range`s are ≤ 360 days; `change_time` set on every sample; no pre-2016 windows.
+- `time_range` is null with adjacent `pre_time_range` / `post_time_range` (each ≤183 days)
+  split at `change_time`; `change_time` set on every sample; no pre-2016 windows.
 - Spatial sanity: 100 % of tile centers fall inside the Greece bbox (lon 20.23–28.09,
   lat 35.08–41.40); sampled locations/dates match known Greek wildfires (e.g. lon 23.27
   lat 38.84 on 2021-08-03 = the North-Evia fire). Labels are rasterized directly from

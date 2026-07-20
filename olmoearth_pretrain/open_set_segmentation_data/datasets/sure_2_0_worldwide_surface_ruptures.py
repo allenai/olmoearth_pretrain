@@ -31,8 +31,12 @@ line is buffered to a zone:
     20190705 Ridgecrest2  Mw 7.1 strike-slip  (USA)           10875 traces
 
 All event dates are known to the day (<< the ~1-2 month change-timing requirement), so we
-set per-sample ``change_time`` = the earthquake date and make ``time_range`` a 360-day
-window CENTERED on it.
+set per-sample ``change_time`` = the earthquake date and keep it as the reference for
+building the windows. Instead of a single centered window, we emit two adjacent six-month
+windows split at ``change_time``: ``pre_time_range`` (the <=183 days immediately before) and
+``post_time_range`` (the <=183 days immediately after), with ``time_range`` set to null
+(built via ``io.pre_post_time_ranges(change_time, ...)``), so pretraining pairs a "before"
+image stack with an "after" stack and probes on their difference.
 
 TASK: change (event) classification, ``label_type`` lines. Per spec section 4 (lines) we
 rasterize the rupture traces to a mask with a small dilation so they are resolvable at 10 m:
@@ -61,7 +65,7 @@ import os
 import warnings
 import zipfile
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -92,9 +96,6 @@ TILE = 64
 BUF_PX = 3  # ~30 m half-width => ~60 m wide rupture zone at 10 m/pixel
 MIN_MW = 5.5  # keep only significant events (drops 2019 Le Teil Mw 4.9)
 MIN_YEAR = 2016  # Sentinel era (change-signal + pre-2016 rule)
-HALF_WINDOW = timedelta(
-    days=180
-)  # +/-180 d => 360-day window centered on the event date
 MAX_SAMPLES = sampling.MAX_SAMPLES_PER_DATASET  # 25000 (not reached; ~1300 tiles)
 
 BG, RUPTURE = 0, 1
@@ -304,7 +305,8 @@ def _write_one(rec: dict[str, Any]) -> tuple[str, list[int]] | None:
     present = sorted(int(v) for v in np.unique(label))
 
     change_time = datetime.fromtimestamp(rec["change_ms"] / 1000.0, tz=UTC)
-    time_range = (change_time - HALF_WINDOW, change_time + HALF_WINDOW)
+    pre_range, post_range = io.pre_post_time_ranges(change_time)
+    time_range = (pre_range[0], post_range[1])  # outer bounding span
 
     io.write_label_geotiff(SLUG, sample_id, label, proj, bounds, nodata=io.CLASS_NODATA)
     io.write_sample_json(
@@ -316,6 +318,8 @@ def _write_one(rec: dict[str, Any]) -> tuple[str, list[int]] | None:
         change_time=change_time,
         source_id=rec["source_id"],
         classes_present=present,
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
     return rec["source_id"], present
 

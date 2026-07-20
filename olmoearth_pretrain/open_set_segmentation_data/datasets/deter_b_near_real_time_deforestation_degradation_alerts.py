@@ -14,10 +14,14 @@ forest change, each tagged with a change class (``classname``) and an observatio
 but not DETER, so this dataset covers Amazon + Cerrado.)
 
 These are dated CHANGE/EVENT labels, so we use the change_time scheme (spec 5): each
-sample's ``change_time`` is the alert ``view_date`` and its ``time_range`` is a 360-day
-window centered on that date; the label is a **mask of the alert polygon** (spec: one
-polygon -> one tile). Deforestation/degradation/fire/mining change persists in the
-imagery, so a ~1-year window centered on the alert is well-posed.
+sample's ``change_time`` is the alert ``view_date``, which splits the sample into two
+adjacent six-month windows (via ``io.pre_post_time_ranges``): ``pre_time_range`` = the
+~6 months (<=183 days) immediately before the alert and ``post_time_range`` = the ~6 months
+(<=183 days) immediately after, with ``time_range`` = null. The label is a **mask of the
+alert polygon** (spec: one polygon -> one tile). Deforestation/degradation/fire/mining
+change persists in the imagery, so the pre/post split around the alert is well-posed;
+pretraining pairs the "before" image stack with the "after" stack and probes on their
+difference.
 
 Encoding: for each selected alert polygon, center a 64x64 UTM 10 m tile on the polygon
 centroid, rasterize that polygon as its class id (all_touched so small polygons register),
@@ -44,7 +48,7 @@ import random
 import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import shapely
@@ -251,11 +255,6 @@ def _sample_per_class(
     return chosen
 
 
-def _time_range(view_date: str) -> tuple[datetime, datetime]:
-    ct = datetime.strptime(view_date, "%Y-%m-%d").replace(tzinfo=UTC)
-    return ct - timedelta(days=WINDOW_HALF_DAYS), ct + timedelta(days=WINDOW_HALF_DAYS)
-
-
 def _write_tile(rec: dict[str, Any]) -> int:
     sample_id = rec["sample_id"]
     tif = io.locations_dir(SLUG) / f"{sample_id}.tif"
@@ -279,7 +278,8 @@ def _write_tile(rec: dict[str, Any]) -> int:
     if int(arr.max()) != cid:
         return -1  # polygon fell outside the centered tile (shouldn't happen); skip
     ct = datetime.strptime(rec["view_date"], "%Y-%m-%d").replace(tzinfo=UTC)
-    tr = _time_range(rec["view_date"])
+    pre_range, post_range = io.pre_post_time_ranges(ct)
+    tr = (pre_range[0], post_range[1])  # outer bounding span
     present = [BACKGROUND_ID, cid] if int((arr == BACKGROUND_ID).sum()) else [cid]
     io.write_label_geotiff(SLUG, sample_id, arr, proj, bounds, nodata=io.CLASS_NODATA)
     io.write_sample_json(
@@ -291,6 +291,8 @@ def _write_tile(rec: dict[str, Any]) -> int:
         change_time=ct,
         source_id=f"{rec['layer']}:{rec['rawclass']}:{rec['gid']}",
         classes_present=present,
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
     return cid
 

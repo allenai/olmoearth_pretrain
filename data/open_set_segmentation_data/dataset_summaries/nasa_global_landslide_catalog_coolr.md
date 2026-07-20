@@ -46,9 +46,14 @@ negatives are fabricated — assembly supplies negatives from other datasets.
 
 Each landslide is a dated **event** → CHANGE label. `event_date` is precise to the day
 for every row (far tighter than the ~1–2 month hard requirement), so `change_time` = the
-event date and `time_range` = a 1-year window **centered** on it
-(change−182d … change+183d). Verified: all 1169 features have change_time set, span ≤ 1
-year, and change_time strictly inside a window whose midpoint is within ≤1 day of it.
+event date, retained as the reference used to build the windows. Instead of a single
+centered window, each sample emits two independent six-month windows: a `pre_time_range`
+(the ≤183 days immediately **before** `change_time`) and a `post_time_range` (the ≤183
+days immediately **after** it), with `time_range` set to null. The windows are adjacent and
+split exactly at `change_time` (built via `io.pre_post_time_ranges(change_time, ...)`), so
+pretraining pairs a "before" image stack with an "after" stack — seeing the slope before
+and after the failure — and probes on their difference. Verified: all 1169 features have
+change_time set with adjacent pre/post windows (each ≤183 days).
 
 ## Filters applied (and counts dropped)
 
@@ -75,7 +80,8 @@ translational_slide 4, earth_flow 2, topple 1. Sparse classes retained per spec 
 - `points.geojson`: FeatureCollection, task=classification, count=1169, all `Point`
   geometries; label ids in 0–13 (all valid, covered by `metadata.json` classes); lon/lat
   span the globe (−179.7…178.5, −44.7…71.5).
-- All windows ≤ 1 year, centered on change_time (0 bad windows / 1169).
+- All samples have `time_range` null with adjacent pre/post windows (each ≤183 days) split
+  at change_time (0 bad windows / 1169).
 - Spatial sanity: these are the catalog's own event geocoordinates (point events, not
   pixel masks); spot-checked points land on plausible terrain (e.g. id 000000 at
   −4.857,56.227 in the Scottish Highlands). No per-pixel S2 overlay is meaningful for a

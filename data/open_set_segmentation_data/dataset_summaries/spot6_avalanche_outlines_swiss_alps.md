@@ -53,16 +53,20 @@ UNKNOWN 2,622, FULL_DEPTH 2,011, LOOSE_SNOW 612}; outline quality = {2/estimated
 
 All avalanches released during the 22–24 January 2018 storm cycle and were mapped from
 the **24 Jan 2018** SPOT6 image — the event date is known to within days (well inside the
-§5 ~1–2 month precision requirement). Each sample carries `change_time = 2018-01-24` and
-a `time_range` of **±180 days (360-day, ≤1-year window) centered on it**. Pretraining
-only uses a sample when the sampled input window spans `change_time`, so it always sees
-the late-Jan-2018 debris period (undisturbed snowpack before → avalanche-debris texture
+§5 ~1–2 month precision requirement). Each sample carries `change_time = 2018-01-24`,
+retained as the reference date used to build two adjacent six-month windows via
+`io.pre_post_time_ranges(change_time, ...)`: `pre_time_range` — the ~6 months (≤183 days)
+immediately before `change_time` — and `post_time_range` — the ~6 months (≤183 days)
+immediately after. The two windows are adjacent, split exactly at `change_time` (total
+span still ~1 year), and `time_range` is set to null. Pretraining pairs a "before" image
+stack with an "after" stack and probes on their difference, so it always straddles the
+late-Jan-2018 debris period (undisturbed snowpack before → avalanche-debris texture
 after). `metadata.json` sets `is_change_dataset: true`.
 
 **Why change, not static presence:** avalanche debris is snow — visible for weeks after
 the event but gone by the following summer. A static full-year presence label anchored on
 2018 would be misleading (summer-2018 imagery shows no debris), so the change framing
-(centering the window on the event) is the faithful representation.
+(splitting the before/after windows at the event) is the faithful representation.
 
 ## Tiling & sampling
 
@@ -86,7 +90,8 @@ run ~96–99 % nodata).
 
 - 5 random tifs: single-band `(1,64,64)`, uint8, UTM 10 m (EPSG:32632), values ⊆ {0,255}. ✓
 - Every `.tif` has a matching `.json` (24,647 / 24,647; 0 missing). ✓
-- `time_range` span = 360 days for all sampled; `change_time` = 2018-01-24 for all;
+- `time_range` = null with an adjacent `pre_time_range`/`post_time_range` pair (each
+  ≤183 days) split at `change_time` for all sampled; `change_time` = 2018-01-24 for all;
   `classes_present` = [0] for all. ✓
 - `metadata.json`: `task_type=classification`, `num_samples=24647`, `nodata_value=255`,
   classes = [(0, avalanche)], `is_change_dataset=true`, `change_time=2018-01-24`. ✓

@@ -2728,7 +2728,7 @@
     "description": "Quarterly global inventory of 375k wind turbines and 86k PV installations from PlanetScope, 2017-2024, with construction dates.",
     "family": "energy",
     "have_locally": false,
-    "label_type": "polygons + points",
+    "label_type": "polygons",
     "license": "MIT",
     "name": "Global Renewables Watch",
     "region": "Global",
@@ -4743,7 +4743,7 @@
     "description": ">38,000 dam-wall points digitized from Landsat/SPOT plus catchment polygons.",
     "family": "dams",
     "have_locally": false,
-    "label_type": "points + polygons",
+    "label_type": "points",
     "license": "CC0",
     "name": "GOODD (Global Georeferenced Dams)",
     "notes": "Larger dam sample than GRanD.",
@@ -4855,7 +4855,7 @@
     "description": "~637,000 georeferenced mine features (shafts, adits, pits, quarries, tailings) digitized from historical topo maps.",
     "family": "mining",
     "have_locally": false,
-    "label_type": "points + polygons",
+    "label_type": "polygons",
     "license": "public domain",
     "name": "USGS USMIN Mine Features",
     "region": "Western US",
@@ -6912,5 +6912,75 @@
       2026
     ],
     "url": "https://data.humdata.org/organization/unosat"
+  },
+  {
+    "annotation_method": "expert visual interpretation (IUCN EFG typology)",
+    "classes": [],
+    "family": "ecosystem",
+    "have_locally": true,
+    "label_type": "points",
+    "license": "internal",
+    "name": "OlmoEarth Ecosystem Atlas IUCN EFG (10m)",
+    "notes": "IUCN Ecosystem Functional Group presence points at 10 m; all coded points kept (no cap).",
+    "region": "Global",
+    "source": "olmoearth",
+    "time_range": [
+      2025,
+      2025
+    ],
+    "url": "/weka/dfive-default/rslearn-eai/artifacts/ecosystem_atlas_labels_20260716.geojson"
+  },
+  {
+    "annotation_method": "expert visual interpretation (IUCN EFG typology)",
+    "classes": [],
+    "family": "ecosystem",
+    "have_locally": true,
+    "label_type": "points",
+    "license": "internal",
+    "name": "OlmoEarth Ecosystem Atlas IUCN EFG (100m)",
+    "notes": "IUCN Ecosystem Functional Group presence points at 100 m; all coded points kept (no cap).",
+    "region": "Global",
+    "source": "olmoearth",
+    "time_range": [
+      2025,
+      2025
+    ],
+    "url": "/weka/dfive-default/rslearn-eai/artifacts/ecosystem_atlas_labels_20260716.geojson"
+  },
+  {
+    "annotation_method": "deep learning (PlanetScope) + human QC",
+    "classes": [
+      "wind_turbine"
+    ],
+    "family": "energy",
+    "have_locally": false,
+    "label_type": "points",
+    "license": "MIT",
+    "name": "Global Renewables Watch (wind turbines)",
+    "notes": "Presence-only wind-turbine points; solar PV polygons are the global_renewables_watch dataset.",
+    "region": "Global",
+    "source": "GitHub (Microsoft/Planet/TNC)",
+    "time_range": [
+      2017,
+      2024
+    ],
+    "url": "https://github.com/microsoft/global-renewables-watch"
+  },
+  {
+    "annotation_method": "digitized from historical USGS topo maps",
+    "classes": [],
+    "family": "mining",
+    "have_locally": false,
+    "label_type": "points",
+    "license": "public domain (US Govt)",
+    "name": "USGS USMIN Mine Features (points)",
+    "notes": "Presence-only point mine markers (prospect pit / shaft / adit / etc.); polygon footprints are the usgs_usmin_mine_features dataset.",
+    "region": "United States",
+    "source": "USGS ScienceBase",
+    "time_range": [
+      2016,
+      2016
+    ],
+    "url": ""
   }
 ]

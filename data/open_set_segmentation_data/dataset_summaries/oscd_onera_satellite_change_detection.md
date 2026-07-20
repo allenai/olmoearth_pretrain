@@ -66,28 +66,33 @@ are retained.
   no-change; because urban change is sparse, essentially every selected tile contains both
   classes). Well under the 25k cap. Per-city change-tile candidates ranged from ~8 (bercy)
   to ~146 (beirut).
-- **Time / change** (spec §5): the change is an event between the pair's two acquisition
-  dates (`dates.txt`). `change_time` = the **midpoint** of date_1/date_2; `time_range` = a
-  **1-year window centered** on it (±182/183 days). `change_time` set on every sample.
+- **Time / change** (spec §5, pre/post scheme): the change is an event between the pair's
+  two acquisition dates (`dates.txt`), date_1 (earlier) and date_2 (later), ~1–2.7 years
+  apart. Each sample carries two independent six-month windows (each ≤ 183 days) with
+  `time_range` = **null**: `pre_time_range` = a ~6-month window **centered on date_1**,
+  `post_time_range` = a ~6-month window **centered on date_2**; `change_time` = the
+  **midpoint** (reference only). The two windows are naturally far apart — exactly what the
+  pre/post scheme is for — so the coarse multi-year change interval sits between them.
 
 ## Verification (§9)
 
 - 1000 `.tif` + 1000 matching `.json`. Every `.tif`: single-band **uint8**, **UTM**
   (EPSG:326xx/327xx) at 10 m, **64×64**, values ⊆ {0, 1, 255} with 255 declared nodata.
-- Every `.json`: `time_range` = 365 days, `change_time` set. `metadata.json` class ids
-  {0,1} cover all non-nodata pixel values.
+- Every `.json`: `time_range` = **null**, `pre_time_range` and `post_time_range` each ≤ 183
+  days, `change_time` set. `metadata.json` class ids {0,1} cover all non-nodata pixel values.
 - **Round-trip**: 8/8 sampled written tiles exactly equal the reprojected source block
   (array + integer pixel_bounds + CRS all match).
 - **Spatial**: sampled tile centers fall inside each city's own bbox geojson.
 
 ## Judgment calls / caveats
 
-- **Multi-year change interval.** OSCD pairs span ~1–2.7 years (e.g. abudhabi 2016-01 →
-  2018-03). Urban change is therefore a **diffuse multi-year growth signal**, not a
-  single-date event. The mandated 1-year window can't cover the whole interval; we anchor it
-  on the midpoint as a representative window (pretraining uses the sample only when the input
-  window spans `change_time`). This is *coarser* than the interval, not *finer* than a year,
-  so it is not ill-posed in the §5 sense — kept, and flagged here.
+- **Multi-year change interval (previously rejected; now resolved by pre/post windows).**
+  OSCD pairs span ~1–2.7 years (e.g. abudhabi 2016-01 → 2018-03), and the exact urban-change
+  moment is not resolvable to within ~1–2 months — the reason this dataset was originally
+  **rejected** on change-timing grounds. Under the pre/post scheme the ambiguity is no longer
+  a problem: `pre_time_range` (centered on date_1) and `post_time_range` (centered on date_2)
+  are two far-apart six-month windows, and the coarse change timing simply sits in the gap
+  between them. The dataset is therefore **completed / usable**.
 - **Georeferencing precision.** Coordinates come from the `imgs_1` EPSG:4326 crops (produced
   by the OSCD Medusa crop + GeFolki registration pipeline), i.e. a resampled approximation of
   the native S2 UTM grid, so expect ~10–20 m (≈1–2 px) absolute registration slop. Fine for

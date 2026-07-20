@@ -78,8 +78,11 @@ common class.
 Scanned **678,542 candidate blocks** (per-class candidates: river 381,918; lake 222,800;
 gravel bar 65,774; ocean 71,210; glaciated 7,264; snow 0).
 
-**Time range:** 1-year window `[2021-01-01, 2022-01-01)` for every sample; `change_time` =
-null. The product is a static July-2021 snapshot, not a dated change label.
+**Time range:** fixed summer low-flow window `[2021-06-01, 2021-09-01)` for every sample;
+`change_time` = null. The product is a static July-2021 snapshot, not a dated change label,
+and gravel bars are only exposed at summer low flow — so the window is narrowed to summer
+rather than the full year to avoid pairing labels with winter high-flow imagery when the
+bars are submerged.
 
 ### Selected class counts (tiles-per-class; a tile counts toward every class it contains)
 
@@ -100,8 +103,8 @@ Total distinct samples: **3968**.
   (e.g. EPSG:32753/32737/32659/32648/32758), nodata **255**. Dataset-wide unique pixel
   values across all 3968 tiles = `{0, 1, 2, 3, 4, 255}`, all covered by `metadata.json`
   classes (class 5 = snow legitimately absent — see caveats).
-- 3968 `.tif` ↔ 3968 `.json`; every sidecar has a ≤1-year `time_range` (365 days) and
-  `change_time` = null.
+- 3968 `.tif` ↔ 3968 `.json`; every sidecar has the same summer `time_range`
+  (`[2021-06-01, 2021-09-01)`, 92 days) and `change_time` = null.
 - **Georeferencing round-trip (spatial sanity):** for 6 random samples, re-read the exact
   source window (`source_id` = `<tile>.tif:<col>_<row>`), applied the code→id remap, and
   compared to the written tile — **6/6 exact match**. Because blocks are cropped natively in

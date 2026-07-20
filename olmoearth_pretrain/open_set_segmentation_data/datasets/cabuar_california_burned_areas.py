@@ -27,8 +27,14 @@ counts toward every class present in it (>= MIN_CLASS_PX px), rarer class (burne
 first, up to PER_CLASS tiles/class.
 
 Time range: the burn is a change/event label. `change_time` is set to the post-fire
-Sentinel-2 acquisition timestamp (the fire occurred shortly before it, between the pre- and
-post-fire acquisitions) and `time_range` is a 1-year window centered on it (spec 5).
+Sentinel-2 acquisition timestamp (a post-event date - the fire occurred shortly before it,
+between the pre- and post-fire acquisitions). We emit two independent six-month windows via
+`io.pre_post_time_ranges(change_time, pre_offset_days=90)`: `post_time_range` starts at
+`change_time` and runs ~6 months (<=183 days) forward, and `pre_time_range` ends 90 days
+before `change_time` (a guard offset, since the fire precedes the acquisition) and spans
+~6 months (<=183 days) backward from there, keeping the pre window entirely before the
+fire. `time_range` is null. Pretraining pairs a "before" stack with an "after" stack and
+probes on their difference (spec 5).
 
 Run:  python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.cabuar_california_burned_areas
 """
@@ -182,12 +188,24 @@ def _select_tiles_per_class(all_recs: list[dict[str, Any]]) -> list[dict[str, An
     return selected
 
 
-def _event_time(ts: str) -> tuple[datetime, tuple[datetime, datetime]]:
-    """(change_time, 1-year window centered on it) from a post-fire ISO timestamp."""
+def _event_time(
+    ts: str,
+) -> tuple[
+    datetime,
+    tuple[datetime, datetime],
+    tuple[datetime, datetime],
+    tuple[datetime, datetime],
+]:
+    """(change_time, outer time_range, pre_range, post_range) from a post-fire ISO ts.
+
+    change_time is a post-fire acquisition date, so the pre window is pushed earlier
+    (pre_offset_days=90) to end before the fire itself.
+    """
     d = datetime.fromisoformat(ts)
     if d.tzinfo is None:
         d = d.replace(tzinfo=UTC)
-    return d, (d - timedelta(days=182), d + timedelta(days=183))
+    pre_range, post_range = io.pre_post_time_ranges(d, pre_offset_days=90)
+    return d, (pre_range[0], post_range[1]), pre_range, post_range
 
 
 def _tile_bounds(x0: float, y0: float, ti: int, tj: int) -> tuple[int, int, int, int]:
@@ -206,7 +224,7 @@ def _write_patch(
     """Write all selected tiles of one patch."""
     epsg, x0, y0, ts = georef
     proj = Projection(CRS.from_epsg(epsg), io.RESOLUTION, -io.RESOLUTION)
-    change_time, tr = _event_time(ts)
+    change_time, tr, pre_range, post_range = _event_time(ts)
     label = None
     for t in tiles:
         sample_id = t["sample_id"]
@@ -233,6 +251,8 @@ def _write_patch(
             change_time=change_time,
             source_id=f"{key}_r{ti}_c{tj}",
             classes_present=present,
+            pre_time_range=pre_range,
+            post_time_range=post_range,
         )
 
 

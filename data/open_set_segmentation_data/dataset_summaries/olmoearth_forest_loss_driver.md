@@ -33,12 +33,24 @@ to [32, 64]. Single-band uint8, local UTM at 10 m/px (nearest-touch rasterizatio
 `all_touched=True`). Outside-footprint is nodata (not a class) because surrounding pixels
 are unlabeled; there is no background/no-change class in the driver scheme.
 
-## Change handling
+## Change handling (spec §5, pre/post scheme)
 
-- `change_time` = event date (see above).
-- `time_range` = 1-year window **centered** on `change_time` (±180 days = 360 days ≤ 1 yr).
-- The 1-year window is appropriate: the pre/post-S2 driver signal is a persistent land
-  change (clearing, mine, road, burn scar), observable across a full year around the event.
+The event date is only **approximate** (`info.json` `pixel_date`/`date`, else the
+window-midpoint → year-resolved), so the change is encoded under the **pre/post change
+scheme**: each sample carries two independent six-month windows (each ≤ 183 days) with
+`time_range` = **null**, separated by a **6-month guard gap on each side** of the approximate
+`change_time` so the ~1-year uncertainty sits in the gap.
+
+- `change_time` = approximate event date (reference only; see above).
+- `pre_time_range` **ends ~6 months before** `change_time`.
+- `post_time_range` **starts ~6 months after** `change_time`.
+- Samples whose post window would start **before 2016** (Sentinel era) are skipped — none
+  were, at 4387.
+
+**Previously rejected; now resolved by pre/post windows.** The approximate / year-resolved
+event date is not resolvable to within ~1–2 months, which is why this dataset was originally
+**rejected** on change-timing grounds. Bracketing the uncertainty in the guard gap between
+the two far-apart windows removes that problem, so the dataset is **completed / usable**.
 
 ## Class mapping
 
@@ -68,7 +80,8 @@ well under the 25k cap.
 
 - 4387 `.tif` each with a matching `.json`; single-band uint8, EPSG:327xx/326xx UTM,
   10 m/px, ≤64×64. Pixel values observed ⊆ {0..9, 255}; metadata class ids cover them.
-- Every sample `time_range` = 360 days with `change_time` set and inside the range.
+- Every sample `time_range` = **null** with `pre_time_range` and `post_time_range` each ≤ 183
+  days, separated by a ~6-month guard gap on each side of `change_time`.
 - Georeferencing spot-check: sample `001068` source label reads "at -3.2908, -76.3476";
   computed tile-center lon/lat = (-76.3477, -3.2908) — exact match. All samples fall in
   the Amazon basin.

@@ -47,22 +47,35 @@ Output: `datasets/bark_beetle_disturbance_pokljuka_slovenia/locations/{000000..0
 | 0 | bark beetle disturbance | 585 tiles |
 | 255 | nodata / ignore (all non-disturbance pixels) | — |
 
-## Time range and change handling (judgment call)
+## Time range and change handling (pre/post scheme)
 
-The mask is a **cumulative 2017–2021 disturbance product** and per-pixel disturbance dates
-are **not recoverable** from the single aggregate raster, so a dated per-pixel change
-encoding is impossible. Bark-beetle die-off is persistent (dead standing / cleared spruce),
-so by the end of the period the cumulative disturbance is fully expressed in imagery. It is
-therefore encoded as **annual disturbance-presence classification anchored on 2021**
-(time_range = 2021-01-01 → 2022-01-01, `change_time = null`) rather than as a dated change
-label. This is the main judgment call; flagged here per spec §5.
+The mask is a **cumulative 2017–2021 disturbance product** with **no per-pixel disturbance
+dates** (they are not recoverable from the single aggregate raster) — the disturbance
+occurred somewhere in that span. It is encoded under the **pre/post change scheme** by
+bracketing the whole span with two **fixed six-month windows** (each ≤ 183 days) and
+`time_range` = **null**:
+
+- `pre_time_range` = **summer 2016** (before the disturbance period).
+- `post_time_range` = **summer 2022** (after it) — the disturbance occurred somewhere in
+  between.
+- `change_time` = **null** (the exact date is unknown).
+
+Summer windows avoid snow-cover confusion.
+
+**Previously rejected; now resolved by pre/post windows.** This replaces the earlier
+encoding (annual disturbance-presence anchored on 2021: `time_range` 2021-01-01 → 2022-01-01,
+`change_time = null`) and the accompanying **rejection** on change-timing grounds (the
+disturbance not resolvable to within ~1–2 months). With the disturbance bracketed between a
+genuine before/after image pair the timing imprecision is no longer a problem, so the
+dataset is **completed / usable**.
 
 ## Verification
 
 - Opened 7 output tifs: all single-band uint8, EPSG:32633, 64×64, nodata 255, values ⊆
   {0, 255}.
-- 585 tifs each have a matching `.json` with a 1-year `time_range`; `metadata.json` class
-  ids cover all values in the tifs.
+- 585 tifs each have a matching `.json` with `time_range` = **null**, fixed `pre_time_range`
+  (summer 2016) and `post_time_range` (summer 2022) each ≤ 183 days, and `change_time` null;
+  `metadata.json` class ids cover all values in the tifs.
 - **Georeferencing:** verified byte-exact — for sampled class-0 output pixels, the source
   raster holds value 1 at the identical world coordinate (tiles are a same-grid remap, so
   alignment is exact). A live Sentinel-2 overlay was not fetched because the label is itself
@@ -79,6 +92,7 @@ python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.bark_beetle_di
 ## Caveats
 
 - Single small study area (~30×25 km, one UTM zone) → only 585 samples; one class.
-- Cumulative multi-year disturbance forced into a single 2021 annual window (see above).
+- Cumulative multi-year disturbance bracketed by fixed pre (summer 2016) / post (summer
+  2022) windows rather than a dated per-pixel change (see above).
 - Positive-only: tiles are label-sparse (~48 disturbance px in a 4096-px tile, rest ignore);
   negatives are added at pretraining-assembly time.

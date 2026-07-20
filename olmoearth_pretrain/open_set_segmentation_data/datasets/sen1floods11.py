@@ -33,8 +33,12 @@ dedicated pass.
 
 Time range: each event has a Sentinel-1 acquisition date (from
 ``Sen1Floods11_Metadata.geojson``). The flood mask is an **event** label, so we
-set ``change_time`` to the acquisition date and make ``time_range`` a 1-year
-window centered on it (spec 5, change labels).
+set ``change_time`` to the acquisition date and keep it as the reference used to
+build two adjacent windows via ``io.pre_post_time_ranges``: ``pre_time_range`` (the
+~6 months, <=183 days, immediately before change_time) and ``post_time_range`` (the
+~6 months, <=183 days, immediately after); ``time_range`` is null (spec 5, change
+labels). Pretraining pairs a "before" image stack with an "after" stack and probes
+on their difference.
 
 Run:  python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.sen1floods11
 """
@@ -283,16 +287,17 @@ def _select_tiles_per_class(all_recs: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def event_time(name: str):
-    """(change_time, (start, end)) for a chip: 1-year window centered on the S1 date."""
+    """(change_time, outer time_range, pre_range, post_range) for a chip."""
     loc = name.split("_")[0]
     d = datetime.strptime(EVENT_DATE[loc], "%Y/%m/%d").replace(tzinfo=UTC)
-    return d, (d - timedelta(days=182), d + timedelta(days=183))
+    pre_range, post_range = io.pre_post_time_ranges(d)
+    return d, (pre_range[0], post_range[1]), pre_range, post_range
 
 
 def _write_chip(name: str, tiles: list[dict[str, Any]]) -> None:
     """Reproject one chip and write all its selected tiles."""
     arr, proj, col0, row0 = _reproject_chip(name)
-    change_time, tr = event_time(name)
+    change_time, tr, pre_range, post_range = event_time(name)
     for t in tiles:
         sample_id = t["sample_id"]
         if (io.locations_dir(SLUG) / f"{sample_id}.tif").exists():
@@ -315,6 +320,8 @@ def _write_chip(name: str, tiles: list[dict[str, Any]]) -> None:
             change_time=change_time,
             source_id=f"{name}_r{ti}_c{tj}",
             classes_present=present,
+            pre_time_range=pre_range,
+            post_time_range=post_range,
         )
 
 

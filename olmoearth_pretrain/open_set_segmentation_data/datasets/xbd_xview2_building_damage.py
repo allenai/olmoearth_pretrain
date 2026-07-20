@@ -15,11 +15,16 @@ needed).
 
 CHANGE dataset (spec S5). This is a disaster before->after damage dataset. xBD gives, per
 post-disaster image, a satellite ``capture_date`` resolvable to the day, tasked within days
-of the event. We set ``change_time`` to that per-image post-disaster capture date and make
-``time_range`` a 360-day window centered on it (spans the event, <= 360-day cap), so
-pretraining only pairs the sample when its input window brackets the change. The damage
-(major/destroyed) mask is the "where the change occurred" signal. This easily meets the
-S5 timing-precision requirement (event known to << 1-2 months).
+of the event (a post-event date). We set ``change_time`` to that per-image post-disaster
+capture date and emit two independent six-month windows via
+``io.pre_post_time_ranges(change_time, pre_offset_days=45)``: ``post_time_range`` starts at
+``change_time`` and runs ~6 months (<=183 days) forward, and ``pre_time_range`` ends 45 days
+before ``change_time`` (a guard offset, since the rapid post-disaster imagery follows the
+event by weeks) and spans ~6 months (<=183 days) backward from there, placing the pre window
+before the event. ``time_range`` is null; pretraining pairs a "before" stack with an "after"
+stack and probes on their difference. The damage (major/destroyed) mask is the "where the
+change occurred" signal. This easily meets the S5 timing-precision requirement (event known
+to << 1-2 months).
 
 Damage-class scheme at 10 m (observability, spec S4). Buildings are ~0.4-1.4 m native GSD
 (sub-pixel at 10 m), so a single building's *damage level* is not discriminable at 10 m from
@@ -52,7 +57,7 @@ import multiprocessing
 import os
 import tarfile
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -83,7 +88,6 @@ UA = {"User-Agent": "Mozilla/5.0 (olmoearth-open-set-seg)"}
 
 TILE = 64
 PER_CLASS = 1000
-WINDOW_DAYS = 360
 MIN_YEAR = 2016  # Sentinel era; drop any image whose post capture predates this.
 
 # 2-class collapsed damage scheme (see module docstring).
@@ -178,14 +182,6 @@ def _parse_capture_date(s: str | None) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return dt
-
-
-def _window(center: datetime) -> tuple[datetime, datetime]:
-    """360-day window centered on the change (post-disaster capture) date."""
-    return (
-        center - timedelta(days=WINDOW_DAYS // 2),
-        center + timedelta(days=WINDOW_DAYS // 2),
-    )
 
 
 def _scan_file(path: str) -> list[dict[str, Any]]:
@@ -286,6 +282,8 @@ def _write_one(rec: dict[str, Any]) -> int:
     proj = Projection(CRS.from_string(rec["crs"]), io.RESOLUTION, -io.RESOLUTION)
     bounds = tuple(rec["bounds"])
     ct = rec["change_time"]
+    pre_range, post_range = io.pre_post_time_ranges(ct, pre_offset_days=45)
+    time_range = (pre_range[0], post_range[1])
     io.write_label_geotiff(
         SLUG, sample_id, rec["array"], proj, bounds, nodata=io.CLASS_NODATA
     )
@@ -294,10 +292,12 @@ def _write_one(rec: dict[str, Any]) -> int:
         sample_id,
         proj,
         bounds,
-        _window(ct),
+        time_range,
         change_time=ct,
         source_id=rec["source_id"],
         classes_present=rec["classes_present"],
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
     return 1
 

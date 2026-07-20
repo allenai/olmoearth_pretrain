@@ -26,8 +26,9 @@ rarest-first so the sparse gravel-bar / river classes are prioritized).
 
 Because tiles are already local UTM at 10 m, each 64x64 block is cropped NATIVELY from
 its source tile (no reprojection): exact georeferencing, no categorical-resampling loss.
-2021 one-year window; the classification is a static July-2021 snapshot -> change_time
-null.
+Gravel bars are only exposed at summer low flow and the source is a single July-2021
+acquisition, so time_range is a fixed summer window [2021-06-01, 2021-09-01) rather than
+the full year; the classification is a static snapshot -> change_time null.
 
 Presence rule (a class "counts" toward a 64x64 block for balancing): fluvial thin
 classes (river, gravel bar) need only >= PRESENT_ABS pixels -- rivers and bars are narrow
@@ -49,6 +50,7 @@ import multiprocessing
 import os
 import random
 import zlib
+from datetime import UTC, datetime
 from collections import Counter
 from typing import Any
 
@@ -98,6 +100,13 @@ RARE_IDS = {0, 1, 2}  # fluvial/inland-water -> reservoir priority
 CAP_RARE_PER_CHUNK = 80
 CAP_COMMON_PER_CHUNK = 12
 YEAR = 2021
+# Gravel bars are only exposed at summer low flow; the source is a single July-2021
+# acquisition. Use a summer low-flow window rather than the full year so pretraining does
+# not pair the label with winter high-flow imagery when the bars are submerged.
+LOW_FLOW_WINDOW = (
+    datetime(YEAR, 6, 1, tzinfo=UTC),
+    datetime(YEAR, 9, 1, tzinfo=UTC),
+)
 SEED = 42
 
 
@@ -202,7 +211,7 @@ def _write_one(rec: dict[str, Any]) -> None:
         sample_id,
         proj,
         bounds,
-        io.year_range(YEAR),
+        LOW_FLOW_WINDOW,
         source_id=f"{os.path.basename(rec['src'])}:{rec['tlc']}_{rec['tlr']}",
         classes_present=present,
     )
@@ -323,7 +332,8 @@ def main() -> None:
                 "so the sparse gravel-bar/river classes are prioritized). Thin fluvial "
                 "classes present if >=40 px in a 64x64 block; areal classes if >=15% of the "
                 "block. 64x64 tiles cropped NATIVELY in each tile's UTM CRS at 10 m (no "
-                "reprojection). 2021 one-year window; static July-2021 snapshot, no "
+                "reprojection). Fixed summer window [2021-06-01, 2021-09-01) (gravel bars "
+                "exposed only at summer low flow); static July-2021 snapshot, no "
                 "change_time. Snow is rare in this Northern-summer (July) product."
             ),
         },

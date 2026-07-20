@@ -14,6 +14,7 @@ from olmoearth_pretrain.dataset_creation.create_windows.from_open_set import (
     _build_open_set_label,
     _build_regression_label,
     _centered_window_bounds,
+    _parse_time_range,
     _window_geometry_for_sample,
     load_exclusion_index,
     normalize_regression,
@@ -30,6 +31,32 @@ CRS_STR = "EPSG:32610"
 def test_centered_window_bounds() -> None:
     """Centered window bounds are computed from center pixel and size."""
     assert _centered_window_bounds(100, 200, 128) == (36, 136, 164, 264)
+
+
+def test_pre_post_time_ranges_fail_instead_of_using_fallback() -> None:
+    """Paired change samples are not silently expanded to the fallback range."""
+    try:
+        _parse_time_range(
+            None,
+            ["2019-01-01T00:00:00+00:00", "2019-07-01T00:00:00+00:00"],
+            ["2021-01-01T00:00:00+00:00", "2021-07-01T00:00:00+00:00"],
+        )
+    except ValueError as error:
+        assert "paired-window materialization" in str(error)
+    else:
+        raise AssertionError("expected paired change sample to be rejected")
+
+
+def test_pre_post_time_ranges_can_be_explicitly_skipped() -> None:
+    """The single-window build can explicitly count paired samples as skipped."""
+    time_range = _parse_time_range(
+        None,
+        ["2019-01-01T00:00:00+00:00", "2019-07-01T00:00:00+00:00"],
+        ["2021-01-01T00:00:00+00:00", "2021-07-01T00:00:00+00:00"],
+        paired_change_policy="skip",
+    )
+
+    assert time_range is None
 
 
 def test_normalize_regression_endpoints() -> None:

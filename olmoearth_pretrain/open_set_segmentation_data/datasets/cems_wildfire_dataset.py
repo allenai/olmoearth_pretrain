@@ -22,9 +22,14 @@ represented. Unburned (0) is a genuine observed background class here (the CEMS 
 delineates the whole AOI), so we keep it - this dataset has a real negative class within
 each tile and is NOT positive-only.
 
-Burn scars are change/event labels: change_time = the post-fire S2 acquisition date;
-time_range = a 360-day window centred on it (burn scars persist for months and are
-detectable in post-fire imagery across that window).
+Burn scars are change/event labels: change_time = the post-fire S2 acquisition date (a
+post-event date). We emit two independent six-month windows via
+io.pre_post_time_ranges(change_time, pre_offset_days=90): post_time_range starts at
+change_time and runs ~6 months (<=183 d) forward, and pre_time_range ends 90 d before
+change_time (a guard offset, since the fire falls weeks-to-months before the cloud-free
+post-fire scene) and spans ~6 months (<=183 d) backward from there, keeping the pre window
+before the fire. time_range = null; pretraining pairs a "before" stack with an "after"
+stack and probes on their difference.
 
 Sampling: tiles-per-class balanced (rarest severity first), <=1000 tiles/class, 25k cap.
 
@@ -59,7 +64,6 @@ HF_REPO = "links-ads/wildfires-cems"
 TILE = 64
 RES = 10
 PER_CLASS = 1000
-HALF_WINDOW_DAYS = 180  # +/-180 d = 360 d change window (<= 1 year)
 
 # id -> (name, description). ids 0-4 are the CEMS grading grades; id 5 is the
 # delineation-only burned class (samples lacking a severity grading product).
@@ -274,10 +278,8 @@ def _write_sample_tiles(sample_dir, tiles):
         y_min = int(round(-y_ul / RES))
         bounds = (x_min, y_min, x_min + TILE, y_min + TILE)
         date = datetime.fromisoformat(rec["date"])
-        tr = (
-            date - timedelta(days=HALF_WINDOW_DAYS),
-            date + timedelta(days=HALF_WINDOW_DAYS),
-        )
+        pre_range, post_range = io.pre_post_time_ranges(date, pre_offset_days=90)
+        tr = (pre_range[0], post_range[1])  # outer bounding span
         if not tif.exists():
             io.write_label_geotiff(
                 SLUG, sid, crop, proj, bounds, nodata=io.CLASS_NODATA
@@ -291,6 +293,8 @@ def _write_sample_tiles(sample_dir, tiles):
                 change_time=date,
                 source_id=rec["source_id"],
                 classes_present=rec["classes_present"],
+                pre_time_range=pre_range,
+                post_time_range=post_range,
             )
         out_info.append((sid, rec["classes_present"]))
     return len(tiles), out_info

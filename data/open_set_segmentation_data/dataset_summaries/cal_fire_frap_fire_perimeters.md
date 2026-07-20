@@ -43,10 +43,14 @@ the burned extent). Downstream assembly supplies additional negatives.
 
 ## Change semantics (this is a change/event dataset)
 
-A fire is a dated change event. Each sample carries `change_time = ALARM_DATE` and a
-`time_range` of **±180 days (360-day, ≤1-year window) centered on `change_time`** (spec
-§5), so pretraining pairs the burned-area mask with imagery spanning the fire (before +
-after the scar appears). Metadata flags `is_change_dataset: true`.
+A fire is a dated change event. Each sample carries `change_time = ALARM_DATE` (retained
+as the reference used to build the windows) and, instead of a single centered window, two
+independent six-month windows: a `pre_time_range` (the ≤183 days immediately **before**
+`change_time`) and a `post_time_range` (the ≤183 days immediately **after** it), with
+`time_range` set to null. The windows are adjacent and split exactly at `change_time`
+(built via `io.pre_post_time_ranges(change_time, ...)`), so pretraining pairs a "before"
+image stack with an "after" stack — spanning the fire before + after the scar appears —
+and probes on their difference. Metadata flags `is_change_dataset: true`.
 
 **Pre-2016 filtering:** only `YEAR_ >= 2016` fires are used (Sentinel era); FRAP's large
 pre-2016 back-catalogue is filtered out.
@@ -70,8 +74,9 @@ pre-2016 back-catalogue is filtered out.
 ## Verification (§9)
 
 - 5 tifs: single-band, `(1,64,64)`, uint8, UTM 10 m (EPSG:32610/32611), values {0,1}. ✓
-- Every `.tif` has a matching `.json` (25,000 / 25,000); `time_range` span = 360 days,
-  `change_time` set, `classes_present` recorded. ✓
+- Every `.tif` has a matching `.json` (25,000 / 25,000); `time_range` null, adjacent
+  `pre_time_range` / `post_time_range` (each ≤183 days) set, `change_time` set,
+  `classes_present` recorded. ✓
 - metadata.json: `task_type=classification`, `num_samples=25000`, `nodata_value=255`,
   classes = [(0, background), (1, fire)]. ✓
 - Geographic sanity: 200 random tile centroids all fall inside the California lon/lat box
@@ -88,9 +93,9 @@ pre-2016 back-catalogue is filtered out.
 - Used the public hosted ArcGIS layer instead of the gated legacy File-GDB (identical
   data). If the user prefers the official GDB, credentials for `egis.fire.ca.gov` or a
   manual download from the landing page would be needed.
-- `time_range` centered on ignition gives ~6 months of post-fire imagery; if finer
-  temporal precision is later wanted (scar strictly post-fire), narrow to a forward window.
-- Perimeters can overlap across years; within a single fire's ±180 d window, out-of-
+- The post window gives ~6 months of post-fire imagery; if finer temporal precision is
+  later wanted (scar strictly post-fire), narrow the forward window.
+- Perimeters can overlap across years; within a single fire's ~1-year pre+post span, out-of-
   perimeter pixels labeled background may (rarely) have burned in a different-year fire.
 
 ## Reproduce

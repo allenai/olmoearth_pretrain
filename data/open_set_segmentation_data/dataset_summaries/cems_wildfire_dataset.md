@@ -17,7 +17,7 @@
 - Reprojected each categorical label from EPSG:4326 (~10 m) to local UTM at 10 m with **nearest** resampling (categorical), via `calculate_default_transform` + `rasterio.warp.reproject`.
 - Tiled each reprojected label into non-overlapping 64x64 UTM patches; dropped tiles touching the reprojection border (nodata) and tiles with no burned pixels.
 - **Unified class scheme** (spec sec.5 multi-target combine): severity grades map directly to ids 0-4; for delineation-only activations (no GRA) burned pixels get id 5 (`burned_ungraded`). Unburned (id 0) is a real observed background class (CEMS delineates the whole AOI), so this dataset is NOT positive-only.
-- **Time**: burn scars are change/event labels. `change_time` = post-fire S2 acquisition date (from `*_S2L2A.json`); `time_range` = +/-180 d (360 d) around it. Burn scars persist for months, so a yearly window is well-posed (not flagged).
+- **Time**: burn scars are change/event labels. `change_time` = post-fire S2 acquisition date (from `*_S2L2A.json`), a post-event date. We emit two independent six-month windows via `io.pre_post_time_ranges(change_time, pre_offset_days=90)`: `post_time_range` starts at `change_time` and runs ~6 months (<=183 d) forward, and `pre_time_range` ends 90 d before `change_time` (a guard offset, since the fire falls weeks-to-months before the cloud-free post-fire scene) and spans ~6 months (<=183 d) backward from there, keeping the pre window before the fire. `time_range` = null. Pretraining pairs a "before" stack with an "after" stack and probes on their difference.
 - **Sampling**: tiles-per-class balanced, rarest-severity-first, <=1000 tiles per class, 25k total cap (`sampling.select_tiles_per_class`).
 - Did NOT apply the cloud mask (`*_CM.tif`): the CEMS burn labels are authoritative vector rapid-mapping products independent of clouds in the particular S2 mosaic.
 
@@ -34,7 +34,7 @@ Class 1 (negligible_to_slight) is the least common severity grade but has enough
 
 ## Verification
 
-Output tifs are single-band uint8, UTM CRS at 10 m, 64x64, values in {0..5} plus 255 nodata; each tif has a matching JSON with a 360-day `time_range` and a `change_time`. Georeferencing derived from the reprojection transform.
+Output tifs are single-band uint8, UTM CRS at 10 m, 64x64, values in {0..5} plus 255 nodata; each tif has a matching JSON with `time_range` null, a `pre_time_range` and `post_time_range` (each <=183 days), and a `change_time`. Georeferencing derived from the reprojection transform.
 
 ## Reproduce
 

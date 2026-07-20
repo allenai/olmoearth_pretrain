@@ -27,10 +27,14 @@ under the 25k cap. Tiles that are mostly nodata are skipped.
 
 Time range / change label: a burn scar is a change/event label. The HLS scene is acquired
 shortly after the fire (MTBS-derived), so `change_time` is set to the HLS acquisition date
-(midpoint of the window's ~2-day acquisition range) and `time_range` is a 360-day window
-centered on it (spec 5). The fire ignition falls a few weeks-to-months before the
-acquisition, comfortably inside the centered window, so the pairing imagery brackets the
-forest->burned transition. (Same convention as cabuar/floga.)
+(midpoint of the window's ~2-day acquisition range), a post-event date. We emit two
+independent six-month windows via `io.pre_post_time_ranges(change_time, pre_offset_days=90)`:
+`post_time_range` starts at `change_time` and runs ~6 months (<=183 days) forward, and
+`pre_time_range` ends 90 days before `change_time` (a guard offset, since the fire ignition
+falls a few weeks-to-months before the acquisition) and spans ~6 months (<=183 days)
+backward from there, keeping the pre window entirely before the burn. `time_range` is null;
+pretraining pairs a "before" stack with an "after" stack and probes on their difference
+(forest->burned). (Same convention as cabuar/floga.)
 
 Run:  python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.olmoearth_hls_burn_scars
 """
@@ -40,7 +44,7 @@ import json
 import multiprocessing
 import os
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -141,7 +145,14 @@ def _scan_window(group: str, name: str) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- write phase
 def _window_geo(
     group: str, name: str
-) -> tuple[Projection, list[int], datetime, tuple[datetime, datetime]]:
+) -> tuple[
+    Projection,
+    list[int],
+    datetime,
+    tuple[datetime, datetime],
+    tuple[datetime, datetime],
+    tuple[datetime, datetime],
+]:
     """(canonical-UTM projection, staged pixel bounds, change_time, 360-day window).
 
     The staged CRS is a non-EPSG WGS84-UTM WKT; we re-derive the canonical EPSG UTM
@@ -160,8 +171,9 @@ def _window_geo(
     if t1.tzinfo is None:
         t1 = t1.replace(tzinfo=UTC)
     change_time = t0 + (t1 - t0) / 2
-    tr = (change_time - timedelta(days=180), change_time + timedelta(days=180))
-    return proj, bounds, change_time, tr
+    pre_range, post_range = io.pre_post_time_ranges(change_time, pre_offset_days=90)
+    tr = (pre_range[0], post_range[1])
+    return proj, bounds, change_time, tr, pre_range, post_range
 
 
 def _write_window(group: str, name: str, tiles: list[dict[str, Any]]) -> None:
@@ -173,7 +185,7 @@ def _write_window(group: str, name: str, tiles: list[dict[str, Any]]) -> None:
     ]
     if not remaining:
         return
-    proj, bounds, change_time, tr = _window_geo(group, name)
+    proj, bounds, change_time, tr, pre_range, post_range = _window_geo(group, name)
     x_min, y_min = bounds[0], bounds[1]
     label = _read_label(group, name)
     for t in remaining:
@@ -195,6 +207,8 @@ def _write_window(group: str, name: str, tiles: list[dict[str, Any]]) -> None:
             change_time=change_time,
             source_id=f"{group}/{name}_r{ti}_c{tj}",
             classes_present=present,
+            pre_time_range=pre_range,
+            post_time_range=post_range,
         )
 
 

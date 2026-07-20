@@ -26,8 +26,11 @@ agents follow.
 Design decisions already made (do not re-litigate):
 - Prefer manual/in-situ **reference** data; use derived-product **maps** only as a
   fallback (and then sample only homogeneous/high-confidence areas).
-- Object-detection point encoding (positive square + nodata buffer + negatives) is
-  **tunable per dataset** with sensible defaults.
+- Object detections split by negative source (§4): **global point inventories** (isolated
+  object coordinates, no real scene) are **presence-only points** — no fabricated
+  buffer/background/negatives; only **exhaustively-searched real scenes** (vessels/xView3/
+  annotated infra windows) use the tunable detection-tile encoding with genuine in-scene
+  negatives.
 - Dense multi-class rasters use **tiles-per-class balanced** sampling (a tile counts
   toward every class present in it; prioritize rare classes to reach the target).
 - Shared code lives in the repo module (not per-dataset `code/` dirs); summaries, the
@@ -169,8 +172,11 @@ regression value), do **NOT** create `locations/{id}.tif` or per-point JSONs. In
 write **one** dataset-wide **GeoJSON** table `datasets/{DATASET}/points.geojson`: a
 `FeatureCollection` with one `Point` `Feature` per location. Coordinates are WGS84
 `[lon, lat]` (GeoJSON's native CRS); pretraining projects them onto the S2 grid. Per-point
-fields (`id`, `label`, `time_range`, `change_time`, `source_id`) live in each feature's
+fields (`id`, `label`, `time_range`, `change_time`, `pre_time_range`, `post_time_range`,
+`source_id`) live in each feature's
 `properties`; `dataset`/`task_type`/`count` are FeatureCollection-level foreign members.
+Change/event point datasets set `pre_time_range`/`post_time_range` and leave `time_range`
+null, exactly as for GeoTIFF samples (§3, §5).
 ```json
 {
   "type": "FeatureCollection",
@@ -184,14 +190,16 @@ fields (`id`, `label`, `time_range`, `change_time`, `source_id`) live in each fe
        "id": "000000",
        "label": 2,                            // class id (classification) OR value (regression)
        "time_range": ["2017-01-01T00:00:00+00:00", "2018-01-01T00:00:00+00:00"],
-       "change_time": null, "source_id": "test/sample_10000"}}
+       "change_time": null, "pre_time_range": null, "post_time_range": null,
+       "source_id": "test/sample_10000"}}
   ]
 }
 ```
 `label` is the class id for classification or the numeric value for regression. The
 dataset-level `metadata.json` (class map / regression block, §3) is still written. Use
 `io.write_points_table(slug, task_type, points)` — it takes the same list of point dicts
-(`id`/`lon`/`lat`/`label`/`time_range`/`change_time`/`source_id`) and writes the GeoJSON.
+(`id`/`lon`/`lat`/`label`/`time_range`/`change_time`/`source_id`, plus optional
+`pre_time_range`/`post_time_range` for change datasets) and writes the GeoJSON.
 A single `points.geojson` handles even large sets (e.g. 50k features) fine; there is no
 JSON-lines variant.
 
@@ -243,11 +251,17 @@ point-only datasets put this info in the `points.geojson` feature `properties` i
   "pixel_bounds": [29696, -964608, 29760, -964544],   // integer px in crs, matches tif
   "time_range": ["2024-01-01T00:00:00+00:00", "2024-12-31T00:00:00+00:00"],
   "change_time": null,                 // ISO time if a change/event label (see §5)
+  "pre_time_range": null,              // change datasets only: 6-mo "before" window (see §5)
+  "post_time_range": null,             // change datasets only: 6-mo "after" window (see §5)
   "source_id": "sample_951",           // provenance back to source record, optional
   "classes_present": [0, 3]            // optional convenience for classification
 }
 ```
-Time range must be ≤ 1 year (360 days). The GeoTIFF carries its own georeferencing;
+Non-change labels set a single `time_range` (must be ≤ 1 year / 360 days) with
+`pre_time_range`/`post_time_range` null. **Change/event labels (§5) instead set
+`pre_time_range` and `post_time_range` (each ≤ 183 days) and leave `time_range` null** — the
+two windows can be far apart, so no single ≤360-day span represents the sample; `change_time`
+is retained as the reference event time. The GeoTIFF carries its own georeferencing;
 `crs`/`pixel_bounds` are duplicated in JSON for convenience.
 
 ## 4. Processing recipes by `label_type`
@@ -259,17 +273,27 @@ Time range must be ≤ 1 year (360 days). The GeoTIFF carries its own georeferen
   balancing. Same for **regression points** (canopy height / soil / biomass at a point): one
   feature per point with `properties.label=<value>`.
 - **points — object detection, positive-only** (the point marks presence, absence is
-  everywhere else; e.g. vessels, turbines, dams-as-points, mines-as-points): use the
-  **tunable detection encoding** — a positive square (default 1×1, or object-sized) at the
-  detection, a **nodata (255) buffer ring** around it, **background (0)** filling the rest
-  of a context tile (default 32×32, ≤64). **The buffer must be at least 10 px** (default
-  `buffer_size=10`): detection/point coordinates are rarely pixel-exact, so a thick ignore
-  ring avoids penalizing the model when the true object lands a few pixels off. With
-  positive_size=1 and buffer_size=10 the ignore region is 21×21 (positive center, rest
-  nodata) — still leaving ample background in a 32×32 or 64×64 tile. Expose `positive_size`,
-  `buffer_size`, `tile_size` as parameters; the per-dataset script sets them from object
-  size/density. Also emit background-only negative tiles away from any detection so the
-  class has negatives.
+  everywhere else; e.g. vessels, turbines, dams-as-points, mines-as-points). **Two cases —
+  pick by where the negatives come from:**
+  - **(a) Global point inventory** (an isolated list of object coordinates — turbine/dam/
+    platform/mine/volcano databases — with NO real annotated scene): emit each detection as a
+    **presence-only point** in the dataset-wide `points.geojson` (§2a): one `Point` feature,
+    `label` = object class id (multi-class where the source distinguishes types), a static
+    1-year `time_range`, `change_time` = null. Do **NOT** fabricate a background/buffer or
+    synthetic negative tiles — there is no real observed absence to encode; the assembly step
+    supplies negatives by sampling other datasets (§5). This is the **default** for object
+    point inventories.
+  - **(b) Exhaustively-searched real scene** (the detections were annotated within an actual
+    image/window that was searched end-to-end, so object-free area is a *genuine observed*
+    negative — e.g. SAR/optical vessel scenes, xView3, annotated marine-infrastructure or
+    wind-turbine windows): keep the **tunable detection encoding** — a positive square
+    (default 1×1, or object-sized) at the detection, a **nodata (255) buffer ring** around it,
+    **background (0)** filling the rest of a context tile (default 32×32, ≤64). **Buffer ≥10 px**
+    (default `buffer_size=10`): coordinates are rarely pixel-exact, so a thick ignore ring
+    avoids penalizing a few-pixel offset (positive_size=1, buffer_size=10 → a 21×21 ignore
+    region, still ample background in a 32×32/64×64 tile). Expose `positive_size`,
+    `buffer_size`, `tile_size`; also emit background-only negative tiles drawn from the same
+    exhaustively-searched scenes so the class has real negatives. Use `encode_detection_tile`.
 - **polygons**: rasterize each polygon (or sampled sub-windows for large/dense coverage)
   into a ≤64×64 UTM tile at 10 m via `rasterio.features.rasterize` (transform built from
   pixel bounds + resolution; see seagrass ref). Value = class ID; outside-polygon =
@@ -303,9 +327,32 @@ these labels, so per-dataset agents should not work around them:
   foreground-type masks like rock-glacier active/transitional/relict, glacier zones). Do
   **not** fabricate synthetic negatives for these — leave non-object pixels as nodata/ignore
   (255) and record every real class. The assembly step gives them negatives by sampling an
-  equal number of locations from *other* datasets. (Detection datasets are the exception:
-  they still emit their own `background`(0) + negative tiles per §4, because those negatives
-  are spatially meaningful within the tile.)
+  equal number of locations from *other* datasets. This now includes **object point
+  inventories** (turbines/dams/platforms/mines/volcanoes/…), which are emitted as
+  presence-only points with no fabricated negatives (§4 case (a)). The **only exception** is
+  **exhaustively-searched real-scene detection** (§4 case (b): vessel/xView3/annotated
+  infrastructure windows), which still emits its own `background`(0) + negative tiles because
+  those negatives are *genuinely observed* within the searched scene.
+  - **Assembly-time grouping (`assemble_classes.py`).** A dataset joins the shared
+    presence-only training group **only if** it is foreground-only (no negative/background
+    class) **and** has few classes (`PRESENCE_ONLY_MAX_CLASSES`, currently ≤3). Everything
+    else — many-class rich classifications (crop-type, land-cover, species, ecosystem, vessel-
+    type, commodity, mine-marker, …) and any dataset carrying its own negative class — becomes
+    its **own standalone multiclass training group** (self-contained softmax; no background is
+    fine). This keeps the small foreground detectors (dams, turbines, platforms, roads, …)
+    pooled while letting rich maps train by themselves, and it stops crop/water/land-cover
+    datasets from wrongly negating each other in the pool.
+  - **Concept merge/conflict for the pool
+    (`data/open_set_segmentation_data/presence_only_concepts.json`).** Pooled classes that
+    denote the *same* real-world thing across datasets are **merged** into one global class
+    (e.g. the wind-turbine detectors; the two road datasets). Classes whose concepts **overlap
+    / subsume** but aren't identical are flagged as mutual **conflicts** (e.g. individual
+    wind_turbine ↔ wind_farm; offshore oil/gas platform ↔ gas flare; mining ↔ tailings; a
+    generic rock_glacier ↔ its active/transitional/relict states) and excluded as each other's
+    negatives; disjoint concepts (wind turbine vs oil platform; maize vs wheat) stay normal
+    negatives. `assemble_classes` emits, in the `__presence_only__` group of
+    `class_mapping.json`, a `concepts` map and a `conflicts` adjacency per pooled global id.
+    Curate the concept file to add clusters; unmatched entries are surfaced by the assembler.
 - **Rare classes.** The assembly step discards classes with fewer than a minimum sample
   count when building the final dataset. So do **not** reject a dataset, or drop a class,
   merely because some classes are sparse (even single-sample classes) — keep every class you
@@ -349,27 +396,44 @@ these labels, so per-dataset agents should not work around them:
     1-year window** within it.
   - Static labels (geology, lithology, persistent sites): pick a representative 1-year
     window in the Sentinel era (2016+).
-- **Change labels** (deforestation events, urban expansion, burn scars with a date, etc.):
-  set `change_time` on the sample and make `time_range` a 1-year window **centered on**
-  `change_time` (adjust per task). The label is a **mask of where** the change occurred;
-  pretraining will only use the sample when the sampled input window spans `change_time`.
-  - **Timing-precision requirement (hard) — reject if the change date is not known to
-    within ~1-2 months.** A change label is only usable if we can place the event confidently
-    inside the pairing window; otherwise the change may have happened *before* (or after) the
-    window we select, so the imagery pretraining sees need not show the change at all and the
-    where-mask becomes unaligned/misleading. So:
-    - If each sample carries a change date known to **≤ ~1-2 months** (dated fire alarm,
-      dated landslide/GLOF event, dated deforestation alert, a tight pre/post image pair a few
-      weeks apart), set `change_time` and center a window on it — good.
-    - If the change is only resolved to a **year or coarser**, or comes from a **multi-year
-      pre/post comparison** (e.g. mosaics 1-3 years apart) so you cannot say when within that
-      span the change occurred, **reject the dataset** with `notes: "change-timing: event not
-      resolvable to within ~1-2 months"`. Do **not** force it into the yearly scheme.
-      (`oscd` and `olmoearth_land_cover_change` were rejected on exactly this ground.)
+- **Change labels** (deforestation events, urban expansion, burn scars with a date,
+  bitemporal change-detection pairs, etc.): the label is a **mask of where** a change
+  occurred. Emit **two independent six-month observation windows**, `pre_time_range`
+  (a "before" window) and `post_time_range` (an "after" window), and **leave `time_range`
+  null**; keep `change_time` as the reference event time (may be null for cumulative masks).
+  Pretraining pairs a "before" image stack (sampled from `pre_time_range`) with an "after"
+  stack (from `post_time_range`) and probes on their difference. Build the windows with
+  `io.pre_post_time_ranges(change_time, gap_days=, pre_offset_days=)` and pass
+  `pre_time_range`/`post_time_range` to `io.write_sample_json` / the point dict:
+  - **The two windows need NOT be adjacent.** Place them to match what the source actually
+    compares, so the change reliably falls *between* them:
+    - **Single dated event** (fire ignition, quake, flood, dated alert): default **adjacent**
+      split at `change_time` (`gap_days=0`) — a 6-mo "before" and 6-mo "after".
+    - **`change_time` is a post-event acquisition** (the event precedes it, e.g. the
+      cloud-free post-fire scene): use `pre_offset_days` so the pre window ends before the
+      true event (burn scars ~90 d; rapid post-disaster imagery ~45 d).
+    - **Two-epoch / multi-year comparison** (bitemporal image pairs, pre-mosaic vs
+      post-mosaic years apart): center each window on its own acquisition period
+      (season-aligned), e.g. pre ≈ 6 mo around the earlier image, post ≈ 6 mo around the
+      later one — they may be several years apart.
+    - **Year-resolved or cumulative-span events** (annual GFC loss year; a cumulative
+      multi-year disturbance mask): put the ambiguous span **in the gap** — pre in a year
+      safely before it, post in a year safely after — so the exact timing no longer matters.
+  - Each window must be **≤ 183 days**. Anchor windows in the Sentinel era (post ≥ 2016);
+    drop or Landsat-note samples whose windows would fall entirely before it.
+  - **This replaces the old "reject if the change date is not resolvable to ~1-2 months"
+    rule.** Because the ambiguous span can sit in the gap between the two windows, coarsely-
+    timed changes (year-resolved, multi-year pre/post comparisons) are now **usable** — do
+    not reject them on timing grounds. (`oscd`, `olmoearth_land_cover_change`, `cam_forestnet`,
+    `olmoearth_forest_loss_driver`, and `bark_beetle` were previously rejected on that ground
+    and are now reprocessed under this scheme.) Still reject a change dataset only for the
+    usual independent reasons (no geocoordinates, all labels pre-2016, not observable at
+    10-30 m, etc.).
   - A **persistent post-change state** that stays visible long after the event (a burn scar,
-    a completed clear-cut, a filled reservoir) may still be usable as **presence/state
-    classification** with `change_time=null` and a static-label 1-year window — but only if
-    the state is genuinely persistent across the window; note the reasoning in the summary.
+    a completed clear-cut, a filled reservoir) may alternatively be encoded as
+    **presence/state classification** with `change_time=null` and a single static-label
+    1-year `time_range` (no pre/post) — use this when there is no meaningful "before" to pair,
+    and note the reasoning in the summary.
 
 ## 6. Shared code module layout
 
@@ -476,11 +540,12 @@ lcmap example does (26k windows scanned in ~18 s; 5.6k patches written in ~60 s)
      (inspect the archive file listing / datasheet / a sample file's CRS) **before**
      downloading multi-GB archives. A per-sample tile/region id alone (e.g. an MGRS tile
      without within-tile pixel index) is not sufficient. If unrecoverable, reject.
-   - **Change/event label whose change date is not known to within ~1-2 months** — e.g. only
-     year-resolved, or from a multi-year pre/post comparison — so the event can't be placed
-     confidently inside the pairing window (see §5). Reject with `notes: "change-timing: event
-     not resolvable to within ~1-2 months"`, unless it can be recast as a persistent
-     presence/state label per §5.
+   - ~~Change/event label whose change date is not known to within ~1-2 months~~ — **NO
+     LONGER a rejection reason.** The pre/post two-window scheme (§5) places coarsely-timed
+     changes (year-resolved, multi-year pre/post comparisons) in the gap between a "before"
+     and an "after" window, so they are now usable. Process such datasets under §5 (do not
+     reject on timing). Only reject a change dataset for an independent reason (no
+     geocoordinates, all pre-2016, not observable at 10-30 m, etc.).
    - **Impractical download volume for the label signal.** Only the *labels* are needed —
      pretraining supplies its own imagery. If the labels are only distributed inside very
      large bulk archives (e.g. whole-region/full-planet OSM extracts, multi-TB SAR scene

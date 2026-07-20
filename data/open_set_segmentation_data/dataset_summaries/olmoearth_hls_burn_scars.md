@@ -75,26 +75,32 @@ A burn scar is a **change/event label** (forest → burned). The HLS scene is ac
 shortly after the fire (MTBS-derived scenes are chosen to capture the burn scar), so:
 
 - **`change_time` = the HLS acquisition date** (midpoint of the window's ~2-day acquisition
-  `time_range`), e.g. `HLS_S30_T10SDH_2020248` → 2020-09-04.
-- **`time_range` = a 360-day window centered on `change_time`** (±180 days, ≤ 1 year).
+  `time_range`), e.g. `HLS_S30_T10SDH_2020248` → 2020-09-04 — a **post-event** date.
+- Instead of one centered window we emit **two independent six-month windows** via
+  `io.pre_post_time_ranges(change_time, pre_offset_days=90)`: a **`post_time_range`** that
+  starts at `change_time` and runs ~6 months (≤183 days) forward, and a **`pre_time_range`**
+  that **ends 90 days before `change_time`** (a guard offset) and spans ~6 months (≤183 days)
+  backward from there. `time_range` = `null`.
 
 Rationale (spec §5): the fire ignition falls a few weeks-to-months before the HLS
-acquisition, comfortably inside the ±180-day window, so imagery the pretraining pairs with
-this label brackets the forest→burned transition and the where-mask stays aligned. This is
+acquisition, so the 90-day pre-window guard offset pushes the "before" window back to sit
+entirely before the burn; pretraining then pairs a "before" stack with an "after" stack and
+probes on their difference (forest→burned), with the where-mask staying aligned. This is
 the same treatment as the sibling burn datasets `cabuar_california_burned_areas`
 (change_time = post-fire S2 acquisition) and `floga` (change_time = ignition). All scene
 dates are 2018–2021, i.e. post-2016 (Sentinel era) — no pre-2016 filtering needed.
 
 We chose the **change-label** framing (change_time set) over the persistent-state framing
 (change_time = null) because HLS burn-scar scenes are deliberately acquired close to the
-fire, so the acquisition date reliably brackets the event to within ~1-2 months.
+fire, so the acquisition date reliably anchors the pre/post windows around the event.
 
 ## Verification (spec §9)
 
 - 1505 `.tif` + 1505 matching `.json`; all `.tif` single-band **uint8, 64×64, 10 m**, UTM
   EPSG 32610–32618; pixel values ⊆ {0, 1, 255}.
-- All sidecars have `change_time` set, a **360-day** `time_range` with
-  `t0 ≤ change_time ≤ t1`, change years 2018–2021.
+- All sidecars have `change_time` set, `time_range` null, and a `pre_time_range` /
+  `post_time_range` pair (each ≤183 days) with the post window starting at `change_time`
+  and the pre window ending 90 days before it; change years 2018–2021.
 - 8 random tiles byte-match their source subtiles (label placement exact).
 - Centroids land in CONUS fire regions.
 - Re-running is **idempotent** (existing `{sample_id}.tif` skipped).

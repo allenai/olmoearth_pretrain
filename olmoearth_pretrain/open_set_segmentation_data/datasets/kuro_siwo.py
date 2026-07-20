@@ -38,8 +38,12 @@ tiles-per-class balanced (spec S5, <=1000/class, rare flood prioritized).
 
 Change label (spec S5): a flood is a transient event, so change_time is set to the event's
 reference date (catalogue.yaml ``ref_date``, resolved to the day -- well within the
-~1-2 month timing requirement) and time_range is a 360-day window centered on it. Events
-dated before 2016 (outside the Sentinel era) are dropped (EMSR118/130/147).
+~1-2 month timing requirement) and kept as the reference used to build two adjacent windows
+via ``io.pre_post_time_ranges``: ``pre_time_range`` (the ~6 months, <=183 days, immediately
+before change_time) and ``post_time_range`` (the ~6 months, <=183 days, immediately after);
+``time_range`` is null. Pretraining pairs a "before" image stack with an "after" stack and
+probes on their difference. Events dated before 2016 (outside the Sentinel era) are dropped
+(EMSR118/130/147).
 
 Run: python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.kuro_siwo
 """
@@ -354,7 +358,8 @@ def _write_one(rec: dict[str, Any]) -> int:
     proj = Projection(CRS.from_string(rec["crs"]), io.RESOLUTION, -io.RESOLUTION)
     bounds = tuple(rec["bounds"])
     ct = datetime.fromisoformat(rec["change_time"])
-    tr = (ct - timedelta(days=180), ct + timedelta(days=180))
+    pre_range, post_range = io.pre_post_time_ranges(ct)
+    tr = (pre_range[0], post_range[1])  # outer bounding span
     io.write_label_geotiff(
         SLUG, sample_id, rec["array"], proj, bounds, nodata=io.CLASS_NODATA
     )
@@ -367,6 +372,8 @@ def _write_one(rec: dict[str, Any]) -> int:
         change_time=ct,
         source_id=rec["source_id"],
         classes_present=rec["classes_present"],
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
     return 1
 

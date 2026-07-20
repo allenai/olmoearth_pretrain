@@ -18,11 +18,15 @@ Encoding (polygons -> change labels, spec 4/5):
   everything outside the polygon is background (0). Polygons smaller than a pixel fall
   back to labelling the single centre pixel (all_touched already captures most). Polygons
   larger than 640 m (~2.5% of events) are clipped to the central 64x64 window.
-- These are pre/post loss *events*, so each sample carries ``change_time`` = mid-point of
-  the GFC loss year and a 1-year ``time_range`` centred on it (year_range(year)). GFC loss
-  is annual, so a 1-year window is the natural (and only available) temporal resolution;
-  it is not ill-posed. Pretraining uses the sample only when the input window spans
-  ``change_time``.
+- These are pre/post loss *events* under the pre/post change scheme. GFC loss is only
+  YEAR-resolved, so each sample carries two independent six-month windows (each <= 183 days)
+  with ``time_range`` = null: ``pre_time_range`` = summer of (loss_year - 1) and
+  ``post_time_range`` = summer of (loss_year + 1), so the entire ambiguous loss year sits in
+  the gap between them; ``change_time`` = 1 July of the loss year (reference only). Events
+  span 2015-2020, so every post window is >= 2016; the year-1 pre window for 2015 events is
+  Landsat-era, which is acceptable. 0 events dropped. This dataset was previously rejected on
+  change-timing grounds (year-only resolution, not resolvable to within ~1-2 months); the
+  pre/post scheme resolves that, so it is now usable.
 
 Class scheme: background (0) + 15 detailed drivers (1..15), ids assigned by descending
 event frequency. All 3108 events are kept (max per-class 546 < 1000, so no truncation and
@@ -283,17 +287,26 @@ def _write_one(rec: dict[str, Any]) -> int:
         arr[0, r1, r0] = cid
 
     classes_present = sorted(int(v) for v in np.unique(arr))
+    # GFC loss is only year-resolved. Under the pre/post scheme we put the whole ambiguous
+    # loss year in the gap: a "before" window in the summer of year-1 and an "after" window
+    # in the summer of year+1, so the clearing reliably falls between them regardless of
+    # when in the loss year it happened. (Events span 2015-2020, so every post window is
+    # >= 2016; year-1 pre windows for 2015 events are Landsat-era, which is acceptable.)
     change_time = datetime(rec["year"], 7, 1, tzinfo=UTC)
+    pre_range = io.centered_time_range(datetime(rec["year"] - 1, 7, 1, tzinfo=UTC), 91)
+    post_range = io.centered_time_range(datetime(rec["year"] + 1, 7, 1, tzinfo=UTC), 91)
     io.write_label_geotiff(SLUG, sample_id, arr, proj, bounds, nodata=io.CLASS_NODATA)
     io.write_sample_json(
         SLUG,
         sample_id,
         proj,
         bounds,
-        io.year_range(rec["year"]),
+        None,
         change_time=change_time,
         source_id=rec["folder"],
         classes_present=classes_present,
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
     return cid
 

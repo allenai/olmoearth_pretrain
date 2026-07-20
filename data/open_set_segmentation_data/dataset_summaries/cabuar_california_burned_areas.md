@@ -51,16 +51,22 @@ background class; both are retained.
   unburned** (most burned tiles also contain unburned; pure-unburned tiles are drawn from
   unburned blocks within the same fire patches). Well under the 25k cap.
 - **Time / change**: the burn is an **event/change** label. `change_time` = the post-fire
-  Sentinel-2 acquisition timestamp (the fire occurred shortly before it, between the pre-
-  and post-fire acquisitions), and `time_range` = a **1-year window centered on it**
-  (±182/183 days). The mask marks *where* the burn occurred; pretraining uses a sample only
-  when the input window spans `change_time`.
+  Sentinel-2 acquisition timestamp (a **post-event** date — the fire occurred shortly
+  before it, between the pre- and post-fire acquisitions). Instead of one centered window
+  we now emit **two independent six-month windows** via
+  `io.pre_post_time_ranges(change_time, pre_offset_days=90)`: a **`post_time_range`** that
+  starts at `change_time` and runs ~6 months (≤183 days) forward, and a **`pre_time_range`**
+  that **ends 90 days before `change_time`** (a guard offset, since the fire precedes the
+  acquisition) and spans ~6 months (≤183 days) backward from there — placing the pre window
+  entirely before the true fire. `time_range` is `null`. The mask marks *where* the burn
+  occurred; pretraining pairs a "before" stack with an "after" stack and probes on their
+  difference.
 
 ## Verification
 
 - Sampled `.tif`s: single-band uint8, EPSG:326xx UTM at 10 m, 64×64, values ⊆ {0,1} with
-  255 declared nodata; every `.tif` has a matching `.json` with a 365-day `time_range` and
-  `change_time` set.
+  255 declared nodata; every `.tif` has a matching `.json` with `time_range` null, a
+  `pre_time_range` and `post_time_range` (each ≤183 days), and `change_time` set.
 - All sampled tile centers fall inside California (lon −125…−114, lat 32…42).
 - **Round-trip check**: 8/8 written tiles exactly equal the 2×-upsampled source block they
   came from (label content + geometry consistent).
@@ -77,8 +83,8 @@ background class; both are retained.
 - Source resolution is **20 m**; upsampled 2× (nearest) to the pipeline's 10 m grid. The
   effective label detail is native 20 m.
 - `change_time` anchored on the post-fire acquisition (not the exact ignition date, which is
-  not in the file). The 1-year centered window comfortably spans the fire, so this is not
-  ill-posed.
+  not in the file). The 90-day pre-window guard offset pushes the "before" window back so it
+  sits entirely before the fire, so this is not ill-posed.
 - Only burn-containing patches exist in the source, so there are no fully-clean "far from
   any fire" negative scenes; downstream assembly adds cross-dataset negatives (spec §5).
 

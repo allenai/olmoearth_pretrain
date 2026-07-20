@@ -40,12 +40,17 @@ out of the class scheme (recorded as provenance context only). Prescribed burns 
 
 A fire is a dated **change** event. `change_time` is set to the fire start date with
 priority `HS_SDATE` (satellite hotspot start) > `AG_SDATE` (agency start) > `CAPDATE`
-(same-year mapping capture); `time_range` is a **360-day window centered** on it
-(±180 days). This meets the hard timing-precision rule (event known to ≤ ~1–2 months):
-HS/AG start dates are exact day-resolved fire dates; the small CAPDATE fallback (152 of
-15,201 kept fires, ≈1%) is a same-fire-year capture of the scar, so a ±180-day window
-still spans the fire. Anchor-source breakdown of kept fires: HS_SDATE 6,685, AG_SDATE
-8,364, CAPDATE 152.
+(same-year mapping capture), and is retained as the reference used to build the windows.
+Instead of a single centered window, each sample emits two independent six-month windows:
+a `pre_time_range` (the ≤183 days immediately **before** `change_time`) and a
+`post_time_range` (the ≤183 days immediately **after** it), with `time_range` set to null.
+The windows are adjacent and split exactly at `change_time` (built via
+`io.pre_post_time_ranges(change_time, ...)`), so pretraining pairs a "before" image stack
+with an "after" stack and probes on their difference. This meets the hard timing-precision
+rule (event known to ≤ ~1–2 months): HS/AG start dates are exact day-resolved fire dates;
+the small CAPDATE fallback (152 of 15,201 kept fires, ≈1%) is a same-fire-year capture of
+the scar, so the pre+post span still brackets the fire. Anchor-source breakdown of kept
+fires: HS_SDATE 6,685, AG_SDATE 8,364, CAPDATE 152.
 
 Filtering: only YEAR ≥ 2016 used (NBAC's 1972–2015 perimeters excluded). A fire is dropped
 only if it has no parseable date, or its only dates fall outside `[YEAR-1, YEAR+1]`
@@ -71,8 +76,8 @@ big fires add more), capped at 25,000 tiles.
 ## Verification (spec §9)
 
 - 25,000 `.tif` each with a matching `.json`. Sampled tiles: single-band uint8, 64×64,
-  local UTM CRS at 10 m, pixel values ⊆ {0, 1}, nodata 255, `time_range` span = 360 days
-  with `change_time` set.
+  local UTM CRS at 10 m, pixel values ⊆ {0, 1}, nodata 255, `time_range` null with
+  adjacent `pre_time_range` / `post_time_range` (each ≤183 days) and `change_time` set.
 - `metadata.json` classes {0 background, 1 fire} cover all values appearing in tiles
   (union over 200 tiles = {0, 1}).
 - Geographic sanity: round-trip of tile CRS/bounds → WGS84 lon/lat for 400 random samples

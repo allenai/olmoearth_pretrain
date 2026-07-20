@@ -29,9 +29,14 @@ event as 1, fill 0). Sampling is tiles-per-class balanced (spec 5): a tile count
 every class present, rarer class filled first, up to PER_CLASS tiles/class under the 25k cap.
 
 Time range: burnt area is a change/event label with a **day-precise ignition date**
-(`Start date`), so `change_time` is set to the ignition date and `time_range` is a
-360-day window centered on it (spec 5). The post-fire Sentinel-2 acquisition (recorded in
-the shapefile `S2_e`) lands a few weeks after ignition, well inside the window.
+(`Start date`), so `change_time` is set to the ignition date and kept as the reference for
+building the windows. Instead of a single centered window, we emit two adjacent six-month
+windows split at `change_time`: `pre_time_range` (the <=183 days immediately before) and
+`post_time_range` (the <=183 days immediately after), with `time_range` set to null (built
+via `io.pre_post_time_ranges(change_time, ...)`, spec 5), so pretraining pairs a "before"
+image stack with an "after" stack and probes on their difference. The post-fire Sentinel-2
+acquisition (recorded in the shapefile `S2_e`) lands a few weeks after ignition, well
+inside the post window.
 
 Run:  python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.floga
 """
@@ -39,7 +44,7 @@ Run:  python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.floga
 import argparse
 import multiprocessing
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -164,11 +169,6 @@ def _polys(geom: Any) -> list[Any]:
     return []  # lines/points contribute no area
 
 
-def _event_window(center: datetime) -> tuple[datetime, datetime]:
-    """360-day UTC window centered on the ignition date (<= 1 year, spec 3/5)."""
-    return (center - timedelta(days=180), center + timedelta(days=180))
-
-
 def _pixel_geom(wkb: bytes) -> tuple[Projection, Any]:
     """Reproject a WGS84 polygon to local-UTM 10 m *pixel* coordinates."""
     geom = shapely.wkb.loads(wkb)
@@ -257,7 +257,8 @@ def _write_event(
         if not og.is_empty:
             other_pg.append(og)
     change_time = event["start"]
-    tr = _event_window(change_time)
+    pre_range, post_range = io.pre_post_time_ranges(change_time)
+    tr = (pre_range[0], post_range[1])  # outer bounding span
     for t in remaining:
         col, row = t["col"], t["row"]
         bounds = (col, row, col + TILE, row + TILE)
@@ -281,6 +282,8 @@ def _write_event(
             change_time=change_time,
             source_id=f"{event['id']}_r{row}_c{col}",
             classes_present=present,
+            pre_time_range=pre_range,
+            post_time_range=post_range,
         )
 
 

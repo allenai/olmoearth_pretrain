@@ -23,10 +23,14 @@ IMPORTANT provenance / scope notes (judgment calls, see summary):
     fabricate negatives -- the assembly step supplies them from other datasets.
 
 Task: sparse-point CLASSIFICATION of each GLOF location by dam type. A GLOF is a dated
-EVENT (sudden lake drainage), so each point is a change label: ``change_time`` = the event
-date (when a full YYYY-MM-DD is known) and ``time_range`` = a 1-year window centered on it
-(or the calendar year when only the year is known). Pretraining will use the sample when the
-sampled input window spans the event, letting the model see the lake before/after drainage.
+EVENT (sudden lake drainage), so each point is a change label. When a full YYYY-MM-DD is
+known, ``change_time`` = the event date and the sample gets two adjacent six-month windows
+split exactly at ``change_time`` (via ``io.pre_post_time_ranges``): ``pre_time_range`` is the
+~6 months (<=183 days) immediately before the event and ``post_time_range`` is the ~6 months
+(<=183 days) immediately after, with ``time_range`` = null. Year-only events instead keep a
+single 1-year ``time_range`` for the calendar year with ``change_time`` = null and no
+pre/post windows. Pretraining pairs the "before" image stack with the "after" stack and
+probes on their difference, letting the model see the lake before/after drainage.
 
 Run: python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.global_glof_database
 Idempotent: rewrites points.geojson + metadata.json from the (cached) raw download.
@@ -35,7 +39,7 @@ Idempotent: rewrites points.geojson + metadata.json from the (cached) raw downlo
 import argparse
 import re
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pandas as pd
 
@@ -201,11 +205,6 @@ def load_records(ods_path: str) -> list[dict]:
     return recs
 
 
-def _centered_year_range(change: datetime):
-    """1-year window centered on a change date (spec 5 change labels)."""
-    return (change - timedelta(days=182), change + timedelta(days=183))
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.parse_args()
@@ -243,13 +242,24 @@ def main() -> None:
         cid = NAME_TO_ID[r["dam_type"]]
         if r["date"] is not None:
             change_time = r["date"]
-            time_range = _centered_year_range(change_time)
+            pre_range, post_range = io.pre_post_time_ranges(change_time)
+            time_range = (pre_range[0], post_range[1])
             n_change += 1
+            point = {
+                "id": f"{i:06d}",
+                "lon": r["lon"],
+                "lat": r["lat"],
+                "label": cid,
+                "time_range": time_range,
+                "pre_time_range": pre_range,
+                "post_time_range": post_range,
+                "change_time": change_time,
+                "source_id": f"{r['sheet']}/{r['src_id']}",
+            }
         else:
             change_time = None
             time_range = io.year_range(r["year"])
-        points.append(
-            {
+            point = {
                 "id": f"{i:06d}",
                 "lon": r["lon"],
                 "lat": r["lat"],
@@ -258,7 +268,7 @@ def main() -> None:
                 "change_time": change_time,
                 "source_id": f"{r['sheet']}/{r['src_id']}",
             }
-        )
+        points.append(point)
     io.write_points_table(SLUG, "classification", points)
 
     counts = Counter(r["dam_type"] for r in selected)

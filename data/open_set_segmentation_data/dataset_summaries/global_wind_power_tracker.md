@@ -1,110 +1,52 @@
 # Global Wind Power Tracker (GWPT)
 
 - **Slug:** `global_wind_power_tracker`
+- **Status:** completed · classification (presence-only points) · **1,367 points**
 - **Source:** Global Wind Power Tracker, Global Energy Monitor (GEM), **February 2026 release**
   (<https://globalenergymonitor.org/projects/global-wind-power-tracker>).
-- **License:** CC-BY-4.0. Recommended citation: "Global Wind Power Tracker, Global Energy
-  Monitor, February 2026 release."
-- **Status:** completed
-- **Task type:** classification (positive-only object **detection** encoded as per-pixel classes, spec §4)
-- **Num samples:** 2,367 (1,000 onshore + 367 offshore + 1,000 background negatives)
+- **License:** CC-BY-4.0
+- **Annotation method:** manual/expert curation.
 
-## What the source is
+## Source & access
 
-A researcher-curated, facility-level inventory of utility-scale (≥10 MW) onshore and
-offshore wind power project **phases** worldwide. The Feb-2026 release lists **33,248 phases**
-(sheet `Data`), each a point with `Latitude`/`Longitude`, `Status`
-(operating / construction / pre-construction / announced / cancelled / shelved / retired /
-mothballed), `Installation Type` (Onshore / Offshore hard mount / Offshore floating /
-Offshore mount unknown / Unknown), `Start year` (commissioning year), optional `Retired year`,
-and a `Location accuracy` flag (`exact` vs `approximate`). Distributed as a single `.xlsx`.
+Facility-level inventory of utility-scale (≥ 10 MW) onshore/offshore wind power project phases
+worldwide. The Feb-2026 release lists 33,248 phases (each a point with `Latitude`/`Longitude`,
+`Status`, `Installation Type`, `Start year`, optional `Retired year`, `Location accuracy`).
+Distributed behind GEM's email-gated download form (not a credential gate); reproduced with the
+`mint_submission`→`presign` HTTP flow (recipe in `raw/global_wind_power_tracker/SOURCE.txt`) →
+`Global-Wind-Power-Tracker-February-2026.xlsx` (~4.9 MB). No imagery downloaded.
 
-Data distribution (Feb 2026): 18,127 operating (17,732 onshore, ~367 offshore, 28 unknown
-installation), all rows had valid lon/lat. Operating accuracy: 12,503 exact / 5,624
-approximate. Start years span 1970–2026.
+## Label type — presence-only points
 
-## Access method (no account required, but email-form gated)
+**Converted from the old positive-only object-detection tile encoding** (32×32 buffer+negative
+tiles). Now emitted as **presence-only points** in a dataset-wide `points.geojson` (spec §2a):
+each operating farm is one point of its observable class. There is **no fabricated GeoTIFF
+context, and no background / buffer / negative tiles** — this dataset carries **no fabricated
+negatives**; negatives are supplied downstream by the assembly step.
 
-The GEM download button is a web-component form that mints a short-lived capability token and
-returns a presigned DigitalOcean Spaces URL. Reproduced with plain HTTP (recipe stored in
-`raw/global_wind_power_tracker/SOURCE.txt`):
+## Classes / counts
 
-1. `POST https://auxunjnrktkmeqyoyngm.supabase.co/rest/v1/rpc/mint_submission`
-   (headers `apikey`/`authorization: Bearer <publishable key>`; body includes
-   `requested_slugs:["wind-power-tracker"]`, `request_mode:"slugs"`, contact fields) →
-   `{capability_token}`.
-2. `POST https://auxunjnrktkmeqyoyngm.supabase.co/functions/v1/presign`
-   (header `authorization: Bearer <capability_token>`) → `{urls:[{url,filename}]}`.
-3. `GET url` → `Global-Wind-Power-Tracker-February-2026.xlsx` (~4.9 MB).
+Only **operating** phases used; onshore vs offshore kept as two observable classes:
 
-This is a public CC-BY dataset behind an email gate, not a credential/account gate, so it is
-processed (not rejected as needs-credential). No credentials from `.env`
-were needed.
+| id | name | points |
+|----|------|--------|
+| 0 | onshore_wind_farm | 1000 |
+| 1 | offshore_wind_farm | 367 |
 
-## Class / label mapping
+Up to 1000 points/class (`balance_by_class`); offshore is a rare class (~367) kept in full (spec
+§5). **1,367 points total.**
 
-The manifest lists one class (`wind farm (onshore/offshore)`). Because onshore and offshore
-farms look very different at 10–30 m (turbines + pads/access roads on land vs. turbine
-monopiles standing in open water), the class set is split into two observable positive
-classes with background as class 0 (spec §5 "unified scheme"):
+## Time handling
 
-| id | name | meaning |
-|----|------|---------|
-| 0 | background | no tracked utility-scale wind farm (land or open water away from any phase) |
-| 1 | onshore_wind_farm | operating ≥10 MW onshore facility (Installation Type = Onshore) |
-| 2 | offshore_wind_farm | operating ≥10 MW offshore facility (Installation Type starts with "Offshore") |
-| 255 | nodata / ignore | detection buffer rings; ambiguous (unknown-installation) in-tile neighbors |
+Persistent-structure model (`change_time = null`): each farm gets a 1-year window sampled from
+`[max(start_year, 2016), min(2025, retired − 1)]` (missing `start_year` → `[2016, 2025]`); phases
+first operating after 2025 skipped. GWPT resolves commissioning only to a calendar year (coarser
+than the ~1–2 month change-timing rule), so no dated change labels.
 
-Only **operating** phases are used as positives (physically built and visible). Non-operating
-statuses and Installation Type "Unknown" are excluded as positives.
+## Output
 
-## Detection encoding (spec §4)
-
-- Tile: **32×32** UTM 10 m context tile per farm, centered on its point.
-- **1 px positive** (class id) + **10 px nodata buffer** ring (21×21 ignore) + rest background.
-  GWPT points are project-level and often "approximate", so the thick ignore ring absorbs
-  positional imprecision.
-- Other **operating** farms falling inside a tile are also encoded by their class in that
-  tile's year (present → 1/2; not-yet-built/retired that year → left background; unknown
-  installation → 255), so neighbors are never mislabeled as background.
-- **Negatives:** 1,000 background-only tiles generated by offsetting random operating farms by
-  a large random bearing and keeping only points whose nearest tracked farm is > ~2 km away
-  (so the tile is genuinely all-background). Offshore-adjacent negatives may land on open
-  water, which is a valid negative.
-
-## Time-range and change handling (spec §5)
-
-A built wind farm is a **persistent structure**, not a dated change event, and GWPT resolves
-commissioning only to a calendar **year** (coarser than the ~1–2 month change-timing
-requirement). So **no dated change labels** are emitted (`change_time = null`). Each positive
-gets a 1-year window sampled (seeded) from the years the farm is both operating and inside the
-Sentinel era: `[max(start_year, 2016), min(2025, retired_year − 1)]`; missing `start_year` →
-treated as a pre-existing persistent farm over `[2016, 2025]`. Phases whose first operating
-year is after 2025 (no full Sentinel year yet, 14 phases) are skipped. Onshore tiles are
-year-stratified for temporal diversity; each sample's window is ≤ 1 year (`io.year_range`).
-
-## Sample counts / caveats
-
-- onshore_wind_farm: **1,000** (capped from 17,718 candidates, stratified across years)
-- offshore_wind_farm: **367** (all operating offshore kept — rare class; spec §5 keeps rare
-  classes, downstream assembly filters too-small ones)
-- background negatives: **1,000**
-- Total **2,367** — well under the 25k per-dataset cap.
-
-Caveats: (1) GWPT points are farm/project-level, so a single positive pixel marks the farm
-location, not every turbine; the 10 px ignore buffer and background context reflect the
-detection encoding's design, not the true farm footprint (which can span > the tile).
-(2) ~30% of operating points are "approximate"; the buffer mitigates but a positive pixel can
-sit slightly off the nearest turbine. (3) Onshore turbine detectability at 10 m relies on the
-turbine pads / access roads / rotor signatures of a multi-turbine ≥10 MW farm.
-
-## Verification
-
-Opened output tifs: single-band uint8, 32×32, UTM CRS at 10 m; values across all tiles are
-{0,1,2,255}, fully covered by the class map; every `.tif` has a matching `.json` with a
-≤1-year `time_range` and `change_time=null`. Spatial sanity: satellite imagery at an onshore
-tile center (Galicia, Spain) clearly shows wind turbines; an offshore tile center (Åland
-archipelago, Baltic) sits on open water as expected.
+- `datasets/global_wind_power_tracker/points.geojson`
+- `datasets/global_wind_power_tracker/metadata.json`
 
 ## Reproduce
 
@@ -112,6 +54,9 @@ archipelago, Baltic) sits on open water as expected.
 python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.global_wind_power_tracker
 ```
 
-Idempotent (skips already-written tiles). The script re-writes `raw/.../SOURCE.txt`; the
-`.xlsx` itself is fetched via the presign recipe above and stored under
-`raw/global_wind_power_tracker/`.
+Idempotent. The `.xlsx` is fetched via the presign recipe into `raw/global_wind_power_tracker/`.
+
+## Caveats
+
+- GWPT points are farm/project-level (mark the farm location, not each turbine); ~30% of
+  operating points are "approximate".

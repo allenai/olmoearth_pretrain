@@ -32,11 +32,15 @@ tiles (partial edge tiles dropped); drop tiles that are > 50% nodata. Sampling i
 change px and toward `no-change` if it has >= MIN_NOCHANGE no-change px; the rarer class
 (`change`) is filled first, up to PER_CLASS tiles/class.
 
-Time range (CHANGE label, spec 5): urban change occurred somewhere between the pair's two
-acquisition dates (`dates.txt`). We set `change_time` to the MIDPOINT of date_1/date_2 and
-`time_range` to a 1-year window centered on it. NOTE: OSCD pairs span ~1-2.7 years, so the
-change is a diffuse multi-year urban-growth signal, not a single-date event -- the 1-year
-window is a representative anchor within the interval (flagged in the summary).
+Time range (CHANGE label, spec 5, pre/post scheme): OSCD gives bitemporal pairs with two
+acquisition dates date_1 (earlier) and date_2 (later), ~1-2.7 years apart, with urban change
+occurring between them. Each sample carries two independent six-month windows (each <= 183
+days) and `time_range` = null: `pre_time_range` = a ~6-month window centered on date_1 and
+`post_time_range` = a ~6-month window centered on date_2; `change_time` = the midpoint (a
+reference only). The two windows are naturally far apart -- exactly what the pre/post scheme
+is for -- so the coarse multi-year change interval falls between them. This dataset was
+previously rejected on change-timing grounds (the event not resolvable to within ~1-2
+months); the pre/post scheme resolves that, so it is now usable.
 
 Run:  python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.oscd_onera_satellite_change_detection
 """
@@ -47,7 +51,7 @@ import math
 import multiprocessing
 import warnings
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -117,8 +121,17 @@ def _cities() -> list[str]:
     return out
 
 
-def _change_time(city: str) -> tuple[datetime, tuple[datetime, datetime]]:
-    """(change_time, 1-year window centered on it) from dates.txt (date_1/date_2 midpoint)."""
+def _change_time(
+    city: str,
+) -> tuple[datetime, tuple[datetime, datetime], tuple[datetime, datetime]]:
+    """(change_time, pre_range, post_range) from dates.txt.
+
+    OSCD pairs are two acquisitions ``date_1`` (earlier) and ``date_2`` (later), often
+    1-2.7 years apart, with the urban change occurring between them. We give each its own
+    ~6-month window (season-blind, centered on the acquisition): ``pre_range`` around
+    ``date_1``, ``post_range`` around ``date_2``. ``change_time`` = the midpoint, kept for
+    reference only.
+    """
     txt = (IMG_ROOT / city / "dates.txt").read_text()
     vals = {}
     for line in txt.splitlines():
@@ -128,7 +141,9 @@ def _change_time(city: str) -> tuple[datetime, tuple[datetime, datetime]]:
     d1 = datetime.strptime(vals["date_1"], "%Y%m%d").replace(tzinfo=UTC)
     d2 = datetime.strptime(vals["date_2"], "%Y%m%d").replace(tzinfo=UTC)
     mid = d1 + (d2 - d1) / 2
-    return mid, (mid - timedelta(days=182), mid + timedelta(days=183))
+    pre_range = io.centered_time_range(d1, 91)
+    post_range = io.centered_time_range(d2, 91)
+    return mid, pre_range, post_range
 
 
 def _reproject_city(city: str) -> tuple[np.ndarray, Projection, int, int]:
@@ -215,7 +230,7 @@ def _scan_city(city: str) -> list[dict[str, Any]]:
 
 def _write_city(city: str, tiles: list[dict[str, Any]]) -> None:
     dst, proj, col_off, row_off = _reproject_city(city)
-    change_time, tr = _change_time(city)
+    change_time, pre_range, post_range = _change_time(city)
     split = _split_of(city)
     for t in tiles:
         sid = t["sample_id"]
@@ -236,10 +251,12 @@ def _write_city(city: str, tiles: list[dict[str, Any]]) -> None:
             sid,
             proj,
             bounds,
-            tr,
+            None,
             change_time=change_time,
             source_id=f"{split}/{city}_r{ti}_c{tj}",
             classes_present=present,
+            pre_time_range=pre_range,
+            post_time_range=post_range,
         )
 
 

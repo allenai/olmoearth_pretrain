@@ -75,9 +75,14 @@ both classes** (no pure-background tiles were added). All three source subsets
 Flood is a **dated event** → treated as a **change label** (spec §5). Copernicus
 EMS activation `start` dates the flood onset to within days (median activation
 `start`→`end` span is 3 days), well inside the ~1–2 month timing-precision
-requirement. Each sample sets `change_time` = activation start and `time_range` =
-a **360-day window centered** on it (≤1 year cap). Pretraining then uses a sample
-only when the sampled input window spans the flood.
+requirement. Each sample sets `change_time` = activation start and retains it as the
+reference date used to build two adjacent six-month windows via
+`io.pre_post_time_ranges(change_time, ...)`: `pre_time_range` — the ~6 months
+(≤183 days) immediately before `change_time` — and `post_time_range` — the ~6
+months (≤183 days) immediately after. The two windows are adjacent, split exactly
+at `change_time` (total span still ~1 year), and `time_range` is set to null.
+Pretraining pairs a "before" image stack with an "after" stack and probes on their
+difference, so it straddles the flood.
 
 ## Date filtering
 
@@ -100,8 +105,9 @@ flood events**.
 - Opened sample patches: single-band, **uint8**, UTM CRS (e.g. EPSG:32629) at
   10 m, 64×64, nodata 255; dataset-wide pixel values are exactly {0, 1, 255},
   matching the class map. Max tile dimension 64.
-- Every `.tif` has a matching `.json`; all 1000 `time_range`s are ≤360 days and all
-  carry `change_time`.
+- Every `.tif` has a matching `.json`; all 1000 have null `time_range` with an
+  adjacent `pre_time_range`/`post_time_range` pair (each ≤183 days) split at
+  `change_time`, and all carry `change_time`.
 - Spatial sanity: tile-center lon/lat fall within their activation's country/region
   (Mexico, Croatia, Madagascar, France, … tiles 27–98 km from the single AOI
   centroid — consistent with AOI extent), confirming correct georeferencing.

@@ -22,12 +22,15 @@ Each label is a coherent full-tile (64x64, 640 m) change annotation, so we write
 single-band uint8 GeoTIFFs (dense/scene-level, spec sec 2/4), NOT a point table. Every pixel
 of a tile carries the tile's class id (0 negative, 1 positive).
 
-CHANGE handling (spec sec 5): each window's stored time_range is a 1-year "post"
-observation window; we set ``change_time`` to its midpoint (so time_range is centered on
-change_time). NOTE / caveat: the annotation compares the post mosaic against a pre mosaic
-taken ~3 years earlier (config ``time_offset: -1095d``), so the precise transition moment is
-NOT resolvable to within this 1-year window -- change_time anchors the post-observation year
-(when the changed state is fully visible), not an exact event date. See the summary.
+CHANGE handling (spec sec 5, pre/post scheme): the annotation compares a post mosaic against
+a pre mosaic taken ~3 years earlier (config ``time_offset: -1095d``). Each sample carries two
+independent six-month windows (each <= 183 days) with ``time_range`` = null:
+``post_time_range`` = a ~6-month window centered in the post-observation year and
+``pre_time_range`` = a ~6-month window centered ~3 years earlier (season-aligned);
+``change_time`` = the midpoint (reference only). This dataset was previously rejected on
+change-timing grounds (the precise transition not resolvable to within ~1-2 months); under
+the pre/post scheme the coarse timing sits in the gap between the two far-apart windows, so
+it is now usable. See the summary.
 
 Run: ``python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.olmoearth_land_cover_change_deforestation_urban_expansion``
 """
@@ -37,7 +40,7 @@ import json
 import multiprocessing
 import os
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -165,6 +168,14 @@ def _write_one(job: tuple[str, dict[str, Any]]) -> int:
     t1 = datetime.fromisoformat(tr[1])
     change_time = t0 + (t1 - t0) / 2
 
+    # The annotation compares a post mosaic against a pre mosaic ~3 years earlier
+    # (config time_offset -1095d), so the transition is not resolvable within one year.
+    # Under the pre/post scheme we give each mosaic its own ~6-month window: post centered
+    # in the post-observation year, pre centered 3 years earlier (season-aligned). The two
+    # windows are ~3 years apart.
+    post_range = io.centered_time_range(change_time, 91)
+    pre_range = io.centered_time_range(change_time - timedelta(days=1095), 91)
+
     source_id = f"{r['group']}/{r['name']}"
     if r["types"]:
         source_id += ";types=" + "+".join(r["types"])
@@ -175,10 +186,12 @@ def _write_one(job: tuple[str, dict[str, Any]]) -> int:
         sample_id,
         projection,
         bounds,
-        (t0, t1),
+        None,
         change_time=change_time,
         source_id=source_id,
         classes_present=[r["label"]],
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
     return r["label"]
 

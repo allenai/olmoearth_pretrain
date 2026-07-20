@@ -27,9 +27,12 @@ not authoritatively undamaged; the assembly step supplies negatives from other d
 Change semantics: each polygon is dated to a named windstorm event. Post-2016 FORWIND
 records are all resolved to the exact day (Vaia 2018-10-28/29, Friederike 2018-01-18,
 Xavier 2017-11-10, plus a few day-dated 2017 events), well within the spec's ~1-2 month
-change-timing requirement. So we set ``change_time`` = EventDate and make ``time_range`` a
-360-day window CENTERED on it (spec §5), so pretraining pairs the windthrow mask with
-imagery spanning before + after the blowdown appears.
+change-timing requirement. So we set ``change_time`` = EventDate, which splits the sample
+into two adjacent six-month windows (via ``io.pre_post_time_ranges``): ``pre_time_range`` =
+the ~6 months (<=183 days) immediately before the storm and ``post_time_range`` = the
+~6 months (<=183 days) immediately after, with ``time_range`` = null (spec §5). Pretraining
+pairs the "before" image stack with the "after" stack and probes on their difference (forest
+before vs blowdown after).
 
 Only records with EventDate year >= 2016 (Sentinel era) are used; FORWIND's 2000-2015
 polygons are filtered out (spec §8).
@@ -50,7 +53,7 @@ import math
 import multiprocessing
 import random
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import fiona
@@ -91,9 +94,6 @@ TILE = 64
 MIN_YEAR = 2016
 MAX_TILES_PER_POLY = 40
 MAX_SAMPLES = sampling.MAX_SAMPLES_PER_DATASET  # 25000
-HALF_WINDOW = timedelta(
-    days=180
-)  # +/-180 d => 360-day (<=1 year) window centered on event
 
 WIND, NODATA = 0, io.CLASS_NODATA
 CLASSES = [
@@ -235,7 +235,8 @@ def _write_one(rec: dict[str, Any]) -> str | None:
     )[0]
 
     change_time = datetime.fromtimestamp(rec["change_ts"], tz=UTC)
-    time_range = (change_time - HALF_WINDOW, change_time + HALF_WINDOW)
+    pre_range, post_range = io.pre_post_time_ranges(change_time)
+    time_range = (pre_range[0], post_range[1])  # outer bounding span
 
     present = sorted(int(v) for v in np.unique(label) if int(v) != NODATA)
     io.write_label_geotiff(SLUG, sample_id, label, proj, bounds, nodata=NODATA)
@@ -248,6 +249,8 @@ def _write_one(rec: dict[str, Any]) -> str | None:
         change_time=change_time,
         source_id=rec["source_id"],
         classes_present=present,
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
     return "ok" if present else "empty"
 

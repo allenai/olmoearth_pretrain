@@ -58,12 +58,18 @@ downstream assembly supplies negatives from other datasets (no fabricated backgr
 ## Change label (spec §5)
 
 This is a disaster **before→after** damage dataset. xBD gives, per post-disaster image, a
-satellite `capture_date` resolvable to the day, tasked within days of the event. We set
-`change_time` = that per-image post-disaster capture date and `time_range` = a 360-day window
-**centered** on it (spans the event; ≤360-day cap). The `damaged_building` mask is the
-"where the change occurred" signal. This easily meets the §5 timing-precision requirement
-(event known to ≪ 1–2 months). No persistent-state recast is used — damage is captured as a
-dated change event.
+satellite `capture_date` resolvable to the day, tasked within days of the event — a
+**post-event** date. We set `change_time` = that per-image post-disaster capture date and,
+instead of one centered window, emit **two independent six-month windows** via
+`io.pre_post_time_ranges(change_time, pre_offset_days=45)`: a **`post_time_range`** that
+starts at `change_time` and runs ~6 months (≤183 days) forward, and a **`pre_time_range`**
+that **ends 45 days before `change_time`** (a guard offset, since the rapid post-disaster
+imagery follows the event by weeks) and spans ~6 months (≤183 days) backward from there,
+placing the pre window before the event. `time_range` = `null`. The `damaged_building` mask
+is the "where the change occurred" signal; pretraining pairs a "before" stack with an
+"after" stack and probes on their difference. This easily meets the §5 timing-precision
+requirement (event known to ≪ 1–2 months). No persistent-state recast is used — damage is
+captured as a dated change event.
 
 **Post-2016 filter.** Images are filtered to `capture_date` year ≥ 2016. All tier1 disasters are
 2016–2019 (hurricane-matthew is Oct 2016), so **none are dropped** by this filter; the only

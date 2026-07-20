@@ -69,10 +69,15 @@ convention. Invalid / outside-AOI pixels become nodata (255).
 Flood extent is a transient **change/event** label with a **day-precise acquisition date**,
 so it is processed as a change label (spec §5), not a static presence class:
 - `change_time` = the activation's `ref_date` from `catalogue.yaml`, resolved to the day
-  (≪ the ~1–2-month timing-precision requirement).
-- `time_range` = a **360-day window centered on `change_time`** (≤ 1 year). The Sentinel-1
-  event acquisition lands on the reference date, comfortably inside the window, so imagery
-  sampled from the window spans the flood and the where-mask stays aligned.
+  (≪ the ~1–2-month timing-precision requirement). It is retained as the reference date
+  used to build the windows.
+- `change_time` is split into two adjacent six-month windows via
+  `io.pre_post_time_ranges(change_time, ...)`: `pre_time_range` — the ~6 months (≤183 days)
+  immediately before `change_time` — and `post_time_range` — the ~6 months (≤183 days)
+  immediately after. The two windows are adjacent, split exactly at `change_time` (total
+  span still ~1 year), and `time_range` is set to null. Pretraining pairs a "before" image
+  stack with an "after" stack and probes on their difference, so it straddles the flood and
+  the where-mask stays aligned.
 
 ## Output
 
@@ -87,8 +92,9 @@ so it is processed as a change label (spec §5), not a static presence class:
 
 - All 1576 `.tif` are single-band **uint8, 64×64, UTM at 10 m** (22 zones); pixel values ∈
   {0, 1, 2, 255}; every `.tif` has a matching `.json`.
-- All `time_range`s are exactly **360 days**; `change_time` set on every sample and the
-  window is centered on it; all change-years ≥ 2016.
+- All samples have null `time_range` and an adjacent `pre_time_range`/`post_time_range`
+  pair (each ≤183 days) split at `change_time`; `change_time` set on every sample; all
+  change-years ≥ 2016.
 - `metadata.json` class ids {0,1,2} cover all non-nodata values in the tifs.
 - Spatial sanity: tile centers reproject to plausible flood locations — for every
   activation the centers fall inside the named country's bbox, with the sole "mismatch"

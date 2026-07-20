@@ -31,6 +31,7 @@ from olmoearth_pretrain.data.constants import Modality, TimeSpan
 from olmoearth_pretrain.dataset.utils import get_modality_dir
 
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
+from .cli import add_common_arguments
 
 # Use the EUROCROPS modality from constants.
 MODALITY = Modality.EUROCROPS
@@ -114,9 +115,8 @@ def convert_eurocrops(
     try:
         features = []
         for group_idx in range(len(item_groups)):
-            layer_dir = window.get_layer_dir(LAYER_NAME, group_idx=group_idx)
-            cur_features = GeojsonVectorFormat().decode_vector(
-                layer_dir, window.projection, window.bounds
+            cur_features = window.data.read_vector(
+                LAYER_NAME, GeojsonVectorFormat(), group_idx=group_idx
             )
             features.extend(cur_features)
 
@@ -224,24 +224,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Convert EuroCrops from rslearn to OlmoEarth format with rasterization",
     )
-    parser.add_argument(
-        "--ds_path",
-        type=str,
-        help="Source rslearn dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--olmoearth_path",
-        type=str,
-        help="Destination OlmoEarth Pretrain dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        help="Number of workers to use",
-        default=32,
-    )
+    add_common_arguments(parser, default_groups=None)
     args = parser.parse_args()
 
     # Load HCAT3 mapping from local JSON file.
@@ -261,7 +244,9 @@ if __name__ == "__main__":
 
     # Process all windows.
     jobs = []
-    for window in dataset.load_windows(workers=args.workers, show_progress=True):
+    for window in dataset.load_windows(
+        workers=args.workers, show_progress=True, groups=args.groups
+    ):
         jobs.append(
             dict(
                 window=window,

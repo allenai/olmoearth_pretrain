@@ -63,17 +63,21 @@ built to represent a single **temporally-coherent event**:
   stable background.
 - `change_time` = **median decoded date of the in-window disturbed pixels** (day-precise,
   representative central date of the event).
-- `time_range` = **change_time ± 180 days** (360-day window, ≤ 1 year), centered on
-  `change_time`, as required for change labels.
+- The tile then emits two adjacent six-month windows split exactly at `change_time` (via
+  `io.pre_post_time_ranges`): **`pre_time_range`** = the ~6 months (≤183 days) immediately
+  before `change_time` and **`post_time_range`** = the ~6 months (≤183 days) immediately
+  after, with **`time_range` = null** (total span still ~1 year). Pretraining pairs the
+  "before" image stack with the "after" stack and probes on their difference.
 - A disturbance tile is kept only if it has **≥ 20** in-window confirmed pixels (~0.2 ha) so
   the mask carries real signal (715 of 3014 selected candidates were dropped for isolated /
   temporally-incoherent centers).
 
-**Background negatives**: stable-forest tiles (≤ 5 confirmed alert px, ≥ 20 forest px) with
-`change_time = null` and a static representative 1-year window (`year_range(2022)`). These
-give the change class spatial negatives from genuine forest; downstream assembly also adds
-cross-dataset negatives (spec §5). 289 of 900 selected background candidates were dropped for
-containing too many alerts / too little forest.
+**Background negatives**: stable-forest tiles (≤ 5 confirmed alert px, ≥ 20 forest px) are
+undated — they keep `change_time = null` and a single static representative 1-year
+`time_range` (`year_range(2022)`) with **no** pre/post windows (only dated disturbance tiles
+get pre/post windows). These give the change class spatial negatives from genuine forest;
+downstream assembly also adds cross-dataset negatives (spec §5). 289 of 900 selected
+background candidates were dropped for containing too many alerts / too little forest.
 
 **Post-2016 rule**: RADD begins ~2018–2019, so every alert is inside the Sentinel era; no
 pre-2016 filtering is needed. Realized `change_time` years span **2019–2026**.
@@ -95,8 +99,10 @@ Sampling is round-robin across `(region, year)` (disturbance) and per-region ran
 
 - 2910 `.tif` each with a matching `.json`; all single-band **uint8**, **UTM** (EPSG:326xx)
   at **10 m**, **64×64**, nodata **255**; pixel values ⊆ {0, 1, 255}.
-- All `time_range`s ≤ 366 days; `change_time` set for every disturbance tile (null only for
-  background negatives).
+- Every disturbance tile has `change_time` set with adjacent ≤183-day
+  `pre_time_range`/`post_time_range` windows split at it and `time_range` = null; background
+  negatives instead have `change_time` = null with a single ≤366-day `time_range` and no
+  pre/post windows.
 - Spatial sanity: 200 sampled centroids all fall in the tropical band (lat −16.5…11.2) and
   split across Americas / Africa / Asia as expected.
 
@@ -106,7 +112,7 @@ Sampling is round-robin across `(region, year)` (disturbance) and per-region ran
   reference). Low-confidence alerts are deliberately ignored rather than labeled.
 - The `Date` band records the *first* detection date; a slowly-progressing clearing may have
   pixels spread over the 90-day event window, but `change_time` (window median) places the
-  event confidently within the ±180-day pairing window.
+  event confidently at the split between the pre and post pairing windows.
 - Non-forest and other-dated disturbances inside a tile are nodata, so a tile is not a
   wall-to-wall land-cover map — it is a where-mask for one disturbance event vs. stable forest.
 

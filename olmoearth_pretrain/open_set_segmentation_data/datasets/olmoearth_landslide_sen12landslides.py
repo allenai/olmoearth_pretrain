@@ -28,8 +28,12 @@ Class scheme (dense per-pixel CLASSIFICATION, matching the manifest's 2 classes)
                           landslide polygon, left ambiguous on purpose)
 
 Time range: landslide is a change/event label. `change_time` = the event date
-(options.event_date); `time_range` = a 1-year window centered on it (spec 5). All Sen12
-events are 2016-2023 (Sentinel era); any pre-2016 window is defensively filtered.
+(options.event_date), kept as the reference used to build two adjacent windows via
+`io.pre_post_time_ranges`: `pre_time_range` (the ~6 months, <=183 days, immediately before
+change_time) and `post_time_range` (the ~6 months, <=183 days, immediately after);
+`time_range` is null (spec 5). Pretraining pairs a "before" image stack with an "after"
+stack and probes on their difference. All Sen12 events are 2016-2023 (Sentinel era); any
+pre-2016 window is defensively filtered.
 
 Sampling: tiles-per-class balanced (spec 5), <= 1000 tiles/class. Every positive tile
 contains both classes, so this yields ~1000 tiles.
@@ -166,7 +170,8 @@ def _write_window(rec: dict[str, Any]) -> None:
     proj = Projection(CRS.from_string(rec["crs"]), io.RESOLUTION, -io.RESOLUTION)
     bounds = tuple(rec["bounds"])
     change_time = datetime.fromisoformat(rec["change_time"])
-    tr = (change_time - timedelta(days=182), change_time + timedelta(days=183))
+    pre_range, post_range = io.pre_post_time_ranges(change_time)
+    tr = (pre_range[0], post_range[1])  # outer bounding span
     io.write_label_geotiff(SLUG, sample_id, out, proj, bounds, nodata=io.CLASS_NODATA)
     present = sorted(int(v) for v in np.unique(out) if v != io.CLASS_NODATA)
     io.write_sample_json(
@@ -178,6 +183,8 @@ def _write_window(rec: dict[str, Any]) -> None:
         change_time=change_time,
         source_id=f"{GROUP}/{rec['name']}",
         classes_present=present,
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
 
 

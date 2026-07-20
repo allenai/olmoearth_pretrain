@@ -18,6 +18,7 @@ Only datasets with registry status ``completed`` are included. Datasets in
 
 import argparse
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,19 +49,28 @@ DEFAULT_SUMMARIES_DIR = (
 DEFAULT_OUTPUT_PATH = (
     _REPO_ROOT / "data" / "open_set_segmentation_data" / "class_mapping.json"
 )
-
-# Class-name tokens that indicate a background / negative / no-label class. A dataset
-# that has such a class is NOT presence-only (it already provides negatives). Detection
-# datasets fall here because they emit an explicit background(0) class.
-_BACKGROUND_NAME_RE = re.compile(
-    r"\b(background|negative|no[\s_-]?data|nodata|unlabel|unlabelled|unlabeled"
-    r"|absence|absent|not\s|no\s+label)\b",
-    re.IGNORECASE,
+# Curated concept annotation for the presence-only pool (merge + overlap/conflict).
+DEFAULT_CONCEPTS_PATH = (
+    _REPO_ROOT / "data" / "open_set_segmentation_data" / "presence_only_concepts.json"
 )
 
-# Wording in a dataset summary that indicates a presence-/positive-only dataset.
-_PRESENCE_TEXT_RE = re.compile(
-    r"presence[\s_-]?only|positive[\s_-]?only|foreground[\s_-]?only|presence/absence",
+# A dataset is presence-only (pooled with cross-dataset negatives) iff it is
+# foreground-only (no explicit negative/background class) AND has few classes
+# (<= PRESENCE_ONLY_MAX_CLASSES). Otherwise it is a self-contained multiclass training
+# group of its own (rich classification, or a dataset that already provides its own
+# negatives). See AGENT_SUMMARY.md sec 5.
+PRESENCE_ONLY_MAX_CLASSES = 3
+
+# Class-name patterns that indicate a background / negative / no-label class (a paired
+# negative such as "non_crop", "no water", "not-flooded", "no-change", "stable_forest",
+# or an explicit background/nodata class). A dataset with such a class provides its own
+# negatives and is NOT presence-only. NOTE: a bare catch-all "other"/"unknown" does NOT
+# count as a disqualifying negative (e.g. GFW oil/wind/other stays foreground-only).
+_NEGATIVE_NAME_RE = re.compile(
+    r"^(background|negative|no[\s_-]?data|nodata|unlabell?ed|absence|absent|none|null"
+    r"|unburned|unburnt)$"
+    r"|^(non|no|not)[\s._-]"
+    r"|^stable[\s._-]",
     re.IGNORECASE,
 )
 
@@ -73,6 +83,9 @@ class AssemblyResult:
     # Datasets whose summary text calls them presence-only but which HAVE a
     # background/negative class (i.e. "marked differently"). These need a human decision.
     ambiguous_presence_only: list[str] = field(default_factory=list)
+    # Concept-file members (slug:class) that matched no presence-only class (typo / dataset
+    # became own-group / not completed). Surfaced so the concept file can be cleaned up.
+    unmatched_concept_keys: list[str] = field(default_factory=list)
 
 
 def _load_metadata(datasets_root: UPath, slug: str) -> dict[str, Any] | None:
@@ -84,23 +97,46 @@ def _load_metadata(datasets_root: UPath, slug: str) -> dict[str, Any] | None:
         return json.load(f)
 
 
-def _has_background_class(classes: list[dict[str, Any]]) -> bool:
-    """Whether any class looks like a background/negative/no-label class."""
+def _has_negative_class(classes: list[dict[str, Any]]) -> bool:
+    """Whether any class looks like an explicit negative/background/no-label class."""
     for c in classes:
-        name = c.get("name") or ""
-        if _BACKGROUND_NAME_RE.search(name):
+        name = (c.get("name") or "").strip()
+        if _NEGATIVE_NAME_RE.match(name):
             return True
     return False
 
 
-def _summary_says_presence_only(summaries_dir: Path | None, slug: str) -> bool:
-    """Whether the dataset summary markdown mentions presence-/positive-only."""
-    if summaries_dir is None:
-        return False
-    p = Path(summaries_dir) / f"{slug}.md"
-    if not p.exists():
-        return False
-    return bool(_PRESENCE_TEXT_RE.search(p.read_text()))
+def _load_concepts(
+    concepts_path: Path | None,
+) -> tuple[dict[str, str], dict[str, dict[str, Any]], list[tuple[str, str]]]:
+    """Load the presence-only concept annotation.
+
+    Returns (key_to_concept, concept_info, overlap_pairs) where key is ``slug:class_name``.
+    A missing/None path yields empty structures (no merges, no conflicts).
+    """
+    if concepts_path is None or not Path(concepts_path).exists():
+        return {}, {}, []
+    with Path(concepts_path).open() as f:
+        cfg = json.load(f)
+    concept_info: dict[str, dict[str, Any]] = cfg.get("concepts", {})
+    key_to_concept: dict[str, str] = {}
+    for concept, info in concept_info.items():
+        for member in info.get("members", []):
+            key_to_concept[member] = concept
+    overlaps = [(a, b) for a, b in cfg.get("overlaps", [])]
+    return key_to_concept, concept_info, overlaps
+
+
+def _is_presence_only(classes: list[dict[str, Any]]) -> bool:
+    """Presence-only = foreground-only (no negative class) AND few classes.
+
+    Such datasets are pooled into the shared presence-only group (cross-dataset negatives).
+    Everything else (many-class rich classifications, or datasets carrying their own
+    negative/background class) becomes its own self-contained multiclass training group.
+    """
+    return len(classes) <= PRESENCE_ONLY_MAX_CLASSES and not _has_negative_class(
+        classes
+    )
 
 
 def assemble_classes(
@@ -108,6 +144,7 @@ def assemble_classes(
     summaries_dir: Path | None = DEFAULT_SUMMARIES_DIR,
     excluded_slugs: frozenset[str] = EXCLUDED_SLUGS,
     registry: dict[str, Any] | None = None,
+    concepts_path: Path | None = DEFAULT_CONCEPTS_PATH,
 ) -> AssemblyResult:
     """Build the global class mapping across all completed open-set datasets.
 
@@ -118,6 +155,8 @@ def assemble_classes(
             cross-check presence-only detection. None to skip the text check.
         excluded_slugs: slugs to drop entirely (held-out evals).
         registry: pre-loaded registry dict (for testing); loads from disk if None.
+        concepts_path: Path to the concept merge and overlap configuration. None
+            disables concept merging.
 
     Returns:
         the assembly result (mapping dict + ambiguous presence-only slugs).
@@ -126,6 +165,13 @@ def assemble_classes(
         datasets_root = OUTPUT_ROOT / "datasets"
     if registry is None:
         registry = load_registry()
+
+    key_to_concept, concept_info, overlap_pairs = _load_concepts(concepts_path)
+    merged_concept_gid: dict[str, int] = {}  # merge-concept -> its single global_id
+    gid_to_classentry: dict[int, dict[str, Any]] = {}  # for appending merged provenance
+    concept_to_gids: dict[str, list[int]] = {}  # concept -> presence-only global_ids
+    gid_to_concept: dict[int, str] = {}
+    matched_concept_keys: set[str] = set()
 
     # Deterministic order: sort completed, non-excluded datasets by slug.
     entries = sorted(
@@ -159,6 +205,15 @@ def assemble_classes(
         if task_type == "regression":
             reg = metadata.get("regression") or {}
             value_range = reg.get("value_range")
+            if not (
+                isinstance(value_range, list)
+                and len(value_range) == 2
+                and all(math.isfinite(float(value)) for value in value_range)
+                and float(value_range[1]) > float(value_range[0])
+            ):
+                raise ValueError(
+                    f"regression dataset {slug} has invalid value_range {value_range!r}"
+                )
             regression_datasets.append(
                 {
                     "dataset_id": next_regression_id,
@@ -179,32 +234,67 @@ def assemble_classes(
         if not classes:
             continue
 
-        has_background = _has_background_class(classes)
-        text_presence_only = _summary_says_presence_only(summaries_dir, slug)
-        presence_only = not has_background
-        if text_presence_only and has_background:
-            # Summary calls it presence-only but it has a background class: needs a
-            # human decision (the plan asked us to surface these).
-            ambiguous.append(slug)
-
-        first_global_id = next_global_id
-        dataset_global_ids: list[int] = []
-        for c in sorted(classes, key=lambda c: c["id"]):
-            global_id = next_global_id
-            next_global_id += 1
-            dataset_global_ids.append(global_id)
-            global_classes.append(
-                {
-                    "global_id": global_id,
-                    "slug": slug,
-                    "local_id": c["id"],
-                    "name": c.get("name"),
-                }
-            )
+        presence_only = _is_presence_only(classes)
 
         if presence_only:
-            presence_only_ids.extend(dataset_global_ids)
+            # Pooled classes; apply concept merge (same real-world thing across datasets
+            # collapses to one global_id) and record concept membership for conflicts.
+            for c in sorted(classes, key=lambda c: c["id"]):
+                key = f"{slug}:{c.get('name')}"
+                concept = key_to_concept.get(key)
+                if concept is not None:
+                    matched_concept_keys.add(key)
+                member = {"slug": slug, "local_id": c["id"], "name": c.get("name")}
+                if concept is not None and concept_info[concept].get("merge"):
+                    if concept in merged_concept_gid:
+                        # Reuse the merged class's global_id; just record provenance.
+                        gid_to_classentry[merged_concept_gid[concept]][
+                            "members"
+                        ].append(member)
+                        continue
+                    global_id = next_global_id
+                    next_global_id += 1
+                    merged_concept_gid[concept] = global_id
+                    ce = {
+                        "global_id": global_id,
+                        "slug": None,
+                        "local_id": None,
+                        "name": concept,
+                        "concept": concept,
+                        "members": [member],
+                    }
+                else:
+                    global_id = next_global_id
+                    next_global_id += 1
+                    ce = {
+                        "global_id": global_id,
+                        "slug": slug,
+                        "local_id": c["id"],
+                        "name": c.get("name"),
+                    }
+                    if concept is not None:
+                        ce["concept"] = concept
+                global_classes.append(ce)
+                gid_to_classentry[global_id] = ce
+                presence_only_ids.append(global_id)
+                if concept is not None:
+                    concept_to_gids.setdefault(concept, []).append(global_id)
+                    gid_to_concept[global_id] = concept
         else:
+            first_global_id = next_global_id
+            dataset_global_ids = []
+            for c in sorted(classes, key=lambda c: c["id"]):
+                global_id = next_global_id
+                next_global_id += 1
+                dataset_global_ids.append(global_id)
+                global_classes.append(
+                    {
+                        "global_id": global_id,
+                        "slug": slug,
+                        "local_id": c["id"],
+                        "name": c.get("name"),
+                    }
+                )
             training_datasets.append(
                 {
                     "name": slug,
@@ -215,6 +305,22 @@ def assemble_classes(
                 }
             )
 
+    # Conflicts among presence-only classes, from the concept overlaps graph: every class
+    # of concept A conflicts with every class of concept B (and vice versa). Members of the
+    # same concept do NOT conflict (merge already collapsed identical ones). At pretraining
+    # time a presence-only class draws negatives only from non-conflicting pool classes.
+    conflicts: dict[int, set[int]] = {}
+    for a, b in overlap_pairs:
+        for x in concept_to_gids.get(a, []):
+            for y in concept_to_gids.get(b, []):
+                if x != y:
+                    conflicts.setdefault(x, set()).add(y)
+                    conflicts.setdefault(y, set()).add(x)
+
+    # Concept keys named in the concept file that never matched a presence-only class
+    # (typo, or the dataset became own-group / isn't completed). Surface for cleanup.
+    unmatched_concept_keys = sorted(set(key_to_concept) - matched_concept_keys)
+
     # All presence-only classes form a single synthetic training group.
     if presence_only_ids:
         training_datasets.append(
@@ -223,6 +329,12 @@ def assemble_classes(
                 "slug": None,
                 "presence_only": True,
                 "global_ids": sorted(presence_only_ids),
+                "concepts": {
+                    str(gid): gid_to_concept[gid] for gid in sorted(gid_to_concept)
+                },
+                "conflicts": {
+                    str(gid): sorted(conflicts[gid]) for gid in sorted(conflicts)
+                },
             }
         )
 
@@ -251,14 +363,25 @@ def assemble_classes(
         },
         "excluded_slugs": sorted(excluded_slugs),
     }
-    return AssemblyResult(mapping=mapping, ambiguous_presence_only=ambiguous)
+    return AssemblyResult(
+        mapping=mapping,
+        ambiguous_presence_only=ambiguous,
+        unmatched_concept_keys=unmatched_concept_keys,
+    )
 
 
 def write_mapping(
-    result: AssemblyResult, output_path: Path = DEFAULT_OUTPUT_PATH
+    result: AssemblyResult,
+    output_path: Path = DEFAULT_OUTPUT_PATH,
+    overwrite: bool = False,
 ) -> None:
-    """Write the class mapping JSON atomically."""
+    """Write the class mapping JSON atomically without replacing a frozen mapping."""
     output_path = Path(output_path)
+    if output_path.exists() and not overwrite:
+        raise FileExistsError(
+            f"refusing to overwrite existing class mapping {output_path}; write to a "
+            "candidate path or pass overwrite=True for a deliberate dataset rebuild"
+        )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = output_path.with_suffix(output_path.suffix + ".tmp")
     with tmp.open("w") as f:
@@ -287,12 +410,19 @@ def main() -> None:
         default=str(DEFAULT_OUTPUT_PATH),
         help="Where to write class_mapping.json",
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Deliberately replace an existing mapping (requires rebuilding encoded labels)"
+        ),
+    )
     args = parser.parse_args()
 
     datasets_root = UPath(args.datasets_root) if args.datasets_root else None
     summaries_dir = Path(args.summaries_dir) if args.summaries_dir else None
     result = assemble_classes(datasets_root=datasets_root, summaries_dir=summaries_dir)
-    write_mapping(result, Path(args.output))
+    write_mapping(result, Path(args.output), overwrite=args.overwrite)
 
     open_set = result.mapping["open_set"]
     regression = result.mapping["open_set_regression"]

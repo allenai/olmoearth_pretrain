@@ -31,9 +31,13 @@ local UTM grid at 10 m/pixel and masked to the fire's own perimeter polygon so t
 severity is attributable to that fire's ignition date.
 
 Change semantics (§5): a fire is a dated CHANGE event. ``change_time`` = ``ig_date`` (known to
-day precision, well within the <=1-2 month requirement); ``time_range`` is a ~1-year window
-(+/-180 d) CENTERED on it, so pretraining pairs the severity mask with imagery spanning the
-fire. Only fires with ig_date year in 2016-2024 (Sentinel era AND covered by a downloaded
+day precision, well within the <=1-2 month requirement), kept as the reference for building
+the windows. Instead of a single centered window, we emit two adjacent six-month windows
+split at ``change_time``: ``pre_time_range`` (the <=183 days immediately before) and
+``post_time_range`` (the <=183 days immediately after), with ``time_range`` set to null. The
+windows are built via ``io.pre_post_time_ranges(change_time, ...)``, so pretraining pairs a
+"before" image stack with an "after" stack spanning the fire and probes on their difference.
+Only fires with ig_date year in 2016-2024 (Sentinel era AND covered by a downloaded
 mosaic) are used; pre-2016 perimeters are filtered out, and 2025+ (no mosaic) are dropped.
 
 Tiling: a fire fitting in a 64x64 tile (640 m) yields one centered tile; larger fires are
@@ -53,7 +57,7 @@ import os
 import random
 import zipfile
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -88,9 +92,6 @@ MIN_YEAR = 2016
 MAX_YEAR = 2024  # last year with a downloaded severity mosaic
 MAX_TILES_PER_FIRE = 20
 PER_CLASS = 1000  # tiles-per-class target (25k total cap; 5 classes => plenty of room)
-HALF_WINDOW = timedelta(
-    days=180
-)  # +/-180 d => 360-day (<=1 yr) window centered on ig_date
 
 # MTBS thematic mosaic value -> our compact class id. Values 0 (background) and 6
 # (non-mapping area) become nodata and are not classes.
@@ -316,7 +317,8 @@ def _write_one(rec: dict[str, Any]) -> None:
     bounds = tuple(rec["bounds"])
     label = np.frombuffer(rec["arr"], dtype=np.uint8).reshape(TILE, TILE)
     change_time = datetime.fromtimestamp(rec["ig_ms"] / 1000.0, tz=UTC)
-    time_range = (change_time - HALF_WINDOW, change_time + HALF_WINDOW)
+    pre_range, post_range = io.pre_post_time_ranges(change_time)
+    time_range = (pre_range[0], post_range[1])  # outer bounding span
     io.write_label_geotiff(SLUG, sample_id, label, proj, bounds, nodata=io.CLASS_NODATA)
     io.write_sample_json(
         SLUG,
@@ -327,6 +329,8 @@ def _write_one(rec: dict[str, Any]) -> None:
         change_time=change_time,
         source_id=rec["source_id"],
         classes_present=rec["present_ids"],
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
 
 

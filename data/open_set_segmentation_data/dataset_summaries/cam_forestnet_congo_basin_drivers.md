@@ -69,24 +69,33 @@ dropped (15 ≤ 254-class uint8 limit).
 
 ## Time range & change handling
 
-These are pre/post forest-loss **events**, so each sample uses the **change_time** scheme
-(spec §5): `change_time` = 1 July of the GFC loss year, and `time_range` = the 1-year
-window centred on it (`[Jan 1 year, Jan 1 year+1)`). GFC loss is annual, so a 1-year
-window is the natural — and only available — temporal resolution; the driver-classification
-task is **not** ill-posed at yearly granularity (pre/post loss signal spans the year).
-Pretraining uses each sample only when the sampled input window spans `change_time`.
+These are pre/post forest-loss **events**, encoded under the **pre/post change scheme**
+(spec §5). GFC loss is only **year-resolved**, so each sample carries two independent
+six-month windows (each ≤ 183 days) with `time_range` = **null**:
+
+- `pre_time_range` = **summer of (loss_year − 1)**.
+- `post_time_range` = **summer of (loss_year + 1)**.
+- so the **entire ambiguous loss year sits in the gap** between the two windows.
+- `change_time` = **1 July of the loss year** (reference only).
+
+**Previously rejected; now resolved by pre/post windows.** Because GFC loss is only
+year-resolved the event is not resolvable to within ~1–2 months, which is why this dataset
+was originally **rejected** on change-timing grounds. Under the pre/post scheme the coarse
+year-level timing is bracketed in the gap between the far-apart pre/post windows, so the
+dataset is **completed / usable**.
 
 Events span **2015–2020** (year counts: 2015=349, 2016=425, 2017=607, 2018=249, 2019=481,
-2020=997). The 349 events in 2015 predate full Sentinel-2 coverage (S2A launched mid-2015)
-but are within Landsat-8 coverage, so they are retained; note the thinner S2 availability
-for that year.
+2020=997). Every `post_time_range` is therefore ≥ 2016 (Sentinel era); the year-1
+`pre_time_range` for 2015 events falls in the Landsat-8 era, which is acceptable. **0 events
+dropped.**
 
 ## Verification
 
 - 3108 `.tif` + 3108 `.json`; every tif single-band uint8, UTM (e.g. EPSG:32632/32633) at
   10 m, 64×64, nodata=255, values are valid class ids.
-- All 3108 sample JSONs have a ≤1-year `time_range` with `change_time` set inside it
-  (0 bad entries).
+- All 3108 sample JSONs have `time_range` = **null** with `pre_time_range` and
+  `post_time_range` each ≤ 183 days and `change_time` (1 July of the loss year) set between
+  them (0 bad entries).
 - Georeferencing sanity: tile-center lon/lat reprojected back to WGS84 matches the source
   CSV event coordinates to ~4 decimals and lands inside the Cameroon bounding box for all
   spot-checked samples.

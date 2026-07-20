@@ -19,8 +19,12 @@ baseline extent, masked elsewhere) delimits the valid forest area.
 This is a genuine dated CHANGE dataset (forest -> disturbed). Per spec §5 we use the
 change_time scheme: each disturbance tile's ``change_time`` is the representative (median)
 decoded disturbance date of the confirmed alerts forming a single temporally-coherent event
-within the tile, and its ``time_range`` is a 360-day window centered on that date. The label
-is a **mask of where** the disturbance occurred.
+within the tile. That ``change_time`` splits the tile into two adjacent six-month windows
+(via ``io.pre_post_time_ranges``): ``pre_time_range`` = the ~6 months (<=183 days)
+immediately before it and ``post_time_range`` = the ~6 months (<=183 days) immediately after,
+with ``time_range`` = null. The label is a **mask of where** the disturbance occurred, and
+pretraining pairs the "before" image stack with the "after" stack and probes on their
+difference.
 
 Label scheme (uint8, single band, local UTM 10 m):
   0   stable forest   (forest-baseline pixel with no alert) -- background.
@@ -351,10 +355,8 @@ def _write_disturbance_tile(rec: dict[str, Any]) -> dict[str, Any] | None:
     mask[in_window] = DISTURB_ID
     # Everything else (non-forest, low-conf alerts, out-of-window confirmed alerts) stays 255.
 
-    tr = (
-        change_dt - timedelta(days=WINDOW_HALF_DAYS),
-        change_dt + timedelta(days=WINDOW_HALF_DAYS),
-    )
+    pre_range, post_range = io.pre_post_time_ranges(change_dt)
+    tr = (pre_range[0], post_range[1])  # outer bounding span
     present = [DISTURB_ID]
     if bool((mask == STABLE_ID).any()):
         present.insert(0, STABLE_ID)
@@ -368,6 +370,8 @@ def _write_disturbance_tile(rec: dict[str, Any]) -> dict[str, Any] | None:
         change_time=change_dt,
         source_id=f"radd:{rec['region']}:{rec['lon']:.4f},{rec['lat']:.4f}",
         classes_present=present,
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
     return {
         "sample_id": sample_id,

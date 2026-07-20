@@ -1,4 +1,4 @@
-"""Process the Global Wind Power Tracker (GWPT) into detection label tiles.
+"""Process the Global Wind Power Tracker (GWPT) into presence-only points.
 
 Source: Global Wind Power Tracker, Global Energy Monitor (GEM), February 2026 release
 (https://globalenergymonitor.org/projects/global-wind-power-tracker, CC-BY-4.0). A
@@ -10,64 +10,47 @@ each with a point Latitude/Longitude, an operating Status, an Installation Type
 behind an email form on the GEM site that mints a short-lived capability token and returns
 a presigned DigitalOcean Spaces URL (see raw/SOURCE.txt for the exact recipe).
 
-Task type: positive-only object DETECTION, encoded as per-pixel classes (spec section 4).
-A GWPT record is a single point marking a wind farm; there is no dataset-provided
-background/negative class, so we use the tunable detection encoding: a 1 px positive at the
-point, a 10 px nodata buffer ring (location coordinates are only project-level and often
-"approximate", so a thick ignore ring avoids penalizing near-misses), and background (0)
-filling the rest of a 32x32 UTM 10 m context tile, plus dedicated background-only negative
-tiles drawn far from any tracked wind farm.
+Task type: presence-only POINTS (spec section 2a). Each selected operating wind farm is
+emitted as one presence point in a dataset-wide ``points.geojson``; negatives are supplied
+by the downstream assembly (no fabricated background tiles here).
 
-Class scheme (spec section 5 "multi-target / unified scheme"): the manifest lists one class
-"wind farm (onshore/offshore)", but onshore and offshore farms look very different at
-10-30 m (turbines + pads/access roads on land vs. turbine monopiles standing in open water),
-so we split into two observable positive classes and keep background as class 0:
-    0 = background, 1 = onshore_wind_farm, 2 = offshore_wind_farm, 255 = nodata/ignore.
-Utility-scale wind farms (many large turbines with cleared pads and access roads spread over
-hundreds of metres) are resolvable at 10 m; the DeepOWT precedent detects even individual
-offshore turbines at Sentinel-1 10 m.
+Class scheme: onshore and offshore farms look very different at 10-30 m (turbines +
+pads/access roads on land vs. turbine monopiles standing in open water), so we keep two
+observable positive classes:
+    0 = onshore_wind_farm, 1 = offshore_wind_farm.
+Utility-scale wind farms (many large turbines with cleared pads and access roads spread
+over hundreds of metres) are resolvable at 10 m; the DeepOWT precedent detects even
+individual offshore turbines at Sentinel-1 10 m.
 
 Only *operating* phases are used as positives (they are physically built and visible);
 construction / pre-construction / announced / cancelled / shelved / retired / mothballed
 phases are excluded. Phases with Installation Type "Unknown" (cannot assign onshore/offshore)
-are excluded as positives.
+are excluded.
 
-Time / change handling (spec section 5). A built wind farm is a PERSISTENT structure, not a
-dated change event: once operating it stays visible for years, and GWPT only resolves the
-Start year to a calendar YEAR (coarser than the ~1-2 month change-timing requirement), so we
-do NOT emit dated change labels (change_time = null). Each positive is given a 1-year time
-window sampled (seeded) from the years the farm is both operating and inside the Sentinel era:
+Time / change handling. A built wind farm is a PERSISTENT structure, not a dated change
+event: once operating it stays visible for years, and GWPT only resolves the Start year to
+a calendar YEAR (coarser than the ~1-2 month change-timing requirement), so we do NOT emit
+dated change labels (change_time = null). Each positive is given a 1-year time window
+sampled (seeded) from the years the farm is both operating and inside the Sentinel era:
 [max(start_year, 2016), min(2025, retired_year - 1)] (start_year missing -> assume a
 pre-existing persistent farm, [2016, 2025]). Phases whose first operating year is after 2025
-(no full Sentinel year yet) are skipped. Other operating farms that fall inside a tile are
-also encoded by their class in that same year (present -> onshore/offshore positive;
-not-yet-built -> left background; unknown installation -> nodata).
+(no full Sentinel year yet) are skipped.
 
-Sampling: up to 1000 tiles for onshore (stratified across years for temporal diversity), all
-operating offshore phases kept (rare class; spec section 5 says do not drop rare classes),
-plus up to 1000 background-only negative tiles. Well under the 25k per-dataset cap.
+Sampling: up to 1000 points per class (sampling.balance_by_class, default 25k total cap).
+Offshore is a rare class (~360) and is kept in full (spec section 5 keeps rare classes).
 
-Run (idempotent; skips already-written tiles):
+Run (reuses cached raw xlsx):
   python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.global_wind_power_tracker
 """
 
 import argparse
-import math
 import multiprocessing
 import random
 from collections import Counter
 from typing import Any
 
-import numpy as np
-import tqdm
-from rslearn.utils.mp import star_imap_unordered
-from scipy.spatial import cKDTree
-
 from olmoearth_pretrain.open_set_segmentation_data import io, manifest
-from olmoearth_pretrain.open_set_segmentation_data.sampling import (
-    balance_by_class,
-    encode_detection_tile,
-)
+from olmoearth_pretrain.open_set_segmentation_data.sampling import balance_by_class
 
 SLUG = "global_wind_power_tracker"
 NAME = "Global Wind Power Tracker"
@@ -75,18 +58,10 @@ URL = "https://globalenergymonitor.org/projects/global-wind-power-tracker"
 XLSX_FILE = "Global-Wind-Power-Tracker-February-2026.xlsx"
 DATA_SHEET = "Data"
 
-# Class scheme (background + two observable positive classes).
-CID_BACKGROUND = 0
-CID_ONSHORE = 1
-CID_OFFSHORE = 2
-POSITIVE_CIDS = (CID_ONSHORE, CID_OFFSHORE)
+# Class scheme (two observable positive classes; no background).
+CID_ONSHORE = 0
+CID_OFFSHORE = 1
 CLASSES = [
-    {
-        "id": CID_BACKGROUND,
-        "name": "background",
-        "description": "No tracked utility-scale wind farm present (land or open water "
-        "away from any GWPT phase).",
-    },
     {
         "id": CID_ONSHORE,
         "name": "onshore_wind_farm",
@@ -102,6 +77,7 @@ CLASSES = [
         "(GWPT Installation Type 'Offshore ...').",
     },
 ]
+CID_TO_NAME = {c["id"]: c["name"] for c in CLASSES}
 
 # Sentinel-era window bounds. min_year: first year of usable S2/S1 imagery. max_year: last
 # full calendar year we assume imagery is available and the farm still standing.
@@ -109,21 +85,7 @@ MIN_YEAR = 2016
 MAX_YEAR = 2025
 
 PER_CLASS = 1000
-N_NEGATIVES = 1000
 SEED = 42
-
-# Detection encoding parameters (spec section 4). 32x32 = 320 m context tile at 10 m; a
-# single-pixel positive at the (project-level, often approximate) point ringed by a 10 px
-# nodata buffer (21x21 ignore) so near-misses are not penalized; rest background.
-DET_TILE = 32
-DET_POS_SIZE = 1
-DET_BUFFER = 10
-
-# Negative tiles must sit far from any tracked farm. 0.02 deg (~2.2 km) >> 320 m tile.
-NEG_MIN_DIST_DEG = 0.02
-# Neighbor search radius for in-tile farms (deg); precise filter is by tile pixel bounds.
-# 320 m tile; ~0.01 deg (~1.1 km) covers it at all latitudes.
-NEIGHBOR_RADIUS_DEG = 0.01
 
 
 def _inst_class(installation: Any) -> int | None:
@@ -194,149 +156,36 @@ def _presence_range(farm: dict[str, Any]) -> tuple[int, int] | None:
     return (lo, hi)
 
 
-def _build_candidates(
-    farms: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], cKDTree, cKDTree, list[dict[str, Any]]]:
-    """Return (positive_candidates, operating_tree, all_tree, operating_farms).
+def _build_records(farms: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One presence record per operating on/offshore farm with a valid presence window.
 
-    One positive candidate per operating on/offshore farm with a valid presence window; the
-    label year is sampled (seeded) from that window for temporal diversity. Also returns
-    KD-trees over operating-farm coords (in-tile neighbor lookup) and all-farm coords
-    (negative-distance filtering).
+    The label year is sampled (seeded) from the presence window for temporal diversity.
     """
     rng = random.Random(SEED)
-    pos: list[dict[str, Any]] = []
-    operating = [f for f in farms if f["status"] == "operating"]
-    for i, f in enumerate(farms):
+    recs: list[dict[str, Any]] = []
+    for f in farms:
         if f["status"] != "operating" or f["cls"] is None:
             continue
-        rng_range = _presence_range(f)
-        if rng_range is None:
+        pr = _presence_range(f)
+        if pr is None:
             continue
-        lo, hi = rng_range
-        year = rng.randint(lo, hi)
-        pos.append(
+        lo, hi = pr
+        recs.append(
             {
-                "kind": "pos",
-                "class": f["cls"],
-                "year": year,
+                "label": f["cls"],
+                "year": rng.randint(lo, hi),
                 "lon": f["lon"],
                 "lat": f["lat"],
                 "source_id": f"gwpt/{f['phase_id']}",
             }
         )
-    op_tree = cKDTree(np.array([[f["lon"], f["lat"]] for f in operating], dtype=float))
-    all_tree = cKDTree(np.array([[f["lon"], f["lat"]] for f in farms], dtype=float))
-    return pos, op_tree, all_tree, operating
-
-
-def _build_negatives(
-    farms: list[dict[str, Any]], all_tree: cKDTree, n: int
-) -> list[dict[str, Any]]:
-    """Generate background-only tiles far from any tracked farm.
-
-    Candidates are made by offsetting random operating farms by a random large bearing so
-    they land in comparable terrain/regions, then kept only if the nearest tracked farm is
-    > NEG_MIN_DIST_DEG away (guarantees an all-background tile). A seeded year in the
-    Sentinel era is assigned to each.
-    """
-    rng = random.Random(SEED + 1)
-    operating = [f for f in farms if f["status"] == "operating"]
-    out: list[dict[str, Any]] = []
-    attempts = 0
-    while len(out) < n and attempts < n * 200:
-        attempts += 1
-        base = rng.choice(operating)
-        dist = rng.uniform(0.15, 0.8) * rng.choice([-1, 1])
-        dist2 = rng.uniform(0.15, 0.8) * rng.choice([-1, 1])
-        lon = base["lon"] + dist
-        lat = base["lat"] + dist2
-        if not (-180 <= lon <= 180 and -80 <= lat <= 84):
-            continue
-        d, _ = all_tree.query([lon, lat], k=1)
-        if d <= NEG_MIN_DIST_DEG:
-            continue
-        out.append(
-            {
-                "kind": "neg",
-                "class": CID_BACKGROUND,
-                "year": rng.randint(MIN_YEAR, MAX_YEAR),
-                "lon": lon,
-                "lat": lat,
-                "source_id": "gwpt/negative",
-            }
-        )
-    return out
-
-
-def _resolve_neighbors(
-    rec: dict[str, Any], operating: list[dict[str, Any]], op_tree: cKDTree
-) -> None:
-    """Attach in-tile operating-farm neighbors present in rec['year'] to rec['neighbors'].
-
-    Each neighbor -> (lon, lat, cid): its class (1/2) if present that year and installation
-    known; 255 (ignore) if present but installation unknown. Not-yet-built / retired
-    neighbors are dropped (correctly left as background). The center point is excluded.
-    """
-    year = rec["year"]
-    idxs = op_tree.query_ball_point([rec["lon"], rec["lat"]], r=NEIGHBOR_RADIUS_DEG)
-    out: list[tuple[float, float, int]] = []
-    for j in idxs:
-        q = operating[j]
-        if q["lon"] == rec["lon"] and q["lat"] == rec["lat"]:
-            continue
-        pr = _presence_range(q)
-        if pr is None or not (pr[0] <= year <= pr[1]):
-            continue  # not built yet / retired in this year -> background
-        cid = q["cls"] if q["cls"] is not None else io.CLASS_NODATA
-        out.append((q["lon"], q["lat"], cid))
-    rec["neighbors"] = out
-
-
-def _write_tile(rec: dict[str, Any]) -> str:
-    sample_id = rec["sample_id"]
-    if (io.locations_dir(SLUG) / f"{sample_id}.tif").exists():
-        return "skip"
-    proj = io.utm_projection_for_lonlat(rec["lon"], rec["lat"])
-    _, col, row = io.lonlat_to_utm_pixel(rec["lon"], rec["lat"], proj)
-    bounds = io.centered_bounds(col, row, DET_TILE, DET_TILE)
-    x_min, y_min = bounds[0], bounds[1]
-
-    positives: list[tuple[int, int, int]] = []
-    if rec["kind"] == "pos":
-        positives.append((row - y_min, col - x_min, rec["class"]))
-    for lon, lat, cid in rec.get("neighbors", []):
-        _, c, r = io.lonlat_to_utm_pixel(lon, lat, proj)
-        lc, lr = c - x_min, r - y_min
-        if 0 <= lc < DET_TILE and 0 <= lr < DET_TILE:
-            positives.append((lr, lc, cid))
-
-    arr = encode_detection_tile(
-        positives,
-        tile_size=DET_TILE,
-        positive_size=DET_POS_SIZE,
-        buffer_size=DET_BUFFER,
-        nodata=io.CLASS_NODATA,
-        background=CID_BACKGROUND,
-    )
-    io.write_label_geotiff(SLUG, sample_id, arr, proj, bounds, nodata=io.CLASS_NODATA)
-    io.write_sample_json(
-        SLUG,
-        sample_id,
-        proj,
-        bounds,
-        io.year_range(rec["year"]),
-        change_time=None,
-        source_id=rec["source_id"],
-        classes_present=sorted(set(np.unique(arr).tolist()) - {io.CLASS_NODATA}),
-    )
-    return "pos" if rec["kind"] == "pos" else "neg"
+    return recs
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workers", type=int, default=64)
-    args = parser.parse_args()
+    parser.parse_args()
 
     io.check_disk()
     manifest.write_registry_entry(SLUG, "in_progress")
@@ -365,64 +214,39 @@ def main() -> None:
     farms = _load_farms()
     print(f"loaded {len(farms)} wind farm phases", flush=True)
 
-    pos_cands, op_tree, all_tree, operating = _build_candidates(farms)
-    by_class: dict[int, list[dict[str, Any]]] = {c: [] for c in POSITIVE_CIDS}
-    for r in pos_cands:
-        by_class[r["class"]].append(r)
+    recs = _build_records(farms)
+    cand_counts = Counter(r["label"] for r in recs)
     print(
-        "positive candidates: "
-        + ", ".join(f"{c}={len(v)}" for c, v in by_class.items()),
+        "presence candidates: "
+        + ", ".join(f"{CID_TO_NAME[c]}={cand_counts[c]}" for c in sorted(cand_counts)),
         flush=True,
     )
 
-    selected: list[dict[str, Any]] = []
-    # Onshore: balance across years for temporal diversity, cap at PER_CLASS.
-    onshore = balance_by_class(
-        by_class[CID_ONSHORE],
-        "year",
-        per_class=math.ceil(PER_CLASS / 10) * 3,
-        seed=SEED,
-    )[:PER_CLASS]
-    selected.extend(onshore)
-    print(f"  onshore: selected {len(onshore)}", flush=True)
-    # Offshore is rare -> keep all (spec section 5: don't drop rare classes).
-    offshore = by_class[CID_OFFSHORE][:PER_CLASS]
-    selected.extend(offshore)
-    print(f"  offshore: selected {len(offshore)}", flush=True)
+    selected = balance_by_class(recs, "label", per_class=PER_CLASS, seed=SEED)
+    print(f"selected {len(selected)} points (<= {PER_CLASS}/class)", flush=True)
 
-    negatives = _build_negatives(farms, all_tree, N_NEGATIVES)
-    selected.extend(negatives)
-    print(f"  negatives: selected {len(negatives)}", flush=True)
-
-    for r in selected:
-        _resolve_neighbors(r, operating, op_tree)
+    points = []
     for i, r in enumerate(selected):
-        r["sample_id"] = f"{i:06d}"
+        points.append(
+            {
+                "id": f"{i:06d}",
+                "lon": r["lon"],
+                "lat": r["lat"],
+                "label": r["label"],
+                "time_range": io.year_range(r["year"]),
+                "change_time": None,
+                "source_id": r["source_id"],
+            }
+        )
+    io.write_points_table(SLUG, "classification", points)
 
-    io.check_disk()
-
-    results: Counter = Counter()
-    with multiprocessing.Pool(args.workers) as p:
-        for res in tqdm.tqdm(
-            star_imap_unordered(p, _write_tile, [dict(rec=r) for r in selected]),
-            total=len(selected),
-        ):
-            results[res] += 1
-    print("write results:", dict(results), flush=True)
-
-    io.check_disk()
-
-    class_counts = {
-        "onshore_wind_farm": len(onshore),
-        "offshore_wind_farm": len(offshore),
-        "background_negative_tiles": len(negatives),
-    }
+    counts = Counter(r["label"] for r in selected)
     io.write_dataset_metadata(
         SLUG,
         {
             "dataset": SLUG,
             "name": NAME,
-            "task_type": "classification",  # detection encoded as per-pixel classes
+            "task_type": "classification",
             "source": "Global Energy Monitor",
             "license": "CC-BY-4.0",
             "provenance": {
@@ -434,39 +258,30 @@ def main() -> None:
             },
             "sensors_relevant": ["sentinel2", "sentinel1", "landsat"],
             "classes": CLASSES,
-            "nodata_value": io.CLASS_NODATA,
-            "detection_encoding": {
-                "tile_size": DET_TILE,
-                "positive_size": DET_POS_SIZE,
-                "buffer_size": DET_BUFFER,
-            },
             "num_samples": len(selected),
-            "class_counts": class_counts,
+            "class_counts": {
+                CID_TO_NAME[c]: counts.get(c, 0) for c in sorted(CID_TO_NAME)
+            },
             "notes": (
-                "Utility-scale (>=10 MW) wind farm DETECTION from Global Energy Monitor's "
-                "GWPT point inventory (Feb 2026 release, 33,248 phases). Only 'operating' "
-                "phases used as positives; onshore vs offshore kept as two observable classes "
-                "(0=background, 1=onshore_wind_farm, 2=offshore_wind_farm, 255=nodata). "
-                "Detection encoding: 32x32 UTM 10 m context tile per farm, 1 px positive + "
-                "10 px nodata buffer (21x21 ignore), rest background; other in-tile operating "
-                "farms encoded by their class in the same year (unknown installation -> 255). "
+                "Presence-only POINTS converted from the former detection-tile encoding; "
+                "negatives are supplied by the downstream assembly. Utility-scale (>=10 MW) "
+                "wind farms from Global Energy Monitor's GWPT point inventory (Feb 2026 "
+                "release, 33,248 phases). Only 'operating' phases used; onshore vs offshore "
+                "kept as two observable classes (0=onshore_wind_farm, 1=offshore_wind_farm). "
                 "Persistent-structure time model (change_time=null): each farm gets a 1-year "
                 "window sampled from [max(start_year,2016), min(2025, retired-1)] "
-                "(missing start_year -> [2016,2025]); phases first operating after 2025 skipped. "
-                "GWPT resolves commissioning only to a calendar year (coarser than the ~1-2 "
-                "month change-timing rule), so NO dated change labels. Location accuracy is a "
-                "mix of 'exact'/'approximate' (project-level points); the 10 px buffer absorbs "
-                "positional imprecision. Sampling: onshore capped at 1000 (stratified across "
-                "years); all operating offshore kept (rare class, ~360; spec section 5 keeps "
-                "rare classes); plus 1000 background-only negatives far (>~2 km) from any "
-                "tracked farm. Well under the 25k per-dataset cap."
+                "(missing start_year -> [2016,2025]); phases first operating after 2025 "
+                "skipped. GWPT resolves commissioning only to a calendar year (coarser than "
+                "the ~1-2 month change-timing rule), so NO dated change labels. Sampling: up "
+                "to 1000 points/class (balance_by_class); offshore is a rare class (~360) "
+                "kept in full (spec section 5 keeps rare classes)."
             ),
         },
     )
     manifest.write_registry_entry(
         SLUG, "completed", task_type="classification", num_samples=len(selected)
     )
-    print(f"done: {len(selected)} samples", flush=True)
+    print(f"done: {len(selected)} points", flush=True)
 
 
 if __name__ == "__main__":

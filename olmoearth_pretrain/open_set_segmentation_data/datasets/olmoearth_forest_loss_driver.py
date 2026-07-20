@@ -11,9 +11,18 @@ else the window metadata time_range midpoint).
 
 Because the label has a real (multi-pixel) footprint and is a dated **change** event, we
 emit small rasterized-polygon GeoTIFF tiles (driver class inside the footprint, 255 =
-nodata/ignore elsewhere), sized to the footprint + context and capped at 64x64. Each
-sample sets ``change_time`` = event date and ``time_range`` = a 1-year window centered on
-it (spec section 5). Balanced to <=1000 samples per class.
+nodata/ignore elsewhere), sized to the footprint + context and capped at 64x64. Balanced to
+<=1000 samples per class.
+
+CHANGE handling (spec section 5, pre/post scheme): the event date is only approximate
+(``info.json`` ``pixel_date``/``date``, else the window-midpoint -> year-resolved). Each
+sample carries two independent six-month windows (each <= 183 days) with ``time_range`` =
+null, separated by a 6-month guard gap on each side of the approximate ``change_time`` so
+the ~1-year uncertainty sits in the gap: ``pre_time_range`` ends ~6 months before
+``change_time`` and ``post_time_range`` starts ~6 months after it. Samples whose post window
+would start before 2016 (Sentinel era) are skipped (none were, at 4387). This dataset was
+previously rejected on change-timing grounds (the approximate/year-resolved date not
+resolvable to within ~1-2 months); the pre/post scheme resolves that, so it is now usable.
 """
 
 import argparse
@@ -21,7 +30,7 @@ import json
 import math
 import multiprocessing
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import shapely
@@ -183,8 +192,13 @@ def _write_one(args: tuple[int, dict[str, Any]]) -> tuple[int, int] | None:
         arr[0, h // 2, w // 2] = cid
 
     ct = datetime.fromisoformat(rec["change_time"])
-    half = timedelta(days=180)
-    time_range = (ct - half, ct + half)
+    # The event date is only approximate (info.json pixel_date/date, else the window
+    # midpoint -> year-resolved). Use a 6-month guard gap on each side so the whole
+    # ambiguous ~1-year window sits between the pre and post windows and the loss reliably
+    # falls in the gap regardless of its exact date.
+    pre_range, post_range = io.pre_post_time_ranges(ct, gap_days=183)
+    if post_range[0] < datetime(2016, 1, 1, tzinfo=UTC):
+        return None  # post window predates the Sentinel era; skip
 
     io.write_label_geotiff(SLUG, sample_id, arr, proj, bounds, nodata=io.CLASS_NODATA)
     io.write_sample_json(
@@ -192,10 +206,12 @@ def _write_one(args: tuple[int, dict[str, Any]]) -> tuple[int, int] | None:
         sample_id,
         proj,
         bounds,
-        time_range,
+        None,
         change_time=ct,
         source_id=rec["source_id"],
         classes_present=[cid],
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
     return (idx, cid)
 

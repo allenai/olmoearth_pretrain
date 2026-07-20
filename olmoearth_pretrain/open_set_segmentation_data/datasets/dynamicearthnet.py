@@ -30,8 +30,9 @@ non-overlapping <=64x64 tiles. A tile is dropped if fully nodata. All 7 classes 
 mode resampling at 10 m (land-cover zones are large relative to 10 m); no class is dropped.
 
 Time range (task spec 5, seasonal/annual): each monthly label is the per-month LAND-COVER
-STATE (not a dated change event), so change_time=null and time_range is a 1-year window
-anchored on the label's year (2018 labels -> 2018, 2019 labels -> 2019).
+STATE (not a dated change event), so change_time=null and time_range is a ~3-month window
+centered on the label's month (centered_time_range(center=15th of the label month,
+half_window_days=45), i.e. ~90 days bracketing that calendar month).
 
 Sampling: tiles-per-class balanced (spec 5) via sampling.select_tiles_per_class -
 <=1000 tiles/class, rarest-class-first, total capped at 25k. A tile counts toward every class
@@ -46,6 +47,7 @@ import multiprocessing
 import pickle
 import re
 import zipfile
+from datetime import UTC, datetime
 from io import BytesIO
 from typing import Any
 
@@ -259,12 +261,18 @@ def _write_one(rec: dict[str, Any]) -> None:
     io.write_label_geotiff(
         SLUG, sample_id, rec["array"], proj, bounds, nodata=io.CLASS_NODATA
     )
+    # Each label is one specific calendar month's land-cover state, so use a ~3-month
+    # window centered on the label month (not the full year the label year falls in).
+    # Parse YYYY-MM from source_id ("{aoi}/{YYYY-MM}/{tr}_{tc}") so it works with any
+    # cached scan record.
+    year_str, month_str = rec["source_id"].split("/")[1].split("-")[:2]
+    center = datetime(int(year_str), int(month_str), 15, tzinfo=UTC)
     io.write_sample_json(
         SLUG,
         sample_id,
         proj,
         bounds,
-        io.year_range(rec["year"]),
+        io.centered_time_range(center, half_window_days=45),
         source_id=rec["source_id"],
         classes_present=rec["classes_present"],
     )
@@ -341,7 +349,7 @@ def main() -> None:
                 "All 7 classes kept, incl. snow & ice (band 6; present in 48/1320 AOI-months) "
                 "which the official 6-class benchmark instead ignores. Each monthly label is the "
                 "per-month land-cover STATE (not a dated change), so change_time=null and "
-                "time_range is a 1-year window anchored on the label year. Tiles-per-class "
+                "time_range is a ~3-month window centered on the label month. Tiles-per-class "
                 "balanced to <=1000/class, rarest-first, <=25k total."
             ),
         },

@@ -48,9 +48,13 @@ context), so under tiles-per-class balancing both classes reach 1000 with 1000 t
   centroid; the polygon rasterized (`all_touched=True`) as class 1, background 0 elsewhere.
   Only the target polygon is drawn (co-located clear-cuts of other dates left as
   background). Mirrors the DETER-B recipe / shared `rasterize` + `io` utilities.
-- **`change_time` = `image_date`** (day-precise); **`time_range` = ±180 days (360 d)
-  centered on it**. A completed clear-cut persists in imagery, so the centered 1-year
-  pairing window is well-posed.
+- **`change_time` = `image_date`** (day-precise), which splits the sample into two adjacent
+  six-month windows (via `io.pre_post_time_ranges`): **`pre_time_range`** = the ~6 months
+  (≤183 days) immediately before the clear-cut and **`post_time_range`** = the ~6 months
+  (≤183 days) immediately after, with **`time_range` = null** (total span still ~1 year). A
+  completed clear-cut persists in imagery, so the pre/post pairing split at the confirmation
+  date is well-posed; pretraining pairs the "before" stack with the "after" stack and probes
+  on their difference.
 - **Post-2016 filter**: only polygons with `image_date >= 2016-01-01` kept (Sentinel era).
   PRODES-year-2016 polygons imaged in late 2015 are dropped.
 - **Giant-polygon guard**: selected polygons filtered to `0.002 <= area_km <= 0.4` km² so
@@ -70,7 +74,8 @@ spanning 2016–2025 and geographic spread across states. Well under the 25k cap
 - 1000 `.tif` + 1000 `.json`; every `.tif` single-band, uint8, 64×64, UTM at 10 m
   (10 distinct UTM zones across the Amazon).
 - Pixel values ∈ {0, 1} only; nodata=255 declared; both classes present in every tile.
-- Every `.json` has a 360-day `time_range` and a non-null `change_time`.
+- Every `.json` has a non-null `change_time` with adjacent ≤183-day
+  `pre_time_range`/`post_time_range` windows split at it and `time_range` = null.
 - All 1000 tile centroids fall inside the Legal Amazon bounding box (lon −73.1…−44.0,
   lat −16.5…+5.0).
 - Georeferencing validated via WGS84→UTM reprojection round-trips + centroid checks; a

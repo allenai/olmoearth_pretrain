@@ -31,10 +31,13 @@ cycle and were mapped from the 24 Jan 2018 SPOT6 image -- the event date is know
 within days. Avalanche debris is snow, visible for weeks after the event but gone by
 the following summer, so a static full-year presence label would be misleading (summer
 2018 imagery shows no debris). We therefore treat each sample as a dated CHANGE label
-(spec §5): ``change_time`` = 2018-01-24 for every sample, and ``time_range`` is a
-360-day window CENTERED on it (+/-180 d). Pretraining only uses a sample when the
-sampled input window spans ``change_time``, so it always sees the late-Jan-2018 debris
-period (undisturbed snowpack before -> avalanche-debris texture after).
+(spec §5): ``change_time`` = 2018-01-24 for every sample, kept as the reference used
+to build two adjacent windows via ``io.pre_post_time_ranges``: ``pre_time_range`` (the
+~6 months, <=183 days, immediately before change_time) and ``post_time_range`` (the
+~6 months, <=183 days, immediately after); ``time_range`` is null. Pretraining pairs a
+"before" image stack with an "after" stack and probes on their difference, so it always
+straddles the late-Jan-2018 debris period (undisturbed snowpack before ->
+avalanche-debris texture after).
 
 Tiling (mirrors cal_fire_frap): each outline is reprojected to a local UTM projection
 at 10 m/pixel. An avalanche whose footprint fits in a 64x64 tile (640 m) yields one
@@ -52,7 +55,7 @@ import math
 import multiprocessing
 import random
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -85,9 +88,6 @@ MAX_SAMPLES = sampling.MAX_SAMPLES_PER_DATASET  # 25000
 
 # All avalanches mapped from the 24 Jan 2018 SPOT6 image; the storm cycle was 22-24 Jan.
 CHANGE_TIME = datetime(2018, 1, 24, tzinfo=UTC)
-HALF_WINDOW = timedelta(
-    days=180
-)  # +/-180 d => 360-day (<=1 year) window centered on event
 
 AVAL, NODATA = 0, io.CLASS_NODATA
 CLASSES = [
@@ -224,7 +224,8 @@ def _write_one(rec: dict[str, Any]) -> str | None:
         [(clip, AVAL)], bounds, fill=NODATA, dtype="uint8", all_touched=True
     )[0]
 
-    time_range = (CHANGE_TIME - HALF_WINDOW, CHANGE_TIME + HALF_WINDOW)
+    pre_range, post_range = io.pre_post_time_ranges(CHANGE_TIME)
+    time_range = (pre_range[0], post_range[1])  # outer bounding span
     present = sorted(int(v) for v in np.unique(label) if int(v) != NODATA)
     io.write_label_geotiff(SLUG, sample_id, label, proj, bounds, nodata=io.CLASS_NODATA)
     io.write_sample_json(
@@ -236,6 +237,8 @@ def _write_one(rec: dict[str, Any]) -> str | None:
         change_time=CHANGE_TIME,
         source_id=rec["source_id"],
         classes_present=present,
+        pre_time_range=pre_range,
+        post_time_range=post_range,
     )
     return "ok" if present else "empty"
 

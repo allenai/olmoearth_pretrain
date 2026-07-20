@@ -25,6 +25,7 @@ from olmoearth_pretrain.dataset.utils import get_modality_fname
 
 from ..constants import METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
+from .cli import add_common_arguments
 
 # Placeholder time range for OpenStreetMap.
 START_TIME = datetime(2020, 1, 1, tzinfo=UTC)
@@ -58,9 +59,8 @@ def convert_openstreetmap(window: Window, olmoearth_path: UPath) -> None:
     # extent. So we need to concatenate the features across all of the layers.
     features = []
     for group_idx in range(len(layer_data.serialized_item_groups)):
-        layer_dir = window.get_layer_dir(LAYER_NAME, group_idx=group_idx)
-        cur_features = vector_format.decode_vector(
-            layer_dir, window.projection, window.bounds
+        cur_features = window.data.read_vector(
+            LAYER_NAME, vector_format, group_idx=group_idx
         )
         features.extend(cur_features)
 
@@ -89,6 +89,7 @@ def convert_openstreetmap(window: Window, olmoearth_path: UPath) -> None:
         writer.writeheader()
         writer.writerow(
             dict(
+                example_id=window_metadata.example_id or "",
                 crs=window_metadata.crs,
                 col=window_metadata.col,
                 row=window_metadata.row,
@@ -106,31 +107,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Post-process OlmoEarth Pretrain data",
     )
-    parser.add_argument(
-        "--ds_path",
-        type=str,
-        help="Source rslearn dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--olmoearth_path",
-        type=str,
-        help="Destination OlmoEarth Pretrain dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        help="Number of workers to use",
-        default=32,
-    )
+    add_common_arguments(parser, default_groups=None)
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))
     olmoearth_path = UPath(args.olmoearth_path)
 
     jobs = []
-    for window in dataset.load_windows(workers=args.workers, show_progress=True):
+    for window in dataset.load_windows(
+        workers=args.workers, show_progress=True, groups=args.groups
+    ):
         jobs.append(
             dict(
                 window=window,

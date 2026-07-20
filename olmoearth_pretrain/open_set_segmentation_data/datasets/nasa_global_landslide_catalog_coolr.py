@@ -13,9 +13,13 @@ landslide events, one row per event, with (among ~31 attributes):
 
 Task: sparse-point CLASSIFICATION of each landslide location by ``landslide_category``
 (spec 2a -> one ``points.geojson``, not per-sample GeoTIFFs). A landslide is a dated EVENT,
-so each point is a CHANGE label: ``change_time`` = the event date and ``time_range`` = a
-1-year window centered on it. Pretraining uses the sample when the sampled input window
-spans the event, so the model can see the slope before/after the failure.
+so each point is a CHANGE label: ``change_time`` = the event date, kept as the reference for
+building the windows. Instead of a single centered window, we emit two adjacent six-month
+windows split at ``change_time``: ``pre_time_range`` (the <=183 days immediately before) and
+``post_time_range`` (the <=183 days immediately after), with ``time_range`` set to null
+(built via ``io.pre_post_time_ranges(change_time, ...)``), so pretraining pairs a "before"
+image stack with an "after" stack -- seeing the slope before and after the failure -- and
+probes on their difference.
 
 FILTERS APPLIED (documented in the summary):
   * Timing precision (spec 5, hard): ``event_date`` is precise to the day for every row, so
@@ -36,7 +40,7 @@ Idempotent: rewrites points.geojson + metadata.json from the (cached) raw CSV do
 
 import argparse
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC
 
 import pandas as pd
 
@@ -102,11 +106,6 @@ def normalize_category(raw) -> str:
     if v in ("mudflow",):
         return "mudslide"
     return "other"
-
-
-def _centered_year_range(change: datetime):
-    """1-year window centered on a change date (spec 5 change labels)."""
-    return (change - timedelta(days=182), change + timedelta(days=183))
 
 
 def load_records(csv_path: str) -> tuple[list[dict], dict]:
@@ -186,13 +185,16 @@ def main() -> None:
     points = []
     for i, r in enumerate(sorted(selected, key=lambda x: (x["date"], x["src_id"]))):
         change_time = r["date"]
+        pre_range, post_range = io.pre_post_time_ranges(change_time)
         points.append(
             {
                 "id": f"{i:06d}",
                 "lon": r["lon"],
                 "lat": r["lat"],
                 "label": NAME_TO_ID[r["category"]],
-                "time_range": _centered_year_range(change_time),
+                "time_range": (pre_range[0], post_range[1]),
+                "pre_time_range": pre_range,
+                "post_time_range": post_range,
                 "change_time": change_time,
                 "source_id": r["src_id"],
                 "location_accuracy": r["accuracy"],

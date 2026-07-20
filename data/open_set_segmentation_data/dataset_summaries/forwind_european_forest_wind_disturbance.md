@@ -53,9 +53,12 @@ day-precision**, well within spec §5's ~1–2 month change-timing requirement:
 | Xavier | 2017-11-10 | 2,073 |
 | unknown-name (still day-dated) | 2017-08-17 / 2017-08-02 / 2017-11-10 | 589 |
 
-Each sample carries `change_time = EventDate` and a `time_range` of **±180 days (360-day
-window) centered on `change_time`** (verified: every sampled JSON has span exactly 360 days
-and is centered). Metadata flags `is_change_dataset: true`. The blowdown gap is also a
+Each sample carries `change_time = EventDate`, which splits it into two adjacent six-month
+windows (via `io.pre_post_time_ranges`): **`pre_time_range`** = the ~6 months (≤183 days)
+immediately before the storm and **`post_time_range`** = the ~6 months (≤183 days)
+immediately after, with **`time_range` = null** (total span still ~1 year). Pretraining pairs
+the "before" image stack with the "after" stack and probes on their difference (forest before
+vs blowdown after). Metadata flags `is_change_dataset: true`. The blowdown gap is also a
 persistent post-event state, but because exact dates are available we use the change-label
 scheme (change_time set) rather than a static presence label.
 
@@ -88,8 +91,9 @@ filtered out. Note: FORWIND has no 2016 events, so realized samples are 2017 + 2
   and full 64×64 grid tiles), pixel values ⊆ {0, 255}, nodata = 255. 0 tifs with
   out-of-range values. Foreground fraction ≈ 35% over sampled tiles. ✓
 - All 15,859 `.tif` have a matching `.json` (0 unmatched either way). ✓
-- 2,000 sampled JSONs: `change_time` always set; `time_range` span always exactly 360 days
-  and always centered on `change_time`. ✓
+- 2,000 sampled JSONs: `change_time` always set; each carries adjacent ≤183-day
+  `pre_time_range`/`post_time_range` windows split exactly at `change_time` with
+  `time_range` = null. ✓
 - metadata.json: `task_type=classification`, `num_samples=15859`, `nodata_value=255`,
   classes = [(0, wind_disturbance)], `is_change_dataset=true`, license CC-BY-4.0. All tif
   values (0, 255) are covered by the class map + nodata. ✓
@@ -107,8 +111,9 @@ filtered out. Note: FORWIND has no 2016 events, so realized samples are 2017 + 2
 - Positive-only with nodata background (FORWIND is not an exhaustive no-damage map).
 - `EventType` for the post-2016 subset is uniformly "Windstorm" (the pre-2016 tornado
   records are filtered out), so no event-type sub-classing was warranted.
-- `time_range` centered on the event gives ~6 months of post-event imagery; if a strictly
-  post-blowdown window is later wanted, narrow to a forward window.
+- The `post_time_range` already gives ~6 months of strictly post-event imagery (and
+  `pre_time_range` the ~6 months before), so the before/after split needed for change
+  probing is built in.
 - Only 2017–2018 realized (FORWIND ends at 2018 and has no 2016 events).
 
 ## Reproduce

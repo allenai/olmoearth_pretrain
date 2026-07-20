@@ -64,8 +64,13 @@ Well under the 25k per-dataset cap.
 
 The flood mask is an **event** label. Each chip's event date is the Sentinel-1
 acquisition from `Sen1Floods11_Metadata.geojson`; `change_time` is set to that
-date and `time_range` is a **1-year window centered** on it (±182/183 days).
-Event dates:
+date and retained as the reference used to build two adjacent six-month windows via
+`io.pre_post_time_ranges(change_time, ...)`: `pre_time_range` — the ~6 months
+(≤183 days) immediately before `change_time` — and `post_time_range` — the ~6
+months (≤183 days) immediately after. The two windows are adjacent, split exactly
+at `change_time` (total span still ~1 year), and `time_range` is set to null.
+Pretraining pairs a "before" image stack with an "after" stack and probes on their
+difference. Event dates:
 
 Bolivia 2018-02-15 · Ghana 2018-09-18 · India 2016-08-12 · Cambodia/Mekong
 2018-08-05 · Nigeria 2018-09-21 · Pakistan 2017-06-28 · Paraguay 2018-10-31 ·
@@ -86,7 +91,8 @@ Somalia 2018-05-07 · Spain 2019-09-17 · Sri-Lanka 2017-05-30 · USA 2019-05-22
 
 - 1212 `.tif` + 1212 matching `.json`; every tile single-band uint8, local UTM,
   10 m, 64×64, values ⊆ {0,1,2,255} with nodata=255.
-- `time_range` is a 1-year window and `change_time` set on every sample.
+- `time_range` is null with an adjacent `pre_time_range`/`post_time_range` pair
+  (each ≤183 days) split at `change_time`, and `change_time` set on every sample.
 - Spatial/label round-trip: sampled UTM label pixels reprojected back to WGS84
   and compared to the source LabelHand+JRC rasters — 64/64 agreement on a Bolivia
   permanent-water tile; tile center coordinates land in Bolivia as expected.

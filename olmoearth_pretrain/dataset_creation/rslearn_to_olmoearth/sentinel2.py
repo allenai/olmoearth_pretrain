@@ -10,10 +10,8 @@ from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 
-from .multitemporal_raster import convert_freq, convert_monthly
-
-# rslearn layer for frequent data.
-LAYER_FREQ = "sentinel2_freq"
+from .cli import add_common_arguments
+from .multitemporal_raster import convert_monthly
 
 # rslearn layer prefix for monthly data.
 LAYER_MONTHLY = "sentinel2"
@@ -26,14 +24,6 @@ def convert_sentinel2(window: Window, olmoearth_path: UPath) -> None:
         window: the rslearn window to read data from.
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
     """
-    convert_freq(
-        window,
-        olmoearth_path,
-        LAYER_FREQ,
-        Modality.SENTINEL2,
-        missing_okay=True,
-        unprepared_okay=True,
-    )
     convert_monthly(window, olmoearth_path, LAYER_MONTHLY, Modality.SENTINEL2)
 
 
@@ -43,24 +33,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Post-process OlmoEarth Pretrain data",
     )
-    parser.add_argument(
-        "--ds_path",
-        type=str,
-        help="Source rslearn dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--olmoearth_path",
-        type=str,
-        help="Destination OlmoEarth Pretrain dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        help="Number of workers to use",
-        default=32,
-    )
+    add_common_arguments(parser, default_groups=["res_10"])
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))
@@ -68,7 +41,7 @@ if __name__ == "__main__":
 
     jobs = []
     for window in dataset.load_windows(
-        workers=args.workers, show_progress=True, groups=["res_10"]
+        workers=args.workers, show_progress=True, groups=args.groups
     ):
         jobs.append(
             dict(

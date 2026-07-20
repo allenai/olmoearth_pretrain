@@ -53,10 +53,13 @@ fire_scar 116,334; degradation 39,260; selective_logging 11,290; deforestation_w
 - Each selected alert polygon → one **64×64 UTM 10 m** tile centered on the polygon
   centroid. The polygon is rasterized (`all_touched=True`) as its class id; everything
   else is background (0). nodata sentinel = 255 (unused — background is a real class).
-- **change_time scheme** (spec §5): `change_time` = the alert `view_date`;
-  `time_range` = ±180 days (360-day window) centered on that date. Deforestation,
-  degradation, fire scars and mining persist in imagery, so a ~1-year window centered on
-  the alert is well-posed; no rejection needed.
+- **change_time scheme** (spec §5): `change_time` = the alert `view_date`, which splits the
+  sample into two adjacent six-month windows (via `io.pre_post_time_ranges`):
+  `pre_time_range` = the ~6 months (≤183 days) immediately before the alert and
+  `post_time_range` = the ~6 months (≤183 days) immediately after, with `time_range` = null
+  (total span still ~1 year). Pretraining pairs the "before" image stack with the "after"
+  stack and probes on their difference. Deforestation, degradation, fire scars and mining
+  persist in imagery, so the pre/post split around the alert is well-posed; no rejection needed.
 - **Only the target polygon is drawn per tile.** Co-located alerts of a different
   date/class are left as background (matches the "label = mask of the alert polygon"
   instruction). Because only a sampled subset of alerts is downloaded, exhaustive
@@ -91,7 +94,8 @@ centered tile).
 
 - Sampled tiles: single band, 64×64, uint8, local UTM (EPSG:327xx) at 10 m, nodata 255.
 - Pixel values across a 200-tile sample: {0,1,2,3,4,5,6} — all covered by `metadata.json`.
-- Every `.tif` has a matching `.json`; `time_range` span = 360 days; `change_time` set.
+- Every `.tif` has a matching `.json`; `change_time` set with adjacent ≤183-day
+  `pre_time_range`/`post_time_range` windows split at it and `time_range` = null.
 - Sample centroids fall in Brazil (lon ≈ −45…−65, lat ≈ −3…−15), UTM zones 19–22 S,
   consistent with the Amazon/Cerrado biomes.
 

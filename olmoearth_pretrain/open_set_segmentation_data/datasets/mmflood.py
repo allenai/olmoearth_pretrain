@@ -41,9 +41,12 @@ three source subsets (train/val/test) are used (spec 5).
 Time range: the flood is a dated EVENT (change label, spec 5). Copernicus EMS
 activation ``start`` dates the flood onset to within days (median event span 3
 days), well inside the ~1-2 month timing-precision requirement. We set
-``change_time`` = activation start and make ``time_range`` a 360-day window
-centered on it. Pretraining then only uses a sample when the sampled input window
-spans the flood. Events whose start is before 2016 (9 of 95 activations, from
+``change_time`` = activation start and keep it as the reference used to build two
+adjacent windows via ``io.pre_post_time_ranges``: ``pre_time_range`` (the ~6
+months, <=183 days, immediately before change_time) and ``post_time_range`` (the
+~6 months, <=183 days, immediately after); ``time_range`` is null. Pretraining
+pairs a "before" image stack with an "after" stack and probes on their difference.
+Events whose start is before 2016 (9 of 95 activations, from
 2014-2015) fall outside the Sentinel era and are dropped (spec 8); the remaining
 86 activations are processed.
 
@@ -74,7 +77,6 @@ TILE = 64
 PER_CLASS = 1000
 MIN_CLASS_PX = 32  # a tile counts toward a class only with >= this many px of it
 MAX_NODATA_FRAC = 0.5  # skip tiles that are more than half nodata
-HALF_WINDOW_DAYS = 180  # +/- around change_time => 360-day (<=1yr) window
 MIN_YEAR = 2016  # Sentinel era; drop pre-2016 activations (spec 8)
 
 NOTFLOOD, FLOOD = 0, 1
@@ -315,10 +317,8 @@ def _write_mask(path: str, tiles: list[dict[str, Any]], change_time_iso: str) ->
     """Reproject a mask and write all its selected tiles + sidecars."""
     arr, proj, col0, row0 = _reproject_mask(path)
     change_time = datetime.fromisoformat(change_time_iso)
-    tr = (
-        change_time - timedelta(days=HALF_WINDOW_DAYS),
-        change_time + timedelta(days=HALF_WINDOW_DAYS),
-    )
+    pre_range, post_range = io.pre_post_time_ranges(change_time)
+    tr = (pre_range[0], post_range[1])  # outer bounding span
     for t in tiles:
         sample_id = t["sample_id"]
         if (io.locations_dir(SLUG) / f"{sample_id}.tif").exists():
@@ -341,6 +341,8 @@ def _write_mask(path: str, tiles: list[dict[str, Any]], change_time_iso: str) ->
             change_time=change_time,
             source_id=t["source_id"],
             classes_present=present,
+            pre_time_range=pre_range,
+            post_time_range=post_range,
         )
 
 

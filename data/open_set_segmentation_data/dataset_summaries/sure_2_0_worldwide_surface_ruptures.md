@@ -33,8 +33,8 @@ observable at 10 m. Applying spec §2/§5/§8:
 in the 1900s; oldest 1872 Owens Valley, 1887 Sonora). They fail the pre-2016 change rule and
 their surface expression is decades-eroded / re-vegetated / built-over — **dropped**. The 8
 events from **2016+** have day-precise dates (≪ the ~1–2 month change-timing requirement), so
-`change_time` = the earthquake date and `time_range` = ±180 d centered on it — a clean change
-signal.
+`change_time` = the earthquake date and each sample gets adjacent pre/post six-month windows
+split at it (`time_range` = null) — a clean change signal.
 
 **Observability at 10 m.** Many surface ruptures are meter-scale offsets (sub-pixel at 10 m),
 but **large earthquakes** produce wide deformation zones / continuous scarps visible at 10 m.
@@ -81,14 +81,20 @@ Both classes appear in all 1312 tiles. `nodata = 255` (unused). All tif values �
   to 10 m pixel space `(E/10, −N/10)`, buffer each line by 3 px, and grid the buffered
   footprint's pixel bbox into **non-overlapping 64×64 tiles**; keep tiles intersecting a
   buffered rupture. One kept tile = one sample.
-- `change_time` = earthquake date (12:00 UTC); `time_range` = **±180 d centered** (360-day
-  window, ≤ 1 year). Verified: all windows span exactly 360 d, all `change_time` ≥ 2016.
+- `change_time` = earthquake date (12:00 UTC), retained as the reference used to build the
+  windows. Instead of a single centered window, each sample emits two independent six-month
+  windows: a `pre_time_range` (the ≤183 days immediately **before** `change_time`) and a
+  `post_time_range` (the ≤183 days immediately **after** it), with `time_range` set to null.
+  The windows are adjacent and split exactly at `change_time` (built via
+  `io.pre_post_time_ranges(change_time, ...)`), so pretraining pairs a "before" image stack
+  with an "after" stack and probes on their difference. Verified: all `change_time` ≥ 2016.
 
 ## Verification (§9)
 
 - 1312 `.tif` + 1312 `.json`. Sampled tiles: single band, `uint8`, UTM (EPSG:326xx) at 10 m,
   64×64, nodata 255, values {0, 1}. Dataset-wide unique values = {0, 1}.
-- Every `.json` has a 360-day `time_range` and a post-2016 `change_time`.
+- Every `.json` has `time_range` null with adjacent `pre_time_range` / `post_time_range`
+  (each ≤183 days) split at a post-2016 `change_time`.
 - Spatial sanity: rupture pixels lie 18–29 m median (≤45 m) from the source traces →
   georeferencing correct.
 - Idempotent: re-running skips existing `locations/{id}.tif`.
@@ -109,5 +115,6 @@ python3 -m olmoearth_pretrain.open_set_segmentation_data.datasets.sure_2_0_world
 Downloads `SURE2.0_Ruptures.zip` + `SURE2.0_Earthquakes.xlsx` from Zenodo 7020265 to
 `raw/sure_2_0_worldwide_surface_ruptures/`, then writes tiles to
 `datasets/sure_2_0_worldwide_surface_ruptures/locations/`. Tunables in the script:
-`BUF_PX` (buffer half-width, px), `MIN_MW` (5.5), `MIN_YEAR` (2016), `TILE` (64),
-`HALF_WINDOW` (±180 d).
+`BUF_PX` (buffer half-width, px), `MIN_MW` (5.5), `MIN_YEAR` (2016), `TILE` (64).
+The pre/post windows are built via `io.pre_post_time_ranges(change_time)` (default
+adjacent six-month split at `change_time`).

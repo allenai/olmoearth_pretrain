@@ -45,12 +45,17 @@ other datasets (spec §5).
 
 ## Time-range & change handling (spec §5)
 
-This **is** a change dataset. Each point's `date` is a day-precise post-event VHR image
+This **is** a change dataset. Each point's `date` is a day-precise **post-event** VHR image
 date in 2022, and the damage it records occurred during the war (after 2022-02-24) within
-weeks of that image — so the change date is known to well within ~1–2 months. Therefore:
-`change_time` = the assessment/image date, and `time_range` = a **360-day window centered
-on `change_time`** (±180 days). Verified: for all 4000 features `change_time` lies inside
-the window and the window is exactly 360 days.
+weeks of that image — so the change date is known to well within ~1–2 months. Therefore
+`change_time` = the assessment/image date, and instead of one centered window we emit **two
+independent six-month windows** via `io.pre_post_time_ranges(change_time, pre_offset_days=45)`:
+a **`post_time_range`** that starts at `change_time` and runs ~6 months (≤183 days) forward,
+and a **`pre_time_range`** that **ends 45 days before `change_time`** (a guard offset, since
+the imagery follows the destruction by weeks) and spans ~6 months (≤183 days) backward from
+there, placing the pre window before the event. `time_range` = `null`. Pretraining pairs a
+"before" stack with an "after" stack and probes on their difference. Verified: for all 4000
+features the pre and post windows are each ≤183 days.
 
 (Contrast with the sibling `unosat_conflict_damage_assessments`, sourced from HDX, which
 recast to static presence/state with `change_time=null` because those comprehensive
@@ -63,7 +68,8 @@ change label.)
 Sparse point segmentation → one dataset-wide GeoJSON point table
 `datasets/ukraine_war_damage_unosat_derived/points.geojson` (spec §2a). One `Point`
 feature per building-damage location; `properties.label` = class id, plus per-feature
-`change_time` and centered `time_range`. No per-point GeoTIFFs. Balanced to **1000 per
+`change_time` and a `pre_time_range` / `post_time_range` pair (`time_range` null). No
+per-point GeoTIFFs. Balanced to **1000 per
 class** (spec §5 classification cap); all four classes have ≥1000 source points so the
 result is 1000×4 = 4000.
 
@@ -76,10 +82,11 @@ result is 1000×4 = 4000.
   of isolated buildings likely are not resolvable at 10 m — grades are kept as a unified
   scheme so downstream training can select/merge; the limitation is flagged here.
 - **Change-window edge:** `change_time` is the *assessment* date; the physical destruction
-  happened somewhat earlier. For most AOIs the assessment follows the event by weeks, well
-  inside the ±180-day window; for a few late-2022 assessments of areas damaged earlier the
-  event could sit near the window's early edge. Centering on the assessment date follows
-  the task instruction.
+  happened somewhat earlier. The 45-day pre-window guard offset pushes the "before" window
+  back so it precedes the event for most AOIs, where the assessment follows the destruction
+  by weeks; for a few late-2022 assessments of areas damaged much earlier the destruction
+  could still fall inside the pre window. Anchoring on the assessment date follows the task
+  instruction.
 - Balancing caps drop most of the abundant severe/moderate points (8,463/5,614 → 1,000
   each); full label set remains in `raw/` for any re-scope.
 

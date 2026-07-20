@@ -2,17 +2,22 @@
 
 import csv
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import numpy as np
 import numpy.typing as npt
-from rslearn.data_sources import Item
 from rslearn.dataset import Window
 from rslearn.utils.geometry import PixelBounds, Projection
 from rslearn.utils.raster_array import RasterArray
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import BandSet, ModalitySpec, TimeSpan
+from olmoearth_pretrain.data.constants import (
+    SENTINEL1_NODATA,
+    BandSet,
+    Modality,
+    ModalitySpec,
+    TimeSpan,
+)
 from olmoearth_pretrain.dataset.utils import get_modality_fname
 
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
@@ -22,6 +27,13 @@ PIXELS_PER_TILE = 256
 EPSILON = 1e-6
 
 logger = logging.getLogger(__name__)
+
+
+def _is_blank_mosaic(modality: ModalitySpec, image: npt.NDArray) -> bool:
+    """Return whether an image contains only a configured blank/nodata fill."""
+    if np.all(image == 0):
+        return True
+    return modality == Modality.SENTINEL1 and np.all(image == SENTINEL1_NODATA)
 
 
 def get_adjusted_projection_and_bounds(
@@ -77,29 +89,35 @@ def get_adjusted_projection_and_bounds(
     return adjusted_projection, adjusted_bounds
 
 
-def convert_freq(
+def convert_period_mosaic(
     window: Window,
     olmoearth_path: UPath,
     layer_name: str,
     modality: ModalitySpec,
-    missing_okay: bool = False,
-    unprepared_okay: bool = False,
+    time_span: TimeSpan = TimeSpan.YEAR,
+    missing_okay: bool = True,
+    unprepared_okay: bool = True,
+    image_tile_size: int = PIXELS_PER_TILE,
 ) -> None:
-    """Add frequent (two-week) data from this window to the OlmoEarth Pretrain dataset.
+    """Add period-mosaic multitemporal data (one mosaic per period) to the dataset.
+
+    Reads a single MOSAIC layer whose item groups are per-period mosaics (see the
+    open-set dataset config: ``space_mode=MOSAIC`` with ``period_duration``). Each item
+    group becomes one timestep, stacked in the order the groups were materialized
+    (chronological when ``per_period_mosaic_reverse_time_order=false``), using each
+    group's period time range for the metadata. Item groups may contain multiple items
+    (a mosaic), and per-group timestamps come from the layer's ``group_time_ranges``.
 
     Args:
         window: the rslearn window to read data from.
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
-        layer_name: the name of the layer containing frequent data in the rslearn
-            dataset. It should be configured to individually store each item from the
-            two-week period that spatially intersects with the window, i.e.
-            space_mode=intersects, max_matches=9999.
+        layer_name: the name of the single MOSAIC layer to read.
         modality: the modality.
-        missing_okay: whether it is okay if some images that appear in items.json are
-            missing. This should only be enabled if there are unresolvable errors
-            during ingestion.
-        unprepared_okay: whether we should ignore the case where the window hasn't been
-            prepared.
+        time_span: the OlmoEarth Pretrain time span to write under (default YEAR).
+        missing_okay: whether it is okay if some item groups are not completed.
+        unprepared_okay: whether to skip windows where the layer is not prepared.
+        image_tile_size: the window size in pixels at the base grid resolution. Defaults
+            to PIXELS_PER_TILE (256); the open-set dataset uses its 128 px window size.
     """
     window_metadata = get_window_metadata(window)
     layer_datas = window.load_layer_datas()
@@ -110,9 +128,6 @@ def convert_freq(
             + f"resolution as modality ({modality.get_tile_resolution()})"
         )
 
-    # Check if the layer is missing from the window's layer datas.
-    # If unprepared_okay is set, then we return immediately since there is no work to
-    # do for this window.
     if layer_name not in layer_datas:
         if unprepared_okay:
             return
@@ -120,47 +135,37 @@ def convert_freq(
             f"layer {layer_name} is missing from layer datas for window {window.name}"
         )
 
-    # We read the individual images and their timestamps, then write the stacked
-    # images and CSV.
-    # Map from band set to the images for that band set.
+    layer_data = layer_datas[layer_name]
+    group_time_ranges = layer_data.group_time_ranges
+
     images: dict[BandSet, list[npt.NDArray]] = {
         band_set: [] for band_set in modality.band_sets
     }
-    timestamps = []
-    for group_idx, group in enumerate(layer_datas[layer_name].serialized_item_groups):
-        if len(group) != 1:
+    time_ranges: list[tuple[datetime, datetime] | None] = []
+    for group_idx in range(len(layer_data.serialized_item_groups)):
+        if not window.is_layer_completed(layer_name, group_idx):
+            if missing_okay:
+                continue
             raise ValueError(
-                f"expected Landsat groups to have length 1 but got {len(group)}"
+                f"item group {group_idx} of layer {layer_name} is not completed "
+                f"for window {window.name}"
             )
 
-        item = Item.deserialize(group[0])
-        timestamp = item.geometry.time_range[0]
         cur_images: dict[BandSet, npt.NDArray] = {}
-
         for band_set in modality.band_sets:
-            # Compute bounds of this raster adjusted for the resolution.
             adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
                 modality, band_set, window.projection, window.bounds
             )
-
-            is_completed = window.is_layer_completed(layer_name, group_idx)
-            # If missing images are okay, we ignore the uncompleted layer here.
-            # Otherwise we will get an error when we try to read the GeoTIFF.
-            if not is_completed and missing_okay:
-                continue
-
-            raster_dir = window.get_raster_dir(layer_name, band_set.bands, group_idx)
-            logger.debug(
-                "reading raster from %s with orig_bounds=%s adjusted_bounds=%s",
-                raster_dir,
-                window.bounds,
-                adjusted_bounds,
-            )
-            image = GEOTIFF_RASTER_FORMAT.decode_raster(
-                raster_dir, adjusted_projection, adjusted_bounds
+            image = window.data.read_raster(
+                layer_name,
+                band_set.bands,
+                GEOTIFF_RASTER_FORMAT,
+                projection=adjusted_projection,
+                bounds=adjusted_bounds,
+                group_idx=group_idx,
             ).get_chw_array()
             expected_image_size = band_set.get_expected_image_size(
-                window_metadata.get_resolution_factor()
+                window_metadata.get_resolution_factor(), image_tile_size
             )
             if (
                 image.shape[1] != expected_image_size
@@ -169,67 +174,79 @@ def convert_freq(
                 raise ValueError(
                     f"expected image size {expected_image_size} but got {image.shape}"
                 )
-
             cur_images[band_set] = image
 
         if len(cur_images) < len(modality.band_sets):
             continue
 
-        # Sometimes the images are blank because the window actually does not intersect
-        # the raster. This is due to raster geometry information being too coarse in
-        # some data sources. Here we skip those rasters so they don't get included with
-        # this example in the OlmoEarth Pretrain dataset.
-        all_images_blank = all(image.max() == 0 for image in cur_images.values())
-        if all_images_blank:
+        # Skip blank mosaics (window did not actually intersect the raster).
+        if all(_is_blank_mosaic(modality, image) for image in cur_images.values()):
             continue
 
-        timestamps.append(timestamp.isoformat())
+        cur_time_range = (
+            group_time_ranges[group_idx]
+            if group_time_ranges is not None and group_idx < len(group_time_ranges)
+            else None
+        )
+        if cur_time_range is None:
+            logger.warning(
+                "skipping item group %d of layer %s for window %s because it has "
+                "no period time range",
+                group_idx,
+                layer_name,
+                window.name,
+            )
+            continue
+        time_ranges.append(cur_time_range)
         for band_set, image in cur_images.items():
             images[band_set].append(image)
 
-    if len(timestamps) > 0:
-        for band_set, band_set_images in images.items():
-            # Compute bounds of this raster adjusted for the resolution.
-            adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
-                modality, band_set, window.projection, window.bounds
-            )
+    if len(time_ranges) == 0:
+        return
 
-            stacked_image = np.concatenate(band_set_images, axis=0)
-            dst_fname = get_modality_fname(
-                olmoearth_path,
-                modality,
-                TimeSpan.TWO_WEEK,
-                window_metadata,
-                band_set.get_resolution(),
-                "tif",
-            )
-            GEOTIFF_RASTER_FORMAT.encode_raster(
-                path=dst_fname.parent,
-                projection=adjusted_projection,
-                bounds=adjusted_bounds,
-                raster=RasterArray(chw_array=stacked_image),
-                fname=dst_fname.name,
-            )
-
-        metadata_fname = get_modality_temp_meta_fname(
-            olmoearth_path, modality, TimeSpan.TWO_WEEK, window.name
+    for band_set, band_set_images in images.items():
+        adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
+            modality, band_set, window.projection, window.bounds
         )
-        metadata_fname.parent.mkdir(parents=True, exist_ok=True)
-        with metadata_fname.open("w") as f:
-            writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
-            writer.writeheader()
-            for group_idx, timestamp in enumerate(timestamps):
-                writer.writerow(
-                    dict(
-                        crs=window_metadata.crs,
-                        col=window_metadata.col,
-                        row=window_metadata.row,
-                        tile_time=window_metadata.time.isoformat(),
-                        image_idx=group_idx,
-                        start_time=timestamp,
-                        end_time=timestamp,
-                    )
+        stacked_image = np.concatenate(band_set_images, axis=0)
+        dst_fname = get_modality_fname(
+            olmoearth_path,
+            modality,
+            time_span,
+            window_metadata,
+            band_set.get_resolution(),
+            "tif",
+        )
+        GEOTIFF_RASTER_FORMAT.encode_raster(
+            path=dst_fname.parent,
+            projection=adjusted_projection,
+            bounds=adjusted_bounds,
+            raster=RasterArray(chw_array=stacked_image),
+            fname=dst_fname.name,
+        )
+
+    metadata_fname = get_modality_temp_meta_fname(
+        olmoearth_path, modality, time_span, window.name
+    )
+    metadata_fname.parent.mkdir(parents=True, exist_ok=True)
+    with metadata_fname.open("w") as f:
+        writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
+        writer.writeheader()
+        for image_idx, cur_time_range in enumerate(time_ranges):
+            start_time = cur_time_range[0].isoformat() if cur_time_range else ""
+            end_time = cur_time_range[1].isoformat() if cur_time_range else ""
+            writer.writerow(
+                dict(
+                    example_id=window_metadata.example_id or "",
+                    crs=window_metadata.crs,
+                    col=window_metadata.col,
+                    row=window_metadata.row,
+                    tile_time=window_metadata.time.isoformat(),
+                    image_idx=image_idx,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
+            )
 
 
 def convert_monthly(
@@ -279,16 +296,18 @@ def convert_monthly(
                 modality, band_set, window.projection, window.bounds
             )
 
-            raster_dir = window.get_raster_dir(layer_name, band_set.bands)
-
             # Rasters may be missing for some months if there is no suitable data
             # during that month. So if any band is missing we exit and don't use that
             # month at this window.
-            if not raster_dir.exists():
+            if not window.is_layer_completed(layer_name):
                 break
 
-            image = GEOTIFF_RASTER_FORMAT.decode_raster(
-                raster_dir, adjusted_projection, adjusted_bounds
+            image = window.data.read_raster(
+                layer_name,
+                band_set.bands,
+                GEOTIFF_RASTER_FORMAT,
+                projection=adjusted_projection,
+                bounds=adjusted_bounds,
             ).get_chw_array()
             expected_image_size = band_set.get_expected_image_size(
                 modality.tile_resolution_factor
@@ -352,6 +371,7 @@ def convert_monthly(
             for image_idx, (start_time, end_time) in enumerate(time_ranges):
                 writer.writerow(
                     dict(
+                        example_id=window_metadata.example_id or "",
                         crs=window_metadata.crs,
                         col=window_metadata.col,
                         row=window_metadata.row,
