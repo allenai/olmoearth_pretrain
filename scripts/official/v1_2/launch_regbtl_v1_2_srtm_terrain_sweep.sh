@@ -31,18 +31,18 @@ D768_REGSUP_LATLON_W0P1="scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_n
 D128_REGSUP_W0P1="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_il_pdproj_noic_lsa_wideread_regsup_w0p1.py"
 D128_REGSUP_LATLON_W0P1="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_il_pdproj_noic_lsa_wideread_regsup_latlon_w0p1.py"
 
-python "$D768_REGSUP_W0P1" launch "regbtl_v1_2_gdyn_d768_regsup_w0p1_srtmterrain" "$CLUSTER" \
+python "$D768_REGSUP_W0P1" launch "regbtl_v1_2_gdyn_d768_regsup_w0p1_srtmterrain_v2" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D768_REGSUP_LATLON_W0P1" launch "regbtl_v1_2_gdyn_d768_regsup_latlon_w0p1_srtmterrain" "$CLUSTER" \
+python "$D768_REGSUP_LATLON_W0P1" launch "regbtl_v1_2_gdyn_d768_regsup_latlon_w0p1_srtmterrain_v2" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D128_REGSUP_W0P1" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_srtmterrain" "$CLUSTER" \
+python "$D128_REGSUP_W0P1" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_srtmterrain_v2" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$D128_REGSUP_LATLON_W0P1" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_latlon_w0p1_srtmterrain" "$CLUSTER" \
+python "$D128_REGSUP_LATLON_W0P1" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_latlon_w0p1_srtmterrain_v2" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
