@@ -265,7 +265,10 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             input_modalities=[Modality.SENTINEL2_L2A.name],
             eval_mode=EvalMode.KNN,
             primary_metric=EvalMetric.ACCURACY,
-            eval_interval=Duration.steps(4000),
+            # Aligned to PERMANENT_SAVE_INTERVAL (5000): beaker eval jobs only
+            # launch on permanent-checkpoint steps, so eval_interval must be a
+            # multiple of it or the eval is skipped.
+            eval_interval=Duration.steps(5000),
         ),
         "m_so2sat": DownstreamTaskConfig(
             dataset="m-so2sat",
@@ -287,7 +290,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=False,
             norm_method=NormMethod.NORM_NO_CLIP_2_STD,
             probe_lr=0.01,
-            eval_interval=Duration.steps(4000),
+            # Aligned to PERMANENT_SAVE_INTERVAL (5000); see m-eurosat note.
+            eval_interval=Duration.steps(5000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
             eval_mode=EvalMode.LINEAR_PROBE,
             primary_metric=EvalMetric.MICRO_F1,
