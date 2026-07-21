@@ -381,7 +381,7 @@ class DownstreamEvaluator:
             "task_type": self.config.task_type,
             "patch_size": self.patch_size,
             "pooling_type": self.pooling_type,
-            "concat_features": (self.probe_type == "attn_pool"),
+            "concat_features": (self.probe_type == ProbeType.ATTNPOOL),
             "use_pooled_tokens": self.use_pooled_tokens,
             "use_center_token": self.use_center_token,
         }
