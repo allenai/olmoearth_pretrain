@@ -255,7 +255,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     )
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     EVAL_TASKS = {
-        "m-eurosat": DownstreamTaskConfig(
+        "m_eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
             embedding_batch_size=128,
             num_workers=0,
@@ -296,7 +296,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_mode=EvalMode.LINEAR_PROBE,
             primary_metric=EvalMetric.MICRO_F1,
         ),
-        "pastis": DownstreamTaskConfig(
+        "pastis_sentinel2": DownstreamTaskConfig(
             dataset="pastis",
             embedding_batch_size=32,
             probe_batch_size=8,
