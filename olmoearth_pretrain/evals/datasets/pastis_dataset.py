@@ -83,6 +83,7 @@ class PASTISRDataset(Dataset):
         # so when using dataset stats (e.g. for MADOS) consistency is important.
         norm_method: str = "norm_no_clip_2_std",
         input_modalities: list[str] = [],
+        window_size: int | None = None,
     ):
         """Init PASTIS-R dataset.
 
@@ -94,6 +95,11 @@ class PASTISRDataset(Dataset):
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
             input_modalities: List of modalities to use, must be a subset of ["sentinel1", "sentinel2_l2a"]
+            window_size: If set, tile every sample (and its labels) into
+                window_size x window_size windows at load time, so each
+                embedding is computed from a fixed spatial context. Must
+                divide the stored sample size (64 or 128). None keeps the
+                native sample size.
         """
         assert split in ["train", "valid", "test"]
 
@@ -192,6 +198,16 @@ class PASTISRDataset(Dataset):
         else:
             self.indices = list(range(len(self.months)))
 
+        sample_size = int(self.labels.shape[-1])
+        self.window_size = window_size if window_size is not None else sample_size
+        if sample_size % self.window_size != 0:
+            raise ValueError(
+                f"window_size {self.window_size} must divide the stored sample "
+                f"size {sample_size}"
+            )
+        # Each stored sample yields tiles_per_side^2 windows.
+        self._tiles_per_side = sample_size // self.window_size
+
     @staticmethod
     def _get_norm_stats(
         imputed_band_info: dict[str, dict[str, float]],
@@ -211,7 +227,7 @@ class PASTISRDataset(Dataset):
 
     def __len__(self) -> int:
         """Length of the dataset."""
-        return len(self.indices)
+        return len(self.indices) * self._tiles_per_side**2
 
     def _load_s2(self, image_idx: int) -> np.ndarray:
         """Load, normalize, and band-map one S2 sample as (H, W, T, C)."""
@@ -258,9 +274,14 @@ class PASTISRDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
         """Return a single PASTIS data instance."""
-        image_idx = self.indices[idx]
-        labels = self.labels[idx]  # (64, 64)
-        months = self.months[idx]  # (12)
+        base_pos, tile = divmod(idx, self._tiles_per_side**2)
+        tile_row, tile_col = divmod(tile, self._tiles_per_side)
+        rows = slice(tile_row * self.window_size, (tile_row + 1) * self.window_size)
+        cols = slice(tile_col * self.window_size, (tile_col + 1) * self.window_size)
+
+        image_idx = self.indices[base_pos]
+        labels = self.labels[base_pos][rows, cols]  # (window_size, window_size)
+        months = self.months[base_pos]  # (12)
 
         timestamps = []
         for month in months:
@@ -279,18 +300,18 @@ class PASTISRDataset(Dataset):
         if Modality.SENTINEL1.name in self.input_modalities:
             sample_dict[Modality.SENTINEL1.name] = torch.from_numpy(
                 self._load_s1(image_idx)
-            ).float()
+            ).float()[rows, cols]
         if Modality.SENTINEL2_L2A.name in self.input_modalities:
             sample_dict[Modality.SENTINEL2_L2A.name] = torch.from_numpy(
                 self._load_s2(image_idx)
-            ).float()
+            ).float()[rows, cols]
         for modality, embedding_dir in self.embedding_dirs.items():
             # Precomputed embedding products are consumed exactly as stored,
             # with a singleton time dim: (C, H, W) -> (H, W, 1, C).
             embedding = torch.load(embedding_dir / f"{image_idx}.pt")
             sample_dict[modality] = einops.rearrange(
                 embedding, "c h w -> h w 1 c"
-            ).float()
+            ).float()[rows, cols]
 
         masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(
             OlmoEarthSample(**sample_dict)

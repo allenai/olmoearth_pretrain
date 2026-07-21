@@ -183,9 +183,16 @@ python -m olmoearth_pretrain.internal.full_eval_sweep --checkpoint_path=<olmoear
    `evals/models/tessera/tessera_model.py` (forward-pass path, same
    command); if they publish v2 embeddings, add a `TESSERA_V2` modality +
    fetcher (~day of work given the above).
-5. **OlmoEarth annualized-readout sweep options** — optional fixed
-   `window_size` / centered-crop as sweepable task options (deferred;
-   `use_center_token` already exists, rslearn ingest already fixes window
+5. **OlmoEarth annualized-readout sweep options** — `window_size` is now a
+   `DownstreamTaskConfig` field for the pastis datasets: it tiles every
+   sample + labels into window_size x window_size windows at load time
+   (e.g. 16 -> sixteen 16x16 windows per 64x64 sample), and the probe
+   geometry follows automatically. Set per task via CLI override, e.g.
+   `--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.window_size=16`
+   (combine with `--patch_size 1` for the ws16/ps1 readout). Note it changes
+   the task definition, so compare models at the SAME window_size. Still
+   deferred: window_size for other datasets and centered-crop
+   (`use_center_token` already exists; rslearn ingest already fixes window
    sizes per dataset).
 6. **Docs** — extend `docs/Evaluation.md` / `docs/Adding-Eval-Datasets.md`:
    a new eval task is embedding-eligible iff its samples have real

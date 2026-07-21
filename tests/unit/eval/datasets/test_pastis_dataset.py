@@ -86,6 +86,51 @@ def test_pastis_dataset_gse_embeddings(
     assert label.shape == (64, 64)
 
 
+def test_pastis_dataset_window_size_tiles_samples(
+    mock_pastis_data_with_gse: tuple[Path, torch.Tensor],
+) -> None:
+    """window_size tiles imagery, embeddings, and labels consistently."""
+    path_to_splits, gse = mock_pastis_data_with_gse
+    full = PASTISRDataset(
+        path_to_splits=path_to_splits,
+        split="train",
+        input_modalities=[Modality.SENTINEL2_L2A.name, Modality.GSE.name],
+    )
+    tiled = PASTISRDataset(
+        path_to_splits=path_to_splits,
+        split="train",
+        input_modalities=[Modality.SENTINEL2_L2A.name, Modality.GSE.name],
+        window_size=32,
+    )
+    assert len(full) == 1
+    assert len(tiled) == 4
+
+    full_sample, full_labels = full[0]
+    # Tile 3 is (row 1, col 1) -> the bottom-right 32x32 window.
+    sample, labels = tiled[3]
+    assert sample.sentinel2_l2a is not None and sample.gse is not None
+    assert full_sample.sentinel2_l2a is not None and full_sample.gse is not None
+    assert sample.sentinel2_l2a.shape[:2] == (32, 32)
+    assert sample.gse.shape == (32, 32, 1, len(Modality.GSE.band_order))
+    assert labels.shape == (32, 32)
+    torch.testing.assert_close(
+        sample.sentinel2_l2a, full_sample.sentinel2_l2a[32:, 32:]
+    )
+    torch.testing.assert_close(sample.gse, full_sample.gse[32:, 32:])
+    torch.testing.assert_close(labels, full_labels[32:, 32:])
+
+
+def test_pastis_dataset_window_size_must_divide(mock_pastis_data: Path) -> None:
+    """A window_size that doesn't divide the sample size raises."""
+    with pytest.raises(ValueError, match="must divide"):
+        PASTISRDataset(
+            path_to_splits=mock_pastis_data,
+            split="train",
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            window_size=48,
+        )
+
+
 def test_pastis_dataset_missing_embeddings_raise(mock_pastis_data: Path) -> None:
     """Requesting embeddings from splits without them gives a clear error."""
     with pytest.raises(FileNotFoundError, match="--embedding_products"):
