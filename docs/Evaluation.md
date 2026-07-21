@@ -54,6 +54,14 @@ The sweep scripts set `TRAIN_SCRIPT_PATH` automatically and select `torchrun` fo
 
 - **OlmoEarth models:** Nano, Tiny, Base, and Large size.
 - **Others:** Supported baseline models are defined in `olmoearth_pretrain/evals/models/__init__.py`, which includes Galileo, Satlas, Terramind, Prithvi v2, Panopticon, CROMA, AnySat etc. Multi-size variants (if available) are also supported.
+- **Precomputed embedding products:** `--model=aef` (AlphaEarth / Google
+  Satellite Embeddings) and `--model=tessera_precomputed` evaluate published
+  embedding products instead of running a forward pass — the embeddings are
+  read off the sample as data modalities (`gse`, `tessera`) baked into eval
+  dataset stores, then flow through the exact same probe/KNN code as every
+  other model. Tasks run only where the modality has been baked in; see
+  `docs/PrecomputedEmbeddingEvals.md` for the design, the embedding
+  materializer, and how to onboard datasets.
 
 ---
 
