@@ -134,10 +134,27 @@ python -m olmoearth_pretrain.internal.full_eval_sweep --checkpoint_path=<olmoear
 
 ### Remaining work
 
-1. **Reprocess PASTIS splits on cluster** — run `pastis_processor.py` with
-   `--embedding_products=aef,tessera` (needs raw PASTIS + network; AEF ≈
-   2.5 GB, Tessera ≈ 5 GB for all 2,433 patches) into the existing
-   `PASTIS_DIR`/`PASTIS_DIR_ORIG` locations.
+1. **Add embeddings to the PASTIS splits** — preferred: the additive
+   embeddings-only mode, which needs ONLY `metadata.geojson` (no 29 GB raw
+   download), verifies per-sample month sequences against the existing
+   `months.pt` before writing (aborts on any count/order drift), and writes
+   only the new `<modality>_images` dirs — existing imagery/labels stay
+   byte-identical so all prior PASTIS numbers remain comparable:
+
+   ```bash
+   # 64x64 splits (pastis)
+   python -m olmoearth_pretrain.evals.datasets.pastis_processor \
+     --data_dir <dir with metadata.geojson> --output_dir $PASTIS_DIR \
+     --embeddings_only --embedding_products aef,tessera
+
+   # 128x128 splits (pastis128): add --orig_size, point at $PASTIS_DIR_ORIG
+   ```
+
+   Resumable (re-runs skip written patches; `--overwrite_embeddings` to
+   redo). AEF ≈ 2.5 GB, Tessera ≈ 5 GB per split set. The full-reprocess
+   path (`--embedding_products` without `--embeddings_only`) needs the raw
+   PASTIS-R download and rewrites everything — only use it into a fresh
+   directory.
 2. **AEF supplemental datasets** — already ingested in
    `evals/studio_ingest/registry.json` (africa_crop_mask, canada_crops_*,
    descals, ethiopia_crops, …; sourced from rslearn_projects'
