@@ -17,8 +17,10 @@ from __future__ import annotations
 import contextlib
 import gc
 import logging
+import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -126,19 +128,18 @@ def _collate_fn(samples: list) -> Any:
     return _collate_samples(samples)
 
 
-def _extract_embeddings(
+def _materialize_batches(
     dataset: Era5TaskDataset,
-    encoder: torch.nn.Module,
-    device: torch.device,
     batch_size: int,
     num_workers: int = 4,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Extract frozen mean-pooled embeddings from the encoder for all samples."""
-    if len(dataset) == 0:
-        raise ValueError(
-            "Cannot extract embeddings from an empty dataset "
-            f"(task={dataset.task_spec.name!r}, split={dataset.task_spec.split!r})."
-        )
+) -> list[Any]:
+    """Load every sample of *dataset* into a list of collated CPU batches.
+
+    Materializing lets callers (e.g. the checkpoint sweep) pay the dataset
+    read cost once and re-run the encoder over the same batches many times.
+    The full eval datasets are small (thousands of [T, C] daily sequences),
+    so holding them in RAM is cheap.
+    """
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -148,16 +149,22 @@ def _extract_embeddings(
         pin_memory=True,
         drop_last=False,
     )
+    return [batch for batch in loader if batch is not None]
 
+
+def _extract_embeddings(
+    batches: list[Any],
+    encoder: torch.nn.Module,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Extract frozen mean-pooled embeddings from the encoder for all batches."""
     all_embeddings: list[torch.Tensor] = []
     all_labels: list[torch.Tensor] = []
 
     was_training = encoder.training
     encoder.eval()
     with torch.no_grad():
-        for batch in loader:
-            if batch is None:
-                continue
+        for batch in batches:
             era5 = batch.era5.to(device)
             timestamps = batch.timestamps.to(device)
             valid_mask = getattr(batch, "valid_mask", None)
@@ -226,23 +233,97 @@ class Era5DownstreamEvaluatorCallback(Callback):
         eval_on_startup: bool = False,
         run_on_test: bool = False,
         num_workers: int = 4,
+        checkpoint_sweep_dir: str | None = None,
+        checkpoint_sweep_interval: int = 0,
     ) -> None:
-        """Initialize the ERA5 downstream evaluator callback."""
+        """Initialize the ERA5 downstream evaluator callback.
+
+        Args:
+            tasks: Linear-probe eval task configs (from the direct registry).
+            max_sequence_length: Maximum daily-timestep sequence length fed to
+                the eval datasets/encoder.
+            eval_on_startup: Run a full evaluation in ``pre_train`` (ignored
+                when ``checkpoint_sweep_dir`` is set).
+            run_on_test: Also evaluate each task's test split.
+            num_workers: DataLoader workers for eval batch materialization.
+            checkpoint_sweep_dir: When set (eval-only runs), instead of a
+                single startup eval, iterate over the ``step*`` checkpoints
+                saved under this run folder: load each checkpoint's weights
+                and run all probe evals, logging metrics at that checkpoint's
+                step. This reproduces the eval-vs-step curves of a training
+                run against frozen, saved weights.
+            checkpoint_sweep_interval: Only evaluate checkpoints whose step is
+                a multiple of this value (e.g. 5000 -> step0, step5000, ...).
+                The last (highest-step) checkpoint is always included. 0 means
+                every saved checkpoint.
+        """
         super().__init__()
         self.tasks = tasks
         self.max_sequence_length = max_sequence_length
         self.eval_on_startup = eval_on_startup
         self.run_on_test = run_on_test
         self.num_workers = num_workers
+        self.checkpoint_sweep_dir = checkpoint_sweep_dir
+        self.checkpoint_sweep_interval = checkpoint_sweep_interval
         # Step at which we last evaluated, so the end-of-training eval doesn't
         # redundantly re-run when training happens to stop on an interval.
         self._last_eval_step = -1
+        # Per-task cache of materialized eval batches, so a checkpoint sweep
+        # pays the dataset read cost once and reuses the raw batches for every
+        # checkpoint (embeddings still get recomputed per checkpoint).
+        self._batch_cache: dict[str, tuple[list[Any], list[Any], list[Any] | None]] = {}
 
     def pre_train(self) -> None:
-        """Run an evaluation on startup if configured."""
+        """Run the checkpoint sweep or a startup evaluation if configured."""
+        if self.checkpoint_sweep_dir is not None:
+            self._run_checkpoint_sweep()
+            return
         if self.eval_on_startup:
             logger.info("Running ERA5 linear-probe eval on startup.")
             self._run_all_evals()
+
+    def _discover_checkpoints(self) -> list[tuple[int, Path]]:
+        """List (step, path) for saved checkpoints, filtered by the sweep interval."""
+        assert self.checkpoint_sweep_dir is not None
+        root = Path(self.checkpoint_sweep_dir)
+        checkpoints: list[tuple[int, Path]] = []
+        for child in root.iterdir():
+            match = re.fullmatch(r"step(\d+)", child.name)
+            if match and child.is_dir():
+                checkpoints.append((int(match.group(1)), child))
+        checkpoints.sort()
+        if not checkpoints:
+            raise ValueError(
+                f"No step* checkpoints found under {self.checkpoint_sweep_dir!r}"
+            )
+        if self.checkpoint_sweep_interval > 0:
+            last_step = checkpoints[-1][0]
+            checkpoints = [
+                (step, path)
+                for step, path in checkpoints
+                if step % self.checkpoint_sweep_interval == 0 or step == last_step
+            ]
+        return checkpoints
+
+    def _run_checkpoint_sweep(self) -> None:
+        """Evaluate every selected checkpoint, logging at its original step."""
+        checkpoints = self._discover_checkpoints()
+        logger.info(
+            "ERA5 checkpoint sweep over %d checkpoints (interval=%d): %s",
+            len(checkpoints),
+            self.checkpoint_sweep_interval,
+            [step for step, _ in checkpoints],
+        )
+        for step, path in checkpoints:
+            logger.info("Checkpoint sweep: loading step %d from %s", step, path)
+            self.trainer.checkpointer.load(
+                str(path),
+                self.trainer.train_module,
+                load_trainer_state=False,
+                load_optim_state=False,
+            )
+            for task in self.tasks:
+                self._run_eval(task, log_step=step)
 
     def post_step(self) -> None:
         """Run evaluations for tasks whose interval has elapsed."""
@@ -261,6 +342,10 @@ class Era5DownstreamEvaluatorCallback(Callback):
         multiple (e.g. short runs where total steps < ``eval_interval``) would
         finish without ever logging a single eval result.
         """
+        if self.checkpoint_sweep_dir is not None:
+            # The sweep already evaluated every selected checkpoint; the
+            # trainer's own step (0) is meaningless here.
+            return
         if self.step == self._last_eval_step:
             return
         logger.info("Running final ERA5 linear-probe eval at step %d.", self.step)
@@ -270,12 +355,12 @@ class Era5DownstreamEvaluatorCallback(Callback):
         for task in self.tasks:
             self._run_eval(task)
 
-    def _run_eval(self, task: Era5LinearProbeTaskConfig) -> None:
-        logger.info("ERA5 linear-probe eval: %s (step %d)", task.name, self.step)
-        start_time = time.monotonic()
-
-        device = self.trainer.device
-        encoder = _get_encoder(self.trainer)
+    def _get_task_batches(
+        self, task: Era5LinearProbeTaskConfig
+    ) -> tuple[list[Any], list[Any], list[Any] | None] | None:
+        """Materialize (and cache) the raw eval batches for *task*."""
+        if task.name in self._batch_cache:
+            return self._batch_cache[task.name]
 
         try:
             train_ds = _build_eval_dataset(task, "train", self.max_sequence_length)
@@ -284,7 +369,7 @@ class Era5DownstreamEvaluatorCallback(Callback):
             logger.exception(
                 "Failed to build eval datasets for %s, skipping.", task.name
             )
-            return
+            return None
 
         if len(train_ds) == 0 or len(val_ds) == 0:
             logger.warning(
@@ -294,31 +379,57 @@ class Era5DownstreamEvaluatorCallback(Callback):
                 len(train_ds),
                 len(val_ds),
             )
-            return
+            return None
 
-        train_embeddings, train_labels = _extract_embeddings(
-            train_ds, encoder, device, task.embedding_batch_size, self.num_workers
+        train_batches = _materialize_batches(
+            train_ds, task.embedding_batch_size, self.num_workers
         )
-        val_embeddings, val_labels = _extract_embeddings(
-            val_ds, encoder, device, task.embedding_batch_size, self.num_workers
+        val_batches = _materialize_batches(
+            val_ds, task.embedding_batch_size, self.num_workers
         )
 
-        test_embeddings: torch.Tensor | None = None
-        test_labels: torch.Tensor | None = None
+        test_batches: list[Any] | None = None
         if self.run_on_test:
             try:
                 test_ds = _build_eval_dataset(task, "test", self.max_sequence_length)
-                test_embeddings, test_labels = _extract_embeddings(
-                    test_ds,
-                    encoder,
-                    device,
-                    task.embedding_batch_size,
-                    self.num_workers,
+                test_batches = _materialize_batches(
+                    test_ds, task.embedding_batch_size, self.num_workers
                 )
             except Exception:
                 logger.warning(
                     "Test split unavailable for %s, skipping test eval.", task.name
                 )
+
+        batches = (train_batches, val_batches, test_batches)
+        self._batch_cache[task.name] = batches
+        return batches
+
+    def _run_eval(
+        self, task: Era5LinearProbeTaskConfig, log_step: int | None = None
+    ) -> None:
+        step = self.step if log_step is None else log_step
+        logger.info("ERA5 linear-probe eval: %s (step %d)", task.name, step)
+        start_time = time.monotonic()
+
+        device = self.trainer.device
+        encoder = _get_encoder(self.trainer)
+
+        batches = self._get_task_batches(task)
+        if batches is None:
+            return
+        train_batches, val_batches, test_batches = batches
+
+        train_embeddings, train_labels = _extract_embeddings(
+            train_batches, encoder, device
+        )
+        val_embeddings, val_labels = _extract_embeddings(val_batches, encoder, device)
+
+        test_embeddings: torch.Tensor | None = None
+        test_labels: torch.Tensor | None = None
+        if test_batches is not None:
+            test_embeddings, test_labels = _extract_embeddings(
+                test_batches, encoder, device
+            )
 
         task_type = TaskType(task.task_type)
 
@@ -387,12 +498,18 @@ class Era5DownstreamEvaluatorCallback(Callback):
             )
 
         eval_time = time.monotonic() - start_time
-        step = self.step
-        self._last_eval_step = step
-        self.trainer.record_metric(f"eval_time/{task.name}", eval_time)
+        self._last_eval_step = self.step
+        # During a checkpoint sweep the trainer's own step is frozen at 0, so
+        # recording into the trainer metric store would flush everything at
+        # step 0 (out of order vs. our explicit per-checkpoint wandb steps).
+        # Log to the trainer store only in the normal in-training path.
+        record_to_trainer = log_step is None
+        if record_to_trainer:
+            self.trainer.record_metric(f"eval_time/{task.name}", eval_time)
 
         if result.val_result is not None:
-            _record_eval_result(self.trainer, "eval", task.name, result.val_result)
+            if record_to_trainer:
+                _record_eval_result(self.trainer, "eval", task.name, result.val_result)
             _log_to_wandb(self.trainer, "eval", task.name, result.val_result, step)
             logger.info(
                 "ERA5 probe %s val: %.4f (%.1fs)",
@@ -402,9 +519,10 @@ class Era5DownstreamEvaluatorCallback(Callback):
             )
 
         if self.run_on_test and result.test_result is not None:
-            _record_eval_result(
-                self.trainer, "eval/test", task.name, result.test_result
-            )
+            if record_to_trainer:
+                _record_eval_result(
+                    self.trainer, "eval/test", task.name, result.test_result
+                )
             _log_to_wandb(
                 self.trainer, "eval/test", task.name, result.test_result, step
             )
@@ -435,6 +553,8 @@ class Era5DownstreamEvaluatorCallbackConfig(CallbackConfig):
     run_on_test: bool = False
     num_workers: int = 4
     max_sequence_length: int = ERA5_INPUT_SEQUENCE_LENGTH
+    checkpoint_sweep_dir: str | None = None
+    checkpoint_sweep_interval: int = 0
 
     def build(self, trainer: Trainer) -> Callback | None:
         """Build the callback, or return None if disabled."""
@@ -447,4 +567,6 @@ class Era5DownstreamEvaluatorCallbackConfig(CallbackConfig):
             eval_on_startup=self.eval_on_startup,
             run_on_test=self.run_on_test,
             num_workers=self.num_workers,
+            checkpoint_sweep_dir=self.checkpoint_sweep_dir,
+            checkpoint_sweep_interval=self.checkpoint_sweep_interval,
         )

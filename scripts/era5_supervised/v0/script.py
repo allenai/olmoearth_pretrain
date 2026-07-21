@@ -274,6 +274,12 @@ class Era5SupervisedCommonComponents(CommonComponents):
     eval_on_startup: bool = False
     eval_tasks: list[str] = field(default_factory=list)
     eval_max_samples: int | None = None
+    # Checkpoint-sweep mode (eval-only runs): when set, iterate over the
+    # ``step*`` checkpoints saved under this run folder
+    eval_checkpoint_sweep_dir: str | None = None
+    # Only evaluate checkpoints whose step is a multiple of this (e.g. 5000
+    # -last checkpoint is always included. 0 = every saved checkpoint.
+    eval_checkpoint_sweep_interval: int = 5000
 
 
 def build_common_components(
@@ -870,6 +876,8 @@ def build_trainer_config(common: Era5SupervisedCommonComponents) -> TrainerConfi
                 run_on_test=common.eval_run_on_test,
                 num_workers=common.num_workers,
                 max_sequence_length=ERA5_INPUT_SEQUENCE_LENGTH,
+                checkpoint_sweep_dir=common.eval_checkpoint_sweep_dir,
+                checkpoint_sweep_interval=common.eval_checkpoint_sweep_interval,
             ),
         )
 
