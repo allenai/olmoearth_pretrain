@@ -62,7 +62,15 @@ _LABEL_FRACTION_TO_PARTITION = {
 class PASTISRDataset(Dataset):
     """PASTIS-R dataset class."""
 
-    allowed_modalities = [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name]
+    allowed_modalities = [
+        Modality.SENTINEL1.name,
+        Modality.SENTINEL2_L2A.name,
+        # Precomputed embedding products; require the splits to have been
+        # processed with pastis_processor.py --embedding_products.
+        Modality.GSE.name,
+        Modality.TESSERA.name,
+    ]
+    embedding_modalities = [Modality.GSE.name, Modality.TESSERA.name]
 
     def __init__(
         self,
@@ -150,6 +158,18 @@ class PASTISRDataset(Dataset):
 
         self.s2_images_dir = path_to_splits / f"pastis_r_{split}" / "s2_images"
         self.s1_images_dir = path_to_splits / f"pastis_r_{split}" / "s1_images"
+        self.embedding_dirs: dict[str, Path] = {}
+        for modality in self.embedding_modalities:
+            if modality not in input_modalities:
+                continue
+            embedding_dir = path_to_splits / f"pastis_r_{split}" / f"{modality}_images"
+            if not embedding_dir.exists():
+                raise FileNotFoundError(
+                    f"PASTIS splits at {path_to_splits} have no '{modality}' "
+                    f"embeddings. Re-run pastis_processor.py with "
+                    f"--embedding_products to bake them in."
+                )
+            self.embedding_dirs[modality] = embedding_dir
         self.labels = torch.load(path_to_splits / f"pastis_r_{split}" / "targets.pt")
         self.months = torch.load(path_to_splits / f"pastis_r_{split}" / "months.pt")
         if label_fraction not in _LABEL_FRACTION_TO_PARTITION:
@@ -193,23 +213,13 @@ class PASTISRDataset(Dataset):
         """Length of the dataset."""
         return len(self.indices)
 
-    def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
-        """Return a single PASTIS data instance."""
-        image_idx = self.indices[idx]
+    def _load_s2(self, image_idx: int) -> np.ndarray:
+        """Load, normalize, and band-map one S2 sample as (H, W, T, C)."""
         s2_image: np.ndarray = torch.load(
             self.s2_images_dir / f"{image_idx}.pt"
         ).numpy()
         s2_image = einops.rearrange(s2_image, "t c h w -> h w t c")  # (64, 64, 12, 13)
-
-        s1_image: np.ndarray = torch.load(
-            self.s1_images_dir / f"{image_idx}.pt"
-        ).numpy()
-        s1_image = einops.rearrange(s1_image, "t c h w -> h w t c")  # (64, 64, 12, 2)
-
-        labels = self.labels[idx]  # (64, 64)
-        months = self.months[idx]  # (12)
-
-        # If using norm stats from pretrained we should normalize before we rearrange
+        # If using norm stats from pretrained we should normalize after band-mapping
         if not self.norm_stats_from_pretrained:
             s2_image = normalize_bands(
                 s2_image,
@@ -219,6 +229,20 @@ class PASTISRDataset(Dataset):
                 self.s2_maxs,
                 self.norm_method,
             )
+        s2_image = s2_image[:, :, :, EVAL_TO_OLMOEARTH_S2_BANDS]
+        if self.norm_stats_from_pretrained:
+            s2_image = self.normalizer_computed.normalize(
+                Modality.SENTINEL2_L2A, s2_image
+            )
+        return s2_image
+
+    def _load_s1(self, image_idx: int) -> np.ndarray:
+        """Load, normalize, and band-map one S1 sample as (H, W, T, C)."""
+        s1_image: np.ndarray = torch.load(
+            self.s1_images_dir / f"{image_idx}.pt"
+        ).numpy()
+        s1_image = einops.rearrange(s1_image, "t c h w -> h w t c")  # (64, 64, 12, 2)
+        if not self.norm_stats_from_pretrained:
             s1_image = normalize_bands(
                 s1_image,
                 self.s1_means,
@@ -227,14 +251,16 @@ class PASTISRDataset(Dataset):
                 self.s1_maxs,
                 self.norm_method,
             )
-
-        s2_image = s2_image[:, :, :, EVAL_TO_OLMOEARTH_S2_BANDS]
         s1_image = s1_image[:, :, :, EVAL_TO_OLMOEARTH_S1_BANDS]
         if self.norm_stats_from_pretrained:
-            s2_image = self.normalizer_computed.normalize(
-                Modality.SENTINEL2_L2A, s2_image
-            )
             s1_image = self.normalizer_computed.normalize(Modality.SENTINEL1, s1_image)
+        return s1_image
+
+    def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
+        """Return a single PASTIS data instance."""
+        image_idx = self.indices[idx]
+        labels = self.labels[idx]  # (64, 64)
+        months = self.months[idx]  # (12)
 
         timestamps = []
         for month in months:
@@ -246,18 +272,25 @@ class PASTISRDataset(Dataset):
             )
         timestamps = torch.stack(timestamps)
 
-        # Build sample dict based on requested modalities
+        # Build sample dict based on requested modalities; only requested
+        # modalities are loaded from disk.
         sample_dict = {"timestamps": timestamps}
 
         if Modality.SENTINEL1.name in self.input_modalities:
-            sample_dict[Modality.SENTINEL1.name] = torch.from_numpy(s1_image).float()
+            sample_dict[Modality.SENTINEL1.name] = torch.from_numpy(
+                self._load_s1(image_idx)
+            ).float()
         if Modality.SENTINEL2_L2A.name in self.input_modalities:
             sample_dict[Modality.SENTINEL2_L2A.name] = torch.from_numpy(
-                s2_image
+                self._load_s2(image_idx)
             ).float()
-
-        if not sample_dict:
-            raise ValueError(f"No valid modalities found in: {self.input_modalities}")
+        for modality, embedding_dir in self.embedding_dirs.items():
+            # Precomputed embedding products are consumed exactly as stored,
+            # with a singleton time dim: (C, H, W) -> (H, W, 1, C).
+            embedding = torch.load(embedding_dir / f"{image_idx}.pt")
+            sample_dict[modality] = einops.rearrange(
+                embedding, "c h w -> h w 1 c"
+            ).float()
 
         masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(
             OlmoEarthSample(**sample_dict)

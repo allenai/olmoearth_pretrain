@@ -1226,6 +1226,48 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     return commands_to_run
 
 
+# Precomputed embedding-product baselines and the (modality, materializer
+# product name) they read.
+PRECOMPUTED_MODEL_TO_MODALITY = {
+    BaselineModelName.AEF: (Modality.GSE.name, "aef"),
+    BaselineModelName.TESSERA_PRECOMPUTED: (Modality.TESSERA.name, "tessera"),
+}
+
+
+def check_precomputed_embedding_tasks(
+    model: BaselineModelName | str | None,
+) -> None:
+    """Fail fast if a precomputed-embedding baseline would run zero tasks.
+
+    A task is capable when its dataset lists the product's modality in
+    supported_modalities, which in turn requires the embedding data to have
+    been baked in (embedding materializer for rslearn datasets,
+    pastis_processor --embedding_products for PASTIS, pretrain h5 stores for
+    GSE). Without this check the sweep would launch jobs that skip every task.
+    """
+    if not isinstance(model, BaselineModelName):
+        return
+    mapping = PRECOMPUTED_MODEL_TO_MODALITY.get(model)
+    if mapping is None:
+        return
+    modality, product = mapping
+    capable = _modality_capable_tasks(modality)
+    if not capable:
+        raise SystemExit(
+            f"No eval task's dataset supports the precomputed '{modality}' "
+            f"modality, so --model={model} would run zero tasks. Bake the "
+            f"embeddings into the eval datasets first, e.g.\n"
+            f"  python -m olmoearth_pretrain.evals.embedding_materializer "
+            f"--dataset_path <dataset> --products {product}\n"
+            f"and list '{modality}' in the dataset's supported_modalities "
+            f"(olmoearth_pretrain/evals/datasets/configs.py)."
+        )
+    logger.info(
+        f"--model={model}: {len(capable)} tasks support '{modality}': "
+        f"{', '.join(capable)}"
+    )
+
+
 def _parse_model_arg(value: str) -> BaselineModelName | str:
     """Parse the model argument, returning either a BaselineModelName or 'all'."""
     if value == "all":
@@ -1378,6 +1420,8 @@ def main() -> None:
     )
 
     args, extra_cli = parser.parse_known_args()
+
+    check_precomputed_embedding_tasks(args.model)
 
     commands_to_run = build_commands(args, extra_cli)
 

@@ -112,15 +112,32 @@ python -m olmoearth_pretrain.internal.full_eval_sweep --checkpoint_path=<olmoear
   dataset's on-WEKA `config.json`/`model.yaml` needs a `gse`/`tessera`
   layer entry — dataset-side change at onboarding time (remaining work #2).
 
+### Done (code-complete; data materialization pending on cluster)
+
+- **PASTIS join** — `pastis_processor.py --embedding_products=aef,tessera
+  [--embedding_year 2019]` fetches each product on the patch's native 10 m
+  UTM grid (footprint from `metadata.geojson`, snapped via
+  `patch_grid_from_geometry`; UTM zone per patch centroid — PASTIS spans
+  zones 30/31/32) and stores `gse_images/` / `tessera_images/` per split
+  alongside `s2_images/`, quadrant-split identically. Processing is
+  deterministic, so re-running into the existing output dir keeps sample
+  indices aligned with prior splits. `pastis_dataset.py` loads them as
+  `(H, W, 1, C)` un-normalized, only loads requested modalities from disk,
+  and raises a clear error pointing at `--embedding_products` when splits
+  lack them. `pastis`/`pastis128` configs list gse+tessera, so the AEF
+  sweep now includes the PASTIS tasks (they fail with that clear error
+  until the WEKA splits are reprocessed — expected).
+  Default year 2019 = PASTIS label year (French LPIS 2019).
+- **Launch-time guard** — `full_eval_sweep.py` exits at launch with the
+  exact materializer command when a precomputed-embedding baseline has
+  zero capable tasks, and logs the capable task list otherwise.
+
 ### Remaining work
 
-1. **PASTIS join** — extend `evals/datasets/pastis_processor.py` +
-   `pastis_dataset.py` to store/load `gse_images` / `tessera_images`
-   alongside `s2_images`/`s1_images`, fetched by patch geometry from
-   PASTIS `metadata.geojson`, **year 2019** (labels are the 2019 French
-   LPIS crop season; AEF ≈ 2.5 GB, Tessera ≈ 5 GB for all 2,433 patches).
-   Then add `gse`/`tessera` to the PASTIS dataset config's
-   `supported_modalities`.
+1. **Reprocess PASTIS splits on cluster** — run `pastis_processor.py` with
+   `--embedding_products=aef,tessera` (needs raw PASTIS + network; AEF ≈
+   2.5 GB, Tessera ≈ 5 GB for all 2,433 patches) into the existing
+   `PASTIS_DIR`/`PASTIS_DIR_ORIG` locations.
 2. **AEF supplemental datasets** — already ingested in
    `evals/studio_ingest/registry.json` (africa_crop_mask, canada_crops_*,
    descals, ethiopia_crops, …; sourced from rslearn_projects'
@@ -130,29 +147,24 @@ python -m olmoearth_pretrain.internal.full_eval_sweep --checkpoint_path=<olmoear
    `primary_metric=BALANCED_ACCURACY` (+ consider bootstrap CIs for parity
    with Google's published numbers; `n_bootstrap` already exists on the
    callback).
-3. **Launch-time guard** — in `full_eval_sweep.py` main: if
-   `--model=aef|tessera_precomputed` and `_modality_capable_tasks(...)` is
-   empty (or a requested task's store lacks the layer), fail fast printing
-   the exact materializer command. (Data-level errors currently surface as
-   an informative `ValueError` from `PrecomputedEmbedding.forward`.)
-4. **Validation on cluster** — reproduce the GSE probe script's numbers
+3. **Validation on cluster** — reproduce the GSE probe script's numbers
    through `--model=aef` on the pretrain_subset tasks (same splits/probe →
    numbers should match `scripts/tools/20260528_gse_linear_probe.py`);
    sanity-check probe `height_width` semantics per task (the script
    overrode `height_width` to the native GSE grid — watch for the same
    issue in the callback path).
-5. **Tessera data + v2** — install/pin `geotessera`, materialize Tessera
+4. **Tessera data + v2** — install/pin `geotessera`, materialize Tessera
    v1.1 for the target datasets (coverage: global 2024, US+EU 2017–2025 —
    gaps must be logged, not zero-filled). Tessera v2: neither weights nor
    embeddings published yet (arXiv:2607.03949); when weights drop, update
    `evals/models/tessera/tessera_model.py` (forward-pass path, same
    command); if they publish v2 embeddings, add a `TESSERA_V2` modality +
    fetcher (~day of work given the above).
-6. **OlmoEarth annualized-readout sweep options** — optional fixed
+5. **OlmoEarth annualized-readout sweep options** — optional fixed
    `window_size` / centered-crop as sweepable task options (deferred;
    `use_center_token` already exists, rslearn ingest already fixes window
    sizes per dataset).
-7. **Docs** — extend `docs/Evaluation.md` / `docs/Adding-Eval-Datasets.md`:
+6. **Docs** — extend `docs/Evaluation.md` / `docs/Adding-Eval-Datasets.md`:
    a new eval task is embedding-eligible iff its samples have real
    geometry + a resolvable year; onboarding = ingest as usual → run
    materializer → add modality to its config's `supported_modalities` →

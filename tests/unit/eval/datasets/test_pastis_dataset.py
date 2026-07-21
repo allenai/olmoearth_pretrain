@@ -54,6 +54,48 @@ def mock_pastis_data(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.fixture
+def mock_pastis_data_with_gse(mock_pastis_data: Path) -> tuple[Path, torch.Tensor]:
+    """Add a mock precomputed GSE embedding to the mock PASTIS data."""
+    gse = torch.randn(len(Modality.GSE.band_order), 64, 64)
+    gse_path = mock_pastis_data / "pastis_r_train" / "gse_images" / "0.pt"
+    os.makedirs(gse_path.parent, exist_ok=True)
+    torch.save(gse, gse_path)
+    return mock_pastis_data, gse
+
+
+def test_pastis_dataset_gse_embeddings(
+    mock_pastis_data_with_gse: tuple[Path, torch.Tensor],
+) -> None:
+    """Precomputed embeddings load as (H, W, 1, C) without normalization."""
+    path_to_splits, gse = mock_pastis_data_with_gse
+    dataset = PASTISRDataset(
+        path_to_splits=path_to_splits,
+        split="train",
+        input_modalities=[Modality.GSE.name],
+    )
+    sample, label = dataset[0]
+
+    assert sample.gse is not None
+    assert sample.gse.shape == (64, 64, 1, len(Modality.GSE.band_order))
+    # Consumed exactly as stored: no normalization applied.
+    torch.testing.assert_close(sample.gse[:, :, 0, :], gse.permute(1, 2, 0))
+    # Imagery is not loaded when not requested.
+    assert sample.sentinel2_l2a is None
+    assert sample.sentinel1 is None
+    assert label.shape == (64, 64)
+
+
+def test_pastis_dataset_missing_embeddings_raise(mock_pastis_data: Path) -> None:
+    """Requesting embeddings from splits without them gives a clear error."""
+    with pytest.raises(FileNotFoundError, match="--embedding_products"):
+        PASTISRDataset(
+            path_to_splits=mock_pastis_data,
+            split="train",
+            input_modalities=[Modality.TESSERA.name],
+        )
+
+
 def test_pastis_dataset_initialization(mock_pastis_data: Path) -> None:
     """Test basic initialization and functionality of PASTISRDataset."""
     # Test multimodal initialization
