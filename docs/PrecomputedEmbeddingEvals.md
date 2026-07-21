@@ -29,7 +29,13 @@ python -m olmoearth_pretrain.internal.full_eval_sweep --checkpoint_path=<olmoear
    choices (patch size, window size, pooling, center-token, modality set)
    remain sweepable config so we can experiment with the best way to
    produce embeddings. Selection happens on val only; results tables must
-   name the readout config used.
+   name the readout config used. For product parity with AEF/Tessera, run
+   OlmoEarth with `--patch_size 1` (per-pixel 10 m embeddings; consider a
+   lower embedding_batch_size — token counts grow 16x vs patch size 4) and
+   `--quantize_embeddings` (int8 round-trip using AEF's exact
+   sqrt-companding scheme; AEF/Tessera are already int8-at-source, so they
+   must NOT be quantized a second time — their sweep args correctly set no
+   quantize flags). Both flags mark the run name (`_ps1`, `_qt`).
 3. **The temporal convention is dataset-scoped, not task-scoped.** rslearn
    eval datasets carry `start_time`/`end_time` in their ingested
    `model.yaml`; the materializer picks the annual product layer from the

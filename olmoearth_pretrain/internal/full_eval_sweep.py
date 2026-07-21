@@ -643,6 +643,35 @@ def _get_label_fraction_args(args: argparse.Namespace) -> str:
     )
 
 
+def _get_patch_size_args(args: argparse.Namespace) -> str:
+    """Build per-task patch_size overrides for every task.
+
+    Used e.g. to evaluate OlmoEarth at patch size 1 so its embeddings are
+    per-pixel like the precomputed embedding products (AEF/Tessera). Baseline
+    models with a fixed model-level patch_size ignore this (the evaluator
+    overrides the task value with the model attribute).
+    """
+    if getattr(args, "embedding_diagnostics_only", False):
+        return ""
+    patch_size = getattr(args, "patch_size", None)
+    if patch_size is None:
+        return ""
+    return " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.patch_size={patch_size}"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+
+
+def _get_patch_size_run_suffix(args: argparse.Namespace) -> str:
+    """Run-name suffix marking a patch-size override."""
+    patch_size = getattr(args, "patch_size", None)
+    if patch_size is None:
+        return ""
+    return f"_ps{patch_size}"
+
+
 def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
     """Build a downstream evaluator include-list override."""
     if getattr(args, "embedding_diagnostics_only", False):
@@ -761,6 +790,8 @@ def _build_default_command(
     else:
         cmd_args += _get_load_checkpoints_args(args.model)
     cmd_args += _get_label_fraction_args(args)
+    cmd_args += _get_patch_size_args(args)
+    run_name += _get_patch_size_run_suffix(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     env_prefix = _get_env_prefix(args, module_path)
@@ -835,6 +866,8 @@ def _build_hyperparameter_command(
         cmd_args += get_embedding_dim_args(embedding_dim)
         run_name += f"_dim{embedding_dim}"
     cmd_args += _get_label_fraction_args(args)
+    cmd_args += _get_patch_size_args(args)
+    run_name += _get_patch_size_run_suffix(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
@@ -991,6 +1024,8 @@ def _build_command_from_eval_settings(
         cmd_args += get_embedding_dim_args(embedding_dim)
         run_name += f"_dim{embedding_dim}"
     cmd_args += _get_label_fraction_args(args)
+    cmd_args += _get_patch_size_args(args)
+    run_name += _get_patch_size_run_suffix(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
@@ -1417,6 +1452,18 @@ def main() -> None:
         type=float,
         default=1.0,
         help="Train-label fraction to evaluate (1.0 uses all labels).",
+    )
+    parser.add_argument(
+        "--patch_size",
+        type=int,
+        default=None,
+        help=(
+            "Override patch_size for every task (e.g. 1 to evaluate OlmoEarth "
+            "at per-pixel granularity like AEF/Tessera). Ignored by baselines "
+            "with a fixed model-level patch size. Consider lowering "
+            "embedding_batch_size at patch size 1: token counts grow 16x vs "
+            "the default patch size 4."
+        ),
     )
 
     args, extra_cli = parser.parse_known_args()
