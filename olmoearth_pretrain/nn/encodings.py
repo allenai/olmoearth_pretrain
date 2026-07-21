@@ -40,12 +40,16 @@ class PositionEncoding(StrEnum):
     @classmethod
     def is_2d_rope(cls, value: str) -> bool:
         """Return whether ``value`` selects a 2D RoPE encoding."""
-        return value in {cls.AXIAL_2D_ROPE, cls.MIXED_2D_ROPE}
+        # Compare against plain strings, not enum members: Dynamo (at least through
+        # torch 2.7.1) mis-evaluates `str in {StrEnum members}` as False, which would
+        # silently drop RoPE from compiled attention blocks (see Attention.forward).
+        return value in (cls.AXIAL_2D_ROPE.value, cls.MIXED_2D_ROPE.value)
 
     @classmethod
     def is_3d_rope(cls, value: str) -> bool:
         """Return whether ``value`` selects a 3D RoPE encoding."""
-        return value in {cls.AXIAL_3D_ROPE, cls.MIXED_3D_ROPE}
+        # Plain-string comparison for torch.compile correctness; see is_2d_rope.
+        return value in (cls.AXIAL_3D_ROPE.value, cls.MIXED_3D_ROPE.value)
 
     @classmethod
     def is_rope(cls, value: str) -> bool:
