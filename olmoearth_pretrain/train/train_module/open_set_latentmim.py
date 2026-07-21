@@ -16,7 +16,8 @@ from logging import getLogger
 from typing import Any
 
 import torch
-from olmo_core.train.common import ReduceType
+import torch.distributed as dist
+from olmo_core.distributed.utils import get_world_size
 
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, TokensAndMasks
 from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
@@ -65,24 +66,83 @@ class OpenSetLatentMIMTrainModule(ContrastiveLatentMIMTrainModule):
             raise RuntimeError(
                 "supervised metrics can only be recorded during train_batch"
             )
-        for key, value in metrics.items():
+        for key in ("open_set_ce", "open_set_mse"):
+            value = metrics.get(key, 0.0)
+            patch_count = metrics.get(f"{key}_patches", 0.0)
             total, count = self._supervised_metrics.get(key, (0.0, 0))
-            self._supervised_metrics[key] = (total + value, count + 1)
+            self._supervised_metrics[key] = (
+                total + value * patch_count,
+                count + 1,
+            )
+            patch_key = f"{key}_patches"
+            patch_total, patch_count_entries = self._supervised_metrics.get(
+                patch_key, (0.0, 0)
+            )
+            self._supervised_metrics[patch_key] = (
+                patch_total + patch_count,
+                patch_count_entries + 1,
+            )
 
     def _flush_supervised_metrics(self) -> None:
-        """Reduce local forwards and submit each metric once to the trainer."""
+        """Log globally patch-weighted metrics once for the full batch."""
         if not self._supervised_metrics:
             return
-        metrics = {}
-        for key, (total, count) in self._supervised_metrics.items():
-            if key.endswith("_patches"):
-                metrics[key] = total / self._NUM_AUGMENTED_VIEWS
-            else:
-                metrics[key] = total / count
+        totals = torch.tensor(
+            [
+                self._supervised_metrics["open_set_ce"][0],
+                self._supervised_metrics["open_set_ce_patches"][0],
+                self._supervised_metrics["open_set_mse"][0],
+                self._supervised_metrics["open_set_mse_patches"][0],
+            ],
+            dtype=torch.float64,
+            device=self.device,
+        )
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(totals, group=self.dp_process_group)
+        ce_sum, ce_count, mse_sum, mse_count = totals.tolist()
+        metrics = {
+            "open_set_ce": ce_sum / ce_count if ce_count else 0.0,
+            "open_set_ce_patches": ce_count / self._NUM_AUGMENTED_VIEWS,
+            "open_set_mse": mse_sum / mse_count if mse_count else 0.0,
+            "open_set_mse_patches": mse_count / self._NUM_AUGMENTED_VIEWS,
+        }
         self.log_extra_metrics(
             {f"train/{key}": value for key, value in metrics.items()},
-            reduce_type=ReduceType.mean,
+            reduce_type=None,
         )
+
+    def _global_patch_counts(self, metrics: dict[str, float]) -> dict[str, float]:
+        """Sum valid classification and regression patch counts across DP ranks."""
+        counts = torch.tensor(
+            [
+                metrics.get("open_set_ce_patches", 0.0),
+                metrics.get("open_set_mse_patches", 0.0),
+            ],
+            dtype=torch.float64,
+            device=self.device,
+        )
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(counts, group=self.dp_process_group)
+        return {
+            "open_set_ce": float(counts[0]),
+            "open_set_mse": float(counts[1]),
+        }
+
+    def _combine_supervised_losses(
+        self,
+        losses: dict[str, torch.Tensor],
+        metrics: dict[str, float],
+    ) -> torch.Tensor:
+        """Combine local means so DP gradient averaging yields global patch means."""
+        loss = losses["zero_touch"]
+        global_counts = self._global_patch_counts(metrics)
+        world_size = get_world_size(self.dp_process_group)
+        for key in ("open_set_ce", "open_set_mse"):
+            local_count = metrics.get(f"{key}_patches", 0.0)
+            global_count = global_counts[key]
+            if key in losses and global_count > 0:
+                loss = loss + losses[key] * local_count * world_size / global_count
+        return loss
 
     def model_forward(
         self,
@@ -103,7 +163,8 @@ class OpenSetLatentMIMTrainModule(ContrastiveLatentMIMTrainModule):
         # it. Production DDP uses bf16 autocast, and the probe's fp32 parameters must be
         # autocast together with the encoder's bf16 latent representations.
         with self._model_forward_context():
-            sup_loss, sup_metrics = self.model.open_set_probe(latent, batch)
+            sup_losses, sup_metrics = self.model.open_set_probe(latent, batch)
+        sup_loss = self._combine_supervised_losses(sup_losses, sup_metrics)
         loss = loss + self.sup_loss_weight * sup_loss
         if sup_metrics:
             self._accumulate_supervised_metrics(sup_metrics)

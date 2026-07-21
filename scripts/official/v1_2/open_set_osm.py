@@ -20,9 +20,10 @@ are built.
 
 import logging
 
-from base_faster import build_dataloader_config, build_visualize_config
+from base_faster import build_visualize_config
 from open_set_base import (
     build_common_components,
+    build_dataloader_config,
     build_model_config,
     build_osm_plus_open_set_dataset_config,
     build_train_module_config,

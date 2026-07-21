@@ -23,7 +23,8 @@ from dataclasses import fields
 from pathlib import Path
 
 # Import the v1.2 helpers we reuse verbatim.
-from base import _tokenization_config  # noqa: E402
+from base import ONLY_DECODE_MODALITIES, _tokenization_config  # noqa: E402
+from base import build_dataloader_config as base_build_dataloader_config  # noqa: E402
 from base import build_dataset_config as build_osm_dataset_config  # noqa: E402
 
 # base_faster re-exports base's builders and layers the validated speedups on top.
@@ -135,6 +136,16 @@ def build_train_module_config(
     # token_exit_cfg is only meaningful for encoded modalities; keep it imagery-only.
     open_config.token_exit_cfg = {modality: 0 for modality in IMAGERY_MODALITIES}
     return open_config
+
+
+def build_dataloader_config(common: CommonComponents):
+    """Build a dataloader that carries labels without treating them as model tokens."""
+    config = base_build_dataloader_config(common)
+    config.token_budget_excluded_modalities = list(LABEL_MODALITIES)
+    config.masking_config.strategy_config["only_decode_modalities"] = list(
+        ONLY_DECODE_MODALITIES
+    ) + list(LABEL_MODALITIES)
+    return config
 
 
 def build_trainer_config(common: CommonComponents, module_path: str):

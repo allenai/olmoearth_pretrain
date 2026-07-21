@@ -276,7 +276,8 @@ def test_forward_zero_touch_when_no_labels(probe: OpenSetProbe) -> None:
         }
     )
 
-    loss, metrics = probe(latent, batch)
+    losses, metrics = probe(latent, batch)
+    loss = sum(losses.values())
     assert torch.isfinite(loss)
     loss.backward()
     assert probe.cls_head.weight.grad is not None

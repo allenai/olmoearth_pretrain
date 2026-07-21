@@ -509,8 +509,8 @@ class OpenSetProbe(nn.Module):
 
     def forward(
         self, latent: TokensAndMasks, batch: Any
-    ) -> tuple[torch.Tensor, dict[str, float]]:
-        """Compute the combined weighted supervised loss for one encoder output.
+    ) -> tuple[dict[str, torch.Tensor], dict[str, float]]:
+        """Compute supervised loss terms for one encoder output.
 
         Args:
             latent: Online-encoder ``TokensAndMasks`` for this view.
@@ -518,26 +518,27 @@ class OpenSetProbe(nn.Module):
                 fields ``open_set`` / ``open_set_regression``).
 
         Returns:
-            loss: Weighted CE + MSE (+ zero-touch), always connected to the probe
-                params so gradients are well-defined on every rank.
+            losses: Weighted CE and MSE terms plus a zero-touch term that keeps probe
+                gradients well-defined on every rank. The train module combines these
+                using globally reduced valid-patch counts.
             metrics: Detached scalar metrics for logging.
         """
         pooled, repr_valid = self.pool_patches(latent)
-        loss = self.zero_touch()
+        losses = {"zero_touch": self.zero_touch()}
         metrics: dict[str, float] = {}
 
         open_set = getattr(batch, Modality.OPEN_SET.name, None)
         if open_set is not None:
             ce, n_ce = self.classification_loss(pooled, repr_valid, open_set)
-            loss = loss + self.seg_loss_weight * ce
+            losses["open_set_ce"] = self.seg_loss_weight * ce
             metrics["open_set_ce"] = float(ce.detach())
             metrics["open_set_ce_patches"] = float(n_ce)
 
         open_set_regression = getattr(batch, Modality.OPEN_SET_REGRESSION.name, None)
         if open_set_regression is not None:
             mse, n_mse = self.regression_loss(pooled, repr_valid, open_set_regression)
-            loss = loss + self.reg_loss_weight * mse
+            losses["open_set_mse"] = self.reg_loss_weight * mse
             metrics["open_set_mse"] = float(mse.detach())
             metrics["open_set_mse_patches"] = float(n_mse)
 
-        return loss, metrics
+        return losses, metrics

@@ -306,6 +306,32 @@ def test_subsetting_worldcover_too() -> None:
     assert subsetted_sample.time == 1
 
 
+def test_supervision_modalities_can_be_excluded_from_token_budget() -> None:
+    """Loaded label layers do not reduce the imagery timestep budget."""
+    h, w, t = 16, 16, 100
+    sample = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((h, w, t, OlmoEarthSample.num_bands("sentinel2_l2a"))),
+        open_set=torch.ones((h, w, 1, OlmoEarthSample.num_bands("open_set"))),
+        open_set_regression=torch.ones(
+            (h, w, 1, OlmoEarthSample.num_bands("open_set_regression"))
+        ),
+        timestamps=torch.ones((t, OlmoEarthSample.num_bands("timestamps"))),
+    )
+
+    subsetted_sample = subset_sample_default(
+        sample,
+        patch_size=4,
+        max_tokens_per_instance=100,
+        sampled_hw_p=4,
+        current_length=12,
+        token_budget_excluded_modalities={"open_set", "open_set_regression"},
+    )
+
+    assert subsetted_sample.time == 2
+    assert subsetted_sample.open_set is not None
+    assert subsetted_sample.open_set_regression is not None
+
+
 def test_subsetting_with_tokenization_config() -> None:
     """Test subsetting respects TokenizationConfig band set overrides."""
     h, w, t = 16, 16, 100

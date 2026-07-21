@@ -177,3 +177,45 @@ def test_open_set_train_batch_records_supervised_loss(
         "train/open_set_mse_patches",
     ):
         assert mock_trainer._metric_record_counts[metric_name] == 1
+
+
+def test_supervised_loss_is_weighted_by_global_valid_patch_count(
+    model: OpenSetLatentMIMConfig,
+) -> None:
+    """Local means are scaled so DP averaging yields a global patch mean."""
+    config = OpenSetLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=1e-4, weight_decay=0.0),
+        rank_microbatch_size=1,
+        loss_config=LossConfig(loss_config={"type": "patch_discrimination"}),
+        contrastive_config=None,
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        token_exit_cfg={modality: 0 for modality in _IMAGERY},
+        ema_decay=(0.996, 1.0),
+        max_grad_norm=1.0,
+        sup_loss_weight=1.0,
+    )
+    train_module = config.build(model, device=torch.device("cpu"))
+    losses = {
+        "zero_touch": torch.tensor(0.0),
+        "open_set_ce": torch.tensor(2.0),
+        "open_set_mse": torch.tensor(3.0),
+    }
+    metrics = {
+        "open_set_ce_patches": 2.0,
+        "open_set_mse_patches": 1.0,
+    }
+
+    with (
+        patch.object(
+            train_module,
+            "_global_patch_counts",
+            return_value={"open_set_ce": 8.0, "open_set_mse": 4.0},
+        ),
+        patch(
+            "olmoearth_pretrain.train.train_module.open_set_latentmim.get_world_size",
+            return_value=2,
+        ),
+    ):
+        loss = train_module._combine_supervised_losses(losses, metrics)
+
+    assert loss.item() == pytest.approx(2.5)
