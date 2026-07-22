@@ -390,10 +390,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
             )
             output_dict[Modality.OPENSTREETMAP_RASTER.name] = mock_openstreetmap_raster
         if Modality.SRTM.name in self.dataset.training_modalities:
-            # srtm is the full [elevation, slope, aspect_sin, aspect_cos] modality.
-            mock_srtm = rng.random(
-                (standard_hw, standard_hw, 1, Modality.SRTM.num_bands), dtype=np.float32
-            )
+            mock_srtm = rng.random((standard_hw, standard_hw, 1, 1), dtype=np.float32)
             output_dict["srtm"] = mock_srtm
         if Modality.LANDSAT.name in self.dataset.training_modalities:
             mock_landsat = rng.random(

@@ -134,9 +134,6 @@ def build_supervision_head_config(
             weight=_weight(SupervisionTaskType.CLASSIFICATION),
             class_values=WORLDCOVER_CLASS_VALUES,
         ),
-        # srtm is the full terrain modality [elevation, slope, aspect_sin, aspect_cos],
-        # so the register head regresses all of its bands (num_output_channels tracks
-        # Modality.SRTM.num_bands rather than being hard-coded to 1).
         "srtm": SupervisionModalityConfig(
             task_type=SupervisionTaskType.REGRESSION,
             num_output_channels=Modality.SRTM.num_bands,

@@ -38,7 +38,7 @@ def test_drop_mismatched_keys() -> None:
     """Shape-mismatched and checkpoint-absent keys are dropped; matches kept."""
     metadata = Metadata(
         state_dict_metadata={
-            # Saved before srtm grew terrain bands: [64, 1] vs the model's [64, 4].
+            # Saved at a different srtm band count: [64, 1] vs the model's [64, 4].
             "model.encoder.srtm.weight": _tensor_meta([64, 1]),
             "model.encoder.s2.weight": _tensor_meta([64, 12]),
         }

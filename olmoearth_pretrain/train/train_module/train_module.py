@@ -416,9 +416,9 @@ class OlmoEarthTrainModule(TrainModule):
 
         Opt-in via ``OE_LOAD_SKIP_MISMATCHED_KEYS=1``, for loading a checkpoint
         whose architecture has drifted in ways that do not matter for the run —
-        e.g. evaluating S2-only tasks with a checkpoint saved before srtm grew
-        the terrain bands (its patch-embedding weight is [64, 1] in the
-        checkpoint but [64, 4] in the current model). Dropped parameters keep
+        e.g. evaluating S2-only tasks with a checkpoint whose srtm
+        patch-embedding was trained at a different band count than the current
+        model builds (say [64, 4] saved vs [64, 1] now). Dropped parameters keep
         their fresh initialization; optimizer state is skipped entirely (the
         flattened optimizer format requires an entry per current param, so a
         partial optimizer load is not possible), and missing-key strictness is

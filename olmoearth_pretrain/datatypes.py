@@ -90,8 +90,6 @@ class OlmoEarthSample(NamedTuple):
         None  # [B, H, W, 1, len(WORLDCOVER_CLASSES)]
     )
     openstreetmap_raster: ArrayTensor | None = None  # [B, H, W, 1, len(OSM_bands)]
-    # srtm carries [elevation, slope, aspect_sin, aspect_cos]; only elevation is stored,
-    # the rest are derived from it at load time (see compute_srtm_bands).
     srtm: ArrayTensor | None = None  # [B, H, W, 1, len(SRTM_bands)]
     landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
     # naip with different tile resolution is currently not used in favor of naip_10.
