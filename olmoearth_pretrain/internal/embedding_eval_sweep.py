@@ -179,6 +179,8 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     base_run_name = _base_run_name(args) + "_emb"
 
     env_prefix = f"TRAIN_SCRIPT_PATH={module_path} EMBEDDING_EVALS=1"
+    if args.skip_mismatched_weights:
+        env_prefix += " OE_LOAD_SKIP_MISMATCHED_KEYS=1"
     common = (
         f"{env_prefix} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {{run_name}} {args.cluster} {launch_overrides} "
@@ -256,6 +258,14 @@ def main() -> None:
         "--select_best_val",
         action="store_true",
         help="Select the best test epoch by the primary validation metric",
+    )
+    parser.add_argument(
+        "--skip_mismatched_weights",
+        action="store_true",
+        help="Skip checkpoint weights whose shape mismatches the current model "
+        "(they keep their fresh init). For checkpoints saved before benign "
+        "architecture drift, e.g. the srtm terrain-band change; the skipped "
+        "keys are logged loudly in the job output.",
     )
     parser.add_argument(
         "--dry_run",

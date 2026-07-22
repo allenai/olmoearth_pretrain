@@ -192,6 +192,14 @@ def build_launch_config(
     embedding_evals = os.environ.get("EMBEDDING_EVALS")
     if embedding_evals is not None:
         env_vars.append(BeakerEnvVar(name="EMBEDDING_EVALS", value=embedding_evals))
+    skip_mismatched_keys = os.environ.get("OE_LOAD_SKIP_MISMATCHED_KEYS")
+    if skip_mismatched_keys is not None:
+        logger.info("Propagating OE_LOAD_SKIP_MISMATCHED_KEYS to experiment")
+        env_vars.append(
+            BeakerEnvVar(
+                name="OE_LOAD_SKIP_MISMATCHED_KEYS", value=skip_mismatched_keys
+            )
+        )
     # Propagate the load-arch-from-checkpoint flag to the experiment if set
     load_arch_from_checkpoint = os.environ.get("LOAD_ARCH_FROM_CHECKPOINT")
     if load_arch_from_checkpoint is not None:

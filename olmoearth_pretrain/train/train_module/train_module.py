@@ -1,8 +1,10 @@
 """Training and optimizer abstraction for OlmoEarth Pretrain."""
 
 import contextlib
+import dataclasses
 import itertools
 import json
+import os
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from logging import getLogger
@@ -402,7 +404,54 @@ class OlmoEarthTrainModule(TrainModule):
     ) -> dict[str, Any]:
         """Get the state dict to load."""
         load_opts = self.state_dict_load_opts
-        return self._get_state_dict(load_opts)
+        state_dict = self._get_state_dict(load_opts)
+        if os.environ.get("OE_LOAD_SKIP_MISMATCHED_KEYS"):
+            self._drop_mismatched_keys(state_dict, metadata)
+        return state_dict
+
+    def _drop_mismatched_keys(
+        self, state_dict: dict[str, Any], metadata: Metadata
+    ) -> None:
+        """Drop keys whose checkpoint shape mismatches the current model.
+
+        Opt-in via ``OE_LOAD_SKIP_MISMATCHED_KEYS=1``, for loading a checkpoint
+        whose architecture has drifted in ways that do not matter for the run —
+        e.g. evaluating S2-only tasks with a checkpoint saved before srtm grew
+        the terrain bands (its patch-embedding weight is [64, 1] in the
+        checkpoint but [64, 4] in the current model). Dropped parameters keep
+        their fresh initialization; their optimizer state is dropped too, and
+        missing-key strictness is relaxed so the partial load succeeds. Never
+        set this when resuming training: a silently unloaded weight is a bug
+        there, not a convenience.
+        """
+        dropped: list[str] = []
+        for key, value in list(state_dict["model"].items()):
+            shape = getattr(value, "shape", None)
+            if shape is None:
+                continue
+            meta = metadata.state_dict_metadata.get(f"model.{key}")
+            saved_size = getattr(meta, "size", None)
+            if meta is not None and (
+                saved_size is None or tuple(saved_size) == tuple(shape)
+            ):
+                continue
+            del state_dict["model"][key]
+            dropped.append(key)
+            logger.warning(
+                "OE_LOAD_SKIP_MISMATCHED_KEYS: not loading '%s' "
+                "(checkpoint: %s, model: %s); keeping fresh initialization.",
+                key,
+                tuple(saved_size) if saved_size is not None else "<absent>",
+                tuple(shape),
+            )
+        if not dropped:
+            return
+        for key in list(state_dict.get("optim", {}).keys()):
+            if any(fqn in key for fqn in dropped):
+                del state_dict["optim"][key]
+        self.state_dict_load_opts = dataclasses.replace(
+            self.state_dict_load_opts, strict=False
+        )
 
     def state_dict_to_save(self) -> dict[str, Any]:
         """Get the state dict to save."""
