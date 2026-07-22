@@ -33,6 +33,10 @@ from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 
 logger = logging.getLogger(__name__)
 
+# Eval entrypoints (all_evals.py / checkpoint_sweep_evals.py) look up this exact
+# name on the module to rebuild the train module when loading the checkpoint.
+build_train_module_config = build_latlon_train_module_config
+
 REGISTER_DIM = 768
 MODULE_PATH = (
     "scripts/official/v1_2/regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_regsup_latlon.py"

@@ -32,6 +32,10 @@ from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 
 logger = logging.getLogger(__name__)
 
+# Eval entrypoints (all_evals.py / checkpoint_sweep_evals.py) look up this exact
+# name on the module to rebuild the train module when loading the checkpoint.
+build_train_module_config = build_latlon_train_module_config
+
 REGISTER_DIM = 768
 # 100x the regsup_common SUPERVISION_WEIGHT nudge (0.01 -> 1.0).
 SUPERVISION_BASE_WEIGHT = 1.0
