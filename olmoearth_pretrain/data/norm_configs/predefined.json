@@ -672,6 +672,18 @@
     }
   },
   "srtm": {
+    "aspect_cos": {
+      "max": 1,
+      "min": -1
+    },
+    "aspect_sin": {
+      "max": 1,
+      "min": -1
+    },
+    "slope": {
+      "max": 1.060055,
+      "min": 0
+    },
     "srtm": {
       "max": 8000,
       "min": 0

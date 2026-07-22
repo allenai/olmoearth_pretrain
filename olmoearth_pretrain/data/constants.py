@@ -322,10 +322,16 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # SRTM is a single terrain modality. Only the elevation band ("srtm") is stored on
+    # disk / parsed from the csv; the slope and aspect bands are derived from elevation
+    # at load time (see compute_srtm_bands in OlmoEarthDataset) and appended so the whole
+    # modality is [elevation, slope, aspect]. Aspect is circular, so it is encoded as its
+    # sine and cosine to avoid the 0/2*pi discontinuity. Ingestion (dataset_creation/.../
+    # srtm.py) only ever reads/writes the elevation band.
     SRTM = ModalitySpec(
         name="srtm",
         tile_resolution_factor=16,
-        band_sets=[BandSet(["srtm"], 16)],
+        band_sets=[BandSet(["srtm", "slope", "aspect_sin", "aspect_cos"], 16)],
         is_multitemporal=False,
         ignore_when_parsing=False,
     )

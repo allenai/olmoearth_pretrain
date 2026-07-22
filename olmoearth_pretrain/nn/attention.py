@@ -12,15 +12,22 @@ from torch.jit import Final
 
 from olmoearth_pretrain.nn.encodings import (
     PositionEncoding,
+    WindowSpec,
     apply_2d_axial_rope,
     apply_2d_mixed_rope,
     apply_3d_axial_rope,
     apply_3d_mixed_rope,
     axial_3d_dim_split,
+    build_window_mask,
     init_2d_mixed_rope_freqs,
     init_3d_mixed_rope_freqs,
     resolve_position_encoding,
 )
+
+# Cap on (chunk_queries * batch * num_keys) elements when materializing a windowed
+# attention mask one query-chunk at a time. Bounds peak mask memory regardless of
+# sequence length (~a few hundred MB of bool/float working set per chunk).
+WINDOW_MASK_CHUNK_ELEMENTS = 256 * 1024 * 1024
 
 try:
     import flash_attn
@@ -128,6 +135,8 @@ class Attention(nn.Module):
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
         spatial_pos_encoding: str | None = None,
+        attn_dim: int | None = None,
+        kv_in_dim: int | None = None,
     ) -> None:
         """Initialize the attention module.
 
@@ -153,14 +162,24 @@ class Attention(nn.Module):
             rope_temporal_base: Optional separate frequency base for the
                 temporal axis in axial 3D RoPE. ``None`` reuses ``rope_base``.
             spatial_pos_encoding: Deprecated alias for ``position_encoding``.
+            attn_dim: Internal width the attention runs at (q/k/v projected to
+                this, output projected back to ``dim``). ``None`` (default) ties
+                it to ``dim`` -- the classic single-width attention. Decoupling
+                lets a narrow residual stream (e.g. a register bottleneck) run
+                its attention with more/wider heads than ``dim`` could fund.
+            kv_in_dim: Input width of the key/value source ``y`` when it differs
+                from ``dim`` (cross-attention over a wider stream). ``None``
+                (default) ties it to ``dim``.
         """
         super().__init__()
         position_encoding = resolve_position_encoding(
             position_encoding, spatial_pos_encoding
         )
-        assert dim % num_heads == 0, "dim should be divisible by num_heads"
+        attn_dim = attn_dim if attn_dim is not None else dim
+        kv_in_dim = kv_in_dim if kv_in_dim is not None else dim
+        assert attn_dim % num_heads == 0, "attn_dim should be divisible by num_heads"
         self.num_heads = num_heads
-        self.head_dim = dim // num_heads
+        self.head_dim = attn_dim // num_heads
         if PositionEncoding.is_2d_rope(position_encoding) and self.head_dim % 4 != 0:
             raise ValueError(
                 f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "
@@ -203,15 +222,61 @@ class Attention(nn.Module):
                 )
             )
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
-        self.q = nn.Linear(dim, dim, bias=qkv_bias)
-        self.k = nn.Linear(dim, dim, bias=qkv_bias)
-        self.v = nn.Linear(dim, dim, bias=qkv_bias)
+        self.q = nn.Linear(dim, attn_dim, bias=qkv_bias)
+        self.k = nn.Linear(kv_in_dim, attn_dim, bias=qkv_bias)
+        self.v = nn.Linear(kv_in_dim, attn_dim, bias=qkv_bias)
 
         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
+        self.proj = nn.Linear(attn_dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
+
+    def _windowed_sdpa(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        spec: WindowSpec,
+    ) -> torch.Tensor:
+        """SDPA restricted to a sliding spatial window, built per query-chunk.
+
+        ``q, k, v`` are ``(B, H, N, D)``. The window mask depends only on positions, so it
+        is rebuilt for each query slice and applied with standard SDPA. This bounds the
+        mask working set to ``WINDOW_MASK_CHUNK_ELEMENTS`` while leaving the math identical
+        to a single full-mask SDPA call; short sequences run as a single chunk.
+        """
+        if not self.fast_attn:
+            raise NotImplementedError(
+                "windowed attention requires scaled_dot_product_attention"
+            )
+        b, _, nq, _ = q.shape
+        nk = k.shape[2]
+        chunk = max(1, min(nq, WINDOW_MASK_CHUNK_ELEMENTS // max(1, b * nk)))
+        outputs = []
+        for start in range(0, nq, chunk):
+            end = min(start + chunk, nq)
+            q_glob = (
+                spec.q_is_global[:, start:end] if spec.q_is_global is not None else None
+            )
+            chunk_mask = build_window_mask(
+                spec.q_positions[:, start:end],
+                spec.k_positions,
+                spec.half_extent,
+                q_is_global=q_glob,
+                k_is_global=spec.k_is_global,
+                key_valid=spec.key_valid,
+            )  # (B, 1, end - start, Nk)
+            outputs.append(
+                F.scaled_dot_product_attention(
+                    q[:, :, start:end],
+                    k,
+                    v,
+                    attn_mask=chunk_mask,
+                    dropout_p=self.attn_drop.p,
+                )
+            )
+        return torch.cat(outputs, dim=2)
 
     def sdpa(
         self,
@@ -226,6 +291,7 @@ class Attention(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
+        window_spec: WindowSpec | None = None,
     ) -> torch.Tensor:
         """Compute scaled dot product attention.
 
@@ -241,6 +307,9 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
+            window_spec: Optional windowed-attention ingredients; when set, attention is
+                restricted to a sliding spatial window built per query-chunk (bounds memory).
+
         Returns:
             Output tensor of shape (B, H, N, D)
         """
@@ -262,9 +331,16 @@ class Attention(nn.Module):
             # Output is (B, Nq, H, D), transpose back to (B, H, Nq, D)
             # matching the transpose of the other attention implementations that need to be transposed back
             x = x.transpose(1, 2)
+        elif window_spec is not None:
+            # Windowed (local) spatial attention: build the (B, 1, Cq, Nk) mask one
+            # query-chunk at a time so peak memory is bounded by the chunk, not Nq*Nk.
+            x = self._windowed_sdpa(q, k, v, window_spec)
         elif self.fast_attn:
-            if attn_mask is not None:
+            if attn_mask is not None and attn_mask.dim() == 2:
+                # A 1D-per-sample key mask (B, Nk): broadcast it over heads/queries.
                 attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, n, 1))
+            # A precomputed (B, 1, Nq, Nk) / (B, H, Nq, Nk) mask is passed straight
+            # through and broadcast over heads.
             x = F.scaled_dot_product_attention(
                 q,
                 k,
@@ -298,6 +374,7 @@ class Attention(nn.Module):
         attn_mask: torch.Tensor | None = None,
         rope_positions: torch.Tensor | None = None,
         rope_positions_y: torch.Tensor | None = None,
+        window_spec: WindowSpec | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -315,6 +392,8 @@ class Attention(nn.Module):
                 ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
             rope_positions_y: Optional RoPE coordinates for y/key tokens:
                 ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
+            window_spec: Optional windowed-attention ingredients; when set, attention is
+                restricted to a sliding spatial window built per query-chunk (bounds memory).
 
         Returns:
             Output tensor of shape (B, N, C) or (B* N , C) if packed
@@ -389,8 +468,13 @@ class Attention(nn.Module):
             max_seqlen_q=max_seqlen_q,
             max_seqlen_k=max_seqlen_k,
             attn_mask=attn_mask,
+            window_spec=window_spec,
         )
-        x = x.transpose(1, 2).reshape(original_shape)
+        # The attention output is at the internal attention width (== the input width
+        # unless attn_dim decouples them); proj maps it back to the input width.
+        x = x.transpose(1, 2).reshape(
+            *original_shape[:-1], self.num_heads * self.head_dim
+        )
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -569,6 +653,8 @@ class Block(nn.Module):
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
         spatial_pos_encoding: str | None = None,
+        attn_dim: int | None = None,
+        kv_in_dim: int | None = None,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -595,6 +681,13 @@ class Block(nn.Module):
             rope_temporal_base: Optional separate frequency base for the
                 temporal axis in axial 3D RoPE. ``None`` reuses ``rope_base``.
             spatial_pos_encoding: Deprecated alias for ``position_encoding``.
+            attn_dim: Optional internal attention width decoupled from ``dim``
+                (see :class:`Attention`). The residual stream and MLP stay at
+                ``dim``. NOTE: the cross-attention ``y`` context is NOT normed
+                by this block, so a ``kv_in_dim`` source must be normalized by
+                the caller.
+            kv_in_dim: Optional key/value source width for cross-attention when
+                the context ``y`` is wider than ``dim`` (see :class:`Attention`).
         """
         super().__init__()
         position_encoding = resolve_position_encoding(
@@ -616,6 +709,8 @@ class Block(nn.Module):
             rope_mixed_base=rope_mixed_base,
             temporal_rope_dim_frac=temporal_rope_dim_frac,
             rope_temporal_base=rope_temporal_base,
+            attn_dim=attn_dim,
+            kv_in_dim=kv_in_dim,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -646,6 +741,7 @@ class Block(nn.Module):
         attn_mask: torch.Tensor | None = None,
         rope_positions: torch.Tensor | None = None,
         rope_positions_y: torch.Tensor | None = None,
+        window_spec: WindowSpec | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -663,6 +759,8 @@ class Block(nn.Module):
                 ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
             rope_positions_y: Optional RoPE coordinates for y/key tokens:
                 ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
+            window_spec: Optional windowed-attention ingredients; when set, attention is
+                restricted to a sliding spatial window built per query-chunk (bounds memory).
 
         Returns:
             Output tensor of shape (B, N, C)
@@ -681,6 +779,7 @@ class Block(nn.Module):
                     attn_mask=attn_mask,
                     rope_positions=rope_positions,
                     rope_positions_y=rope_positions_y,
+                    window_spec=window_spec,
                 )
             )
         )

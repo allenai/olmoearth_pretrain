@@ -5,7 +5,7 @@ import logging
 import os
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import partial
 from typing import Any
@@ -103,6 +103,15 @@ class DownstreamTaskConfig:
     eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
+    # If the model has a register bottleneck, probe the pooled encoder patch tokens
+    # instead of the register latents. No effect without a register bottleneck.
+    eval_on_encoder_tokens: bool = False
+    # For geobench segmentation tasks: split each native image into
+    # (height_width // tile_size)**2 non-overlapping tile_size x tile_size windows
+    # (keeps every pixel, shrinks the token grid the model/register-read sees).
+    # Used to test whether the large-grid read dilution drives the register
+    # regressions on the 256px tasks (sa_crop_type, cashew_plant). None = native size.
+    tile_size: int | None = None
     # Use the center spatial patch embedding instead of pooling across all patches
     # for classification tasks. Has no effect on segmentation tasks.
     use_center_token: bool = False
@@ -180,6 +189,12 @@ class DownstreamEvaluator:
         """
         self.evaluation_name = evaluation_name
         self.config = dataset_to_config(task.dataset)
+        self.tile_size = task.tile_size
+        if self.tile_size is not None:
+            # dataset_to_config returns a shared instance, so copy rather than
+            # mutate: shrink the segmentation reshape target to the tiled window
+            # so the seg probe reshapes to the smaller (tiled) token grid.
+            self.config = replace(self.config, height_width=self.tile_size)
         self.trainer = trainer
         self.device = device
         # Add all task attributes to self
@@ -207,6 +222,7 @@ class DownstreamEvaluator:
         self.label_fraction = task.label_fraction
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
+        self.eval_on_encoder_tokens = task.eval_on_encoder_tokens
         self.use_center_token = task.use_center_token
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
@@ -319,6 +335,8 @@ class DownstreamEvaluator:
             worker_init_fn = partial(_seed_worker, base_seed=split_seed)
 
         extra_kwargs: dict[str, Any] = {}
+        if self.tile_size is not None:
+            extra_kwargs["tile_size"] = self.tile_size
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities
@@ -383,6 +401,7 @@ class DownstreamEvaluator:
             "pooling_type": self.pooling_type,
             "concat_features": (self.probe_type == "attn_pool"),
             "use_pooled_tokens": self.use_pooled_tokens,
+            "eval_on_encoder_tokens": self.eval_on_encoder_tokens,
             "use_center_token": self.use_center_token,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
@@ -609,6 +628,7 @@ class DownstreamEvaluator:
             patch_size=self.patch_size,
             pooling_type=self.pooling_type,
             use_pooled_tokens=self.use_pooled_tokens,
+            eval_on_encoder_tokens=self.eval_on_encoder_tokens,
             train_loader=train_loader,
             val_loader=val_loader,
             test_loader=test_loader,
@@ -867,8 +887,10 @@ class DownstreamEvaluatorCallback(Callback):
                 )
                 wandb_callback.wandb.log({f"{evaluator.evaluation_name}_step": 0})
 
-        # Log test results and bootstrap stats independently of val validity
-        test_valid = test_result is not None and test_result.primary >= 0
+        # Log test results and bootstrap stats independently of val validity.
+        # Don't gate on `test_result.primary >= 0` — for regression tasks with
+        # neg-RMSE primary, valid test values are always negative.
+        test_valid = test_result is not None
         if wandb_callback.enabled and test_valid:
             if bootstrap_stats:
                 wandb_callback.wandb.log(

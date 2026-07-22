@@ -629,6 +629,8 @@ def _get_env_prefix(args: argparse.Namespace, module_path: str) -> str:
     prefix = f"TRAIN_SCRIPT_PATH={module_path}"
     if getattr(args, "embedding_diagnostics_only", False):
         prefix += " EMBEDDING_DIAGNOSTICS_ONLY=1"
+    if getattr(args, "load_arch_from_checkpoint", False):
+        prefix += " LOAD_ARCH_FROM_CHECKPOINT=1"
     return prefix
 
 
@@ -1310,6 +1312,16 @@ def main() -> None:
         type=float,
         default=1.0,
         help="Train-label fraction to evaluate (1.0 uses all labels).",
+    )
+    parser.add_argument(
+        "--load_arch_from_checkpoint",
+        action="store_true",
+        help=(
+            "Reconstruct the model architecture from the checkpoint's saved "
+            "config.json instead of the training module's defaults. Lets you eval "
+            "runs whose architecture was set via train-time CLI overrides without "
+            "re-passing those overrides here."
+        ),
     )
 
     args, extra_cli = parser.parse_known_args()

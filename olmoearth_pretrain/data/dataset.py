@@ -302,6 +302,66 @@ def one_hot_worldcover(raw: np.ndarray, dtype: np.dtype) -> np.ndarray:
     return onehot
 
 
+def compute_srtm_bands(elevation: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    """Expand the stored SRTM elevation band into the full terrain modality.
+
+    On disk SRTM is a single elevation band; the model consumes it as one modality
+    [elevation, slope, aspect_sin, aspect_cos] (Modality.SRTM.band_order). Slope and
+    aspect are derived here from the elevation grid so they never need to be stored.
+
+    Slope is the steepest gradient angle (radians, in [0, pi/2]). Aspect is the compass
+    direction that steepest gradient points in; because it is circular it is returned as
+    its sine and cosine (each in [-1, 1]) rather than a raw angle, so there is no
+    discontinuity at 0/2*pi.
+
+    Gradients are taken on the elevation grid using the modality's ground resolution as
+    the pixel spacing, so slope is a true angle. np.gradient uses a central difference,
+    so a one-pixel "halo" around every elevation void reads the missing neighbour and has
+    no well-defined slope/aspect. Both the void pixels and that halo are set to
+    MISSING_VALUE across ALL bands (elevation included, so the modality's missing pattern
+    stays coherent), which routes them through the normal missing-value handling. Tile
+    edges are NOT lost: np.gradient falls back to one-sided differences at the array
+    boundary, so only internal voids produce a halo.
+
+    Args:
+        elevation: raw (un-normalized) stored SRTM data, shape [H, W, T, 1]. T is 1 for
+            the static SRTM modality but the calculation is done per timestep regardless.
+        dtype: the dtype of the output array.
+
+    Returns:
+        Array of shape [H, W, T, 4] holding (elevation, slope, aspect_sin, aspect_cos).
+    """
+    ground_resolution_m = Modality.SRTM.band_sets[0].get_resolution()
+
+    # Drop the single-band axis and promote to a float type so NaN can mark missing
+    # pixels. float32 is plenty for elevation (<= ~9000 m) and roughly halves the cost
+    # versus float64.
+    elev = elevation[..., 0].astype(np.float32)  # [H, W, T]
+    elev = np.where(elev == MISSING_VALUE, np.nan, elev)
+
+    # axis 0 is rows (north-south), axis 1 is columns (east-west). NaNs propagate one
+    # pixel into the central difference, giving the missing halo for free.
+    grad_y, grad_x = np.gradient(
+        elev, ground_resolution_m, ground_resolution_m, axis=(0, 1)
+    )
+    slope = np.arctan(np.sqrt(grad_x**2 + grad_y**2))
+    aspect = np.arctan2(grad_y, -grad_x)
+
+    # A pixel is missing if its own elevation is a void (elev is NaN there) OR it sits in
+    # the one-pixel halo where the central difference read a void neighbour (slope is NaN
+    # there; the void pixel's own slope is finite since it is built from valid neighbours,
+    # so both terms are needed). Mark the whole pixel missing across all four bands so the
+    # modality shares one missing pattern.
+    pixel_missing = np.isnan(elev) | np.isnan(slope)  # [H, W, T]
+
+    # Band order must match Modality.SRTM.band_order: elevation first, then terrain.
+    bands = np.stack(
+        [elev, slope, np.sin(aspect), np.cos(aspect)], axis=-1
+    )  # [H, W, T, 4]
+    bands[pixel_missing] = MISSING_VALUE
+    return bands.astype(dtype)
+
+
 class GetItemArgs(NamedTuple):
     """Arguments for the __getitem__ method of the OlmoEarthDataset."""
 
@@ -779,6 +839,15 @@ class OlmoEarthDataset(Dataset):
                 ):
                     sample_dict[Modality.WORLDCOVER_ONEHOT.name] = one_hot_worldcover(
                         h5file[Modality.WORLDCOVER.name][()], self.dtype
+                    )
+
+                # Only the elevation band of srtm is stored; expand it into the full
+                # [elevation, slope, aspect_sin, aspect_cos] modality here, on the whole
+                # tile (before any spatial cropping) so the slope/aspect gradients are
+                # correct. If srtm is absent it is treated as missing downstream.
+                if Modality.SRTM.name in sample_dict:
+                    sample_dict[Modality.SRTM.name] = compute_srtm_bands(
+                        sample_dict[Modality.SRTM.name], self.dtype
                     )
 
                 if (

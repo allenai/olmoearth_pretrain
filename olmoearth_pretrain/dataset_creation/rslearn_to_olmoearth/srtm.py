@@ -37,7 +37,11 @@ def convert_srtm(window: Window, olmoearth_path: UPath) -> None:
 
     assert len(Modality.SRTM.band_sets) == 1
     band_set = Modality.SRTM.band_sets[0]
-    raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
+    # SRTM's modality bands are [elevation, slope, aspect_sin, aspect_cos], but only the
+    # elevation band is stored on disk; slope/aspect are derived from it at load time
+    # (see compute_srtm_bands). Ingestion therefore reads/writes elevation only.
+    stored_bands = [band_set.bands[0]]
+    raster_dir = window.get_raster_dir(LAYER_NAME, stored_bands)
     image = GEOTIFF_RASTER_FORMAT.decode_raster(
         raster_dir, window.projection, window.bounds
     )
