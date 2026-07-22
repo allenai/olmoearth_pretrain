@@ -63,6 +63,18 @@ The sweep scripts set `TRAIN_SCRIPT_PATH` automatically and select `torchrun` fo
   `docs/PrecomputedEmbeddingEvals.md` for the design, the embedding
   materializer, and how to onboard datasets.
 
+  For head-to-head comparisons with these products, `all_evals.py` defines
+  tasks under a per-pixel embedding-product convention: 16×16 windows,
+  `patch_size=1` (one embedding per 10 m pixel), and an int8 round-trip
+  (`quantize_embeddings=True`) so forward-pass models are scored as int8
+  products too. `pastis_ws16_ps1_sentinel2` tiles each PASTIS sample into
+  16×16 windows; the `<dataset>_ws16_ps1` tasks (the eight AEF supplemental
+  datasets) center-crop each sample to a 16×16 window around its single
+  labeled pixel and run as center-pixel classification
+  (`label_at_center_pixel` + `use_center_token`), keeping only the token that
+  actually carries a label. Their primary metric is balanced accuracy (the
+  AEF paper's protocol).
+
 ---
 
 ## Datasets & Model Checkpoints

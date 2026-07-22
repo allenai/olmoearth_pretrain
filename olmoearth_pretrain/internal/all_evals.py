@@ -1253,6 +1253,56 @@ EVAL_TASKS.update(
     }
 )
 
+# The AEF supplemental evaluation datasets (arXiv:2507.22291): S2 timeseries
+# crops carrying a single labeled center pixel each, ingested via the registry
+# (their plain 32x32 segmentation variants are defined above).
+AEF_SUPPLEMENTAL_DATASETS = (
+    "africa_crop_mask",
+    "canada_crops_coarse",
+    "canada_crops_fine",
+    "descals",
+    "ethiopia_crops",
+    "glance",
+    "lcmap_lu",
+    "us_trees",
+)
+
+# The AEF supplemental datasets under the per-pixel embedding-product
+# convention (the registry-dataset counterpart of pastis_ws16_ps1_sentinel2):
+# each sample is center-cropped to a 16x16 window around its labeled pixel,
+# OlmoEarth emits per-pixel (patch_size=1) embeddings int8 round-tripped like
+# an embedding product, and only the labeled pixel's token is kept — the task
+# runs as center-pixel classification (label_at_center_pixel +
+# use_center_token). Balanced accuracy is the AEF paper's protocol metric.
+# The precomputed AEF/Tessera baselines run these same tasks with
+# input_modalities overridden to the embedding modality and
+# quantize_embeddings=False (they are already int8 at source).
+EVAL_TASKS.update(
+    {
+        f"{name}_ws16_ps1": DownstreamTaskConfig(
+            dataset=name,
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+            probe_lr=0.01,
+            eval_interval=Duration.epochs(10),
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            primary_metric=EvalMetric.BALANCED_ACCURACY,
+            window_size=16,
+            patch_size=1,
+            quantize_embeddings=True,
+            use_center_token=True,
+            label_at_center_pixel=True,
+        )
+        for name in AEF_SUPPLEMENTAL_DATASETS
+    }
+)
+
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
         dataset="pretrain_subset",
