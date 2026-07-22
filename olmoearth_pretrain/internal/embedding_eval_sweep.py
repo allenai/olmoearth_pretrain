@@ -71,13 +71,22 @@ def _task_arg(task_name: str, field_name: str, value: object) -> str:
 
 
 def _capable_tasks(task_names: list[str], modality: str) -> list[str]:
-    """Task names whose dataset carries the given precomputed modality."""
-    return [
-        name
-        for name in task_names
-        if modality
-        in dataset_to_config(EMBEDDING_EVAL_TASKS[name].dataset).supported_modalities
-    ]
+    """Task names whose dataset carries the given precomputed modality.
+
+    A precomputed baseline reads only the embedding modality, so tasks that
+    differ solely in imagery input_modalities (e.g. the S2-only and S1+S2
+    PASTIS variants) collapse to the same run — keep one task per dataset.
+    """
+    capable = []
+    seen_datasets = set()
+    for name in task_names:
+        dataset = EMBEDDING_EVAL_TASKS[name].dataset
+        if dataset in seen_datasets:
+            continue
+        if modality in dataset_to_config(dataset).supported_modalities:
+            capable.append(name)
+            seen_datasets.add(dataset)
+    return capable
 
 
 def _model_task_names(

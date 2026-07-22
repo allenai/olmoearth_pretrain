@@ -43,6 +43,11 @@ from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, OlmoEarthSam
 
 from .normalize import normalize_bands
 
+# Fallback imagery time range for timestamp synthesis, used when the registry
+# entry does not record the dataset's actual time range.
+DEFAULT_START_TIME = "2022-09-01"
+DEFAULT_END_TIME = "2023-09-01"
+
 
 def get_timestamps(
     start_time: str,
@@ -115,11 +120,13 @@ class RslearnToOlmoEarthDataset(Dataset):
         norm_method: str = NormMethod.NORM_NO_CLIP_2_STD,
         ds_norm_stats_json: str | None = None,
         ds_norm_stats: dict[str, Any] | None = None,
-        start_time: str = "2022-09-01",
-        end_time: str = "2023-09-01",
+        start_time: str = DEFAULT_START_TIME,
+        end_time: str = DEFAULT_END_TIME,
         num_timesteps: int = 12,
         window_size: int | None = None,
         label_at_center_pixel: bool = False,
+        tile_samples: bool = False,
+        sample_size: int | None = None,
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
@@ -152,6 +159,15 @@ class RslearnToOlmoEarthDataset(Dataset):
                 Requires a segmentation target with exactly one labeled pixel
                 per sample (extra labeled pixels: the one nearest the raster
                 center is used).
+            tile_samples: If set (with window_size), every stored sample (and
+                its label raster) is tiled into non-overlapping
+                window_size x window_size windows at load time — the PASTIS
+                dense-label convention — instead of center-cropping one window
+                per sample. Requires sample_size, a dense (segmentation or
+                per-pixel regression) target, and is mutually exclusive with
+                label_at_center_pixel.
+            sample_size: Stored sample height/width in pixels (required with
+                tile_samples; must be divisible by window_size).
         """
         if (
             not norm_stats_from_pretrained
@@ -202,6 +218,25 @@ class RslearnToOlmoEarthDataset(Dataset):
         self.window_size = window_size
         self.label_at_center_pixel = label_at_center_pixel
 
+        if tile_samples:
+            if label_at_center_pixel:
+                raise ValueError(
+                    "tile_samples and label_at_center_pixel are mutually exclusive"
+                )
+            if window_size is None or sample_size is None:
+                raise ValueError(
+                    "tile_samples requires both window_size and sample_size"
+                )
+            if sample_size % window_size != 0:
+                raise ValueError(
+                    f"window_size {window_size} must divide sample_size {sample_size}"
+                )
+        self.sample_size = sample_size
+        # Each stored sample yields _tiles_per_side^2 windows (1 = no tiling).
+        self._tiles_per_side = (
+            sample_size // window_size if tile_samples else 1  # type: ignore[operator]
+        )
+
         if self.norm_stats_from_pretrained:
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
         else:
@@ -222,8 +257,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         norm_method: str = NormMethod.NORM_NO_CLIP_2_STD,
         ds_norm_stats_json: str | None = None,
         ds_norm_stats: dict[str, Any] | None = None,
-        start_time: str = "2022-09-01",
-        end_time: str = "2023-09-01",
+        start_time: str = DEFAULT_START_TIME,
+        end_time: str = DEFAULT_END_TIME,
         max_samples: int | None = None,
         num_timesteps: int = 12,
         groups_override: list[str] | None = None,
@@ -232,6 +267,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         label_fraction_seed: int = 42,
         window_size: int | None = None,
         label_at_center_pixel: bool = False,
+        tile_samples: bool = False,
+        sample_size: int | None = None,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -262,6 +299,10 @@ class RslearnToOlmoEarthDataset(Dataset):
                 (see RslearnToOlmoEarthDataset).
             label_at_center_pixel: Emit the labeled pixel's class as a scalar
                 classification label (see RslearnToOlmoEarthDataset).
+            tile_samples: Tile every sample into window_size x window_size
+                windows instead of center-cropping (see
+                RslearnToOlmoEarthDataset).
+            sample_size: Stored sample height/width, required with tile_samples.
         """
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
@@ -318,6 +359,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             num_timesteps=num_timesteps,
             window_size=window_size,
             label_at_center_pixel=label_at_center_pixel,
+            tile_samples=tile_samples,
+            sample_size=sample_size,
         )
 
     @staticmethod
@@ -439,9 +482,16 @@ class RslearnToOlmoEarthDataset(Dataset):
         return rows, cols, classes
 
     def _transform_sample(
-        self, input_dict: dict, target: dict
+        self,
+        input_dict: dict,
+        target: dict,
+        tile: tuple[int, int] | None = None,
     ) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
-        """Transform a raw rslearn sample into (MaskedOlmoEarthSample, label)."""
+        """Transform a raw rslearn sample into (MaskedOlmoEarthSample, label).
+
+        With tile set (tile_samples mode), (tile_row, tile_col) selects which
+        window_size x window_size tile of the stored sample to emit.
+        """
         sample_dict: dict[str, Any] = {}
         sample_timesteps: int | None = None
 
@@ -451,7 +501,19 @@ class RslearnToOlmoEarthDataset(Dataset):
         label = self._parse_label(target)
         crop_rows: slice | None = None
         crop_cols: slice | None = None
-        if self.window_size is not None or self.label_at_center_pixel:
+        if tile is not None:
+            assert self.window_size is not None
+            if label.shape != (self.sample_size, self.sample_size):
+                raise ValueError(
+                    f"tile_samples expects {self.sample_size}x{self.sample_size} "
+                    f"label rasters, got {tuple(label.shape)}"
+                )
+            tile_row, tile_col = tile
+            ws = self.window_size
+            crop_rows = slice(tile_row * ws, (tile_row + 1) * ws)
+            crop_cols = slice(tile_col * ws, (tile_col + 1) * ws)
+            label = label[crop_rows, crop_cols]
+        elif self.window_size is not None or self.label_at_center_pixel:
             crop_rows, crop_cols, label = self._label_crop_slices(label)
 
         for modality in self.input_modalities:
@@ -570,10 +632,16 @@ class RslearnToOlmoEarthDataset(Dataset):
 
     def __len__(self) -> int:
         """Length of the dataset."""
-        return len(self.dataset)
+        return len(self.dataset) * self._tiles_per_side**2
 
     def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
         """Return a MaskedOlmoEarthSample and target tensor."""
+        if self._tiles_per_side > 1:
+            base_idx, tile = divmod(idx, self._tiles_per_side**2)
+            input_dict, target, _ = self.dataset[base_idx]
+            return self._transform_sample(
+                input_dict, target, tile=divmod(tile, self._tiles_per_side)
+            )
         input_dict, target, _ = self.dataset[idx]
         return self._transform_sample(input_dict, target)
 
@@ -584,7 +652,13 @@ class IterableRslearnToOlmoEarthDataset(IterableDataset, RslearnToOlmoEarthDatas
     def __iter__(self) -> Iterator[tuple[MaskedOlmoEarthSample, torch.Tensor]]:
         """Iterate over the dataset."""
         for input_dict, target, _ in self.dataset:
-            yield self._transform_sample(input_dict, target)
+            if self._tiles_per_side > 1:
+                for tile in range(self._tiles_per_side**2):
+                    yield self._transform_sample(
+                        input_dict, target, tile=divmod(tile, self._tiles_per_side)
+                    )
+            else:
+                yield self._transform_sample(input_dict, target)
 
 
 def wrap_rslearn_dataset(**kwargs: Any) -> RslearnToOlmoEarthDataset:
@@ -607,6 +681,7 @@ def from_registry_entry(
     label_fraction_seed: int = 42,
     window_size: int | None = None,
     label_at_center_pixel: bool = False,
+    tile_samples: bool = False,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -634,6 +709,9 @@ def from_registry_entry(
             (see RslearnToOlmoEarthDataset).
         label_at_center_pixel: Emit the labeled pixel's class as a scalar
             classification label (see RslearnToOlmoEarthDataset).
+        tile_samples: Tile every sample into window_size x window_size windows
+            instead of center-cropping; the stored sample size is taken from
+            the registry entry's window_size (see RslearnToOlmoEarthDataset).
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -701,11 +779,20 @@ def from_registry_entry(
         raise ValueError(
             f"Dataset '{entry.name}' has use_pretrain_norm=False but no norm_stats in registry."
         )
+    if tile_samples and not entry.window_size:
+        raise ValueError(
+            f"tile_samples requires registry entry '{entry.name}' to record its "
+            "stored sample size in window_size."
+        )
     return RslearnToOlmoEarthDataset.from_model_config(
         model_config=model_config,
         source_path=dataset_path,
         split=normalized_split,
         input_modalities=input_modalities,
+        # Per-dataset imagery time range (for timestamp synthesis); fall back
+        # to the defaults when the entry does not record one.
+        start_time=entry.start_time or DEFAULT_START_TIME,
+        end_time=entry.end_time or DEFAULT_END_TIME,
         norm_stats_from_pretrained=use_pretrain_norm,
         norm_method=norm_method,
         ds_norm_stats_json=None,
@@ -717,4 +804,6 @@ def from_registry_entry(
         label_fraction_seed=label_fraction_seed,
         window_size=window_size,
         label_at_center_pixel=label_at_center_pixel,
+        tile_samples=tile_samples,
+        sample_size=entry.window_size if tile_samples else None,
     )

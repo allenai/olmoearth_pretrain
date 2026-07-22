@@ -24,6 +24,119 @@ logger = logging.getLogger(__name__)
 # matching annual embedding-product layer is 2019.
 PASTIS_LABEL_YEAR = 2019
 
+# Calendar months spanned by the PASTIS time series; each sample keeps the
+# first 12 months that have S2 acquisitions.
+PASTIS_ALL_MONTHS = [
+    "201809",
+    "201810",
+    "201811",
+    "201812",
+    "201901",
+    "201902",
+    "201903",
+    "201904",
+    "201905",
+    "201906",
+    "201907",
+    "201908",
+    "201909",
+    "201910",
+]
+
+
+def replay_months(dates: dict[str, int]) -> list[int]:
+    """Replay aggregate_months' month selection from metadata dates alone.
+
+    The per-sample month sequence depends only on which months have S2
+    acquisitions (``dates-S2`` in metadata.geojson), not on the imagery, so
+    it can be reproduced without loading any .npy files.
+    """
+    months_present = {str(date)[:6] for date in dates.values()}
+    months = [int(month) for month in PASTIS_ALL_MONTHS if month in months_present]
+    return months[:12]
+
+
+def replay_split_patches(
+    meta_data: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    """Replay the processor's deterministic split ordering from metadata alone.
+
+    Patches appear in metadata feature order within folds, folds 1-3
+    concatenated for train (matching PASTISRProcessor.process()); patches
+    without 12 months of S2 data are dropped, mirroring the processor's
+    12-month filter.
+
+    Returns:
+        Dict split name ("train"/"valid"/"test") -> ordered list of dicts with
+        "patch_id", "geometry", "fold", and "months" keys.
+    """
+    fold_patches: dict[str, list[dict[str, Any]]] = {
+        f"fold_{i}": [] for i in range(1, 6)
+    }
+    for feature in meta_data["features"]:
+        properties = feature["properties"]
+        months = replay_months(properties["dates-S2"])
+        if len(months) != 12:
+            continue
+        fold_patches[f"fold_{properties['Fold']}"].append(
+            {
+                "patch_id": properties["ID_PATCH"],
+                "geometry": feature["geometry"],
+                "fold": properties["Fold"],
+                "months": months,
+            }
+        )
+    return {
+        "train": (
+            fold_patches["fold_1"] + fold_patches["fold_2"] + fold_patches["fold_3"]
+        ),
+        "valid": fold_patches["fold_4"],
+        "test": fold_patches["fold_5"],
+    }
+
+
+def verify_months_alignment(
+    splits_dir: UPath,
+    split_patches: dict[str, list[dict[str, Any]]],
+    samples_per_patch: int,
+) -> None:
+    """Verify the replayed patch ordering against every split's months.pt.
+
+    Confirms that the processed splits under ``splits_dir`` were produced from
+    the same metadata replay (patch ordering and per-patch month sequences),
+    so per-index files like the <modality>_images embeddings are guaranteed to
+    be aligned with ``split_patches``. Raises on any drift.
+    """
+    for split, patches in split_patches.items():
+        months_path = splits_dir / f"pastis_r_{split}" / "months.pt"
+        if not months_path.exists():
+            raise FileNotFoundError(
+                f"{months_path} not found; expected fully processed splits "
+                f"under {splits_dir} (run the full processor first)."
+            )
+        existing = torch.load(months_path)
+        expected = torch.tensor(
+            [patch["months"] for patch in patches], dtype=torch.long
+        ).repeat_interleave(samples_per_patch, dim=0)
+        if existing.shape != expected.shape:
+            raise ValueError(
+                f"{split}: months.pt has shape {tuple(existing.shape)} but "
+                f"metadata replay predicts {tuple(expected.shape)}. The "
+                f"existing splits were not produced from this metadata "
+                f"(e.g. patches were skipped); per-index files cannot be "
+                f"aligned. Fall back to a full re-run into a fresh directory."
+            )
+        if not torch.equal(existing.long(), expected):
+            first_bad = (existing.long() != expected).any(dim=1).nonzero()[0].item()
+            raise ValueError(
+                f"{split}: months.pt disagrees with the metadata replay at "
+                f"sample {first_bad}; ordering cannot be verified. Fall "
+                f"back to a full re-run into a fresh directory."
+            )
+        logger.info(
+            f"{split}: months.pt matches metadata replay ({len(patches)} patches)"
+        )
+
 
 def build_embedding_fetcher(product_name: str) -> EmbeddingFetcher:
     """Build the embedding fetcher for a product name ("aef" or "tessera")."""
@@ -136,22 +249,7 @@ class PASTISRProcessor:
         self.output_dir = UPath(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.all_months = [
-            "201809",
-            "201810",
-            "201811",
-            "201812",
-            "201901",
-            "201902",
-            "201903",
-            "201904",
-            "201905",
-            "201906",
-            "201907",
-            "201908",
-            "201909",
-            "201910",
-        ]
+        self.all_months = PASTIS_ALL_MONTHS
         self.resize_to_64 = resize_to_64
         self.embedding_year = embedding_year
         self.embedding_fetchers = [
@@ -252,15 +350,8 @@ class PASTISRProcessor:
         return embeddings
 
     def _replay_months(self, dates: dict[str, int]) -> list[int]:
-        """Replay aggregate_months' month selection from metadata dates alone.
-
-        The per-sample month sequence depends only on which months have S2
-        acquisitions (``dates-S2`` in metadata.geojson), not on the imagery, so
-        it can be reproduced without loading any .npy files.
-        """
-        months_present = {str(date)[:6] for date in dates.values()}
-        months = [int(month) for month in self.all_months if month in months_present]
-        return months[:12]
+        """Replay aggregate_months' month selection from metadata dates alone."""
+        return replay_months(dates)
 
     def process_embeddings_only(
         self, overwrite: bool = False, workers: int = 8
@@ -292,63 +383,11 @@ class PASTISRProcessor:
         if crs_name is not None:
             self.meta_crs = CRS.from_user_input(crs_name)
 
-        # Replay ordering: metadata feature order within folds, folds 1-3
-        # concatenated for train (matching process()).
-        fold_patches: dict[str, list[dict[str, Any]]] = {
-            f"fold_{i}": [] for i in range(1, 6)
-        }
-        for feature in meta_data["features"]:
-            properties = feature["properties"]
-            months = self._replay_months(properties["dates-S2"])
-            if len(months) != 12:
-                # Mirrors the 12-month filter in process().
-                continue
-            fold_patches[f"fold_{properties['Fold']}"].append(
-                {
-                    "patch_id": properties["ID_PATCH"],
-                    "geometry": feature["geometry"],
-                    "months": months,
-                }
-            )
-        split_patches = {
-            "train": (
-                fold_patches["fold_1"] + fold_patches["fold_2"] + fold_patches["fold_3"]
-            ),
-            "valid": fold_patches["fold_4"],
-            "test": fold_patches["fold_5"],
-        }
+        split_patches = replay_split_patches(meta_data)
         samples_per_patch = 4 if self.resize_to_64 else 1
 
         # Verify alignment against every split's months.pt before writing.
-        for split, patches in split_patches.items():
-            months_path = self.output_dir / f"pastis_r_{split}" / "months.pt"
-            if not months_path.exists():
-                raise FileNotFoundError(
-                    f"{months_path} not found; embeddings-only mode augments "
-                    f"existing processed splits (run the full processor first)."
-                )
-            existing = torch.load(months_path)
-            expected = torch.tensor(
-                [patch["months"] for patch in patches], dtype=torch.long
-            ).repeat_interleave(samples_per_patch, dim=0)
-            if existing.shape != expected.shape:
-                raise ValueError(
-                    f"{split}: months.pt has shape {tuple(existing.shape)} but "
-                    f"metadata replay predicts {tuple(expected.shape)}. The "
-                    f"existing splits were not produced from this metadata "
-                    f"(e.g. patches were skipped); embeddings cannot be aligned. "
-                    f"Fall back to a full re-run into a fresh directory."
-                )
-            if not torch.equal(existing.long(), expected):
-                first_bad = (existing.long() != expected).any(dim=1).nonzero()[0].item()
-                raise ValueError(
-                    f"{split}: months.pt disagrees with the metadata replay at "
-                    f"sample {first_bad}; ordering cannot be verified. Fall "
-                    f"back to a full re-run into a fresh directory."
-                )
-            logger.info(
-                f"{split}: months.pt matches metadata replay ({len(patches)} patches)"
-            )
+        verify_months_alignment(self.output_dir, split_patches, samples_per_patch)
 
         # Fetch and write, resumable per patch.
         for split, patches in split_patches.items():

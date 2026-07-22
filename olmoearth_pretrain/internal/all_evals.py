@@ -1284,13 +1284,24 @@ def _aef_ws16_ps1_task(name: str, eval_mode: EvalMode) -> DownstreamTaskConfig:
 # and quantize_embeddings=False (they are already int8 at source).
 #
 # The AEF supplemental tasks are effectively pixel-wise classification, so each
-# gets a KNN twin (`_knn`). The PASTIS task stays LP-only: its dense labels
+# gets a KNN twin (`_knn`). The PASTIS tasks stay LP-only: their dense labels
 # flatten to millions of train pixels, and KNN keeps every one as a reference
 # point (cost scales with train x query pixels), unlike the LP which compresses
 # them into a single weight matrix.
-EMBEDDING_EVAL_TASKS = {
-    "pastis_ws16_ps1_sentinel2": DownstreamTaskConfig(
-        dataset="pastis",
+#
+# The PASTIS tasks run on `pastis_rslearn`, an rslearn export that mirrors the
+# pretraining dataset (12 monthly Planetary Computer mosaics per sensor on the
+# native PASTIS patch grid; see
+# olmoearth_pretrain/evals/datasets/pastis_rslearn_export.py) rather than the
+# imagery shipped with the PASTIS benchmark. Each 128x128 patch is tiled into
+# 16x16 windows (tile_samples). The gse/tessera layers were converted from the
+# embeddings previously fetched by pastis_processor.py --embedding_products.
+
+
+def _pastis_ws16_ps1_task(input_modalities: list[str]) -> DownstreamTaskConfig:
+    """PASTIS (rslearn export) under the per-pixel embedding-product convention."""
+    return DownstreamTaskConfig(
+        dataset="pastis_rslearn",
         embedding_batch_size=32,
         probe_batch_size=8,
         num_workers=2,
@@ -1298,13 +1309,21 @@ EMBEDDING_EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         probe_lr=0.1,
         eval_interval=Duration.epochs(50),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
+        input_modalities=input_modalities,
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
         window_size=16,
         patch_size=1,
+        tile_samples=True,
         quantize_embeddings=True,
+    )
+
+
+EMBEDDING_EVAL_TASKS = {
+    "pastis_ws16_ps1_sentinel2": _pastis_ws16_ps1_task([Modality.SENTINEL2_L2A.name]),
+    "pastis_ws16_ps1_sentinel1_sentinel2": _pastis_ws16_ps1_task(
+        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name]
     ),
     **{
         f"{name}_ws16_ps1": _aef_ws16_ps1_task(name, EvalMode.LINEAR_PROBE)
