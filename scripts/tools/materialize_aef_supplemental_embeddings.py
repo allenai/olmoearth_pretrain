@@ -36,21 +36,9 @@ from olmoearth_pretrain.evals.embedding_materializer.materialize import (
     write_manifest,
 )
 from olmoearth_pretrain.evals.studio_ingest.registry import get_dataset_entry
+from olmoearth_pretrain.internal.all_evals import AEF_SUPPLEMENTAL_DATASETS
 
 logger = logging.getLogger(__name__)
-
-# The AlphaEarth-supplemental evaluation datasets (arXiv:2507.22291), as
-# ingested in evals/studio_ingest/registry.json.
-AEF_SUPPLEMENTAL_DATASETS = [
-    "africa_crop_mask",
-    "canada_crops_coarse",
-    "canada_crops_fine",
-    "descals",
-    "ethiopia_crops",
-    "glance",
-    "lcmap_lu",
-    "us_trees",
-]
 
 
 def build_fetcher(product_name: str) -> EmbeddingFetcher:
