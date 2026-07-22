@@ -419,10 +419,12 @@ class OlmoEarthTrainModule(TrainModule):
         e.g. evaluating S2-only tasks with a checkpoint saved before srtm grew
         the terrain bands (its patch-embedding weight is [64, 1] in the
         checkpoint but [64, 4] in the current model). Dropped parameters keep
-        their fresh initialization; their optimizer state is dropped too, and
-        missing-key strictness is relaxed so the partial load succeeds. Never
-        set this when resuming training: a silently unloaded weight is a bug
-        there, not a convenience.
+        their fresh initialization; optimizer state is skipped entirely (the
+        flattened optimizer format requires an entry per current param, so a
+        partial optimizer load is not possible), and missing-key strictness is
+        relaxed so the partial load succeeds. Never set this when resuming
+        training: a silently unloaded weight — and a fresh optimizer — is a
+        bug there, not a convenience.
         """
         dropped: list[str] = []
         for key, value in list(state_dict["model"].items()):
@@ -446,9 +448,13 @@ class OlmoEarthTrainModule(TrainModule):
             )
         if not dropped:
             return
-        for key in list(state_dict.get("optim", {}).keys()):
-            if any(fqn in key for fqn in dropped):
-                del state_dict["optim"][key]
+        if state_dict.pop("optim", None) is not None:
+            logger.warning(
+                "OE_LOAD_SKIP_MISMATCHED_KEYS: skipping optimizer state entirely "
+                "(%d model key(s) were dropped, and the flattened optimizer "
+                "format cannot be partially loaded).",
+                len(dropped),
+            )
         self.state_dict_load_opts = dataclasses.replace(
             self.state_dict_load_opts, strict=False
         )
@@ -465,6 +471,11 @@ class OlmoEarthTrainModule(TrainModule):
             options=self.state_dict_load_opts,
         )
         gc_cuda()
+        if "optim" not in state_dict:
+            # _drop_mismatched_keys removed it (OE_LOAD_SKIP_MISMATCHED_KEYS);
+            # the optimizer keeps its fresh state.
+            logger.warning("No optimizer state in the load plan; not loading any.")
+            return
         dist_cp_sd.set_optimizer_state_dict(
             self.model,
             self.optimizer,
