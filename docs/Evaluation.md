@@ -33,9 +33,10 @@ We run evaluations through the same `olmoearth_pretrain/internal/experiment.py` 
 
 - `olmoearth_pretrain/internal/full_eval_sweep.py` runs KNN (classification) and linear probing (segmentation) sweeps for OlmoEarth checkpoints or baseline models, with optional sweeps over learning rate, pretrained / dataset normalizers, and pooling (mean or max).
 - `olmoearth_pretrain/internal/full_eval_sweep_finetune.py` runs fine-tuning sweeps for OlmoEarth checkpoints or baseline models, with optional sweeps over learning rate and pretrained / dataset normalizers.
+- `olmoearth_pretrain/internal/embedding_eval_sweep.py` runs the embedding-product evals (`EMBEDDING_EVAL_TASKS`: the per-pixel ws16/ps1 tasks) for an OlmoEarth checkpoint or the precomputed products (`--model=aef` / `--model=tessera_precomputed`). Normalization is held fixed (pretraining stats; embedding products are consumed as stored) and only the probe learning rate is swept — the KNN twins of the AEF supplemental tasks run once in their own job.
 
-Both scripts use:
-- [`olmoearth_pretrain/internal/all_evals.py`](../olmoearth_pretrain/internal/all_evals.py) for the task registry (`EVAL_TASKS` for KNN and linear probing, and `FT_EVAL_TASKS` for fine-tuning).
+The scripts use:
+- [`olmoearth_pretrain/internal/all_evals.py`](../olmoearth_pretrain/internal/all_evals.py) for the task registry (`EVAL_TASKS` for KNN and linear probing, `FT_EVAL_TASKS` for fine-tuning, and `EMBEDDING_EVAL_TASKS` for the embedding-product convention).
 - [`olmoearth_pretrain/evals`](../olmoearth_pretrain/evals) for dataset and model wrappers.
 
 Every launch uses one of the evaluation subcommands in `experiment.py`:
@@ -64,7 +65,9 @@ The sweep scripts set `TRAIN_SCRIPT_PATH` automatically and select `torchrun` fo
   materializer, and how to onboard datasets.
 
   For head-to-head comparisons with these products, `all_evals.py` defines
-  tasks under a per-pixel embedding-product convention: 16×16 windows,
+  a separate `EMBEDDING_EVAL_TASKS` registry (swept via
+  `embedding_eval_sweep.py`, see above) under a per-pixel embedding-product
+  convention: 16×16 windows,
   `patch_size=1` (one embedding per 10 m pixel), and an int8 round-trip
   (`quantize_embeddings=True`) so forward-pass models are scored as int8
   products too. `pastis_ws16_ps1_sentinel2` tiles each PASTIS sample into
