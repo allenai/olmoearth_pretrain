@@ -53,6 +53,10 @@ class GridTile:
     col: int
     row: int
 
+    # Globally unique identity for centered, non-grid windows. Legacy grid datasets use
+    # None and retain the historical (crs, resolution, col, row) identity.
+    example_id: str | None = None
+
 
 @dataclass
 class ModalityTile:
@@ -106,6 +110,7 @@ def parse_modality_csv(
                 resolution_factor=modality.tile_resolution_factor,
                 col=int(csv_row["col"]),
                 row=int(csv_row["row"]),
+                example_id=csv_row.get("example_id") or None,
             )
             image = ModalityImage(
                 start_time=datetime.fromisoformat(csv_row["start_time"]),
@@ -144,6 +149,7 @@ def parse_modality_csv(
             col=grid_tile.col,
             row=grid_tile.row,
             time=tile.center_time,
+            example_id=grid_tile.example_id,
         )
         for band_set in modality.band_sets:
             fname = get_modality_fname(
@@ -179,8 +185,8 @@ def parse_dataset(
             continue
 
         if modality.is_multitemporal:
-            # We need to load the one-year and two-week data separately.
-            time_spans = [TimeSpan.YEAR]  # [TimeSpan.YEAR, TimeSpan.TWO_WEEK]
+            # Only the one-year (monthly) series is used.
+            time_spans = [TimeSpan.YEAR]
         else:
             # Just need to load the static data.
             time_spans = [TimeSpan.STATIC]

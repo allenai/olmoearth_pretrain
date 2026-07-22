@@ -16,6 +16,7 @@ from olmoearth_pretrain.dataset.utils import get_modality_fname
 
 from ..constants import METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
+from .cli import add_common_arguments
 from .multitemporal_raster import get_adjusted_projection_and_bounds
 
 # Layer name in the input rslearn dataset.
@@ -62,9 +63,12 @@ def convert_naip(window: Window, olmoearth_path: UPath) -> None:
     adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
         Modality.NAIP_10, band_set, window.projection, window.bounds
     )
-    raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
-    image = raster_format.decode_raster(
-        raster_dir, adjusted_projection, adjusted_bounds
+    image = window.data.read_raster(
+        LAYER_NAME,
+        band_set.bands,
+        raster_format,
+        projection=adjusted_projection,
+        bounds=adjusted_bounds,
     )
     dst_fname = get_modality_fname(
         olmoearth_path,
@@ -90,6 +94,7 @@ def convert_naip(window: Window, olmoearth_path: UPath) -> None:
         writer.writeheader()
         writer.writerow(
             dict(
+                example_id=window_metadata.example_id or "",
                 crs=window_metadata.crs,
                 col=window_metadata.col,
                 row=window_metadata.row,
@@ -107,24 +112,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Post-process OlmoEarth Pretrain data",
     )
-    parser.add_argument(
-        "--ds_path",
-        type=str,
-        help="Source rslearn dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--olmoearth_path",
-        type=str,
-        help="Destination OlmoEarth Pretrain dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        help="Number of workers to use",
-        default=32,
-    )
+    add_common_arguments(parser, default_groups=["res_10"])
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))
@@ -132,7 +120,7 @@ if __name__ == "__main__":
 
     jobs = []
     for window in dataset.load_windows(
-        workers=args.workers, show_progress=True, groups=["res_10"]
+        workers=args.workers, show_progress=True, groups=args.groups
     ):
         jobs.append(
             dict(
