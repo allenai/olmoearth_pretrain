@@ -135,6 +135,64 @@ def draw_line_string(
         array[category_id, rows[valid], cols[valid]] = 1
 
 
+def draw_geometry(
+    array: npt.NDArray,
+    geometry: dict,
+    category_id: int,
+    transform: Callable[[npt.NDArray], npt.NDArray],
+    output_size: int,
+) -> None:
+    """Draw a GeoJSON geometry on the array.
+
+    Multi-geometries and GeometryCollections are handled by recursively drawing each
+    of their component geometries.
+
+    Args:
+        array: the array to write to.
+        geometry: the GeoJSON geometry dict.
+        category_id: the category of this geometry.
+        transform: transform to apply on the coordinates.
+        output_size: the height/width of the output raster in pixels.
+    """
+    if geometry["type"] == "Polygon":
+        draw_polygon(
+            array, geometry["coordinates"], category_id, transform, output_size
+        )
+    elif geometry["type"] == "LineString":
+        draw_line_string(
+            array, geometry["coordinates"], category_id, transform, output_size
+        )
+    elif geometry["type"] == "Point":
+        coords = transform(np.array(geometry["coordinates"]))
+        if coords[0] < 0 or coords[0] >= output_size:
+            return
+        if coords[1] < 0 or coords[1] >= output_size:
+            return
+        array[category_id, coords[1], coords[0]] = 1
+    elif geometry["type"] == "MultiPoint":
+        for point_coords in geometry["coordinates"]:
+            draw_geometry(
+                array,
+                dict(type="Point", coordinates=point_coords),
+                category_id,
+                transform,
+                output_size,
+            )
+    elif geometry["type"] == "MultiLineString":
+        for line_string_coords in geometry["coordinates"]:
+            draw_line_string(
+                array, line_string_coords, category_id, transform, output_size
+            )
+    elif geometry["type"] == "MultiPolygon":
+        for polygon_coords in geometry["coordinates"]:
+            draw_polygon(array, polygon_coords, category_id, transform, output_size)
+    elif geometry["type"] == "GeometryCollection":
+        for component in geometry["geometries"]:
+            draw_geometry(array, component, category_id, transform, output_size)
+    else:
+        raise ValueError(f"cannot handle geometry type {geometry['type']}")
+
+
 def rasterize_openstreetmap(
     olmoearth_path: UPath,
     in_fname: UPath,
@@ -219,32 +277,7 @@ def rasterize_openstreetmap(
         category_id = CATEGORIES.index(category)
 
         # Now rasterize based on the geometry type.
-        geometry = feat["geometry"]
-        if geometry["type"] == "Polygon":
-            draw_polygon(
-                array, geometry["coordinates"], category_id, transform, output_size
-            )
-        elif geometry["type"] == "LineString":
-            draw_line_string(
-                array, geometry["coordinates"], category_id, transform, output_size
-            )
-        elif geometry["type"] == "Point":
-            coords = transform(np.array(geometry["coordinates"]))
-            if coords[0] < 0 or coords[0] >= output_size:
-                continue
-            if coords[1] < 0 or coords[1] >= output_size:
-                continue
-            array[category_id, coords[1], coords[0]] = 1
-        elif geometry["type"] == "MultiLineString":
-            for line_string_coords in geometry["coordinates"]:
-                draw_line_string(
-                    array, line_string_coords, category_id, transform, output_size
-                )
-        elif geometry["type"] == "MultiPolygon":
-            for polygon_coords in geometry["coordinates"]:
-                draw_polygon(array, polygon_coords, category_id, transform, output_size)
-        else:
-            raise ValueError(f"cannot handle geometry type {geometry['type']}")
+        draw_geometry(array, feat["geometry"], category_id, transform, output_size)
 
     # Upload the rasterized data as GeoTIFF.
     out_fname = get_modality_fname(
