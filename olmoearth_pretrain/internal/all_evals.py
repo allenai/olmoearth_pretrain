@@ -190,6 +190,26 @@ EVAL_TASKS = {
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
+    # Per-pixel embedding-product convention: 16x16 windows, patch size 1, so
+    # OlmoEarth emits per-pixel 10m embeddings from a fixed 160m context —
+    # directly comparable to the precomputed AEF/Tessera baselines (which are
+    # natively per-pixel and ignore patch_size).
+    "pastis_ws16_ps1_sentinel2": DownstreamTaskConfig(
+        dataset="pastis",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        window_size=16,
+        patch_size=1,
+    ),
     "pastis_sentinel1": DownstreamTaskConfig(
         dataset="pastis",
         embedding_batch_size=32,
