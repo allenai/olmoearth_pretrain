@@ -57,8 +57,11 @@ def convert_openstreetmap(window: Window, olmoearth_path: UPath) -> None:
     # It may end up in multiple layers if there are different OpenStreetMap GeoJSONs
     # that match to the window due to just using their bounding box instead of actual
     # extent. So we need to concatenate the features across all of the layers.
+    # Skip the window if any of the item groups is not materialized yet.
     features = []
     for group_idx in range(len(layer_data.serialized_item_groups)):
+        if not window.is_layer_completed(LAYER_NAME, group_idx=group_idx):
+            return
         cur_features = window.data.read_vector(
             LAYER_NAME, vector_format, group_idx=group_idx
         )
