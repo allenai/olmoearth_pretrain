@@ -189,6 +189,9 @@ def build_launch_config(
                 name="EMBEDDING_DIAGNOSTICS_ONLY", value=embedding_diagnostics_only
             )
         )
+    embedding_evals = os.environ.get("EMBEDDING_EVALS")
+    if embedding_evals is not None:
+        env_vars.append(BeakerEnvVar(name="EMBEDDING_EVALS", value=embedding_evals))
     # Propagate the load-arch-from-checkpoint flag to the experiment if set
     load_arch_from_checkpoint = os.environ.get("LOAD_ARCH_FROM_CHECKPOINT")
     if load_arch_from_checkpoint is not None:
