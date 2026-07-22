@@ -123,6 +123,7 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
+            Modality.GSE.name,
         ],
     ),
     "pretrain_subset_worldcover": EvalDatasetConfig(
@@ -135,6 +136,7 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
+            Modality.GSE.name,
         ],
     ),
     "pretrain_subset_osm": EvalDatasetConfig(
@@ -147,6 +149,7 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
+            Modality.GSE.name,
         ],
     ),
     "pretrain_subset_srtm": EvalDatasetConfig(
@@ -159,6 +162,7 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
+            Modality.GSE.name,
         ],
     ),
     "pretrain_subset_canopy": EvalDatasetConfig(
@@ -171,6 +175,7 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
+            Modality.GSE.name,
         ],
     ),
     "pretrain_subset_cdl": EvalDatasetConfig(
@@ -185,6 +190,7 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
+            Modality.GSE.name,
         ],
     ),
     "pretrain_subset_worldcereal": EvalDatasetConfig(
@@ -198,6 +204,7 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
+            Modality.GSE.name,
         ],
     ),
     "m-eurosat": EvalDatasetConfig(
@@ -287,7 +294,14 @@ DATASET_TO_CONFIG = {
         num_classes=19,
         is_multilabel=False,
         height_width=64,
-        supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        # gse/tessera require splits processed with
+        # pastis_processor.py --embedding_products=aef,tessera
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.GSE.name,
+            Modality.TESSERA.name,
+        ],
         timeseries=True,
     ),
     "pastis128": EvalDatasetConfig(
@@ -296,7 +310,14 @@ DATASET_TO_CONFIG = {
         num_classes=19,
         is_multilabel=False,
         height_width=128,
-        supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        # gse/tessera require splits processed with
+        # pastis_processor.py --embedding_products=aef,tessera
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.GSE.name,
+            Modality.TESSERA.name,
+        ],
         timeseries=True,
     ),
     # 50Cities: single-timestep S2+S1 land-cover segmentation, 64x64 tiles.

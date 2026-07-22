@@ -114,20 +114,21 @@ def get_eval_dataset(
             norm_method=norm_method,
         )
     elif eval_dataset.startswith("pastis"):
-        kwargs = {
+        pastis_kwargs = {
             "split": split,
             "label_fraction": label_fraction,
             "norm_stats_from_pretrained": norm_stats_from_pretrained,
             "input_modalities": input_modalities,
             "norm_method": norm_method,
             "dir_partition": paths.PASTIS_DIR_PARTITION,
+            "window_size": kwargs.get("window_size"),
         }
         if "128" in eval_dataset:
             # "pastis128"
-            kwargs["path_to_splits"] = paths.PASTIS_DIR_ORIG
+            pastis_kwargs["path_to_splits"] = paths.PASTIS_DIR_ORIG
         else:
-            kwargs["path_to_splits"] = paths.PASTIS_DIR
-        return PASTISRDataset(**kwargs)  # type: ignore
+            pastis_kwargs["path_to_splits"] = paths.PASTIS_DIR
+        return PASTISRDataset(**pastis_kwargs)  # type: ignore
     elif eval_dataset.startswith("fifty_cities"):
         # Split mode is encoded in the dataset-name suffix; "fifty_cities" alone
         # is the random split.

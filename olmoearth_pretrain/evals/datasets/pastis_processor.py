@@ -9,12 +9,98 @@ from typing import Any
 
 import numpy as np
 import torch
+from rasterio.crs import CRS
+from rasterio.warp import transform as warp_transform
+from rslearn.utils.geometry import PixelBounds, Projection
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.evals.embedding_materializer.fetchers import EmbeddingFetcher
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 
 logger = logging.getLogger(__name__)
+
+# PASTIS parcel labels come from the 2019 French LPIS declarations, so the
+# matching annual embedding-product layer is 2019.
+PASTIS_LABEL_YEAR = 2019
+
+
+def build_embedding_fetcher(product_name: str) -> EmbeddingFetcher:
+    """Build the embedding fetcher for a product name ("aef" or "tessera")."""
+    if product_name == "aef":
+        from olmoearth_pretrain.evals.embedding_materializer.fetchers import AEFFetcher
+
+        return AEFFetcher()
+    if product_name == "tessera":
+        from olmoearth_pretrain.evals.embedding_materializer.fetchers import (
+            TesseraFetcher,
+        )
+
+        return TesseraFetcher()
+    raise ValueError(f"Unknown embedding product '{product_name}'")
+
+
+def patch_grid_from_geometry(
+    geometry: dict[str, Any],
+    source_crs: CRS,
+    patch_size_px: int = 128,
+    resolution: float = 10.0,
+) -> tuple[PixelBounds, Projection]:
+    """Compute a patch's native UTM pixel grid from its footprint geometry.
+
+    PASTIS patches are cut from Sentinel-2 tiles, so their native grid is the
+    10 m UTM grid of the tile. The footprint (in the metadata.geojson CRS) is
+    reprojected to the centroid's UTM zone and the min corner is snapped to the
+    10 m grid; the grid size is forced to ``patch_size_px`` so the embedding
+    raster aligns pixel-for-pixel with the patch imagery and labels.
+
+    Args:
+        geometry: GeoJSON polygon geometry of the patch footprint.
+        source_crs: CRS of the geometry coordinates.
+        patch_size_px: Patch size in pixels (128 for PASTIS).
+        resolution: Grid resolution in meters.
+
+    Returns:
+        Tuple of (pixel bounds, rslearn Projection) for the patch grid.
+    """
+    if geometry["type"] == "Polygon":
+        exterior = geometry["coordinates"][0]
+    elif geometry["type"] == "MultiPolygon":
+        exterior = geometry["coordinates"][0][0]
+    else:
+        raise ValueError(f"Unsupported geometry type: {geometry['type']}")
+    xs = [float(pt[0]) for pt in exterior]
+    ys = [float(pt[1]) for pt in exterior]
+
+    # UTM zone from the footprint centroid (PASTIS is in France: northern zones).
+    lons, lats = warp_transform(
+        source_crs,
+        CRS.from_epsg(4326),
+        [sum(xs) / len(xs)],
+        [sum(ys) / len(ys)],
+    )
+    zone = int((lons[0] + 180) // 6) + 1
+    utm_crs = CRS.from_epsg(32600 + zone)
+
+    utm_xs, utm_ys = warp_transform(source_crs, utm_crs, xs, ys)
+    x0 = round(min(utm_xs) / resolution)
+    # rslearn pixel y grows southward (y_res is negative), so the min pixel row
+    # corresponds to the max geographic y.
+    y0 = round(-max(utm_ys) / resolution)
+    bounds = (x0, y0, x0 + patch_size_px, y0 + patch_size_px)
+    return bounds, Projection(utm_crs, resolution, -resolution)
+
+
+def split_into_quadrants(images: torch.Tensor) -> torch.Tensor:
+    """Split (..., 128, 128) images into 4 stacked (..., 64, 64) quadrants."""
+    return torch.stack(
+        [
+            images[..., :64, :64],
+            images[..., 64:, :64],
+            images[..., :64, 64:],
+            images[..., 64:, 64:],
+        ]
+    )
 
 
 class PASTISRProcessor:
@@ -25,7 +111,14 @@ class PASTISRProcessor:
     It also imputes the missing bands in the S2 images.
     """
 
-    def __init__(self, data_dir: str, output_dir: str, resize_to_64: bool = True):
+    def __init__(
+        self,
+        data_dir: str,
+        output_dir: str,
+        resize_to_64: bool = True,
+        embedding_products: list[str] | None = None,
+        embedding_year: int = PASTIS_LABEL_YEAR,
+    ):
         """Initialize PASTIS-R processor.
 
         Args:
@@ -33,6 +126,11 @@ class PASTISRProcessor:
             output_dir: Path to output directory
             resize_to_64: Whether or not to resize the pastis dataset into 64x64 tiles
                 from 128x128 tiles
+            embedding_products: Optional precomputed embedding products ("aef",
+                "tessera") to fetch per patch and store alongside the imagery,
+                as <modality>_images (e.g. gse_images, tessera_images).
+            embedding_year: Annual embedding-product layer to fetch. Defaults to
+                2019, the PASTIS label year (French LPIS 2019 declarations).
         """
         self.data_dir = UPath(data_dir)
         self.output_dir = UPath(output_dir)
@@ -55,6 +153,16 @@ class PASTISRProcessor:
             "201910",
         ]
         self.resize_to_64 = resize_to_64
+        self.embedding_year = embedding_year
+        self.embedding_fetchers = [
+            build_embedding_fetcher(name) for name in (embedding_products or [])
+        ]
+        self.image_keys = ["s2_images", "s1_images"] + [
+            f"{fetcher.modality.name}_images" for fetcher in self.embedding_fetchers
+        ]
+        self.data_keys = self.image_keys + ["months", "targets"]
+        # CRS of metadata.geojson geometries; parsed in process().
+        self.meta_crs = CRS.from_epsg(4326)
 
     def impute(self, img: torch.Tensor) -> torch.Tensor:
         """Impute missing bands in Sentinel-2 images."""
@@ -119,6 +227,179 @@ class PASTISRProcessor:
 
         return torch.stack(img_list), torch.tensor(month_list, dtype=torch.long)
 
+    def fetch_patch_embeddings(
+        self, geometry: dict[str, Any], patch_id: Any
+    ) -> dict[str, torch.Tensor]:
+        """Fetch each configured embedding product on the patch's native grid.
+
+        Returns:
+            Dict of <modality>_images -> float32 tensor of shape (C, 128, 128).
+        """
+        if not self.embedding_fetchers:
+            return {}
+        bounds, projection = patch_grid_from_geometry(geometry, self.meta_crs)
+        embeddings: dict[str, torch.Tensor] = {}
+        for fetcher in self.embedding_fetchers:
+            array = fetcher.fetch(bounds, projection, self.embedding_year)
+            if array is None:
+                # PASTIS (France, 2019) is inside every product's coverage, so a
+                # gap indicates a fetch problem rather than genuine missing data.
+                raise ValueError(
+                    f"{fetcher.modality.name} has no coverage for PASTIS patch "
+                    f"{patch_id} in {self.embedding_year}"
+                )
+            embeddings[f"{fetcher.modality.name}_images"] = torch.from_numpy(array)
+        return embeddings
+
+    def _replay_months(self, dates: dict[str, int]) -> list[int]:
+        """Replay aggregate_months' month selection from metadata dates alone.
+
+        The per-sample month sequence depends only on which months have S2
+        acquisitions (``dates-S2`` in metadata.geojson), not on the imagery, so
+        it can be reproduced without loading any .npy files.
+        """
+        months_present = {str(date)[:6] for date in dates.values()}
+        months = [int(month) for month in self.all_months if month in months_present]
+        return months[:12]
+
+    def process_embeddings_only(
+        self, overwrite: bool = False, workers: int = 8
+    ) -> None:
+        """Add embedding products to existing processed splits, touching nothing else.
+
+        Only needs metadata.geojson under ``data_dir`` (no PASTIS imagery).
+        Replays the deterministic sample ordering and per-sample month
+        sequences from metadata and verifies them row-by-row against every
+        split's existing months.pt BEFORE writing anything — so the embeddings
+        are guaranteed index-aligned with the existing imagery/labels, and any
+        count drift, fold mismatch, or reordering aborts the run. Writes only
+        the <modality>_images directories; s2_images, s1_images, targets.pt,
+        and months.pt are never modified, keeping all previous eval results
+        comparable.
+
+        Args:
+            overwrite: Re-fetch and rewrite patches whose embedding files
+                already exist (default: skip them, making re-runs resumable).
+            workers: Concurrent fetch threads (the fetches are network-bound).
+        """
+        if not self.embedding_fetchers:
+            raise ValueError(
+                "embedding_products must be set for embeddings-only processing."
+            )
+        with open(self.data_dir / "metadata.geojson") as f:
+            meta_data = json.load(f)
+        crs_name = meta_data.get("crs", {}).get("properties", {}).get("name")
+        if crs_name is not None:
+            self.meta_crs = CRS.from_user_input(crs_name)
+
+        # Replay ordering: metadata feature order within folds, folds 1-3
+        # concatenated for train (matching process()).
+        fold_patches: dict[str, list[dict[str, Any]]] = {
+            f"fold_{i}": [] for i in range(1, 6)
+        }
+        for feature in meta_data["features"]:
+            properties = feature["properties"]
+            months = self._replay_months(properties["dates-S2"])
+            if len(months) != 12:
+                # Mirrors the 12-month filter in process().
+                continue
+            fold_patches[f"fold_{properties['Fold']}"].append(
+                {
+                    "patch_id": properties["ID_PATCH"],
+                    "geometry": feature["geometry"],
+                    "months": months,
+                }
+            )
+        split_patches = {
+            "train": (
+                fold_patches["fold_1"] + fold_patches["fold_2"] + fold_patches["fold_3"]
+            ),
+            "valid": fold_patches["fold_4"],
+            "test": fold_patches["fold_5"],
+        }
+        samples_per_patch = 4 if self.resize_to_64 else 1
+
+        # Verify alignment against every split's months.pt before writing.
+        for split, patches in split_patches.items():
+            months_path = self.output_dir / f"pastis_r_{split}" / "months.pt"
+            if not months_path.exists():
+                raise FileNotFoundError(
+                    f"{months_path} not found; embeddings-only mode augments "
+                    f"existing processed splits (run the full processor first)."
+                )
+            existing = torch.load(months_path)
+            expected = torch.tensor(
+                [patch["months"] for patch in patches], dtype=torch.long
+            ).repeat_interleave(samples_per_patch, dim=0)
+            if existing.shape != expected.shape:
+                raise ValueError(
+                    f"{split}: months.pt has shape {tuple(existing.shape)} but "
+                    f"metadata replay predicts {tuple(expected.shape)}. The "
+                    f"existing splits were not produced from this metadata "
+                    f"(e.g. patches were skipped); embeddings cannot be aligned. "
+                    f"Fall back to a full re-run into a fresh directory."
+                )
+            if not torch.equal(existing.long(), expected):
+                first_bad = (existing.long() != expected).any(dim=1).nonzero()[0].item()
+                raise ValueError(
+                    f"{split}: months.pt disagrees with the metadata replay at "
+                    f"sample {first_bad}; ordering cannot be verified. Fall "
+                    f"back to a full re-run into a fresh directory."
+                )
+            logger.info(
+                f"{split}: months.pt matches metadata replay ({len(patches)} patches)"
+            )
+
+        # Fetch and write, resumable per patch.
+        for split, patches in split_patches.items():
+            split_dir = self.output_dir / f"pastis_r_{split}"
+            for fetcher in self.embedding_fetchers:
+                os.makedirs(
+                    split_dir / f"{fetcher.modality.name}_images", exist_ok=True
+                )
+
+            def handle_patch(patch_pos: int, patch: dict[str, Any]) -> bool:
+                """Fetch and write one patch; returns True if it was skipped."""
+                base_idx = patch_pos * samples_per_patch
+                out_paths = {
+                    fetcher.modality.name: [
+                        split_dir
+                        / f"{fetcher.modality.name}_images"
+                        / f"{base_idx + q}.pt"
+                        for q in range(samples_per_patch)
+                    ]
+                    for fetcher in self.embedding_fetchers
+                }
+                if not overwrite and all(
+                    path.exists() for paths in out_paths.values() for path in paths
+                ):
+                    return True
+                embeddings = self.fetch_patch_embeddings(
+                    patch["geometry"], patch["patch_id"]
+                )
+                for key, emb in embeddings.items():
+                    modality = key.removesuffix("_images")
+                    per_sample = (
+                        split_into_quadrants(emb)
+                        if self.resize_to_64
+                        else emb.unsqueeze(0)
+                    )
+                    for q, path in enumerate(out_paths[modality]):
+                        torch.save(per_sample[q].clone(), path)
+                return False
+
+            skipped = 0
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                for done, was_skipped in enumerate(
+                    executor.map(handle_patch, range(len(patches)), patches), start=1
+                ):
+                    skipped += int(was_skipped)
+                    if done % 100 == 0 or done == len(patches):
+                        logger.info(
+                            f"{split}: {done}/{len(patches)} patches "
+                            f"({skipped} skipped as already present)"
+                        )
+
     def process_sample(self, sample: dict[str, Any]) -> dict[str, torch.Tensor] | None:
         """Process a single sample from metadata."""
         properties = sample["properties"]
@@ -150,22 +431,18 @@ class PASTISRProcessor:
         # https://github.com/VSainteuf/pastis-benchmark
         targets[targets == 19] = SEGMENTATION_IGNORE_LABEL
 
-        def split_images(images: torch.Tensor) -> torch.Tensor:
-            """Split images into 4 quadrants."""
-            return torch.stack(
-                [
-                    images[..., :64, :64],
-                    images[..., 64:, :64],
-                    images[..., :64, 64:],
-                    images[..., 64:, 64:],
-                ]
-            )
+        embedding_images = self.fetch_patch_embeddings(sample["geometry"], patch_id)
+
+        split_images = split_into_quadrants
 
         if self.resize_to_64:
             return {
                 "fold": f"fold_{properties['Fold']}",
                 "s2_images": split_images(s2_images),
                 "s1_images": split_images(s1_images),
+                # Embeddings are (C, 128, 128), so the same quadrant split keeps
+                # them pixel-aligned with the imagery and labels.
+                **{key: split_images(emb) for key, emb in embedding_images.items()},
                 "months": torch.stack([months] * 4),
                 "targets": torch.stack(
                     [
@@ -181,6 +458,7 @@ class PASTISRProcessor:
                 "fold": f"fold_{properties['Fold']}",
                 "s2_images": s2_images.unsqueeze(0),
                 "s1_images": s1_images.unsqueeze(0),
+                **{key: emb.unsqueeze(0) for key, emb in embedding_images.items()},
                 "months": months.unsqueeze(0),
                 "targets": targets.unsqueeze(0),
             }
@@ -190,9 +468,12 @@ class PASTISRProcessor:
         with open(self.data_dir / "metadata.geojson") as f:
             meta_data = json.load(f)
 
+        crs_name = meta_data.get("crs", {}).get("properties", {}).get("name")
+        if crs_name is not None:
+            self.meta_crs = CRS.from_user_input(crs_name)
+
         all_data: dict[str, dict[str, list[torch.Tensor]]] = {
-            f"fold_{i}": {"s2_images": [], "s1_images": [], "months": [], "targets": []}
-            for i in range(1, 6)
+            f"fold_{i}": {key: [] for key in self.data_keys} for i in range(1, 6)
         }
 
         # Count how many samples don't have 12 months of data
@@ -205,7 +486,7 @@ class PASTISRProcessor:
             if res:
                 fold = res["fold"]
                 if res["s2_images"].shape[1] == 12 and res["s1_images"].shape[1] == 12:
-                    for key in ["s2_images", "s1_images", "months", "targets"]:
+                    for key in self.data_keys:
                         all_data[fold][key].append(res[key])
                 else:
                     doesnt_have_twelve += 1
@@ -214,7 +495,7 @@ class PASTISRProcessor:
 
         for fold_idx in range(1, 6):
             fold_key = f"fold_{fold_idx}"
-            for key in ["s2_images", "s1_images", "months", "targets"]:
+            for key in self.data_keys:
                 all_data[fold_key][key] = torch.cat(all_data[fold_key][key], dim=0)
 
         all_data_splits = {
@@ -227,43 +508,28 @@ class PASTISRProcessor:
                     ],
                     dim=0,
                 )
-                for key in ["s2_images", "s1_images", "months", "targets"]
+                for key in self.data_keys
             },
-            "valid": {
-                key: all_data["fold_4"][key]
-                for key in ["s2_images", "s1_images", "months", "targets"]
-            },
-            "test": {
-                key: all_data["fold_5"][key]
-                for key in ["s2_images", "s1_images", "months", "targets"]
-            },
+            "valid": {key: all_data["fold_4"][key] for key in self.data_keys},
+            "test": {key: all_data["fold_5"][key] for key in self.data_keys},
         }
 
         for split, data in all_data_splits.items():
-            # Save each S1/S2 separately
+            # Save each image modality separately, one file per sample
             split_dir = self.output_dir / f"pastis_r_{split}"
             os.makedirs(split_dir, exist_ok=True)
 
             torch.save(data["months"], split_dir / "months.pt")
             torch.save(data["targets"], split_dir / "targets.pt")
-            print(data["s2_images"].shape)
-            print(data["s1_images"].shape)
 
-            s2_dir = split_dir / "s2_images"
-            s1_dir = split_dir / "s1_images"
-            os.makedirs(s2_dir, exist_ok=True)
-            os.makedirs(s1_dir, exist_ok=True)
-
-            for idx in range(data["s2_images"].shape[0]):
-                print(data["s2_images"][idx, :, :, :, :].shape)
-                torch.save(data["s2_images"][idx].clone(), s2_dir / f"{idx}.pt")
-
-            for idx in range(data["s1_images"].shape[0]):
-                print(data["s1_images"][idx, :, :, :, :].shape)
-                torch.save(data["s1_images"][idx].clone(), s1_dir / f"{idx}.pt")
+            for image_key in self.image_keys:
+                image_dir = split_dir / image_key
+                os.makedirs(image_dir, exist_ok=True)
+                for idx in range(data[image_key].shape[0]):
+                    torch.save(data[image_key][idx].clone(), image_dir / f"{idx}.pt")
 
         for split in ["train", "valid", "test"]:
-            for key in ["s2_images", "s1_images", "months", "targets"]:
+            for key in self.data_keys:
                 print(f"{split} {key}: {all_data_splits[split][key].shape}")
 
         for channel_idx in range(13):
@@ -283,11 +549,18 @@ class PASTISRProcessor:
             )
 
 
-def process_pastis(data_dir: str, output_dir: str) -> None:
+def process_pastis(
+    data_dir: str,
+    output_dir: str,
+    embedding_products: list[str] | None = None,
+    embedding_year: int = PASTIS_LABEL_YEAR,
+) -> None:
     """Process PASTIS-R dataset."""
     processor = PASTISRProcessor(
         data_dir=data_dir,
         output_dir=output_dir,
+        embedding_products=embedding_products,
+        embedding_year=embedding_year,
     )
     processor.process()
 
@@ -295,16 +568,25 @@ def process_pastis(data_dir: str, output_dir: str) -> None:
 def process_pastis_orig_size(
     data_dir: str,
     output_dir: str,
+    embedding_products: list[str] | None = None,
+    embedding_year: int = PASTIS_LABEL_YEAR,
 ) -> None:
     """Process PASTIS-R dataset."""
     processor = PASTISRProcessor(
-        data_dir=data_dir, output_dir=output_dir, resize_to_64=False
+        data_dir=data_dir,
+        output_dir=output_dir,
+        resize_to_64=False,
+        embedding_products=embedding_products,
+        embedding_year=embedding_year,
     )
     processor.process()
 
 
 def main() -> None:
     """Main function to process PASTIS-R dataset."""
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+    )
     parser = argparse.ArgumentParser(
         description="Process PASTIS-R dataset into PyTorch objects."
     )
@@ -323,12 +605,75 @@ def main() -> None:
         action="store_true",
         help="If set, do not resize to 64x64 (use original size).",
     )
+    parser.add_argument(
+        "--embedding_products",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated precomputed embedding products to fetch per patch "
+            "(aef, tessera), stored as <modality>_images alongside s2/s1. "
+            "Processing is deterministic, so re-running into an existing "
+            "output_dir keeps sample indices aligned with prior splits."
+        ),
+    )
+    parser.add_argument(
+        "--embedding_year",
+        type=int,
+        default=PASTIS_LABEL_YEAR,
+        help="Annual embedding-product layer to fetch (default: PASTIS label year).",
+    )
+    parser.add_argument(
+        "--embeddings_only",
+        action="store_true",
+        help=(
+            "Add embedding products to EXISTING processed splits in "
+            "--output_dir without touching them. Only needs metadata.geojson "
+            "under --data_dir. Verifies sample alignment against months.pt "
+            "before writing; requires --embedding_products."
+        ),
+    )
+    parser.add_argument(
+        "--overwrite_embeddings",
+        action="store_true",
+        help="With --embeddings_only: rewrite patches whose files already exist.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="With --embeddings_only: concurrent fetch threads.",
+    )
     args = parser.parse_args()
 
+    embedding_products = (
+        args.embedding_products.split(",") if args.embedding_products else None
+    )
+    if args.embeddings_only:
+        processor = PASTISRProcessor(
+            data_dir=args.data_dir,
+            output_dir=args.output_dir,
+            resize_to_64=not args.orig_size,
+            embedding_products=embedding_products,
+            embedding_year=args.embedding_year,
+        )
+        processor.process_embeddings_only(
+            overwrite=args.overwrite_embeddings, workers=args.workers
+        )
+        return
     if args.orig_size:
-        process_pastis_orig_size(data_dir=args.data_dir, output_dir=args.output_dir)
+        process_pastis_orig_size(
+            data_dir=args.data_dir,
+            output_dir=args.output_dir,
+            embedding_products=embedding_products,
+            embedding_year=args.embedding_year,
+        )
     else:
-        process_pastis(data_dir=args.data_dir, output_dir=args.output_dir)
+        process_pastis(
+            data_dir=args.data_dir,
+            output_dir=args.output_dir,
+            embedding_products=embedding_products,
+            embedding_year=args.embedding_year,
+        )
 
 
 if __name__ == "__main__":

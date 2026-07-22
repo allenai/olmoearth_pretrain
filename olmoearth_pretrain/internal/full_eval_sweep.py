@@ -4,6 +4,7 @@ e.g. python -m olmoearth_pretrain.internal.full_eval_sweep --cluster=ai2/saturn-
 """
 
 import argparse
+import dataclasses
 import json
 import os
 import subprocess  # nosec
@@ -12,6 +13,7 @@ from collections.abc import Generator
 from logging import getLogger
 from typing import Any
 
+from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config, get_eval_mode
 from olmoearth_pretrain.evals.models import (
     MODELS_WITH_MULTIPLE_SIZES,
@@ -202,6 +204,73 @@ def get_tessera_args(pretrained_normalizer: bool = True) -> str:
             ]
         )
     return tessera_args
+
+
+def _modality_capable_tasks(modality_name: str) -> list[str]:
+    """Task names whose dataset carries the given precomputed embedding modality.
+
+    Tasks that differ only by input imagery (e.g. the _sentinel1 variants of a
+    probe) collapse into identical evals once input_modalities is overridden to
+    the embedding modality, so only the first task of each such group is kept.
+    """
+    seen: set[str] = set()
+    task_names: list[str] = []
+    for task_name, task in EVAL_TASKS.items():
+        if modality_name not in dataset_to_config(task.dataset).supported_modalities:
+            continue
+        key = repr(dataclasses.replace(task, input_modalities=[]))
+        if key in seen:
+            continue
+        seen.add(key)
+        task_names.append(task_name)
+    return task_names
+
+
+def _get_precomputed_embedding_args(modality_name: str) -> str:
+    """Get the arguments for a precomputed embedding product baseline.
+
+    Embedding products are consumed exactly as stored: no re-normalization, and
+    each capable task reads the precomputed modality instead of imagery. Tasks
+    whose dataset has no such modality baked in keep their imagery
+    input_modalities and are skipped at runtime by the modality check.
+    """
+    capable_tasks = _modality_capable_tasks(modality_name)
+    args = dataset_args
+    args += " " + " ".join(
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+        for task_name in capable_tasks
+    )
+    args += " " + " ".join(
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.input_modalities=[{modality_name}]"
+        for task_name in capable_tasks
+    )
+    # Embedding products are already int8 at source (their quantization loss is
+    # baked into the stored values), so never round-trip them through the int8
+    # quantizer again — even on tasks that set quantize_embeddings=True to
+    # evaluate forward-pass models as int8 products.
+    args += " " + " ".join(
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.quantize_embeddings=False"
+        for task_name in capable_tasks
+    )
+    return args
+
+
+def get_aef_args(pretrained_normalizer: bool = True) -> str:
+    """Get the AlphaEarth (GSE) arguments.
+
+    ``pretrained_normalizer`` has no effect (there is no runnable model); it is
+    accepted for interface parity with the other baseline arg functions.
+    """
+    return _get_precomputed_embedding_args(Modality.GSE.name)
+
+
+def get_tessera_precomputed_args(pretrained_normalizer: bool = True) -> str:
+    """Get the precomputed-Tessera arguments.
+
+    ``pretrained_normalizer`` has no effect (there is no runnable model); it is
+    accepted for interface parity with the other baseline arg functions.
+    """
+    return _get_precomputed_embedding_args(Modality.TESSERA.name)
 
 
 def get_panopticon_args() -> str:
@@ -454,6 +523,8 @@ def _get_model_specific_args(model: BaselineModelName | None) -> str:
         BaselineModelName.PRITHVI_V2: get_prithviv2_args,
         BaselineModelName.TERRAMIND: get_terramind_args,
         BaselineModelName.CLAY: get_clay_args,
+        BaselineModelName.AEF: get_aef_args,
+        BaselineModelName.TESSERA_PRECOMPUTED: get_tessera_precomputed_args,
     }
     if model is None or model not in model_args_map:
         return ""
@@ -490,6 +561,8 @@ def _get_normalization_args(model: BaselineModelName | None, norm_mode: str) -> 
         BaselineModelName.PRESTO: get_presto_args,
         BaselineModelName.TERRAMIND: get_terramind_args,
         BaselineModelName.CLAY: get_clay_args,
+        BaselineModelName.AEF: get_aef_args,
+        BaselineModelName.TESSERA_PRECOMPUTED: get_tessera_precomputed_args,
     }
 
     if model in model_map:
@@ -576,6 +649,35 @@ def _get_label_fraction_args(args: argparse.Namespace) -> str:
             for task_name in EVAL_TASKS.keys()
         ]
     )
+
+
+def _get_patch_size_args(args: argparse.Namespace) -> str:
+    """Build per-task patch_size overrides for every task.
+
+    Used e.g. to evaluate OlmoEarth at patch size 1 so its embeddings are
+    per-pixel like the precomputed embedding products (AEF/Tessera). Baseline
+    models with a fixed model-level patch_size ignore this (the evaluator
+    overrides the task value with the model attribute).
+    """
+    if getattr(args, "embedding_diagnostics_only", False):
+        return ""
+    patch_size = getattr(args, "patch_size", None)
+    if patch_size is None:
+        return ""
+    return " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.patch_size={patch_size}"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+
+
+def _get_patch_size_run_suffix(args: argparse.Namespace) -> str:
+    """Run-name suffix marking a patch-size override."""
+    patch_size = getattr(args, "patch_size", None)
+    if patch_size is None:
+        return ""
+    return f"_ps{patch_size}"
 
 
 def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
@@ -698,6 +800,8 @@ def _build_default_command(
     else:
         cmd_args += _get_load_checkpoints_args(args.model)
     cmd_args += _get_label_fraction_args(args)
+    cmd_args += _get_patch_size_args(args)
+    run_name += _get_patch_size_run_suffix(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     env_prefix = _get_env_prefix(args, module_path)
@@ -772,6 +876,8 @@ def _build_hyperparameter_command(
         cmd_args += get_embedding_dim_args(embedding_dim)
         run_name += f"_dim{embedding_dim}"
     cmd_args += _get_label_fraction_args(args)
+    cmd_args += _get_patch_size_args(args)
+    run_name += _get_patch_size_run_suffix(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
@@ -928,6 +1034,8 @@ def _build_command_from_eval_settings(
         cmd_args += get_embedding_dim_args(embedding_dim)
         run_name += f"_dim{embedding_dim}"
     cmd_args += _get_label_fraction_args(args)
+    cmd_args += _get_patch_size_args(args)
+    run_name += _get_patch_size_run_suffix(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
@@ -1163,6 +1271,48 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     return commands_to_run
 
 
+# Precomputed embedding-product baselines and the (modality, materializer
+# product name) they read.
+PRECOMPUTED_MODEL_TO_MODALITY = {
+    BaselineModelName.AEF: (Modality.GSE.name, "aef"),
+    BaselineModelName.TESSERA_PRECOMPUTED: (Modality.TESSERA.name, "tessera"),
+}
+
+
+def check_precomputed_embedding_tasks(
+    model: BaselineModelName | str | None,
+) -> None:
+    """Fail fast if a precomputed-embedding baseline would run zero tasks.
+
+    A task is capable when its dataset lists the product's modality in
+    supported_modalities, which in turn requires the embedding data to have
+    been baked in (embedding materializer for rslearn datasets,
+    pastis_processor --embedding_products for PASTIS, pretrain h5 stores for
+    GSE). Without this check the sweep would launch jobs that skip every task.
+    """
+    if not isinstance(model, BaselineModelName):
+        return
+    mapping = PRECOMPUTED_MODEL_TO_MODALITY.get(model)
+    if mapping is None:
+        return
+    modality, product = mapping
+    capable = _modality_capable_tasks(modality)
+    if not capable:
+        raise SystemExit(
+            f"No eval task's dataset supports the precomputed '{modality}' "
+            f"modality, so --model={model} would run zero tasks. Bake the "
+            f"embeddings into the eval datasets first, e.g.\n"
+            f"  python -m olmoearth_pretrain.evals.embedding_materializer "
+            f"--dataset_path <dataset> --products {product}\n"
+            f"and list '{modality}' in the dataset's supported_modalities "
+            f"(olmoearth_pretrain/evals/datasets/configs.py)."
+        )
+    logger.info(
+        f"--model={model}: {len(capable)} tasks support '{modality}': "
+        f"{', '.join(capable)}"
+    )
+
+
 def _parse_model_arg(value: str) -> BaselineModelName | str:
     """Parse the model argument, returning either a BaselineModelName or 'all'."""
     if value == "all":
@@ -1323,8 +1473,22 @@ def main() -> None:
         default=1.0,
         help="Train-label fraction to evaluate (1.0 uses all labels).",
     )
+    parser.add_argument(
+        "--patch_size",
+        type=int,
+        default=None,
+        help=(
+            "Override patch_size for every task (e.g. 1 to evaluate OlmoEarth "
+            "at per-pixel granularity like AEF/Tessera). Ignored by baselines "
+            "with a fixed model-level patch size. Consider lowering "
+            "embedding_batch_size at patch size 1: token counts grow 16x vs "
+            "the default patch size 4."
+        ),
+    )
 
     args, extra_cli = parser.parse_known_args()
+
+    check_precomputed_embedding_tasks(args.model)
 
     commands_to_run = build_commands(args, extra_cli)
 

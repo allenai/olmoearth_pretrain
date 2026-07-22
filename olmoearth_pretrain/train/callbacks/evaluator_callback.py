@@ -118,6 +118,12 @@ class DownstreamTaskConfig:
     # Fraction of training labels to use for low-label evals. Dataset-specific
     # code translates this into fixed partitions or deterministic subsamples.
     label_fraction: float = 1.0
+    # Tile each sample (and its labels) into window_size x window_size windows
+    # at load time, fixing the spatial context every embedding is computed
+    # from (e.g. 16 -> each 64x64 PASTIS sample becomes sixteen 16x16
+    # windows). None keeps the dataset's native sample size. Currently
+    # supported by the pastis datasets only.
+    window_size: int | None = None
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: NormMethod = field(
@@ -190,11 +196,22 @@ class DownstreamEvaluator:
         self.evaluation_name = evaluation_name
         self.config = dataset_to_config(task.dataset)
         self.tile_size = task.tile_size
+        self.window_size = task.window_size
+        if self.tile_size is not None and self.window_size is not None:
+            raise ValueError("Set at most one of tile_size and window_size")
         if self.tile_size is not None:
             # dataset_to_config returns a shared instance, so copy rather than
             # mutate: shrink the segmentation reshape target to the tiled window
             # so the seg probe reshapes to the smaller (tiled) token grid.
             self.config = replace(self.config, height_width=self.tile_size)
+        if self.window_size is not None:
+            if not task.dataset.startswith("pastis"):
+                raise ValueError(
+                    f"window_size is only supported for pastis datasets, got "
+                    f"dataset '{task.dataset}'"
+                )
+            # The probe's spatial geometry must follow the tiled sample size.
+            self.config = replace(self.config, height_width=self.window_size)
         self.trainer = trainer
         self.device = device
         # Add all task attributes to self
@@ -337,6 +354,8 @@ class DownstreamEvaluator:
         extra_kwargs: dict[str, Any] = {}
         if self.tile_size is not None:
             extra_kwargs["tile_size"] = self.tile_size
+        if self.dataset.startswith("pastis") and self.window_size is not None:
+            extra_kwargs["window_size"] = self.window_size
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities

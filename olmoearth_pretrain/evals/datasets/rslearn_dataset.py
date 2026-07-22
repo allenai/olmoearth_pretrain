@@ -19,7 +19,11 @@ from rslearn.train.dataset import ModelDataset as RsModelDataset
 from rslearn.train.model_context import RasterImage
 from torch.utils.data import Dataset, IterableDataset, Subset
 
-from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS, Modality
+from olmoearth_pretrain.data.constants import (
+    EMBEDDING_PRODUCT_MODALITIES,
+    YEAR_NUM_TIMESTEPS,
+    Modality,
+)
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 from olmoearth_pretrain.data.utils import convert_to_db
 from olmoearth_pretrain.evals.constants import (
@@ -95,6 +99,10 @@ class RslearnToOlmoEarthDataset(Dataset):
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
+        # Precomputed embedding products, baked in as layers by the embedding
+        # materializer (olmoearth_pretrain/evals/embedding_materializer).
+        Modality.GSE.name,
+        Modality.TESSERA.name,
     }
 
     def __init__(
@@ -370,6 +378,13 @@ class RslearnToOlmoEarthDataset(Dataset):
 
             if modality == Modality.SENTINEL1.name:
                 x = convert_to_db(x)
+
+            if modality in EMBEDDING_PRODUCT_MODALITIES:
+                # Precomputed embedding products are consumed exactly as
+                # stored; imagery normalization does not apply, and dataset
+                # registries carry no norm stats for them.
+                sample_dict[modality] = torch.as_tensor(x, dtype=torch.float32)
+                continue
 
             if self.norm_stats_from_pretrained:
                 x = self.normalizer_computed.normalize(Modality.get(modality), x)

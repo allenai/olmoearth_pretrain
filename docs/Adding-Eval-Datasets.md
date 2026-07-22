@@ -13,6 +13,12 @@ Adding a new eval dataset requires two things:
 1. **Ingest** — copy the rslearn dataset to Weka, compute splits and band stats, register it
 2. **Wire up** — add a `DownstreamTaskConfig` to a training script so it runs as a loop eval
 
+Optionally, to make the dataset evaluable by precomputed embedding products
+(AlphaEarth/GSE, Tessera): the dataset is eligible if its windows have real
+geometry and a resolvable year. After ingest, run the embedding materializer
+over it, add a `gse`/`tessera` layer entry to its `model.yaml`, and list the
+modality in its `supported_modalities`. See `docs/PrecomputedEmbeddingEvals.md`.
+
 ---
 
 ## Prerequisites
