@@ -43,6 +43,7 @@ import logging
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -65,6 +66,13 @@ from olmoearth_pretrain.evals.embedding_materializer.providers import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Repo-checkout location of the dataset config, resolved relative to this file
+# so the script works from any working directory.
+DEFAULT_DATASET_CONFIG = (
+    Path(__file__).resolve().parents[3]
+    / "data/rslearn_dataset_configs/config_pastis_rslearn.json"
+)
 
 WINDOW_GROUP = "pastis"
 PATCH_SIZE_PX = 128
@@ -220,7 +228,7 @@ def main() -> None:
     parser.add_argument(
         "--dataset_config",
         type=str,
-        default="data/rslearn_dataset_configs/config_pastis_rslearn.json",
+        default=str(DEFAULT_DATASET_CONFIG),
         help="rslearn dataset config to install as <ds_path>/config.json",
     )
     parser.add_argument(
