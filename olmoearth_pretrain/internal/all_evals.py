@@ -209,6 +209,11 @@ EVAL_TASKS = {
         primary_metric=EvalMetric.MIOU,
         window_size=16,
         patch_size=1,
+        # int8 round-trip (AEF's companding scheme) so OlmoEarth is evaluated
+        # as an int8 product. The precomputed baselines (AEF/Tessera) are
+        # already int8 at source; their sweep args override this back to False
+        # so they are not quantized twice.
+        quantize_embeddings=True,
     ),
     "pastis_sentinel1": DownstreamTaskConfig(
         dataset="pastis",

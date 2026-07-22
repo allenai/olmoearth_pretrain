@@ -244,6 +244,14 @@ def _get_precomputed_embedding_args(modality_name: str) -> str:
         f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.input_modalities=[{modality_name}]"
         for task_name in capable_tasks
     )
+    # Embedding products are already int8 at source (their quantization loss is
+    # baked into the stored values), so never round-trip them through the int8
+    # quantizer again — even on tasks that set quantize_embeddings=True to
+    # evaluate forward-pass models as int8 products.
+    args += " " + " ".join(
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.quantize_embeddings=False"
+        for task_name in capable_tasks
+    )
     return args
 
 
