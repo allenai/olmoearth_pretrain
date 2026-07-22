@@ -1321,8 +1321,13 @@ def _pastis_ws16_ps1_task(input_modalities: list[str]) -> DownstreamTaskConfig:
 
 
 EMBEDDING_EVAL_TASKS = {
-    "pastis_ws16_ps1_sentinel2": _pastis_ws16_ps1_task([Modality.SENTINEL2_L2A.name]),
-    "pastis_ws16_ps1_sentinel1_sentinel2": _pastis_ws16_ps1_task(
+    # The _pretrain_export suffix marks that these read the pastis_rslearn
+    # pretraining-mirror export, distinguishing their metrics from earlier
+    # pastis_ws16_ps1_* runs on the benchmark-shipped imagery.
+    "pastis_ws16_ps1_sentinel2_pretrain_export": _pastis_ws16_ps1_task(
+        [Modality.SENTINEL2_L2A.name]
+    ),
+    "pastis_ws16_ps1_sentinel1_sentinel2_pretrain_export": _pastis_ws16_ps1_task(
         [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name]
     ),
     **{
