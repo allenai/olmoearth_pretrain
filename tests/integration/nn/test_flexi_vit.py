@@ -11,6 +11,7 @@ import torch
 from einops import rearrange
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.nn.encodings import PositionEncoding
 from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     MultiModalPatchEmbeddings,
@@ -1245,6 +1246,130 @@ def test_encoder_register_bottleneck_3d_rope_encoder_2d_read(
     output_dict["registers"].sum().backward()
     assert encoder.register_bottleneck.register.grad is not None
     assert torch.isfinite(encoder.register_bottleneck.register.grad).all()
+
+
+def _build_temporal_anchor_encoder(anchor: str, register_dim: int = 32) -> Encoder:
+    """3D-RoPE encoder with the temporally-anchored register read."""
+    return Encoder(
+        supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,  # register head_dim 16 -> axial 3D split (4, 6, 6)
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        position_encoding="rope_3d_mixed",
+        use_register_bottleneck=True,
+        register_grid_size=0,
+        register_dim=register_dim,
+        register_read_depth=1,
+        register_latent_depth=2,
+        register_temporal_anchor=anchor,
+    )
+
+
+@pytest.mark.parametrize("anchor", ["year_start", "first_timestep"])
+def test_encoder_register_bottleneck_temporal_anchor(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    anchor: str,
+) -> None:
+    """The anchored read runs 3D RoPE while the register grid stays a 2D map.
+
+    The read blocks rotate over anchor-relative ``(t, row, col)``; the latent
+    self-attention and the returned ``register_positions`` remain purely spatial, so
+    the decoder/eval contract is unchanged.
+    """
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    register_dim = 32
+    encoder = _build_temporal_anchor_encoder(anchor, register_dim)
+    bottleneck = encoder.register_bottleneck
+    assert bottleneck is not None
+    assert bottleneck.temporal_anchor == anchor
+    for blk in bottleneck.read_blocks:
+        assert blk.attn.position_encoding == PositionEncoding.AXIAL_3D_ROPE
+    # Registers all share t=0, so the latent transformer stays 2D.
+    for blk in bottleneck.latent_blocks:
+        assert blk.attn.position_encoding == PositionEncoding.AXIAL_2D_ROPE
+
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[15, 5, 2021], [2, 7, 2021]]],
+        dtype=torch.long,
+    )
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=4, input_res=10)
+    expected_side = H // 4
+    n_reg = expected_side * expected_side
+    assert output_dict["registers"].shape == (B, n_reg, register_dim)
+    # The grid contract is unchanged: spatial-only 2D positions.
+    assert output_dict["register_positions"].shape == (B, n_reg, 2)
+    output_dict["registers"].sum().backward()
+    assert bottleneck.register.grad is not None
+    assert torch.isfinite(bottleneck.register.grad).all()
+
+
+def test_encoder_register_temporal_anchor_relative_coordinates() -> None:
+    """The re-anchored temporal coordinate matches the documented anchors.
+
+    ``year_start``: t becomes days since Jan 1 of the sample's first observation year
+    (in the 365.25 days/year convention of ``timestamps_to_days``); ``first_timestep``:
+    days since the earliest observation. Static tokens sit at the anchor (t=0).
+    """
+    # (t, row, col) for two samples: sample 0 observed in 2020 (Jan 1 of 2020 is day
+    # 20 * 365.25 = 7305), sample 1 has no temporal tokens at all.
+    positions = torch.tensor(
+        [
+            [[7305.0 + 60.0, 0.0, 0.0], [7305.0 + 200.0, 0.0, 1.0], [0.0, 0.0, 2.0]],
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 2.0]],
+        ]
+    )
+    temporal_flag = torch.tensor(
+        [[True, True, False], [False, False, False]], dtype=torch.bool
+    )
+
+    encoder = _build_temporal_anchor_encoder("year_start")
+    anchored = encoder._anchor_register_kv_positions(positions, temporal_flag)
+    torch.testing.assert_close(anchored[0, :, 0], torch.tensor([60.0, 200.0, 0.0]))
+    # Spatial coordinates pass through untouched.
+    torch.testing.assert_close(anchored[..., 1:], positions[..., 1:])
+    # No temporal tokens -> no anchor; everything stays at 0.
+    torch.testing.assert_close(anchored[1, :, 0], torch.zeros(3))
+
+    encoder = _build_temporal_anchor_encoder("first_timestep")
+    anchored = encoder._anchor_register_kv_positions(positions, temporal_flag)
+    torch.testing.assert_close(anchored[0, :, 0], torch.tensor([0.0, 140.0, 0.0]))
+
+
+def test_encoder_register_temporal_anchor_requires_3d_rope() -> None:
+    """The anchored read needs the temporal RoPE coordinate to exist."""
+    with pytest.raises(ValueError, match="3D RoPE"):
+        Encoder(
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
+            embedding_size=16,
+            max_patch_size=4,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=2.0,
+            max_sequence_length=12,
+            depth=2,
+            drop_path=0.0,
+            position_encoding="rope",  # 2D: no temporal coordinate to anchor
+            use_register_bottleneck=True,
+            register_grid_size=0,
+            register_dim=32,
+            register_temporal_anchor="year_start",
+        )
 
 
 def test_encoder_register_bottleneck_interleave(

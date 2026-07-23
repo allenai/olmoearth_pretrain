@@ -1196,6 +1196,33 @@ class FlexiVitBase(nn.Module):
         flags, _ = self.collapse_and_combine_hwtc(flag_dict)
         return flags.squeeze(-1) > 0.5
 
+    def build_temporal_token_mask(
+        self,
+        tokens_only_dict: dict[str, Tensor],
+        original_masks_dict: dict[str, Tensor],
+    ) -> Tensor:
+        """Per-token multitemporal flag in the same collapsed order as positions.
+
+        ``True`` where a token belongs to a multitemporal modality (matching the order
+        of :meth:`build_rope_positions`). Static tokens have no meaningful temporal
+        coordinate (they sit at ``t=0``), so the anchored register read needs this flag
+        to re-anchor only the tokens whose ``t`` is a real observation time.
+        """
+        flag_dict: dict[str, Tensor] = {}
+        available_modalities = return_modalities_from_dict(tokens_only_dict)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        for modality_name in modalities_to_process:
+            tokens = tokens_only_dict[modality_name]
+            is_temporal = float(Modality.get(modality_name).is_multitemporal)
+            flag_dict[modality_name] = tokens.new_full(
+                (*tokens.shape[:-1], 1), is_temporal
+            )
+        flag_dict.update(original_masks_dict)
+        flags, _ = self.collapse_and_combine_hwtc(flag_dict)
+        return flags.squeeze(-1) > 0.5
+
     def _patch_grid_hw(self, tokens_only_dict: dict[str, Tensor]) -> tuple[int, int]:
         """Spatial patch grid ``(h, w)`` of the (finest) spatial modality.
 
@@ -1536,6 +1563,9 @@ class SpatialRegisterBottleneck(nn.Module):
         fused_read: str | None = None,
         latent_self_attn: bool = True,
         attn_dim: int | None = None,
+        temporal_anchor: str | None = None,
+        temporal_rope_dim_frac: float = 0.25,
+        rope_temporal_base: float | None = None,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1634,6 +1664,27 @@ class SpatialRegisterBottleneck(nn.Module):
                 head_dim <64. ``None`` (default) keeps the classic tied-width blocks
                 (backwards compatible). Incompatible with ``fused_read`` (the fusion
                 projections are register_dim-specific).
+            temporal_anchor: If set, make the cross-attention READ temporally aware:
+                the read blocks run axial 3D RoPE over ``(t, row, col)`` with each
+                register anchored at ``t=0`` and the K/V patch positions carrying an
+                anchor-RELATIVE temporal coordinate (computed by the caller; see
+                ``Encoder.register_temporal_anchor``). The registers themselves stay a
+                time-free 2D grid -- the latent self-attention, the returned
+                ``register_positions``, and everything downstream (decoder, evals) are
+                unchanged. This gives read heads relative-time structure ("attend N
+                days after the anchor"), which pure 2D reads cannot express: without
+                it, read attention logits contain no temporal geometry and timesteps
+                are distinguished only by content. Values: ``"year_start"`` (anchor at
+                Jan 1 of the sample's first observation year, so the relative
+                coordinate is ~day-of-year: season-selective heads are expressible and
+                year-invariant) or ``"first_timestep"`` (anchor at the sample's
+                earliest observation: window-relative geometry only). ``None``
+                (default) keeps the purely spatial read (backwards compatible).
+            temporal_rope_dim_frac: Fraction of head_dim allocated to the temporal
+                chunk in the read blocks' axial 3D RoPE (only used with
+                ``temporal_anchor``; matches the encoder's setting).
+            rope_temporal_base: Optional separate frequency base for the temporal axis
+                of the read blocks' axial 3D RoPE. ``None`` reuses ``rope_base``.
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1663,6 +1714,18 @@ class SpatialRegisterBottleneck(nn.Module):
                 )
         self.fused_read = fused_read
         self.attn_dim = attn_dim
+        if temporal_anchor is not None:
+            if temporal_anchor not in ("year_start", "first_timestep"):
+                raise ValueError(
+                    "temporal_anchor must be 'year_start' or 'first_timestep', "
+                    f"got {temporal_anchor!r}"
+                )
+            if not use_2d_rope:
+                raise ValueError(
+                    "temporal_anchor requires RoPE (use_2d_rope=True): the anchored "
+                    "read is expressed through the read blocks' rotary positions"
+                )
+        self.temporal_anchor = temporal_anchor
         # Per-depth contribution norms from the most recent fused read, for logging.
         self.last_read_source_norms: Tensor | None = None
         self.interleave = interleave or (self.multi_depth and fused_read is None)
@@ -1772,6 +1835,19 @@ class SpatialRegisterBottleneck(nn.Module):
                 if attn_dim is not None
                 else nn.Linear(encoder_embedding_size, register_dim)
             )
+        # With a temporal anchor the READ rotates over (t, row, col) -- registers sit
+        # at the anchor (t=0), K/V patches carry anchor-relative days -- while the
+        # latent self-attention stays 2D: all registers share t=0, so a temporal
+        # rotation there would cancel in every relative offset and only eat spatial
+        # RoPE dims.
+        if use_2d_rope:
+            read_position_encoding = (
+                PositionEncoding.AXIAL_3D_ROPE
+                if temporal_anchor is not None
+                else PositionEncoding.AXIAL_2D_ROPE
+            )
+        else:
+            read_position_encoding = PositionEncoding.ABSOLUTE
         self.read_blocks = nn.ModuleList(
             [
                 Block(
@@ -1782,12 +1858,10 @@ class SpatialRegisterBottleneck(nn.Module):
                     qk_norm=qk_norm,
                     cross_attn=True,
                     use_flash_attn=False,
-                    position_encoding=(
-                        PositionEncoding.AXIAL_2D_ROPE
-                        if use_2d_rope
-                        else PositionEncoding.ABSOLUTE
-                    ),
+                    position_encoding=read_position_encoding,
                     rope_base=rope_base,
+                    temporal_rope_dim_frac=temporal_rope_dim_frac,
+                    rope_temporal_base=rope_temporal_base,
                     attn_dim=attn_dim,
                     # Decoupled mode consumes the K/V source at full encoder width
                     # (input_norm already normalizes it; Block does not norm ``y``).
@@ -1907,7 +1981,10 @@ class SpatialRegisterBottleneck(nn.Module):
             patch_tokens: Encoded tokens ``[B, N, encoder_embedding_size]``. In multi-depth
                 mode (``read_layers`` set) this is instead a list of one such tensor per
                 read block, giving the K/V source at each successive encoder depth.
-            patch_positions: GSD-scaled ``[B, N, 2]`` coords (None if not using RoPE).
+            patch_positions: GSD-scaled ``[B, N, 2]`` ``(row, col)`` coords (None if not
+                using RoPE). With ``temporal_anchor`` set this is instead ``[B, N, 3]``
+                ``(t, row, col)`` where ``t`` is the anchor-RELATIVE temporal
+                coordinate (0 for static tokens, which sit at the anchor).
             visible_mask: Bool ``[B, N]``, True where a token is a valid key
                 (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
             spatial_grid: ``(n_h, n_w)`` patch grid; required in dynamic mode (the single
@@ -1993,6 +2070,18 @@ class SpatialRegisterBottleneck(nn.Module):
             registers = (
                 self.registers.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
             )
+        # With a temporal anchor the K/V positions arrive as anchor-relative
+        # (t, row, col). Everything spatial -- register placement, windowing, the
+        # latent blocks' 2D RoPE, the returned positions -- uses the (row, col)
+        # part; only the read blocks rotate over the full 3D coordinate.
+        spatial_patch_positions = patch_positions
+        if self.temporal_anchor is not None and patch_positions is not None:
+            if patch_positions.shape[-1] != 3:
+                raise ValueError(
+                    "temporal_anchor expects (t, row, col) patch_positions, got "
+                    f"last dim {patch_positions.shape[-1]}"
+                )
+            spatial_patch_positions = patch_positions[..., 1:]
         register_positions = None
         if self.use_2d_rope:
             if patch_positions is None:
@@ -2000,7 +2089,7 @@ class SpatialRegisterBottleneck(nn.Module):
                     "patch_positions are required for the RoPE register bottleneck"
                 )
             register_positions = self.build_register_positions(
-                patch_positions, register_grid
+                spatial_patch_positions, register_grid
             )
         # Read mask: by default just the [B, N] key-visibility mask. With windowing the
         # read instead restricts each register to a spatial window of the patch tokens
@@ -2013,11 +2102,13 @@ class SpatialRegisterBottleneck(nn.Module):
         read_window_spec: WindowSpec | None = None
         latent_window_spec: WindowSpec | None = None
         if window_half_extent is not None and self.use_2d_rope:
-            assert register_positions is not None and patch_positions is not None
+            assert (
+                register_positions is not None and spatial_patch_positions is not None
+            )
             read_attn_mask = None  # validity carried by read_window_spec.key_valid
             read_window_spec = WindowSpec(
                 q_positions=register_positions,
-                k_positions=patch_positions,
+                k_positions=spatial_patch_positions,
                 half_extent=window_half_extent,
                 k_is_global=patch_is_global,
                 key_valid=visible_mask.bool() if visible_mask is not None else None,
@@ -2028,12 +2119,22 @@ class SpatialRegisterBottleneck(nn.Module):
                 half_extent=window_half_extent,
             )
 
+        # The read's rotary coordinates: with a temporal anchor the register queries
+        # sit at t=0 (the anchor) ahead of their (row, col), and the patch keys keep
+        # their full anchor-relative (t, row, col); otherwise both sides are 2D.
+        read_register_positions = register_positions
+        if self.temporal_anchor is not None and register_positions is not None:
+            read_register_positions = torch.cat(
+                [torch.zeros_like(register_positions[..., :1]), register_positions],
+                dim=-1,
+            )
+
         def read(registers: Tensor, i: int, blk: nn.Module, kv: Tensor) -> Tensor:
             out = blk(
                 x=registers,
                 y=kv,
                 attn_mask=read_attn_mask,
-                rope_positions=register_positions,
+                rope_positions=read_register_positions,
                 rope_positions_y=patch_positions,
                 window_spec=read_window_spec,
             )
@@ -2125,6 +2226,7 @@ class Encoder(FlexiVitBase):
         register_fused_read: str | None = None,
         register_latent_self_attn: bool = True,
         register_attn_dim: int | None = None,
+        register_temporal_anchor: str | None = None,
         register_contrastive_source: str = "registers",
     ):
         """Initialize the encoder.
@@ -2246,6 +2348,20 @@ class Encoder(FlexiVitBase):
                 self-attention blocks entirely (cross-attention reads only, no
                 register-to-register mixing); the read count is unchanged. Defaults to True
                 (keep the latent transformer, backwards compatible).
+            register_temporal_anchor: If set, make the register READ temporally aware
+                while keeping the registers a time-free 2D grid: the bottleneck's read
+                blocks run axial 3D RoPE with each register anchored at a per-sample
+                reference time and the patch keys at their anchor-relative
+                days-since-2000 (instead of slicing the temporal coordinate off
+                entirely). ``"year_start"`` anchors at Jan 1 of the sample's first
+                observation year (relative coordinate ~= day-of-year, so
+                season-selective read heads are expressible and year-invariant);
+                ``"first_timestep"`` anchors at the sample's earliest observation
+                (window-relative geometry only). Static tokens sit at the anchor
+                (``t=0``). Requires a 3D RoPE ``position_encoding`` (the temporal
+                coordinate must exist) and the register bottleneck. The returned
+                ``register_positions`` stay 2D, so the decoder and evals are
+                unaffected. None (default) keeps the purely spatial read.
             register_contrastive_source: Where the contrastive (project-and-aggregate)
                 head reads from when the bottleneck is active: ``"registers"`` (default,
                 project from the register latents at ``register_dim``) or
@@ -2325,6 +2441,19 @@ class Encoder(FlexiVitBase):
 
         self.use_register_bottleneck = use_register_bottleneck
         self.register_bottleneck: SpatialRegisterBottleneck | None = None
+        self.register_temporal_anchor = register_temporal_anchor
+        if register_temporal_anchor is not None:
+            if not use_register_bottleneck:
+                raise ValueError(
+                    "register_temporal_anchor requires use_register_bottleneck=True"
+                )
+            if not PositionEncoding.is_3d_rope(self.position_encoding):
+                raise ValueError(
+                    "register_temporal_anchor requires a 3D RoPE position_encoding: "
+                    "the anchored read re-expresses the tokens' temporal RoPE "
+                    "coordinate, which only exists under 3D RoPE (got "
+                    f"{self.position_encoding!r})"
+                )
         if use_register_bottleneck:
             if register_read_layers is not None:
                 if sorted(set(register_read_layers)) != list(register_read_layers):
@@ -2358,9 +2487,12 @@ class Encoder(FlexiVitBase):
                 read_depth=register_read_depth,
                 latent_transformer_depth=register_latent_depth,
                 # The register grid is a purely spatial (row, col) summary with no
-                # temporal axis, so the bottleneck always reads/mixes with 2D RoPE --
-                # even when the encoder self-attention uses 3D RoPE. The caller feeds it
-                # 2D positions (the temporal coordinate is sliced off in Encoder.forward).
+                # temporal axis, so the bottleneck reads/mixes with 2D RoPE -- even
+                # when the encoder self-attention uses 3D RoPE. The caller feeds it 2D
+                # positions (the temporal coordinate is sliced off in Encoder.forward)
+                # UNLESS register_temporal_anchor is set, in which case the READ keeps
+                # an anchor-relative temporal coordinate (see apply_attn) while the
+                # grid itself stays 2D.
                 use_2d_rope=PositionEncoding.is_rope(self.position_encoding),
                 rope_base=rope_base,
                 qk_norm=qk_norm,
@@ -2371,6 +2503,9 @@ class Encoder(FlexiVitBase):
                 fused_read=register_fused_read,
                 latent_self_attn=register_latent_self_attn,
                 attn_dim=register_attn_dim,
+                temporal_anchor=register_temporal_anchor,
+                temporal_rope_dim_frac=temporal_rope_dim_frac,
+                rope_temporal_base=rope_temporal_base,
             )
 
         if register_contrastive_source not in ("registers", "encoder_tokens"):
@@ -2656,6 +2791,46 @@ class Encoder(FlexiVitBase):
             tokens, _ = self.add_removed_tokens(tokens, indices, mask)
         return tokens
 
+    def _anchor_register_kv_positions(
+        self, positions: Tensor, temporal_flag: Tensor
+    ) -> Tensor:
+        """Re-express the temporal RoPE coordinate relative to a per-sample anchor.
+
+        Args:
+            positions: ``[B, N, 3]`` full (pre-masking) ``(t, row, col)`` coordinates,
+                with ``t`` in scaled days-since-2000 (static tokens at 0).
+            temporal_flag: ``[B, N]`` bool, True where the token belongs to a
+                multitemporal modality (its ``t`` is a real observation time).
+
+        Returns:
+            ``[B, N, 3]`` positions whose ``t`` is anchor-relative: for
+            ``"year_start"`` the anchor is Jan 1 of the year of the sample's earliest
+            observation (in the same 365.25 days/year convention as
+            :func:`timestamps_to_days`, so the relative coordinate is ~day-of-year);
+            for ``"first_timestep"`` it is the earliest observation itself. Static
+            tokens are placed AT the anchor (``t=0``), sharing the register queries'
+            temporal position, so their read weight is time-neutral. The anchor is
+            computed over all (visible + masked) temporal tokens, so it is stable
+            under MAE masking.
+        """
+        t = positions[..., 0]
+        t_min = torch.where(
+            temporal_flag, t, torch.full_like(t, torch.finfo(t.dtype).max)
+        ).amin(dim=1)
+        # Samples with no temporal tokens have no anchor; leave everything at 0.
+        t_min = torch.where(temporal_flag.any(dim=1), t_min, torch.zeros_like(t_min))
+        if self.register_temporal_anchor == "year_start":
+            days_min = t_min / self.rope_temporal_coordinate_scale
+            anchor = (
+                torch.floor(days_min / 365.25)
+                * 365.25
+                * self.rope_temporal_coordinate_scale
+            )
+        else:  # "first_timestep"
+            anchor = t_min
+        t_rel = torch.where(temporal_flag, t - anchor[:, None], torch.zeros_like(t))
+        return torch.cat([t_rel[..., None], positions[..., 1:]], dim=-1)
+
     def apply_attn(
         self,
         x: dict[str, Tensor],
@@ -2693,14 +2868,25 @@ class Encoder(FlexiVitBase):
         # bottleneck read so registers attend over the encoded *visible* patch tokens
         # using their original coordinates (`positions` below is reduced/packed in place).
         register_kv_positions = positions
-        # The register grid has no temporal axis, so the bottleneck reads with 2D
-        # (row, col) positions even when the encoder self-attention uses 3D RoPE. Drop
-        # the leading temporal coordinate (3D positions are ``(t, row, col)``). This does
-        # not touch `positions`, which the encoder blocks still use for full 3D RoPE.
+        # The register grid has no temporal axis, so by default the bottleneck reads
+        # with 2D (row, col) positions even when the encoder self-attention uses 3D
+        # RoPE: drop the leading temporal coordinate (3D positions are
+        # ``(t, row, col)``). With ``register_temporal_anchor`` the read instead keeps
+        # ``t``, re-expressed relative to a per-sample anchor (registers sit at t=0),
+        # so the read's attention logits gain relative-time structure. Neither case
+        # touches `positions`, which the encoder blocks still use for full 3D RoPE.
         if register_kv_positions is not None and PositionEncoding.is_3d_rope(
             self.position_encoding
         ):
-            register_kv_positions = register_kv_positions[..., 1:]
+            if self.register_temporal_anchor is not None:
+                register_kv_positions = self._anchor_register_kv_positions(
+                    register_kv_positions,
+                    self.build_temporal_token_mask(
+                        tokens_only_dict, original_masks_dict
+                    ),
+                )
+            else:
+                register_kv_positions = register_kv_positions[..., 1:]
 
         # Windowed (local) spatial attention setup. Active only when the patch grid is
         # larger than the window in some dim; otherwise we leave the fast (full-attention)
@@ -3664,6 +3850,16 @@ class EncoderConfig(Config):
     # narrow-register corner where register_dim cannot fund both >=8 heads (throughput)
     # and >=64-dim heads (RoPE anchoring). None (default) keeps tied widths.
     register_attn_dim: int | None = None
+    # If set, the register READ becomes temporally aware while the grid stays a
+    # time-free 2D map: the read blocks run axial 3D RoPE with registers anchored at a
+    # per-sample reference time and patch keys at anchor-relative days-since-2000
+    # (instead of slicing the temporal coordinate off). "year_start" -> anchor at Jan 1
+    # of the sample's first observation year (relative coord ~= day-of-year:
+    # season-selective read heads, year-invariant); "first_timestep" -> anchor at the
+    # earliest observation (window-relative only). Requires a 3D RoPE
+    # position_encoding. None (default) keeps the purely spatial read (backwards
+    # compatible).
+    register_temporal_anchor: str | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
