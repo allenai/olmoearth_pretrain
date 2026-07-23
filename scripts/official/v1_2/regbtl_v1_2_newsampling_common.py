@@ -24,9 +24,11 @@ from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModul
 SUPERVISION_BASE_WEIGHT = 0.1
 
 # --- shape-sampler hyperparameters (see the shape-sampler distribution analysis) ---
-# 6144 ~= the requested ~6090; a multiple of 256 and, with maps excluded, enough for
-# the full 12 months at grids up to hw=13.
-TOKEN_BUDGET = 6144
+# A multiple of 256. With maps excluded this fits the full 12 months at grids up to
+# hw=9 (3*9^2*12=2916). 6144 (full year to hw=13) was ~2.4x slower to train for
+# marginal extra coverage; the decorrelated sampler already gets full-year-at-large-grid
+# here, which the old anti-correlated sampler never did.
+TOKEN_BUDGET = 3072
 # Minimum tokens a shape must cost. With maps excluded this is 3*hw^2*t, so 228 drops
 # hw<=2 entirely and forces small grids onto long sequences (hw=3 -> t>=9, hw=4 -> t>=5).
 MIN_TOKENS_PER_INSTANCE = 228
@@ -40,12 +42,13 @@ PATCH_SIZE_PROBS = [0.40, 0.15, 0.13, 0.10, 0.08, 0.06, 0.045, 0.035]
 # Base grids 1..16 plus a coarse incremental tail; the token floor drops hw<=2 and
 # large grids naturally carry few timesteps. Nothing special about the exact values.
 SAMPLED_HW_P_LIST = list(range(1, 17)) + [18, 20, 24, 28, 32]
-# Halved from 64 so the ~2.7x token budget fits memory. The broadcastable key mask
-# (nn/attention.py) stops SDPA materializing a dense (B, H, N, Nk) mask + the O(N^2)
-# score matrix, so 32 should now fit at budget 6144 (paired with
-# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True in the launcher). If a heavy shape
-# still OOMs, drop to 16; if there's headroom, try 64 for full speed.
-RANK_MICROBATCH_SIZE = 32
+# Back to the base 64 (matches old runs = 1 microbatch/step). At budget 3072 with the
+# broadcastable key mask (nn/attention.py: no dense (B,H,N,Nk) mask, no O(N^2) score
+# materialization) + expandable_segments, this should fit. NOTE: micro 64 @ 3072 has
+# the same per-forward token load as the micro 32 @ 6144 config that OOM'd *before* the
+# mask fix, so this relaunch is the real test of that fix -- if it OOMs, drop to 32
+# (throughput is ~unchanged; micro only affects memory, not tokens/step).
+RANK_MICROBATCH_SIZE = 64
 
 
 def apply_new_sampling(config: OlmoEarthDataLoaderConfig) -> OlmoEarthDataLoaderConfig:
