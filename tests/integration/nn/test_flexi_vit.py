@@ -4,6 +4,7 @@ Any methods that piece together multiple steps or are the entire forward pass fo
 """
 
 import logging
+from typing import Any
 
 import pytest
 import torch
@@ -239,7 +240,7 @@ class TestEncoder:
         input_res = 10
 
         for fast_pass in [True, False]:
-            output, _ = encoder.apply_attn(
+            output, _, _ = encoder.apply_attn(
                 x=x,
                 timestamps=timestamps,
                 patch_size=patch_size,
@@ -316,7 +317,7 @@ class TestEncoder:
         encoder.eval()
         outputs = []
         for fast_pass in [True, False]:
-            output, _ = encoder.apply_attn(
+            output, _, _ = encoder.apply_attn(
                 x=x,
                 timestamps=timestamps,
                 patch_size=patch_size,
@@ -1059,13 +1060,14 @@ def test_encoder_rope_dynamic_patch_sizes(
         assert encoder.blocks[0].attn.q.weight.grad is not None
 
 
-def test_encoder_rope_mixed_forward_and_learns_freqs(
+def test_encoder_register_bottleneck(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
-    """RoPE-Mixed encoder should forward and backprop into learnable freqs."""
+    """The Perceiver-style register bottleneck returns a fixed grid, decoupled from input size."""
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
     sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
     latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    grid_size, register_dim = 3, 8
     encoder = Encoder(
         supported_modalities=supported_modalities,
         embedding_size=16,
@@ -1076,11 +1078,155 @@ def test_encoder_rope_mixed_forward_and_learns_freqs(
         max_sequence_length=12,
         depth=2,
         drop_path=0.0,
-        position_encoding="rope_mixed",
+        position_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=grid_size,
+        register_dim=register_dim,
+        register_read_depth=1,
+        register_latent_depth=2,
     )
 
-    B, H, W, T = 1, 8, 8, 2
-    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    prev_max_coord = None
+    for patch_size in (2, 4):
+        s2_mask = torch.zeros(B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long)
+        # Mark the top half decode-only so the read must exclude them via the mask.
+        s2_mask[:, : H // 2] = MaskValue.DECODER.value
+        sample = MaskedOlmoEarthSample(
+            sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+            sentinel2_l2a_mask=s2_mask,
+            latlon=torch.randn(B, latlon_num_bands),
+            latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+            timestamps=timestamps,
+        )
+        encoder.zero_grad()
+        output_dict = encoder.forward(sample, patch_size=patch_size, input_res=10)
+
+        registers = output_dict["registers"]
+        register_positions = output_dict["register_positions"]
+        # Register count is fixed regardless of patch grid; width is the bottleneck dim.
+        assert registers.shape == (B, grid_size * grid_size, register_dim)
+        assert register_positions.shape == (B, grid_size * grid_size, 2)
+        # With a register bottleneck, project_and_aggregate pools the register tokens
+        # (only), so the contrastive projection is sized to register_dim.
+        project_aggregated = output_dict["project_aggregated"]
+        assert project_aggregated.shape == (B, register_dim)
+        # Coordinates are anchored and rescale with the input extent (variable input size).
+        assert register_positions.amax() > 0
+        if prev_max_coord is not None:
+            assert register_positions.amax().item() != prev_max_coord
+        prev_max_coord = register_positions.amax().item()
+
+        registers.sum().backward()
+        assert encoder.register_bottleneck is not None
+        assert encoder.register_bottleneck.registers.grad is not None
+        assert encoder.blocks[0].attn.q.weight.grad is not None
+
+
+def test_encoder_register_bottleneck_dynamic_grid(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """register_grid_size=None clones a single latent across the (dynamic) patch grid."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    register_dim = 8
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        position_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=None,
+        register_dim=register_dim,
+        register_read_depth=1,
+        register_latent_depth=2,
+    )
+    # Single shared latent, not a per-cell grid of parameters.
+    assert encoder.register_bottleneck is not None
+    assert encoder.register_bottleneck.dynamic_grid
+    assert encoder.register_bottleneck.register.shape == (1, register_dim)
+    assert not hasattr(encoder.register_bottleneck, "registers")
+
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    for patch_size in (2, 4):
+        sample = MaskedOlmoEarthSample(
+            sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+            sentinel2_l2a_mask=torch.zeros(
+                B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
+            ),
+            latlon=torch.randn(B, latlon_num_bands),
+            latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+            timestamps=timestamps,
+        )
+        encoder.zero_grad()
+        output_dict = encoder.forward(sample, patch_size=patch_size, input_res=10)
+
+        # The register grid tracks the patch grid (H//patch_size) instead of being fixed.
+        expected_side = H // patch_size
+        n_reg = expected_side * expected_side
+        assert encoder.register_bottleneck.register_grid == (
+            expected_side,
+            expected_side,
+        )
+        assert output_dict["registers"].shape == (B, n_reg, register_dim)
+        assert output_dict["register_positions"].shape == (B, n_reg, 2)
+
+        output_dict["registers"].sum().backward()
+        assert encoder.register_bottleneck.register.grad is not None
+
+
+def test_encoder_register_bottleneck_3d_rope_encoder_2d_read(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """A 3D-RoPE encoder keeps the register bottleneck spatial: it reads with 2D RoPE.
+
+    The patch encoder self-attention rotates over ``(t, row, col)`` while the register
+    grid is a purely spatial summary; the bottleneck therefore reads with the ``(row, col)``
+    axes only (temporal coordinate sliced off). Exercises the decoupled path.
+    """
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    register_dim = 8
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        position_encoding="rope_3d_mixed",
+        use_register_bottleneck=True,
+        register_grid_size=0,  # dynamic single-latent grid (gdyn) under a 3D encoder
+        register_dim=register_dim,
+        register_read_depth=1,
+        register_latent_depth=2,
+    )
+    assert encoder.register_bottleneck is not None
+    # The bottleneck reads spatially (2D RoPE) even though the encoder is 3D.
+    assert encoder.register_bottleneck.use_2d_rope
+    assert encoder.register_bottleneck.dynamic_grid
+
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
     sample = MaskedOlmoEarthSample(
         sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
         sentinel2_l2a_mask=torch.zeros(
@@ -1091,14 +1237,582 @@ def test_encoder_rope_mixed_forward_and_learns_freqs(
         timestamps=timestamps,
     )
     output_dict = encoder.forward(sample, patch_size=4, input_res=10)
-    output, _, _ = unpack_encoder_output(output_dict)
-    assert output.sentinel2_l2a is not None
-    assert output.sentinel2_l2a.shape[:3] == (B, H // 4, W // 4)
-    output.sentinel2_l2a.sum().backward()
-    for blk in encoder.blocks:
-        assert blk.attn.rope_mixed_freqs.grad is not None
-        assert torch.isfinite(blk.attn.rope_mixed_freqs.grad).all()
-        assert blk.attn.rope_mixed_freqs.grad.abs().sum() > 0
+    expected_side = H // 4
+    n_reg = expected_side * expected_side
+    assert output_dict["registers"].shape == (B, n_reg, register_dim)
+    # Register positions are spatial only -- 2D, regardless of the 3D encoder.
+    assert output_dict["register_positions"].shape == (B, n_reg, 2)
+    output_dict["registers"].sum().backward()
+    assert encoder.register_bottleneck.register.grad is not None
+    assert torch.isfinite(encoder.register_bottleneck.register.grad).all()
+
+
+def test_encoder_register_bottleneck_interleave(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """register_interleave pairs one read with each latent self-attention block."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    grid_size, register_dim, latent_depth = 3, 8, 3
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        position_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=grid_size,
+        register_dim=register_dim,
+        register_read_depth=1,
+        register_latent_depth=latent_depth,
+        register_interleave=True,
+    )
+    bottleneck = encoder.register_bottleneck
+    assert bottleneck is not None
+    assert bottleneck.interleave
+    # One read per latent self-attention block (read_depth is ignored when interleaving).
+    assert len(bottleneck.read_blocks) == latent_depth
+    assert len(bottleneck.latent_blocks) == latent_depth
+
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=2, input_res=10)
+    assert output_dict["registers"].shape == (B, grid_size * grid_size, register_dim)
+    output_dict["registers"].sum().backward()
+    # Gradients reach the last interleaved read (only reached if reads run between selves).
+    assert bottleneck.read_blocks[-1].attn.q.weight.grad is not None
+
+
+def test_encoder_register_bottleneck_multi_depth(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """register_read_layers reads a different encoder depth at each interleaved step."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    grid_size, register_dim, depth = 3, 8, 4
+    # Read only from depth 2 (an intermediate layer): blocks AFTER depth 2 then have no
+    # path to the registers, which pins down that the read sources the intermediate layer
+    # rather than the final one.
+    read_layers = [2]
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=depth,
+        drop_path=0.0,
+        position_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=grid_size,
+        register_dim=register_dim,
+        # read_depth / latent_depth are overridden by read_layers.
+        register_read_depth=1,
+        register_latent_depth=99,
+        register_read_layers=read_layers,
+    )
+    bottleneck = encoder.register_bottleneck
+    assert bottleneck is not None
+    assert bottleneck.multi_depth
+    assert bottleneck.interleave  # multi-depth forces the interleaved schedule
+    assert bottleneck.read_layers == read_layers
+    # One read + one latent block per source layer (read_depth / latent_depth ignored).
+    assert len(bottleneck.read_blocks) == len(read_layers)
+    assert len(bottleneck.latent_blocks) == len(read_layers)
+
+    # Also build a stride-2 encoder to confirm the read/latent counts track len(read_layers).
+    stride2 = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=depth,
+        drop_path=0.0,
+        position_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=grid_size,
+        register_dim=register_dim,
+        register_read_layers=[2, 4],
+    )
+    assert stride2.register_bottleneck is not None
+    assert len(stride2.register_bottleneck.read_blocks) == 2
+    assert len(stride2.register_bottleneck.latent_blocks) == 2
+
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=2, input_res=10)
+    assert output_dict["registers"].shape == (B, grid_size * grid_size, register_dim)
+    output_dict["registers"].sum().backward()
+    # The read draws K/V from the depth-2 output, so the read block and blocks up to and
+    # including depth 2 (indices 0, 1) receive gradient...
+    assert bottleneck.read_blocks[0].attn.q.weight.grad is not None
+    assert encoder.blocks[0].attn.q.weight.grad is not None
+    assert encoder.blocks[1].attn.q.weight.grad is not None
+    # ...while blocks AFTER the deepest read layer (depths 3, 4) do not -- they have no
+    # path to the registers, proving the read sources the intermediate layer, not the final.
+    assert encoder.blocks[2].attn.q.weight.grad is None
+    assert encoder.blocks[3].attn.q.weight.grad is None
+
+
+def test_encoder_register_bottleneck_per_depth_read_proj(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """per_depth_read_proj gives each multi-depth read its own input_norm + kv_proj.
+
+    Companion ``test_..._per_depth_read_proj_interleave`` covers the single-source
+    (interleaved, non-multi-depth) case.
+    """
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    grid_size, register_dim, depth = 3, 8, 4
+    read_layers = [2, 4]
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=depth,
+        drop_path=0.0,
+        position_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=grid_size,
+        register_dim=register_dim,
+        register_read_layers=read_layers,
+        register_per_depth_read_proj=True,
+    )
+    bottleneck = encoder.register_bottleneck
+    assert bottleneck is not None
+    assert bottleneck.per_depth_read_proj
+    # One norm + one projection per read layer; no shared pair.
+    assert len(bottleneck.input_norms) == len(read_layers)
+    assert len(bottleneck.kv_projs) == len(read_layers)
+    assert not hasattr(bottleneck, "input_norm")
+    assert not hasattr(bottleneck, "kv_proj")
+
+    B, H, W = 2, 8, 8
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, 2, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, 2, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=2, input_res=10)
+    assert output_dict["registers"].shape == (B, grid_size * grid_size, register_dim)
+    output_dict["registers"].sum().backward()
+    # Each per-depth norm + projection receives gradient.
+    for norm in bottleneck.input_norms:
+        assert norm.weight.grad is not None
+    for proj in bottleneck.kv_projs:
+        assert proj.weight.grad is not None
+
+
+def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """per_depth_read_proj also applies to interleaved (single-source) reads.
+
+    No multi-depth (register_read_layers=None): every read re-queries the same final
+    layer, but each read block still gets its own input_norm + kv_proj.
+    """
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    grid_size, register_dim, latent_depth = 3, 8, 4
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=4,
+        drop_path=0.0,
+        position_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=grid_size,
+        register_dim=register_dim,
+        register_interleave=True,
+        register_latent_depth=latent_depth,
+        register_per_depth_read_proj=True,
+    )
+    bottleneck = encoder.register_bottleneck
+    assert bottleneck is not None
+    assert not bottleneck.multi_depth
+    assert bottleneck.per_depth_read_proj
+    # Interleave -> one read block per latent block; one norm + projection each, no shared.
+    assert len(bottleneck.read_blocks) == latent_depth
+    assert len(bottleneck.input_norms) == latent_depth
+    assert len(bottleneck.kv_projs) == latent_depth
+    assert not hasattr(bottleneck, "input_norm")
+    assert not hasattr(bottleneck, "kv_proj")
+
+    B, H, W = 2, 8, 8
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, 2, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, 2, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=2, input_res=10)
+    assert output_dict["registers"].shape == (B, grid_size * grid_size, register_dim)
+    output_dict["registers"].sum().backward()
+    # Every per-block norm + projection receives gradient.
+    for norm in bottleneck.input_norms:
+        assert norm.weight.grad is not None
+    for proj in bottleneck.kv_projs:
+        assert proj.weight.grad is not None
+
+
+def test_encoder_register_bottleneck_decoupled_attn_dim(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """register_attn_dim decouples the bottleneck attention width from register_dim.
+
+    The read + latent blocks run attention internally at attn_dim (here the encoder
+    width) while the register stream stays at register_dim; the K/V down-projections
+    become Identity so reads consume the encoder tokens at full width.
+    """
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    embedding_size, register_dim, latent_depth, num_heads = 16, 8, 4, 2
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=embedding_size,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=num_heads,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=4,
+        drop_path=0.0,
+        position_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=0,
+        register_dim=register_dim,
+        register_interleave=True,
+        register_latent_depth=latent_depth,
+        register_per_depth_read_proj=True,
+        register_attn_dim=embedding_size,
+    )
+    bottleneck = encoder.register_bottleneck
+    assert bottleneck is not None
+    assert bottleneck.attn_dim == embedding_size
+    # K/V down-projections are dropped (Identity); the per-depth norms remain.
+    for proj in bottleneck.kv_projs:
+        assert isinstance(proj, torch.nn.Identity)
+    for norm in bottleneck.input_norms:
+        assert norm.weight.shape == (embedding_size,)
+    # Reads: q register_dim -> attn_dim, k/v encoder width -> attn_dim, out -> register_dim.
+    read_attn = bottleneck.read_blocks[0].attn
+    assert read_attn.num_heads == num_heads
+    assert read_attn.head_dim == embedding_size // num_heads
+    assert read_attn.q.weight.shape == (embedding_size, register_dim)
+    assert read_attn.k.weight.shape == (embedding_size, embedding_size)
+    assert read_attn.proj.weight.shape == (register_dim, embedding_size)
+    # Latent self-attention: q/k/v register_dim -> attn_dim, out -> register_dim.
+    latent_attn = bottleneck.latent_blocks[0].attn
+    assert latent_attn.k.weight.shape == (embedding_size, register_dim)
+    assert latent_attn.proj.weight.shape == (register_dim, embedding_size)
+
+    B, H, W = 2, 8, 8
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, 2, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, 2, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    patch_size = 2
+    output_dict = encoder.forward(sample, patch_size=patch_size, input_res=10)
+    grid = (H // patch_size, W // patch_size)
+    assert output_dict["registers"].shape == (B, grid[0] * grid[1], register_dim)
+    output_dict["registers"].sum().backward()
+    assert read_attn.q.weight.grad is not None
+    assert read_attn.k.weight.grad is not None
+    assert latent_attn.q.weight.grad is not None
+
+
+def test_encoder_register_bottleneck_attn_dim_default_unchanged(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Default register_attn_dim=None keeps the classic tied-width parameter set."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    embedding_size, register_dim = 16, 8
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=embedding_size,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=4,
+        drop_path=0.0,
+        position_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=0,
+        register_dim=register_dim,
+        register_interleave=True,
+        register_latent_depth=4,
+        register_per_depth_read_proj=True,
+    )
+    bottleneck = encoder.register_bottleneck
+    assert bottleneck is not None
+    assert bottleneck.attn_dim is None
+    for proj in bottleneck.kv_projs:
+        assert proj.weight.shape == (register_dim, embedding_size)
+    read_attn = bottleneck.read_blocks[0].attn
+    assert read_attn.q.weight.shape == (register_dim, register_dim)
+    assert read_attn.proj.weight.shape == (register_dim, register_dim)
+
+
+@pytest.mark.parametrize("fused_read", ["uniform", "learned"])
+def test_encoder_register_bottleneck_fused_read(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    fused_read: str,
+) -> None:
+    """register_fused_read combines the multi-depth sources into one fused K/V source.
+
+    The schedule reverts to the single-source rules (read/latent counts decouple from
+    len(read_layers)), the fused source draws only from the configured depths, and the
+    per-depth contribution norms are stashed for logging.
+    """
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    grid_size, register_dim, depth, latent_depth = 3, 8, 4, 3
+    # Reading only depth 2 pins down that the fused source comes from the tapped depth:
+    # blocks AFTER depth 2 then have no path to the registers.
+    read_layers = [2]
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=depth,
+        drop_path=0.0,
+        position_encoding="rope",
+        use_register_bottleneck=True,
+        register_grid_size=grid_size,
+        register_dim=register_dim,
+        register_interleave=True,
+        register_latent_depth=latent_depth,
+        register_read_layers=read_layers,
+        register_fused_read=fused_read,
+    )
+    bottleneck = encoder.register_bottleneck
+    assert bottleneck is not None
+    assert bottleneck.multi_depth
+    assert bottleneck.fused_read == fused_read
+    # Single-source schedule: interleave -> one read per latent block, decoupled from
+    # len(read_layers) (a non-fused multi-depth model would have 1 read block here).
+    assert len(bottleneck.read_blocks) == latent_depth
+    assert len(bottleneck.latent_blocks) == latent_depth
+    if fused_read == "uniform":
+        # Parameter-free per-depth standardization + the standard shared pair.
+        assert bottleneck.fused_norm.weight is None
+        assert hasattr(bottleneck, "input_norm")
+        assert hasattr(bottleneck, "kv_proj")
+        assert not hasattr(bottleneck, "fused_projs")
+    else:
+        # Per-depth norm + projection replace the shared pair.
+        assert len(bottleneck.fused_norms) == len(read_layers)
+        assert len(bottleneck.fused_projs) == len(read_layers)
+        assert not hasattr(bottleneck, "input_norm")
+        assert not hasattr(bottleneck, "kv_proj")
+
+    B, H, W = 2, 8, 8
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, 2, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, 2, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=2, input_res=10)
+    assert output_dict["registers"].shape == (B, grid_size * grid_size, register_dim)
+    # One contribution norm per fused depth, stashed for logging.
+    assert bottleneck.last_read_source_norms is not None
+    assert bottleneck.last_read_source_norms.shape == (len(read_layers),)
+    assert bool(torch.isfinite(bottleneck.last_read_source_norms).all())
+
+    output_dict["registers"].sum().backward()
+    # The fused source draws only from depth 2: blocks up to depth 2 get gradient,
+    # blocks after it have no path to the registers.
+    assert encoder.blocks[0].attn.q.weight.grad is not None
+    assert encoder.blocks[1].attn.q.weight.grad is not None
+    assert encoder.blocks[2].attn.q.weight.grad is None
+    assert encoder.blocks[3].attn.q.weight.grad is None
+    if fused_read == "learned":
+        for norm, proj in zip(bottleneck.fused_norms, bottleneck.fused_projs):
+            assert norm.weight.grad is not None
+            assert proj.weight.grad is not None
+    else:
+        assert bottleneck.kv_proj.weight.grad is not None
+
+
+def test_encoder_register_bottleneck_fused_read_validation(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """fused_read requires read_layers and rejects per_depth_read_proj."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+
+    def build_encoder(
+        register_read_layers: list[int] | None = None,
+        register_fused_read: str | None = None,
+        register_per_depth_read_proj: bool = False,
+    ) -> Encoder:
+        return Encoder(
+            supported_modalities=supported_modalities,
+            embedding_size=16,
+            max_patch_size=4,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=2.0,
+            max_sequence_length=12,
+            depth=4,
+            drop_path=0.0,
+            position_encoding="rope",
+            use_register_bottleneck=True,
+            register_grid_size=3,
+            register_dim=8,
+            register_read_layers=register_read_layers,
+            register_fused_read=register_fused_read,
+            register_per_depth_read_proj=register_per_depth_read_proj,
+        )
+
+    with pytest.raises(ValueError, match="requires read_layers"):
+        build_encoder(register_fused_read="uniform")
+    with pytest.raises(ValueError, match="per_depth_read_proj"):
+        build_encoder(
+            register_read_layers=[2, 4],
+            register_fused_read="uniform",
+            register_per_depth_read_proj=True,
+        )
+    with pytest.raises(ValueError, match="must be 'uniform' or 'learned'"):
+        build_encoder(register_read_layers=[2, 4], register_fused_read="sum")
+
+
+def test_encoder_register_bottleneck_contrastive_source(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """register_contrastive_source toggles the contrastive head between latents/tokens."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    embedding_size, register_dim = 16, 8
+
+    def build(source: str) -> Encoder:
+        return Encoder(
+            supported_modalities=supported_modalities,
+            embedding_size=embedding_size,
+            max_patch_size=4,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=2.0,
+            max_sequence_length=12,
+            depth=2,
+            drop_path=0.0,
+            position_encoding="rope",
+            use_register_bottleneck=True,
+            register_grid_size=3,
+            register_dim=register_dim,
+            register_contrastive_source=source,
+        )
+
+    B, H, W = 2, 8, 8
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+
+    def sample() -> MaskedOlmoEarthSample:
+        return MaskedOlmoEarthSample(
+            sentinel2_l2a=torch.randn(B, H, W, 2, sentinel2_l2a_num_bands),
+            sentinel2_l2a_mask=torch.zeros(
+                B, H, W, 2, sentinel2_l2a_num_bands, dtype=torch.long
+            ),
+            latlon=torch.randn(B, latlon_num_bands),
+            latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+            timestamps=timestamps,
+        )
+
+    # Default: project from the register latents (sized to register_dim).
+    reg_encoder = build("registers")
+    assert reg_encoder.contrastive_from_registers
+    reg_out = reg_encoder.forward(sample(), patch_size=2, input_res=10)
+    assert reg_out["project_aggregated"].shape == (B, register_dim)
+
+    # Opt-in: project from the encoder patch tokens (sized to the final embedding size),
+    # the pre-bottleneck behaviour.
+    tok_encoder = build("encoder_tokens")
+    assert not tok_encoder.contrastive_from_registers
+    tok_out = tok_encoder.forward(sample(), patch_size=2, input_res=10)
+    assert tok_out["project_aggregated"].shape == (B, embedding_size)
 
 
 def test_predictor_forward_rope(
@@ -1153,6 +1867,374 @@ def test_predictor_forward_rope(
     )
     output.sentinel2_l2a.sum().backward()
     assert predictor.blocks[0].attn.q.weight.grad is not None
+
+
+def test_end_to_end_with_exit_config(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    masked_sample_dict: dict[str, torch.Tensor],
+) -> None:
+    """Test the full end to end forward pass of the model with an exit configuration."""
+    supported_modalities = [
+        Modality.SENTINEL2_L2A,
+        Modality.LATLON,
+        Modality.WORLDCOVER,
+    ]
+    token_exit_cfg = {"sentinel2_l2a": 3, "latlon": 0, "worldcover": 0}
+    sentinel2_l2a_num_band_sets = modality_band_set_len_and_total_bands[
+        "sentinel2_l2a"
+    ][0]
+    latlon_num_band_sets = modality_band_set_len_and_total_bands["latlon"][0]
+    B, H, W, T, _ = masked_sample_dict["sentinel2_l2a"].shape
+    x = MaskedOlmoEarthSample(**masked_sample_dict)
+
+    patch_size = 4
+    input_res = 1
+    # Shared constants for encoder and predictor
+    MAX_PATCH_SIZE = 8
+    NUM_HEADS = 2
+    MLP_RATIO = 4.0
+    MAX_SEQ_LENGTH = 12
+    DEPTH = 2
+    DROP_PATH = 0.1
+    ENCODER_EMBEDDING_SIZE = 16
+    DECODER_EMBEDDING_SIZE = 16
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=ENCODER_EMBEDDING_SIZE,
+        max_patch_size=MAX_PATCH_SIZE,
+        min_patch_size=1,
+        num_heads=NUM_HEADS,
+        mlp_ratio=MLP_RATIO,
+        max_sequence_length=MAX_SEQ_LENGTH,
+        depth=DEPTH,
+        drop_path=DROP_PATH,
+    )
+    predictor = Predictor(
+        supported_modalities=supported_modalities,
+        encoder_embedding_size=ENCODER_EMBEDDING_SIZE,
+        decoder_embedding_size=DECODER_EMBEDDING_SIZE,
+        depth=DEPTH,
+        mlp_ratio=MLP_RATIO,
+        num_heads=NUM_HEADS,
+        max_sequence_length=MAX_SEQ_LENGTH,
+        drop_path=DROP_PATH,
+    )
+    output_dict = encoder.forward(
+        x,
+        patch_size,
+        input_res,
+        token_exit_cfg=token_exit_cfg,
+    )
+    output, _, decoder_kwargs = unpack_encoder_output(output_dict)
+    output = predictor.forward(
+        output, x.timestamps, patch_size, input_res, **decoder_kwargs
+    )
+    patched_H = H // patch_size
+    patched_W = W // patch_size
+    assert output.sentinel2_l2a is not None
+    assert output.sentinel2_l2a_mask is not None
+    assert output.latlon is not None
+    assert output.latlon_mask is not None
+    assert output.sentinel2_l2a.shape == (
+        B,
+        patched_H,
+        patched_W,
+        T,
+        sentinel2_l2a_num_band_sets,
+        predictor.output_embedding_size,
+    )
+    assert output.sentinel2_l2a_mask.shape == (
+        B,
+        patched_H,
+        patched_W,
+        T,
+        sentinel2_l2a_num_band_sets,
+    )
+    assert output.latlon.shape == (
+        B,
+        latlon_num_band_sets,
+        predictor.output_embedding_size,
+    )
+    assert output.latlon_mask.shape == (
+        B,
+        latlon_num_band_sets,
+    )
+    assert output.worldcover is not None
+    assert output.worldcover_mask is not None
+    assert output.worldcover.shape == (
+        B,
+        patched_H,
+        patched_W,
+        1,
+        1,
+        predictor.output_embedding_size,
+    )
+    assert output.worldcover_mask.shape == (
+        B,
+        patched_H,
+        patched_W,
+        1,
+        1,
+    )
+    output.worldcover.sum().backward()
+    for name, param in predictor.named_parameters():
+        if not any(
+            x in name
+            for x in [
+                "pos_embed",
+                "month_embed",
+                "composite_encodings.per_modality_channel_embeddings.latlon",
+                "project_and_aggregate",
+            ]
+        ):
+            assert param.grad is not None, name
+
+
+def _windowed_encoder(
+    supported_modalities: list[ModalitySpec],
+    attn_window_size: int | None,
+    **kwargs: Any,
+) -> Encoder:
+    """Small rope encoder configured for windowed-attention tests."""
+    return Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        position_encoding="rope",
+        attn_window_size=attn_window_size,
+        **kwargs,
+    )
+
+
+def test_encoder_windowed_attention_forward(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Windowed encoder (window < grid) runs forward + backward with masking."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    s2_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    encoder = _windowed_encoder(supported_modalities, attn_window_size=2)
+    encoder.train()
+
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    s2_mask = torch.zeros(B, H, W, T, s2_bands, dtype=torch.long)
+    # Mask part of the grid out so the windowed key-validity path is exercised.
+    s2_mask[:, : H // 2] = MaskValue.DECODER.value
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_bands),
+        sentinel2_l2a_mask=s2_mask,
+        latlon=torch.randn(B, latlon_bands),
+        latlon_mask=torch.zeros(B, latlon_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    # patch_size=2 -> 4x4 patch grid, larger than the window (2) -> windowing active.
+    output_dict = encoder.forward(sample, patch_size=2, input_res=10)
+    output, _, _ = unpack_encoder_output(output_dict)
+    assert output.sentinel2_l2a is not None
+    assert torch.isfinite(output.sentinel2_l2a).all()
+    output.sentinel2_l2a.sum().backward()
+    assert encoder.blocks[0].attn.q.weight.grad is not None
+    assert torch.isfinite(encoder.blocks[0].attn.q.weight.grad).all()
+
+
+def test_encoder_windowed_matches_full_when_window_covers_grid(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Window >= grid must reproduce full (unwindowed) attention exactly."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    s2_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_bands = modality_band_set_len_and_total_bands["latlon"][1]
+
+    full = _windowed_encoder(supported_modalities, attn_window_size=None)
+    windowed = _windowed_encoder(supported_modalities, attn_window_size=8)
+    # No new parameters are introduced by windowing, so the state dicts are identical.
+    windowed.load_state_dict(full.state_dict())
+    full.eval()
+    windowed.eval()
+
+    B, H, W, T = 1, 8, 8, 2
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_bands),
+        sentinel2_l2a_mask=torch.zeros(B, H, W, T, s2_bands, dtype=torch.long),
+        latlon=torch.randn(B, latlon_bands),
+        latlon_mask=torch.zeros(B, latlon_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    # patch_size=2 -> 4x4 grid <= window 8 -> windowing inactive (full attention).
+    with torch.no_grad():
+        out_full, _, _ = unpack_encoder_output(
+            full.forward(sample, patch_size=2, input_res=10)
+        )
+        out_win, _, _ = unpack_encoder_output(
+            windowed.forward(sample, patch_size=2, input_res=10)
+        )
+    assert out_full.sentinel2_l2a is not None
+    torch.testing.assert_close(out_win.sentinel2_l2a, out_full.sentinel2_l2a)
+
+
+def test_encoder_windowed_changes_output_when_active(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """An active window (window < grid) must actually alter attention vs full."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    s2_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_bands = modality_band_set_len_and_total_bands["latlon"][1]
+
+    full = _windowed_encoder(supported_modalities, attn_window_size=None)
+    windowed = _windowed_encoder(supported_modalities, attn_window_size=2)
+    windowed.load_state_dict(full.state_dict())
+    full.eval()
+    windowed.eval()
+
+    B, H, W, T = 1, 8, 8, 2
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_bands),
+        sentinel2_l2a_mask=torch.zeros(B, H, W, T, s2_bands, dtype=torch.long),
+        latlon=torch.randn(B, latlon_bands),
+        latlon_mask=torch.zeros(B, latlon_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    # patch_size=1 -> 8x8 grid > window 2 -> windowing active, output must differ.
+    with torch.no_grad():
+        out_full, _, _ = unpack_encoder_output(
+            full.forward(sample, patch_size=1, input_res=10)
+        )
+        out_win, _, _ = unpack_encoder_output(
+            windowed.forward(sample, patch_size=1, input_res=10)
+        )
+    assert out_full.sentinel2_l2a is not None
+    assert not torch.allclose(out_win.sentinel2_l2a, out_full.sentinel2_l2a)
+
+
+def test_encoder_windowed_chunked_matches_unchunked(
+    monkeypatch: pytest.MonkeyPatch,
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Chunking the windowed mask must not change the result.
+
+    The mask is built per query-chunk to bound memory; force 1-query chunks and
+    compare to the default single chunk.
+    """
+    import olmoearth_pretrain.nn.attention as attention_mod
+
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    s2_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    encoder = _windowed_encoder(supported_modalities, attn_window_size=2)
+    encoder.eval()
+
+    B, H, W, T = 1, 8, 8, 2
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_bands),
+        sentinel2_l2a_mask=torch.zeros(B, H, W, T, s2_bands, dtype=torch.long),
+        latlon=torch.randn(B, latlon_bands),
+        latlon_mask=torch.zeros(B, latlon_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    with torch.no_grad():
+        out_default, _, _ = unpack_encoder_output(
+            encoder.forward(sample, patch_size=1, input_res=10)
+        )
+        # 1 -> one query per chunk (maximal chunking).
+        monkeypatch.setattr(attention_mod, "WINDOW_MASK_CHUNK_ELEMENTS", 1)
+        out_chunked, _, _ = unpack_encoder_output(
+            encoder.forward(sample, patch_size=1, input_res=10)
+        )
+    assert out_default.sentinel2_l2a is not None
+    torch.testing.assert_close(out_chunked.sentinel2_l2a, out_default.sentinel2_l2a)
+
+
+def test_encoder_windowed_register_bottleneck(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """Windowing the register read + latent self-attention runs forward + backward."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    s2_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    encoder = _windowed_encoder(
+        supported_modalities,
+        attn_window_size=2,
+        use_register_bottleneck=True,
+        register_grid_size=0,  # dynamic grid matches the patch grid
+        register_dim=8,
+        register_latent_depth=2,
+    )
+    encoder.train()
+
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    s2_mask = torch.zeros(B, H, W, T, s2_bands, dtype=torch.long)
+    s2_mask[:, : H // 2] = MaskValue.DECODER.value
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_bands),
+        sentinel2_l2a_mask=s2_mask,
+        latlon=torch.randn(B, latlon_bands),
+        latlon_mask=torch.zeros(B, latlon_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=2, input_res=10)
+    registers = output_dict["registers"]
+    assert torch.isfinite(registers).all()
+    registers.sum().backward()
+    assert encoder.register_bottleneck is not None
+    assert encoder.register_bottleneck.register.grad is not None
+    assert torch.isfinite(encoder.register_bottleneck.register.grad).all()
+
+
+def test_encoder_rope_mixed_forward_and_learns_freqs(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """RoPE-Mixed encoder should forward and backprop into learnable freqs."""
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    encoder = Encoder(
+        supported_modalities=supported_modalities,
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+        position_encoding="rope_mixed",
+    )
+
+    B, H, W, T = 1, 8, 8, 2
+    timestamps = torch.tensor([[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long)
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    output_dict = encoder.forward(sample, patch_size=4, input_res=10)
+    output, _, _ = unpack_encoder_output(output_dict)
+    assert output.sentinel2_l2a is not None
+    assert output.sentinel2_l2a.shape[:3] == (B, H // 4, W // 4)
+    output.sentinel2_l2a.sum().backward()
+    for blk in encoder.blocks:
+        assert blk.attn.rope_mixed_freqs.grad is not None
+        assert torch.isfinite(blk.attn.rope_mixed_freqs.grad).all()
+        assert blk.attn.rope_mixed_freqs.grad.abs().sum() > 0
 
 
 def test_predictor_forward_rope_mixed(
@@ -1472,124 +2554,3 @@ def test_predictor_forward_rope_3d_mixed(
     assert len(grads) > 0
     assert all(torch.isfinite(g).all() for g in grads)
     assert sum(g.abs().sum() for g in grads) > 0
-
-
-def test_end_to_end_with_exit_config(
-    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
-    masked_sample_dict: dict[str, torch.Tensor],
-) -> None:
-    """Test the full end to end forward pass of the model with an exit configuration."""
-    supported_modalities = [
-        Modality.SENTINEL2_L2A,
-        Modality.LATLON,
-        Modality.WORLDCOVER,
-    ]
-    token_exit_cfg = {"sentinel2_l2a": 3, "latlon": 0, "worldcover": 0}
-    sentinel2_l2a_num_band_sets = modality_band_set_len_and_total_bands[
-        "sentinel2_l2a"
-    ][0]
-    latlon_num_band_sets = modality_band_set_len_and_total_bands["latlon"][0]
-    B, H, W, T, _ = masked_sample_dict["sentinel2_l2a"].shape
-    x = MaskedOlmoEarthSample(**masked_sample_dict)
-
-    patch_size = 4
-    input_res = 1
-    # Shared constants for encoder and predictor
-    MAX_PATCH_SIZE = 8
-    NUM_HEADS = 2
-    MLP_RATIO = 4.0
-    MAX_SEQ_LENGTH = 12
-    DEPTH = 2
-    DROP_PATH = 0.1
-    ENCODER_EMBEDDING_SIZE = 16
-    DECODER_EMBEDDING_SIZE = 16
-    encoder = Encoder(
-        supported_modalities=supported_modalities,
-        embedding_size=ENCODER_EMBEDDING_SIZE,
-        max_patch_size=MAX_PATCH_SIZE,
-        min_patch_size=1,
-        num_heads=NUM_HEADS,
-        mlp_ratio=MLP_RATIO,
-        max_sequence_length=MAX_SEQ_LENGTH,
-        depth=DEPTH,
-        drop_path=DROP_PATH,
-    )
-    predictor = Predictor(
-        supported_modalities=supported_modalities,
-        encoder_embedding_size=ENCODER_EMBEDDING_SIZE,
-        decoder_embedding_size=DECODER_EMBEDDING_SIZE,
-        depth=DEPTH,
-        mlp_ratio=MLP_RATIO,
-        num_heads=NUM_HEADS,
-        max_sequence_length=MAX_SEQ_LENGTH,
-        drop_path=DROP_PATH,
-    )
-    output_dict = encoder.forward(
-        x,
-        patch_size,
-        input_res,
-        token_exit_cfg=token_exit_cfg,
-    )
-    output, _, decoder_kwargs = unpack_encoder_output(output_dict)
-    output = predictor.forward(
-        output, x.timestamps, patch_size, input_res, **decoder_kwargs
-    )
-    patched_H = H // patch_size
-    patched_W = W // patch_size
-    assert output.sentinel2_l2a is not None
-    assert output.sentinel2_l2a_mask is not None
-    assert output.latlon is not None
-    assert output.latlon_mask is not None
-    assert output.sentinel2_l2a.shape == (
-        B,
-        patched_H,
-        patched_W,
-        T,
-        sentinel2_l2a_num_band_sets,
-        predictor.output_embedding_size,
-    )
-    assert output.sentinel2_l2a_mask.shape == (
-        B,
-        patched_H,
-        patched_W,
-        T,
-        sentinel2_l2a_num_band_sets,
-    )
-    assert output.latlon.shape == (
-        B,
-        latlon_num_band_sets,
-        predictor.output_embedding_size,
-    )
-    assert output.latlon_mask.shape == (
-        B,
-        latlon_num_band_sets,
-    )
-    assert output.worldcover is not None
-    assert output.worldcover_mask is not None
-    assert output.worldcover.shape == (
-        B,
-        patched_H,
-        patched_W,
-        1,
-        1,
-        predictor.output_embedding_size,
-    )
-    assert output.worldcover_mask.shape == (
-        B,
-        patched_H,
-        patched_W,
-        1,
-        1,
-    )
-    output.worldcover.sum().backward()
-    for name, param in predictor.named_parameters():
-        if not any(
-            x in name
-            for x in [
-                "pos_embed",
-                "month_embed",
-                "composite_encodings.per_modality_channel_embeddings.latlon",
-                "project_and_aggregate",
-            ]
-        ):
-            assert param.grad is not None, name

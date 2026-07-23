@@ -324,7 +324,7 @@ def test_supervision_modalities_can_be_excluded_from_token_budget() -> None:
         max_tokens_per_instance=100,
         sampled_hw_p=4,
         current_length=12,
-        token_budget_excluded_modalities={"open_set", "open_set_regression"},
+        budget_exclude_modalities=frozenset({"open_set", "open_set_regression"}),
     )
 
     assert subsetted_sample.time == 2

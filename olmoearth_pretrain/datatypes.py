@@ -97,6 +97,7 @@ class OlmoEarthSample(NamedTuple):
     # naip_10 is currently 4x the height/width of sentinel2_l2a.
     naip_10: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
     gse: ArrayTensor | None = None  # [B, H, W, 1, len(GSE_bands)]
+    tessera: ArrayTensor | None = None  # [B, H, W, 1, len(TESSERA_bands)]
     cdl: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
     worldpop: ArrayTensor | None = None  # [B, H, W, 1, len(WORLDPOP_bands)]
     worldcereal: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
@@ -383,6 +384,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     naip_10_mask: Tensor | None = None
     gse: Tensor | None = None
     gse_mask: Tensor | None = None
+    tessera: Tensor | None = None
+    tessera_mask: Tensor | None = None
     cdl: Tensor | None = None
     cdl_mask: Tensor | None = None
     worldpop: Tensor | None = None
@@ -529,6 +532,8 @@ class TokensAndMasks(NamedTuple):
     naip_10_mask: Tensor | None = None
     gse: Tensor | None = None
     gse_mask: Tensor | None = None
+    tessera: Tensor | None = None
+    tessera_mask: Tensor | None = None
     cdl: Tensor | None = None
     cdl_mask: Tensor | None = None
     worldpop: Tensor | None = None

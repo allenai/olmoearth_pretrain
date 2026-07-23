@@ -517,6 +517,21 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # Tessera (https://github.com/ucam-eo/tessera) precomputed embeddings:
+    # 128-dim, 10 m, annual — same product shape as GSE/AlphaEarth above.
+    TESSERA = ModalitySpec(
+        name="tessera",
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [f"T{idx:03d}" for idx in range(128)],
+                16,
+            ),
+        ],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     CDL = ModalitySpec(
         name="cdl",
         tile_resolution_factor=16,
@@ -608,6 +623,11 @@ class Modality:
 # Latlon and timestamps
 LATLON = ["lat", "lon"]
 TIMESTAMPS = ["day", "month", "year"]
+
+# Modalities that carry precomputed embedding products (e.g. AlphaEarth/GSE,
+# Tessera) rather than imagery. Eval loaders consume these exactly as stored —
+# imagery normalization does not apply to them.
+EMBEDDING_PRODUCT_MODALITIES = frozenset({Modality.GSE.name, Modality.TESSERA.name})
 
 
 def get_modality_specs_from_names(names: list[str]) -> list[ModalitySpec]:

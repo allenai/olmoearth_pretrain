@@ -11,6 +11,7 @@ from olmoearth_pretrain.nn.encodings import (
     apply_3d_axial_rope,
     apply_3d_mixed_rope,
     axial_3d_dim_split,
+    build_window_mask,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -19,6 +20,70 @@ from olmoearth_pretrain.nn.encodings import (
     init_3d_mixed_rope_freqs,
     timestamps_to_days,
 )
+
+
+def _grid_positions(side: int) -> torch.Tensor:
+    """A (1, side*side, 2) row-major integer (row, col) grid."""
+    rows = torch.arange(side).repeat_interleave(side)
+    cols = torch.arange(side).repeat(side)
+    return torch.stack([rows, cols], dim=-1).float().unsqueeze(0)
+
+
+def test_build_window_mask_centered_window() -> None:
+    """A query attends exactly the Chebyshev neighbourhood of half_extent cells."""
+    pos = _grid_positions(5)  # 5x5 grid, coords 0..4
+    half = 1.0  # window side 3 (|d| <= 1)
+    mask = build_window_mask(pos, pos, half)[0, 0]  # (25, 25)
+
+    coords = pos[0]
+    for i in range(25):
+        for j in range(25):
+            within = bool((coords[i] - coords[j]).abs().max() <= half + 1e-6)
+            assert mask[i, j].item() == within
+
+
+def test_build_window_mask_full_when_window_covers_grid() -> None:
+    """When the window spans the whole grid the mask is all-True (== full attention)."""
+    pos = _grid_positions(4)
+    mask = build_window_mask(pos, pos, half_extent=10.0)
+    assert mask.all()
+
+
+def test_build_window_mask_global_tokens_attend_everywhere() -> None:
+    """Global queries/keys bypass the window constraint."""
+    pos = _grid_positions(4)
+    n = pos.shape[1]
+    q_global = torch.zeros(1, n, dtype=torch.bool)
+    q_global[0, 0] = True  # first query is global
+    k_global = torch.zeros(1, n, dtype=torch.bool)
+    k_global[0, -1] = True  # last key is global
+    mask = build_window_mask(
+        pos, pos, half_extent=0.0, q_is_global=q_global, k_is_global=k_global
+    )[0, 0]
+    assert mask[0].all()  # global query sees all keys
+    assert mask[:, -1].all()  # global key seen by all queries
+
+
+def test_build_window_mask_respects_key_valid() -> None:
+    """Invalid keys never participate, even inside the window."""
+    pos = _grid_positions(4)
+    n = pos.shape[1]
+    key_valid = torch.ones(1, n, dtype=torch.bool)
+    key_valid[0, 5] = False
+    mask = build_window_mask(pos, pos, half_extent=10.0, key_valid=key_valid)[0, 0]
+    assert not mask[:, 5].any()
+
+
+def test_build_window_mask_no_empty_rows() -> None:
+    """A starved query (no valid key in window) falls back to valid keys, never empty."""
+    pos = _grid_positions(4)
+    n = pos.shape[1]
+    key_valid = torch.zeros(1, n, dtype=torch.bool)
+    key_valid[0, 0] = True  # only one valid key, far from most queries
+    mask = build_window_mask(pos, pos, half_extent=0.0, key_valid=key_valid)[0, 0]
+    # Every query keeps at least one key (avoids NaN softmax); only valid keys allowed.
+    assert mask.any(dim=-1).all()
+    assert not mask[:, 1:].any()
 
 
 def test_get_1d_sincos_pos_encoding() -> None:
