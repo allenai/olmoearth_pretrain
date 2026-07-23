@@ -114,14 +114,26 @@ _CDL_CODES = [
 CDL_CLASS_VALUES = [code / 200 for code in _CDL_CODES]
 
 
+# Annual harmonics for the NDVI time-conditioned head's day-of-year sincos basis.
+NDVI_TIME_HARMONICS = 4
+
+
 def build_supervision_head_config(
-    *, include_latlon: bool, base_weight: float = SUPERVISION_WEIGHT
+    *,
+    include_latlon: bool,
+    include_ndvi: bool = False,
+    base_weight: float = SUPERVISION_WEIGHT,
 ) -> SupervisionHeadConfig:
     """Register-grid supervision head config over the decode-only map modalities.
 
     ``include_latlon`` adds the unit-sphere location regression read from the
-    mean-pooled register grid. ``base_weight`` overrides the low ``SUPERVISION_WEIGHT``
-    nudge (kept as the default); it is still scaled per-task by ``TASK_TYPE_WEIGHTS``.
+    mean-pooled register grid. ``include_ndvi`` adds the TIME-CONDITIONED NDVI
+    regression: a small MLP on ``[register_cell ; phi(day_of_year)]`` predicts the
+    cell's NDVI at each observed timestep, so each cell is forced to store its own
+    temporal trajectory, decodable given time — the property the frozen ps=1
+    phenology probes (PASTIS) need. ``base_weight`` overrides the low
+    ``SUPERVISION_WEIGHT`` nudge (kept as the default); it is still scaled per-task
+    by ``TASK_TYPE_WEIGHTS``.
     """
 
     def _weight(task_type: SupervisionTaskType) -> float:
@@ -171,6 +183,15 @@ def build_supervision_head_config(
             num_output_channels=LATLON_TARGET_DIM,
             weight=_weight(SupervisionTaskType.REGRESSION),
         )
+    if include_ndvi:
+        modality_configs[Modality.NDVI.name] = SupervisionModalityConfig(
+            task_type=SupervisionTaskType.REGRESSION,
+            num_output_channels=1,
+            weight=_weight(SupervisionTaskType.REGRESSION),
+            regression_loss_type="l1",
+            time_conditioned=True,
+            time_harmonics=NDVI_TIME_HARMONICS,
+        )
     return SupervisionHeadConfig(
         modality_configs=modality_configs,
         register_supervision=True,
@@ -181,11 +202,72 @@ def add_register_supervision(
     config: LatentMIMConfig,
     *,
     include_latlon: bool,
+    include_ndvi: bool = False,
     base_weight: float = SUPERVISION_WEIGHT,
 ) -> LatentMIMConfig:
     """Attach the register-grid supervision head to a regbtl model config."""
     config.supervision_head_config = build_supervision_head_config(
-        include_latlon=include_latlon, base_weight=base_weight
+        include_latlon=include_latlon,
+        include_ndvi=include_ndvi,
+        base_weight=base_weight,
+    )
+    return config
+
+
+def _extra_decode_masking_config(
+    tokenization_config: TokenizationConfig | None,
+    extra_modalities: list[str],
+) -> MaskingConfig:
+    """Base masking config with extra supervision-only decode modalities.
+
+    only_decode marks every non-missing token of the extra modalities DECODE,
+    keeping them out of the encode split; since neither the encoder nor the decoder
+    supports them, the mask is inert and the modality just rides along in the batch
+    for supervision (the latlon pattern; ndvi works identically).
+    """
+    config = _masking_config(tokenization_config)
+    config.strategy_config["only_decode_modalities"] = [
+        *ONLY_DECODE_MODALITIES,
+        *extra_modalities,
+    ]
+    return config
+
+
+def build_extra_decode_dataset_config(
+    common: CommonComponents, extra_modalities: list[str]
+) -> OlmoEarthDatasetConfig:
+    """Base dataset config with extra supervision-only training modalities.
+
+    latlon is loaded from the h5 files (stored with every sample); ndvi is derived
+    (``ignore_when_parsing=True``) — the dataset computes it in ``__getitem__`` from
+    the raw S2 L2A B04/B08 bands whenever "ndvi" is a training modality.
+    """
+    config = _base_build_dataset_config(common)
+    config.training_modalities = [
+        *config.training_modalities,
+        *extra_modalities,
+    ]
+    return config
+
+
+def build_extra_decode_dataloader_config(
+    common: CommonComponents, extra_modalities: list[str]
+) -> OlmoEarthDataLoaderConfig:
+    """Single-view (1fwd) dataloader whose masking knows the extras are decode-only."""
+    config = _1fwd_build_dataloader_config(common)
+    config.masking_config = _extra_decode_masking_config(
+        common.tokenization_config, extra_modalities
+    )
+    return config
+
+
+def build_extra_decode_train_module_config(
+    common: CommonComponents, extra_modalities: list[str]
+) -> LatentMIMTrainModuleConfig:
+    """Faster (1fwd + fused AdamW + ddp/bf16) train module with extras decode-only."""
+    config = build_faster_train_module_config(common)
+    config.masking_config = _extra_decode_masking_config(
+        common.tokenization_config, extra_modalities
     )
     return config
 
@@ -193,43 +275,24 @@ def add_register_supervision(
 def _latlon_masking_config(
     tokenization_config: TokenizationConfig | None,
 ) -> MaskingConfig:
-    """Base masking config with latlon added to the only-decode modalities.
-
-    only_decode marks every non-missing latlon token DECODE, keeping it out of the
-    encode split; since neither the encoder nor the decoder supports latlon, the
-    mask is inert and the modality just rides along in the batch for supervision.
-    """
-    config = _masking_config(tokenization_config)
-    config.strategy_config["only_decode_modalities"] = [
-        *ONLY_DECODE_MODALITIES,
-        Modality.LATLON.name,
-    ]
-    return config
+    """Base masking config with latlon added to the only-decode modalities."""
+    return _extra_decode_masking_config(tokenization_config, [Modality.LATLON.name])
 
 
 def build_latlon_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
     """Base dataset config, additionally loading latlon from the h5 files."""
-    config = _base_build_dataset_config(common)
-    config.training_modalities = [
-        *config.training_modalities,
-        Modality.LATLON.name,
-    ]
-    return config
+    return build_extra_decode_dataset_config(common, [Modality.LATLON.name])
 
 
 def build_latlon_dataloader_config(
     common: CommonComponents,
 ) -> OlmoEarthDataLoaderConfig:
     """Single-view (1fwd) dataloader whose masking knows latlon is decode-only."""
-    config = _1fwd_build_dataloader_config(common)
-    config.masking_config = _latlon_masking_config(common.tokenization_config)
-    return config
+    return build_extra_decode_dataloader_config(common, [Modality.LATLON.name])
 
 
 def build_latlon_train_module_config(
     common: CommonComponents,
 ) -> LatentMIMTrainModuleConfig:
     """Faster (1fwd + fused AdamW + ddp/bf16) train module with latlon-aware masking."""
-    config = build_faster_train_module_config(common)
-    config.masking_config = _latlon_masking_config(common.tokenization_config)
-    return config
+    return build_extra_decode_train_module_config(common, [Modality.LATLON.name])

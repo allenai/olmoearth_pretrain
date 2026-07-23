@@ -32,12 +32,39 @@ from torch import Tensor
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.nn.encodings import timestamps_to_day_of_year
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 
 logger = logging.getLogger(__name__)
 
 # The latlon supervision target is a point on the unit sphere: (x, y, z).
 LATLON_TARGET_DIM = 3
+
+
+def _day_of_year_encoding(timestamps: Tensor, num_harmonics: int) -> Tensor:
+    """Fixed sincos day-of-year basis for the time-conditioned heads.
+
+    ``phi(t) = [sin(2*pi*k*doy/365.25), cos(2*pi*k*doy/365.25)] for k = 1..K``:
+    periodic across year boundaries and year-invariant (matching the anchored
+    register read's ``year_start`` semantics). A learned linear map over a
+    Fourier basis IS a learned continuous-time embedding, so the MLP's first
+    layer provides the mixing and nothing here needs to be learned — which
+    also means exact generalization to observation dates never seen in
+    training.
+
+    Args:
+        timestamps: ``[B, T, 3]`` ``(day, month, year)`` timestamps.
+        num_harmonics: Number of annual harmonics K.
+
+    Returns:
+        ``[B, T, 2 * num_harmonics]`` float tensor.
+    """
+    doy = timestamps_to_day_of_year(timestamps)  # [B, T]
+    k = torch.arange(
+        1, num_harmonics + 1, device=timestamps.device, dtype=torch.float32
+    )
+    angles = 2.0 * torch.pi * doy.unsqueeze(-1) * k / 365.25  # [B, T, K]
+    return torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
 
 
 class SupervisionTaskType(StrEnum):
@@ -74,6 +101,26 @@ class SupervisionModalityConfig(Config):
             targets like SRTM/canopy where MSE overweights extreme outliers.
             Matches AlphaEarth's choice (Table S2 of arXiv:2507.22291) of L1
             across all continuous reconstruction targets.
+        time_conditioned: Register-supervision only, for MULTITEMPORAL targets
+            (e.g. ndvi). The register grid is a time-free 2D map, so a plain
+            linear head can only produce one prediction per cell; a
+            time-conditioned head instead predicts a value per (cell, timestep)
+            by evaluating a small MLP on ``[register_cell ; phi(t)]``, where
+            ``phi(t)`` is a fixed day-of-year sincos basis built from the
+            sample's own timestamps. Because the prediction for cell (i, j) can
+            only read ``z[i, j]``, the loss forces each cell to store its own
+            trajectory, decodable given time — exactly what a frozen
+            per-cell probe needs. Variable timestep counts need no fixed
+            output layer (the head is queried at exactly the observed times;
+            per-timestep validity is handled by the MISSING_VALUE mask).
+        time_harmonics: For time_conditioned only. Number of annual harmonics
+            K in the day-of-year encoding: ``phi(t) = [sin(2*pi*k*doy/365.25),
+            cos(...)] for k = 1..K`` (2K features). K=4 spans phenology-scale
+            temporal structure; the MLP's first layer learns the mixing.
+        time_mlp_hidden_dim: For time_conditioned only. Hidden width of the
+            two-layer MLP head. Kept small on purpose: the point of the loss
+            is to force the REGISTER to store the trajectory, not to let a
+            clever head reconstruct it from weak features.
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
@@ -83,6 +130,9 @@ class SupervisionModalityConfig(Config):
     norm_pix_loss: bool = False
     pos_weight: bool = False
     regression_loss_type: str = "mse"
+    time_conditioned: bool = False
+    time_harmonics: int = 4
+    time_mlp_hidden_dim: int = 64
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -98,6 +148,16 @@ class SupervisionModalityConfig(Config):
                 f"regression_loss_type must be 'mse' or 'l1', got "
                 f"{self.regression_loss_type!r}"
             )
+        if self.time_conditioned:
+            if self.task_type != SupervisionTaskType.REGRESSION:
+                raise ValueError(
+                    "time_conditioned supervision only supports regression, got "
+                    f"{self.task_type}"
+                )
+            if self.time_harmonics < 1:
+                raise ValueError(
+                    f"time_harmonics must be >= 1, got {self.time_harmonics}"
+                )
 
 
 @dataclass
@@ -166,6 +226,7 @@ class SupervisionHead(nn.Module):
         self.max_patch_size = max_patch_size
         self.register_supervision = register_supervision
         self._non_spatial_modalities: set[str] = set()
+        self._time_conditioned_modalities: set[str] = set()
         self.heads = nn.ModuleDict()
         for name, cfg in modality_configs.items():
             if name == Modality.LATLON.name and (
@@ -179,6 +240,31 @@ class SupervisionHead(nn.Module):
                     f"{cfg.num_output_channels}"
                 )
             modality_spec = Modality.get(name)
+            if cfg.time_conditioned:
+                if not register_supervision:
+                    raise ValueError(
+                        f"time_conditioned supervision ({name}) requires "
+                        "register_supervision=True: it conditions the time-free "
+                        "register grid on the query time"
+                    )
+                if not (modality_spec.is_spatial and modality_spec.is_multitemporal):
+                    raise ValueError(
+                        f"time_conditioned supervision requires a spatial "
+                        f"multitemporal modality, got {name}"
+                    )
+                # Two-layer MLP on [register_cell ; phi(t)] -> C. Per-cell (no
+                # max_patch_size^2 unfold): the output is bilinearly interpolated
+                # to the target resolution like the other spatial heads.
+                self._time_conditioned_modalities.add(name)
+                self.heads[name] = nn.Sequential(
+                    nn.Linear(
+                        embedding_dim + 2 * cfg.time_harmonics,
+                        cfg.time_mlp_hidden_dim,
+                    ),
+                    nn.GELU(),
+                    nn.Linear(cfg.time_mlp_hidden_dim, cfg.num_output_channels),
+                )
+                continue
             if modality_spec.is_spatial:
                 # TODO: the max_patch_size^2 unfold is a holdover from decoder-token
                 # supervision (each token = one real patch of up to max_patch_size px).
@@ -213,6 +299,27 @@ class SupervisionHead(nn.Module):
             if t is not None:
                 return t.shape[0]
         return 1
+
+    @staticmethod
+    def _maybe_interpolate_to_target(
+        output: Tensor, raw_target: Tensor | None
+    ) -> Tensor:
+        """Bilinearly resize ``[B, H, W, T, C]`` predictions to the target's (H, W)."""
+        if raw_target is None:
+            return output
+        target_h, target_w = raw_target.shape[1], raw_target.shape[2]
+        if output.shape[1] == target_h and output.shape[2] == target_w:
+            return output
+        orig_dtype = output.dtype
+        b, h, w, t, c = output.shape
+        output = rearrange(output, "b h w t c -> (b t) c h w")
+        output = F.interpolate(
+            output.float(),
+            size=(target_h, target_w),
+            mode="bilinear",
+            align_corners=False,
+        ).to(orig_dtype)
+        return rearrange(output, "(b t) c h w -> b h w t c", b=b, t=t)
 
     def forward(
         self,
@@ -249,6 +356,36 @@ class SupervisionHead(nn.Module):
         predictions: dict[str, Tensor] = {}
         for sup_name, head in self.heads.items():
             tokens = getattr(decoded, sup_name, None)
+
+            if sup_name in self._time_conditioned_modalities:
+                # Time-conditioned head: MLP([register_cell ; phi(t)]) evaluated at
+                # every (cell, observed timestep). The prediction for cell (i, j)
+                # can only read register_grid[:, i, j], so the fitted trajectory is
+                # guaranteed to live in the cell the frozen probes read.
+                assert register_grid is not None
+                if batch.timestamps is None:
+                    raise ValueError(
+                        f"time_conditioned supervision ({sup_name}) requires batch "
+                        "timestamps to build the day-of-year encoding"
+                    )
+                cfg = self.modality_configs[sup_name]
+                phi = _day_of_year_encoding(batch.timestamps, cfg.time_harmonics).to(
+                    dtype
+                )  # [B, T, 2K]
+                b, n_h, n_w, d = register_grid.shape
+                t = phi.shape[1]
+                features = torch.cat(
+                    [
+                        register_grid[:, :, :, None, :].expand(b, n_h, n_w, t, d),
+                        phi[:, None, None, :, :].expand(b, n_h, n_w, t, -1),
+                    ],
+                    dim=-1,
+                )
+                output = head(features)  # [B, n_h, n_w, T, C]
+                predictions[sup_name] = self._maybe_interpolate_to_target(
+                    output, getattr(batch, sup_name, None)
+                )
+                continue
 
             if sup_name in self._non_spatial_modalities:
                 # Non-spatial modality: features [B, D]
@@ -294,20 +431,9 @@ class SupervisionHead(nn.Module):
                     j=mps,
                 )  # [B, P_H*mps, P_W*mps, T, C]
 
-                raw_target = getattr(batch, sup_name, None)
-                if raw_target is not None:
-                    target_h, target_w = raw_target.shape[1], raw_target.shape[2]
-                    if output.shape[1] != target_h or output.shape[2] != target_w:
-                        orig_dtype = output.dtype
-                        b, h, w, t, c = output.shape
-                        output = rearrange(output, "b h w t c -> (b t) c h w")
-                        output = F.interpolate(
-                            output.float(),
-                            size=(target_h, target_w),
-                            mode="bilinear",
-                            align_corners=False,
-                        ).to(orig_dtype)
-                        output = rearrange(output, "(b t) c h w -> b h w t c", b=b, t=t)
+                output = self._maybe_interpolate_to_target(
+                    output, getattr(batch, sup_name, None)
+                )
 
             predictions[sup_name] = output
 

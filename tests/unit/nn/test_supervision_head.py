@@ -13,6 +13,7 @@ from olmoearth_pretrain.nn.supervision_head import (
     SupervisionModalityConfig,
     SupervisionTaskType,
     _build_valid_mask,
+    _day_of_year_encoding,
     _latlon_regression_loss,
     _latlon_unit_xyz_target,
     compute_supervision_loss,
@@ -517,4 +518,144 @@ class TestSupervisionHeadConfig:
             SupervisionModalityConfig(
                 task_type=SupervisionTaskType.CLASSIFICATION,
                 num_output_channels=11,
+            )
+
+
+def _ndvi_time_conditioned_config() -> dict[str, SupervisionModalityConfig]:
+    """NDVI time-conditioned register-supervision config."""
+    return {
+        "ndvi": SupervisionModalityConfig(
+            task_type=SupervisionTaskType.REGRESSION,
+            num_output_channels=1,
+            weight=1.0,
+            time_conditioned=True,
+            time_harmonics=4,
+        )
+    }
+
+
+class TestTimeConditionedSupervision:
+    """Time-conditioned (register grid x day-of-year MLP) supervision, e.g. NDVI."""
+
+    T = 3
+
+    def _make_timestamps(self) -> torch.Tensor:
+        # (day, month0, year): Jan 1, Apr 15, Jul 1 of 2023.
+        return torch.tensor(
+            [[[1, 0, 2023], [15, 3, 2023], [1, 6, 2023]]], dtype=torch.long
+        ).expand(B, -1, -1)
+
+    def _make_head(self) -> SupervisionHead:
+        return SupervisionHead(
+            _ndvi_time_conditioned_config(),
+            embedding_dim=D,
+            max_patch_size=MAX_PATCH_SIZE,
+            register_supervision=True,
+        )
+
+    def test_forward_shape_time_dependence_and_locality(self) -> None:
+        """Per-(cell, timestep) predictions from the time-free register grid.
+
+        With a grid-resolution target (no interpolation): predictions vary across
+        timesteps (the time conditioning is live), and cell (i, j)'s prediction
+        depends ONLY on register_grid[:, i, j] (the per-cell forcing that makes the
+        fitted trajectory readable by a frozen per-cell probe).
+        """
+        head = self._make_head()
+        register_grid = torch.randn(B, P_H, P_W, D)
+        ndvi_target = torch.rand(B, P_H, P_W, self.T, 1)
+        batch = MaskedOlmoEarthSample(
+            timestamps=self._make_timestamps(), ndvi=ndvi_target
+        )
+        preds = head(TokensAndMasks(), batch, register_grid=register_grid)
+        assert preds["ndvi"].shape == (B, P_H, P_W, self.T, 1)
+        # Same cell, different timesteps -> different predictions.
+        assert not torch.allclose(preds["ndvi"][:, :, :, 0], preds["ndvi"][:, :, :, 1])
+        # Perturbing one cell leaves every other cell's predictions unchanged.
+        perturbed = register_grid.clone()
+        perturbed[:, 0, 0] += 1.0
+        preds_perturbed = head(TokensAndMasks(), batch, register_grid=perturbed)
+        assert not torch.allclose(
+            preds_perturbed["ndvi"][:, 0, 0], preds["ndvi"][:, 0, 0]
+        )
+        torch.testing.assert_close(preds_perturbed["ndvi"][:, 1:], preds["ndvi"][:, 1:])
+
+    def test_forward_interpolates_to_pixel_target(self) -> None:
+        """A pixel-resolution target triggers bilinear upsampling of the grid preds."""
+        head = self._make_head()
+        register_grid = torch.randn(B, P_H, P_W, D)
+        ndvi_target = torch.rand(B, H_PIX, W_PIX, self.T, 1)
+        batch = MaskedOlmoEarthSample(
+            timestamps=self._make_timestamps(), ndvi=ndvi_target
+        )
+        preds = head(TokensAndMasks(), batch, register_grid=register_grid)
+        assert preds["ndvi"].shape == (B, H_PIX, W_PIX, self.T, 1)
+
+    def test_loss_and_register_gradients(self) -> None:
+        """The supervision loss backpropagates into the register grid."""
+        head = self._make_head()
+        register_grid = torch.randn(B, P_H, P_W, D, requires_grad=True)
+        ndvi_target = torch.rand(B, H_PIX, W_PIX, self.T, 1)
+        # Punch some MISSING holes (cloud/absent obs); the masked loss skips them.
+        ndvi_target[:, :4, :4, 0] = MISSING_VALUE
+        batch = MaskedOlmoEarthSample(
+            timestamps=self._make_timestamps(), ndvi=ndvi_target
+        )
+        preds = head(TokensAndMasks(), batch, register_grid=register_grid)
+        total_loss, per_mod = compute_supervision_loss(preds, batch, head)
+        assert total_loss.ndim == 0
+        assert torch.isfinite(total_loss)
+        total_loss.backward()
+        assert register_grid.grad is not None
+        assert torch.isfinite(register_grid.grad).all()
+        assert register_grid.grad.abs().sum() > 0
+
+    def test_day_of_year_encoding(self) -> None:
+        """Jan 1 encodes as (sin 0, cos 1) x K, and the encoding is year-invariant."""
+        jan1_2023 = torch.tensor([[[1, 0, 2023]]], dtype=torch.long)
+        phi = _day_of_year_encoding(jan1_2023, num_harmonics=4)  # [1, 1, 8]
+        torch.testing.assert_close(phi[0, 0, :4], torch.zeros(4))
+        torch.testing.assert_close(phi[0, 0, 4:], torch.ones(4))
+        jul15_2019 = torch.tensor([[[15, 6, 2019]]], dtype=torch.long)
+        jul15_2024 = torch.tensor([[[15, 6, 2024]]], dtype=torch.long)
+        torch.testing.assert_close(
+            _day_of_year_encoding(jul15_2019, num_harmonics=4),
+            _day_of_year_encoding(jul15_2024, num_harmonics=4),
+        )
+
+    def test_requires_register_supervision(self) -> None:
+        """time_conditioned without register_supervision raises."""
+        with pytest.raises(ValueError, match="register_supervision"):
+            SupervisionHead(
+                _ndvi_time_conditioned_config(),
+                embedding_dim=D,
+                max_patch_size=MAX_PATCH_SIZE,
+                register_supervision=False,
+            )
+
+    def test_requires_multitemporal_modality(self) -> None:
+        """time_conditioned on a static modality (srtm) raises."""
+        cfg = {
+            "srtm": SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION,
+                num_output_channels=1,
+                time_conditioned=True,
+            ),
+        }
+        with pytest.raises(ValueError, match="multitemporal"):
+            SupervisionHead(
+                cfg,
+                embedding_dim=D,
+                max_patch_size=MAX_PATCH_SIZE,
+                register_supervision=True,
+            )
+
+    def test_requires_regression(self) -> None:
+        """time_conditioned classification is rejected at config time."""
+        with pytest.raises(ValueError, match="regression"):
+            SupervisionModalityConfig(
+                task_type=SupervisionTaskType.CLASSIFICATION,
+                num_output_channels=2,
+                class_values=[0.0, 1.0],
+                time_conditioned=True,
             )

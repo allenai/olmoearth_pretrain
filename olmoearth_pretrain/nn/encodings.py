@@ -121,6 +121,31 @@ def timestamps_to_days(
     return (year - anchor_year) * 365.25 + offsets + (day - 1.0)
 
 
+def timestamps_to_day_of_year(timestamps: torch.Tensor) -> torch.Tensor:
+    """Convert ``(day, month, year)`` timestamps to 0-indexed day-of-year.
+
+    Helios timestamps are stored as ``(day, month - 1, year)`` (1-indexed day,
+    0-indexed month). Returns the non-leap-year day-of-year in ``[0, 364]``
+    (Jan 1 -> 0), dropping the year entirely — the periodic calendar
+    coordinate used by time encodings that should be year-invariant.
+
+    Args:
+        timestamps: Long tensor with shape ``(..., 3)``. Last dim is
+            ``(day, month, year)``.
+
+    Returns:
+        Float tensor of shape ``timestamps.shape[:-1]``.
+    """
+    if timestamps.shape[-1] != 3:
+        raise ValueError(
+            f"timestamps last dim must be 3 (day, month, year), got {timestamps.shape}"
+        )
+    day = timestamps[..., 0].to(torch.float32)
+    month = timestamps[..., 1].to(torch.long)
+    offsets = _DAYS_BEFORE_MONTH.to(timestamps.device)[month]
+    return offsets + (day - 1.0)
+
+
 def get_1d_sincos_pos_encoding(pos: torch.Tensor, encoding_dim: int) -> torch.Tensor:
     """Get 1D sin cos position encoding for a given set of positions.
 
