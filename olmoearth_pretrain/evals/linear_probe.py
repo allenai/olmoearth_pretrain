@@ -448,6 +448,8 @@ def train_and_eval_probe(
         TensorDataset(train_embeddings, train_labels),
         batch_size=batch_size,
         shuffle=True,
+        # A final batch of size 1 breaks BatchNorm1d in training mode.
+        drop_last=len(train_embeddings) % batch_size == 1,
     )
     # Training loop: only evaluate on validation set
     for i in range(num_times_to_run_eval):
