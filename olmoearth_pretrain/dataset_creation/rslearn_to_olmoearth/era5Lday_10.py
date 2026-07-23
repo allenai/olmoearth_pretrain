@@ -23,6 +23,7 @@ from olmoearth_pretrain.dataset.utils import get_modality_fname
 
 from ..constants import METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
+from .cli import add_common_arguments
 from .multitemporal_raster import get_adjusted_projection_and_bounds
 
 LAYER_NAME = "era5_365dhistory"
@@ -81,10 +82,14 @@ def convert_era5l_day(window: Window, olmoearth_path: UPath) -> None:
         modality, band_set, window.projection, window.bounds
     )
 
-    raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands, group_idx)
     numpy_format = NumpyRasterFormat()
-    raster_array = numpy_format.decode_raster(
-        raster_dir, adjusted_projection, adjusted_bounds
+    raster_array = window.data.read_raster(
+        LAYER_NAME,
+        band_set.bands,
+        numpy_format,
+        projection=adjusted_projection,
+        bounds=adjusted_bounds,
+        group_idx=group_idx,
     )
     # raster_array.array shape: (C=14, T=~720, H=1, W=1)
 
@@ -158,24 +163,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Convert ERA5-Land daily data to OlmoEarth Pretrain format",
     )
-    parser.add_argument(
-        "--ds_path",
-        type=str,
-        help="Source rslearn dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--olmoearth_path",
-        type=str,
-        help="Destination OlmoEarth Pretrain dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        help="Number of workers to use",
-        default=32,
-    )
+    add_common_arguments(parser)
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))
