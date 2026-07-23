@@ -5,16 +5,16 @@ self-supervised latent-MIM objective, driven by the ``open_set`` /
 ``open_set_regression`` label layers (built by
 ``olmoearth_pretrain.open_set_segmentation_data``).
 
-The probe is a linear map from the pooled per-spatial-patch encoder
-representation to per-class logits (classification) and per-dataset scalars
-(regression):
+The probe is a linear map from the encoder's *spatial latent grid* (the
+Perceiver/register bottleneck output, where time / modality / band-set are
+already collapsed into one embedding per spatial cell) to per-class logits
+(classification) and per-dataset scalars (regression):
 
 * One learned vector per global class id (a ``num_classes x D`` weight matrix).
 * One learned vector per regression dataset (a ``num_reg_datasets x D`` matrix).
 
-Per spatial patch we pool the encoder tokens over modality / timestep / band-set
-(only the tokens actually seen by the online encoder), run the linear probe, and
-compute:
+Per spatial latent cell we run the linear probe against the pooled label block
+and compute:
 
 * **cross-entropy** for classification, with a *masked softmax* restricted to the
   source dataset's class subset (each open-set window comes from a single source
@@ -45,7 +45,6 @@ from einops import rearrange
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.datatypes import MaskValue, TokensAndMasks
 
 logger = logging.getLogger(__name__)
 
@@ -95,10 +94,11 @@ class OpenSetProbeConfig(Config):
 
 
 class OpenSetProbe(nn.Module):
-    """Linear probe over pooled per-patch encoder representations.
+    """Linear probe over the encoder's spatial latent grid.
 
     Args:
-        embedding_size: The token embedding size ``D`` emitted by the encoder.
+        embedding_size: The embedding size ``D`` of the spatial latent grid (the
+            encoder register/bottleneck dim, e.g. 768 or 128).
         class_mapping: Parsed ``class_mapping.json`` dict.
         seg_loss_weight: Relative weight of the classification (CE) term.
         reg_loss_weight: Relative weight of the regression (MSE) term.
@@ -229,64 +229,6 @@ class OpenSetProbe(nn.Module):
         self.register_buffer(
             "target_allowed_positions", target_allowed_positions, persistent=False
         )
-
-    # ------------------------------------------------------------------
-    # Per-patch pooling of encoder tokens
-    # ------------------------------------------------------------------
-    def pool_patches(self, latent: TokensAndMasks) -> tuple[torch.Tensor, torch.Tensor]:
-        """Pool the online-encoder tokens to one vector per spatial patch.
-
-        Averages the tokens that were actually seen by the online encoder
-        (``MaskValue.ONLINE_ENCODER``) over modality, timestep and band-set for each
-        ``(batch, patch_row, patch_col)``.
-
-        Returns:
-            pooled: ``(B, P_H, P_W, D)`` pooled representation.
-            valid: ``(B, P_H, P_W)`` bool mask, ``True`` where at least one token was
-                pooled.
-        """
-        p_h, p_w = self._reference_grid(latent)
-
-        pooled_sum: torch.Tensor | None = None
-        pooled_cnt: torch.Tensor | None = None
-        for modality in latent.modalities:
-            tokens = getattr(latent, modality)
-            mask = getattr(latent, latent.get_masked_modality_name(modality))
-            if tokens is None or mask is None:
-                continue
-            # Spatial modalities have shape (B, P_H, P_W, T, BandSets, D). Skip
-            # non-spatial (era5, latlon) and modalities on a different token grid.
-            if tokens.dim() != 6:
-                continue
-            if tokens.shape[1] != p_h or tokens.shape[2] != p_w:
-                continue
-            visible = (mask == MaskValue.ONLINE_ENCODER.value).to(tokens.dtype)
-            # sum over T and BandSets -> (B, P_H, P_W, D) and (B, P_H, P_W)
-            weighted = tokens * visible.unsqueeze(-1)
-            mod_sum = weighted.sum(dim=(3, 4))
-            mod_cnt = visible.sum(dim=(3, 4))
-            if pooled_sum is None:
-                pooled_sum = mod_sum
-                pooled_cnt = mod_cnt
-            else:
-                pooled_sum = pooled_sum + mod_sum
-                pooled_cnt = pooled_cnt + mod_cnt
-
-        if pooled_sum is None or pooled_cnt is None:
-            raise ValueError("No spatial modality found in encoder output for pooling")
-
-        valid = pooled_cnt > 0
-        pooled = pooled_sum / pooled_cnt.clamp(min=1.0).unsqueeze(-1)
-        return pooled, valid
-
-    @staticmethod
-    def _reference_grid(latent: TokensAndMasks) -> tuple[int, int]:
-        """Return the (P_H, P_W) token grid of the first spatial modality."""
-        for modality in latent.modalities:
-            tokens = getattr(latent, modality)
-            if tokens is not None and tokens.dim() == 6:
-                return int(tokens.shape[1]), int(tokens.shape[2])
-        raise ValueError("No spatial modality found in encoder output")
 
     # ------------------------------------------------------------------
     # Label pooling (pixels -> patches)
@@ -508,12 +450,14 @@ class OpenSetProbe(nn.Module):
         return 0.0 * total
 
     def forward(
-        self, latent: TokensAndMasks, batch: Any
+        self, spatial_latent: torch.Tensor, batch: Any
     ) -> tuple[dict[str, torch.Tensor], dict[str, float]]:
-        """Compute supervised loss terms for one encoder output.
+        """Compute supervised loss terms from the encoder's spatial latent grid.
 
         Args:
-            latent: Online-encoder ``TokensAndMasks`` for this view.
+            spatial_latent: ``(B, P_H, P_W, D)`` spatial latent embeddings (the
+                encoder's register/Perceiver bottleneck grid, with time / modality
+                already collapsed).
             batch: The ``MaskedOlmoEarthSample`` for this view (carries the label
                 fields ``open_set`` / ``open_set_regression``).
 
@@ -523,7 +467,17 @@ class OpenSetProbe(nn.Module):
                 using globally reduced valid-patch counts.
             metrics: Detached scalar metrics for logging.
         """
-        pooled, repr_valid = self.pool_patches(latent)
+        if spatial_latent.dim() != 4:
+            raise ValueError(
+                "spatial_latent must have shape (B, P_H, P_W, D), got "
+                f"{tuple(spatial_latent.shape)}"
+            )
+        pooled = spatial_latent
+        # Every spatial latent cell attends over the full input, so all cells carry
+        # a valid representation; validity is governed by the labels alone.
+        repr_valid = torch.ones(
+            pooled.shape[:3], dtype=torch.bool, device=pooled.device
+        )
         losses = {"zero_touch": self.zero_touch()}
         metrics: dict[str, float] = {}
 

@@ -1,49 +1,50 @@
-r"""Launch script: osm_sampling + open-set supervised pretraining.
+r"""Launch script: open-set supervised pretraining on the d128 spatial latent.
 
-Trains on a concatenation of the global ``osm_sampling`` dataset (self-supervised
-only) and the open-set supervised dataset (self-supervised + supervised). The
-``osm_sampling`` H5s lack the label layers, so those samples are missing-filled
-and contribute only the self-supervised loss, while the open-set samples add the
-supervised segmentation + regression signal.
-
-Inherits all v1.2-faster speedups (projection-only target, DDP + bf16, in-loop
-evals as separate Beaker jobs).
+Same as ``open_set_only_d768.py`` but with a 128-wide spatial latent grid (the
+``wideread`` builder keeps the bottleneck attention at encoder width, so the
+narrow register dim is purely the storage bottleneck).
 
 Usage (from the repo root)::
 
-    python scripts/official/v1_2/open_set_osm.py launch open_set_osm ai2/jupiter \\
-        --launch.num_gpus=8
-
-Set the open-set H5 directory in ``open_set_base.OPEN_SET_H5_DIR`` once the H5s
-are built.
+    python scripts/official/v1_2/open_set_only_d128.py launch open_set_only_d128 \\
+        ai2/jupiter --launch.num_gpus=8
 """
 
 import logging
 
-from base_faster import build_visualize_config
+from base import build_visualize_config
 from open_set_base import (
     build_common_components,
     build_dataloader_config,
-    build_model_config,
-    build_osm_plus_open_set_dataset_config,
+    build_open_set_dataset_config,
     build_train_module_config,
+)
+from open_set_base import (
+    build_model_config as _build_model_config_with_dim,
 )
 from open_set_base import (
     build_trainer_config as _build_trainer_config_with_path,
 )
 
 from olmoearth_pretrain.internal.experiment import CommonComponents, main
+from olmoearth_pretrain.nn.open_set_latent_mim import OpenSetLatentMIMConfig
 
 logger = logging.getLogger(__name__)
 
+REGISTER_DIM = 128
 # Path (relative to the repo root) used by the in-loop Beaker eval jobs to rebuild
 # this exact model config when loading a checkpoint.
-MODULE_PATH = "scripts/official/v1_2/open_set_osm.py"
+MODULE_PATH = "scripts/official/v1_2/open_set_only_d128.py"
+
+
+def build_model_config(common: CommonComponents) -> OpenSetLatentMIMConfig:
+    """d128 spatial latent + map supervision + open-set probe."""
+    return _build_model_config_with_dim(common, register_dim=REGISTER_DIM)
 
 
 def build_dataset_config(common: CommonComponents):
-    """Concatenated osm_sampling + open-set supervised dataset."""
-    return build_osm_plus_open_set_dataset_config(common)
+    """Open-set supervised dataset only."""
+    return build_open_set_dataset_config(common)
 
 
 def build_trainer_config(common: CommonComponents):

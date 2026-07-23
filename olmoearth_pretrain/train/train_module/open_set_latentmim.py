@@ -1,10 +1,12 @@
-"""Contrastive latent-MIM train module with a supervised open-set probe.
+"""Latent-MIM train module with a supervised open-set probe.
 
-Extends :class:`ContrastiveLatentMIMTrainModule` by adding a supervised
-segmentation + regression loss (see
+Extends :class:`LatentMIMTrainModule` (the single-forward recipe used by the
+register-bottleneck / perceiver runs) by adding a supervised segmentation +
+regression loss (see
 :class:`olmoearth_pretrain.train.open_set_probe.OpenSetProbe`) on top of the
-self-supervised objective. The probe reads the *online* encoder output, so the
-supervised gradient flows back into the encoder.
+self-supervised objective. The probe reads the encoder's *spatial latent grid*
+(the register/Perceiver bottleneck output), so the supervised gradient flows
+back into the bottleneck and the encoder.
 
 The probe itself lives inside the model
 (:class:`olmoearth_pretrain.nn.open_set_latent_mim.OpenSetLatentMIM`) so that the
@@ -20,18 +22,19 @@ import torch.distributed as dist
 from olmo_core.distributed.utils import get_world_size
 
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, TokensAndMasks
-from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
-    ContrastiveLatentMIMTrainModule,
-    ContrastiveLatentMIMTrainModuleConfig,
+from olmoearth_pretrain.train.train_module.latent_mim import (
+    LatentMIMTrainModule,
+    LatentMIMTrainModuleConfig,
 )
 
 logger = getLogger(__name__)
 
 
-class OpenSetLatentMIMTrainModule(ContrastiveLatentMIMTrainModule):
-    """Contrastive latent-MIM plus a supervised open-set probe loss."""
+class OpenSetLatentMIMTrainModule(LatentMIMTrainModule):
+    """Latent-MIM plus a supervised open-set probe loss on the spatial latent."""
 
-    _NUM_AUGMENTED_VIEWS = 2
+    # The single-forward (1fwd) recipe runs one view per batch.
+    _NUM_AUGMENTED_VIEWS = 1
 
     def __init__(self, *args: Any, sup_loss_weight: float = 1.0, **kwargs: Any) -> None:
         """Initialize, extracting the supervised loss weight.
@@ -48,7 +51,7 @@ class OpenSetLatentMIMTrainModule(ContrastiveLatentMIMTrainModule):
 
     def train_batch(
         self,
-        batch: tuple[int, MaskedOlmoEarthSample, MaskedOlmoEarthSample],
+        batch: tuple[int, MaskedOlmoEarthSample],
         dry_run: bool = False,
     ) -> None:
         """Train a batch and record supervised metrics once for the full batch."""
@@ -150,29 +153,42 @@ class OpenSetLatentMIMTrainModule(ContrastiveLatentMIMTrainModule):
         patch_size: int,
         token_exit_cfg: dict[str, int],
     ) -> tuple[
-        torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
+        torch.Tensor,
+        TokensAndMasks,
+        TokensAndMasks,
+        TokensAndMasks,
+        dict[str, Any] | None,
     ]:
         """Run the base forward, then add the supervised probe loss."""
-        loss, latent, decoded, target_output, pooled = super().model_forward(
+        loss, latent, decoded, target_output, extra_metrics = super().model_forward(
             batch, patch_size, token_exit_cfg
         )
+        # The probe reads the encoder's spatial latent grid (the Perceiver/register
+        # bottleneck output), which the model forward stashes on the model.
+        register_grid = getattr(self.model, "last_register_grid", None)
+        if register_grid is None:
+            raise RuntimeError(
+                "OpenSetLatentMIMTrainModule requires the encoder register "
+                "bottleneck: the open-set probe reads the spatial latent grid "
+                "(set use_register_bottleneck=True on the encoder/decoder configs)"
+            )
         # The probe lives inside the model so DDP/optimizer cover its params. It always
         # returns a probe-connected loss (a zero-touch term when a rank has no labeled
         # patches) so every rank produces gradients for the probe params each step.
         # Re-enter the model forward context because the base method has already exited
         # it. Production DDP uses bf16 autocast, and the probe's fp32 parameters must be
-        # autocast together with the encoder's bf16 latent representations.
+        # autocast together with the encoder's bf16 spatial latent grid.
         with self._model_forward_context():
-            sup_losses, sup_metrics = self.model.open_set_probe(latent, batch)
+            sup_losses, sup_metrics = self.model.open_set_probe(register_grid, batch)
         sup_loss = self._combine_supervised_losses(sup_losses, sup_metrics)
         loss = loss + self.sup_loss_weight * sup_loss
         if sup_metrics:
             self._accumulate_supervised_metrics(sup_metrics)
-        return loss, latent, decoded, target_output, pooled
+        return loss, latent, decoded, target_output, extra_metrics
 
 
 @dataclass
-class OpenSetLatentMIMTrainModuleConfig(ContrastiveLatentMIMTrainModuleConfig):
+class OpenSetLatentMIMTrainModuleConfig(LatentMIMTrainModuleConfig):
     """Configuration for :class:`OpenSetLatentMIMTrainModule`."""
 
     sup_loss_weight: float = 1.0

@@ -8,7 +8,6 @@ import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.datatypes import MaskValue, TokensAndMasks
 from olmoearth_pretrain.train.open_set_probe import (
     OPEN_SET_NODATA,
     OpenSetProbe,
@@ -47,25 +46,13 @@ def _tiny_mapping(groups: list[dict], num_classes: int = 4) -> dict:
     }
 
 
-def _make_latent(
-    b: int, p: int, t: int, d: int, visible: torch.Tensor
-) -> tuple[TokensAndMasks, torch.Tensor]:
-    """Build a TokensAndMasks with a single sentinel2_l2a modality.
+def _make_spatial_latent(b: int, p: int, d: int) -> torch.Tensor:
+    """Build a random spatial latent grid (B, P, P, D) with gradients enabled.
 
-    Args:
-        b: Batch size.
-        p: Number of patches along each spatial dimension.
-        t: Number of timesteps.
-        d: Token embedding dimension.
-        visible: (b, p, p, t, 1) bool mask of which tokens the online encoder saw.
+    This mimics the encoder's register/Perceiver bottleneck output: one embedding
+    per spatial cell, time/modality already collapsed.
     """
-    tokens = torch.randn(b, p, p, t, 1, d, requires_grad=True)
-    mask = torch.where(
-        visible,
-        torch.full_like(visible, MaskValue.ONLINE_ENCODER.value, dtype=torch.long),
-        torch.full_like(visible, MaskValue.DECODER.value, dtype=torch.long),
-    )
-    return TokensAndMasks(sentinel2_l2a=tokens, sentinel2_l2a_mask=mask), tokens
+    return torch.randn(b, p, p, d, requires_grad=True)
 
 
 def test_lookup_buffers_cover_all_classes(probe: OpenSetProbe) -> None:
@@ -94,18 +81,16 @@ def test_config_rejects_changed_frozen_mapping(tmp_path: Path) -> None:
         config.build(embedding_size=1)
 
 
-def test_pool_patches_averages_visible_tokens(probe: OpenSetProbe) -> None:
-    """Patch pooling averages visible tokens and rejects invisible patches."""
-    b, p, t, d = 2, 4, 3, 8
-    visible = torch.ones(b, p, p, t, 1, dtype=torch.bool)
-    # Make one patch fully invisible (all decoder) -> invalid.
-    visible[0, 0, 0] = False
-    latent, _ = _make_latent(b, p, t, d, visible)
-    pooled, valid = probe.pool_patches(latent)
-    assert pooled.shape == (b, p, p, d)
-    assert valid.shape == (b, p, p)
-    assert not valid[0, 0, 0]
-    assert valid[1, 1, 1]
+def test_forward_rejects_non_grid_latent(probe: OpenSetProbe) -> None:
+    """The probe requires a (B, P_H, P_W, D) spatial latent grid."""
+    batch = SimpleNamespace(
+        **{
+            Modality.OPEN_SET.name: None,
+            Modality.OPEN_SET_REGRESSION.name: None,
+        }
+    )
+    with pytest.raises(ValueError, match="spatial_latent must have shape"):
+        probe(torch.randn(2, 4, 8), batch)
 
 
 def test_classification_label_pooling_majority_and_nodata(
@@ -144,11 +129,10 @@ def test_classification_label_pooling_tie_uses_lowest_id(
 
 
 def test_classification_loss_backprops(probe: OpenSetProbe) -> None:
-    """Classification loss backpropagates through tokens and probe weights."""
-    b, p, t, d = 2, 2, 2, 8
-    visible = torch.ones(b, p, p, t, 1, dtype=torch.bool)
-    latent, tokens = _make_latent(b, p, t, d, visible)
-    pooled, repr_valid = probe.pool_patches(latent)
+    """Classification loss backpropagates through the latent and probe weights."""
+    b, p, d = 2, 2, 8
+    pooled = _make_spatial_latent(b, p, d)
+    repr_valid = torch.ones(b, p, p, dtype=torch.bool)
 
     h = w = p * 2
     open_set = torch.full((b, h, w, 1, 1), float(OPEN_SET_NODATA))
@@ -158,8 +142,8 @@ def test_classification_loss_backprops(probe: OpenSetProbe) -> None:
     assert n == b * p * p
     assert torch.isfinite(loss)
     loss.backward()
-    # Gradient flows into both the encoder tokens and the probe weights.
-    assert tokens.grad is not None
+    # Gradient flows into both the spatial latent and the probe weights.
+    assert pooled.grad is not None
     assert probe.cls_head.weight.grad is not None
 
 
@@ -223,10 +207,9 @@ def test_classification_loss_excludes_target_conflicts() -> None:
 
 def test_regression_loss_and_scaling(probe: OpenSetProbe) -> None:
     """Regression labels are scaled and contribute a finite loss."""
-    b, p, t, d = 1, 2, 1, 8
-    visible = torch.ones(b, p, p, t, 1, dtype=torch.bool)
-    latent, _ = _make_latent(b, p, t, d, visible)
-    pooled, repr_valid = probe.pool_patches(latent)
+    b, p, d = 1, 2, 8
+    pooled = _make_spatial_latent(b, p, d)
+    repr_valid = torch.ones(b, p, p, dtype=torch.bool)
 
     h = w = p * 2
     reg = torch.zeros(b, h, w, 1, 2)
@@ -262,9 +245,8 @@ def test_regression_pooling_ignores_degenerate_frozen_range() -> None:
 
 def test_forward_zero_touch_when_no_labels(probe: OpenSetProbe) -> None:
     """With all-missing labels the loss must still connect to probe params."""
-    b, p, t, d = 2, 2, 2, 8
-    visible = torch.ones(b, p, p, t, 1, dtype=torch.bool)
-    latent, _ = _make_latent(b, p, t, d, visible)
+    b, p, d = 2, 2, 8
+    latent = _make_spatial_latent(b, p, d)
 
     h = w = p * 2
     open_set = torch.full((b, h, w, 1, 1), float(OPEN_SET_NODATA))

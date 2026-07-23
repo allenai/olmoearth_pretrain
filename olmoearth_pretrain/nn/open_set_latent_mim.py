@@ -7,8 +7,12 @@ gradients by iterating ``self.model.parameters()``, and the optimizer is likewis
 built from ``self.model``. A probe attached to the train module (rather than the
 model) would therefore never be synced or optimized.
 
-The probe is not part of the self-supervised ``forward``; the train module calls
-``model.open_set_probe(latent, batch)`` after the usual latent-MIM forward.
+The probe reads the encoder's *spatial latent grid* (the Perceiver/register
+bottleneck output exposed by ``LatentMIM.forward`` as ``last_register_grid``),
+so the encoder must be configured with ``use_register_bottleneck=True``. The
+probe is not part of the self-supervised ``forward``; the train module calls
+``model.open_set_probe(register_grid, batch)`` after the usual latent-MIM
+forward.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from torch.distributed import DeviceMesh
 from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
 
 from olmoearth_pretrain.nn.latent_mim import LatentMIM, LatentMIMConfig
+from olmoearth_pretrain.nn.supervision_head import SupervisionHead
 from olmoearth_pretrain.train.open_set_probe import OpenSetProbe, OpenSetProbeConfig
 
 logger = logging.getLogger(__name__)
@@ -36,6 +41,7 @@ class OpenSetLatentMIM(LatentMIM):
         decoder: nn.Module,
         open_set_probe: OpenSetProbe,
         reconstructor: torch.nn.Module | None = None,
+        supervision_head: SupervisionHead | None = None,
         projection_only_target: bool = False,
     ):
         """Initialize the model and attach the probe as a submodule."""
@@ -43,6 +49,7 @@ class OpenSetLatentMIM(LatentMIM):
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
+            supervision_head=supervision_head,
             projection_only_target=projection_only_target,
         )
         self.open_set_probe = open_set_probe
@@ -87,27 +94,28 @@ class OpenSetLatentMIMConfig(LatentMIMConfig):
         super().validate()
         if self.open_set_probe_config is None:
             raise ValueError("open_set_probe_config is required for OpenSetLatentMIM")
+        if not getattr(self.encoder_config, "use_register_bottleneck", False):
+            raise ValueError(
+                "OpenSetLatentMIM requires the encoder register bottleneck: the "
+                "open-set probe reads the spatial latent grid it produces"
+            )
 
     def build(self) -> OpenSetLatentMIM:
         """Build the model, including the supervised probe head."""
         self.validate()
         assert self.open_set_probe_config is not None
-        encoder = self.encoder_config.build()
-        decoder = self.decoder_config.build()
-        reconstructor = (
-            self.reconstructor_config.build()
-            if self.reconstructor_config is not None
-            else None
+        base = super().build()
+        # The probe reads the spatial latent grid, so its input dim is the
+        # register (bottleneck) dim, not the encoder token dim.
+        register_dim = self.encoder_config.register_dim or (
+            self.encoder_config.embedding_size // 2
         )
-        embedding_size = (
-            self.encoder_config.output_embedding_size
-            or self.encoder_config.embedding_size
-        )
-        probe = self.open_set_probe_config.build(embedding_size=embedding_size)
+        probe = self.open_set_probe_config.build(embedding_size=register_dim)
         return OpenSetLatentMIM(
-            encoder=encoder,
-            decoder=decoder,
+            encoder=base.encoder,
+            decoder=base.decoder,
             open_set_probe=probe,
-            reconstructor=reconstructor,
+            reconstructor=base.reconstructor,
+            supervision_head=base.supervision_head,
             projection_only_target=self.projection_only_target,
         )

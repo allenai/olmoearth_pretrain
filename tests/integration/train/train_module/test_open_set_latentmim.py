@@ -10,7 +10,7 @@ import torch
 from olmo_core.config import DType
 from olmo_core.optim.adamw import AdamWConfig
 
-from olmoearth_pretrain.data.collate import collate_double_masked_batched
+from olmoearth_pretrain.data.collate import collate_single_masked_batched
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig
@@ -91,7 +91,13 @@ def _make_samples() -> list[tuple[int, OlmoEarthSample]]:
 
 @pytest.fixture
 def model(set_random_seeds: None) -> OpenSetLatentMIMConfig:
-    """Build a small CPU open-set latent-MIM model for integration tests."""
+    """Build a small CPU open-set latent-MIM model for integration tests.
+
+    Uses the register (Perceiver) bottleneck with a spatial-latent dim different
+    from the encoder token dim, so the test also covers the probe reading a
+    narrower spatial latent (the d128-style configuration).
+    """
+    register_dim = 8
     encoder_config = EncoderConfig(
         supported_modality_names=_IMAGERY,
         embedding_size=16,
@@ -101,6 +107,12 @@ def model(set_random_seeds: None) -> OpenSetLatentMIMConfig:
         depth=2,
         drop_path=0.1,
         max_sequence_length=12,
+        position_encoding="rope_3d_mixed",  # 3D encoder self-attention
+        use_register_bottleneck=True,
+        register_grid_size=0,  # dynamic single-latent grid (gdyn)
+        register_dim=register_dim,
+        register_interleave=True,
+        register_per_depth_read_proj=True,
     )
     decoder_config = PredictorConfig(
         supported_modality_names=_IMAGERY,
@@ -112,6 +124,9 @@ def model(set_random_seeds: None) -> OpenSetLatentMIMConfig:
         max_sequence_length=12,
         drop_path=0.0,
         output_embedding_size=None,
+        position_encoding="rope",  # 2D decoder cross-attends the spatial latent
+        use_register_bottleneck=True,
+        register_dim=register_dim,
     )
     config = OpenSetLatentMIMConfig(
         encoder_config=encoder_config,
@@ -135,18 +150,16 @@ def test_open_set_train_batch_records_supervised_loss(
 ) -> None:
     """train_batch runs and records a finite supervised CE loss."""
     masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
-    batch = collate_double_masked_batched(
+    batch = collate_single_masked_batched(
         _make_samples(),
         transform=None,
         masking_strategy=masking_strategy,
-        masking_strategy_b=None,
     )
 
     config = OpenSetLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=1e-4, weight_decay=0.0),
         rank_microbatch_size=rank_microbatch_size,
         loss_config=LossConfig(loss_config={"type": "patch_discrimination"}),
-        contrastive_config=LossConfig(loss_config={"type": "InfoNCE", "weight": 0.1}),
         masking_config=MaskingConfig(strategy_config={"type": "random"}),
         token_exit_cfg={modality: 0 for modality in _IMAGERY},
         ema_decay=(0.996, 1.0),
@@ -187,7 +200,6 @@ def test_supervised_loss_is_weighted_by_global_valid_patch_count(
         optim_config=AdamWConfig(lr=1e-4, weight_decay=0.0),
         rank_microbatch_size=1,
         loss_config=LossConfig(loss_config={"type": "patch_discrimination"}),
-        contrastive_config=None,
         masking_config=MaskingConfig(strategy_config={"type": "random"}),
         token_exit_cfg={modality: 0 for modality in _IMAGERY},
         ema_decay=(0.996, 1.0),

@@ -1,20 +1,25 @@
-"""Shared config builders for open-set *supervised* pretraining.
+"""Shared config builders for open-set *supervised* pretraining on the spatial latent.
 
-Builds on ``base_faster.py`` (the merged production baseline: projection-only
-target + replicated DDP + bf16 autocast + in-loop evals as separate Beaker jobs)
-and adds a supervised open-set probe head:
+Builds on the register-bottleneck (Perceiver) ``wideread`` recipe with the
+decorrelated shape sampler (``regbtl_v1_2_gdyn_d*_wideread_regsup_*_newsampling``:
+single forward pass, fused AdamW, projection-only target, replicated DDP + bf16)
+and adds a supervised open-set probe over the encoder's spatial latent grid:
 
 * The dataset loads the imagery modalities **plus** the ``open_set`` /
   ``open_set_regression`` label layers, so every sample carries the labels
   (missing-filled where absent, e.g. for ``osm_sampling`` samples).
 * The **encoder** only ever sees the imagery modalities -- the label layers are
   never tokenized -- so there is no label leakage.
-* An :class:`OpenSetLatentMIM` model owns an :class:`OpenSetProbe`; the
-  :class:`OpenSetLatentMIMTrainModule` adds the weighted supervised loss.
+* The register-grid supervision head (gabi's map probes: worldcover, srtm,
+  openstreetmap_raster, wri_canopy_height_map, cdl, worldcereal) stays active,
+  reading the same spatial latent grid.
+* An :class:`OpenSetLatentMIM` model owns an :class:`OpenSetProbe` that reads the
+  spatial latent grid; the :class:`OpenSetLatentMIMTrainModule` adds the weighted
+  supervised loss.
 
-The two concrete launch scripts (``open_set_only.py`` and ``open_set_osm.py``)
-import these builders and only supply ``build_dataset_config`` /
-``build_trainer_config``.
+The concrete launch scripts (``open_set_only_d{768,128}.py`` and
+``open_set_osm_d{768,128}.py``) import these builders and supply the register dim,
+``build_dataset_config`` and ``build_trainer_config``.
 """
 
 import dataclasses
@@ -24,15 +29,22 @@ from pathlib import Path
 
 # Import the v1.2 helpers we reuse verbatim.
 from base import ONLY_DECODE_MODALITIES, _tokenization_config  # noqa: E402
-from base import build_dataloader_config as base_build_dataloader_config  # noqa: E402
 from base import build_dataset_config as build_osm_dataset_config  # noqa: E402
-
-# base_faster re-exports base's builders and layers the validated speedups on top.
-from base_faster import build_model_config as base_faster_build_model_config
-from base_faster import (
-    build_train_module_config as base_faster_build_train_module_config,
+from base import build_trainer_config as _base_build_trainer_config  # noqa: E402
+from regbtl_v1_2_common import add_loop_eval_beaker_job
+from regbtl_v1_2_faster_common import (
+    build_faster_train_module_config,
+    build_wideread_regbtl_model_config,
 )
-from base_faster import build_trainer_config as base_faster_build_trainer_config
+from regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_1fwd import (
+    build_dataloader_config as _1fwd_build_dataloader_config,
+)
+from regbtl_v1_2_newsampling_common import (
+    SUPERVISION_BASE_WEIGHT,
+    apply_microbatch,
+    apply_new_sampling,
+)
+from regbtl_v1_2_regsup_common import add_register_supervision
 
 from olmoearth_pretrain.data.concat import OlmoEarthConcatDatasetConfig
 from olmoearth_pretrain.data.constants import Modality
@@ -109,13 +121,26 @@ def _imagery_common(common: CommonComponents) -> CommonComponents:
     return dataclasses.replace(common, training_modalities=list(IMAGERY_MODALITIES))
 
 
-def build_model_config(common: CommonComponents) -> OpenSetLatentMIMConfig:
-    """Build the v1.2-faster model (imagery-only encoder) plus the open-set probe."""
-    base_config = base_faster_build_model_config(_imagery_common(common))
+def build_model_config(
+    common: CommonComponents, register_dim: int
+) -> OpenSetLatentMIMConfig:
+    """Register-bottleneck (wideread) model + map supervision + the open-set probe.
+
+    ``register_dim`` sets the spatial-latent (bottleneck) width, e.g. 768 or 128.
+    The open-set probe reads the same register grid as the map supervision heads,
+    so its input dim is ``register_dim``.
+    """
+    base_config = build_wideread_regbtl_model_config(
+        _imagery_common(common), latent_self_attn=True, register_dim=register_dim
+    )
+    base_config = add_register_supervision(
+        base_config, include_latlon=False, base_weight=SUPERVISION_BASE_WEIGHT
+    )
     return OpenSetLatentMIMConfig(
         encoder_config=base_config.encoder_config,
         decoder_config=base_config.decoder_config,
         reconstructor_config=base_config.reconstructor_config,
+        supervision_head_config=base_config.supervision_head_config,
         projection_only_target=base_config.projection_only_target,
         open_set_probe_config=OpenSetProbeConfig(
             class_mapping_path=CLASS_MAPPING_PATH,
@@ -124,27 +149,42 @@ def build_model_config(common: CommonComponents) -> OpenSetLatentMIMConfig:
     )
 
 
+def _label_aware_only_decode() -> list[str]:
+    """only_decode modalities including the open-set label layers.
+
+    only_decode marks every non-missing label token DECODE, keeping it out of the
+    encode split; since neither the encoder nor the decoder supports the label
+    layers, the mask is inert and the labels just ride along in the batch for the
+    probe. With ``exclude_only_decode_from_budget=True`` this also keeps them from
+    consuming the encoder token budget.
+    """
+    return list(ONLY_DECODE_MODALITIES) + list(LABEL_MODALITIES)
+
+
 def build_train_module_config(
     common: CommonComponents,
 ) -> OpenSetLatentMIMTrainModuleConfig:
-    """Build the DDP+bf16 train module config with the supervised probe loss."""
-    base_config = base_faster_build_train_module_config(common)
+    """1fwd + fused AdamW + DDP/bf16 train module with the supervised probe loss."""
+    base_config = apply_microbatch(build_faster_train_module_config(common))
     open_config = OpenSetLatentMIMTrainModuleConfig(
         **{f.name: getattr(base_config, f.name) for f in fields(base_config)},
         sup_loss_weight=SUP_LOSS_WEIGHT,
     )
     # token_exit_cfg is only meaningful for encoded modalities; keep it imagery-only.
     open_config.token_exit_cfg = {modality: 0 for modality in IMAGERY_MODALITIES}
+    open_config.masking_config.strategy_config["only_decode_modalities"] = (
+        _label_aware_only_decode()
+    )
     return open_config
 
 
 def build_dataloader_config(common: CommonComponents):
-    """Build a dataloader that carries labels without treating them as model tokens."""
-    config = base_build_dataloader_config(common)
+    """Single-view dataloader (new sampling) carrying labels as decode-only extras."""
+    config = apply_new_sampling(_1fwd_build_dataloader_config(common))
     config.token_budget_excluded_modalities = list(LABEL_MODALITIES)
-    config.masking_config.strategy_config["only_decode_modalities"] = list(
-        ONLY_DECODE_MODALITIES
-    ) + list(LABEL_MODALITIES)
+    config.masking_config.strategy_config["only_decode_modalities"] = (
+        _label_aware_only_decode()
+    )
     return config
 
 
@@ -153,11 +193,11 @@ def build_trainer_config(common: CommonComponents, module_path: str):
 
     The eval job rebuilds the model from ``module_path`` to load the checkpoint, so
     it must point at the open-set launch script (whose model config includes the
-    probe) rather than base_faster.
+    probe) rather than the regbtl scripts.
     """
-    trainer_config = base_faster_build_trainer_config(common)
-    evaluator = trainer_config.callbacks["downstream_evaluator"]
-    evaluator.beaker_eval_module_path = module_path
+    trainer_config = add_loop_eval_beaker_job(
+        _base_build_trainer_config(common), module_path
+    )
     trainer_config.callbacks["wandb"].project = "2026_07_22_open_set"
     return trainer_config
 

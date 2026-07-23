@@ -181,15 +181,22 @@ class LatentMIM(nn.Module, DistributedMixins):
         )
 
         supervision_preds = None
+        # Expose the encoder's spatial latent grid (the Perceiver/register bottleneck
+        # output, time/modality collapsed) for heads that probe it directly: the
+        # register-supervision heads below and the open-set probe (see
+        # olmoearth_pretrain.nn.open_set_latent_mim), which reads it via
+        # ``last_register_grid`` after the forward pass.
+        register_grid = None
+        registers = decoder_kwargs.get("registers")
+        if register_bottleneck is not None and registers is not None:
+            n_h, n_w = register_bottleneck.register_grid
+            register_grid = registers.reshape(
+                registers.shape[0], n_h, n_w, registers.shape[-1]
+            )
+        self.last_register_grid = register_grid
         if self.supervision_head is not None:
             if getattr(self.supervision_head, "register_supervision", False):
-                # Supervise the register grid directly: reshape [B, n_reg, D] to the
-                # spatial grid [B, n_h, n_w, D] the heads expect.
-                registers = decoder_kwargs.get("registers")
-                n_h, n_w = self.encoder.register_bottleneck.register_grid
-                register_grid = registers.reshape(
-                    registers.shape[0], n_h, n_w, registers.shape[-1]
-                )
+                # Supervise the register grid directly ([B, n_h, n_w, D]).
                 supervision_preds = self.supervision_head(
                     decoded, x, register_grid=register_grid
                 )
