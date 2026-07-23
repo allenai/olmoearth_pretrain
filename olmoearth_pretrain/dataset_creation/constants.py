@@ -9,6 +9,7 @@ WINDOW_SIZE = 256
 
 # Columns in the per-modality metadata CSVs.
 METADATA_COLUMNS = [
+    "example_id",
     "crs",
     "col",
     "row",

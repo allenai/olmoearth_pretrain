@@ -97,15 +97,16 @@ def convert_period_mosaic(
     time_span: TimeSpan = TimeSpan.YEAR,
     missing_okay: bool = True,
     unprepared_okay: bool = True,
+    image_tile_size: int = PIXELS_PER_TILE,
 ) -> None:
     """Add period-mosaic multitemporal data (one mosaic per period) to the dataset.
 
-    Reads a single MOSAIC layer whose item groups are per-period mosaics
-    (``space_mode=MOSAIC`` with ``period_duration``). Each item group becomes one
-    timestep, stacked in the order the groups were materialized (chronological when
-    ``per_period_mosaic_reverse_time_order=false``), using each group's period time
-    range for the metadata. Item groups may contain multiple items (a mosaic), and
-    per-group timestamps come from the layer's ``group_time_ranges``.
+    Reads a single MOSAIC layer whose item groups are per-period mosaics (see the
+    open-set dataset config: ``space_mode=MOSAIC`` with ``period_duration``). Each item
+    group becomes one timestep, stacked in the order the groups were materialized
+    (chronological when ``per_period_mosaic_reverse_time_order=false``), using each
+    group's period time range for the metadata. Item groups may contain multiple items
+    (a mosaic), and per-group timestamps come from the layer's ``group_time_ranges``.
 
     Args:
         window: the rslearn window to read data from.
@@ -115,6 +116,8 @@ def convert_period_mosaic(
         time_span: the OlmoEarth Pretrain time span to write under (default YEAR).
         missing_okay: whether it is okay if some item groups are not completed.
         unprepared_okay: whether to skip windows where the layer is not prepared.
+        image_tile_size: the window size in pixels at the base grid resolution. Defaults
+            to PIXELS_PER_TILE (256); the open-set dataset uses its 128 px window size.
     """
     window_metadata = get_window_metadata(window)
     layer_datas = window.load_layer_datas()
@@ -162,7 +165,7 @@ def convert_period_mosaic(
                 group_idx=group_idx,
             ).get_chw_array()
             expected_image_size = band_set.get_expected_image_size(
-                window_metadata.get_resolution_factor()
+                window_metadata.get_resolution_factor(), image_tile_size
             )
             if (
                 image.shape[1] != expected_image_size
@@ -234,6 +237,7 @@ def convert_period_mosaic(
             end_time = cur_time_range[1].isoformat() if cur_time_range else ""
             writer.writerow(
                 dict(
+                    example_id=window_metadata.example_id or "",
                     crs=window_metadata.crs,
                     col=window_metadata.col,
                     row=window_metadata.row,
@@ -367,6 +371,7 @@ def convert_monthly(
             for image_idx, (start_time, end_time) in enumerate(time_ranges):
                 writer.writerow(
                     dict(
+                        example_id=window_metadata.example_id or "",
                         crs=window_metadata.crs,
                         col=window_metadata.col,
                         row=window_metadata.row,

@@ -132,6 +132,7 @@ def convert_era5(window: Window, olmoearth_path: UPath) -> None:
         for group_idx, time_range in enumerate(year_time_ranges):
             writer.writerow(
                 dict(
+                    example_id=window_metadata.example_id or "",
                     crs=window_metadata.crs,
                     col=window_metadata.col,
                     row=window_metadata.row,

@@ -74,16 +74,20 @@ class BandSet:
         """Compute the resolution."""
         return get_resolution(self.resolution_factor)
 
-    def get_expected_image_size(self, modality_resolution_factor: int) -> int:
+    def get_expected_image_size(
+        self, modality_resolution_factor: int, image_tile_size: int = IMAGE_TILE_SIZE
+    ) -> int:
         """Get the expected size of images containing these bands.
 
         Args:
             modality_resolution_factor: the resolution factor of the modality.
+            image_tile_size: the modality grid tile size in pixels. Defaults to
+                IMAGE_TILE_SIZE (256); per-window datasets pass their own window size.
 
         Returns:
             the expected image size.
         """
-        return IMAGE_TILE_SIZE // (self.resolution_factor // modality_resolution_factor)
+        return image_tile_size // (self.resolution_factor // modality_resolution_factor)
 
 
 class TimeSpan(str, Enum):

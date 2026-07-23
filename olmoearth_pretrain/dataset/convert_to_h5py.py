@@ -54,6 +54,12 @@ class ConvertToH5pyConfig(Config):
         None  # Chunking configuration. None: disabled. True: auto (data_item.shape). tuple: specific shape.
     )
     tile_size: int = IMAGE_TILE_SIZE
+    image_tile_size: int = (
+        IMAGE_TILE_SIZE  # Size of the source per-window GeoTIFFs (before splitting)
+    )
+    pixel_coord_windows: bool = (
+        False  # True if window col/row are absolute pixel coords (e.g. open-set)
+    )
     # Processes may go to sleep state if we use too many processes
     reserved_cores: int = (
         10  # Number of cores to reserve and not used for multiprocessing
@@ -75,6 +81,8 @@ class ConvertToH5pyConfig(Config):
             shuffle=self.shuffle,
             chunk_options=self.chunk_options,
             tile_size=self.tile_size,
+            image_tile_size=self.image_tile_size,
+            pixel_coord_windows=self.pixel_coord_windows,
             reserved_cores=self.reserved_cores,
             required_modalities=get_modality_specs_from_names(
                 self.required_modality_names
@@ -103,6 +111,8 @@ class ConvertToH5py:
         shuffle: bool | None = None,
         chunk_options: tuple | bool | None = None,
         tile_size: int = IMAGE_TILE_SIZE,
+        image_tile_size: int = IMAGE_TILE_SIZE,
+        pixel_coord_windows: bool = False,
         reserved_cores: int = 10,
         required_modalities: list[ModalitySpec] = [],
     ) -> None:
@@ -121,8 +131,14 @@ class ConvertToH5py:
                          True: auto-chunk (chunks will match dataset shape).
                          tuple: specify a chunk shape. If tuple rank differs from data rank,
                                 it's adjusted (padded with full dimension sizes or truncated).
-            tile_size: The size of the tile to split the image into. It is based on the IMAGE_TILE_SIZE, so
+            tile_size: The size of the tile to split the image into. It is based on the image_tile_size, so
                 higher-resolution modalities like NAIP would be split up correspondingly.
+            image_tile_size: The size (pixels) of the source per-window GeoTIFFs at the
+                base grid resolution. Defaults to IMAGE_TILE_SIZE (256); the open-set
+                dataset uses its 128 px window size (one window -> one H5, no splitting).
+            pixel_coord_windows: If True, window col/row are absolute pixel coordinates
+                of the window center (e.g. the open-set dataset) rather than grid-tile
+                indices, which affects latlon computation.
             reserved_cores: The number of cores to reserve and not use for multiprocessing.
             required_modalities: Samples without all of these modalities will be skipped.
         """
@@ -137,13 +153,15 @@ class ConvertToH5py:
         self.chunk_options = chunk_options
         self.h5py_dir: UPath | None = None
         self.required_modalities = required_modalities
-        if IMAGE_TILE_SIZE % tile_size != 0:
+        self.image_tile_size = image_tile_size
+        self.pixel_coord_windows = pixel_coord_windows
+        if image_tile_size % tile_size != 0:
             raise ValueError(
-                f"Tile size {tile_size} must be a factor of {IMAGE_TILE_SIZE}"
+                f"Tile size {tile_size} must be a factor of {image_tile_size}"
             )
         self.tile_size = tile_size
         # Tile_size_split_factor is the factor by which the tile size is split into subtiles
-        self.num_subtiles_per_dim = IMAGE_TILE_SIZE // tile_size
+        self.num_subtiles_per_dim = image_tile_size // tile_size
         self.num_subtiles = self.num_subtiles_per_dim**2
         self.reserved_cores = reserved_cores
 
@@ -259,7 +277,12 @@ class ConvertToH5py:
     ) -> None:
         """Save the latlon distribution to a file."""
         logger.info(f"Saving latlon distribution to {self.latlon_distribution_path}")
-        latlons = np.array([sample.get_latlon() for _, sample in samples])
+        latlons = np.array(
+            [
+                sample.get_latlon(self.image_tile_size, self.pixel_coord_windows)
+                for _, sample in samples
+            ]
+        )
         with self.latlon_distribution_path.open("wb") as f:
             np.save(f, latlons)
 
@@ -303,7 +326,7 @@ class ConvertToH5py:
         modalities_to_remove = set()
         for modality in sample.modalities:
             sample_modality = sample.modalities[modality]
-            image = self.load_sample(sample_modality, sample)
+            image = self.load_sample(sample_modality, sample, self.image_tile_size)
             # Remove modalities that contains any nan
             if np.any(np.isnan(image)):
                 logger.warning(
@@ -365,7 +388,9 @@ class ConvertToH5py:
     ) -> dict[str, Any]:
         """Create the h5 file."""
         sample_dict = {}
-        sample_dict["latlon"] = sample.get_latlon().astype(np.float32)
+        sample_dict["latlon"] = sample.get_latlon(
+            self.image_tile_size, self.pixel_coord_windows
+        ).astype(np.float32)
         multi_temporal_timestamps_dict = sample.get_timestamps()
 
         # Compute longest timestamps from only spacetime varying modalities
@@ -390,7 +415,7 @@ class ConvertToH5py:
         # Load image data for all modalities in the sample
         for modality in sample.modalities:
             sample_modality = sample.modalities[modality]
-            image = self.load_sample(sample_modality, sample)
+            image = self.load_sample(sample_modality, sample, self.image_tile_size)
 
             if modality == Modality.SENTINEL1:
                 # Convert Sentinel1 data to dB
@@ -559,10 +584,13 @@ class ConvertToH5py:
 
     @classmethod
     def load_sample(
-        cls, sample_modality: ModalityTile, sample: SampleInformation
+        cls,
+        sample_modality: ModalityTile,
+        sample: SampleInformation,
+        image_tile_size: int = IMAGE_TILE_SIZE,
     ) -> np.ndarray:
         """Load the sample."""
-        image = load_image_for_sample(sample_modality, sample)
+        image = load_image_for_sample(sample_modality, sample, image_tile_size)
 
         if image.ndim == 4:
             modality_data = rearrange(image, "t c h w -> h w t c")

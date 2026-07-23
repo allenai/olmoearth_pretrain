@@ -80,6 +80,7 @@ def convert_naip(window: Window, olmoearth_path: UPath) -> None:
         writer.writeheader()
         writer.writerow(
             dict(
+                example_id=window_metadata.example_id or "",
                 crs=window_metadata.crs,
                 col=window_metadata.col,
                 row=window_metadata.row,

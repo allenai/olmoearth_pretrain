@@ -45,13 +45,27 @@ class SampleInformation:
     # time span of the sample, or should be TimeSpan.STATIC.
     modalities: dict[ModalitySpec, ModalityTile]
 
-    def get_latlon(self) -> np.ndarray:
-        """Get the latlon of the sample."""
+    def get_latlon(
+        self,
+        image_tile_size: int = IMAGE_TILE_SIZE,
+        pixel_coord_windows: bool = False,
+    ) -> np.ndarray:
+        """Get the latlon of the sample.
+
+        Args:
+            image_tile_size: the number of pixels per grid tile. For grid-snapped
+                datasets, col/row are grid-tile indices so the projection coordinate is
+                the tile index times this many pixels times the pixel resolution.
+            pixel_coord_windows: if True, col/row are absolute pixel coordinates of the
+                window center (e.g. the open-set dataset) rather than grid-tile indices,
+                so there is one pixel per unit and image_tile_size is not applied.
+        """
         # Get coordinates at projection units, and then transform to latlon
         grid_resolution = self.grid_tile.resolution_factor * BASE_RESOLUTION
+        pixels_per_tile = 1 if pixel_coord_windows else image_tile_size
         x, y = (
-            (self.grid_tile.col + 0.5) * grid_resolution * IMAGE_TILE_SIZE,
-            (self.grid_tile.row + 0.5) * -grid_resolution * IMAGE_TILE_SIZE,
+            (self.grid_tile.col + 0.5) * grid_resolution * pixels_per_tile,
+            (self.grid_tile.row + 0.5) * -grid_resolution * pixels_per_tile,
         )
         transformer = Transformer.from_crs(
             self.grid_tile.crs, PROJECTION_CRS, always_xy=True
@@ -155,6 +169,7 @@ def image_tiles_to_samples(
 def load_image_for_sample(
     image_tile: ModalityTile,
     sample: SampleInformation,
+    image_tile_size: int = IMAGE_TILE_SIZE,
 ) -> npt.NDArray:
     """Loads the per-window image for a modality.
 
@@ -166,6 +181,9 @@ def load_image_for_sample(
     Args:
         image_tile: the image to load.
         sample: the SampleInformation.
+        image_tile_size: the modality grid tile size in pixels (before applying the
+            modality's image_tile_size_factor). Defaults to IMAGE_TILE_SIZE (256); the
+            open-set dataset uses its 128 px window size.
 
     Returns:
         the image as a numpy array TCHW (time is on the first dimension).
@@ -201,7 +219,7 @@ def load_image_for_sample(
                 # Resample the band set to the modality's grid resolution.
                 # The difference in resolution should always be a power of 2.
                 desired_subtile_size = int(
-                    IMAGE_TILE_SIZE * image_tile.modality.image_tile_size_factor
+                    image_tile_size * image_tile.modality.image_tile_size_factor
                 )
                 if desired_subtile_size < subtile_size:
                     # In this case we need to downscale.
