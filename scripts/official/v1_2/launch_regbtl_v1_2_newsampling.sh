@@ -21,10 +21,10 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 REGSUP="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_newsampling.py"
 REGSUP_LATLON="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_wideread_regsup_latlon_w0p1_newsampling.py"
 
-python "$REGSUP" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_newsamp_v4" "$CLUSTER" \
+python "$REGSUP" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_newsamp_v5" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$REGSUP_LATLON" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_latlon_w0p1_newsamp_v4" "$CLUSTER" \
+python "$REGSUP_LATLON" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_latlon_w0p1_newsamp_v5" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"

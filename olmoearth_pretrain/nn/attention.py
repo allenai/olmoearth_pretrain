@@ -337,8 +337,13 @@ class Attention(nn.Module):
             x = self._windowed_sdpa(q, k, v, window_spec)
         elif self.fast_attn:
             if attn_mask is not None and attn_mask.dim() == 2:
-                # A 1D-per-sample key mask (B, Nk): broadcast it over heads/queries.
-                attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, n, 1))
+                # A 1D-per-sample key mask (B, Nk): add head/query dims and let SDPA
+                # broadcast over them. We deliberately do NOT materialize a dense
+                # (B, H, N, Nk) mask -- that ~N^2 tensor forces SDPA onto the math
+                # backend (full score materialization -> O(N^2) memory + slow). The
+                # broadcastable (B, 1, 1, Nk) mask lets the fused mem-efficient kernel
+                # handle padding instead.
+                attn_mask = attn_mask[:, None, None]
             # A precomputed (B, 1, Nq, Nk) / (B, H, Nq, Nk) mask is passed straight
             # through and broadcast over heads.
             x = F.scaled_dot_product_attention(
