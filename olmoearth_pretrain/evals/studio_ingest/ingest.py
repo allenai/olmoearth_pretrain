@@ -58,6 +58,7 @@ from rslearn.dataset.dataset import Dataset as RslearnDataset
 from tqdm import tqdm
 from upath import UPath
 
+from olmoearth_pretrain.data.constants import EMBEDDING_PRODUCT_MODALITIES
 from olmoearth_pretrain.evals.datasets.rslearn_builder import parse_model_config
 from olmoearth_pretrain.evals.studio_ingest.band_stats import (
     compute_band_stats_from_model_config,
@@ -160,6 +161,11 @@ class IngestConfig:
         # Archive handling
         untar_source: If True, source_path points to a .tar.gz archive on GCS
             that will be streamed and extracted directly to the destination.
+
+        # Timestamps
+        start_time: Imagery time range start ("YYYY-MM-DD"), recorded on the
+            registry entry so eval-time timestamps match the imagery months.
+        end_time: Imagery time range end ("YYYY-MM-DD").
     """
 
     # Required
@@ -181,6 +187,10 @@ class IngestConfig:
 
     # Archive handling
     untar_source: bool = False
+
+    # Timestamps
+    start_time: str | None = None
+    end_time: str | None = None
 
 
 # =============================================================================
@@ -1144,10 +1154,33 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     # sentinel2_l2a_feb, _may, _aug, _nov all resolve to sentinel2_l2a).
     # We deduplicate and aggregate max_matches across temporal layers.
     logger.info("[Step 0c] Extracting modalities from dataset config...")
+    # Modalities whose model.yaml input stacks all of its layers on the time
+    # dimension (load_all_layers): distinct layers each contribute their
+    # timesteps (sum), instead of being alternatives (max).
+    load_all_layer_modalities: set[str] = set()
+    for input_cfg in model_config["data"]["init_args"].get("inputs", {}).values():
+        if input_cfg.get("is_target") or not input_cfg.get("load_all_layers"):
+            continue
+        for input_layer in input_cfg.get("layers", []):
+            try:
+                load_all_layer_modalities.add(rslearn_to_olmoearth(input_layer).name)
+            except KeyError:
+                continue
+
     modality_max_timesteps: dict[str, int] = {}
     modality_layer_names = []
     for layer_name, layer_config in dataset_config.layers.items():
         if layer_config.data_source is None:
+            # Directly-written layers (no data source): precomputed embedding
+            # products baked in by an export script are real input modalities
+            # (single-timestep); anything else (e.g. label rasters) is not.
+            try:
+                mod_name = rslearn_to_olmoearth(layer_name).name
+            except KeyError:
+                continue
+            if mod_name in EMBEDDING_PRODUCT_MODALITIES:
+                modality_layer_names.append(layer_name)
+                modality_max_timesteps.setdefault(mod_name, 1)
             continue
         try:
             olmoearth_modality = rslearn_to_olmoearth(layer_name)
@@ -1160,7 +1193,10 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         query_config = layer_config.data_source.query_config
         mod_name = olmoearth_modality.name
         prev = modality_max_timesteps.get(mod_name, 0)
-        modality_max_timesteps[mod_name] = max(prev, query_config.max_matches)
+        if mod_name in load_all_layer_modalities:
+            modality_max_timesteps[mod_name] = prev + query_config.max_matches
+        else:
+            modality_max_timesteps[mod_name] = max(prev, query_config.max_matches)
 
     modalities = list(modality_max_timesteps.keys())
     num_timesteps = (
@@ -1303,6 +1339,8 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         split_tag_key=EVAL_SPLIT_TAG_KEY,
         split_stats=split_stats,
         norm_stats=norm_stats,
+        start_time=config.start_time,
+        end_time=config.end_time,
     )
 
     logger.info(f"{'=' * 60}")

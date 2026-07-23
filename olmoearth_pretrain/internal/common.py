@@ -208,6 +208,10 @@ def build_launch_config(
                 name="LOAD_ARCH_FROM_CHECKPOINT", value=load_arch_from_checkpoint
             )
         )
+    # Propagate the embedding-evals flag to the experiment if set
+    embedding_evals = os.environ.get("EMBEDDING_EVALS")
+    if embedding_evals is not None:
+        env_vars.append(BeakerEnvVar(name="EMBEDDING_EVALS", value=embedding_evals))
 
     return OlmoEarthBeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",

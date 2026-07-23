@@ -1,5 +1,6 @@
 """Downstream evaluator callback."""
 
+import dataclasses
 import gc
 import logging
 import os
@@ -23,6 +24,7 @@ from upath import UPath
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
+    DATASET_TO_CONFIG,
     EvalDatasetConfig,
     TaskType,
     dataset_to_config,
@@ -118,6 +120,27 @@ class DownstreamTaskConfig:
     # Fraction of training labels to use for low-label evals. Dataset-specific
     # code translates this into fixed partitions or deterministic subsamples.
     label_fraction: float = 1.0
+    # Fix the spatial context every embedding is computed from to
+    # window_size x window_size at load time. None keeps the dataset's native
+    # sample size. For pastis datasets each sample (and its labels) is tiled
+    # into non-overlapping windows (e.g. 16 -> each 64x64 sample becomes
+    # sixteen 16x16 windows); for registry (rslearn) datasets each sample is
+    # center-cropped to a single window instead, since those carry one labeled
+    # pixel — unless tile_samples is set. Not supported for other dataset
+    # families.
+    window_size: int | None = None
+    # For registry (rslearn) datasets with dense labels (e.g. pastis_rslearn):
+    # tile every stored sample into non-overlapping window_size x window_size
+    # windows (the pastis convention above) instead of center-cropping one
+    # window per sample. Mutually exclusive with label_at_center_pixel.
+    tile_samples: bool = False
+    # For registry (rslearn) segmentation datasets with a single labeled pixel
+    # per sample (the AEF supplemental sets): emit the labeled pixel's class as
+    # a scalar label and run the task as classification, so only the token that
+    # actually carries a label is kept. The window_size crop is centered on the
+    # labeled pixel; pair with use_center_token=True (and patch_size=1) so the
+    # probe reads exactly that token.
+    label_at_center_pixel: bool = False
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: NormMethod = field(
@@ -195,6 +218,53 @@ class DownstreamEvaluator:
             # mutate: shrink the segmentation reshape target to the tiled window
             # so the seg probe reshapes to the smaller (tiled) token grid.
             self.config = replace(self.config, height_width=self.tile_size)
+        # Registry-backed datasets are the ones dataset_to_config resolves via
+        # the dynamic registry rather than the hardcoded config table.
+        self._is_registry_dataset = task.dataset not in DATASET_TO_CONFIG
+        self.window_size = task.window_size
+        self.label_at_center_pixel = task.label_at_center_pixel
+        self.tile_samples = task.tile_samples
+        if self.tile_samples:
+            if not self._is_registry_dataset:
+                raise ValueError(
+                    f"tile_samples is only supported for registry datasets, "
+                    f"got dataset '{task.dataset}'"
+                )
+            if self.window_size is None:
+                raise ValueError("tile_samples requires window_size to be set")
+            if self.label_at_center_pixel:
+                raise ValueError(
+                    "tile_samples and label_at_center_pixel are mutually exclusive"
+                )
+        if self.window_size is not None:
+            if not (
+                task.dataset in ("pastis", "pastis128") or self._is_registry_dataset
+            ):
+                raise ValueError(
+                    f"window_size is only supported for pastis and registry "
+                    f"datasets, got dataset '{task.dataset}'"
+                )
+            # The probe's spatial geometry must follow the tiled/cropped
+            # sample size.
+            self.config = dataclasses.replace(
+                self.config, height_width=self.window_size
+            )
+        if self.label_at_center_pixel:
+            if not self._is_registry_dataset:
+                raise ValueError(
+                    f"label_at_center_pixel is only supported for registry "
+                    f"datasets, got dataset '{task.dataset}'"
+                )
+            if self.config.task_type != TaskType.SEGMENTATION:
+                raise ValueError(
+                    "label_at_center_pixel requires a segmentation dataset, "
+                    f"got task type '{self.config.task_type.value}'"
+                )
+            # The dataset emits one scalar label per sample, so downstream the
+            # task is a classification task over per-sample embeddings.
+            self.config = dataclasses.replace(
+                self.config, task_type=TaskType.CLASSIFICATION, height_width=None
+            )
         self.trainer = trainer
         self.device = device
         # Add all task attributes to self
@@ -337,6 +407,15 @@ class DownstreamEvaluator:
         extra_kwargs: dict[str, Any] = {}
         if self.tile_size is not None:
             extra_kwargs["tile_size"] = self.tile_size
+        if self.dataset in ("pastis", "pastis128") and self.window_size is not None:
+            extra_kwargs["window_size"] = self.window_size
+        if self._is_registry_dataset:
+            if self.window_size is not None:
+                extra_kwargs["window_size"] = self.window_size
+            if self.label_at_center_pixel:
+                extra_kwargs["label_at_center_pixel"] = True
+            if self.tile_samples:
+                extra_kwargs["tile_samples"] = True
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities

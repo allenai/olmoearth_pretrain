@@ -31,6 +31,7 @@ from einops import rearrange
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from olmoearth_pretrain.data.constants import EMBEDDING_PRODUCT_MODALITIES
 from olmoearth_pretrain.data.constants import Modality as DataModality
 from olmoearth_pretrain.data.utils import convert_to_db
 from olmoearth_pretrain.evals.constants import (
@@ -75,6 +76,10 @@ def _get_bands_by_modality(
         resolved = resolve_rslearn_layer_name(layer)
         if resolved is not None:
             modality = RSLEARN_TO_OLMOEARTH[resolved]
+            # Precomputed embedding products are consumed exactly as stored —
+            # normalization never applies to them, so no stats are needed.
+            if modality.name in EMBEDDING_PRODUCT_MODALITIES:
+                continue
             bands_by_modality[modality.name] = modality.band_order
 
     return bands_by_modality

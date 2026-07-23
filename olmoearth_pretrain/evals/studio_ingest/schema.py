@@ -197,6 +197,12 @@ class EvalDatasetEntry(BaseModel):
 
     num_timesteps: int = 1
 
+    # Time range the imagery covers ("YYYY-MM-DD"), used at eval time to
+    # synthesize per-timestep (monthly) timestamps fed to the model. None
+    # falls back to RslearnToOlmoEarthDataset's defaults.
+    start_time: str | None = None
+    end_time: str | None = None
+
     @field_validator("task_type", mode="before")
     @classmethod
     def _normalize_task_type(cls, value: str | TaskType) -> str:

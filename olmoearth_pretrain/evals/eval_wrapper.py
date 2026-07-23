@@ -16,6 +16,7 @@ from olmoearth_pretrain.evals.models import (
     DINOv3,
     GalileoWrapper,
     Panopticon,
+    PrecomputedEmbedding,
     PrestoWrapper,
     PrithviV2,
     Satlas,
@@ -489,6 +490,31 @@ class SatlasEvalWrapper(EvalWrapper):
         return batch_embeddings, labels
 
 
+class PrecomputedEmbeddingEvalWrapper(EvalWrapper):
+    """Wrapper for precomputed embedding products (e.g. AlphaEarth/GSE).
+
+    The "model" reads embeddings baked into the sample as a data modality, so
+    this wrapper only handles the shared pooling/center-token conventions.
+    """
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Read the precomputed embeddings carried by the sample."""
+        spatial_pool = self.spatial_pool or self.use_center_token
+        batch_embeddings = self.model(
+            masked_olmoearth_sample,
+            pooling=self.pooling_type,
+            spatial_pool=spatial_pool,
+        )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
+        return batch_embeddings, labels
+
+
 class TesseraEvalWrapper(EvalWrapper):
     """Wrapper for Tessera models."""
 
@@ -553,6 +579,9 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     elif isinstance(model, Tessera):
         logger.info("Using TesseraEvalWrapper")
         return TesseraEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, PrecomputedEmbedding):
+        logger.info("Using PrecomputedEmbeddingEvalWrapper")
+        return PrecomputedEmbeddingEvalWrapper(model=model, **kwargs)
     elif isinstance(model, PrithviV2):
         logger.info("Using PrithviEvalWrapper")
         return PrithviV2EvalWrapper(model=model, **kwargs)
