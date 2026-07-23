@@ -15,10 +15,10 @@ LAUNCH_ARGS="--launch.num_gpus=8 --launch.priority=urgent --launch.clusters=[ai2
 REGSUP="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_newsampling.py"
 REGSUP_LATLON="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_wideread_regsup_latlon_w0p1_newsampling.py"
 
-python "$REGSUP" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_newsamp_v2" "$CLUSTER" \
+python "$REGSUP" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_newsamp_v3" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$REGSUP_LATLON" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_latlon_w0p1_newsamp_v2" "$CLUSTER" \
+python "$REGSUP_LATLON" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_latlon_w0p1_newsamp_v3" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
