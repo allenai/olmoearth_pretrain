@@ -70,8 +70,12 @@ The sweep scripts set `TRAIN_SCRIPT_PATH` automatically and select `torchrun` fo
   convention: 16×16 windows,
   `patch_size=1` (one embedding per 10 m pixel), and an int8 round-trip
   (`quantize_embeddings=True`) so forward-pass models are scored as int8
-  products too. `pastis_ws16_ps1_sentinel2` tiles each PASTIS sample into
-  16×16 windows; the `<dataset>_ws16_ps1` tasks (the eight AEF supplemental
+  products too. The `pastis_ws16_ps1_*_pretrain_export` tasks tile each
+  128×128 PASTIS sample into 16×16 windows, reading the `pastis_rslearn`
+  dataset — an rslearn export whose S1/S2 inputs mirror the pretraining
+  dataset (see `olmoearth_pretrain/evals/datasets/pastis_rslearn_export.py`)
+  rather than the benchmark-shipped imagery; the `<dataset>_ws16_ps1` tasks
+  (the eight AEF supplemental
   datasets) center-crop each sample to a 16×16 window around its single
   labeled pixel and run as center-pixel classification
   (`label_at_center_pixel` + `use_center_token`), keeping only the token that

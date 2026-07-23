@@ -82,6 +82,7 @@ tail -f "${NAME}_ingest.out"
 | `--overwrite` | | Re-ingest if already exists |
 | `--source-groups` | | Comma-separated list of rslearn groups to include |
 | `--untar-source` | | Use if source is a `.tar.gz` archive on GCS |
+| `--start-time` / `--end-time` | | Imagery time range (`YYYY-MM-DD`), recorded on the registry entry so eval-time (monthly) timestamps match the imagery months. Omit to use the loader default (2022-09 to 2023-09) |
 
 ### Verify
 

@@ -113,7 +113,7 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
-    elif eval_dataset.startswith("pastis"):
+    elif eval_dataset in ("pastis", "pastis128"):
         pastis_kwargs = {
             "split": split,
             "label_fraction": label_fraction,
@@ -166,4 +166,5 @@ def get_eval_dataset(
             label_fraction=label_fraction,
             window_size=kwargs.get("window_size"),
             label_at_center_pixel=kwargs.get("label_at_center_pixel", False),
+            tile_samples=kwargs.get("tile_samples", False),
         )
