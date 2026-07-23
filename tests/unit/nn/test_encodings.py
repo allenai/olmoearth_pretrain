@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from olmoearth_pretrain.nn.encodings import (
+    PositionEncoding,
     apply_1d_rope,
     apply_2d_axial_rope,
     apply_2d_mixed_rope,
@@ -562,3 +563,27 @@ def test_timestamps_to_days_rejects_bad_last_dim() -> None:
     """Non-3 last dim should raise."""
     with pytest.raises(ValueError):
         timestamps_to_days(torch.zeros(2, 2, dtype=torch.long))
+
+
+@pytest.mark.parametrize(
+    "value", [encoding.value for encoding in PositionEncoding] + list(PositionEncoding)
+)
+def test_is_rope_traces_correctly_under_torch_compile(value: str) -> None:
+    """torch.compile must take the same is_rope branch as eager Python.
+
+    Regression test: Dynamo (at least through torch 2.7.1) mis-evaluates
+    ``"rope_3d_mixed" in {StrEnum members}`` as False, which silently dropped all
+    RoPE ops from compiled attention blocks. is_rope/is_2d_rope/is_3d_rope must
+    therefore compare against plain strings.
+    """
+    torch._dynamo.reset()
+
+    def f(x: torch.Tensor, s: str) -> torch.Tensor:
+        if PositionEncoding.is_rope(s):
+            return x + 1
+        return x - 1
+
+    x = torch.zeros(1)
+    eager = f(x, value)
+    compiled = torch.compile(f, backend="eager", fullgraph=True)(x, value)
+    torch.testing.assert_close(compiled, eager)
