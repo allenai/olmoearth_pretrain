@@ -55,11 +55,12 @@ def _as_dict(obj: NamedTuple, include_nones: bool = False) -> dict[str, Any]:
 
 
 def _modalities(obj: NamedTuple) -> list[str]:
-    """Get present modalities (excludes masks and timestamps)."""
+    """Get present modalities (excludes masks, cloud side-payloads, and timestamps)."""
     return [
         name
         for name in obj._fields
         if not name.endswith("_mask")
+        and not name.endswith("_cloud")
         and name != TIMESTAMPS_FIELD
         and getattr(obj, name) is not None
     ]
@@ -106,6 +107,12 @@ class OlmoEarthSample(NamedTuple):
     # ndvi is computed from S2 L2A bands B04 (Red) and B08 (NIR), not loaded from file.
     ndvi: ArrayTensor | None = None  # [B, H, W, T, 1]
     eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
+    # OmniCloudMask cloud-class side-payloads (0 clear/1 thick/2 thin/3 shadow/255
+    # no-data), aligned to the S2/Landsat time+space grid. Excluded from
+    # `.modalities` (never tokenized/normalized); consumed by the masking strategy
+    # to drop mostly-cloud target tokens, then dropped. See data.cloud_mask_cache.
+    sentinel2_l2a_cloud: ArrayTensor | None = None  # [B, H, W, T, 1]
+    landsat_cloud: ArrayTensor | None = None  # [B, H, W, T, 1]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
 
@@ -124,10 +131,14 @@ class OlmoEarthSample(NamedTuple):
 
     @property
     def modalities_with_timestamps(self) -> list[str]:
-        """Get all modalities including timestamps if present (excludes masks)."""
+        """Get all modalities including timestamps if present (excludes masks, cloud)."""
         result = []
         for name in self._fields:
-            if not name.endswith("_mask") and getattr(self, name) is not None:
+            if (
+                not name.endswith("_mask")
+                and not name.endswith("_cloud")
+                and getattr(self, name) is not None
+            ):
                 result.append(name)
         return result
 

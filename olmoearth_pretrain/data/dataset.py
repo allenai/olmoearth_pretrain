@@ -23,6 +23,7 @@ from olmoearth_pretrain._compat import (
     deprecated_class_alias as _deprecated_class_alias,
 )
 from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.data import cloud_mask_cache
 from olmoearth_pretrain.data.constants import (
     MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
@@ -65,7 +66,7 @@ def _get_max_t_within_token_budget(
     used_tokens = 0
     time_multiply_tokens = 0
     for attribute in sample.as_dict().keys():
-        if attribute in ("timestamps", "latlon"):
+        if attribute in ("timestamps", "latlon") or attribute.endswith("_cloud"):
             continue
         modality_spec = Modality.get(attribute)
         num_band_sets = (
@@ -169,6 +170,15 @@ def subset_sample_default(
             continue
         if attribute == "latlon":
             new_data_dict[attribute] = modality
+            continue
+        if attribute.endswith("_cloud"):
+            # Cloud side-payload: spacetime, stored on the same 128 grid as its
+            # modality (image_tile_size_factor == 1). Crop in lockstep.
+            new_data_dict[attribute] = modality[
+                start_h : start_h + sampled_hw,
+                start_w : start_w + sampled_hw,
+                start_t : start_t + max_t,
+            ]
             continue
         modality_spec = Modality.get(attribute)
         if modality_spec.is_spacetime_varying:
@@ -329,6 +339,7 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        cloud_cache_dir: str | None = None,
     ):
         """Initialize the dataset.
 
@@ -354,6 +365,9 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            cloud_cache_dir: If set, directory of precomputed OmniCloudMask cloud-class
+                sidecars (see data.cloud_mask_cache); enables dropping mostly-cloud
+                target tokens. None disables cloud masking.
 
         Returns:
             None
@@ -366,6 +380,7 @@ class OlmoEarthDataset(Dataset):
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         self.training_modalities = training_modalities
+        self.cloud_cache_dir = cloud_cache_dir
 
         self.dtype = dtype
         self.normalize = normalize
@@ -654,7 +669,7 @@ class OlmoEarthDataset(Dataset):
         """Extract h, w, t from sample_dict."""
         time = sample_dict["timestamps"].shape[0]
         for mod_name, mod_data in sample_dict.items():
-            if mod_name == "timestamps":
+            if mod_name == "timestamps" or mod_name.endswith("_cloud"):
                 continue
             mod_spec = Modality.get(mod_name)
             if mod_spec.is_spatial and mod_data is not None:
@@ -838,6 +853,29 @@ class OlmoEarthDataset(Dataset):
             sample_dict["timestamps"], missing_timesteps_masks
         )
         sample_dict["timestamps"] = timestamps
+        # Cloud side-payload: load precomputed OmniCloudMask maps and de-compact them
+        # to nominal timesteps using the SAME cropped mask the modality will use in
+        # fill_sample_with_missing_values, so they stay time-aligned. Gated on
+        # cloud_cache_dir; skipped under cutmix and for uncached samples (train
+        # normally). Carried as `<modality>_cloud` fields (excluded from .modalities).
+        if self.cloud_cache_dir is not None and not self.apply_cutmix:
+            clouds = cloud_mask_cache.load_sample_clouds(self.cloud_cache_dir, index)
+            if clouds is not None:
+                for npz_key, modality in (
+                    ("s2_cloud", "sentinel2_l2a"),
+                    ("landsat_cloud", "landsat"),
+                ):
+                    if (
+                        npz_key in clouds
+                        and modality in sample_dict
+                        and modality in missing_timesteps_masks
+                    ):
+                        aligned = cloud_mask_cache.align_cloud_to_nominal(
+                            clouds[npz_key],
+                            missing_timesteps_masks[modality],
+                            self.max_sequence_length,
+                        )
+                        sample_dict[f"{modality}_cloud"] = aligned[..., None]
         sample_dict, current_length = self._pad_timestamps(sample_dict)
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
         sample, missing_modalities = self.fill_sample_with_missing_values(
@@ -879,7 +917,7 @@ class OlmoEarthDataset(Dataset):
 
         if self.normalize:
             for modality_name in sample_dict.keys():
-                if modality_name == "timestamps":
+                if modality_name == "timestamps" or modality_name.endswith("_cloud"):
                     continue
                 # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
                 if modality_name in missing_modalities:
@@ -915,6 +953,12 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    # Directory of precomputed OmniCloudMask per-pixel cloud-class sidecars
+    # (see olmoearth_pretrain.data.cloud_mask_cache). When set, each sample's S2
+    # and Landsat cloud maps are loaded and carried alongside the sample so the
+    # masking strategy can drop mostly-cloud target tokens. None => cloud-masking
+    # disabled (default; other runs unaffected).
+    cloud_cache_dir: str | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

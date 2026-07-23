@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv self *)",
+      "Bash(curl -LsSf https://astral.sh/uv/install.sh)",
+      "Bash(sh)",
+      "Bash([ -s \"$out\" ])",
+      "Bash(env -i HOME=/root bash -lc ' *)"
+    ]
+  }
+}
