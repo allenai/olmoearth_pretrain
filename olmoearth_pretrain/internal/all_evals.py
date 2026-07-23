@@ -1,11 +1,13 @@
 """Launch script for evaluation allowing you to easily run all the evals for your model by just pointing at your training script."""
 
 import importlib.util
+import json
 import os
 import sys
 from logging import getLogger
 from typing import Any
 
+from olmo_core.config import Config
 from olmo_core.train.callbacks import (
     BeakerCallback,
     ConfigSaverCallback,
@@ -15,6 +17,7 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
+from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
@@ -24,6 +27,7 @@ from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
     main,
 )
+from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -33,6 +37,7 @@ from olmoearth_pretrain.train.callbacks.evaluator_callback import (
     DownstreamTaskConfig,
     EvalMode,
 )
+from olmoearth_pretrain.train.train_module.train_module import _strip_unknown_fields
 
 logger = getLogger(__name__)
 
@@ -61,6 +66,56 @@ def load_user_module(path: str) -> Any:
     assert loader is not None
     loader.exec_module(user_mod)
     return user_mod
+
+
+def _load_path_from_argv() -> str | None:
+    """Extract the checkpoint path from a ``--trainer.load_path=...`` CLI override."""
+    prefix = "--trainer.load_path="
+    for arg in sys.argv:
+        if arg.startswith(prefix):
+            return arg[len(prefix) :]
+    return None
+
+
+def build_model_config_from_checkpoint(fallback_builder: Any) -> Any:
+    """Wrap a model-config builder to reconstruct the architecture from a checkpoint.
+
+    When ``LOAD_ARCH_FROM_CHECKPOINT`` is set, the returned builder reads
+    ``{load_path}/config.json`` -- the fully-resolved config that ConfigSaverCallback
+    writes alongside every checkpoint -- and deserializes its ``model`` block. This
+    rebuilds the EXACT architecture the checkpoint weights expect, so train-time
+    architecture overrides (e.g. ``--model.encoder_config.register_dim=768``) do NOT
+    need to be re-passed at eval time.
+
+    Falls back to ``fallback_builder`` (the training module's ``build_model_config``)
+    when no ``--trainer.load_path`` is given or the ``config.json`` is missing -- e.g.
+    older checkpoints or baseline models -- so existing flows are unaffected.
+    """
+
+    def builder(common: Any) -> Any:
+        load_path = _load_path_from_argv()
+        if load_path is None:
+            logger.warning(
+                "LOAD_ARCH_FROM_CHECKPOINT is set but no --trainer.load_path was "
+                "provided; falling back to the module's build_model_config."
+            )
+            return fallback_builder(common)
+        config_path = UPath(load_path) / "config.json"
+        if not config_path.exists():
+            logger.warning(
+                "LOAD_ARCH_FROM_CHECKPOINT is set but %s does not exist; falling back "
+                "to the module's build_model_config.",
+                config_path,
+            )
+            return fallback_builder(common)
+        logger.info("Reconstructing model architecture from %s", config_path)
+        # Use the same reconstruction pipeline as the train-module compatibility check
+        # (patch legacy fields, strip fields unknown to the current schema) so the eval
+        # model and that check agree exactly.
+        config_dict = patch_legacy_encoder_config(json.loads(config_path.read_text()))
+        return Config.from_dict(_strip_unknown_fields(config_dict["model"]))
+
+    return builder
 
 
 EVAL_TASKS = {
@@ -137,6 +192,42 @@ EVAL_TASKS = {
     ),
     "m_cashew_plant": DownstreamTaskConfig(
         dataset="m-cashew-plant",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    # 64x64-tiled variants of the two 256px segmentation tasks: each native
+    # 256x256 image becomes 16 non-overlapping 64x64 tiles, shrinking the token
+    # grid the register read sees (64/patch vs 256/patch). Used to test whether
+    # the large-grid read dilution drives the register regressions on these tasks.
+    # Not directly comparable in absolute terms to the 256px versions (less spatial
+    # context per window); the signal is the rope-vs-latents gap at 64 vs 256.
+    "m_sa_crop_type_64": DownstreamTaskConfig(
+        dataset="m-sa-crop-type",
+        tile_size=64,
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "m_cashew_plant_64": DownstreamTaskConfig(
+        dataset="m-cashew-plant",
+        tile_size=64,
         embedding_batch_size=32,
         probe_batch_size=8,
         num_workers=2,
@@ -1228,6 +1319,118 @@ EVAL_TASKS.update(
     }
 )
 
+# The AEF supplemental evaluation datasets (arXiv:2507.22291): S2 timeseries
+# crops carrying a single labeled center pixel each, ingested via the registry
+# (their plain 32x32 segmentation variants are defined above).
+AEF_SUPPLEMENTAL_DATASETS = (
+    "africa_crop_mask",
+    "canada_crops_coarse",
+    "canada_crops_fine",
+    "descals",
+    "ethiopia_crops",
+    "glance",
+    "lcmap_lu",
+    "us_trees",
+)
+
+
+def _aef_ws16_ps1_task(name: str, eval_mode: EvalMode) -> DownstreamTaskConfig:
+    """AEF supplemental task under the per-pixel embedding-product convention.
+
+    Each sample is center-cropped to a 16x16 window around its labeled pixel,
+    OlmoEarth emits per-pixel (patch_size=1) embeddings int8 round-tripped like
+    an embedding product, and only the labeled pixel's token is kept — the task
+    runs as center-pixel classification (label_at_center_pixel +
+    use_center_token). Balanced accuracy is the AEF paper's protocol metric.
+    """
+    return DownstreamTaskConfig(
+        dataset=name,
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=eval_mode,
+        primary_metric=EvalMetric.BALANCED_ACCURACY,
+        window_size=16,
+        patch_size=1,
+        quantize_embeddings=True,
+        use_center_token=True,
+        label_at_center_pixel=True,
+    )
+
+
+# Embedding-product evals: OlmoEarth scored under the same conventions as the
+# precomputed embedding products (AEF/Tessera) — per-pixel (patch_size=1)
+# embeddings from fixed 16x16 windows, int8 round-tripped. Kept separate from
+# EVAL_TASKS and swept by embedding_eval_sweep.py (EMBEDDING_EVALS=1), which
+# holds normalization fixed to pretraining stats and sweeps only the probe LR
+# for olmoearth / aef / tessera_precomputed. The precomputed baselines run
+# these same tasks with input_modalities overridden to the embedding modality
+# and quantize_embeddings=False (they are already int8 at source).
+#
+# The AEF supplemental tasks are effectively pixel-wise classification, so each
+# gets a KNN twin (`_knn`). The PASTIS tasks stay LP-only: their dense labels
+# flatten to millions of train pixels, and KNN keeps every one as a reference
+# point (cost scales with train x query pixels), unlike the LP which compresses
+# them into a single weight matrix.
+#
+# The PASTIS tasks run on `pastis_rslearn`, an rslearn export that mirrors the
+# pretraining dataset (12 monthly Planetary Computer mosaics per sensor on the
+# native PASTIS patch grid; see
+# olmoearth_pretrain/evals/datasets/pastis_rslearn_export.py) rather than the
+# imagery shipped with the PASTIS benchmark. Each 128x128 patch is tiled into
+# 16x16 windows (tile_samples). The gse/tessera layers were converted from the
+# embeddings previously fetched by pastis_processor.py --embedding_products.
+
+
+def _pastis_ws16_ps1_task(input_modalities: list[str]) -> DownstreamTaskConfig:
+    """PASTIS (rslearn export) under the per-pixel embedding-product convention."""
+    return DownstreamTaskConfig(
+        dataset="pastis_rslearn",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=input_modalities,
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        window_size=16,
+        patch_size=1,
+        tile_samples=True,
+        quantize_embeddings=True,
+    )
+
+
+EMBEDDING_EVAL_TASKS = {
+    # The _pretrain_export suffix marks that these read the pastis_rslearn
+    # pretraining-mirror export, distinguishing their metrics from earlier
+    # pastis_ws16_ps1_* runs on the benchmark-shipped imagery.
+    "pastis_ws16_ps1_sentinel2_pretrain_export": _pastis_ws16_ps1_task(
+        [Modality.SENTINEL2_L2A.name]
+    ),
+    "pastis_ws16_ps1_sentinel1_sentinel2_pretrain_export": _pastis_ws16_ps1_task(
+        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name]
+    ),
+    **{
+        f"{name}_ws16_ps1": _aef_ws16_ps1_task(name, EvalMode.LINEAR_PROBE)
+        for name in AEF_SUPPLEMENTAL_DATASETS
+    },
+    **{
+        f"{name}_ws16_ps1_knn": _aef_ws16_ps1_task(name, EvalMode.KNN)
+        for name in AEF_SUPPLEMENTAL_DATASETS
+    },
+}
+
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
         dataset="pretrain_subset",
@@ -1525,6 +1728,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                     if os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY")
                     else FT_EVAL_TASKS
                     if os.environ.get("FINETUNE")
+                    else EMBEDDING_EVAL_TASKS
+                    if os.environ.get("EMBEDDING_EVALS")
                     else EVAL_TASKS
                 ),
                 eval_on_startup=True,
@@ -1557,6 +1762,10 @@ if __name__ == "__main__":
         build_train_module_config = None
 
     build_model_config = user_mod.build_model_config
+    # Optionally reconstruct the architecture from the checkpoint's saved config.json,
+    # so train-time architecture overrides don't need to be re-passed at eval time.
+    if os.environ.get("LOAD_ARCH_FROM_CHECKPOINT"):
+        build_model_config = build_model_config_from_checkpoint(build_model_config)
     main(
         common_components_builder=build_common_components,
         model_config_builder=build_model_config,

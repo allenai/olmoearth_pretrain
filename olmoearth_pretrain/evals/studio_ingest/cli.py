@@ -101,6 +101,8 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         split_seed=args.split_seed,
         num_samples=args.num_samples,
         untar_source=args.untar_source,
+        start_time=args.start_time,
+        end_time=args.end_time,
     )
 
     entry = ingest_dataset(config)
@@ -183,6 +185,19 @@ def add_ingest_args(parser: argparse.ArgumentParser) -> None:
         "--untar-source",
         action="store_true",
         help="Source is a .tar.gz archive on GCS; stream and extract directly to Weka",
+    )
+
+    # Timestamps
+    parser.add_argument(
+        "--start-time",
+        default=None,
+        help="Imagery time range start (YYYY-MM-DD), recorded on the registry "
+        "entry so eval-time timestamps match the imagery months",
+    )
+    parser.add_argument(
+        "--end-time",
+        default=None,
+        help="Imagery time range end (YYYY-MM-DD)",
     )
 
     # Registry arguments

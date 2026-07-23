@@ -33,9 +33,10 @@ We run evaluations through the same `olmoearth_pretrain/internal/experiment.py` 
 
 - `olmoearth_pretrain/internal/full_eval_sweep.py` runs KNN (classification) and linear probing (segmentation) sweeps for OlmoEarth checkpoints or baseline models, with optional sweeps over learning rate, pretrained / dataset normalizers, and pooling (mean or max).
 - `olmoearth_pretrain/internal/full_eval_sweep_finetune.py` runs fine-tuning sweeps for OlmoEarth checkpoints or baseline models, with optional sweeps over learning rate and pretrained / dataset normalizers.
+- `olmoearth_pretrain/internal/embedding_eval_sweep.py` runs the embedding-product evals (`EMBEDDING_EVAL_TASKS`: the per-pixel ws16/ps1 tasks) for an OlmoEarth checkpoint or the precomputed products (`--model=aef` / `--model=tessera_precomputed`). Normalization is held fixed (pretraining stats; embedding products are consumed as stored) and only the probe learning rate is swept — the KNN twins of the AEF supplemental tasks run once in their own job.
 
-Both scripts use:
-- [`olmoearth_pretrain/internal/all_evals.py`](../olmoearth_pretrain/internal/all_evals.py) for the task registry (`EVAL_TASKS` for KNN and linear probing, and `FT_EVAL_TASKS` for fine-tuning).
+The scripts use:
+- [`olmoearth_pretrain/internal/all_evals.py`](../olmoearth_pretrain/internal/all_evals.py) for the task registry (`EVAL_TASKS` for KNN and linear probing, `FT_EVAL_TASKS` for fine-tuning, and `EMBEDDING_EVAL_TASKS` for the embedding-product convention).
 - [`olmoearth_pretrain/evals`](../olmoearth_pretrain/evals) for dataset and model wrappers.
 
 Every launch uses one of the evaluation subcommands in `experiment.py`:
@@ -54,6 +55,32 @@ The sweep scripts set `TRAIN_SCRIPT_PATH` automatically and select `torchrun` fo
 
 - **OlmoEarth models:** Nano, Tiny, Base, and Large size.
 - **Others:** Supported baseline models are defined in `olmoearth_pretrain/evals/models/__init__.py`, which includes Galileo, Satlas, Terramind, Prithvi v2, Panopticon, CROMA, AnySat etc. Multi-size variants (if available) are also supported.
+- **Precomputed embedding products:** `--model=aef` (AlphaEarth / Google
+  Satellite Embeddings) and `--model=tessera_precomputed` evaluate published
+  embedding products instead of running a forward pass — the embeddings are
+  read off the sample as data modalities (`gse`, `tessera`) baked into eval
+  dataset stores, then flow through the exact same probe/KNN code as every
+  other model. Tasks run only where the modality has been baked in; see
+  `docs/PrecomputedEmbeddingEvals.md` for the design, the embedding
+  materializer, and how to onboard datasets.
+
+  For head-to-head comparisons with these products, `all_evals.py` defines
+  a separate `EMBEDDING_EVAL_TASKS` registry (swept via
+  `embedding_eval_sweep.py`, see above) under a per-pixel embedding-product
+  convention: 16×16 windows,
+  `patch_size=1` (one embedding per 10 m pixel), and an int8 round-trip
+  (`quantize_embeddings=True`) so forward-pass models are scored as int8
+  products too. The `pastis_ws16_ps1_*_pretrain_export` tasks tile each
+  128×128 PASTIS sample into 16×16 windows, reading the `pastis_rslearn`
+  dataset — an rslearn export whose S1/S2 inputs mirror the pretraining
+  dataset (see `olmoearth_pretrain/evals/datasets/pastis_rslearn_export.py`)
+  rather than the benchmark-shipped imagery; the `<dataset>_ws16_ps1` tasks
+  (the eight AEF supplemental
+  datasets) center-crop each sample to a 16×16 window around its single
+  labeled pixel and run as center-pixel classification
+  (`label_at_center_pixel` + `use_center_token`), keeping only the token that
+  actually carries a label. Their primary metric is balanced accuracy (the
+  AEF paper's protocol).
 
 ---
 

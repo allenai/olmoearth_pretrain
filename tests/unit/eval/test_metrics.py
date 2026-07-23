@@ -319,6 +319,18 @@ class TestClassificationMetrics:
         assert "f1_class_1" in result.metrics
         assert "auroc" in result.metrics
 
+    def test_single_label_balanced_accuracy(self) -> None:
+        """Balanced accuracy is the mean per-class recall (AEF protocol)."""
+        # Class 0: 2/2 correct; class 1: 1/2 correct -> balanced acc 0.75.
+        preds = torch.tensor([0, 1, 0, 0], dtype=torch.long)
+        labels = torch.tensor([0, 1, 1, 0], dtype=torch.long)
+        scores = torch.nn.functional.one_hot(preds, 2).float()
+        result = classification_metrics(preds, labels, scores, is_multilabel=False)
+
+        assert result.metrics[EvalMetric.BALANCED_ACCURACY.value] == pytest.approx(0.75)
+        selected = result.with_primary_metric(EvalMetric.BALANCED_ACCURACY)
+        assert selected.primary == pytest.approx(0.75)
+
     def test_multilabel_classification(self) -> None:
         """Multilabel metrics should include exact-match accuracy and micro F1."""
         preds = torch.tensor([[1, 0, 1], [0, 1, 0]], dtype=torch.int)

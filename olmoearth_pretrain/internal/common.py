@@ -189,6 +189,36 @@ def build_launch_config(
                 name="EMBEDDING_DIAGNOSTICS_ONLY", value=embedding_diagnostics_only
             )
         )
+    skip_mismatched_keys = os.environ.get("OE_LOAD_SKIP_MISMATCHED_KEYS")
+    if skip_mismatched_keys is not None:
+        logger.info("Propagating OE_LOAD_SKIP_MISMATCHED_KEYS to experiment")
+        env_vars.append(
+            BeakerEnvVar(
+                name="OE_LOAD_SKIP_MISMATCHED_KEYS", value=skip_mismatched_keys
+            )
+        )
+    # Propagate the load-arch-from-checkpoint flag to the experiment if set
+    load_arch_from_checkpoint = os.environ.get("LOAD_ARCH_FROM_CHECKPOINT")
+    if load_arch_from_checkpoint is not None:
+        logger.info(
+            f"Propagating load-arch-from-checkpoint flag: {load_arch_from_checkpoint}"
+        )
+        env_vars.append(
+            BeakerEnvVar(
+                name="LOAD_ARCH_FROM_CHECKPOINT", value=load_arch_from_checkpoint
+            )
+        )
+    # Propagate the embedding-evals flag to the experiment if set
+    embedding_evals = os.environ.get("EMBEDDING_EVALS")
+    if embedding_evals is not None:
+        env_vars.append(BeakerEnvVar(name="EMBEDDING_EVALS", value=embedding_evals))
+    # Propagate the CUDA allocator config if set (e.g. expandable_segments:True to
+    # reduce fragmentation OOMs at large token budgets).
+    cuda_alloc_conf = os.environ.get("PYTORCH_CUDA_ALLOC_CONF")
+    if cuda_alloc_conf is not None:
+        env_vars.append(
+            BeakerEnvVar(name="PYTORCH_CUDA_ALLOC_CONF", value=cuda_alloc_conf)
+        )
 
     return OlmoEarthBeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",
