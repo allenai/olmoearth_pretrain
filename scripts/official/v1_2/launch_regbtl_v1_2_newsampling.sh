@@ -3,7 +3,7 @@
 # sampler. Two runs -- regsup and regsup+latlon -- matching the committed w0p1
 # baselines except for the dataloader shape sampling (independent timestep axis with
 # temporal bias, a token floor, ps=1 oversampling, larger grids, maps excluded from
-# the budget) and rank_microbatch_size 64->16 to fit the ~6144 token budget. All
+# the budget) and rank_microbatch_size 64->32 to fit the ~6144 token budget. All
 # knobs live in regbtl_v1_2_newsampling_common.py; the architecture is baked into the
 # scripts (not CLI overrides) so the Beaker eval jobs reconstruct the matching model.
 set -e
@@ -21,10 +21,10 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 REGSUP="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_newsampling.py"
 REGSUP_LATLON="scripts/official/v1_2/regbtl_v1_2_gdyn_d128_wideread_regsup_latlon_w0p1_newsampling.py"
 
-python "$REGSUP" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_newsamp_v5" "$CLUSTER" \
+python "$REGSUP" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_newsamp_v5_b32" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
 
-python "$REGSUP_LATLON" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_latlon_w0p1_newsamp_v5" "$CLUSTER" \
+python "$REGSUP_LATLON" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_latlon_w0p1_newsamp_v5_b32" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
