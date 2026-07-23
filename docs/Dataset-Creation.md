@@ -240,6 +240,14 @@ python -m olmoearth_pretrain.dataset_creation.scripts.sentinel2_l1c.launch_jobs 
 
 Now convert the data from the rslearn dataset to OlmoEarth format.
 
+The commands below are for the legacy grid dataset and retain their historical group
+defaults (`res_10`, `res_160`, or `res_0.625`). Every converter also accepts one or more
+groups as `--group GROUP [GROUP ...]`. For the 128x128 sample-centered open-set dataset,
+use the dedicated conversion sequence in
+[`open_set_segmentation_data/README.md`](../olmoearth_pretrain/open_set_segmentation_data/README.md),
+including `--group open_set` on shared static converters and the identity-aware metadata
+summary steps before H5 creation.
+
 ```
 export OLMOEARTH_PATH=./olmoearth_dataset
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.cdl --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
@@ -267,28 +275,22 @@ into the per-modality CSVs:
 
 ```
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality cdl
-python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality era5_10 --time_span two_week
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality era5_10 --time_span year
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality eurocrops
-python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality landsat --time_span two_week
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality landsat --time_span year
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality naip_10
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality openstreetmap
-python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality sentinel1 --time_span two_week
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality sentinel1 --time_span year
-python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality sentinel2_l2a --time_span two_week
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality sentinel2_l2a --time_span year
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality srtm
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality worldcereal
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality worldcover
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality wri_canopy_height_map
 # The modalities below are not used in our final dataset but supported in this code.
-python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality era5 --time_span two_week
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality era5 --time_span year
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality gse
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality worldpop
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality naip
-python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality sentinel2 --time_span two_week
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality sentinel2 --time_span year
 ```
 

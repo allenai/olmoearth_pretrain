@@ -16,6 +16,7 @@ from olmoearth_pretrain.dataset.utils import get_modality_fname
 
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
+from .cli import add_common_arguments
 
 START_TIME = datetime(2020, 1, 1, tzinfo=UTC)
 END_TIME = datetime(2021, 1, 1, tzinfo=UTC)
@@ -38,9 +39,8 @@ def convert_worldpop(window: Window, olmoearth_path: UPath) -> None:
 
     assert len(Modality.WORLDPOP.band_sets) == 1
     band_set = Modality.WORLDPOP.band_sets[0]
-    raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
-    image = GEOTIFF_RASTER_FORMAT.decode_raster(
-        raster_dir, window.projection, window.bounds
+    image = window.data.read_raster(
+        LAYER_NAME, band_set.bands, GEOTIFF_RASTER_FORMAT
     ).get_chw_array()
 
     # Clip population count to 0. NODATA is -99999 and includes locations that are
@@ -75,6 +75,7 @@ def convert_worldpop(window: Window, olmoearth_path: UPath) -> None:
         writer.writeheader()
         writer.writerow(
             dict(
+                example_id=window_metadata.example_id or "",
                 crs=window_metadata.crs,
                 col=window_metadata.col,
                 row=window_metadata.row,
@@ -92,24 +93,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Post-process OlmoEarth Pretrain data",
     )
-    parser.add_argument(
-        "--ds_path",
-        type=str,
-        help="Source rslearn dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--olmoearth_path",
-        type=str,
-        help="Destination OlmoEarth Pretrain dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        help="Number of workers to use",
-        default=32,
-    )
+    add_common_arguments(parser, default_groups=["res_10"])
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))
@@ -117,7 +101,7 @@ if __name__ == "__main__":
 
     jobs = []
     for window in dataset.load_windows(
-        workers=args.workers, show_progress=True, groups=["res_10"]
+        workers=args.workers, show_progress=True, groups=args.groups
     ):
         jobs.append(
             dict(

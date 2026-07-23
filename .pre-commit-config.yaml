@@ -4,6 +4,7 @@ ci:
   autoupdate_commit_msg: "[pre-commit.ci] pre-commit autoupdate"
   autoupdate_schedule: weekly
   skip: [end-of-file-fixer, equirements-txt-fixer]
+exclude: ^olmoearth_pretrain/open_set_segmentation_data/datasets/
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.4.0
@@ -71,6 +72,8 @@ repos:
             olmoearth_pretrain,
             --exclude,
             olmoearth_pretrain/evals/models/*,
+            --exclude,
+            olmoearth_pretrain/open_set_segmentation_data/datasets/*,
             --fail-under=80,
           ]
   - repo: https://github.com/astral-sh/ruff-pre-commit
