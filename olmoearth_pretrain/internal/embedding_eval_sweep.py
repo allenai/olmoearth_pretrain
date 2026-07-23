@@ -22,6 +22,8 @@ e.g.
   # Precomputed baselines
   python -m olmoearth_pretrain.internal.embedding_eval_sweep \
       --cluster=ai2/saturn-cirrascale --model=aef
+
+Pass --task_names=<name>[,<name>...] to run a subset of EMBEDDING_EVAL_TASKS.
 """
 
 import argparse
@@ -43,6 +45,7 @@ from olmoearth_pretrain.internal.full_eval_sweep import (
     LP_LRs,
     _get_checkpoint_args,
     _get_sub_command,
+    parse_task_names,
 )
 from olmoearth_pretrain.train.callbacks.evaluator_callback import EvalMode
 
@@ -115,6 +118,30 @@ def _model_task_names(
     return lp, knn
 
 
+def _filter_selected_tasks(
+    task_names_arg: str | None, lp_tasks: list[str], knn_tasks: list[str]
+) -> tuple[list[str], list[str]]:
+    """Restrict (LP, KNN) task names to a --task_names selection, if given."""
+    selected = parse_task_names(task_names_arg)
+    if not selected:
+        return lp_tasks, knn_tasks
+    unknown = sorted(set(selected) - set(EMBEDDING_EVAL_TASKS))
+    if unknown:
+        raise SystemExit(
+            f"Unknown embedding eval task(s): {', '.join(unknown)}. "
+            f"Choose from: {', '.join(EMBEDDING_EVAL_TASKS)}."
+        )
+    lp = [name for name in lp_tasks if name in selected]
+    knn = [name for name in knn_tasks if name in selected]
+    if not lp and not knn:
+        raise SystemExit(
+            "--task_names selected zero runnable tasks (for precomputed "
+            "baselines, tasks whose dataset does not carry the embedding "
+            "modality are skipped)."
+        )
+    return lp, knn
+
+
 def _model_args(model: BaselineModelName | None, task_names: list[str]) -> str:
     """Per-task and trainer args pinning each model's normalization/quantization.
 
@@ -177,6 +204,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         raise ValueError("Provide --module_path (and --checkpoint_path) or --model")
 
     lp_tasks, knn_tasks = _model_task_names(model)
+    lp_tasks, knn_tasks = _filter_selected_tasks(args.task_names, lp_tasks, knn_tasks)
 
     module_path = args.module_path if model is None else get_launch_script_path(model)
     sub_command = _get_sub_command(args)
@@ -260,6 +288,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--project_name", type=str, required=False, help="Wandb project name"
+    )
+    parser.add_argument(
+        "--task_names",
+        type=str,
+        default=None,
+        help="Comma-separated subset of EMBEDDING_EVAL_TASKS to run (default: all)",
     )
     parser.add_argument(
         "--select_best_val",
