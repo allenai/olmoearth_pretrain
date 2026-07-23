@@ -39,6 +39,9 @@ from dataclasses import replace
 from base import build_model_config as _base_build_model_config
 from olmo_core.train.common import Duration
 
+from olmoearth_pretrain.internal.all_evals import (
+    EMBEDDING_EVAL_TASKS as _EMBEDDING_EVAL_TASKS,
+)
 from olmoearth_pretrain.internal.all_evals import EVAL_TASKS as _ALL_EVAL_TASKS
 from olmoearth_pretrain.internal.experiment import CommonComponents
 from olmoearth_pretrain.nn.encodings import PositionEncoding
@@ -71,6 +74,21 @@ _FIFTY_CITIES_LOOP_EVAL_NAMES = (
 FIFTY_CITIES_LOOP_EVAL_TASKS = {
     name: replace(_ALL_EVAL_TASKS[name], eval_interval=Duration.steps(20000))
     for name in _FIFTY_CITIES_LOOP_EVAL_NAMES
+}
+
+# PASTIS per-pixel (patch_size=1, window_size=16) embedding evals on the pastis_rslearn
+# pretraining-mirror export -- the deployment scenario for these models (frozen ps=1
+# embeddings probed for segmentation, the way Tessera/AEF are compared). The in-loop eval
+# job reconstructs these task CONFIGS from this module's build_trainer_config (see
+# checkpoint_sweep_evals.get_train_run_eval_tasks), so they need no EMBEDDING_EVALS gate --
+# only the pastis_rslearn dataset must be materialized where the eval job can read it.
+_PASTIS_EMBEDDING_LOOP_EVAL_NAMES = (
+    "pastis_ws16_ps1_sentinel2_pretrain_export",
+    "pastis_ws16_ps1_sentinel1_sentinel2_pretrain_export",
+)
+PASTIS_EMBEDDING_LOOP_EVAL_TASKS = {
+    name: replace(_EMBEDDING_EVAL_TASKS[name], eval_interval=Duration.steps(20000))
+    for name in _PASTIS_EMBEDDING_LOOP_EVAL_NAMES
 }
 
 
@@ -111,14 +129,18 @@ def build_regbtl_model_config(
 
 
 def add_loop_eval_beaker_job(trainer_config, module_path: str):
-    """Add the fifty_cities in-loop evals and route the in-loop evals through a Beaker job.
+    """Add the fifty_cities + PASTIS embedding in-loop evals and route them through Beaker.
 
     ``run_as_beaker_job=True`` makes each due evaluator launch a Beaker job that evaluates
     the just-saved checkpoint (instead of blocking training); ``beaker_eval_module_path``
     points at the launching script so the eval job rebuilds the matching architecture.
     """
     evaluator = trainer_config.callbacks["downstream_evaluator"]
-    evaluator.tasks = {**evaluator.tasks, **FIFTY_CITIES_LOOP_EVAL_TASKS}
+    evaluator.tasks = {
+        **evaluator.tasks,
+        **FIFTY_CITIES_LOOP_EVAL_TASKS,
+        **PASTIS_EMBEDDING_LOOP_EVAL_TASKS,
+    }
     evaluator.run_as_beaker_job = True
     evaluator.beaker_eval_module_path = module_path
     evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
