@@ -40,8 +40,12 @@ PATCH_SIZE_PROBS = [0.40, 0.15, 0.13, 0.10, 0.08, 0.06, 0.045, 0.035]
 # Base grids 1..16 plus a coarse incremental tail; the token floor drops hw<=2 and
 # large grids naturally carry few timesteps. Nothing special about the exact values.
 SAMPLED_HW_P_LIST = list(range(1, 17)) + [18, 20, 24, 28, 32]
-# Halved from 64 so the ~2.7x token budget fits memory (baseline ran attention un-flashed).
-RANK_MICROBATCH_SIZE = 32
+# Quartered from 64 so the ~2.7x token budget fits memory: the encoder self-attention
+# runs flash-off (O(seq^2) scores), so the 6144-token budget's memory grew ~7x per
+# instance; 32 still OOM'd on an 80GB GPU, so drop to 16. (Paired with
+# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True in the launcher; raise back toward
+# 24/32 for speed only if headroom allows.)
+RANK_MICROBATCH_SIZE = 16
 
 
 def apply_new_sampling(config: OlmoEarthDataLoaderConfig) -> OlmoEarthDataLoaderConfig:
