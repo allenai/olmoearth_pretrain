@@ -117,14 +117,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Post-process OlmoEarth Pretrain data",
     )
-    add_common_arguments(parser)
+    add_common_arguments(parser, default_groups=None)
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))
     olmoearth_path = UPath(args.olmoearth_path)
 
     jobs = []
-    for window in dataset.load_windows(workers=args.workers, show_progress=True):
+    for window in dataset.load_windows(
+        workers=args.workers, show_progress=True, groups=args.groups
+    ):
         jobs.append(
             dict(
                 window=window,

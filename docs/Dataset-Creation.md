@@ -240,6 +240,10 @@ python -m olmoearth_pretrain.dataset_creation.scripts.sentinel2_l1c.launch_jobs 
 
 Now convert the data from the rslearn dataset to OlmoEarth format.
 
+The commands below retain their historical group defaults (`res_10`, `res_160`, or
+`res_0.625`). Every converter also accepts one or more groups as
+`--group GROUP [GROUP ...]`.
+
 ```
 export OLMOEARTH_PATH=./olmoearth_dataset
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.cdl --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
