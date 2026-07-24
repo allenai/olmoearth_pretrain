@@ -388,9 +388,20 @@ class DownstreamEvaluator:
         )
 
     def _get_data_loader(
-        self, split: str, batch_size: int, seed: int | None = None
+        self,
+        split: str,
+        batch_size: int,
+        seed: int | None = None,
+        shuffle: bool = False,
     ) -> DataLoader:
-        """Get the data loader for the given split."""
+        """Get the data loader for the given split.
+
+        shuffle is only needed when the loader is trained on directly
+        (finetuning). Embedding extraction should keep the default: order is
+        irrelevant downstream (the probe re-shuffles its own DataLoader every
+        epoch), and sequential access lets tiled datasets reuse the loaded
+        base sample across its windows instead of re-reading it per tile.
+        """
         logger.info(
             f"Getting data loader for {self.dataset} with norm method {self.norm_method} and norm stats from pretrained {self.norm_stats_from_pretrained}"
         )
@@ -447,7 +458,7 @@ class DownstreamEvaluator:
             num_workers=self.num_workers,
             generator=None if is_iterable else generator,
             worker_init_fn=worker_init_fn,
-            shuffle=False if is_iterable else (split == "train"),
+            shuffle=False if is_iterable else shuffle,
         )
 
     def _get_embeddings(
@@ -647,7 +658,7 @@ class DownstreamEvaluator:
         logger.info(f"Validating {self.dataset} with finetune")
 
         train_loader = self._get_data_loader(
-            "train", self.ft_batch_size, seed=self.finetune_seed
+            "train", self.ft_batch_size, seed=self.finetune_seed, shuffle=True
         )
         val_loader = self._get_data_loader("valid", self.ft_batch_size)
 
