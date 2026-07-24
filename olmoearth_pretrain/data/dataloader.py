@@ -392,6 +392,18 @@ class OlmoEarthDataLoader(DataLoaderBase):
         if Modality.SRTM.name in self.dataset.training_modalities:
             mock_srtm = rng.random((standard_hw, standard_hw, 1, 1), dtype=np.float32)
             output_dict["srtm"] = mock_srtm
+        if Modality.GLO30.name in self.dataset.training_modalities:
+            mock_glo30 = rng.random(
+                (standard_hw, standard_hw, 1, Modality.GLO30.num_bands),
+                dtype=np.float32,
+            )
+            output_dict[Modality.GLO30.name] = mock_glo30
+        if Modality.META_CANOPY_HEIGHT.name in self.dataset.training_modalities:
+            mock_meta_canopy_height = rng.random(
+                (standard_hw, standard_hw, 1, Modality.META_CANOPY_HEIGHT.num_bands),
+                dtype=np.float32,
+            )
+            output_dict[Modality.META_CANOPY_HEIGHT.name] = mock_meta_canopy_height
         if Modality.LANDSAT.name in self.dataset.training_modalities:
             mock_landsat = rng.random(
                 (standard_hw, standard_hw, 12, Modality.LANDSAT.num_bands),

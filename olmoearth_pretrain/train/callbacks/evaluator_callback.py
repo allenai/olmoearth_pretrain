@@ -142,6 +142,9 @@ class DownstreamTaskConfig:
     pretrain_max_samples: int = 512
     # For pretrain subset auxiliary probes: target modality to predict.
     pretrain_target_modality: str | None = None
+    # For multi-band regression targets (e.g. glo30), the band selected for this
+    # single-channel probe (0=elevation, 1=slope, 2=aspect). None = full target.
+    pretrain_target_band_index: int | None = None
     pretrain_label_seed: int = 42
     pretrain_train_samples: int = 512
     pretrain_valid_samples: int = 512
@@ -224,6 +227,7 @@ class DownstreamEvaluator:
         self.h5py_dir = task.h5py_dir
         self.pretrain_max_samples = task.pretrain_max_samples
         self.pretrain_target_modality = task.pretrain_target_modality
+        self.pretrain_target_band_index = task.pretrain_target_band_index
         self.pretrain_label_seed = task.pretrain_label_seed
         self.pretrain_train_samples = task.pretrain_train_samples
         self.pretrain_valid_samples = task.pretrain_valid_samples
@@ -324,6 +328,7 @@ class DownstreamEvaluator:
             extra_kwargs["training_modalities"] = self.input_modalities
             extra_kwargs["max_samples"] = self.pretrain_max_samples
             extra_kwargs["target_modality"] = self.pretrain_target_modality
+            extra_kwargs["target_band_index"] = self.pretrain_target_band_index
             extra_kwargs["pretrain_split"] = split
             extra_kwargs["pretrain_label_seed"] = self.pretrain_label_seed
             extra_kwargs["pretrain_train_samples"] = self.pretrain_train_samples

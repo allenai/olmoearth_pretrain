@@ -536,6 +536,25 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # Copernicus GLO-30 DSM (digital surface model), resampled to 10 m/pixel.
+    # elevation (m), slope (deg [0, 90)), and aspect (deg [0, 360), -1 for flat).
+    GLO30 = ModalitySpec(
+        name="glo30",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["elevation", "slope", "aspect"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    # Meta Canopy Height Map V2, 1 m native, resampled to 10 m/pixel.
+    META_CANOPY_HEIGHT = ModalitySpec(
+        name="meta_canopy_height",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["canopy_height"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     NDVI = ModalitySpec(
         name="ndvi",
         tile_resolution_factor=16,

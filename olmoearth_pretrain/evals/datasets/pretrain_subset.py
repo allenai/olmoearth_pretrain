@@ -43,6 +43,8 @@ WORLDCOVER_TARGET_MODALITY = "worldcover"
 CDL_TARGET_MODALITY = "cdl"
 WORLDCEREAL_TARGET_MODALITY = "worldcereal"
 WRI_CANOPY_TARGET_MODALITY = "wri_canopy_height_map"
+GLO30_TARGET_MODALITY = "glo30"
+META_CANOPY_TARGET_MODALITY = "meta_canopy_height"
 # WorldCereal channel used for the binary "is annual temporary crops" probe.
 WORLDCEREAL_PRIMARY_CHANNEL = 0
 # CDL uses 0 to mark no-data / background.
@@ -86,6 +88,7 @@ class PretrainSubsetDataset(Dataset):
         test_samples: int = DEFAULT_MAX_SAMPLES,
         split_strategy: str = "random",
         geographic_bin_size_deg: float = 5.0,
+        target_band_index: int | None = None,
     ) -> None:
         """Initialize a deterministic pretrain eval subset.
 
@@ -106,11 +109,15 @@ class PretrainSubsetDataset(Dataset):
             split_strategy: ``random`` for shuffled 80/10/10 sample splits or
                 ``geographic`` for shuffled 80/10/10 lat/lon-bin splits.
             geographic_bin_size_deg: Geographic bin size for spatial holdouts.
+            target_band_index: For multi-band regression targets (e.g. glo30),
+                the band to select for this single-channel probe. ``None`` keeps
+                the full target as-is.
         """
         self.patch_size = patch_size
         self.hw_p = hw_p
         self.max_samples = max_samples
         self.target_modality = target_modality
+        self.target_band_index = target_band_index
 
         self._dataset = OlmoEarthDataset(
             h5py_dir=UPath(h5py_dir),
@@ -349,6 +356,23 @@ class PretrainSubsetDataset(Dataset):
         return PretrainSubsetDataset._squeeze_label(label).float()
 
     @staticmethod
+    def _meta_canopy_label(label: torch.Tensor) -> torch.Tensor:
+        """Return continuous Meta canopy height labels (meters)."""
+        return PretrainSubsetDataset._squeeze_label(label).float()
+
+    @staticmethod
+    def _glo30_label(label: torch.Tensor, band_index: int | None) -> torch.Tensor:
+        """Return one continuous GLO-30 DSM band (elevation/slope/aspect).
+
+        The glo30 label tensor carries 3 bands in the last axis; the
+        single-channel regression head consumes one band per probe, so
+        ``band_index`` selects which one before squeezing to [H, W].
+        """
+        if band_index is None:
+            raise ValueError("glo30 target requires a target_band_index (0/1/2)")
+        return PretrainSubsetDataset._squeeze_label(label[..., band_index]).float()
+
+    @staticmethod
     def _cdl_label(label: torch.Tensor) -> torch.Tensor:
         """Return CDL class-code labels with no-data pixels marked as ignore."""
         label = PretrainSubsetDataset._squeeze_label(label).long()
@@ -394,6 +418,10 @@ class PretrainSubsetDataset(Dataset):
             return self._srtm_label(label)
         if self.target_modality == WRI_CANOPY_TARGET_MODALITY:
             return self._canopy_label(label)
+        if self.target_modality == META_CANOPY_TARGET_MODALITY:
+            return self._meta_canopy_label(label)
+        if self.target_modality == GLO30_TARGET_MODALITY:
+            return self._glo30_label(label, self.target_band_index)
         if self.target_modality == CDL_TARGET_MODALITY:
             return self._cdl_label(label)
         if self.target_modality == WORLDCEREAL_TARGET_MODALITY:

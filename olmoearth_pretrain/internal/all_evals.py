@@ -1047,6 +1047,11 @@ PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset
 # probes fall back to PRETRAIN_SUBSET_H5PY_DIR (in-distribution).
 PRETRAIN_AUX_EVAL_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/65536"
 
+# Full pretraining h5 that contains the glo30 and meta_canopy_height modalities
+# (alongside the other map modalities). Used by the glo30/meta-canopy probes,
+# which read these DSM/canopy targets in-distribution.
+PRETRAIN_DSM_CANOPY_H5PY_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_glo30_landsat_meta_canopy_height_openstreetmap_raster_sentinel1_sentinel2_l2a_worldcereal_worldcover/1138828"
+
 MAP_MODALITY_PROBE_INPUTS = [
     Modality.SENTINEL2_L2A.name,
 ]
@@ -1068,6 +1073,7 @@ def _map_modality_probe(
     h5py_dir: str,
     split_strategy: str = "random",
     input_modalities: list[str] | None = None,
+    target_band_index: int | None = None,
 ) -> DownstreamTaskConfig:
     """Build a uniform DownstreamTaskConfig for a decode-only map modality probe."""
     return DownstreamTaskConfig(
@@ -1087,6 +1093,7 @@ def _map_modality_probe(
         primary_metric=primary_metric,
         h5py_dir=h5py_dir,
         pretrain_target_modality=target_modality,
+        pretrain_target_band_index=target_band_index,
         pretrain_train_samples=6144,
         pretrain_valid_samples=3072,
         pretrain_test_samples=3072,
@@ -1134,6 +1141,35 @@ EVAL_TASKS.update(
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
         ),
+        # In-distribution DSM/canopy regression probes, read from the full h5
+        # that carries glo30 (elevation/slope/aspect) and meta_canopy_height.
+        f"pretrain_meta_canopy_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_meta_canopy",
+            target_modality=Modality.META_CANOPY_HEIGHT.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+        ),
+        f"pretrain_glo30_elevation_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_elevation",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            target_band_index=0,
+        ),
+        f"pretrain_glo30_slope_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_slope",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            target_band_index=1,
+        ),
+        f"pretrain_glo30_aspect_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_aspect",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            target_band_index=2,
+        ),
         # Geographic-holdout variants: train/val/test split by spatial bins
         # so the test set is geographically disjoint from train.
         f"pretrain_worldcover_probe_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
@@ -1177,6 +1213,37 @@ EVAL_TASKS.update(
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
             split_strategy="geographic",
+        ),
+        f"pretrain_meta_canopy_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_meta_canopy",
+            target_modality=Modality.META_CANOPY_HEIGHT.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            split_strategy="geographic",
+        ),
+        f"pretrain_glo30_elevation_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_elevation",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            split_strategy="geographic",
+            target_band_index=0,
+        ),
+        f"pretrain_glo30_slope_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_slope",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            split_strategy="geographic",
+            target_band_index=1,
+        ),
+        f"pretrain_glo30_aspect_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_aspect",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            split_strategy="geographic",
+            target_band_index=2,
         ),
         # SRTM elevation regression from S1-only and S2+S1 inputs, so we can
         # compare elevation signal across modality combinations.

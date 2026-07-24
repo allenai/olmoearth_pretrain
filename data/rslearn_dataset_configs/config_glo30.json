@@ -1,0 +1,26 @@
+{
+  "layers": {
+    "glo30": {
+      "band_sets": [
+        {
+          "bands": [
+            "elevation",
+            "slope",
+            "aspect"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "rslearn.data_sources.aws_glo30.CopernicusGLO30",
+        "ingest": true,
+        "query_config": {
+          "max_matches": 1,
+          "space_mode": "MOSAIC"
+        }
+      },
+      "resampling_method": "nearest",
+      "type": "raster"
+    }
+  }
+}
