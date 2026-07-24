@@ -236,6 +236,12 @@ class RslearnToOlmoEarthDataset(Dataset):
         self._tiles_per_side = (
             sample_size // window_size if tile_samples else 1  # type: ignore[operator]
         )
+        # Last (base_idx, (input_dict, target)) loaded in tiled mode. A tiled
+        # sample's windows have consecutive indices, so with sequential access
+        # this avoids re-reading the full stored sample for every tile. Each
+        # DataLoader worker holds its own copy post-fork. Reuse is safe because
+        # _transform_sample doesn't mutate its inputs.
+        self._cached_base: tuple[int, Any] | None = None
 
         if self.norm_stats_from_pretrained:
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
@@ -638,7 +644,10 @@ class RslearnToOlmoEarthDataset(Dataset):
         """Return a MaskedOlmoEarthSample and target tensor."""
         if self._tiles_per_side > 1:
             base_idx, tile = divmod(idx, self._tiles_per_side**2)
-            input_dict, target, _ = self.dataset[base_idx]
+            if self._cached_base is None or self._cached_base[0] != base_idx:
+                input_dict, target, _ = self.dataset[base_idx]
+                self._cached_base = (base_idx, (input_dict, target))
+            input_dict, target = self._cached_base[1]
             return self._transform_sample(
                 input_dict, target, tile=divmod(tile, self._tiles_per_side)
             )

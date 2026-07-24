@@ -12,6 +12,7 @@ result can be written to a GeoTIFF without any transposition.
 
 import logging
 import os
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -198,6 +199,7 @@ class AEFFetcher(EmbeddingFetcher):
             metadata_cache_dir = os.path.expanduser(DEFAULT_AEF_CACHE_DIR)
         self._metadata_cache_dir = metadata_cache_dir
         self._source: GoogleSatelliteEmbeddingV1 | None = None
+        self._source_lock = threading.Lock()
 
     @property
     def modality(self) -> ModalitySpec:
@@ -215,12 +217,17 @@ class AEFFetcher(EmbeddingFetcher):
         return AEF_NODATA
 
     def _get_source(self) -> GoogleSatelliteEmbeddingV1:
-        """Lazily construct the underlying rslearn data source."""
-        if self._source is None:
-            self._source = GoogleSatelliteEmbeddingV1(
-                metadata_cache_dir=self._metadata_cache_dir
-            )
-        return self._source
+        """Lazily construct the underlying rslearn data source.
+
+        Guarded by a lock so concurrent fetch threads share one source (and
+        therefore one cached spatial index) instead of each building their own.
+        """
+        with self._source_lock:
+            if self._source is None:
+                self._source = GoogleSatelliteEmbeddingV1(
+                    metadata_cache_dir=self._metadata_cache_dir
+                )
+            return self._source
 
     def fetch(
         self, bounds: PixelBounds, projection: Projection, year: int

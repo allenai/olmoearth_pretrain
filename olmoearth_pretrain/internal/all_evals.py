@@ -1393,7 +1393,11 @@ def _pastis_ws16_ps1_task(input_modalities: list[str]) -> DownstreamTaskConfig:
     """PASTIS (rslearn export) under the per-pixel embedding-product convention."""
     return DownstreamTaskConfig(
         dataset="pastis_rslearn",
-        embedding_batch_size=32,
+        # 64 = one full 128x128 stored sample (8x8 tiles of 16x16) per batch,
+        # so each DataLoader worker's batch maps to exactly one base-sample
+        # load with the tiled-__getitem__ cache. Peak GPU memory at batch 32
+        # was ~7.6GB, so 64 stays far from OOM.
+        embedding_batch_size=64,
         probe_batch_size=8,
         num_workers=2,
         pooling_type=PoolingType.MEAN,
