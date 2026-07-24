@@ -19,10 +19,8 @@ from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
     IMAGE_TILE_SIZE,
     SENTINEL1_NODATA,
-    YEAR_NUM_TIMESTEPS,
     Modality,
     ModalitySpec,
-    TimeSpan,
     get_modality_specs_from_names,
 )
 from olmoearth_pretrain.data.utils import convert_to_db
@@ -607,12 +605,6 @@ class ConvertToH5py:
                 )
                 continue
 
-            if sample.time_span != TimeSpan.YEAR:
-                logger.debug(
-                    "Skipping sample because it is not the yearly frequency data"
-                )
-                continue
-
             multi_temporal_timestamps_dict = sample.get_timestamps()
             spacetime_varying_modalities = {
                 modality: timestamps
@@ -623,18 +615,6 @@ class ConvertToH5py:
             if len(spacetime_varying_modalities) == 0:
                 logger.info(
                     "Skipping sample because it has no spacetime varying modalities"
-                )
-                continue
-
-            # To align with ERA5, which either missing (for ocean) or has 12 timesteps
-            # We require at least one spacetime varying modality to have 12 timesteps
-            # e.g., for Presto dataset, only 43 samples not meeting this requirement
-            longest_timestamps_array = self._find_longest_timestamps_array(
-                spacetime_varying_modalities
-            )
-            if len(longest_timestamps_array) < YEAR_NUM_TIMESTEPS:
-                logger.info(
-                    "Skipping sample because it does not have at least 12 timesteps"
                 )
                 continue
 

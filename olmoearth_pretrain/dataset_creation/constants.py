@@ -4,11 +4,6 @@ from datetime import timedelta
 
 from rslearn.utils.raster_format import GeotiffRasterFormat
 
-# List of resolutions that are needed.
-# When creating a window at a given resolution, we ensure that it is covered at every
-# coarser resolution too.
-WINDOW_RESOLUTIONS = [0.625, 10, 160]
-
 WINDOW_DURATION = timedelta(days=14)
 WINDOW_SIZE = 256
 

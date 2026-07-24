@@ -32,5 +32,8 @@
       },
       "type": "raster"
     }
+  },
+  "window_data_storage": {
+    "class_path": "rslearn.dataset.window_data_storage.per_layer.PerLayerStorageFactory"
   }
 }

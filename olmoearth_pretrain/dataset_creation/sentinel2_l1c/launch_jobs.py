@@ -15,7 +15,6 @@ GROUP = "res_10"
 
 # Relevant layers that would be ingested.
 LAYER_NAMES = [
-    "sentinel2_freq",
     "sentinel2_mo01",
     "sentinel2_mo02",
     "sentinel2_mo03",
