@@ -2,10 +2,12 @@
 
 import json
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 from rslearn.dataset import Window
 from upath import UPath
 
@@ -22,6 +24,13 @@ STATUS_WRITTEN = "written"
 STATUS_SKIPPED_EXISTING = "skipped_existing"
 STATUS_COVERAGE_GAP = "coverage_gap"
 STATUS_NO_YEAR = "no_year"
+STATUS_FAILED = "failed"
+
+# Transient reads over HTTP (e.g. S3 range requests behind AEF COGs) can fail
+# in ways GDAL's own retry logic does not cover, such as a 206 response with a
+# truncated body. Retry the whole window fetch a few times before giving up.
+FETCH_ATTEMPTS = 4
+FETCH_RETRY_BASE_DELAY_SECONDS = 5.0
 
 
 @dataclass
@@ -33,12 +42,14 @@ class MaterializeStats:
         skipped_existing: windows skipped because the layer already existed.
         coverage_gaps: windows where the product had no data.
         no_year: windows with no time range when no --year override is given.
+        failed: windows whose fetch/write errored even after retries.
     """
 
     written: list[str] = field(default_factory=list)
     skipped_existing: list[str] = field(default_factory=list)
     coverage_gaps: list[str] = field(default_factory=list)
     no_year: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
 
     def record(self, status: str, window_id: str) -> None:
         """Record one window outcome.
@@ -52,6 +63,7 @@ class MaterializeStats:
             STATUS_SKIPPED_EXISTING: self.skipped_existing,
             STATUS_COVERAGE_GAP: self.coverage_gaps,
             STATUS_NO_YEAR: self.no_year,
+            STATUS_FAILED: self.failed,
         }
         status_to_list[status].append(window_id)
 
@@ -59,6 +71,39 @@ class MaterializeStats:
 def _window_id(window: Window) -> str:
     """Return the "group/name" identifier of a window."""
     return f"{window.group}/{window.name}"
+
+
+def _fetch_with_retry(
+    fetcher: EmbeddingFetcher, window: Window, target_year: int
+) -> np.ndarray | None:
+    """Fetch a window's embedding raster, retrying transient IO errors.
+
+    rasterio's RasterioIOError subclasses OSError, so this covers failed
+    S3/HTTP range reads under the AEF COGs as well as geotessera download
+    hiccups.
+
+    Args:
+        fetcher: the embedding product fetcher.
+        window: the rslearn window being materialized.
+        target_year: the annual product layer to fetch.
+
+    Returns:
+        the fetched array, or None if the product has no coverage.
+    """
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            return fetcher.fetch(window.bounds, window.projection, target_year)
+        except OSError as e:
+            if attempt == FETCH_ATTEMPTS:
+                raise
+            delay = FETCH_RETRY_BASE_DELAY_SECONDS * 2 ** (attempt - 1)
+            logger.warning(
+                f"Fetch failed for window {_window_id(window)} "
+                f"(attempt {attempt}/{FETCH_ATTEMPTS}): {e}; "
+                f"retrying in {delay:.0f}s"
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def _process_window(
@@ -92,7 +137,7 @@ def _process_window(
         )
         return STATUS_NO_YEAR
 
-    array = fetcher.fetch(window.bounds, window.projection, target_year)
+    array = _fetch_with_retry(fetcher, window, target_year)
     if array is None:
         return STATUS_COVERAGE_GAP
 
@@ -153,11 +198,22 @@ def materialize_product(
     num_done = 0
 
     def run_one(window: Window) -> tuple[str, str]:
-        """Process one window and return (status, window_id)."""
-        return (
-            _process_window(window, fetcher, provider, year, overwrite),
-            _window_id(window),
-        )
+        """Process one window and return (status, window_id).
+
+        Errors that survive the fetch retries are recorded as failures rather
+        than propagated, so one bad window cannot abort the whole run;
+        re-running the script picks failed windows back up since their layer
+        was never written.
+        """
+        window_id = _window_id(window)
+        try:
+            return (
+                _process_window(window, fetcher, provider, year, overwrite),
+                window_id,
+            )
+        except Exception:
+            logger.exception(f"Window {window_id} failed; continuing")
+            return (STATUS_FAILED, window_id)
 
     if workers > 1:
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -179,8 +235,14 @@ def materialize_product(
         f"Product '{product_name}': wrote {len(stats.written)} windows, "
         f"skipped {len(stats.skipped_existing)} existing, "
         f"{len(stats.coverage_gaps)} coverage gaps, "
-        f"{len(stats.no_year)} without a target year."
+        f"{len(stats.no_year)} without a target year, "
+        f"{len(stats.failed)} failed."
     )
+    if stats.failed:
+        logger.warning(
+            f"Product '{product_name}': {len(stats.failed)} windows failed; "
+            "re-run the script to retry them (existing layers are skipped)."
+        )
     return build_manifest(fetcher, product_name, year, stats, cli_args)
 
 
@@ -216,6 +278,8 @@ def build_manifest(
         "coverage_gaps": sorted(stats.coverage_gaps),
         "num_windows_without_year": len(stats.no_year),
         "windows_without_year": sorted(stats.no_year),
+        "num_windows_failed": len(stats.failed),
+        "windows_failed": sorted(stats.failed),
         "cli_args": cli_args or {},
     }
 

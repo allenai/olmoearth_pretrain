@@ -119,7 +119,8 @@ def main() -> None:
             f"{dataset_name} / {product_name}: "
             f"written={manifest.get('num_windows_written')} "
             f"skipped_existing={manifest.get('num_windows_skipped_existing')} "
-            f"coverage_gaps={manifest.get('num_coverage_gaps')}"
+            f"coverage_gaps={manifest.get('num_coverage_gaps')} "
+            f"failed={manifest.get('num_windows_failed')}"
         )
 
 
