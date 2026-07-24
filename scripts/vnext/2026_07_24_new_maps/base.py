@@ -266,7 +266,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             input_modalities=[Modality.SENTINEL2_L2A.name],
             eval_mode=EvalMode.KNN,
             primary_metric=EvalMetric.ACCURACY,
-            eval_interval=Duration.steps(4000),
+            eval_interval=Duration.steps(20000),
         ),
         "m_so2sat": DownstreamTaskConfig(
             dataset="m-so2sat",
@@ -288,7 +288,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=False,
             norm_method=NormMethod.NORM_NO_CLIP_2_STD,
             probe_lr=0.01,
-            eval_interval=Duration.steps(4000),
+            eval_interval=Duration.steps(20000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
             eval_mode=EvalMode.LINEAR_PROBE,
             primary_metric=EvalMetric.MICRO_F1,
@@ -321,37 +321,37 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             epochs=50,
             eval_mode=EvalMode.LINEAR_PROBE,
         ),
-        "geo_ecosystem_annual_test": DownstreamTaskConfig(
-            dataset="geo_ecosystem_annual_test",
+        # 50Cities: single-timestep land-cover segmentation, 64x64 tiles, 13
+        # classes. Unsuffixed "fifty_cities" is the random split; the modality
+        # choice is per-task input_modalities. Mirrors the definitions in
+        # internal/all_evals.py, with the in-loop eval cadence below.
+        "fifty_cities_sentinel2": DownstreamTaskConfig(
+            dataset="fifty_cities",
             embedding_batch_size=32,
             probe_batch_size=8,
-            num_workers=8,
+            num_workers=4,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
-            probe_lr=0.01,
-            eval_interval=Duration.steps(20000),
-            input_modalities=[Modality.SENTINEL2_L2A.name],
-            epochs=50,
-            eval_mode=EvalMode.LINEAR_PROBE,
-        ),
-        "canada_wildfire_sat_eval_split": DownstreamTaskConfig(
-            dataset="canada_wildfire_sat_eval_split",
-            embedding_batch_size=32,
-            probe_batch_size=16,
-            patch_size=5,  # TODO: This is changeable but we should know the valid sizes for inputs
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
             probe_lr=0.1,
             eval_interval=Duration.steps(20000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
             epochs=50,
             eval_mode=EvalMode.LINEAR_PROBE,
-            use_dice_loss=True,
-            primary_metric=EvalMetric.CLASS_F1,
-            primary_metric_class=1,
+            primary_metric=EvalMetric.MIOU,
+        ),
+        "fifty_cities_sentinel1_sentinel2": DownstreamTaskConfig(
+            dataset="fifty_cities",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=4,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.steps(20000),
+            input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            primary_metric=EvalMetric.MIOU,
         ),
     }
     trainer_config = (
