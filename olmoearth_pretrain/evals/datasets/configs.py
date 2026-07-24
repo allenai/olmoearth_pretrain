@@ -209,7 +209,22 @@ DATASET_TO_CONFIG = {
             Modality.LANDSAT.name,
         ],
     ),
-    "pretrain_subset_glo30_aspect": EvalDatasetConfig(
+    # Aspect is a compass bearing, so it is probed as sin/cos rather than raw
+    # degrees: the 0/360 seam makes degree-space MSE ill-posed. See
+    # pretrain_subset.GLO30_LABEL_ASPECT_SIN.
+    "pretrain_subset_glo30_aspect_sin": EvalDatasetConfig(
+        task_type=TaskType.PER_PIXEL_REGRESSION,
+        imputes=[],
+        num_classes=1,
+        is_multilabel=False,
+        height_width=32,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
+    "pretrain_subset_glo30_aspect_cos": EvalDatasetConfig(
         task_type=TaskType.PER_PIXEL_REGRESSION,
         imputes=[],
         num_classes=1,

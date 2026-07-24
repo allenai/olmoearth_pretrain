@@ -27,16 +27,33 @@ from olmoearth_pretrain.data.utils import update_streaming_stats
 
 logger = logging.getLogger(__name__)
 
+# Per-(modality, band) sentinel values that encode "not measured" rather than a
+# measurement, and so must be excluded from the stats. glo30 aspect uses -1 for
+# flat pixels, which have no compass bearing; including them drags the mean
+# toward north and inflates the std.
+BAND_STAT_EXCLUDED_VALUES: dict[tuple[str, str], float] = {
+    ("glo30", "aspect"): -1.0,
+}
+
+# Sampling a subset of a large h5 dir will hit some samples that carry none of
+# the requested modalities; those raise instead of loading. Tolerate them, but
+# fail loudly if they stop being a small minority.
+DEFAULT_MAX_SKIP_FRACTION = 0.05
+
 
 def compute_normalization_values(
     dataset: OlmoEarthDataset,
     estimate_from: int | None = None,
+    max_skip_fraction: float = DEFAULT_MAX_SKIP_FRACTION,
 ) -> dict[str, Any]:
     """Compute the normalization values for the dataset in a streaming manner.
 
     Args:
         dataset: The dataset to compute the normalization values for.
         estimate_from: The number of samples to estimate the normalization values from.
+        max_skip_fraction: Abort if more than this fraction of the sampled
+            indices fail to load. Guards against silently computing stats from a
+            handful of samples when something is systemically wrong.
 
     Returns:
         dict: A dictionary containing the normalization values for the dataset.
@@ -47,9 +64,17 @@ def compute_normalization_values(
     else:
         indices_to_sample = list(range(dataset_len))
     norm_dict: dict[str, Any] = {}
+    skipped = 0
     for i in tqdm(indices_to_sample):
         get_item_args = GetItemArgs(idx=i, patch_size=1, sampled_hw_p=IMAGE_TILE_SIZE)
-        _, sample = dataset[get_item_args]
+        try:
+            _, sample = dataset[get_item_args]
+        except Exception:
+            # Most commonly: the sample has none of the requested modalities, so
+            # there is no spatial modality to read H/W/T from.
+            logger.warning(f"Skipping sample {i}; failed to load.", exc_info=True)
+            skipped += 1
+            continue
         for modality in sample.modalities:
             # Shall we compute the norm stats for worldcover?
             if modality == "latlon":
@@ -77,6 +102,14 @@ def compute_normalization_values(
             # Compute the normalization stats for the modality
             for idx, band in enumerate(modality_bands):
                 modality_band_data = modality_data[..., idx]
+                excluded = BAND_STAT_EXCLUDED_VALUES.get((modality, band))
+                if excluded is not None:
+                    modality_band_data = modality_band_data[
+                        modality_band_data != excluded
+                    ]
+                    if modality_band_data.size == 0:
+                        # Every pixel was the sentinel; nothing to accumulate.
+                        continue
                 current_stats = norm_dict[modality][band]
                 new_count, new_mean, new_var = update_streaming_stats(
                     current_stats["count"],
@@ -89,15 +122,29 @@ def compute_normalization_values(
                 norm_dict[modality][band]["mean"] = float(new_mean)
                 norm_dict[modality][band]["var"] = float(new_var)
 
+    used = len(indices_to_sample) - skipped
+    if skipped > max_skip_fraction * len(indices_to_sample):
+        raise RuntimeError(
+            f"{skipped}/{len(indices_to_sample)} sampled indices failed to load, "
+            f"above the {max_skip_fraction:.0%} tolerance. Refusing to emit stats "
+            "computed from the remainder; check the dataset and modality list."
+        )
+    if skipped:
+        logger.warning(
+            f"Skipped {skipped}/{len(indices_to_sample)} unloadable samples."
+        )
+
     # Compute the standard deviation
     for modality in norm_dict:
         for band in norm_dict[modality]:
+            count = norm_dict[modality][band]["count"]
             norm_dict[modality][band]["std"] = (
-                norm_dict[modality][band]["var"] / norm_dict[modality][band]["count"]
-            ) ** 0.5
+                (norm_dict[modality][band]["var"] / count) ** 0.5 if count else 0.0
+            )
 
     norm_dict["total_n"] = dataset_len
-    norm_dict["sampled_n"] = len(indices_to_sample)
+    norm_dict["sampled_n"] = used
+    norm_dict["skipped_n"] = skipped
     path = dataset.h5py_dir or dataset.tile_path
     norm_dict["tile_path"] = str(path)
 

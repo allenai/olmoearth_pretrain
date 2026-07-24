@@ -143,7 +143,9 @@ class DownstreamTaskConfig:
     # For pretrain subset auxiliary probes: target modality to predict.
     pretrain_target_modality: str | None = None
     # For multi-band regression targets (e.g. glo30), the band selected for this
-    # single-channel probe (0=elevation, 1=slope, 2=aspect). None = full target.
+    # single-channel probe: 0=elevation, 1=slope, 2=aspect in degrees, plus the
+    # virtual 3=sin(aspect) / 4=cos(aspect) encodings preferred for the circular
+    # aspect band. None = full target. See evals.datasets.pretrain_subset.
     pretrain_target_band_index: int | None = None
     pretrain_label_seed: int = 42
     pretrain_train_samples: int = 512

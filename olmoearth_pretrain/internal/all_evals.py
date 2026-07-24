@@ -18,6 +18,12 @@ from olmo_core.train.config import TrainerConfig
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.datasets.pretrain_subset import (
+    GLO30_BAND_ELEVATION,
+    GLO30_BAND_SLOPE,
+    GLO30_LABEL_ASPECT_COS,
+    GLO30_LABEL_ASPECT_SIN,
+)
 from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
 from olmoearth_pretrain.internal.experiment import (
@@ -1154,21 +1160,30 @@ EVAL_TASKS.update(
             target_modality=Modality.GLO30.name,
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
-            target_band_index=0,
+            target_band_index=GLO30_BAND_ELEVATION,
         ),
         f"pretrain_glo30_slope_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_glo30_slope",
             target_modality=Modality.GLO30.name,
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
-            target_band_index=1,
+            target_band_index=GLO30_BAND_SLOPE,
         ),
-        f"pretrain_glo30_aspect_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
-            dataset="pretrain_subset_glo30_aspect",
+        # Aspect is probed as sin/cos of the compass bearing, not raw degrees:
+        # degree-space MSE is ill-posed across the 0/360 seam.
+        f"pretrain_glo30_aspect_sin_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_aspect_sin",
             target_modality=Modality.GLO30.name,
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
-            target_band_index=2,
+            target_band_index=GLO30_LABEL_ASPECT_SIN,
+        ),
+        f"pretrain_glo30_aspect_cos_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_aspect_cos",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            target_band_index=GLO30_LABEL_ASPECT_COS,
         ),
         # Geographic-holdout variants: train/val/test split by spatial bins
         # so the test set is geographically disjoint from train.
@@ -1227,7 +1242,7 @@ EVAL_TASKS.update(
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
             split_strategy="geographic",
-            target_band_index=0,
+            target_band_index=GLO30_BAND_ELEVATION,
         ),
         f"pretrain_glo30_slope_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
             dataset="pretrain_subset_glo30_slope",
@@ -1235,15 +1250,23 @@ EVAL_TASKS.update(
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
             split_strategy="geographic",
-            target_band_index=1,
+            target_band_index=GLO30_BAND_SLOPE,
         ),
-        f"pretrain_glo30_aspect_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
-            dataset="pretrain_subset_glo30_aspect",
+        f"pretrain_glo30_aspect_sin_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_aspect_sin",
             target_modality=Modality.GLO30.name,
             primary_metric=EvalMetric.NEG_RMSE,
             h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
             split_strategy="geographic",
-            target_band_index=2,
+            target_band_index=GLO30_LABEL_ASPECT_SIN,
+        ),
+        f"pretrain_glo30_aspect_cos_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_aspect_cos",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            split_strategy="geographic",
+            target_band_index=GLO30_LABEL_ASPECT_COS,
         ),
         # SRTM elevation regression from S1-only and S2+S1 inputs, so we can
         # compare elevation signal across modality combinations.

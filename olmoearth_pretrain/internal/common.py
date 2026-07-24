@@ -259,8 +259,6 @@ def build_common_components(
         # Modality.OPENSTREETMAP_RASTER.name,
         # Modality.NAIP_10.name,
         # Modality.ERA5_10.name,
-        # Modality.GLO30.name,
-        # Modality.META_CANOPY_HEIGHT.name,
     ]
     if cmd == SubCmd.launch:
         cmd_to_launch = SubCmd.train

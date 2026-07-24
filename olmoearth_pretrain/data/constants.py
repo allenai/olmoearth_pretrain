@@ -536,8 +536,13 @@ class Modality:
         ignore_when_parsing=False,
     )
 
-    # Copernicus GLO-30 DSM (digital surface model), resampled to 10 m/pixel.
-    # elevation (m), slope (deg [0, 90)), and aspect (deg [0, 360), -1 for flat).
+    # Copernicus GLO-30 DSM, resampled to 10 m/pixel: elevation (m),
+    # slope (deg [0, 90)), and aspect (deg [0, 360), -1 for flat).
+    # This is a *surface* model, not a terrain model: elevation includes canopy
+    # and buildings, so it partly overlaps the META_CANOPY_HEIGHT target.
+    # aspect is circular and carries a -1 "flat" sentinel, so plain z-scoring it
+    # is lossy; consumers should prefer a sin/cos encoding (see
+    # evals.datasets.pretrain_subset.GLO30_LABEL_ASPECT_SIN).
     GLO30 = ModalitySpec(
         name="glo30",
         tile_resolution_factor=16,

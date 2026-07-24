@@ -441,7 +441,7 @@
   },
   "meta_canopy_height": {
     "canopy_height": {
-      "max": 60,
+      "max": 70,
       "min": 0
     }
   },
