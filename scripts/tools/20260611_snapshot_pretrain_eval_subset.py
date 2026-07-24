@@ -70,6 +70,15 @@ PRESETS: dict[str, list[list[str]]] = {
         ["cdl", "sentinel2_l2a"],
         ["worldcereal", "sentinel2_l2a"],
     ],
+    # The regenerated osm_sampling h5 that carries glo30 (elevation/slope/
+    # aspect) and meta_canopy_height in place of srtm/wri_canopy_height_map.
+    # glo30 is present for ~99.6% of samples and meta_canopy_height for ~54%
+    # (the converter drops tiles with nodata or <20% positive canopy), so the
+    # canopy rule is the binding one for quota purposes.
+    "dsm_canopy": [
+        ["meta_canopy_height", "sentinel2_l2a"],
+        ["glo30", "sentinel2_l2a"],
+    ],
 }
 
 

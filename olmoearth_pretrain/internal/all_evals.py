@@ -1053,10 +1053,13 @@ PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset
 # probes fall back to PRETRAIN_SUBSET_H5PY_DIR (in-distribution).
 PRETRAIN_AUX_EVAL_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/65536"
 
-# Full pretraining h5 that contains the glo30 and meta_canopy_height modalities
-# (alongside the other map modalities). Used by the glo30/meta-canopy probes,
-# which read these DSM/canopy targets in-distribution.
-PRETRAIN_DSM_CANOPY_H5PY_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_glo30_landsat_meta_canopy_height_openstreetmap_raster_sentinel1_sentinel2_l2a_worldcereal_worldcover/1138828"
+# Frozen snapshot of the regenerated osm_sampling h5, which carries glo30 and
+# meta_canopy_height in place of srtm/wri_canopy_height_map. Used by the
+# glo30/meta-canopy probes, which read these DSM/canopy targets
+# in-distribution. Built with `--preset dsm_canopy --total 65536`; quotas give
+# ~50k meta_canopy-eligible and ~65k glo30-eligible samples, comfortably above
+# what the geographic splits need (valid/test see only ~10% of the pool).
+PRETRAIN_DSM_CANOPY_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_glo30_landsat_meta_canopy_height_openstreetmap_raster_sentinel1_sentinel2_l2a_worldcereal_worldcover/65536"
 
 MAP_MODALITY_PROBE_INPUTS = [
     Modality.SENTINEL2_L2A.name,
