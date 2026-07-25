@@ -40,6 +40,9 @@ from base import build_model_config as _base_build_model_config
 from olmo_core.train.common import Duration
 
 from olmoearth_pretrain.internal.all_evals import (
+    AEF_SUPPLEMENTAL_DATASETS as _AEF_SUPPLEMENTAL_DATASETS,
+)
+from olmoearth_pretrain.internal.all_evals import (
     EMBEDDING_EVAL_TASKS as _EMBEDDING_EVAL_TASKS,
 )
 from olmoearth_pretrain.internal.all_evals import EVAL_TASKS as _ALL_EVAL_TASKS
@@ -89,6 +92,29 @@ _PASTIS_EMBEDDING_LOOP_EVAL_NAMES = (
 PASTIS_EMBEDDING_LOOP_EVAL_TASKS = {
     name: replace(_EMBEDDING_EVAL_TASKS[name], eval_interval=Duration.steps(20000))
     for name in _PASTIS_EMBEDDING_LOOP_EVAL_NAMES
+}
+
+# The AEF supplemental per-pixel evals (arXiv:2507.22291), same ws16/ps=1 embedding-product
+# convention as the PASTIS exports above: each sample is a 16x16 window around one labeled
+# center pixel, embeddings are int8 round-tripped, and only the center token is probed.
+# Both eval modes are included -- ``_ws16_ps1`` is the linear probe, ``_ws16_ps1_knn`` the
+# kNN -- because the AEF/Tessera comparisons report both.
+_AEF_EMBEDDING_LOOP_EVAL_NAMES = tuple(
+    f"{dataset}_ws16_ps1{mode_suffix}"
+    for dataset in _AEF_SUPPLEMENTAL_DATASETS
+    for mode_suffix in ("", "_knn")
+)
+AEF_EMBEDDING_LOOP_EVAL_TASKS = {
+    name: replace(_EMBEDDING_EVAL_TASKS[name], eval_interval=Duration.steps(20000))
+    for name in _AEF_EMBEDDING_LOOP_EVAL_NAMES
+}
+
+# The full ps=1 eval set: PASTIS ps=1 exports + the AEF supplemental ps=1 probes. Used by
+# runs that train at ps=1 ONLY, for which the ps=4 catalog evals measure a resolution the
+# model was never trained at.
+PS1_ONLY_LOOP_EVAL_TASKS = {
+    **PASTIS_EMBEDDING_LOOP_EVAL_TASKS,
+    **AEF_EMBEDDING_LOOP_EVAL_TASKS,
 }
 
 
@@ -141,6 +167,29 @@ def add_loop_eval_beaker_job(trainer_config, module_path: str):
         **FIFTY_CITIES_LOOP_EVAL_TASKS,
         **PASTIS_EMBEDDING_LOOP_EVAL_TASKS,
     }
+    evaluator.run_as_beaker_job = True
+    evaluator.beaker_eval_module_path = module_path
+    evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
+    return trainer_config
+
+
+def set_ps1_only_loop_evals(trainer_config, module_path: str):
+    """REPLACE the in-loop eval set with only the ps=1 embedding evals.
+
+    Unlike :func:`add_loop_eval_beaker_job`, which merges extra tasks into the shared
+    catalog, this DISCARDS the catalog entirely. That is deliberate and only appropriate
+    for runs that train at patch_size=1 exclusively: every catalog eval except the ws16
+    ps=1 exports runs at ``patch_size=4`` (the ``DownstreamTaskConfig`` default), so for a
+    ps=1-only model they probe a resolution it never saw and their numbers are not
+    comparable to the rest of the sweep.
+
+    The in-loop eval job reads this task dict back out of the training script's
+    ``build_trainer_config`` (``checkpoint_sweep_evals.get_train_run_eval_tasks``), so
+    replacing it here is what actually restricts what the eval jobs run -- there is no
+    separate CLI or env-var filter to set.
+    """
+    evaluator = trainer_config.callbacks["downstream_evaluator"]
+    evaluator.tasks = dict(PS1_ONLY_LOOP_EVAL_TASKS)
     evaluator.run_as_beaker_job = True
     evaluator.beaker_eval_module_path = module_path
     evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
