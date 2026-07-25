@@ -1,7 +1,7 @@
 """Smaller-embedding speedups: replicated DP + bf16 autocast + beaker in-loop evals.
 
 Mirrors ``scripts/official/v1_2/base_faster.py``: on top of the local ``base.py``
-train module it switches to DDP + bf16 autocast, and runs the 4 in-loop evals as
+train module it switches to DDP + bf16 autocast, and runs the in-loop evals as
 separate Beaker jobs so they never block training. ``projection_only_target`` is
 already set by ``build_model_config`` in ``base.py``.
 

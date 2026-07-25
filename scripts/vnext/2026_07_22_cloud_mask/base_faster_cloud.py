@@ -31,9 +31,10 @@ from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
 logger = logging.getLogger(__name__)
 
 MODULE_PATH = "scripts/vnext/2026_07_22_cloud_mask/base_faster_cloud.py"
-# The per-token cloud-skip fraction lives on the masking strategy
-# (RandomTimeWithDecodeMaskingStrategy.cloud_skip_threshold, default 0.5); to
-# change it, add "cloud_skip_threshold": <x> to the masking strategy_config.
+# The per-token cloud-skip fraction is base.CLOUD_SKIP_THRESHOLD (0.5), set on the
+# masking strategy_config; override at launch with
+# --train_module.masking_config.strategy_config.cloud_skip_threshold=<x>
+# (and the matching --data_loader.masking_config... for the loader's copy).
 
 
 def build_train_module_config(
@@ -53,7 +54,7 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
 
 
 def build_trainer_config(common: CommonComponents):
-    """Shared 4 in-loop evals, run as beaker jobs (via base_faster)."""
+    """Shared in-loop evals (all 7, every 20k steps), run as beaker jobs."""
     return make_build_trainer_config(MODULE_PATH)(common)
 
 

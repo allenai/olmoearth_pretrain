@@ -1,10 +1,13 @@
 """Cloud-mask base: plain v1.2 (mixed 3D RoPE) base model.
 
 Self-contained copy of ``scripts/official/v1_2/base.py``. The functional deltas
-vs v1.2 base are only the eval/logging trims:
+vs v1.2 base are only the eval/logging knobs:
 
-* Only 4 in-loop evals (m-eurosat, m_so2sat, mados, pastis).
-* W&B project ``2026_04_12_smaller_embedding``.
+* 7 in-loop evals on one 20k-step interval, with the same task names and configs
+  as ``scripts/vnext/2026_07_24_new_maps/base.py`` (m-eurosat / pastis naming as
+  in ``scripts/official/v1_2/base.py`` on ``main``, fifty_cities_* as in
+  ``internal/all_evals.py``) so the curves overlay the other runs in the project.
+* W&B project ``2026_07_24_new_maps``.
 
 The model is the standard 768-d base (``build_model_config``); the cloud-mask
 experiment lives in ``base_faster_cloud.py``.
@@ -117,6 +120,11 @@ ONLY_DECODE_MODALITIES = [
     Modality.WORLDCEREAL.name,
 ]
 
+# Fraction of a decoder token's pixels that must be cloud/shadow (OmniCloudMask
+# classes 1/2/3) before the token is dropped from the patch-discrimination loss.
+# Only consumed when the dataset supplies cloud sidecars (base_faster_cloud.py).
+CLOUD_SKIP_THRESHOLD = 0.5
+
 # No S1 dropout — only apply band dropout to S2 and Landsat.
 BAND_DROPOUT_MODALITIES = [
     Modality.SENTINEL2_L2A.name,
@@ -143,6 +151,10 @@ def _masking_config(
             "decode_ratio": 0.5,
             "random_ratio": 0.5,
             "only_decode_modalities": ONLY_DECODE_MODALITIES,
+            # Stated explicitly (rather than left to the strategy default) so the
+            # saved run config records the cloud-skip fraction. Only has an effect
+            # when the dataset supplies a cloud payload, i.e. base_faster_cloud.
+            "cloud_skip_threshold": CLOUD_SKIP_THRESHOLD,
         },
         tokenization_config=tokenization_config,
     )
@@ -228,15 +240,20 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
-    """Build the trainer config with only the 4 smaller-embedding in-loop evals."""
+    """Build the trainer config with the full v1.2 in-loop eval set."""
     MAX_DURATION = Duration.epochs(300)
     METRICS_COLLECT_INTERVAL = 10
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "2026_04_12_smaller_embedding"
+    WANDB_PROJECT = "2026_07_24_new_maps"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
+    # Every in-loop eval runs on the same cadence. Must stay a multiple of
+    # PERMANENT_SAVE_INTERVAL: the beaker eval jobs load the *saved* checkpoint at
+    # the eval step, and only permanent checkpoints survive long enough for a
+    # queued job to read them, so an unaligned interval is skipped entirely.
+    EVAL_INTERVAL = Duration.steps(20000)
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = OlmoEarthWandBCallback(
         name=common.run_name,
@@ -245,8 +262,11 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         enabled=True,
     )
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
+    # Task names are kept byte-identical to scripts/vnext/2026_07_24_new_maps/base.py
+    # (which follows main's scripts/official/v1_2/base.py) so the W&B metric keys
+    # (eval/{name}/...) line up with the other runs in this project.
     EVAL_TASKS = {
-        "m_eurosat": DownstreamTaskConfig(
+        "m-eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
             embedding_batch_size=128,
             num_workers=0,
@@ -256,10 +276,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             input_modalities=[Modality.SENTINEL2_L2A.name],
             eval_mode=EvalMode.KNN,
             primary_metric=EvalMetric.ACCURACY,
-            # Aligned to PERMANENT_SAVE_INTERVAL (5000): beaker eval jobs only
-            # launch on permanent-checkpoint steps, so eval_interval must be a
-            # multiple of it or the eval is skipped.
-            eval_interval=Duration.steps(5000),
+            eval_interval=EVAL_INTERVAL,
         ),
         "m_so2sat": DownstreamTaskConfig(
             dataset="m-so2sat",
@@ -267,7 +284,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=4,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.steps(20000),
+            eval_interval=EVAL_INTERVAL,
             input_modalities=[Modality.SENTINEL2_L2A.name],
             eval_mode=EvalMode.KNN,
             primary_metric=EvalMetric.ACCURACY,
@@ -281,13 +298,12 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=False,
             norm_method=NormMethod.NORM_NO_CLIP_2_STD,
             probe_lr=0.01,
-            # Aligned to PERMANENT_SAVE_INTERVAL (5000); see m-eurosat note.
-            eval_interval=Duration.steps(5000),
+            eval_interval=EVAL_INTERVAL,
             input_modalities=[Modality.SENTINEL2_L2A.name],
             eval_mode=EvalMode.LINEAR_PROBE,
             primary_metric=EvalMetric.MICRO_F1,
         ),
-        "pastis_sentinel2": DownstreamTaskConfig(
+        "pastis": DownstreamTaskConfig(
             dataset="pastis",
             embedding_batch_size=32,
             probe_batch_size=8,
@@ -295,8 +311,54 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.steps(20000),
+            eval_interval=EVAL_INTERVAL,
             input_modalities=[Modality.SENTINEL2_L2A.name],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            primary_metric=EvalMetric.MIOU,
+        ),
+        "yemen_crop": DownstreamTaskConfig(
+            dataset="yemen_crop",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+            eval_interval=EVAL_INTERVAL,
+            probe_lr=0.001,
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+        ),
+        # 50Cities: single-timestep land-cover segmentation, 64x64 tiles, 13
+        # classes. Unsuffixed "fifty_cities" is the random split; the modality
+        # choice is per-task input_modalities. Mirrors the definitions in
+        # internal/all_evals.py, with the in-loop eval cadence above.
+        "fifty_cities_sentinel2": DownstreamTaskConfig(
+            dataset="fifty_cities",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=4,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=EVAL_INTERVAL,
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            primary_metric=EvalMetric.MIOU,
+        ),
+        "fifty_cities_sentinel1_sentinel2": DownstreamTaskConfig(
+            dataset="fifty_cities",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=4,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=EVAL_INTERVAL,
+            input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
             epochs=50,
             eval_mode=EvalMode.LINEAR_PROBE,
             primary_metric=EvalMetric.MIOU,

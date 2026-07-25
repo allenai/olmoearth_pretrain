@@ -171,6 +171,10 @@ class OlmoEarthSample(NamedTuple):
         """Get the number of channels for a given attribute."""
         if attribute == "timestamps":
             return len(TIMESTAMPS)
+        elif attribute.endswith("_cloud"):
+            # `*_cloud` side-payloads are single-channel class maps, not modalities,
+            # so there is no ModalitySpec to look up (see data.cloud_mask_cache).
+            return 1
         else:
             return Modality.get(attribute).num_bands
 
@@ -469,6 +473,11 @@ class MaskedOlmoEarthSample(NamedTuple):
         for key, t in sample.as_dict(include_nones=True).items():
             if key == "timestamps":
                 masked_sample_dict[key] = t
+            elif key.endswith("_cloud"):
+                # `*_cloud` side-payloads have no counterpart on
+                # MaskedOlmoEarthSample: the masking strategy consumes them (see
+                # data.collate.extract_cloud_payload) and they never reach the model.
+                continue
             else:
                 if t is None:
                     masked_sample_dict[key] = None
