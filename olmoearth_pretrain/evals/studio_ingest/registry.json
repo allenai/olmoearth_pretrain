@@ -2373,7 +2373,9 @@
         "gse",
         "sentinel1",
         "sentinel2_l2a",
-        "tessera"
+        "tessera",
+        "tessera_v11",
+        "tessera_v2"
       ],
       "name": "pastis_rslearn",
       "norm_stats": {

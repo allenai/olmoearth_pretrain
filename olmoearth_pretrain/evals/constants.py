@@ -18,6 +18,8 @@ RSLEARN_TO_OLMOEARTH: dict[str, ModalitySpec] = {
     # the embedding materializer or a dataset export script.
     "gse": Modality.GSE,
     "tessera": Modality.TESSERA,
+    "tessera_v11": Modality.TESSERA_V11,
+    "tessera_v2": Modality.TESSERA_V2,
 }
 
 

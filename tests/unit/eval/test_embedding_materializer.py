@@ -2,6 +2,8 @@
 
 import importlib.util
 import json
+import sys
+import types
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -396,6 +398,41 @@ def test_tessera_fetcher_requires_geotessera() -> None:
     """Constructing TesseraFetcher without geotessera raises a helpful error."""
     with pytest.raises(ImportError, match="pip install geotessera"):
         TesseraFetcher()
+
+
+def test_tessera_fetcher_products(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each Tessera product pins its geotessera dataset, modality, and version."""
+    captured: dict[str, str] = {}
+
+    class FakeGeoTessera:
+        def __init__(self, **kwargs: str) -> None:
+            captured.update(kwargs)
+
+    fake_module = types.ModuleType("geotessera")
+    fake_module.GeoTessera = FakeGeoTessera  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "geotessera", fake_module)
+
+    # Default product is v1.1 (the going-forward product).
+    fetcher = TesseraFetcher()
+    assert captured == {"dataset_version": "v1.1", "dataset_variant": "cambridge"}
+    assert fetcher.modality is Modality.TESSERA_V11
+    assert fetcher.product_version == "v1.1"
+
+    # "tessera" reproduces the original v1 layers (geotessera defaults at the
+    # time they were fetched).
+    captured.clear()
+    fetcher = TesseraFetcher(product_name="tessera")
+    assert captured == {"dataset_version": "v1", "dataset_variant": "vultr"}
+    assert fetcher.modality is Modality.TESSERA
+    assert fetcher.product_version == "v1"
+
+    # client_kwargs overrides the pinned defaults.
+    captured.clear()
+    TesseraFetcher(client_kwargs={"dataset_variant": "other"})
+    assert captured == {"dataset_version": "v1.1", "dataset_variant": "other"}
+
+    with pytest.raises(ValueError, match="Unknown Tessera product"):
+        TesseraFetcher(product_name="tessera_v3")
 
 
 class FakeTesseraClient:
