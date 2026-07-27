@@ -177,6 +177,25 @@ def _tasks_to_run_arg(task_names: list[str]) -> str:
     )
 
 
+def _window_size_args(window_size: int | None, task_names: list[str]) -> str:
+    """Per-task window_size overrides for windowed-sampling tasks.
+
+    Only tasks whose config already sets window_size are overridden. Tiled
+    (tile_samples) datasets require window_size to divide the stored sample
+    size (128 for pastis_rslearn).
+    """
+    if window_size is None:
+        return ""
+    overrides = [
+        _task_arg(name, "window_size", window_size)
+        for name in task_names
+        if EMBEDDING_EVAL_TASKS[name].window_size is not None
+    ]
+    if not overrides:
+        return ""
+    return " " + " ".join(overrides)
+
+
 def _select_best_val_args(task_names: list[str]) -> str:
     """Per-LP-task early-stopping args (best epoch by primary val metric)."""
     return " " + " ".join(
@@ -214,6 +233,9 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     project_name = args.project_name or EVAL_WANDB_PROJECT
     extra = " " + " ".join(extra_cli) if extra_cli else ""
     base_run_name = _base_run_name(args) + "_emb"
+    window_size = getattr(args, "window_size", None)
+    if window_size is not None:
+        base_run_name += f"_ws{window_size}"
 
     env_prefix = f"TRAIN_SCRIPT_PATH={module_path} EMBEDDING_EVALS=1"
     common = (
@@ -229,6 +251,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         for lr in LP_LRs:
             cmd = common.format(run_name=f"{base_run_name}_lr{lr}")
             cmd += lp_model_args
+            cmd += _window_size_args(window_size, lp_tasks)
             cmd += " " + " ".join(_task_arg(name, "probe_lr", lr) for name in lp_tasks)
             if args.select_best_val:
                 cmd += _select_best_val_args(lp_tasks)
@@ -237,6 +260,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     if knn_tasks:
         cmd = common.format(run_name=f"{base_run_name}_knn")
         cmd += _model_args(model, knn_tasks)
+        cmd += _window_size_args(window_size, knn_tasks)
         cmd += _tasks_to_run_arg(knn_tasks)
         commands.append(cmd)
     return commands
@@ -299,6 +323,19 @@ def main() -> None:
         "--select_best_val",
         action="store_true",
         help="Select the best test epoch by the primary validation metric",
+    )
+    parser.add_argument(
+        "--window_size",
+        type=int,
+        default=None,
+        help=(
+            "Override window_size on every selected task. Must divide the "
+            "stored sample size for tiled datasets (128 for pastis_rslearn). "
+            "NOTE: ws16/8/4/1 variants already run by default "
+            "(EMBEDDING_EVAL_WINDOW_SIZES) — this override forces ALL "
+            "selected tasks to one size, so combine it with --task_names to "
+            "avoid running duplicates."
+        ),
     )
     parser.add_argument(
         "--dry_run",

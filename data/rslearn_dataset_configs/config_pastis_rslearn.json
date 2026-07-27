@@ -85,6 +85,84 @@
       ],
       "type": "raster"
     },
+    "sentinel1_ascending_all": {
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32",
+          "nodata_value": -32768
+        }
+      ],
+      "data_source": {
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "ingest": false,
+        "init_args": {
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            },
+            "sat:orbit_state": {
+              "eq": "ascending"
+            }
+          },
+          "sort_ascending": true,
+          "sort_by": "datetime"
+        },
+        "query_config": {
+          "max_matches": 100,
+          "space_mode": "INTERSECTS"
+        }
+      },
+      "type": "raster"
+    },
+    "sentinel1_descending_all": {
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32",
+          "nodata_value": -32768
+        }
+      ],
+      "data_source": {
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "ingest": false,
+        "init_args": {
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            },
+            "sat:orbit_state": {
+              "eq": "descending"
+            }
+          },
+          "sort_ascending": true,
+          "sort_by": "datetime"
+        },
+        "query_config": {
+          "max_matches": 100,
+          "space_mode": "INTERSECTS"
+        }
+      },
+      "type": "raster"
+    },
     "sentinel1_mo01": {
       "alias": "sentinel1",
       "band_sets": [
@@ -490,6 +568,52 @@
           }
         },
         "time_offset": "330d"
+      },
+      "type": "raster"
+    },
+    "sentinel2_l2a_all": {
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "SCL"
+          ],
+          "dtype": "uint8",
+          "zoom_offset": -1
+        }
+      ],
+      "data_source": {
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "ingest": false,
+        "init_args": {
+          "harmonize": true,
+          "sort_ascending": true,
+          "sort_by": "datetime"
+        },
+        "query_config": {
+          "max_matches": 150,
+          "space_mode": "INTERSECTS"
+        }
       },
       "type": "raster"
     },
@@ -1046,6 +1170,282 @@
       "type": "raster"
     },
     "tessera": {
+      "band_sets": [
+        {
+          "bands": [
+            "T000",
+            "T001",
+            "T002",
+            "T003",
+            "T004",
+            "T005",
+            "T006",
+            "T007",
+            "T008",
+            "T009",
+            "T010",
+            "T011",
+            "T012",
+            "T013",
+            "T014",
+            "T015",
+            "T016",
+            "T017",
+            "T018",
+            "T019",
+            "T020",
+            "T021",
+            "T022",
+            "T023",
+            "T024",
+            "T025",
+            "T026",
+            "T027",
+            "T028",
+            "T029",
+            "T030",
+            "T031",
+            "T032",
+            "T033",
+            "T034",
+            "T035",
+            "T036",
+            "T037",
+            "T038",
+            "T039",
+            "T040",
+            "T041",
+            "T042",
+            "T043",
+            "T044",
+            "T045",
+            "T046",
+            "T047",
+            "T048",
+            "T049",
+            "T050",
+            "T051",
+            "T052",
+            "T053",
+            "T054",
+            "T055",
+            "T056",
+            "T057",
+            "T058",
+            "T059",
+            "T060",
+            "T061",
+            "T062",
+            "T063",
+            "T064",
+            "T065",
+            "T066",
+            "T067",
+            "T068",
+            "T069",
+            "T070",
+            "T071",
+            "T072",
+            "T073",
+            "T074",
+            "T075",
+            "T076",
+            "T077",
+            "T078",
+            "T079",
+            "T080",
+            "T081",
+            "T082",
+            "T083",
+            "T084",
+            "T085",
+            "T086",
+            "T087",
+            "T088",
+            "T089",
+            "T090",
+            "T091",
+            "T092",
+            "T093",
+            "T094",
+            "T095",
+            "T096",
+            "T097",
+            "T098",
+            "T099",
+            "T100",
+            "T101",
+            "T102",
+            "T103",
+            "T104",
+            "T105",
+            "T106",
+            "T107",
+            "T108",
+            "T109",
+            "T110",
+            "T111",
+            "T112",
+            "T113",
+            "T114",
+            "T115",
+            "T116",
+            "T117",
+            "T118",
+            "T119",
+            "T120",
+            "T121",
+            "T122",
+            "T123",
+            "T124",
+            "T125",
+            "T126",
+            "T127"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "type": "raster"
+    },
+    "tessera_v11": {
+      "band_sets": [
+        {
+          "bands": [
+            "T000",
+            "T001",
+            "T002",
+            "T003",
+            "T004",
+            "T005",
+            "T006",
+            "T007",
+            "T008",
+            "T009",
+            "T010",
+            "T011",
+            "T012",
+            "T013",
+            "T014",
+            "T015",
+            "T016",
+            "T017",
+            "T018",
+            "T019",
+            "T020",
+            "T021",
+            "T022",
+            "T023",
+            "T024",
+            "T025",
+            "T026",
+            "T027",
+            "T028",
+            "T029",
+            "T030",
+            "T031",
+            "T032",
+            "T033",
+            "T034",
+            "T035",
+            "T036",
+            "T037",
+            "T038",
+            "T039",
+            "T040",
+            "T041",
+            "T042",
+            "T043",
+            "T044",
+            "T045",
+            "T046",
+            "T047",
+            "T048",
+            "T049",
+            "T050",
+            "T051",
+            "T052",
+            "T053",
+            "T054",
+            "T055",
+            "T056",
+            "T057",
+            "T058",
+            "T059",
+            "T060",
+            "T061",
+            "T062",
+            "T063",
+            "T064",
+            "T065",
+            "T066",
+            "T067",
+            "T068",
+            "T069",
+            "T070",
+            "T071",
+            "T072",
+            "T073",
+            "T074",
+            "T075",
+            "T076",
+            "T077",
+            "T078",
+            "T079",
+            "T080",
+            "T081",
+            "T082",
+            "T083",
+            "T084",
+            "T085",
+            "T086",
+            "T087",
+            "T088",
+            "T089",
+            "T090",
+            "T091",
+            "T092",
+            "T093",
+            "T094",
+            "T095",
+            "T096",
+            "T097",
+            "T098",
+            "T099",
+            "T100",
+            "T101",
+            "T102",
+            "T103",
+            "T104",
+            "T105",
+            "T106",
+            "T107",
+            "T108",
+            "T109",
+            "T110",
+            "T111",
+            "T112",
+            "T113",
+            "T114",
+            "T115",
+            "T116",
+            "T117",
+            "T118",
+            "T119",
+            "T120",
+            "T121",
+            "T122",
+            "T123",
+            "T124",
+            "T125",
+            "T126",
+            "T127"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "type": "raster"
+    },
+    "tessera_v2": {
       "band_sets": [
         {
           "bands": [

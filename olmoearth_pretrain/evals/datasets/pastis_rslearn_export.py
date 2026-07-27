@@ -89,7 +89,11 @@ FOLD_TO_SPLIT_TAG = {"train": "train", "valid": "val", "test": "test"}
 # Nodata fill values the embeddings were fetched with (see
 # embedding_materializer/fetchers.py: AEF dequantizes with -1.0 fill, Tessera
 # uses NaN).
-EMBEDDING_NODATA = {Modality.GSE.name: -1.0, Modality.TESSERA.name: float("nan")}
+EMBEDDING_NODATA = {
+    Modality.GSE.name: -1.0,
+    Modality.TESSERA.name: float("nan"),
+    Modality.TESSERA_V11.name: float("nan"),
+}
 
 
 def stitch_quadrants(quadrants: torch.Tensor) -> torch.Tensor:

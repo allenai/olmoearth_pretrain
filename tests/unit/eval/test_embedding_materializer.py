@@ -2,6 +2,8 @@
 
 import importlib.util
 import json
+import sys
+import types
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +18,7 @@ from rslearn.utils.geometry import PixelBounds, Projection
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.evals.embedding_materializer import materialize
 from olmoearth_pretrain.evals.embedding_materializer.fetchers import (
     EmbeddingFetcher,
     SourceTile,
@@ -118,6 +121,53 @@ def make_dataset(tmp_path: Path) -> tuple[UPath, list[Window]]:
     return ds_path, windows
 
 
+class FakeTime:
+    """Stand-in for the time module that records sleeps instead of waiting."""
+
+    def __init__(self) -> None:
+        """Initialize with no recorded sleeps."""
+        self.sleeps: list[float] = []
+
+    def sleep(self, seconds: float) -> None:
+        """Record the requested sleep without blocking."""
+        self.sleeps.append(seconds)
+
+
+class FlakyFetcher(FakeFetcher):
+    """FakeFetcher that raises IO errors for designated bounds.
+
+    Bounds listed in fail_bounds raise on their first ``failures`` fetch
+    attempts, then behave like FakeFetcher (so failures=None means always
+    raise).
+    """
+
+    def __init__(
+        self, fail_bounds: set[PixelBounds], failures: int | None = None
+    ) -> None:
+        """Initialize a FlakyFetcher.
+
+        Args:
+            fail_bounds: window bounds whose fetch raises an OSError.
+            failures: number of times each failing bounds raises before
+                succeeding, or None to always raise.
+        """
+        super().__init__()
+        self.fail_bounds = fail_bounds
+        self.failures = failures
+        self.attempts: dict[PixelBounds, int] = {}
+
+    def fetch(
+        self, bounds: PixelBounds, projection: Projection, year: int
+    ) -> np.ndarray | None:
+        """Raise for failing bounds until their failure budget is spent."""
+        key = tuple(bounds)
+        if key in self.fail_bounds:
+            self.attempts[key] = self.attempts.get(key, 0) + 1
+            if self.failures is None or self.attempts[key] <= self.failures:
+                raise OSError("simulated transient read failure")
+        return super().fetch(bounds, projection, year)
+
+
 GAP_BOUNDS = (32, 32, 48, 48)  # bounds of window w3
 
 
@@ -174,6 +224,43 @@ def test_overwrite_rewrites(tmp_path: Path) -> None:
     assert len(fetcher.calls) == 3
     assert manifest["num_windows_written"] == 3
     assert manifest["num_windows_skipped_existing"] == 0
+
+
+def test_transient_fetch_error_is_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fetch that fails transiently is retried and the window still written."""
+    monkeypatch.setattr(materialize, "time", FakeTime())
+    ds_path, windows = make_dataset(tmp_path)
+    fetcher = FlakyFetcher(fail_bounds={GAP_BOUNDS}, failures=2)
+    manifest = materialize_product(ds_path, fetcher, product_name="fake")
+
+    assert fetcher.attempts[GAP_BOUNDS] == 3
+    assert manifest["num_windows_written"] == 3
+    assert manifest["num_windows_failed"] == 0
+    assert windows[2].is_layer_completed("gse")
+
+
+def test_persistent_fetch_error_recorded_not_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A window that keeps failing is recorded as failed; the run completes."""
+    monkeypatch.setattr(materialize, "time", FakeTime())
+    ds_path, windows = make_dataset(tmp_path)
+    fetcher = FlakyFetcher(fail_bounds={GAP_BOUNDS})
+    manifest = materialize_product(ds_path, fetcher, product_name="fake", workers=2)
+
+    assert manifest["num_windows_written"] == 2
+    assert manifest["num_windows_failed"] == 1
+    assert manifest["windows_failed"] == ["default/w3"]
+    assert not windows[2].is_layer_completed("gse")
+
+    # A re-run picks the failed window back up.
+    retry_fetcher = FlakyFetcher(fail_bounds=set())
+    manifest = materialize_product(ds_path, retry_fetcher, product_name="fake")
+    assert manifest["num_windows_written"] == 1
+    assert manifest["num_windows_skipped_existing"] == 2
+    assert windows[2].is_layer_completed("gse")
 
 
 def test_year_policy(tmp_path: Path) -> None:
@@ -311,6 +398,41 @@ def test_tessera_fetcher_requires_geotessera() -> None:
     """Constructing TesseraFetcher without geotessera raises a helpful error."""
     with pytest.raises(ImportError, match="pip install geotessera"):
         TesseraFetcher()
+
+
+def test_tessera_fetcher_products(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each Tessera product pins its geotessera dataset, modality, and version."""
+    captured: dict[str, str] = {}
+
+    class FakeGeoTessera:
+        def __init__(self, **kwargs: str) -> None:
+            captured.update(kwargs)
+
+    fake_module = types.ModuleType("geotessera")
+    fake_module.GeoTessera = FakeGeoTessera  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "geotessera", fake_module)
+
+    # Default product is v1.1 (the going-forward product).
+    fetcher = TesseraFetcher()
+    assert captured == {"dataset_version": "v1.1", "dataset_variant": "cambridge"}
+    assert fetcher.modality is Modality.TESSERA_V11
+    assert fetcher.product_version == "v1.1"
+
+    # "tessera" reproduces the original v1 layers (geotessera defaults at the
+    # time they were fetched).
+    captured.clear()
+    fetcher = TesseraFetcher(product_name="tessera")
+    assert captured == {"dataset_version": "v1", "dataset_variant": "vultr"}
+    assert fetcher.modality is Modality.TESSERA
+    assert fetcher.product_version == "v1"
+
+    # client_kwargs overrides the pinned defaults.
+    captured.clear()
+    TesseraFetcher(client_kwargs={"dataset_variant": "other"})
+    assert captured == {"dataset_version": "v1.1", "dataset_variant": "other"}
+
+    with pytest.raises(ValueError, match="Unknown Tessera product"):
+        TesseraFetcher(product_name="tessera_v3")
 
 
 class FakeTesseraClient:

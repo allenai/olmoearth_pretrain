@@ -37,6 +37,21 @@ fix = true
 [tool.ruff.lint]
 extend-select = ["D", "I", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# Vendored verbatim from github.com/ucam-eo/tessera (branch v2); do not
+# restyle so re-vendoring stays a clean diff.
+"olmoearth_pretrain/evals/models/tessera/tessera_v2_model.py" = ["D", "E702"]
+"olmoearth_pretrain/evals/models/tessera/tessera_v2_infer.py" = ["D", "E702", "F841"]
+
+[[tool.mypy.overrides]]
+# Vendored verbatim from github.com/ucam-eo/tessera (branch v2); not typed to
+# repo standards. Do not restyle so re-vendoring stays a clean diff.
+module = [
+    "olmoearth_pretrain.evals.models.tessera.tessera_v2_model",
+    "olmoearth_pretrain.evals.models.tessera.tessera_v2_infer",
+]
+ignore_errors = true
+
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 

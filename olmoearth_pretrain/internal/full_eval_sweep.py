@@ -680,6 +680,36 @@ def _get_patch_size_run_suffix(args: argparse.Namespace) -> str:
     return f"_ps{patch_size}"
 
 
+def _get_window_size_args(args: argparse.Namespace) -> str:
+    """Build per-task window_size overrides for windowed-sampling tasks.
+
+    Only tasks whose config already sets window_size are overridden: for the
+    full-sample tasks window_size is unsupported and would fail evaluator
+    validation. Tiled (tile_samples) datasets require window_size to divide
+    the stored sample size (e.g. 128 for pastis_rslearn).
+    """
+    if getattr(args, "embedding_diagnostics_only", False):
+        return ""
+    window_size = getattr(args, "window_size", None)
+    if window_size is None:
+        return ""
+    return " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.window_size={window_size}"
+            for task_name, task in EVAL_TASKS.items()
+            if task.window_size is not None
+        ]
+    )
+
+
+def _get_window_size_run_suffix(args: argparse.Namespace) -> str:
+    """Run-name suffix marking a window-size override."""
+    window_size = getattr(args, "window_size", None)
+    if window_size is None:
+        return ""
+    return f"_ws{window_size}"
+
+
 def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
     """Build a downstream evaluator include-list override."""
     if getattr(args, "embedding_diagnostics_only", False):
@@ -802,6 +832,8 @@ def _build_default_command(
     cmd_args += _get_label_fraction_args(args)
     cmd_args += _get_patch_size_args(args)
     run_name += _get_patch_size_run_suffix(args)
+    cmd_args += _get_window_size_args(args)
+    run_name += _get_window_size_run_suffix(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     env_prefix = _get_env_prefix(args, module_path)
@@ -878,6 +910,8 @@ def _build_hyperparameter_command(
     cmd_args += _get_label_fraction_args(args)
     cmd_args += _get_patch_size_args(args)
     run_name += _get_patch_size_run_suffix(args)
+    cmd_args += _get_window_size_args(args)
+    run_name += _get_window_size_run_suffix(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
@@ -1036,6 +1070,8 @@ def _build_command_from_eval_settings(
     cmd_args += _get_label_fraction_args(args)
     cmd_args += _get_patch_size_args(args)
     run_name += _get_patch_size_run_suffix(args)
+    cmd_args += _get_window_size_args(args)
+    run_name += _get_window_size_run_suffix(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
@@ -1276,6 +1312,16 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
 PRECOMPUTED_MODEL_TO_MODALITY = {
     BaselineModelName.AEF: (Modality.GSE.name, "aef"),
     BaselineModelName.TESSERA_PRECOMPUTED: (Modality.TESSERA.name, "tessera"),
+    BaselineModelName.TESSERA_V11_PRECOMPUTED: (
+        Modality.TESSERA_V11.name,
+        "tessera_v11",
+    ),
+    # tessera_v2 is baked by our own v2 inference run (see
+    # docs/TesseraV2Inference.md), not by the embedding materializer.
+    BaselineModelName.TESSERA_V2_PRECOMPUTED: (
+        Modality.TESSERA_V2.name,
+        "tessera_v2",
+    ),
 }
 
 
@@ -1483,6 +1529,17 @@ def main() -> None:
             "with a fixed model-level patch size. Consider lowering "
             "embedding_batch_size at patch size 1: token counts grow 16x vs "
             "the default patch size 4."
+        ),
+    )
+    parser.add_argument(
+        "--window_size",
+        type=int,
+        default=None,
+        help=(
+            "Override window_size for every windowed-sampling task (e.g. 8 "
+            "for 8x8-pixel windows). Tasks without a window_size are left "
+            "unchanged. Tiled datasets require it to divide the stored "
+            "sample size (128 for pastis_rslearn)."
         ),
     )
 

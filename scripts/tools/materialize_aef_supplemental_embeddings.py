@@ -27,6 +27,7 @@ import argparse
 import logging
 
 from olmoearth_pretrain.evals.embedding_materializer.fetchers import (
+    TESSERA_PRODUCTS,
     AEFFetcher,
     EmbeddingFetcher,
     TesseraFetcher,
@@ -42,11 +43,11 @@ logger = logging.getLogger(__name__)
 
 
 def build_fetcher(product_name: str) -> EmbeddingFetcher:
-    """Build the fetcher for a product name ("aef" or "tessera")."""
+    """Build the fetcher for a product name (aef/tessera/tessera_v11)."""
     if product_name == "aef":
         return AEFFetcher()
-    if product_name == "tessera":
-        return TesseraFetcher()
+    if product_name in TESSERA_PRODUCTS:
+        return TesseraFetcher(product_name=product_name)
     raise ValueError(f"Unknown embedding product '{product_name}'")
 
 
@@ -119,7 +120,8 @@ def main() -> None:
             f"{dataset_name} / {product_name}: "
             f"written={manifest.get('num_windows_written')} "
             f"skipped_existing={manifest.get('num_windows_skipped_existing')} "
-            f"coverage_gaps={manifest.get('num_coverage_gaps')}"
+            f"coverage_gaps={manifest.get('num_coverage_gaps')} "
+            f"failed={manifest.get('num_windows_failed')}"
         )
 
 
