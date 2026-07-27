@@ -329,9 +329,12 @@ def main() -> None:
         type=int,
         default=None,
         help=(
-            "Override window_size for every windowed-sampling task (e.g. 8 "
-            "for 8x8-pixel windows). Must divide the stored sample size for "
-            "tiled datasets (128 for pastis_rslearn)."
+            "Override window_size on every selected task. Must divide the "
+            "stored sample size for tiled datasets (128 for pastis_rslearn). "
+            "NOTE: ws16/8/4/1 variants already run by default "
+            "(EMBEDDING_EVAL_WINDOW_SIZES) — this override forces ALL "
+            "selected tasks to one size, so combine it with --task_names to "
+            "avoid running duplicates."
         ),
     )
     parser.add_argument(
