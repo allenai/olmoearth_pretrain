@@ -39,6 +39,13 @@ TIME_PRIORITY_PROB = 0.5
 # P(patch_size = k) for k in 1..8 (min/max patch size are 1/8). Oversamples the ps=1
 # deployment resolution while keeping flexi-ViT coverage of coarser patches.
 PATCH_SIZE_PROBS = [0.40, 0.15, 0.13, 0.10, 0.08, 0.06, 0.045, 0.035]
+# Uniform over ps=1..8 -- the dataloader default (what patch_size_probs=None does).
+# The ``_psuniform`` arms use this to isolate the ps=1 oversampling above from the rest of
+# the newsampling recipe. The 4-point P(ps=1) sweep (0.125 / 0.40 / 0.70 / 1.00) showed the
+# ps=1 gain on the frozen ps=1 PASTIS probes is FLAT from 0.125 to 0.70 and drops at 1.00,
+# while the ps=4 evals degrade as P(ps=1) rises -- i.e. the oversampling is not what buys
+# the newsampling gain, so uniform is the better default. See the directory README.
+UNIFORM_PATCH_SIZE_PROBS = [1.0 / 8] * 8
 # Base grids 1..16 plus a coarse incremental tail; the token floor drops hw<=2 and
 # large grids naturally carry few timesteps. Nothing special about the exact values.
 SAMPLED_HW_P_LIST = list(range(1, 17)) + [18, 20, 24, 28, 32]
@@ -60,6 +67,18 @@ def apply_new_sampling(config: OlmoEarthDataLoaderConfig) -> OlmoEarthDataLoader
     config.time_priority_prob = TIME_PRIORITY_PROB
     config.patch_size_probs = PATCH_SIZE_PROBS
     config.sampled_hw_p_list = SAMPLED_HW_P_LIST
+    return config
+
+
+def apply_uniform_patch_sizes(
+    config: OlmoEarthDataLoaderConfig,
+) -> OlmoEarthDataLoaderConfig:
+    """Revert patch-size sampling to uniform, keeping every other newsampling knob.
+
+    Apply AFTER :func:`apply_new_sampling`, which sets the oversampled
+    :data:`PATCH_SIZE_PROBS`; this overwrites just that one field.
+    """
+    config.patch_size_probs = list(UNIFORM_PATCH_SIZE_PROBS)
     return config
 
 

@@ -1,19 +1,16 @@
-"""d128 wideread + regsup (w0p1, newsampling) with UNIFORM patch-size sampling.
+"""d128 wideread + regsup (w0p1, newsampling, UNIFORM ps) with the anchored register read.
 
-``regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_newsampling`` with ``patch_size_probs``
-reverted to uniform over ps=1..8 (0.125 each, the dataloader default) while every
-other newsampling knob (decorrelated time/grid sampling, temporal_bias, token floor,
-budget 3072, decode-only maps excluded) is held fixed.
+``regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_tanchor_newsampling`` with
+``patch_size_probs`` reverted to uniform over ps=1..8. Every other newsampling knob and
+``register_temporal_anchor="year_start"`` are unchanged.
 
-WHY: the newsampling gain observed on the frozen ps=1 PASTIS probes (~+0.025 mIoU vs
-old sampling, consistently across the tanchor/ndvi arms) coincides with a 3.2x
-oversampling of ps=1 (0.125 -> 0.40), and it does NOT transfer to the ps=4 evals --
-including the in-loop ps=4 PASTIS probe on the SAME dataset and labels, which moved
-only ~+0.008. That pattern points at patch-size reallocation rather than the
-full-sequence temporal exposure as the driver. This run is the direct test: if the
-ps=1 gain largely disappears here, the ps=1 bias owns it and the temporal knobs are
-second-order. A/B partner: ``..._w0p1_newsampling`` (ps=1 at 0.40) and
-``..._w0p1_newsampling_ps1heavy`` (ps=1 at 0.70) complete the three-point sweep.
+WHY: the tanchor arm was only ever measured under the ps=1-oversampled sampler
+(P(ps=1)=0.40), which the 4-point patch-size sweep showed to be a confound -- it costs
+0.01-0.03 on the ps=4 evals while buying nothing on the ps=1 probes. So the tanchor
+verdict so far ("indistinguishable from no-tanchor") was read off a baseline that was
+itself degraded on most tasks. This re-tests the anchor on the clean uniform-ps baseline,
+where the ps=4 evals are informative again. A/B partner:
+``..._w0p1_newsampling_psuniform`` (same sampler, no anchor).
 """
 
 import logging
@@ -47,24 +44,26 @@ from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModul
 logger = logging.getLogger(__name__)
 
 REGISTER_DIM = 128
+REGISTER_TEMPORAL_ANCHOR = "year_start"
 MODULE_PATH = (
     "scripts/official/v1_2/"
-    "regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_newsampling_psuniform.py"
+    "regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_tanchor_newsampling_psuniform.py"
 )
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """d128 wideread + register-grid supervision at w0p1 (base_weight 0.1)."""
+    """d128 wideread + regsup (w0p1) with the year-start-anchored register read."""
     config = build_wideread_regbtl_model_config(
         common, latent_self_attn=True, register_dim=REGISTER_DIM
     )
+    config.encoder_config.register_temporal_anchor = REGISTER_TEMPORAL_ANCHOR
     return add_register_supervision(
         config, include_latlon=False, base_weight=SUPERVISION_BASE_WEIGHT
     )
 
 
 def build_dataloader_config(common: CommonComponents):
-    """Newsampling dataloader with the patch-size distribution forced to uniform."""
+    """Newsampling dataloader at uniform patch sizes."""
     return apply_uniform_patch_sizes(
         apply_new_sampling(_base_build_dataloader_config(common))
     )
