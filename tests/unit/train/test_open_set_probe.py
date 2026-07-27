@@ -138,8 +138,9 @@ def test_classification_loss_backprops(probe: OpenSetProbe) -> None:
     open_set = torch.full((b, h, w, 1, 1), float(OPEN_SET_NODATA))
     open_set[:, :, :, 0, 0] = 5  # every pixel class 5 (dataset agrifieldnet_india)
 
-    loss, n = probe.classification_loss(pooled, repr_valid, open_set)
-    assert n == b * p * p
+    loss, n_samples, n_patches = probe.classification_loss(pooled, repr_valid, open_set)
+    assert n_samples == b
+    assert n_patches == b * p * p
     assert torch.isfinite(loss)
     loss.backward()
     # Gradient flows into both the spatial latent and the probe weights.
@@ -165,9 +166,10 @@ def test_classification_loss_only_uses_target_group_vectors() -> None:
     repr_valid = torch.ones(1, 1, 1, dtype=torch.bool)
     open_set = torch.zeros(1, 1, 1, 1, 1)
 
-    loss, n = probe.classification_loss(pooled, repr_valid, open_set)
+    loss, n_samples, n_patches = probe.classification_loss(pooled, repr_valid, open_set)
 
-    assert n == 1
+    assert n_samples == 1
+    assert n_patches == 1
     assert loss.detach().item() == pytest.approx(
         torch.log(torch.tensor(1.0 + torch.e)).item()
     )
@@ -197,12 +199,41 @@ def test_classification_loss_excludes_target_conflicts() -> None:
     repr_valid = torch.ones(1, 1, 1, dtype=torch.bool)
     open_set = torch.zeros(1, 1, 1, 1, 1)
 
-    loss, n = probe.classification_loss(pooled, repr_valid, open_set)
+    loss, n_samples, n_patches = probe.classification_loss(pooled, repr_valid, open_set)
 
-    assert n == 1
+    assert n_samples == 1
+    assert n_patches == 1
     assert loss.detach().item() == pytest.approx(
         torch.log(torch.tensor(1.0 + torch.e)).item()
     )
+
+
+def test_classification_loss_balances_samples() -> None:
+    """Loss is the mean of per-sample means, not the mean over all patches."""
+    probe = OpenSetProbe(
+        embedding_size=1,
+        class_mapping=_tiny_mapping(
+            [{"name": "all", "global_ids": [0, 1]}], num_classes=2
+        ),
+    )
+    with torch.no_grad():
+        probe.cls_head.weight.copy_(torch.tensor([[0.0], [1.0]]))
+        probe.cls_head.bias.zero_()
+    pooled = torch.ones(2, 2, 2, 1)
+    repr_valid = torch.ones(2, 2, 2, dtype=torch.bool)
+    # Sample 0: all four patches labeled class 0. Sample 1: one patch labeled class 1.
+    open_set = torch.full((2, 2, 2, 1, 1), float(OPEN_SET_NODATA))
+    open_set[0, :, :, 0, 0] = 0
+    open_set[1, 0, 0, 0, 0] = 1
+
+    loss, n_samples, n_patches = probe.classification_loss(pooled, repr_valid, open_set)
+
+    assert n_samples == 2
+    assert n_patches == 5
+    # Per-patch CE: class 0 -> log(1 + e); class 1 -> log(1 + e) - 1. The dense
+    # sample must not outweigh the sparse one: mean of the two per-sample means.
+    ce0 = torch.log(torch.tensor(1.0 + torch.e)).item()
+    assert loss.detach().item() == pytest.approx((ce0 + (ce0 - 1.0)) / 2, rel=1e-5)
 
 
 def test_regression_loss_and_scaling(probe: OpenSetProbe) -> None:
@@ -222,8 +253,9 @@ def test_regression_loss_and_scaling(probe: OpenSetProbe) -> None:
     assert (dataset_idx == 0).all()
     assert torch.allclose(target, torch.ones_like(target))
 
-    loss, n = probe.regression_loss(pooled, repr_valid, reg)
-    assert n == b * p * p
+    loss, n_samples, n_patches = probe.regression_loss(pooled, repr_valid, reg)
+    assert n_samples == b
+    assert n_patches == b * p * p
     assert torch.isfinite(loss)
 
 
@@ -264,5 +296,7 @@ def test_forward_zero_touch_when_no_labels(probe: OpenSetProbe) -> None:
     loss.backward()
     assert probe.cls_head.weight.grad is not None
     assert probe.reg_head.weight.grad is not None
+    assert metrics["open_set_ce_samples"] == 0.0
     assert metrics["open_set_ce_patches"] == 0.0
+    assert metrics["open_set_mse_samples"] == 0.0
     assert metrics["open_set_mse_patches"] == 0.0

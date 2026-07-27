@@ -23,6 +23,10 @@ and compute:
 * **mean-squared error** for regression, against the stored value mapped to
   ``[0, 1]``.
 
+Per-patch losses are averaged *within each sample* first and then across labeled
+samples, so densely labeled samples (e.g. wall-to-wall land-cover maps) carry the
+same weight as sparsely labeled ones (e.g. point/polygon datasets).
+
 The probe parameters are meant to live *inside* the model (see
 ``olmoearth_pretrain.nn.open_set_latent_mim``) so the DDP gradient all-reduce and
 the optimizer, which both iterate ``self.model.parameters()``, cover them.
@@ -370,28 +374,56 @@ class OpenSetProbe(nn.Module):
     # ------------------------------------------------------------------
     # Losses
     # ------------------------------------------------------------------
+    @staticmethod
+    def _sample_mean(
+        per_patch: torch.Tensor, keep: torch.Tensor
+    ) -> tuple[torch.Tensor, int]:
+        """Average per-patch losses within each sample, then across labeled samples.
+
+        Args:
+            per_patch: ``(n_keep,)`` per-patch losses, ordered like ``keep.nonzero()``.
+            keep: ``(B, P_H, P_W)`` bool mask of the contributing patches.
+
+        Returns:
+            The mean-of-per-sample-means loss and the number of labeled samples.
+        """
+        b = keep.shape[0]
+        sample_idx = (
+            torch.arange(b, device=keep.device).view(b, 1, 1).expand_as(keep)[keep]
+        )
+        loss_per_sample = per_patch.new_zeros(b).index_add(0, sample_idx, per_patch)
+        count_per_sample = torch.bincount(sample_idx, minlength=b).to(per_patch.dtype)
+        labeled = count_per_sample > 0
+        n_samples = int(labeled.sum())
+        loss = (loss_per_sample[labeled] / count_per_sample[labeled]).mean()
+        return loss, n_samples
+
     def classification_loss(
         self,
         pooled: torch.Tensor,
         repr_valid: torch.Tensor,
         open_set: torch.Tensor,
-    ) -> tuple[torch.Tensor, int]:
+    ) -> tuple[torch.Tensor, int, int]:
         """Masked-softmax cross-entropy over each patch's source-dataset classes.
 
-        Returns the (unweighted) mean CE loss and the number of contributing patches.
+        Per-patch CE is averaged within each sample and then across labeled samples,
+        so densely and sparsely labeled samples contribute equally.
+
+        Returns the (unweighted) loss, the number of contributing samples, and the
+        number of contributing patches.
         """
         p_h, p_w = pooled.shape[1], pooled.shape[2]
         target, label_valid = self.pool_classification_labels(open_set, p_h, p_w)
         keep = repr_valid & label_valid  # (B,P_H,P_W)
         n_keep = int(keep.sum())
         if n_keep == 0:
-            return pooled.new_zeros(()), 0
+            return pooled.new_zeros(()), 0, 0
 
         pooled_keep = pooled[keep]  # (n_keep, D)
         target_keep = target[keep]  # (n_keep,)
         groups = self.group_of_global_id[target_keep]
 
-        loss_sum = pooled.new_zeros(())
+        per_patch = torch.zeros(n_keep, dtype=torch.float32, device=pooled.device)
         for group_idx in torch.unique(groups).tolist():
             group_keep = groups == group_idx
             group_targets = target_keep[group_keep]
@@ -405,20 +437,25 @@ class OpenSetProbe(nn.Module):
             allowed = self.target_allowed_positions[group_targets, :group_size]
             logits = logits.masked_fill(~allowed, float("-inf"))
             local_targets = self.local_index_of_global_id[group_targets]
-            loss_sum = loss_sum + F.cross_entropy(
-                logits, local_targets, reduction="sum"
-            )
-        return loss_sum / n_keep, n_keep
+            per_patch[group_keep] = F.cross_entropy(
+                logits, local_targets, reduction="none"
+            ).float()
+        loss, n_samples = self._sample_mean(per_patch, keep)
+        return loss, n_samples, n_keep
 
     def regression_loss(
         self,
         pooled: torch.Tensor,
         repr_valid: torch.Tensor,
         open_set_regression: torch.Tensor,
-    ) -> tuple[torch.Tensor, int]:
+    ) -> tuple[torch.Tensor, int, int]:
         """Per-dataset MSE against the value mapped to ``[0, 1]``.
 
-        Returns the (unweighted) mean MSE loss and the number of contributing patches.
+        Per-patch MSE is averaged within each sample and then across labeled samples,
+        so densely and sparsely labeled samples contribute equally.
+
+        Returns the (unweighted) loss, the number of contributing samples, and the
+        number of contributing patches.
         """
         p_h, p_w = pooled.shape[1], pooled.shape[2]
         dataset_idx, target, label_valid = self.pool_regression_labels(
@@ -427,15 +464,16 @@ class OpenSetProbe(nn.Module):
         keep = repr_valid & label_valid
         n_keep = int(keep.sum())
         if n_keep == 0:
-            return pooled.new_zeros(()), 0
+            return pooled.new_zeros(()), 0, 0
 
         pooled_keep = pooled[keep]  # (n_keep, D)
         idx_keep = dataset_idx[keep]  # (n_keep,)
         target_keep = target[keep]  # (n_keep,)
         preds = self.reg_head(pooled_keep)  # (n_keep, num_reg_datasets)
         pred = preds.gather(1, idx_keep.unsqueeze(1)).squeeze(1)  # (n_keep,)
-        loss = F.mse_loss(pred, target_keep)
-        return loss, n_keep
+        per_patch = F.mse_loss(pred.float(), target_keep.float(), reduction="none")
+        loss, n_samples = self._sample_mean(per_patch, keep)
+        return loss, n_samples, n_keep
 
     def zero_touch(self) -> torch.Tensor:
         """A ``0 * sum(params)`` term to keep probe params in the autograd graph.
@@ -462,9 +500,10 @@ class OpenSetProbe(nn.Module):
                 fields ``open_set`` / ``open_set_regression``).
 
         Returns:
-            losses: Weighted CE and MSE terms plus a zero-touch term that keeps probe
+            losses: Weighted CE and MSE terms (each a per-sample mean averaged over
+                the rank's labeled samples) plus a zero-touch term that keeps probe
                 gradients well-defined on every rank. The train module combines these
-                using globally reduced valid-patch counts.
+                using globally reduced labeled-sample counts.
             metrics: Detached scalar metrics for logging.
         """
         if spatial_latent.dim() != 4:
@@ -483,16 +522,22 @@ class OpenSetProbe(nn.Module):
 
         open_set = getattr(batch, Modality.OPEN_SET.name, None)
         if open_set is not None:
-            ce, n_ce = self.classification_loss(pooled, repr_valid, open_set)
+            ce, ce_samples, ce_patches = self.classification_loss(
+                pooled, repr_valid, open_set
+            )
             losses["open_set_ce"] = self.seg_loss_weight * ce
             metrics["open_set_ce"] = float(ce.detach())
-            metrics["open_set_ce_patches"] = float(n_ce)
+            metrics["open_set_ce_samples"] = float(ce_samples)
+            metrics["open_set_ce_patches"] = float(ce_patches)
 
         open_set_regression = getattr(batch, Modality.OPEN_SET_REGRESSION.name, None)
         if open_set_regression is not None:
-            mse, n_mse = self.regression_loss(pooled, repr_valid, open_set_regression)
+            mse, mse_samples, mse_patches = self.regression_loss(
+                pooled, repr_valid, open_set_regression
+            )
             losses["open_set_mse"] = self.reg_loss_weight * mse
             metrics["open_set_mse"] = float(mse.detach())
-            metrics["open_set_mse_patches"] = float(n_mse)
+            metrics["open_set_mse_samples"] = float(mse_samples)
+            metrics["open_set_mse_patches"] = float(mse_patches)
 
         return losses, metrics

@@ -92,7 +92,10 @@ CLASS_MAPPING_SHA256_PATH = Path(CLASS_MAPPING_PATH).with_suffix(".sha256")
 CLASS_MAPPING_SHA256 = CLASS_MAPPING_SHA256_PATH.read_text().split()[0]
 
 # Weight on the combined supervised (CE + MSE) loss relative to the SSL objective.
-SUP_LOSS_WEIGHT = 1.0
+# 1.0 inflated the total grad norm ~5-15x over the baseline (constant clipping at
+# max_grad_norm=1.0, drowning the SSL gradient); 0.1 mirrors the w1 -> w0p1 lesson
+# from the register-map supervision sweeps.
+SUP_LOSS_WEIGHT = 0.1
 
 # H5 directory of the open-set supervised dataset. Set once the H5s are built; it will
 # live under /weka/dfive-default/helios/dataset/open_set_dataset/... The layout mirrors

@@ -71,55 +71,65 @@ class OpenSetLatentMIMTrainModule(LatentMIMTrainModule):
             )
         for key in ("open_set_ce", "open_set_mse"):
             value = metrics.get(key, 0.0)
+            sample_count = metrics.get(f"{key}_samples", 0.0)
             patch_count = metrics.get(f"{key}_patches", 0.0)
-            total, count = self._supervised_metrics.get(key, (0.0, 0))
-            self._supervised_metrics[key] = (
-                total + value * patch_count,
-                count + 1,
-            )
-            patch_key = f"{key}_patches"
-            patch_total, patch_count_entries = self._supervised_metrics.get(
-                patch_key, (0.0, 0)
-            )
-            self._supervised_metrics[patch_key] = (
-                patch_total + patch_count,
-                patch_count_entries + 1,
-            )
+            for suffix, increment in (
+                ("", value * sample_count),
+                ("_samples", sample_count),
+                ("_patches", patch_count),
+            ):
+                total, count = self._supervised_metrics.get(key + suffix, (0.0, 0))
+                self._supervised_metrics[key + suffix] = (
+                    total + increment,
+                    count + 1,
+                )
 
     def _flush_supervised_metrics(self) -> None:
-        """Log globally patch-weighted metrics once for the full batch."""
+        """Log globally sample-weighted metrics once for the full batch."""
         if not self._supervised_metrics:
             return
+        keys = [
+            "open_set_ce",
+            "open_set_ce_samples",
+            "open_set_ce_patches",
+            "open_set_mse",
+            "open_set_mse_samples",
+            "open_set_mse_patches",
+        ]
         totals = torch.tensor(
-            [
-                self._supervised_metrics["open_set_ce"][0],
-                self._supervised_metrics["open_set_ce_patches"][0],
-                self._supervised_metrics["open_set_mse"][0],
-                self._supervised_metrics["open_set_mse_patches"][0],
-            ],
+            [self._supervised_metrics[key][0] for key in keys],
             dtype=torch.float64,
             device=self.device,
         )
         if dist.is_available() and dist.is_initialized():
             dist.all_reduce(totals, group=self.dp_process_group)
-        ce_sum, ce_count, mse_sum, mse_count = totals.tolist()
+        (
+            ce_sum,
+            ce_samples,
+            ce_patches,
+            mse_sum,
+            mse_samples,
+            mse_patches,
+        ) = totals.tolist()
         metrics = {
-            "open_set_ce": ce_sum / ce_count if ce_count else 0.0,
-            "open_set_ce_patches": ce_count / self._NUM_AUGMENTED_VIEWS,
-            "open_set_mse": mse_sum / mse_count if mse_count else 0.0,
-            "open_set_mse_patches": mse_count / self._NUM_AUGMENTED_VIEWS,
+            "open_set_ce": ce_sum / ce_samples if ce_samples else 0.0,
+            "open_set_ce_samples": ce_samples / self._NUM_AUGMENTED_VIEWS,
+            "open_set_ce_patches": ce_patches / self._NUM_AUGMENTED_VIEWS,
+            "open_set_mse": mse_sum / mse_samples if mse_samples else 0.0,
+            "open_set_mse_samples": mse_samples / self._NUM_AUGMENTED_VIEWS,
+            "open_set_mse_patches": mse_patches / self._NUM_AUGMENTED_VIEWS,
         }
         self.log_extra_metrics(
             {f"train/{key}": value for key, value in metrics.items()},
             reduce_type=None,
         )
 
-    def _global_patch_counts(self, metrics: dict[str, float]) -> dict[str, float]:
-        """Sum valid classification and regression patch counts across DP ranks."""
+    def _global_sample_counts(self, metrics: dict[str, float]) -> dict[str, float]:
+        """Sum labeled classification and regression sample counts across DP ranks."""
         counts = torch.tensor(
             [
-                metrics.get("open_set_ce_patches", 0.0),
-                metrics.get("open_set_mse_patches", 0.0),
+                metrics.get("open_set_ce_samples", 0.0),
+                metrics.get("open_set_mse_samples", 0.0),
             ],
             dtype=torch.float64,
             device=self.device,
@@ -136,12 +146,12 @@ class OpenSetLatentMIMTrainModule(LatentMIMTrainModule):
         losses: dict[str, torch.Tensor],
         metrics: dict[str, float],
     ) -> torch.Tensor:
-        """Combine local means so DP gradient averaging yields global patch means."""
+        """Combine local sample means so DP averaging yields global sample means."""
         loss = losses["zero_touch"]
-        global_counts = self._global_patch_counts(metrics)
+        global_counts = self._global_sample_counts(metrics)
         world_size = get_world_size(self.dp_process_group)
         for key in ("open_set_ce", "open_set_mse"):
-            local_count = metrics.get(f"{key}_patches", 0.0)
+            local_count = metrics.get(f"{key}_samples", 0.0)
             global_count = global_counts[key]
             if key in losses and global_count > 0:
                 loss = loss + losses[key] * local_count * world_size / global_count

@@ -179,23 +179,27 @@ def test_open_set_train_batch_records_supervised_loss(
     assert "train/open_set_ce" in mock_trainer._metrics
     ce = mock_trainer._metrics["train/open_set_ce"]
     assert torch.isfinite(torch.as_tensor(ce))
-    # Every patch has a valid classification label.
+    # Every sample has valid classification labels on every patch.
+    assert mock_trainer._metrics["train/open_set_ce_samples"] == 3.0
     assert mock_trainer._metrics["train/open_set_ce_patches"] > 0
-    # Regression had no labels, so no patches contributed.
+    # Regression had no labels, so no samples or patches contributed.
+    assert mock_trainer._metrics["train/open_set_mse_samples"] == 0.0
     assert mock_trainer._metrics["train/open_set_mse_patches"] == 0.0
     for metric_name in (
         "train/open_set_ce",
+        "train/open_set_ce_samples",
         "train/open_set_ce_patches",
         "train/open_set_mse",
+        "train/open_set_mse_samples",
         "train/open_set_mse_patches",
     ):
         assert mock_trainer._metric_record_counts[metric_name] == 1
 
 
-def test_supervised_loss_is_weighted_by_global_valid_patch_count(
+def test_supervised_loss_is_weighted_by_global_valid_sample_count(
     model: OpenSetLatentMIMConfig,
 ) -> None:
-    """Local means are scaled so DP averaging yields a global patch mean."""
+    """Local sample means are scaled so DP averaging yields a global sample mean."""
     config = OpenSetLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=1e-4, weight_decay=0.0),
         rank_microbatch_size=1,
@@ -213,14 +217,14 @@ def test_supervised_loss_is_weighted_by_global_valid_patch_count(
         "open_set_mse": torch.tensor(3.0),
     }
     metrics = {
-        "open_set_ce_patches": 2.0,
-        "open_set_mse_patches": 1.0,
+        "open_set_ce_samples": 2.0,
+        "open_set_mse_samples": 1.0,
     }
 
     with (
         patch.object(
             train_module,
-            "_global_patch_counts",
+            "_global_sample_counts",
             return_value={"open_set_ce": 8.0, "open_set_mse": 4.0},
         ),
         patch(
