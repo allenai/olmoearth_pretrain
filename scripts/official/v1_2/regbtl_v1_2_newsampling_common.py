@@ -82,6 +82,43 @@ def apply_uniform_patch_sizes(
     return config
 
 
+def apply_shape_sweep(
+    config: OlmoEarthDataLoaderConfig,
+    *,
+    token_budget: int,
+    temporal_bias: float,
+) -> OlmoEarthDataLoaderConfig:
+    """Override the two swept shape-sampler axes, keeping every other knob fixed.
+
+    Apply AFTER :func:`apply_new_sampling` (and :func:`apply_uniform_patch_sizes`);
+    this overwrites only ``token_budget`` and ``temporal_bias``.
+
+    The two axes are NOT independent, which is the point of sweeping them together.
+    ``token_budget`` sets how wide the feasible timestep window is at each grid size;
+    ``temporal_bias`` only skews the draw *within* that window. It cannot create tokens,
+    so at a fixed budget a higher bias trades spatial extent for temporal extent. With
+    the token floor at 228 and decode-only maps excluded (cost = 3*hw^2*t), full-year
+    (t=12) shapes are reachable only up to hw=6 at budget 1536, hw=9 at 3072, and hw=13
+    at 6144 -- and the ws16 ps=1 eval shape (hw=16) tops out at t=2 / t=4 / t=8
+    respectively. So a cheap budget with an aggressive bias trains almost entirely on
+    small-grid-long-sequence and large-grid-single-timestep shapes, and never gets close
+    to the large-grid-AND-long-sequence regime the frozen ps=1 probes evaluate at.
+
+    Duration is deliberately NOT touched. ``base.MAX_DURATION`` is ``epochs(300)``, and
+    an epoch is a fixed number of *instances* (``total_batches = instances /
+    global_batch_size``), independent of ``token_budget`` -- the sampler changes each
+    instance's shape, not how many there are. So every arm runs the same 662,700 steps
+    on an identical LR schedule and differs only in tokens per step, which keeps these
+    runs comparable to every existing 300-epoch run. Do not switch to a steps- or
+    tokens-based duration to "compute-match": step counts would diverge from the
+    committed runs, and ``Duration.tokens`` is unusable here because
+    ``Trainer.tokens_per_batch`` returns ``global_batch_size`` (512 *instances*).
+    """
+    config.token_budget = token_budget
+    config.temporal_bias = temporal_bias
+    return config
+
+
 def apply_microbatch(config: LatentMIMTrainModuleConfig) -> LatentMIMTrainModuleConfig:
     """Halve the rank microbatch size in place so the larger budget fits memory."""
     config.rank_microbatch_size = RANK_MICROBATCH_SIZE

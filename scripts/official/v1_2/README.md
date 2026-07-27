@@ -56,6 +56,8 @@ built from these fragments:
 | `tanchor` | `register_temporal_anchor="year_start"` — reads use axial 3D RoPE anchored at Jan 1 of the sample's first observation year; the register grid itself stays a time-free 2D map |
 | `newsampling` / `newsamp` | decorrelated (grid, timestep) shape sampler — see below |
 | `psuniform` / `ps1heavy` / `ps1only` | patch-size distribution variants of the newsampling recipe — P(ps=1) = 0.125 / 0.70 / 1.00 |
+| `b<N>` | `token_budget = N` (e.g. `b1536`); absent means the committed 3072 |
+| `tb<N>` | `temporal_bias = N` (e.g. `tb0`, `tb6`); absent means the committed 2.75 |
 
 Note that older scripts spell out `il_pdproj_noic_lsa_wideread` while the newsampling-era
 scripts abbreviate to just `wideread`. They mean the same architecture.
@@ -172,6 +174,52 @@ Restricting evals means editing `evaluator.tasks` in the training script's
 `build_trainer_config`; there is no CLI or env-var filter for the in-loop path. The eval
 job reads that dict back out via `checkpoint_sweep_evals.get_train_run_eval_tasks`.
 
+### 8. Shape sweep: token budget × temporal bias — `launch_regbtl_v1_2_shape_sweep.sh`
+
+**Motivation:** with patch-size oversampling ruled out (§7 results below) and budget 6144
+worth only ~+0.005, the temporal knobs are the last untested part of the newsampling
+bundle. A 2×2 on the v6 + uniform-patch-size base:
+
+| | bias 0 | bias 2.75 | bias 6 |
+|---|---|---|---|
+| **budget 1536** | — | `..._psuniform_b1536` (~45h) | `..._psuniform_b1536_tb6` (~45h) |
+| **budget 3072** | `..._psuniform_tb0` (~90h) | `..._psuniform` *(running)* | `..._psuniform_tb6` (~90h) |
+| **budget 6144** | — | `newsamp_v5_b32` *(running, ps=0.40)* | — |
+
+Two arms are free: the 3072/2.75 centre is the running `psuniform` run, and budget 6144
+is already covered by `newsamp_v5_b32`, which pairs cleanly with `newsamp_v6` (identical
+`patch_size_probs`) to isolate the budget effect. That measured only ~+0.005, which is why
+no uniform-ps 6144 arm is launched — it would cost ~7.5 days.
+
+**Why a 2×2 and not two independent arms.** The axes interact. `token_budget` sets how
+wide the feasible timestep window is at each grid size; `temporal_bias` only skews the
+draw *within* that window, so it cannot create tokens — at fixed budget it trades spatial
+extent for temporal extent. With the token floor at 228 and decode-only maps excluded
+(cost `3·hw²·t`):
+
+| budget | full year (t=12) reachable at | hw=16 — the ws16 ps=1 **eval** shape |
+|---|---|---|
+| 1536 | hw ≤ 6 | t ≤ 2 |
+| 3072 | hw ≤ 9 | t ≤ 4 |
+| 6144 | hw ≤ 13 | t ≤ 8 |
+
+So `b1536_tb6` — the cheap-and-fast corner, and the one with a real payoff since bias is
+free while budget is linear in cost — may lose *specifically* because it never trains
+near the large-grid-and-long-sequence regime the frozen ps=1 probes evaluate at. That
+failure mode would itself explain the small 6144 gain, so a negative result is nearly as
+informative as a positive one. `b1536` exists only to decompose that corner: without it,
+a good result can't be attributed to the cheap budget being harmless versus the bias
+compensating.
+
+**Duration is deliberately untouched.** `epochs(300)` = 662,700 steps at *every* budget,
+because an epoch is a fixed number of *instances* (`total_batches = instances /
+global_batch_size`) and the sampler changes each instance's shape, not how many there
+are. Every arm therefore shares one LR schedule and stays comparable to every committed
+300-epoch run. Do **not** switch to a steps- or tokens-based duration to "compute-match":
+step counts would diverge from the committed runs, and `Duration.tokens` is unusable here
+because `Trainer.tokens_per_batch` returns `global_batch_size` (512 *instances*, not
+tokens).
+
 ## Findings snapshot (2026-07-25, preliminary — single seeds)
 
 **Newsampling's gain is concentrated on ps=1 evals and is mildly negative elsewhere.**
@@ -203,8 +251,58 @@ Mechanism that fits: ps=1 went 0.125 → 0.40 (3.2× more exposure) and ps=4 wen
 almost nothing on ps=1 PASTIS. At 140k, no-tanchor 0.5221 vs tanchor 0.5225; with latlon
 0.5296 vs 0.5305. NDVI adds ~+0.003, within noise. The metric that motivated both
 `tanchor` and the NDVI arm is being moved by a dataloader knob, not by the read's
-temporal geometry. The §7 sweep is meant to settle this; if it confirms, `tanchor`/NDVI
-need a different metric to be judged on.
+temporal geometry.
+
+## Update (2026-07-27) — two hypotheses above are now settled
+
+**1. Patch-size oversampling is NOT what buys the newsampling gain.** The §7 sweep
+returned. At ckpt 260k, PASTIS ps=1 (S2):
+
+| P(ps=1) | 0.125 | 0.40 | 0.70 | 1.00 |
+|---|---|---|---|---|
+| ps=1 (S2) | 0.5484 | 0.5521 | 0.5488 | 0.5350 |
+| ps=4 | 0.5110 | 0.5023 | 0.4967 | *(evals restricted)* |
+
+Flat from 0.125 to 0.70, dropping at 1.00, while ps=4 degrades monotonically as P(ps=1)
+rises. **Uniform is the better default** — tied-best on ps=1, clearly best on ps=4 —
+which is why `UNIFORM_PATCH_SIZE_PROBS` exists and why §8 sweeps on the uniform base.
+Note `ps1only` is the *worst* ps=1 arm: patch-size diversity is useful regularization even
+for the deployment resolution. This refutes the "ps=1 bias owns the gain" hypothesis
+stated in the `_psuniform` docstring and above.
+
+**2. tanchor and NDVI are null; both were demoted to `high` priority.** Pooled across 8
+matched pairs (both samplers × both latlon settings), over every overlapping checkpoint:
+
+| metric | pooled Δ | per-pair range |
+|---|---|---|
+| PASTIS ps=1 (S2) | −0.0003 | −0.008 .. +0.005 |
+| PASTIS ps=1 (S1+S2) | −0.0016 | −0.009 .. +0.004 |
+| PASTIS ps=4 | −0.0068 | −0.019 .. +0.001 |
+
+The sign flips between the latlon and no-latlon versions of the *same* comparison
+(tanchor+newsampling is −0.0055 without latlon, +0.0048 with), which is a noise signature
+rather than a small effect; magnitudes sit inside the checkpoint-to-checkpoint scatter
+(sd 0.004–0.008). The one genuinely non-null result is **tanchor under old sampling, which
+is harmful**: −0.019 on ps=4 with 0 of 31 checkpoints positive.
+
+**3. Token budget: real but poor value.** `newsamp_v5_b32` (6144) vs `newsamp_v6` (3072),
+identical `patch_size_probs`, at matched steps: +0.005 on ps=1 and +0.005 on ps=4 — and
+notably it lifts *both* resolutions rather than trading them, unlike the patch-size axis.
+But 6144 uses exactly 2.00× tokens/step (196,608 vs 98,304 per device) at half the
+throughput (BPS 1.03 vs 2.04), so it is +0.005 for 2× compute. Beware comparing arms at
+matched *tokens* (6144@N vs 3072@2N): with a shared `epochs(300)` horizon those points sit
+at different places in the cosine decay, which flatters the longer-step run.
+
+**4. Longer training doesn't help.** `ep600` vs its true 300-epoch twin at the same
+supervision weight: +0.005 (regsup) and +0.003 (latlon) on ps=4 — flat for 2× compute.
+(Comparing `ep600` against `w0p1` instead makes it look actively harmful, but that is
+confounded by supervision weight.) Since tokens = epochs × instances × tokens-per-instance
+and tokens-per-instance scales with budget, **3072 @ 600 epochs and 6144 @ 300 epochs cost
+the same** — so this is the reference point for whether richer context per sample beats
+more samples.
+
+What remains unexplained: the temporal knobs (`temporal_bias`, `time_priority_prob`) plus
+the budget bump 2250 → 3072. That is what §8 tests.
 
 ## Shared modules (not runnable)
 
@@ -215,7 +313,7 @@ need a different metric to be judged on.
 | `regbtl_v1_2_common.py` | register-bottleneck model builder; `add_loop_eval_beaker_job` (merges fifty_cities + PASTIS ps=1 into the catalog) and `set_ps1_only_loop_evals` (replaces the catalog with the 18 ps=1 tasks) |
 | `regbtl_v1_2_faster_common.py` | `wideread` model builder + faster train module |
 | `regbtl_v1_2_regsup_common.py` | register supervision heads; latlon and time-conditioned NDVI arms; extra-decode dataset/dataloader plumbing |
-| `regbtl_v1_2_newsampling_common.py` | all newsampling knobs + `SUPERVISION_BASE_WEIGHT` |
+| `regbtl_v1_2_newsampling_common.py` | all newsampling knobs + `SUPERVISION_BASE_WEIGHT`; `apply_uniform_patch_sizes` and `apply_shape_sweep` (the budget × bias overrides, applied *after* `apply_new_sampling`) |
 
 Note that `regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_1fwd.py` doubles as a module: most
 newer scripts import `build_common_components`, `build_dataset_config`,
