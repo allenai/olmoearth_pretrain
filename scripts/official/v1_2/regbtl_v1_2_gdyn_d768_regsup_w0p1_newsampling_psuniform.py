@@ -41,6 +41,7 @@ from regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_1fwd import (
 )
 from regbtl_v1_2_newsampling_common import (
     SUPERVISION_BASE_WEIGHT,
+    apply_microbatch,
     apply_new_sampling,
     apply_uniform_patch_sizes,
 )
@@ -53,13 +54,13 @@ from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModul
 logger = logging.getLogger(__name__)
 
 REGISTER_DIM = 768
-# 32 rather than the newsampling module's 64. Registers are 6x wider than the d128 arms
-# and the decorrelated sampler reaches hw=32 grids, so peak activation memory is well
-# above anything this recipe has run at; the d128 newsampling relaunches (v3-v5) already
-# OOM'd repeatedly at budget 3072. Microbatch size affects ONLY memory -- tokens/step,
-# the loss, and the LR schedule are unchanged (it is a grad-accumulation split), so this
-# stays comparable to every other arm. Raise to 64 if it proves to fit.
-RANK_MICROBATCH_SIZE = 32
+# rank_microbatch_size stays at the newsampling module's 64. The OOMs in this recipe's
+# history were at token_budget 6144 and BEFORE the broadcastable key-mask fix; micro 64 @
+# 3072 is proven (d128 newsamp_v6 ran to 540k), and the d768 old-sampling arms ran to 660k
+# at micro 64 / budget 2250. The extra memory at d768 is confined to the bottleneck's
+# register stream -- the encoder pass over the budget-capped patch tokens dominates and is
+# identical to d128 -- so there should be real headroom here. If a run does OOM, drop to
+# 32: microbatch affects ONLY memory, not tokens/step, the loss, or the LR schedule.
 MODULE_PATH = (
     "scripts/official/v1_2/regbtl_v1_2_gdyn_d768_regsup_w0p1_newsampling_psuniform.py"
 )
@@ -83,10 +84,8 @@ def build_dataloader_config(common: CommonComponents):
 
 
 def build_train_module_config(common: CommonComponents) -> LatentMIMTrainModuleConfig:
-    """1fwd + fused AdamW train module at the reduced d768 microbatch size."""
-    config = build_faster_train_module_config(common)
-    config.rank_microbatch_size = RANK_MICROBATCH_SIZE
-    return config
+    """1fwd + fused AdamW train module at the newsampling microbatch size."""
+    return apply_microbatch(build_faster_train_module_config(common))
 
 
 def build_trainer_config(common: CommonComponents):

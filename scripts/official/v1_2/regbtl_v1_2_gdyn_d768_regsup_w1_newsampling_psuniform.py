@@ -33,6 +33,7 @@ from regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_1fwd import (
     build_dataloader_config as _base_build_dataloader_config,
 )
 from regbtl_v1_2_newsampling_common import (
+    apply_microbatch,
     apply_new_sampling,
     apply_uniform_patch_sizes,
 )
@@ -48,9 +49,8 @@ REGISTER_DIM = 768
 # w1: base_weight 1.0 -- 10x the w0p1 arms, 100x the committed SUPERVISION_WEIGHT (0.01).
 # Scaled by TASK_TYPE_WEIGHTS per arm inside regbtl_v1_2_regsup_common, same as w0p1.
 SUPERVISION_BASE_WEIGHT_W1 = 1.0
-# See the w0p1 sibling: 32 rather than 64 for memory headroom at 6x the register width.
-# Microbatch size affects only memory, not tokens/step, the loss, or the LR schedule.
-RANK_MICROBATCH_SIZE = 32
+# rank_microbatch_size stays at the newsampling module's 64 -- see the w0p1 sibling for
+# why (the recipe's OOMs were at budget 6144 pre-mask-fix, not at 3072).
 MODULE_PATH = (
     "scripts/official/v1_2/regbtl_v1_2_gdyn_d768_regsup_w1_newsampling_psuniform.py"
 )
@@ -74,10 +74,8 @@ def build_dataloader_config(common: CommonComponents):
 
 
 def build_train_module_config(common: CommonComponents) -> LatentMIMTrainModuleConfig:
-    """1fwd + fused AdamW train module at the reduced d768 microbatch size."""
-    config = build_faster_train_module_config(common)
-    config.rank_microbatch_size = RANK_MICROBATCH_SIZE
-    return config
+    """1fwd + fused AdamW train module at the newsampling microbatch size."""
+    return apply_microbatch(build_faster_train_module_config(common))
 
 
 def build_trainer_config(common: CommonComponents):
