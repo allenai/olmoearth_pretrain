@@ -103,6 +103,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         untar_source=args.untar_source,
         start_time=args.start_time,
         end_time=args.end_time,
+        overwrite_configs=args.overwrite,
     )
 
     entry = ingest_dataset(config)
@@ -209,7 +210,9 @@ def add_ingest_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Overwrite existing registry entry if it exists",
+        help="Overwrite the existing registry entry and refresh the "
+        "model.yaml copy at the dataset folder (otherwise a re-ingest "
+        "silently keeps the stale copy)",
     )
 
 

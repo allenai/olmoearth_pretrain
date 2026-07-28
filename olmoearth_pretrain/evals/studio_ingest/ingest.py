@@ -192,6 +192,10 @@ class IngestConfig:
     start_time: str | None = None
     end_time: str | None = None
 
+    # Re-ingest behavior: refresh the model.yaml copy at the dataset folder
+    # instead of keeping an existing (possibly stale) one.
+    overwrite_configs: bool = False
+
 
 # =============================================================================
 # Dataset Copy Utilities
@@ -263,13 +267,18 @@ def _ensure_config_json(dataset_path: str, model_config_dir: str) -> None:
     logger.info("  Wrote config.json to dataset folder")
 
 
-def _copy_model_yaml(dataset_path: str, model_config_dir: str) -> None:
+def _copy_model_yaml(
+    dataset_path: str, model_config_dir: str, overwrite: bool = False
+) -> None:
     """Copy model.yaml into the dataset folder for canonical access at eval time.
 
-    Skips if model.yaml already exists in the dataset folder.
+    Skips if model.yaml already exists in the dataset folder, unless
+    ``overwrite`` is set — without it, re-ingesting a dataset whose model.yaml
+    gained new inputs silently keeps the stale copy (which eval jobs and the
+    registry modality extraction both read).
     """
     dest = Path(dataset_path) / "model.yaml"
-    if dest.exists():
+    if dest.exists() and not overwrite:
         logger.info("  model.yaml already exists in dataset folder, skipping copy")
         return
 
@@ -1119,7 +1128,9 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
 
     # Copy model.yaml to the dataset folder so it's canonically accessible
     # at eval time without depending on the original source location
-    _copy_model_yaml(weka_path, config.olmoearth_run_config_path)
+    _copy_model_yaml(
+        weka_path, config.olmoearth_run_config_path, overwrite=config.overwrite_configs
+    )
 
     # Step 0a: Load dataset config from the dataset folder
     logger.info("[Step 0a] Loading dataset config...")
