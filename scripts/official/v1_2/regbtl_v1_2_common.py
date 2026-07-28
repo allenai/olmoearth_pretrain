@@ -45,6 +45,9 @@ from olmoearth_pretrain.internal.all_evals import (
 from olmoearth_pretrain.internal.all_evals import (
     EMBEDDING_EVAL_TASKS as _EMBEDDING_EVAL_TASKS,
 )
+from olmoearth_pretrain.internal.all_evals import (
+    EMBEDDING_EVAL_WINDOW_SIZES as _EMBEDDING_EVAL_WINDOW_SIZES,
+)
 from olmoearth_pretrain.internal.all_evals import EVAL_TASKS as _ALL_EVAL_TASKS
 from olmoearth_pretrain.internal.experiment import CommonComponents
 from olmoearth_pretrain.nn.encodings import PositionEncoding
@@ -117,6 +120,26 @@ PS1_ONLY_LOOP_EVAL_TASKS = {
     **AEF_EMBEDDING_LOOP_EVAL_TASKS,
 }
 
+# The PASTIS exports at EVERY embedding-eval window size (16/8/4/1), not just the ws16
+# deployment shape. The smaller windows probe how much spatial context the frozen ps=1
+# embeddings need.
+_PASTIS_ALL_WS_EMBEDDING_LOOP_EVAL_NAMES = tuple(
+    f"pastis_ws{ws}_ps1_{mods}_pretrain_export"
+    for ws in _EMBEDDING_EVAL_WINDOW_SIZES
+    for mods in ("sentinel2", "sentinel1_sentinel2")
+)
+PASTIS_ALL_WS_EMBEDDING_LOOP_EVAL_TASKS = {
+    name: replace(_EMBEDDING_EVAL_TASKS[name], eval_interval=Duration.steps(20000))
+    for name in _PASTIS_ALL_WS_EMBEDDING_LOOP_EVAL_NAMES
+}
+
+# The complete embedding-product eval set: PASTIS at all window sizes + the AEF
+# supplemental probes (LP + kNN, ws16 -- the convention the AEF/Tessera comparisons use).
+ALL_EMBEDDING_LOOP_EVAL_TASKS = {
+    **PASTIS_ALL_WS_EMBEDDING_LOOP_EVAL_TASKS,
+    **AEF_EMBEDDING_LOOP_EVAL_TASKS,
+}
+
 
 def build_regbtl_model_config(
     common: CommonComponents,
@@ -166,6 +189,25 @@ def add_loop_eval_beaker_job(trainer_config, module_path: str):
         **evaluator.tasks,
         **FIFTY_CITIES_LOOP_EVAL_TASKS,
         **PASTIS_EMBEDDING_LOOP_EVAL_TASKS,
+    }
+    evaluator.run_as_beaker_job = True
+    evaluator.beaker_eval_module_path = module_path
+    evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
+    return trainer_config
+
+
+def add_all_embedding_loop_evals(trainer_config, module_path: str):
+    """Like :func:`add_loop_eval_beaker_job`, but with the FULL embedding eval set.
+
+    Merges fifty_cities + PASTIS at every window size (16/8/4/1) + the AEF supplemental
+    LP/kNN probes into the shared catalog, instead of only the ws16 PASTIS exports. The
+    extra tasks run in the separate eval Beaker job, so they cost no training time.
+    """
+    evaluator = trainer_config.callbacks["downstream_evaluator"]
+    evaluator.tasks = {
+        **evaluator.tasks,
+        **FIFTY_CITIES_LOOP_EVAL_TASKS,
+        **ALL_EMBEDDING_LOOP_EVAL_TASKS,
     }
     evaluator.run_as_beaker_job = True
     evaluator.beaker_eval_module_path = module_path
