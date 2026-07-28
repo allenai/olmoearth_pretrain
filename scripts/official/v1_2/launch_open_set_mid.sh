@@ -13,7 +13,7 @@
 set -e
 
 export OE_LOAD_SKIP_MISMATCHED_KEYS=1
-LAUNCH_ARGS="--launch.num_gpus=8 --launch.priority=high --launch.clusters=[ai2/jupiter]"
+LAUNCH_ARGS="--launch.num_gpus=8 --launch.priority=urgent --launch.clusters=[ai2/jupiter,ai2/ceres]"
 
 for script in open_set_mid_d768 open_set_mid_d128; do
     python scripts/official/v1_2/$script.py launch $script ai2/jupiter $LAUNCH_ARGS
