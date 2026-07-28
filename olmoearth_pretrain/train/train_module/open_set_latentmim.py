@@ -36,18 +36,71 @@ class OpenSetLatentMIMTrainModule(LatentMIMTrainModule):
     # The single-forward (1fwd) recipe runs one view per batch.
     _NUM_AUGMENTED_VIEWS = 1
 
-    def __init__(self, *args: Any, sup_loss_weight: float = 1.0, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        sup_loss_weight: float = 1.0,
+        freeze_backbone_until_step: int = 0,
+        **kwargs: Any,
+    ) -> None:
         """Initialize, extracting the supervised loss weight.
 
         Args:
             *args: Positional arguments forwarded to the base train module.
             sup_loss_weight: Scalar weight applied to the combined supervised
                 (CE + MSE) loss when added to the self-supervised objective.
+            freeze_backbone_until_step: If > 0, train ONLY the open-set probe
+                until this global step, then unfreeze the rest of the model
+                (the linear-probe warmup of the mid-training recipe, for runs
+                initialized from a pretrained checkpoint via
+                ``trainer.load_path``).
             **kwargs: Keyword arguments forwarded to the base train module.
         """
         super().__init__(*args, **kwargs)
         self.sup_loss_weight = sup_loss_weight
+        self.freeze_backbone_until_step = freeze_backbone_until_step
         self._supervised_metrics: dict[str, tuple[float, int]] | None = None
+        # Params frozen at init (e.g. FrozenTargetProjection copies) must never
+        # be flipped trainable by the freeze schedule.
+        self._always_frozen_param_ids = {
+            id(p) for p in self.model.parameters() if not p.requires_grad
+        }
+        self._backbone_frozen: bool | None = None
+
+    def _apply_freeze_schedule(self) -> None:
+        """Freeze/unfreeze the non-probe params based on the global step.
+
+        Before ``freeze_backbone_until_step`` only the open-set probe trains;
+        afterwards the whole model does. ``requires_grad`` is toggled lazily
+        AFTER the optimizer was built, so the backbone params remain in the
+        optimizer throughout and simply resume updating on unfreeze (AdamW,
+        fused included, skips params whose ``grad`` is ``None``). The flip is
+        keyed on the global step, so all DP ranks toggle together and the
+        replicated-DDP gradient all-reduce sees identical grad sets on every
+        rank. Params that were already frozen at init (the projection-only
+        target copies) are never unfrozen.
+        """
+        if self.freeze_backbone_until_step <= 0:
+            return
+        freeze = self.trainer.global_step < self.freeze_backbone_until_step
+        if freeze == self._backbone_frozen:
+            return
+        probe_param_ids = {id(p) for p in self.model.open_set_probe.parameters()}
+        num_toggled = 0
+        for p in self.model.parameters():
+            if id(p) in probe_param_ids or id(p) in self._always_frozen_param_ids:
+                continue
+            p.requires_grad_(not freeze)
+            num_toggled += 1
+        self._backbone_frozen = freeze
+        logger.info(
+            "open-set freeze schedule: %s %d backbone params at step %d "
+            "(freeze_backbone_until_step=%d)",
+            "froze" if freeze else "unfroze",
+            num_toggled,
+            self.trainer.global_step,
+            self.freeze_backbone_until_step,
+        )
 
     def train_batch(
         self,
@@ -55,6 +108,7 @@ class OpenSetLatentMIMTrainModule(LatentMIMTrainModule):
         dry_run: bool = False,
     ) -> None:
         """Train a batch and record supervised metrics once for the full batch."""
+        self._apply_freeze_schedule()
         self._supervised_metrics = {}
         try:
             super().train_batch(batch, dry_run=dry_run)
@@ -202,6 +256,7 @@ class OpenSetLatentMIMTrainModuleConfig(LatentMIMTrainModuleConfig):
     """Configuration for :class:`OpenSetLatentMIMTrainModule`."""
 
     sup_loss_weight: float = 1.0
+    freeze_backbone_until_step: int = 0
 
     def build(
         self,

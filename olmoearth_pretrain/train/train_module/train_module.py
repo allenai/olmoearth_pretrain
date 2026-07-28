@@ -604,6 +604,12 @@ class OlmoEarthTrainModule(TrainModule):
             for key in self.model.state_dict().keys():
                 if key not in model.state_dict():
                     logger.info("Key %s not in checkpoint", key)
+                    if os.environ.get("OE_LOAD_SKIP_MISMATCHED_KEYS"):
+                        # Intentional partial load (e.g. mid-training a model that
+                        # extends the checkpointed one with new heads): the key is
+                        # dropped from the load plan by _drop_mismatched_keys and
+                        # keeps its fresh initialization.
+                        continue
                     raise RuntimeError("Model and checkpoint are not compatible")
             logger.info("Model and checkpoint are compatible")
 

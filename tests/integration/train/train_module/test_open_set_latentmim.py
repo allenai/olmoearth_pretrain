@@ -235,3 +235,72 @@ def test_supervised_loss_is_weighted_by_global_valid_sample_count(
         loss = train_module._combine_supervised_losses(losses, metrics)
 
     assert loss.item() == pytest.approx(2.5)
+
+
+def test_freeze_schedule_trains_probe_only_then_unfreezes(
+    model: OpenSetLatentMIMConfig, set_random_seeds: None
+) -> None:
+    """Before the freeze boundary only the probe trains; after it, the backbone too.
+
+    Params that were already frozen at init (e.g. the projection-only target
+    copies) must never be flipped trainable by the schedule.
+    """
+    # Simulate an intentionally-frozen param (like FrozenTargetProjection).
+    always_frozen_param = next(model.encoder.parameters())
+    always_frozen_param.requires_grad_(False)
+
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    batch = collate_single_masked_batched(
+        _make_samples(),
+        transform=None,
+        masking_strategy=masking_strategy,
+    )
+
+    config = OpenSetLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=1e-4, weight_decay=0.0),
+        rank_microbatch_size=3,
+        loss_config=LossConfig(loss_config={"type": "patch_discrimination"}),
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        token_exit_cfg={modality: 0 for modality in _IMAGERY},
+        ema_decay=(0.996, 1.0),
+        max_grad_norm=1.0,
+        sup_loss_weight=1.0,
+        freeze_backbone_until_step=5,
+    )
+    train_module = config.build(model, device=torch.device("cpu"))
+    probe_param_ids = {id(p) for p in model.open_set_probe.parameters()}
+
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        mock_trainer = MockTrainer()
+        train_module.on_attach = MagicMock(return_value=None)  # type: ignore
+        train_module._attach_trainer(mock_trainer)
+
+        # Frozen stage: only the probe has requires_grad / receives gradients.
+        mock_trainer.global_step = 0
+        train_module.train_batch(batch)
+        for p in model.open_set_probe.parameters():
+            assert p.requires_grad and p.grad is not None
+        for p in model.parameters():
+            if id(p) not in probe_param_ids:
+                assert not p.requires_grad
+                assert p.grad is None
+
+        # Unfrozen stage: the backbone trains again, except always-frozen params
+        # (the manually frozen one plus e.g. the frozen month-embedding tables).
+        train_module.zero_grads()
+        mock_trainer._metric_record_counts.clear()  # second batch re-records
+        mock_trainer.global_step = 5
+        train_module.train_batch(batch)
+        assert id(always_frozen_param) in train_module._always_frozen_param_ids
+        assert not always_frozen_param.requires_grad
+        assert always_frozen_param.grad is None
+        num_backbone_with_grad = 0
+        for p in model.parameters():
+            if id(p) in probe_param_ids:
+                continue
+            if id(p) in train_module._always_frozen_param_ids:
+                assert not p.requires_grad
+                continue
+            assert p.requires_grad
+            num_backbone_with_grad += int(p.grad is not None)
+        assert num_backbone_with_grad > 0
