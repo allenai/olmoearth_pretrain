@@ -86,11 +86,17 @@ data:
         passthrough: true
       # Tessera v2 embeddings produced by running the released v2 students
       # ourselves (docs/TesseraV2Inference.md); no published v2 product exists.
+      # required: false so windows are NOT filtered out while the layer is
+      # still being baked — rslearn drops windows missing any required input's
+      # layers, so a required tessera_v2 input would empty the dataset until
+      # every window has the layer. Requesting the tessera_v2 modality while
+      # a window lacks the layer still fails loudly at sample load.
       tessera_v2:
         data_type: raster
         dtype: FLOAT32
         layers:
           - tessera_v2
+        required: false
         use_all_bands_in_order_of_band_set_idx: 0
         passthrough: true
       targets:
