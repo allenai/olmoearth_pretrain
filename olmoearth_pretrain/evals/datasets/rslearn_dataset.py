@@ -38,6 +38,11 @@ from olmoearth_pretrain.evals.datasets.rslearn_builder import (
     parse_model_config,
 )
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
+from olmoearth_pretrain.evals.studio_ingest.provenance import (
+    log_eval_dataset_provenance_to_wandb,
+    sha256_of_file,
+    verify_config_json_hash,
+)
 from olmoearth_pretrain.evals.task_types import TaskType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, OlmoEarthSample
 
@@ -697,8 +702,12 @@ def from_registry_entry(
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
-    Uses jsonargparse to build ModelDataset directly from model.yaml.
-    Requires model.yaml at entry.weka_path/model.yaml (set during ingestion).
+    Uses jsonargparse to build ModelDataset directly from model.yaml. The
+    model.yaml is read from the git checkout when the entry records a
+    config_repo_dir (pinned by the commit being run), otherwise from the copy
+    at entry.weka_path/model.yaml written during ingestion. The dataset
+    folder's config.json is verified against the sha256 recorded in the
+    registry before building.
 
     Uses the split tags written during ingestion to filter windows by default.
 
@@ -751,7 +760,26 @@ def from_registry_entry(
             "model.yaml must be at weka_path/model.yaml. Run migrate_model_yaml or re-ingest."
         )
 
-    model_yaml_path = f"{entry.weka_path}/model.yaml"
+    # Resolves to the git-tracked config when the entry records a
+    # config_repo_dir; otherwise the copy in the Weka dataset folder.
+    model_yaml_path = entry.model_yaml_path
+
+    # config.json must live in the dataset folder (rslearn reads it from the
+    # dataset root), so pin it by hash instead: fail loudly if it has drifted
+    # from what was registered at ingest time.
+    config_json_sha256 = verify_config_json_hash(
+        entry.name, entry.weka_path, entry.config_json_sha256
+    )
+    log_eval_dataset_provenance_to_wandb(
+        entry.name,
+        {
+            "model_yaml_path": model_yaml_path,
+            "model_yaml_sha256": sha256_of_file(model_yaml_path),
+            "config_json_sha256": config_json_sha256,
+            "config_repo_dir": entry.config_repo_dir,
+            "weka_path": entry.weka_path,
+        },
+    )
 
     # Use override if provided, otherwise use modalities from entry
     if input_modalities_override:

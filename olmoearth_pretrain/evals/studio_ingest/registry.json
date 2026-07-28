@@ -2366,6 +2366,7 @@
         "17",
         "18"
       ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis_rslearn",
       "end_time": "2019-09-01",
       "imputes": [],
       "is_multilabel": false,

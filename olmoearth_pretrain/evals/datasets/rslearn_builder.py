@@ -24,6 +24,10 @@ from rslearn.train.dataset import ModelDataset
 from rslearn.utils.jsonargparse import init_jsonargparse
 from upath import UPath
 
+from olmoearth_pretrain.evals.studio_ingest.provenance import (
+    verify_config_json_hash,
+)
+
 logger = logging.getLogger(__name__)
 
 _JSONARGPARSE_INITIALIZED = False
@@ -330,6 +334,7 @@ def build_dataset_from_registry_entry(
     tags_override = {entry.split_tag_key: split}
     logger.info("Using tag-based splits: %s=%s", entry.split_tag_key, split)
 
+    verify_config_json_hash(entry.name, entry.weka_path, entry.config_json_sha256)
     model_config = parse_model_config(entry.model_yaml_path)
     return build_model_dataset(
         model_config=model_config,
