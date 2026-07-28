@@ -229,6 +229,11 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     sub_command = _get_sub_command(args)
     launch_command = "torchrun" if sub_command == SubCmd.evaluate else "python3"
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
+    priority = getattr(args, "priority", None)
+    if priority:
+        launch_overrides = launch_overrides.replace(
+            "--launch.priority=high", f"--launch.priority={priority}"
+        )
     checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
     project_name = args.project_name or EVAL_WANDB_PROJECT
     extra = " " + " ".join(extra_cli) if extra_cli else ""
@@ -323,6 +328,12 @@ def main() -> None:
         "--select_best_val",
         action="store_true",
         help="Select the best test epoch by the primary validation metric",
+    )
+    parser.add_argument(
+        "--priority",
+        type=str,
+        default=None,
+        help="Beaker job priority (default high), e.g. urgent",
     )
     parser.add_argument(
         "--window_size",
