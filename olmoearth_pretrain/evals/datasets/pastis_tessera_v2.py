@@ -165,6 +165,11 @@ def _read_scenes(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Read every completed scene of a layer onto the window grid.
 
+    A layer that was prepared but matched zero items (e.g. no descending S1
+    passes over the window) yields empty (0, H, W, C) / (0,) arrays — the
+    Tessera inference handles missing sources. A layer with prepared items
+    but no materialized scenes raises (materialization incomplete).
+
     Returns:
         (T, H, W, C) float32 array (band sets concatenated in the given
         order, coarser band sets resampled to the window resolution) and the
@@ -176,6 +181,14 @@ def _read_scenes(
         if name == layer_name
     )
     times = _acquisition_times(window, layer_name)
+    if not times:
+        height = window.bounds[3] - window.bounds[1]
+        width = window.bounds[2] - window.bounds[0]
+        num_bands = sum(len(bands) for bands in band_sets)
+        return (
+            np.zeros((0, height, width, num_bands), dtype=np.float32),
+            np.zeros((0,), dtype=np.int64),
+        )
     raster_format = GeotiffRasterFormat()
     scenes = []
     for group_idx in completed:
@@ -206,6 +219,13 @@ def _read_scenes(
 def build_dpixel_inputs(fetch_window: Window) -> dict[str, np.ndarray]:
     """Assemble the tessera_v2_infer.encode_tile inputs for one window."""
     s2, s2_doys = _read_scenes(fetch_window, S2_LAYER, S2_BAND_SETS)
+    if s2.shape[0] == 0:
+        # Missing S1 passes can be real (orbit geometry); zero S2 scenes over
+        # a PASTIS window can only be a fetch-pipeline failure.
+        raise ValueError(
+            f"window {fetch_window.group}/{fetch_window.name} has zero "
+            f"{S2_LAYER} scenes"
+        )
     # SCL is categorical: nearest resampling, no averaging across classes.
     scl, scl_doys = _read_scenes(
         fetch_window, S2_LAYER, (SCL_BAND_SET,), resampling=Resampling.nearest
