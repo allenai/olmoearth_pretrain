@@ -150,13 +150,19 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         """Pool the register grid into the eval embedding.
 
         For spatial tasks (segmentation/regression) the grid is returned as a coarse
-        ``[B, n_h, n_w, D]`` spatial map for the downstream head to upsample; otherwise
-        the registers are pooled across the grid to ``[B, D]``.
+        ``[B, n_h, n_w, D]`` spatial map for the downstream head to upsample. For
+        center-pixel classification (``use_center_token``) only the center cell is kept,
+        matching the non-bottleneck path -- the label describes the center pixel, so
+        averaging the whole window would mix in unlabeled context. Otherwise the
+        registers are pooled across the grid to ``[B, D]``.
         """
         registers = encoder_output["registers"]  # [B, n_reg, D]
-        if self.spatial_pool:
+        if self.spatial_pool or self.use_center_token:
             n_h, n_w = self.model.register_bottleneck.register_grid
-            return rearrange(registers, "b (h w) d -> b h w d", h=n_h, w=n_w)
+            grid = rearrange(registers, "b (h w) d -> b h w d", h=n_h, w=n_w)
+            if self.spatial_pool:
+                return grid
+            return self._extract_center_token(grid)
         return reduce(registers, "b n d -> b d", self.pooling_type)
 
     def __call__(
