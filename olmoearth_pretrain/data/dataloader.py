@@ -56,7 +56,6 @@ def _worker_ignore_sigterm(worker_id: int) -> None:
     from running (stuck ranks then get SIGKILLed, which can leave GPUs in a bad
     state). Workers must instead stay alive until the parent shuts them down.
     """
-    del worker_id
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
 
