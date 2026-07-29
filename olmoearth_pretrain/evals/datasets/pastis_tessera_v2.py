@@ -45,7 +45,9 @@ pass ``--checkpoint_path``.
 """
 
 import argparse
+import itertools
 import logging
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
@@ -311,12 +313,29 @@ def infer(
             logger.exception(f"window {eval_window.name}: reading inputs failed")
             return eval_window, None, True
 
+    def bounded_map(pool: ThreadPoolExecutor, windows: list[Window]) -> Any:
+        """pool.map with bounded read-ahead.
+
+        pool.map submits every window upfront and buffers all completed
+        results until consumed — each holds ~200MB of scene arrays, so if
+        reads outpace inference the host runs out of memory. Keep at most
+        2 x read_workers windows in flight instead.
+        """
+        pending: deque = deque()
+        window_iter = iter(windows)
+        for window in itertools.islice(window_iter, 2 * read_workers):
+            pending.append(pool.submit(read_one, window))
+        while pending:
+            yield pending.popleft().result()
+            for window in itertools.islice(window_iter, 1):
+                pending.append(pool.submit(read_one, window))
+
     written = 0
     skipped = 0
     failed: list[str] = []
     # Overlap raster reads (I/O-bound) with GPU inference.
     with ThreadPoolExecutor(max_workers=read_workers) as pool:
-        for eval_window, inputs, read_failed in pool.map(read_one, eval_windows):
+        for eval_window, inputs, read_failed in bounded_map(pool, eval_windows):
             if read_failed:
                 failed.append(eval_window.name)
                 continue
