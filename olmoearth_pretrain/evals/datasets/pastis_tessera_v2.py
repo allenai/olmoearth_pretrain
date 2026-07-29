@@ -185,7 +185,7 @@ def _read_scenes(
                 window.projection,
                 window.bounds,
                 resampling=resampling,
-            ).chw_array
+            ).get_chw_array()
             for bands in band_sets
         ]
         scenes.append(np.concatenate(arrays, axis=0).transpose(1, 2, 0))
