@@ -6,6 +6,7 @@ from typing import Any
 
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
+import torch.nn.functional as F
 from olmo_core.distributed.parallel import DataParallelConfig
 from olmo_core.distributed.utils import get_local_rank, get_local_tensor
 from olmo_core.optim import OptimConfig
@@ -30,6 +31,73 @@ from olmoearth_pretrain.train.utils import split_masked_batch
 logger = getLogger(__name__)
 
 
+def compute_projection_distill_loss(
+    teacher: torch.Tensor,
+    student: torch.Tensor,
+    back_projections: dict[str, torch.nn.Module],
+    cosine_weight: float,
+    gram_weight: float,
+    gram_max_tokens: int,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Distill the (detached) teacher register grid into the low-dim student.
+
+    Each entry of ``back_projections`` is a Matryoshka prefix width ``d`` (as a
+    string key): the first ``d`` dims of the student are distilled onto the full
+    teacher through their own back-projection (cosine) and their own relational
+    Gram term, so every listed prefix is trained to be self-sufficient
+    (Tessera-v2 per-prefix heads). Terms are summed unweighted across prefixes.
+
+    Args:
+        teacher: Register grid ``[B, N, D]``; detached here, so this loss never
+            reaches the encoder.
+        student: Projected register grid ``[B, N, max_d]`` (the detached-input
+            student; gradients flow into the projection + back-projections only).
+        back_projections: Per-prefix learned ``d -> D`` maps, keyed by ``str(d)``.
+        cosine_weight: Weight of ``1 - cos(back_projection_d(student[..., :d]),
+            teacher)`` (each prefix).
+        gram_weight: Weight of the MSE between each student prefix's and the
+            teacher's token-token cosine-similarity matrices (relational/RKD term).
+        gram_max_tokens: Max register cells entering the Gram terms (one random
+            subsample shared across prefixes; bounds the O(n^2) matrices).
+
+    Returns:
+        total: The weighted sum of the enabled terms across prefixes.
+        metrics: Detached per-term, per-prefix values for logging.
+    """
+    teacher = teacher.detach().float()
+    student = student.float()
+    metrics: dict[str, torch.Tensor] = {}
+    total = torch.zeros([], device=student.device, dtype=student.dtype)
+    flat_teacher: torch.Tensor | None = None
+    teacher_gram: torch.Tensor | None = None
+    idx: torch.Tensor | None = None
+    if gram_weight > 0:
+        flat_teacher = F.normalize(teacher.reshape(-1, teacher.shape[-1]), dim=-1)
+        num_tokens = flat_teacher.shape[0]
+        if num_tokens > gram_max_tokens:
+            idx = torch.randperm(num_tokens, device=flat_teacher.device)[
+                :gram_max_tokens
+            ]
+            flat_teacher = flat_teacher[idx]
+        teacher_gram = flat_teacher @ flat_teacher.T
+    for dim_str, back_projection in back_projections.items():
+        prefix = student[..., : int(dim_str)]
+        if cosine_weight > 0:
+            back = back_projection(prefix)
+            cosine = (1.0 - F.cosine_similarity(back, teacher, dim=-1)).mean()
+            total = total + cosine_weight * cosine
+            metrics[f"projection/distill_cosine_d{dim_str}"] = cosine.detach()
+        if gram_weight > 0:
+            assert teacher_gram is not None
+            flat_prefix = F.normalize(prefix.reshape(-1, prefix.shape[-1]), dim=-1)
+            if idx is not None:
+                flat_prefix = flat_prefix[idx]
+            gram = F.mse_loss(flat_prefix @ flat_prefix.T, teacher_gram)
+            total = total + gram_weight * gram
+            metrics[f"projection/distill_gram_d{dim_str}"] = gram.detach()
+    return total, metrics
+
+
 @dataclass
 class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     """A configuration class for building :class:`LatentMIMTrainModule` instances.
@@ -52,6 +120,18 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     )
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
+    # Distillation losses for the encoder's detached register projection (the low-dim
+    # "student"; see EncoderConfig.register_projection_dim). Only used when the model
+    # produces projection outputs. Cosine: 1 - cos(back_projection(student), teacher)
+    # per register cell (Tessera-v2 style, via the encoder's learned back-projection).
+    # Gram: MSE between the student's and teacher's token-token cosine-similarity
+    # matrices over a random subsample of register cells (relational/RKD term --
+    # preserves the teacher's geometry, the property dense probes use).
+    projection_distill_cosine_weight: float = 1.0
+    projection_distill_gram_weight: float = 1.0
+    # Max register cells (across the microbatch) entering the Gram term; bounds the
+    # O(n^2) similarity matrices.
+    projection_distill_gram_max_tokens: int = 2048
 
     def build(
         self,
@@ -120,6 +200,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         ema_decay: tuple[float, float] = (0.996, 1.0),
         regularizer_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
+        projection_distill_cosine_weight: float = 1.0,
+        projection_distill_gram_weight: float = 1.0,
+        projection_distill_gram_max_tokens: int = 2048,
     ):
         """Initialize the training module.
 
@@ -145,6 +228,12 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             mae_loss_config: Optional loss config for masked auto-encoding.
             regularizer_config: An optional regularizer configuration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
+            projection_distill_cosine_weight: Weight of the cosine distillation term
+                for the detached register projection (see the config docstring).
+            projection_distill_gram_weight: Weight of the Gram (relational)
+                distillation term for the detached register projection.
+            projection_distill_gram_max_tokens: Max register cells entering the Gram
+                term per microbatch (bounds the O(n^2) similarity matrices).
         """
         super().__init__(
             model=model,
@@ -184,6 +273,12 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 self.model.supervision_head.modality_configs.keys()
             )
             self.total_loss_name = f"{self.total_loss_name}+supervision"
+
+        self.projection_distill_cosine_weight = projection_distill_cosine_weight
+        self.projection_distill_gram_weight = projection_distill_gram_weight
+        self.projection_distill_gram_max_tokens = projection_distill_gram_max_tokens
+        if getattr(self.model.encoder, "register_projection_dims", None) is not None:
+            self.total_loss_name = f"{self.total_loss_name}+projection"
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -301,6 +396,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 reconstructed,
                 extra_metrics,
                 supervision_preds,
+                projection_outputs,
             ) = self.model(batch, patch_size)
 
             with torch.no_grad():
@@ -335,5 +431,42 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                         if extra_metrics is None:
                             extra_metrics = {}
                         extra_metrics[f"supervision/{mod_name}"] = mod_loss
+
+                if projection_outputs is not None:
+                    # Detached-student losses: the teacher registers are detached and
+                    # the student's inputs were detached inside the encoder, so none
+                    # of this reaches the encoder or the primary bottleneck.
+                    distill_loss, distill_metrics = compute_projection_distill_loss(
+                        teacher=projection_outputs["registers"],
+                        student=projection_outputs["projected_registers"],
+                        back_projections=dict(
+                            self.model.encoder.register_back_projections
+                        ),
+                        cosine_weight=self.projection_distill_cosine_weight,
+                        gram_weight=self.projection_distill_gram_weight,
+                        gram_max_tokens=self.projection_distill_gram_max_tokens,
+                    )
+                    loss = loss + distill_loss
+                    if extra_metrics is None:
+                        extra_metrics = {}
+                    extra_metrics.update(distill_metrics)
+                    projection_supervision_preds = projection_outputs[
+                        "supervision_preds"
+                    ]
+                    if (
+                        projection_supervision_preds is not None
+                        and self.model.projection_supervision_heads is not None
+                    ):
+                        for dim_str, dim_preds in projection_supervision_preds.items():
+                            proj_sup_loss, proj_per_modality = compute_supervision_loss(
+                                dim_preds,
+                                batch,
+                                self.model.projection_supervision_heads[dim_str],
+                            )
+                            loss = loss + proj_sup_loss
+                            for mod_name, mod_loss in proj_per_modality.items():
+                                extra_metrics[
+                                    f"supervision_projection_d{dim_str}/{mod_name}"
+                                ] = mod_loss
 
             return loss, latent, decoded, target_output, extra_metrics

@@ -2228,6 +2228,8 @@ class Encoder(FlexiVitBase):
         register_attn_dim: int | None = None,
         register_temporal_anchor: str | None = None,
         register_contrastive_source: str = "registers",
+        register_projection_dims: list[int] | None = None,
+        register_projection_type: str = "linear",
     ):
         """Initialize the encoder.
 
@@ -2368,6 +2370,33 @@ class Encoder(FlexiVitBase):
                 ``"encoder_tokens"`` (project from the encoder's patch-token output at the
                 final embedding size, as before the bottleneck existed). Ignored when the
                 bottleneck is off (always reads encoder tokens).
+            register_projection_dims: If set, add a DETACHED low-dim "student" readout
+                of the register grid, exported alongside the registers as
+                ``projected_registers`` at width ``max(register_projection_dims)``.
+                The student's input is detached, so its gradients (distillation /
+                supervision, computed by the train module) never reach the encoder or
+                the primary bottleneck -- the encoder trains exactly as it would
+                without the student, and the student is trained online against the
+                improving teacher (post-hoc distillation amortized into the
+                pretraining run). Additional (smaller) entries are trained as
+                MATRYOSHKA PREFIXES of the student output (Tessera-v2 style): each
+                dim ``d`` gets its own back-projection (cosine distillation of
+                ``student[..., :d]`` onto the teacher), its own Gram term, and -- when
+                projection supervision is enabled -- its own supervision head, so the
+                first ``d`` dims form a self-sufficient embedding and deployment can
+                truncate for free. Requires ``use_register_bottleneck``. Defaults to
+                None (no student).
+            register_projection_type: Architecture of the student readout.
+                ``"linear"`` projects each register cell independently
+                (``Linear(register_dim, max(register_projection_dims))`` on the
+                detached registers) -- tests whether the teacher's information is
+                linearly readable per cell at the low width. ``"perceiver"``
+                instantiates a second :class:`SpatialRegisterBottleneck` at the
+                student width (wideread: ``attn_dim=embedding_size``, encoder-shaped
+                heads, mirroring the primary's schedule) that re-reads the DETACHED
+                final-layer patch tokens -- the deployed narrow-bottleneck
+                architecture, trained by distillation instead of the pretext loss.
+                Defaults to ``"linear"``.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2441,6 +2470,18 @@ class Encoder(FlexiVitBase):
 
         self.use_register_bottleneck = use_register_bottleneck
         self.register_bottleneck: SpatialRegisterBottleneck | None = None
+        # Detached low-dim student readout of the register grid (see docstring).
+        # Dims are stored descending; the student runs at dims[0] and the smaller
+        # entries are Matryoshka prefixes of its output.
+        self.register_projection_dims = (
+            sorted(set(register_projection_dims), reverse=True)
+            if register_projection_dims
+            else None
+        )
+        self.register_projection_type = register_projection_type
+        self.register_projection: nn.Linear | None = None
+        self.register_projection_student: SpatialRegisterBottleneck | None = None
+        self.register_back_projections: nn.ModuleDict | None = None
         self.register_temporal_anchor = register_temporal_anchor
         if register_temporal_anchor is not None:
             if not use_register_bottleneck:
@@ -2506,6 +2547,73 @@ class Encoder(FlexiVitBase):
                 temporal_anchor=register_temporal_anchor,
                 temporal_rope_dim_frac=temporal_rope_dim_frac,
                 rope_temporal_base=rope_temporal_base,
+            )
+            # Detached low-dim "student" readout (see the __init__ docstring). Both
+            # variants consume DETACHED inputs, so the student is invisible to the
+            # encoder's training; the per-prefix back-projections fund the cosine
+            # distillation terms (student prefix -> teacher width) in the train module.
+            if self.register_projection_dims is not None:
+                if register_projection_type not in ("linear", "perceiver"):
+                    raise ValueError(
+                        "register_projection_type must be 'linear' or 'perceiver', "
+                        f"got {register_projection_type!r}"
+                    )
+                if any(d <= 0 for d in self.register_projection_dims):
+                    raise ValueError(
+                        "register_projection_dims must be positive, got "
+                        f"{register_projection_dims}"
+                    )
+                student_dim = self.register_projection_dims[0]
+                if register_projection_type == "linear":
+                    # Per-cell linear map on the detached register grid.
+                    self.register_projection = nn.Linear(
+                        resolved_register_dim, student_dim
+                    )
+                else:
+                    # A second bottleneck at the projection width, re-reading the
+                    # DETACHED final-layer patch tokens. Always wideread
+                    # (attn_dim=embedding_size, encoder-shaped heads): narrow widths
+                    # cannot fund both head count and head dim (see register_attn_dim).
+                    # Mirrors the primary's grid mode and schedule; always reads the
+                    # final layer (no multi-depth), whatever the primary does.
+                    self.register_projection_student = SpatialRegisterBottleneck(
+                        encoder_embedding_size=embedding_size,
+                        register_dim=student_dim,
+                        register_grid=(
+                            None
+                            if register_grid_size is None or register_grid_size <= 0
+                            else (register_grid_size, register_grid_size)
+                        ),
+                        num_heads=num_heads,
+                        mlp_ratio=mlp_ratio,
+                        read_depth=register_read_depth,
+                        latent_transformer_depth=register_latent_depth,
+                        use_2d_rope=PositionEncoding.is_rope(self.position_encoding),
+                        rope_base=rope_base,
+                        qk_norm=qk_norm,
+                        interleave=register_interleave,
+                        read_layers=None,
+                        per_depth_read_proj=register_per_depth_read_proj,
+                        learned_read_weighting=False,
+                        fused_read=None,
+                        latent_self_attn=register_latent_self_attn,
+                        attn_dim=embedding_size,
+                        temporal_anchor=register_temporal_anchor,
+                        temporal_rope_dim_frac=temporal_rope_dim_frac,
+                        rope_temporal_base=rope_temporal_base,
+                    )
+                # One back-projection per Matryoshka prefix: dim d reconstructs the
+                # teacher from student[..., :d], forcing the first d dims to be
+                # self-sufficient (Tessera-v2 per-prefix heads).
+                self.register_back_projections = nn.ModuleDict(
+                    {
+                        str(d): nn.Linear(d, resolved_register_dim)
+                        for d in self.register_projection_dims
+                    }
+                )
+        elif register_projection_dims is not None:
+            raise ValueError(
+                "register_projection_dims requires use_register_bottleneck=True"
             )
 
         if register_contrastive_source not in ("registers", "encoder_tokens"):
@@ -3125,6 +3233,27 @@ class Encoder(FlexiVitBase):
                 "registers": registers,
                 "register_positions": register_positions,
             }
+            # Detached student readout: reuses this pass's encodings (no second
+            # encoder forward) -- the linear variant re-projects the registers just
+            # computed; the perceiver variant re-reads the same final-layer tokens.
+            # Both consume DETACHED tensors, so no student gradient reaches the
+            # encoder or the primary bottleneck.
+            if self.register_projection is not None:
+                register_output["projected_registers"] = self.register_projection(
+                    registers.detach()
+                )
+            elif self.register_projection_student is not None:
+                projected, _ = self.register_projection_student(
+                    patch_tokens=tokens.detach(),
+                    patch_positions=register_kv_positions,
+                    visible_mask=bool_mask,
+                    spatial_grid=spatial_grid,
+                    window_half_extent=window_half_extent,
+                    patch_is_global=(
+                        ~patch_spatial_flag if patch_spatial_flag is not None else None
+                    ),
+                )
+                register_output["projected_registers"] = projected
 
         tokens_per_modality_dict = self.split_and_expand_per_modality(
             tokens, modalities_to_dims_dict
@@ -3190,6 +3319,10 @@ class Encoder(FlexiVitBase):
         if register_output is not None:
             output_dict["registers"] = register_output["registers"]
             output_dict["register_positions"] = register_output["register_positions"]
+            if "projected_registers" in register_output:
+                output_dict["projected_registers"] = register_output[
+                    "projected_registers"
+                ]
 
         if not fast_pass:
             if self.contrastive_from_registers:
@@ -3860,6 +3993,22 @@ class EncoderConfig(Config):
     # position_encoding. None (default) keeps the purely spatial read (backwards
     # compatible).
     register_temporal_anchor: str | None = None
+    # If set, add a DETACHED low-dim "student" readout of the register grid, exported
+    # as ``projected_registers`` (at width max(dims)) alongside the registers. The
+    # student's inputs are detached, so its training signal (distillation to the
+    # registers + optional supervision, wired in the train module) never reaches the
+    # encoder: the encoder trains exactly as it would without the student. Smaller
+    # entries are trained as MATRYOSHKA PREFIXES of the student output (each dim gets
+    # its own back-projection / Gram term / supervision head), so e.g. [128, 64]
+    # yields one 128d artifact whose first 64 dims are a self-sufficient 64d
+    # embedding. Requires use_register_bottleneck. None (default) -> no student.
+    register_projection_dims: list[int] | None = None
+    # Student architecture: "linear" (per-cell Linear(register_dim, max(dims)) on
+    # the detached registers) or "perceiver" (a second wideread bottleneck at the
+    # student width re-reading the detached final-layer tokens -- the deployed
+    # narrow-bottleneck architecture trained by distillation instead of the pretext
+    # loss). Ignored without register_projection_dims.
+    register_projection_type: str = "linear"
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -3996,6 +4145,19 @@ class EncoderConfig(Config):
                         "register_per_depth_read_proj (the fusion replaces the per-depth "
                         "read projections)"
                     )
+            if self.register_projection_dims is not None:
+                if len(self.register_projection_dims) == 0 or any(
+                    d <= 0 for d in self.register_projection_dims
+                ):
+                    raise ValueError(
+                        "register_projection_dims must be a non-empty list of "
+                        f"positive ints, got {self.register_projection_dims}"
+                    )
+                if self.register_projection_type not in ("linear", "perceiver"):
+                    raise ValueError(
+                        "register_projection_type must be 'linear' or 'perceiver', "
+                        f"got {self.register_projection_type!r}"
+                    )
         elif self.register_read_layers is not None:
             raise ValueError(
                 "register_read_layers requires use_register_bottleneck=True"
@@ -4003,6 +4165,10 @@ class EncoderConfig(Config):
         elif self.register_fused_read is not None:
             raise ValueError(
                 "register_fused_read requires use_register_bottleneck=True"
+            )
+        elif self.register_projection_dims is not None:
+            raise ValueError(
+                "register_projection_dims requires use_register_bottleneck=True"
             )
         if self.register_contrastive_source not in ("registers", "encoder_tokens"):
             raise ValueError(

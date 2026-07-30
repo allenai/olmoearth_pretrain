@@ -333,7 +333,17 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 reconstructed,
                 extra_metrics,
                 supervision_preds,
+                projection_outputs,
             ) = self.model(batch, patch_size)
+            if projection_outputs is not None:
+                # The detached register projection is trained by the distillation /
+                # projection-supervision losses in LatentMIMTrainModule; this
+                # (two-view contrastive) module does not implement them, so refuse
+                # rather than silently leaving the student untrained.
+                raise NotImplementedError(
+                    "register_projection_dims is not supported by "
+                    "ContrastiveLatentMIMTrainModule; use LatentMIMTrainModule"
+                )
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
                 output_dict = self.model.target_encoder.forward(

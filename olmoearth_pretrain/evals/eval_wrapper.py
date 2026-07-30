@@ -50,6 +50,8 @@ class EvalWrapper:
         concat_features: bool = False,
         use_pooled_tokens: bool = False,
         eval_on_encoder_tokens: bool = False,
+        eval_on_projected_registers: bool = False,
+        eval_projection_dim: int | None = None,
         use_center_token: bool = False,
     ):
         """Initialize the eval wrapper.
@@ -65,6 +67,15 @@ class EvalWrapper:
                 probe the pooled encoder patch tokens instead of the register latents.
                 No effect when the model has no register bottleneck (encoder tokens are
                 always used in that case).
+            eval_on_projected_registers: If True and the model has a detached register
+                projection (``register_projection_dims``), probe the low-dim
+                ``projected_registers`` instead of the register grid -- the same run
+                can then be evaluated at both widths. Mutually exclusive with
+                eval_on_encoder_tokens.
+            eval_projection_dim: With ``eval_on_projected_registers``, probe only the
+                first ``eval_projection_dim`` dims of the student (a Matryoshka
+                prefix, e.g. 64 of a [128, 64] student). None (default) probes the
+                full student width.
             use_center_token: Whether to use the center spatial patch embedding instead
                 of pooling across all patches for classification tasks.
         """
@@ -83,7 +94,21 @@ class EvalWrapper:
         )
         self.use_pooled_tokens = use_pooled_tokens
         self.eval_on_encoder_tokens = eval_on_encoder_tokens
+        self.eval_on_projected_registers = eval_on_projected_registers
+        self.eval_projection_dim = eval_projection_dim
         self.use_center_token = use_center_token
+        if self.eval_on_projected_registers and self.eval_on_encoder_tokens:
+            raise ValueError(
+                "eval_on_projected_registers and eval_on_encoder_tokens are mutually "
+                "exclusive (projected registers only exist under the bottleneck)"
+            )
+        if (
+            self.eval_projection_dim is not None
+            and not self.eval_on_projected_registers
+        ):
+            raise ValueError(
+                "eval_projection_dim requires eval_on_projected_registers=True"
+            )
         if self.use_center_token and self.spatial_pool:
             raise ValueError(
                 "use_center_token is only supported for classification tasks, "
@@ -155,8 +180,24 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         matching the non-bottleneck path -- the label describes the center pixel, so
         averaging the whole window would mix in unlabeled context. Otherwise the
         registers are pooled across the grid to ``[B, D]``.
+
+        With ``eval_on_projected_registers`` the low-dim detached student
+        (``projected_registers``) is probed instead of the register grid; it shares
+        the registers' grid layout, so the pooling is identical.
+        ``eval_projection_dim`` keeps only the first d dims (a Matryoshka prefix).
         """
-        registers = encoder_output["registers"]  # [B, n_reg, D]
+        if self.eval_on_projected_registers:
+            if "projected_registers" not in encoder_output:
+                raise ValueError(
+                    "eval_on_projected_registers requires a model with "
+                    "register_projection_dims (no projected_registers in the encoder "
+                    "output)"
+                )
+            registers = encoder_output["projected_registers"]  # [B, n_reg, d]
+            if self.eval_projection_dim is not None:
+                registers = registers[..., : self.eval_projection_dim]
+        else:
+            registers = encoder_output["registers"]  # [B, n_reg, D]
         if self.spatial_pool or self.use_center_token:
             n_h, n_w = self.model.register_bottleneck.register_grid
             grid = rearrange(registers, "b (h w) d -> b h w d", h=n_h, w=n_w)

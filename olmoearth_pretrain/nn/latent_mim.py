@@ -83,6 +83,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         decoder: nn.Module,
         reconstructor: torch.nn.Module | None = None,
         supervision_head: SupervisionHead | None = None,
+        projection_supervision_heads: dict[int, SupervisionHead] | None = None,
         projection_only_target: bool = False,
     ):
         """Initialize the Latent MIM Style.
@@ -93,6 +94,13 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructor: Optional reconstructor for auto-encoding.
             supervision_head: Optional supervision head for direct supervision
                 of decode-only modalities from decoder output.
+            projection_supervision_heads: Optional per-prefix supervision heads
+                reading the encoder's DETACHED low-dim register projection
+                (``projected_registers``) instead of the register grid, keyed by
+                Matryoshka prefix width (head ``d`` reads
+                ``projected_registers[..., :d]``). Their gradients train the
+                projection (and themselves) only -- never the encoder. Requires the
+                encoder's ``register_projection_dims``.
             projection_only_target: If True, the target encoder is only the frozen
                 initial projection (patch embeddings + optional embedding projector)
                 instead of a full copy of the encoder. Only valid when all token
@@ -104,6 +112,14 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.decoder = decoder
         self.reconstructor = reconstructor
         self.supervision_head = supervision_head
+        # ModuleDict keys must be strings; keep prefix widths as str(dim).
+        self.projection_supervision_heads = (
+            nn.ModuleDict(
+                {str(dim): head for dim, head in projection_supervision_heads.items()}
+            )
+            if projection_supervision_heads
+            else None
+        )
         if projection_only_target:
             self.target_encoder: nn.Module = FrozenTargetProjection(self.encoder)
         else:
@@ -120,6 +136,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         TokensAndMasks | None,
         dict[str, Any],
         dict[str, torch.Tensor] | None,
+        dict[str, Any] | None,
     ]:
         """Forward pass for the Latent MIM Style.
 
@@ -130,6 +147,11 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
             extra_metrics: additional metrics to log
             supervision_preds: per-modality supervision predictions (or None)
+            projection_outputs: detached-student outputs when the encoder has a
+                register projection (else None): the teacher ``registers``, the
+                student ``projected_registers``, and the student's
+                ``supervision_preds`` (or None). Consumed by the train module's
+                distillation / projection-supervision losses.
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         output_dict = self.encoder(x, patch_size=patch_size)
@@ -137,6 +159,9 @@ class LatentMIM(nn.Module, DistributedMixins):
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict
         )
+        # The decoder reads only the registers; the student projection is for the
+        # train module's losses (and evals), never a decoder input.
+        projected_registers = decoder_kwargs.pop("projected_registers", None)
         extra_metrics = {}
         if token_norm_stats is not None:
             extra_metrics["token_norm_stats"] = token_norm_stats
@@ -196,6 +221,31 @@ class LatentMIM(nn.Module, DistributedMixins):
             else:
                 supervision_preds = self.supervision_head(decoded, x)
 
+        projection_outputs = None
+        if projected_registers is not None:
+            projection_supervision_preds = None
+            if self.projection_supervision_heads is not None:
+                # Same grid as the registers (the student mirrors the primary's grid).
+                # Head d reads the first d dims (the Matryoshka prefix), so every
+                # listed width is supervised as a self-sufficient embedding. The
+                # student input is already detached inside the encoder, so these
+                # gradients stop at the projection.
+                n_h, n_w = self.encoder.register_bottleneck.register_grid
+                projected_grid = projected_registers.reshape(
+                    projected_registers.shape[0], n_h, n_w, -1
+                )
+                projection_supervision_preds = {
+                    dim_str: head(
+                        decoded, x, register_grid=projected_grid[..., : int(dim_str)]
+                    )
+                    for dim_str, head in self.projection_supervision_heads.items()
+                }
+            projection_outputs = {
+                "registers": decoder_kwargs.get("registers"),
+                "projected_registers": projected_registers,
+                "supervision_preds": projection_supervision_preds,
+            }
+
         return (
             latent,
             decoded,
@@ -203,6 +253,7 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructed,
             extra_metrics,
             supervision_preds,
+            projection_outputs,
         )
 
     def apply_fsdp(
@@ -230,6 +281,9 @@ class LatentMIM(nn.Module, DistributedMixins):
             self.reconstructor.apply_fsdp(**fsdp_config)
         if self.supervision_head is not None:
             fully_shard(self.supervision_head, **fsdp_config)
+        if self.projection_supervision_heads is not None:
+            for head in self.projection_supervision_heads.values():
+                fully_shard(head, **fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
@@ -247,6 +301,10 @@ class LatentMIM(nn.Module, DistributedMixins):
         if self.supervision_head is not None:
             self.supervision_head = torch.compile(self.supervision_head)
             logger.info("Applied torch.compile to the supervision head")
+        if self.projection_supervision_heads is not None:
+            for dim_str, head in self.projection_supervision_heads.items():
+                self.projection_supervision_heads[dim_str] = torch.compile(head)
+            logger.info("Applied torch.compile to the projection supervision heads")
 
 
 @dataclass
@@ -257,6 +315,13 @@ class LatentMIMConfig(Config):
     decoder_config: Config
     reconstructor_config: Config | None = None
     supervision_head_config: SupervisionHeadConfig | None = None
+    # Where the (register) supervision heads attach when the encoder has a detached
+    # register projection: "registers" (default -- the register grid, gradients shape
+    # the encoder/bottleneck as before), "projection" (only the detached low-dim
+    # student -- the encoder gets NO supervision gradient), or "both" (two separate
+    # heads, one per source). Only meaningful with register_supervision=True; sources
+    # other than "registers" require encoder_config.register_projection_dim.
+    supervision_source: str = "registers"
     projection_only_target: bool = False
 
     def validate(self) -> None:
@@ -307,6 +372,25 @@ class LatentMIMConfig(Config):
             raise ValueError(
                 "register_supervision requires the encoder register bottleneck"
             )
+        if self.supervision_source not in ("registers", "projection", "both"):
+            raise ValueError(
+                "supervision_source must be 'registers', 'projection' or 'both', "
+                f"got {self.supervision_source!r}"
+            )
+        if self.supervision_source != "registers":
+            if self.supervision_head_config is None or not getattr(
+                self.supervision_head_config, "register_supervision", False
+            ):
+                raise ValueError(
+                    "supervision_source='projection'/'both' requires a "
+                    "supervision_head_config with register_supervision=True"
+                )
+            if getattr(self.encoder_config, "register_projection_dims", None) is None:
+                raise ValueError(
+                    "supervision_source='projection'/'both' requires "
+                    "encoder_config.register_projection_dims (the detached student "
+                    "the projection heads read)"
+                )
 
     def build(self) -> "LatentMIM":
         """Build the Latent Predictor."""
@@ -319,12 +403,29 @@ class LatentMIMConfig(Config):
             else None
         )
         supervision_head = None
+        projection_supervision_heads = None
         if self.supervision_head_config is not None:
             if getattr(self.supervision_head_config, "register_supervision", False):
                 # Heads read the register grid, so embedding_dim is the register dim.
                 embedding_dim = self.encoder_config.register_dim or (
                     self.encoder_config.embedding_size // 2
                 )
+                if self.supervision_source in ("registers", "both"):
+                    supervision_head = self.supervision_head_config.build(
+                        embedding_dim=embedding_dim,
+                        max_patch_size=self.encoder_config.max_patch_size,
+                    )
+                if self.supervision_source in ("projection", "both"):
+                    # SEPARATE heads (their own parameters), one per Matryoshka
+                    # prefix width, each reading the first d dims of the detached
+                    # student grid.
+                    projection_supervision_heads = {
+                        dim: self.supervision_head_config.build(
+                            embedding_dim=dim,
+                            max_patch_size=self.encoder_config.max_patch_size,
+                        )
+                        for dim in self.encoder_config.register_projection_dims
+                    }
             else:
                 output_embed_size = getattr(
                     self.decoder_config, "output_embedding_size", None
@@ -334,14 +435,15 @@ class LatentMIMConfig(Config):
                     if output_embed_size is not None
                     else self.encoder_config.embedding_size
                 )
-            supervision_head = self.supervision_head_config.build(
-                embedding_dim=embedding_dim,
-                max_patch_size=self.encoder_config.max_patch_size,
-            )
+                supervision_head = self.supervision_head_config.build(
+                    embedding_dim=embedding_dim,
+                    max_patch_size=self.encoder_config.max_patch_size,
+                )
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
             supervision_head=supervision_head,
+            projection_supervision_heads=projection_supervision_heads,
             projection_only_target=self.projection_only_target,
         )
