@@ -12,10 +12,13 @@ datasets will record coverage gaps for other label years — gaps are logged and
 listed in each dataset's embedding_materializer_manifest_<product>.json, and
 the corresponding windows simply lack the layer.
 
-After materializing, to make the datasets AEF/Tessera-evaluable you still need
-to (a) add the gse/tessera raster layer entry to each dataset's model.yaml and
-(b) list the modality in the dataset's registry modalities; see
-docs/PrecomputedEmbeddingEvals.md.
+Materializing alone does not make a dataset evaluable: the layer also has to
+be declared in the dataset's config.json, wired as a model.yaml input, and
+listed in the registry entry's modalities. Run
+scripts/tools/wire_embedding_modalities.py afterwards to do all three (it
+gates on the manifests this script writes, so it only turns on datasets whose
+bake finished cleanly), then backfill_eval_registry_provenance.py to re-stamp
+config_json_sha256.
 
 Example:
     python scripts/tools/materialize_aef_supplemental_embeddings.py
