@@ -45,7 +45,9 @@ pass ``--checkpoint_path``.
 """
 
 import argparse
+import itertools
 import logging
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
@@ -165,6 +167,11 @@ def _read_scenes(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Read every completed scene of a layer onto the window grid.
 
+    A layer that was prepared but matched zero items (e.g. no descending S1
+    passes over the window) yields empty (0, H, W, C) / (0,) arrays — the
+    Tessera inference handles missing sources. A layer with prepared items
+    but no materialized scenes raises (materialization incomplete).
+
     Returns:
         (T, H, W, C) float32 array (band sets concatenated in the given
         order, coarser band sets resampled to the window resolution) and the
@@ -176,6 +183,14 @@ def _read_scenes(
         if name == layer_name
     )
     times = _acquisition_times(window, layer_name)
+    if not times:
+        height = window.bounds[3] - window.bounds[1]
+        width = window.bounds[2] - window.bounds[0]
+        num_bands = sum(len(bands) for bands in band_sets)
+        return (
+            np.zeros((0, height, width, num_bands), dtype=np.float32),
+            np.zeros((0,), dtype=np.int64),
+        )
     raster_format = GeotiffRasterFormat()
     scenes = []
     for group_idx in completed:
@@ -185,7 +200,7 @@ def _read_scenes(
                 window.projection,
                 window.bounds,
                 resampling=resampling,
-            ).chw_array
+            ).get_chw_array()
             for bands in band_sets
         ]
         scenes.append(np.concatenate(arrays, axis=0).transpose(1, 2, 0))
@@ -206,6 +221,13 @@ def _read_scenes(
 def build_dpixel_inputs(fetch_window: Window) -> dict[str, np.ndarray]:
     """Assemble the tessera_v2_infer.encode_tile inputs for one window."""
     s2, s2_doys = _read_scenes(fetch_window, S2_LAYER, S2_BAND_SETS)
+    if s2.shape[0] == 0:
+        # Missing S1 passes can be real (orbit geometry); zero S2 scenes over
+        # a PASTIS window can only be a fetch-pipeline failure.
+        raise ValueError(
+            f"window {fetch_window.group}/{fetch_window.name} has zero "
+            f"{S2_LAYER} scenes"
+        )
     # SCL is categorical: nearest resampling, no averaging across classes.
     scl, scl_doys = _read_scenes(
         fetch_window, S2_LAYER, (SCL_BAND_SET,), resampling=Resampling.nearest
@@ -291,12 +313,29 @@ def infer(
             logger.exception(f"window {eval_window.name}: reading inputs failed")
             return eval_window, None, True
 
+    def bounded_map(pool: ThreadPoolExecutor, windows: list[Window]) -> Any:
+        """pool.map with bounded read-ahead.
+
+        pool.map submits every window upfront and buffers all completed
+        results until consumed — each holds ~200MB of scene arrays, so if
+        reads outpace inference the host runs out of memory. Keep at most
+        2 x read_workers windows in flight instead.
+        """
+        pending: deque = deque()
+        window_iter = iter(windows)
+        for window in itertools.islice(window_iter, 2 * read_workers):
+            pending.append(pool.submit(read_one, window))
+        while pending:
+            yield pending.popleft().result()
+            for window in itertools.islice(window_iter, 1):
+                pending.append(pool.submit(read_one, window))
+
     written = 0
     skipped = 0
     failed: list[str] = []
     # Overlap raster reads (I/O-bound) with GPU inference.
     with ThreadPoolExecutor(max_workers=read_workers) as pool:
-        for eval_window, inputs, read_failed in pool.map(read_one, eval_windows):
+        for eval_window, inputs, read_failed in bounded_map(pool, eval_windows):
             if read_failed:
                 failed.append(eval_window.name)
                 continue

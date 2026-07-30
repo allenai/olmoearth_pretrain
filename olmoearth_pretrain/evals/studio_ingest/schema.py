@@ -203,6 +203,20 @@ class EvalDatasetEntry(BaseModel):
     start_time: str | None = None
     end_time: str | None = None
 
+    # === Config provenance ===
+    # Repo-relative directory containing this dataset's model.yaml (e.g.
+    # "data/rslearn_dataset_configs/pastis_rslearn"). When set, eval jobs read
+    # model.yaml from the git checkout — pinned by the commit being run —
+    # instead of the Weka copy, which can silently go stale between ingests.
+    # None falls back to the Weka copy (datasets whose configs are not yet
+    # committed to the repo).
+    config_repo_dir: str | None = None
+    # sha256 of the dataset folder's config.json, recorded at ingest. Unlike
+    # model.yaml, config.json must stay physically in the dataset folder
+    # (rslearn reads it from the dataset root), so eval jobs verify it against
+    # this hash instead. None skips verification with a warning.
+    config_json_sha256: str | None = None
+
     @field_validator("task_type", mode="before")
     @classmethod
     def _normalize_task_type(cls, value: str | TaskType) -> str:
@@ -240,7 +254,19 @@ class EvalDatasetEntry(BaseModel):
 
     @property
     def model_yaml_path(self) -> str:
-        """Get the path to the model.yaml file."""
+        """Path to the model.yaml eval jobs should read.
+
+        Entries with ``config_repo_dir`` resolve against the repo checkout
+        (git-pinned; raises if the checkout or file is missing rather than
+        silently falling back to a possibly-stale Weka copy). Entries without
+        it fall back to the copy in the Weka dataset folder.
+        """
+        if self.config_repo_dir is not None:
+            from olmoearth_pretrain.evals.studio_ingest.provenance import (
+                resolve_repo_config_path,
+            )
+
+            return resolve_repo_config_path(self.config_repo_dir, "model.yaml")
         return f"{self.weka_path}/model.yaml"
 
     def to_eval_config(self) -> EvalDatasetConfig:

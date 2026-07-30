@@ -15,7 +15,11 @@ from olmoearth_pretrain.evals.models import (
     MODELS_WITH_MULTIPLE_SIZES,
     BaselineModelName,
 )
-from olmoearth_pretrain.internal.all_evals import EVAL_TASKS, FT_EVAL_TASKS
+from olmoearth_pretrain.internal.all_evals import (
+    EMBEDDING_EVAL_TASKS,
+    EVAL_TASKS,
+    FT_EVAL_TASKS,
+)
 from olmoearth_pretrain.train.callbacks.evaluator_callback import EvalMode
 
 WANDB_ENTITY = "eai-ai2"
@@ -66,12 +70,32 @@ def get_run_group_name(run_name: str, keep_steps_separate: bool = False) -> str:
     match = re.match(pattern, run_name)
     if match:
         return match.group(1)
-    # Runs without _step: strip from the norm mode + lr suffix onwards
-    # e.g. "model_dataset_lr0.001_ptmean" -> "model"
-    match = re.match(r"(.+?)_(dataset|pre_trained|df)_lr", run_name)
+    # Runs without _step (full_eval_sweep.py): strip from the norm mode +
+    # lr/knn suffix onwards, e.g. "model_dataset_lr0.001_ptmean" -> "model",
+    # "aef_9ac5_fixed_lr0.0001_ptdf" -> "aef_9ac5", "aef_9ac5_fixed_knn_ptdf"
+    # -> "aef_9ac5". Norm modes come from _get_norm_mode_str ("mixed" is the
+    # multi-setting marker in the best-settings path); the middle token is the
+    # lr_str, which is "knn" for KNN-only runs.
+    match = re.match(
+        r"(.+?)_(dataset|pre_trained|df|fixed|mixed)_(lr[\d.eE+-]+|knn|mixed)",
+        run_name,
+    )
     if match:
         return match.group(1)
-    raise ValueError(f"unexpected run name {run_name}")
+    # Precomputed-embedding sweep runs (embedding_eval_sweep.py) have no norm
+    # token, just a terminal lr or knn suffix:
+    # "aef_9ac5_emb_lr0.0001" -> "aef_9ac5_emb",
+    # "aef_9ac5_emb_ws8_knn" -> "aef_9ac5_emb_ws8"
+    match = re.match(r"(.+)_lr[\d.eE+-]+$", run_name)
+    if match:
+        return match.group(1)
+    if run_name.endswith("_knn"):
+        return run_name[: -len("_knn")]
+    print(
+        f"WARNING: could not parse a group from run name {run_name}; "
+        "using the full run name as its own group"
+    )
+    return run_name
 
 
 def get_run_groups(
@@ -694,6 +718,7 @@ if __name__ == "__main__":
     all_metrics = (
         list(FT_EVAL_TASKS.keys()) if args.finetune else list(EVAL_TASKS.keys())
     )
+    all_metrics.extend(EMBEDDING_EVAL_TASKS.keys())
     all_metrics.extend(EXTRA_EVAL_TASKS)
 
     if args.per_partition:
@@ -783,13 +808,13 @@ if __name__ == "__main__":
                     metric_name = k.split("/")[-1]
                     print(f"  {task_name}/{metric_name}: {sub_metrics[k]}")
             else:
-                # Fall back to eval/{task} (pre-PR#504 runs without sub-metrics)
+                # Fall back to eval/{task} (pre-PR#504 runs without sub-metrics).
+                # Tasks with no result for this group are skipped silently.
                 for name in (task_name, task_name_alt):
                     k = f"{prefix}/{name}"
                     if k in metrics:
                         print(f"  {name}: {metrics[k]}")
                         return
-                print(f"  {task_name}: not found")
 
         print("\nFinal Results:")
         for group_name, metrics in group_metrics.items():
