@@ -1,4 +1,4 @@
-"""d768 teacher + detached linear [128, 64] student (lin), supervision: sup128, w1, newsampling psuniform.
+"""d768 teacher + detached perceiver [128, 64] student (pcv), supervision: supboth, w0p1, newsampling psuniform.
 
 One of the 6 detached-student ("proj128") runs -- see ``regbtl_v1_2_proj_common``
 for the full motivation and the variant matrix. The student is trained at 128d with
@@ -6,16 +6,16 @@ its first 64 dims as a self-sufficient Matryoshka prefix (per-prefix back-projec
 Gram term and, when enabled, supervision head), so one artifact ships both widths.
 This arm:
 
-* student architecture: **per-cell Linear(768, 128) on the detached registers**
-* supervision heads: **the detached 128d student ONLY -- the encoder gets no supervision gradient**
+* student architecture: **second wideread d128 Perceiver bottleneck re-reading the detached final-layer tokens**
+* supervision heads: **separate heads on BOTH the d768 registers and the 128d student**
 
-A/B against sup768 isolates WHERE regsup helps: shaping the encoder (sup768 wins)
-or shaping the output space (this arm matches it).
+A/B against the sup768 sibling isolates what supervision directly on the student
+buys on top of distillation.
 
-Recipe: d768 wideread regbtl, regsup base_weight 1.0 (w1), decorrelated sampler at
+Recipe: d768 wideread regbtl, regsup base_weight 0.1 (w0p1), decorrelated sampler at
 UNIFORM patch sizes (the newsampling psuniform recipe). The student is trained by
 the distillation terms (cosine + Gram) plus its own supervision heads; its input is detached, so the
-encoder trains with NO supervision signal at all (plain d768 base + student).
+encoder and the primary bottleneck train exactly as regsup_w0p1 does.
 """
 
 import logging
@@ -46,15 +46,15 @@ from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModul
 
 logger = logging.getLogger(__name__)
 
-MODULE_PATH = "scripts/official/v1_2/regbtl_v1_2_gdyn_d768_proj128lin_sup128_w1_newsampling_psuniform.py"
+MODULE_PATH = "scripts/official/v1_2/regbtl_v1_2_gdyn_d768_proj128pcv_supboth_w0p1_newsampling_psuniform.py"
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """d768 teacher + detached linear [128, 64] student, supervision on the 128d student."""
+    """d768 teacher + detached perceiver [128, 64] student, supervision on both widths."""
     return build_proj_model_config(
         common,
-        projection_type="linear",
-        supervision_source="projection",
+        projection_type="perceiver",
+        supervision_source="both",
     )
 
 

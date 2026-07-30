@@ -1,4 +1,4 @@
-"""d768 teacher + detached linear [128, 64] student (lin), supervision: supboth, w1, newsampling psuniform.
+"""d768 teacher + detached linear [128, 64] student (lin), supervision: supboth, w0p1, newsampling psuniform.
 
 One of the 6 detached-student ("proj128") runs -- see ``regbtl_v1_2_proj_common``
 for the full motivation and the variant matrix. The student is trained at 128d with
@@ -12,10 +12,10 @@ This arm:
 A/B against the sup768 sibling isolates what supervision directly on the student
 buys on top of distillation.
 
-Recipe: d768 wideread regbtl, regsup base_weight 1.0 (w1), decorrelated sampler at
+Recipe: d768 wideread regbtl, regsup base_weight 0.1 (w0p1), decorrelated sampler at
 UNIFORM patch sizes (the newsampling psuniform recipe). The student is trained by
 the distillation terms (cosine + Gram) plus its own supervision heads; its input is detached, so the
-encoder and the primary bottleneck train exactly as regsup_w1 does.
+encoder and the primary bottleneck train exactly as regsup_w0p1 does.
 """
 
 import logging
@@ -46,7 +46,7 @@ from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModul
 
 logger = logging.getLogger(__name__)
 
-MODULE_PATH = "scripts/official/v1_2/regbtl_v1_2_gdyn_d768_proj128lin_supboth_w1_newsampling_psuniform.py"
+MODULE_PATH = "scripts/official/v1_2/regbtl_v1_2_gdyn_d768_proj128lin_supboth_w0p1_newsampling_psuniform.py"
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:

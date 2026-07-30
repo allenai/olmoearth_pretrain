@@ -9,7 +9,7 @@ SEED/CompRess) says the fix is distillation from a wide teacher. These runs amor
 that distillation into pretraining: the d768 bottleneck trains exactly as before
 (the teacher), and a DETACHED low-dim student is trained alongside it against the
 improving teacher. Stop-gradient means the encoder run is unchanged -- variant
-``sup768`` is encoder-identical to ``regbtl_v1_2_gdyn_d768_regsup_w1_newsampling_
+``sup768`` is encoder-identical to ``regbtl_v1_2_gdyn_d768_regsup_w0p1_newsampling_
 psuniform`` -- and every checkpoint ships a 768d head plus a 128d student whose
 first 64 dims are a self-sufficient Matryoshka prefix, all evaluated side by side
 in-loop.
@@ -36,8 +36,8 @@ for 6 runs total:
 The student is always trained with the distillation terms (cosine via a learned
 back-projection + Gram/relational matching, ``LatentMIMTrainModule`` defaults).
 
-Recipe otherwise matches the d768 w1 newsampling psuniform run: wideread regbtl at
-register_dim 768, regsup base_weight 1.0, decorrelated sampler at uniform patch
+Recipe otherwise matches the d768 w0p1 newsampling psuniform run: wideread regbtl at
+register_dim 768, regsup base_weight 0.1, decorrelated sampler at uniform patch
 sizes. The architecture is baked into each run script (the in-loop Beaker eval jobs
 rebuild the model from the launching module's ``build_model_config``).
 """
@@ -64,9 +64,11 @@ logger = logging.getLogger(__name__)
 # stored artifact serves both widths by truncation (Tessera-v2 per-prefix heads).
 REGISTER_DIM = 768
 PROJECTION_DIMS = [128, 64]
-# w1 everywhere heads attach, matching the best d768 PASTIS run (regsup w1) so the
-# sup768 variant is encoder-identical to it.
-SUPERVISION_BASE_WEIGHT_W1 = 1.0
+# w0p1 (base 0.1) everywhere heads attach: best for the smaller register dims, and
+# d768 has only w0.01/w1 completed evals, so this doubles as the missing d768 w0p1
+# point. The sup768 variant is encoder-identical to the in-flight
+# regbtl_v1_2_gdyn_d768_regsup_w0p1_newsampling_psuniform run.
+SUPERVISION_BASE_WEIGHT_W0P1 = 0.1
 
 # The PASTIS ws16/ps1 embedding evals duplicated onto the projected head at each
 # Matryoshka width: the ``_proj{d}`` tasks probe (a prefix of)
@@ -87,7 +89,7 @@ def build_proj_model_config(
     projection_type: str,
     supervision_source: str,
 ) -> LatentMIMConfig:
-    """d768 wideread regbtl + regsup(w1) + a detached [128, 64] Matryoshka student.
+    """d768 wideread regbtl + regsup(w0p1) + a detached [128, 64] Matryoshka student.
 
     Args:
         common: The common experiment components.
@@ -99,7 +101,7 @@ def build_proj_model_config(
         common, latent_self_attn=True, register_dim=REGISTER_DIM
     )
     config = add_register_supervision(
-        config, include_latlon=False, base_weight=SUPERVISION_BASE_WEIGHT_W1
+        config, include_latlon=False, base_weight=SUPERVISION_BASE_WEIGHT_W0P1
     )
     config.encoder_config.register_projection_dims = list(PROJECTION_DIMS)
     config.encoder_config.register_projection_type = projection_type
