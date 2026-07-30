@@ -27,9 +27,14 @@ PrecomputedEmbedding.forward. Note that flipping it also drops those windows
 from the other evals on that dataset, so previously recorded numbers on it are
 no longer directly comparable.
 
-Step 3 only fires for products whose manifest reports a finished, clean bake
-(no failed windows); datasets still materializing are reported and left alone,
-so a dataset goes live exactly when its data is ready. Pass
+Step 3 (and --required) only fire for products whose manifest reports a
+finished, clean bake covering at least --min_coverage of the dataset's windows.
+Datasets still materializing, carrying fetch failures, or only partly covered
+by the product are reported and left alone, so a dataset goes live exactly when
+its data is ready. Partial coverage is not merely a smaller sample: Tessera
+covers 8% of ethiopia_crops, and requiring it there would drop the other 92% of
+windows from every eval on that dataset. See
+docs/PrecomputedEmbeddingCoverage.md for the measured numbers. Pass
 --no_enable_modality to stage steps 1 and 2 without turning anything on.
 
 After this script, run backfill_eval_registry_provenance.py to re-stamp
@@ -79,21 +84,37 @@ PRODUCT_TO_MODALITY: dict[str, ModalitySpec] = {
 # silently drop the layer added here.
 CONFIG_BACKUP_NAME = "config.json.pre_embedding_layers.bak"
 
+# Fraction of a dataset's windows that must carry the layer before the product
+# goes live there. See bake_is_complete for why partial coverage is unsafe, and
+# docs/PrecomputedEmbeddingCoverage.md for the measured per-dataset numbers.
+DEFAULT_MIN_COVERAGE = 0.99
+
 
 def manifest_path(weka_path: str, product: str) -> UPath:
     """Return the materializer manifest path for one (dataset, product)."""
     return UPath(weka_path) / f"embedding_materializer_manifest_{product}.json"
 
 
-def bake_is_complete(weka_path: str, product: str) -> tuple[bool, str]:
-    """Report whether a product's bake finished cleanly for this dataset.
+def bake_is_complete(
+    weka_path: str, product: str, min_coverage: float
+) -> tuple[bool, str]:
+    """Report whether a product's bake is finished, clean, and well-covered.
+
+    Coverage matters as much as completion. Because rslearn builds the dataset
+    from every input in model.yaml before the model selects which it reads, a
+    required input filters coverage-gap windows out for *all* evals on the
+    dataset, not just this product's — so wiring a sparsely covered product
+    would quietly shrink the OlmoEarth baselines on the same dataset. A bake
+    that finished but only covers a fraction of the windows is therefore not
+    ready to go live.
 
     Args:
         weka_path: the dataset folder.
         product: materializer product name (e.g. "aef", "tessera").
+        min_coverage: minimum fraction of windows that must carry the layer.
 
     Returns:
-        (complete, reason) — reason describes the manifest state either way.
+        (ready, reason) — reason describes the manifest state either way.
     """
     path = manifest_path(weka_path, product)
     if not path.exists():
@@ -104,11 +125,24 @@ def bake_is_complete(weka_path: str, product: str) -> tuple[bool, str]:
     skipped = manifest.get("num_windows_skipped_existing", 0)
     failed = manifest.get("num_windows_failed", 0)
     gaps = manifest.get("num_coverage_gaps", 0)
-    state = f"written={written} skipped={skipped} gaps={gaps} failed={failed}"
+    no_year = manifest.get("num_windows_without_year", 0)
+    have = written + skipped
+    total = have + gaps + failed + no_year
+    coverage = have / total if total else 0.0
+    state = (
+        f"written={written} skipped={skipped} gaps={gaps} failed={failed} "
+        f"coverage={coverage:.1%}"
+    )
     if failed:
         return False, f"{state} — re-run the materializer to retry failures"
-    if written + skipped == 0:
+    if have == 0:
         return False, f"{state} — nothing baked"
+    if coverage < min_coverage:
+        return False, (
+            f"{state} — below --min_coverage {min_coverage:.1%}; requiring this "
+            "layer would drop the uncovered windows from every eval on this "
+            "dataset"
+        )
     return True, state
 
 
@@ -459,6 +493,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--min_coverage",
+        type=float,
+        default=DEFAULT_MIN_COVERAGE,
+        help=(
+            "Minimum fraction of a dataset's windows that must carry the layer "
+            "before it goes live. A product that covers only part of a dataset "
+            "(e.g. Tessera outside its 2024-global / US+EU-since-2017 "
+            "footprint) would, once required, drop the uncovered windows from "
+            "every eval on that dataset — including the OlmoEarth baselines. "
+            f"Default {DEFAULT_MIN_COVERAGE:.0%}."
+        ),
+    )
+    parser.add_argument(
         "--no_enable_modality",
         action="store_true",
         help=(
@@ -512,7 +559,9 @@ def main(argv: list[str] | None = None) -> int:
 
         for product in products:
             modality = PRODUCT_TO_MODALITY[product]
-            complete, reason = bake_is_complete(entry.weka_path, product)
+            complete, reason = bake_is_complete(
+                entry.weka_path, product, args.min_coverage
+            )
             logger.info("  %s (%s): %s", product, modality.name, reason)
 
             if patch_config_json(entry.weka_path, modality, args.dry_run):
@@ -523,8 +572,9 @@ def main(argv: list[str] | None = None) -> int:
             required = args.required and complete
             if args.required and not complete:
                 logger.info(
-                    "    model.yaml: keeping 'required: false' until the bake "
-                    "finishes (re-run with --required afterwards)"
+                    "    model.yaml: keeping 'required: false' — not ready "
+                    "here (see the manifest line above); re-run with "
+                    "--required once it is"
                 )
             patch_model_yaml(entry, repo_root, modality, required, args.dry_run)
 

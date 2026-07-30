@@ -60,7 +60,10 @@ The sweep scripts set `TRAIN_SCRIPT_PATH` automatically and select `torchrun` fo
   embedding products instead of running a forward pass — the embeddings are
   read off the sample as data modalities (`gse`, `tessera`) baked into eval
   dataset stores, then flow through the exact same probe/KNN code as every
-  other model. Tasks run only where the modality has been baked in. To onboard
+  other model. Tasks run only where the modality has been baked in — see
+  [`PrecomputedEmbeddingCoverage.md`](PrecomputedEmbeddingCoverage.md) for
+  per-dataset coverage and the caveats that belong in any reported comparison
+  (Tessera covers as little as 8% of some datasets). To onboard
   a dataset: bake the rasters with
   `olmoearth_pretrain/evals/embedding_materializer` (or
   `scripts/tools/materialize_aef_supplemental_embeddings.py` for the AEF

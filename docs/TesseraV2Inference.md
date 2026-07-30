@@ -1,0 +1,163 @@
+# Running TESSERA v2 inference ourselves for PASTIS
+
+Status (2026-07-27): TESSERA v2 **weights + inference code are public**
+(github.com/ucam-eo/tessera, branch `v2`; HF org `geotessera`), but **v2
+precomputed embeddings are not** — the distribution bucket
+(`s3://tessera-embeddings/`) holds only `v1/` and `v1.1/`, and v2 embeddings
+are pre-request-only while their infra ramps up. To eval PASTIS against v2 we
+must run their inference ourselves. This doc is the plan plus time / storage /
+FLOPs estimates.
+
+All Tessera facts below were read from their released code (`tessera_infer_v2/`,
+`student/{model,infer}.py`, `teacher/model.py`, Rust stackers), model cards, and
+the v2 paper (arXiv:2607.03949). OlmoEarth numbers were measured from this repo
+(`all_evals.py` ws16/ps1 PASTIS tasks, `base_shallow_decoder` = 768d/12L/12H,
+encoder ≈ 89M params exercised at eval).
+
+## What v2 inference needs
+
+One forward pass = **one pixel's year** of observations, dual-branch temporal
+transformer (S2 branch + merged-S1 branch, attention-pooled over time, concat +
+MLP → 128-d Matryoshka embedding; teacher → 1024-d, not truncatable):
+
+| Model  | Params | Layers/branch | d_model | FFN  | ckpt size |
+|--------|--------|---------------|---------|------|-----------|
+| nano   | 1.07M  | 2             | 144     | 384  | 4 MB      |
+| small  | 7.11M  | 4             | 256     | 1024 | 28 MB     |
+| medium | 21.0M  | 4             | 440     | 1792 | 84 MB     |
+| large  | 43.8M  | 4             | 640     | 2560 | 175 MB    |
+| teacher| 2.06B  | 4 (+2 fusion) | 4096    | 16384| 8.26 GB   |
+
+Inputs per pixel: **all** valid acquisitions in the calendar year —
+S2 L2A 10 bands (order B04,B02,B03,B08,B8A,B05,B06,B07,B11,B12, raw DN) with
+per-pixel SCL-derived cloud mask; S1 RTC VV/VH, ascending + descending kept
+separate. Per-pixel valid counts are bucketized to bins {8,16,…,256} and
+batched by bin. For PASTIS France 2019 expect T_s2(valid) ≈ 24–48 and
+T_s1 ≈ 128–136 (S1A+S1B, multiple orbits) → ~160–190 tokens per pixel total.
+
+Their pipeline: `s1_s2_downloader.sh` (data source **must be MPC for 2019** —
+the AWS path uses OPERA RTC-S1 which only exists from ~2021) → Rust
+`s2_stack`/`s1_stack` → `dpixel_retiler.py` → per-tile "d-pixel" npy dirs →
+`python infer_v2.py --model medium --data-root … --out-dir …` → per-tile
+`(H,W,128)` float32 npy (or `--int8` + per-pixel scales).
+
+## Plan — IMPLEMENTED (rslearn route)
+
+Scope: **PASTIS patch footprints only** (2,433 128×128 windows ≈ 3,990 km² ≈
+8% of the 4-tile area). Instead of their bash + Rust preprocessing we reuse
+rslearn against Planetary Computer — the fetch is expressed as three
+all-scenes layers in `config_pastis_rslearn.json` (`sentinel2_l2a_all` with
+an SCL band set, `sentinel1_ascending_all`, `sentinel1_descending_all`;
+`space_mode=INTERSECTS`, `sort_by=datetime`, one item group per acquisition),
+and inference is `olmoearth_pretrain/evals/datasets/pastis_tessera_v2.py`
+running the vendored v2 student
+(`olmoearth_pretrain/evals/models/tessera/tessera_v2_{model,infer}.py`,
+vendored from their repo; param counts reproduce the model cards exactly).
+Their preprocessing is replicated faithfully: SCL classes {0,1,2,3,8,9} →
+cloud-invalid, S1 stored as `clip((20*log10(raw_MPC_power) + 50) * 200, 0,
+32767)` int16 with 0 as the missing sentinel (verified against their
+`s1_fast_processor.py`/Rust stacker sources), per-pixel valid-count
+bucketization to {8,…,256} via their own vendored `encode_tile`.
+
+Runbook (details in the script docstring):
+
+```
+export DS_PATH=/weka/dfive-default/rslearn-eai/datasets/pastis_rslearn
+# 1. Calendar-2019 fetch windows mirroring the eval windows (group pastis):
+python -m olmoearth_pretrain.evals.datasets.pastis_tessera_v2 create_windows --ds_path $DS_PATH
+# 2. Fetch every 2019 acquisition (restrict to the new layers!):
+rslearn dataset prepare     --root $DS_PATH --group pastis_tessera_v2 --workers 64 \
+    --no-use-initial-job --retry-max-attempts 8 --retry-backoff-seconds 60 \
+    --enabled-layers sentinel2_l2a_all,sentinel1_ascending_all,sentinel1_descending_all
+rslearn dataset materialize ... (same flags)   # or fan out with rslearn_projects:
+# python -m rslp.main common launch_data_materialization_jobs --image <img> \
+#     --ds_path $DS_PATH --command '["rslearn","dataset","materialize",...]'
+# 3. Download student weights (HF geotessera/TESSERA-V-2.0-2B-M -> ckpt/student_medium.pt), then:
+python -m olmoearth_pretrain.evals.datasets.pastis_tessera_v2 infer \
+    --ds_path $DS_PATH --checkpoint_path <student_medium.pt> --model_size medium
+# 4. Eval (identical probes/splits/metrics as AEF / tessera / tessera_v11):
+python -m olmoearth_pretrain.internal.embedding_eval_sweep --cluster=... --model=tessera_v2_precomputed
+```
+
+The `tessera_v2` modality/layer plumbing (constants, datatypes, model.yaml,
+registry, `tessera_v2_precomputed` baseline) is in place; `tessera_v11` got
+the same treatment so v1 (`tessera`), v1.1 (`tessera_v11`) and v2 coexist as
+separate layers of the same dataset. NOTE: the `*_all` fetch layers exist in
+the shared dataset config, so any prepare/materialize of OTHER groups must
+keep using `--enabled-layers` (or the defaults per layer type) to avoid
+fetching a year of scenes for the eval windows.
+
+Alternative considered and rejected as primary path: building d-pixels straight
+from PASTIS-R's own arrays (it ships 43 S2 dates + 65 asc/70 desc S1 dates on
+the exact patch grids, matching band sets). Zero download, ~1 day total — but
+PASTIS reflectances come from a different processing chain (Theia), there are
+no SCL cloud masks, and S1 units differ from their int16-scaled RTC, so the
+hardcoded v2 normalization stats would be off-distribution. Keep as a fallback
+/ sanity check only. Open question either way: v2 ships a single set of
+normalization stats without stating whether they match MPC or AWS sources
+(v1.1 shipped separate checkpoints per source); pre-2021 their own global runs
+can only have used MPC, so MPC is the safer bet.
+
+## Estimates
+
+**Wall clock** (footprint scope, ~40M px):
+- Engineering (ROI script, env for their pipeline incl. Rust build, output
+  join): **2–3 days**.
+- Download + preprocess: their v1-era figure is ~10 h per full tile-year on a
+  128-core node; at 8% of the area but with per-scene overheads, expect
+  **~1–2 days wall clock** (network-bound, parallelizable across ROI chunks).
+- GPU inference: students **minutes** (medium ≈ 3.3 GFLOPs/px → ~0.13 EFLOPs
+  total ≈ a few minutes on one H100 at realistic MFU; paper's own scaling law
+  gives ~80 H100-seconds). Teacher ≈ 283 GFLOPs/px → ~11 EFLOPs ≈ **~4–8 h**
+  on one H100.
+- Join + eval launch: **~1 day**.
+- Total: **≈ 1 calendar week**, mostly preprocessing + plumbing.
+
+**Storage** (footprint scope): d-pixel npys ≈ 60 GB S2 (uint16, ~73 frames) +
+~3 GB masks + ~22 GB S1 (int16, ~135 frames) ≈ **~85–100 GB**, plus ~2–4× that
+transient during download (per-band GeoTIFFs) → budget **~0.5 TB scratch**.
+Outputs: 40M px × 128 × f32 = **20 GB per student size** (5 GB int8+scales);
+teacher 1024-d = 163 GB fp32 → use int8 (~41 GB) or store only patch pixels.
+(Full-tile scope for reference: ≥1 TB per tile-year working storage per their
+README, ~1–1.8 TB d-pixels total, 62–247 GB embeddings — not worth it.)
+
+## FLOPs comparison (per 10 m pixel embedded, single pass, S1+S2)
+
+OlmoEarth ws16/ps1: N = (16/1)² spatial tokens × 12 monthly timesteps ×
+{1 S2, 1 S1} bandgroup tokens = 3,072 (S2) / 6,144 (S1+S2) tokens of d=768
+through 12 layers, full self-attention; 64 such windows per 128×128 patch.
+Tessera v2: ~160–190 tokens of d≤640 through 4 layers, per pixel.
+
+| Model | GFLOPs / pixel | vs OlmoEarth S1+S2 |
+|---|---|---|
+| Tessera v2 nano | ~0.14 | 0.015× |
+| Tessera v2 small | ~1.1 | 0.12× |
+| Tessera v2 medium | ~3.3 | 0.35× |
+| Tessera v2 large | ~6.9 | 0.73× |
+| **OlmoEarth base ws16/ps1 S2-only** | **3.4** | 0.36× |
+| **OlmoEarth base ws16/ps1 S1+S2** | **9.5** | 1× |
+| Tessera v2 2B teacher | ~283 | ~30× |
+
+(Tessera per-pixel = T_total × per-token cost of ONE branch — each token passes
+through half the model; medium = 4 layers × (4d² + 2·d·FFN) MACs ≈ 18.8
+MFLOPs/token × ~176 tokens. OlmoEarth per-pixel = per-window TFLOPs / 256 px;
+window cost = 6,144 × (170 weight + 226 attention) MFLOPs/token ≈ 2.44 TFLOPs.
+Attention is 57% of the OlmoEarth S1+S2 cost because N=6,144 is large, vs <5%
+for Tessera at T≤256.)
+
+**The intuition "Tessera runs 16×16 separate forward passes so it must cost
+more" turns out backwards for the students**: per pixel they see ~15× more
+timesteps than our 12 monthly mosaics, but through a 4-layer, ≤640-wide model
+(≈19 MFLOPs/token for medium) instead of a 12-layer 768-wide one
+(≈396 MFLOPs/token incl. attention at N=6144). Net: medium ≈ ⅓ of our S1+S2
+per-pixel cost; even large is ~0.7×. Only the 2B teacher is meaningfully more
+expensive (~30×). Caveats: (i) these are architectural FLOPs — our harness
+re-embeds per LP-LR job (×8) and per modality variant (×2), which is harness
+overhead, not model cost; (ii) OlmoEarth amortizes better at coarser output —
+at ps=8 (semantic-level tasks) our cost/pixel drops ~64× on the linear term,
+whereas Tessera's per-pixel cost is fixed; (iii) Tessera's true end-to-end cost
+is dominated by preprocessing (their v1 figure: ~10 h/tile on 128 cores),
+which FLOPs don't capture.
+
+Totals for embedding all 39.9M PASTIS pixels once: OlmoEarth S1+S2 ≈ 0.38
+EFLOPs, S2-only ≈ 0.14; Tessera medium ≈ 0.13, large ≈ 0.27, teacher ≈ 11.3.
