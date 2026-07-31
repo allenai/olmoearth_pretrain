@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-07-30T13:48:04.091927",
+  "updated_at": "2026-07-31T06:34:56.219853",
   "datasets": {
     "africa_crop_mask": {
       "name": "africa_crop_mask",
@@ -378,6 +378,7 @@
         }
       },
       "modalities": [
+        "gse",
         "sentinel2_l2a"
       ],
       "imputes": [],
