@@ -17,14 +17,24 @@ anchors are not mid-year).
 
 Runbook, per dataset::
 
-    SRC=/weka/dfive-default/olmoearth/eval_datasets/canada_crops_coarse
-    DST=${SRC}_year_aligned
+    NAME=canada_crops_coarse
+    # Seed from the eval_datasets copy, NOT the rslearn-eai source: only the
+    # former carries the materialized gse/tessera layers, and reusing them is
+    # what avoids re-fetching AEF/Tessera over every window.
+    SEED=/weka/dfive-default/olmoearth/eval_datasets/$NAME
+    DST=/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/${NAME}_year_aligned
 
-    # 1. copy everything except the imagery we are replacing
+    # 1. copy everything except the imagery we are replacing. rslearn stores
+    # item group N of layer L as a SIBLING directory "L.N" (sentinel2,
+    # sentinel2.1, ... sentinel2.11), so the groups need their own pattern.
+    # Slash-free patterns match on the final path component only, which is
+    # what we want -- these names occur nowhere else in the tree.
+    mkdir -p "$DST"
     rsync -a --info=progress2 \
-        --exclude='layers/sentinel2' --exclude='layers/sentinel2_l2a_mo*' \
-        --exclude='layers/sentinel1_mo*' \
-        "$SRC/" "$DST/"
+        --exclude='sentinel2' --exclude='sentinel2.*' \
+        --exclude='sentinel1' --exclude='sentinel1.*' \
+        --exclude='sentinel2_l2a_mo*' --exclude='sentinel1_mo*' \
+        "$SEED/" "$DST/"
 
     # 2. inspect, then apply
     python scripts/tools/reanchor_year_aligned_dataset.py plan --ds_path "$DST"
