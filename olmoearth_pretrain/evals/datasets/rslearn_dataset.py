@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 from datetime import datetime
 from importlib.resources import files
@@ -48,8 +49,11 @@ from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, OlmoEarthSam
 
 from .normalize import normalize_bands
 
-# Fallback imagery time range for timestamp synthesis, used when the registry
-# entry does not record the dataset's actual time range.
+logger = logging.getLogger(__name__)
+
+# Fallback imagery time range for timestamp synthesis, used when the imagery
+# carries no acquisition times of its own and the registry entry does not
+# record the dataset's actual time range.
 DEFAULT_START_TIME = "2022-09-01"
 DEFAULT_END_TIME = "2023-09-01"
 
@@ -92,6 +96,34 @@ def get_timestamps(
         )
         cur += relativedelta(months=1)
     return dates
+
+
+def timestamps_from_time_ranges(
+    time_ranges: list[tuple[datetime, datetime]],
+) -> torch.Tensor:
+    """Convert per-timestep acquisition ranges to OlmoEarth timestamps.
+
+    Each range's *start* is used, matching how pretraining timestamps are built
+    from the stored imagery (``dataset/sample.py``: the period start of each
+    monthly mosaic), so eval-time dates are on the same convention the model
+    was trained with.
+
+    Args:
+        time_ranges: one (start, end) datetime tuple per timestep, in the order
+            the timesteps appear on the imagery's time axis.
+
+    Returns:
+        Long tensor of shape (T, 3) holding [day, month (0-indexed), year].
+    """
+    return torch.stack(
+        [
+            torch.tensor(
+                [int(start.day), int(start.month) - 1, int(start.year)],
+                dtype=torch.long,
+            )
+            for start, _ in time_ranges
+        ]
+    )
 
 
 class RslearnToOlmoEarthDataset(Dataset):
@@ -149,8 +181,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             norm_method: Normalization method when not using pretrain stats.
             ds_norm_stats_json: Path to dataset norm stats JSON.
             ds_norm_stats: Dataset norm stats blob (e.g. from registry entry).
-            start_time: Start time for timestamp generation.
-            end_time: End time for timestamp generation.
+            start_time: Fallback start time for synthesized timestamps, used
+                only when the imagery carries no acquisition times.
+            end_time: Fallback end time for synthesized timestamps.
             num_timesteps: Number of timesteps per sample.
             window_size: If set, center-crop every sample (imagery and label
                 rasters) to window_size x window_size, fixing the spatial
@@ -198,10 +231,12 @@ class RslearnToOlmoEarthDataset(Dataset):
         self.norm_stats_from_pretrained = norm_stats_from_pretrained
         self.input_modalities = input_modalities
 
-        # Store temporal config for per-sample timestamp generation
+        # Fallback temporal config, used only when the imagery carries no
+        # acquisition times of its own (see _build_timestamps).
         self.start_time = start_time
         self.end_time = end_time
         self.max_timesteps = num_timesteps  # Max expected timesteps (for validation)
+        self._warned_synthesized_timestamps = False
 
         # Target parsing config - derived from Task structure
         self.target_task_name = target_task_name  # For MultiTask, e.g., "segment"
@@ -298,8 +333,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             norm_method: Normalization method.
             ds_norm_stats_json: Path to dataset norm stats.
             ds_norm_stats: Dataset norm stats blob (e.g. from registry entry).
-            start_time: Start time for timestamps (used for timestamp generation).
-            end_time: End time for timestamps (used for timestamp generation).
+            start_time: Fallback start time for synthesized timestamps, used
+                only when the imagery carries no acquisition times.
+            end_time: Fallback end time for synthesized timestamps.
             max_samples: Optional sample limit.
             num_timesteps: Max expected timesteps from config (actual per-sample
                 timesteps are derived from data).
@@ -508,6 +544,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         """
         sample_dict: dict[str, Any] = {}
         sample_timesteps: int | None = None
+        # Real acquisition ranges rslearn read off the imagery, per modality.
+        stored_time_ranges: dict[str, list[tuple[datetime, datetime]]] = {}
 
         # Parse the target first: with window_size / label_at_center_pixel the
         # imagery crop is derived from the label raster (centered on the
@@ -538,6 +576,9 @@ class RslearnToOlmoEarthDataset(Dataset):
                 raise TypeError(
                     f"Input modality '{modality}' must be RasterImage, got {type(x).__name__}"
                 )
+
+            if x.timestamps is not None:
+                stored_time_ranges[modality] = list(x.timestamps)
 
             img = x.image
             if isinstance(img, torch.Tensor):
@@ -574,10 +615,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             sample_dict[modality] = torch.as_tensor(x, dtype=torch.float32)
 
         sample_timesteps = sample_timesteps or self.max_timesteps
-        timestamps = get_timestamps(
-            self.start_time, self.end_time, num_timesteps=sample_timesteps
+        sample_dict["timestamps"] = self._build_timestamps(
+            sample_timesteps, stored_time_ranges
         )
-        sample_dict["timestamps"] = torch.stack(timestamps)
 
         olmoearth_sample = OlmoEarthSample(**sample_dict)
         masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(olmoearth_sample)
@@ -600,6 +640,65 @@ class RslearnToOlmoEarthDataset(Dataset):
                     )
 
         return masked_sample, label
+
+    def _build_timestamps(
+        self,
+        num_timesteps: int,
+        stored_time_ranges: dict[str, list[tuple[datetime, datetime]]],
+    ) -> torch.Tensor:
+        """Build the sample's (T, 3) timestamps tensor.
+
+        Prefers the acquisition ranges rslearn read off the imagery, so every
+        timestep carries its own real date. A single dataset-level
+        (start_time, end_time) range cannot describe these datasets: their
+        windows are dated per label (the AEF supplemental datasets span
+        2016-2024), and several store their imagery item groups in *descending*
+        time order, so synthesized ascending months mislabel every timestep.
+
+        A sample carries one timestamps tensor for all modalities, so when
+        several provide times the first ``input_modalities`` entry whose axis
+        length matches wins (co-registered modalities share their period
+        boundaries by construction; see the monthly layer scheme in
+        scripts/tools/build_year_aligned_eval_configs.py).
+
+        Falls back to synthesizing monthly timestamps over
+        [start_time, end_time] only when the imagery carries no times at all
+        (rslearn leaves ``RasterImage.timestamps`` unset for single-timestep
+        layers whose items have no time range).
+
+        Args:
+            num_timesteps: the sample's time axis length.
+            stored_time_ranges: modality -> per-timestep (start, end) ranges, as
+                read from the imagery.
+
+        Returns:
+            Long tensor of shape (num_timesteps, 3): [day, month0, year].
+        """
+        for modality in self.input_modalities:
+            time_ranges = stored_time_ranges.get(modality)
+            if time_ranges is None:
+                continue
+            if len(time_ranges) != num_timesteps:
+                logger.warning(
+                    f"Modality {modality} has {len(time_ranges)} stored time "
+                    f"ranges but the sample has {num_timesteps} timesteps; "
+                    "ignoring them for timestamp construction."
+                )
+                continue
+            return timestamps_from_time_ranges(time_ranges)
+
+        if not self._warned_synthesized_timestamps:
+            logger.warning(
+                "No stored acquisition times on any of "
+                f"{self.input_modalities}; synthesizing {num_timesteps} monthly "
+                f"timestamps from {self.start_time}..{self.end_time}. These are "
+                "the same for every window, so multi-year datasets get the "
+                "wrong year."
+            )
+            self._warned_synthesized_timestamps = True
+        return torch.stack(
+            get_timestamps(self.start_time, self.end_time, num_timesteps=num_timesteps)
+        )
 
     def _parse_label(self, target: dict) -> torch.Tensor:
         """Parse the raw rslearn target dict into a label tensor."""
@@ -829,8 +928,9 @@ def from_registry_entry(
         source_path=dataset_path,
         split=normalized_split,
         input_modalities=input_modalities,
-        # Per-dataset imagery time range (for timestamp synthesis); fall back
-        # to the defaults when the entry does not record one.
+        # Per-dataset imagery time range, used only as the fallback when the
+        # imagery has no acquisition times of its own (see _build_timestamps);
+        # fall back further to the defaults when the entry records no range.
         start_time=entry.start_time or DEFAULT_START_TIME,
         end_time=entry.end_time or DEFAULT_END_TIME,
         norm_stats_from_pretrained=use_pretrain_norm,

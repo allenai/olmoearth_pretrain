@@ -1,5 +1,6 @@
 """Tests for the rslearn dataset wrapper's window_size / center-pixel logic."""
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import numpy as np
@@ -150,6 +151,80 @@ class TestTransformSample:
         input_dict, target = make_sample(32, {(16, 16): 1})
         with pytest.raises(ValueError, match="window_size"):
             ds._transform_sample(input_dict, target)
+
+
+class TestTimestamps:
+    """Timestamps must come from the imagery's real acquisition times."""
+
+    @staticmethod
+    def monthly_ranges(
+        year: int, num_timesteps: int, descending: bool = False
+    ) -> list[tuple[datetime, datetime]]:
+        """Build num_timesteps 30-day ranges tiling `year` from Jan 1."""
+        ranges = [
+            (
+                datetime(year, 1, 1, tzinfo=UTC) + timedelta(days=30 * i),
+                datetime(year, 1, 1, tzinfo=UTC) + timedelta(days=30 * (i + 1)),
+            )
+            for i in range(num_timesteps)
+        ]
+        return list(reversed(ranges)) if descending else ranges
+
+    def test_stored_timestamps_are_used(self) -> None:
+        """Per-window acquisition dates win over the dataset-level fallback."""
+        ds = build_dataset()
+        input_dict, target = make_sample(8, {(4, 4): 1}, num_timesteps=12)
+        ranges = self.monthly_ranges(2018, 12)
+        input_dict[S2] = RasterImage(image=input_dict[S2].image, timestamps=ranges)
+
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+
+        timestamps = masked_sample.timestamps
+        assert timestamps.shape == (12, 3)
+        # (day, month0, year) taken from each range's start.
+        assert [int(t) for t in timestamps[:, 2]] == [2018] * 12
+        assert [int(t) for t in timestamps[:, 1]] == [
+            start.month - 1 for start, _ in ranges
+        ]
+        assert [int(t) for t in timestamps[:, 0]] == [start.day for start, _ in ranges]
+
+    def test_descending_time_axis_is_labeled_descending(self) -> None:
+        """Reverse-chronological item groups get reverse-chronological dates.
+
+        The AEF supplemental datasets store their 12 S2 mosaics latest-first;
+        synthesized ascending months labeled December's imagery as January.
+        """
+        ds = build_dataset()
+        input_dict, target = make_sample(8, {(4, 4): 1}, num_timesteps=12)
+        ranges = self.monthly_ranges(2019, 12, descending=True)
+        input_dict[S2] = RasterImage(image=input_dict[S2].image, timestamps=ranges)
+
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+
+        months = [int(t) for t in masked_sample.timestamps[:, 1]]
+        assert months == sorted(months, reverse=True)
+        assert months[0] == ranges[0][0].month - 1
+
+    def test_falls_back_to_synthesized_range(self) -> None:
+        """Imagery with no stored times still gets the configured range."""
+        ds = build_dataset()
+        input_dict, target = make_sample(8, {(4, 4): 1}, num_timesteps=12)
+        assert input_dict[S2].timestamps is None
+
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+
+        timestamps = masked_sample.timestamps
+        assert timestamps.shape == (12, 3)
+        # DEFAULT_START_TIME is 2022-09-01, so the first timestep is Sep 2022.
+        assert int(timestamps[0, 1]) == 8
+        assert int(timestamps[0, 2]) == 2022
+
+    def test_mismatched_length_is_ignored(self) -> None:
+        """Stored times that don't match the time axis fall back, not crash."""
+        ds = build_dataset()
+        timestamps = ds._build_timestamps(12, {S2: self.monthly_ranges(2018, 6)})
+        assert timestamps.shape == (12, 3)
+        assert int(timestamps[0, 2]) == 2022  # fell back to the default range
 
 
 def make_position_sample(size: int, num_timesteps: int = 2) -> tuple[dict, dict]:
