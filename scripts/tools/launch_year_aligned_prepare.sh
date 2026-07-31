@@ -23,6 +23,7 @@
 #   scripts/tools/launch_year_aligned_prepare.sh                       # dry run
 #   LAUNCH=1 HOSTS=jupiter-cs-aus-134.reviz.ai2.in scripts/tools/launch_year_aligned_prepare.sh
 #   LAUNCH=1 CLUSTERS=ai2/jupiter-cirrascale-2 NUM_JOBS=2 ONLY=us_trees ...
+#   LAUNCH=1 COMMAND=materialize HOSTS=... scripts/tools/launch_year_aligned_prepare.sh
 #
 # Env:
 #   IMAGE               Beaker image (default favyen/rslpomp20260727a)
@@ -31,6 +32,7 @@
 #   NUM_JOBS            jobs per cluster target
 #   JOBS_PER_DATASET    repeat each dataset's launch this many times (default 1)
 #   ONLY                restrict to one dataset (staging name or base name)
+#   COMMAND             prepare (default) or materialize
 #   WORKERS             rslearn --workers (default 16; 64 drew 403 storms)
 #   PRIORITY            Beaker priority: low|normal|high|immediate|urgent (default high)
 #   LAUNCH=1            actually launch instead of printing
@@ -45,6 +47,15 @@ JOBS_PER_DATASET="${JOBS_PER_DATASET:-1}"
 # defaults to high; prepare is not latency-critical, so raise it only to jump a
 # busy queue.
 PRIORITY="${PRIORITY:-high}"
+# prepare writes items.json (STAC queries); materialize downloads the pixels.
+# Same flags either way -- both handlers take --workers/--retry-*/--enabled-layers/
+# --ignore-errors -- but materialize is far heavier, and running it before prepare
+# has finished just does partial work, so it gets a readiness pre-flight below.
+COMMAND="${COMMAND:-prepare}"
+if [[ "$COMMAND" != "prepare" && "$COMMAND" != "materialize" ]]; then
+    echo "ERROR: COMMAND must be 'prepare' or 'materialize', got '$COMMAND'" >&2
+    exit 1
+fi
 ONLY="${ONLY:-}"
 LAUNCH="${LAUNCH:-}"
 
@@ -125,11 +136,44 @@ sys.exit(0 if 'sentinel2_l2a_mo12' in layers and 'sentinel1_mo12' in layers else
         continue
     fi
 
+    # Materializing before prepare has finished silently produces a partial
+    # dataset, so sample a few windows and check they carry all 24 monthly
+    # entries in items.json.
+    if [[ "$COMMAND" == "materialize" ]]; then
+        readiness=$(DS_PATH="$ds_path" python3 - <<'EOF'
+import json, os, pathlib, random
+root = pathlib.Path(os.environ["DS_PATH"]) / "windows"
+windows = [p for p in root.glob("*/*") if p.is_dir()]
+if not windows:
+    print("no windows found"); raise SystemExit(0)
+random.seed(0)
+sample = random.sample(windows, min(25, len(windows)))
+short = 0
+for w in sample:
+    items = w / "items.json"
+    if not items.exists():
+        short += 1
+        continue
+    names = set(json.loads(items.read_text()))
+    n = sum(1 for k in names if k.startswith(("sentinel2_l2a_mo", "sentinel1_mo")))
+    if n < 24:
+        short += 1
+if short:
+    print(f"{short}/{len(sample)} sampled windows lack all 24 monthly item entries")
+EOF
+)
+        if [[ -n "$readiness" ]]; then
+            log "SKIP  $name -- prepare looks incomplete: $readiness"
+            skipped=$((skipped + 1))
+            continue
+        fi
+    fi
+
     command_json=$(
-        ENABLED_LAYERS="$ENABLED_LAYERS" WORKERS="$WORKERS" python3 - <<'EOF'
+        ENABLED_LAYERS="$ENABLED_LAYERS" WORKERS="$WORKERS" COMMAND="$COMMAND" python3 - <<'EOF'
 import json, os
 print(json.dumps([
-    "rslearn", "dataset", "prepare",
+    "rslearn", "dataset", os.environ["COMMAND"],
     "--root", "{ds_path}",
     "--workers", os.environ["WORKERS"],
     "--no-use-initial-job",
@@ -151,7 +195,7 @@ EOF
             for arg in "${target_args[@]}"; do echo "    $arg \\"; done
             echo "    --command '$command_json'"
         else
-            log "LAUNCH $name (job $((i + 1))/$JOBS_PER_DATASET)"
+            log "LAUNCH $COMMAND $name (job $((i + 1))/$JOBS_PER_DATASET)"
             python -m rslp.main common launch_data_materialization_jobs \
                 --image "$IMAGE" \
                 --ds_path "$ds_path" \
@@ -165,9 +209,9 @@ done
 
 echo
 log "$launched job(s) $([[ -z "$LAUNCH" ]] && echo 'would be launched' || echo launched), $skipped dataset(s) skipped"
-log "Completion check per dataset: re-run prepare and confirm it logs"
-log "  'Preparing 0 windows for layer ...' for all 24 layers. --ignore-errors"
-log "  means a nonzero exit is not the signal to trust."
+log "Completion check per dataset: re-run $COMMAND and confirm it reports nothing"
+log "  left to do for all 24 layers ('Preparing 0 windows for layer ...')."
+log "  --ignore-errors means a nonzero exit is not the signal to trust."
 if [[ -z "$LAUNCH" ]]; then
     echo
     log "To raise the PC rate ceiling, patch rslp/common/beaker_data_materialization.py"
