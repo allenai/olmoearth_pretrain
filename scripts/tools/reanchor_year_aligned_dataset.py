@@ -38,9 +38,14 @@ Runbook, per dataset::
         --exclude='sentinel2_l2a_mo*' --exclude='sentinel1_mo*' \
         "$SEED/" "$DST/"
 
-    # 2. inspect, then apply
-    python scripts/tools/reanchor_year_aligned_dataset.py plan --ds_path "$DST"
-    python scripts/tools/reanchor_year_aligned_dataset.py apply --ds_path "$DST"
+    # 2. inspect, then apply. --seed_path is optional the first time but
+    # REQUIRED to re-run after changing a dataset's year rule: apply overwrites
+    # the observation dates the rule needs, so re-reading them off the staging
+    # copy would shift every window by a year. Passing it always is safe.
+    python scripts/tools/reanchor_year_aligned_dataset.py plan \
+        --ds_path "$DST" --seed_path "$SEED"
+    python scripts/tools/reanchor_year_aligned_dataset.py apply \
+        --ds_path "$DST" --seed_path "$SEED"
 
     # 3. fetch the new imagery
     rslearn dataset prepare  --root "$DST" --workers 64
@@ -59,12 +64,12 @@ per-window timestamp fix landed (``rslearn_dataset._build_timestamps``) the
 loader reads each timestep's real acquisition date off the imagery, so these
 flags no longer matter for datasets whose rasters carry time ranges.
 
-NOTE, unresolved: the AEF/Tessera layers live in the *eval_datasets* copy (the
-embedding materializer and wire_embedding_modalities.py both run there), not in
-the rslearn-eai source that `ingest --source` reads from. So whether the
-existing embedding layers survive depends on which copy you rsync from and
-whether `ingest` re-copies over them. Settle this on the first dataset before
-scaling out -- see the two options in the handover notes.
+The AEF/Tessera layers live only in the *eval_datasets* copy -- the embedding
+materializer and wire_embedding_modalities.py both run there, not on the
+rslearn-eai source. That is why step 1 seeds from eval_datasets: `ingest` copies
+with an unfiltered tree tar (studio_ingest/ingest.py:_tar_copy_cmd), so anything
+in the seed rides through to the registered dataset, embedding layers included,
+and nothing needs re-fetching.
 """
 
 import argparse
@@ -169,11 +174,71 @@ def build_monthly_layers() -> dict:
     return layers
 
 
-def label_years(dataset: Dataset, rule: str) -> tuple[Counter, int, int]:
+def seed_time_ranges(seed_path: UPath) -> dict[str, tuple[datetime, datetime]]:
+    """Map "group/name" -> original time range from an untouched seed dataset."""
+    return {
+        f"{w.group}/{w.name}": w.time_range
+        for w in Dataset(seed_path).storage.get_windows()
+        if w.time_range is not None
+    }
+
+
+def looks_reanchored(time_range: tuple[datetime, datetime]) -> bool:
+    """Whether a range is already (Jan 1 Y, Jan 1 Y+1), i.e. apply() has run."""
+    start, end = time_range
+    return (start.month, start.day) == (1, 1) and (end.month, end.day) == (1, 1)
+
+
+def source_ranges(
+    dataset: Dataset, seed: dict[str, tuple[datetime, datetime]] | None
+) -> list[tuple[object, tuple[datetime, datetime] | None]]:
+    """Pair each staging window with the range the year rule should read.
+
+    Uses the seed's original range when a seed is given, so re-running apply
+    after a rule change is safe. Without a seed the staging window's own range
+    is used, which is only correct the first time apply runs -- afterwards the
+    range is (Jan 1 Y, Jan 1 Y+1) and every rule but "start" reads it wrongly.
+
+    Args:
+        dataset: the staging dataset being re-anchored.
+        seed: original ranges by "group/name", or None.
+
+    Returns:
+        list of (window, range-to-read), with None where no range is available.
+
+    Raises:
+        SystemExit: if no seed was given and the staging windows already look
+            re-anchored, which would silently shift every window by a year.
+        KeyError: if a staging window is missing from the seed.
+    """
+    pairs = []
+    already = 0
+    for window in dataset.storage.get_windows():
+        if seed is not None:
+            key = f"{window.group}/{window.name}"
+            if key not in seed:
+                raise KeyError(f"window {key} not found in the seed dataset")
+            pairs.append((window, seed[key]))
+            continue
+        if window.time_range is not None and looks_reanchored(window.time_range):
+            already += 1
+        pairs.append((window, window.time_range))
+
+    if seed is None and already > 0:
+        raise SystemExit(
+            f"{already} windows already have (Jan 1, Jan 1) ranges, so apply() has "
+            "run before and their original observation dates are gone. Re-reading "
+            "the year off these would shift every window. Pass --seed_path "
+            "pointing at the untouched eval_datasets copy."
+        )
+    return pairs
+
+
+def label_years(pairs: list, rule: str) -> tuple[Counter, int, int]:
     """Histogram of label years under `rule`, plus range-less and re-yeared counts.
 
     Args:
-        dataset: the rslearn dataset to scan.
+        pairs: (window, source range) pairs from source_ranges().
         rule: one of YEAR_RULE_CHOICES.
 
     Returns:
@@ -185,18 +250,18 @@ def label_years(dataset: Dataset, rule: str) -> tuple[Counter, int, int]:
     years: Counter = Counter()
     missing = 0
     differs = 0
-    for window in dataset.storage.get_windows():
-        if window.time_range is None:
+    for _window, time_range in pairs:
+        if time_range is None:
             missing += 1
             continue
-        year = label_year(window.time_range, rule)
+        year = label_year(time_range, rule)
         years[year] += 1
-        if year != label_year(window.time_range, "midpoint"):
+        if year != label_year(time_range, "midpoint"):
             differs += 1
     return years, missing, differs
 
 
-def plan(ds_path: UPath, rule: str) -> None:
+def plan(ds_path: UPath, rule: str, seed_path: UPath | None) -> None:
     """Report what apply() would change, without writing anything."""
     dataset = Dataset(ds_path)
     config = json.loads((ds_path / "config.json").read_text())
@@ -211,7 +276,8 @@ def plan(ds_path: UPath, rule: str) -> None:
     print(f"  layers kept    ({len(kept)}): {', '.join(sorted(kept)) or '-'}")
     print(f"  layers added   ({len(added)}): {added[0]} .. {added[-1]}")
 
-    years, missing, differs = label_years(dataset, rule)
+    seed = seed_time_ranges(seed_path) if seed_path else None
+    years, missing, differs = label_years(source_ranges(dataset, seed), rule)
     total = sum(years.values())
     print(f"\n  label year (rule: {rule}), {total} windows:")
     for year in sorted(years):
@@ -232,7 +298,7 @@ def plan(ds_path: UPath, rule: str) -> None:
         print("  window count relative to previously recorded numbers.")
 
 
-def apply(ds_path: UPath, rule: str) -> None:
+def apply(ds_path: UPath, rule: str, seed_path: UPath | None) -> None:
     """Rewrite config.json and re-anchor every window to its label year."""
     config_path = ds_path / "config.json"
     config = json.loads(config_path.read_text())
@@ -249,13 +315,14 @@ def apply(ds_path: UPath, rule: str) -> None:
     logger.info(f"wrote {config_path} with {len(layers)} layers")
 
     dataset = Dataset(ds_path)
+    seed = seed_time_ranges(seed_path) if seed_path else None
     moved = skipped = differs = 0
-    for window in dataset.storage.get_windows():
-        if window.time_range is None:
+    for window, time_range in source_ranges(dataset, seed):
+        if time_range is None:
             skipped += 1
             continue
-        year = label_year(window.time_range, rule)
-        if year != label_year(window.time_range, "midpoint"):
+        year = label_year(time_range, rule)
+        if year != label_year(time_range, "midpoint"):
             differs += 1
         window.time_range = (
             datetime(year, 1, 1, tzinfo=UTC),
@@ -295,15 +362,25 @@ def main() -> None:
             f"{DEFAULT_YEAR_RULE!r}."
         ),
     )
+    parser.add_argument(
+        "--seed_path",
+        default=None,
+        help=(
+            "Untouched seed dataset to read original window time ranges from. "
+            "Required to re-run apply after a year-rule change, since apply "
+            "overwrites the observation dates it would otherwise need."
+        ),
+    )
     args = parser.parse_args()
 
     ds_path = UPath(args.ds_path)
+    seed_path = UPath(args.seed_path) if args.seed_path else None
     rule = resolve_year_rule(ds_path, args.year_from)
     logger.info(f"label-year rule: {rule}")
     if args.command == "plan":
-        plan(ds_path, rule)
+        plan(ds_path, rule, seed_path)
     else:
-        apply(ds_path, rule)
+        apply(ds_path, rule, seed_path)
 
 
 if __name__ == "__main__":
