@@ -35,6 +35,8 @@
 #   COMMAND             prepare (default) or materialize
 #   WORKERS             rslearn --workers (default 16; 64 drew 403 storms)
 #   PRIORITY            Beaker priority: low|normal|high|immediate|urgent (default high)
+#   RETRY_BACKOFF       --retry-backoff-seconds (default 2; 60 parks workers for minutes)
+#   RETRY_ATTEMPTS      --retry-max-attempts (default 12)
 #   LAUNCH=1            actually launch instead of printing
 
 set -uo pipefail
@@ -47,6 +49,14 @@ JOBS_PER_DATASET="${JOBS_PER_DATASET:-1}"
 # defaults to high; prepare is not latency-critical, so raise it only to jump a
 # busy queue.
 PRIORITY="${PRIORITY:-high}"
+# rslearn's retry() sleeps retry_backoff * (attempt + 1) * random(1..2), so
+# --retry-backoff-seconds 60 parks a worker for 60-120s on its FIRST 403.
+# Prepare queries cost ~100ms and 403s are routine, so that collapses effective
+# parallelism toward one worker. internal_docs.md uses 60 for MATERIALIZE, where
+# a retry covers a transient failure mid-download and a minute is negligible.
+# Keep this small for prepare.
+RETRY_BACKOFF="${RETRY_BACKOFF:-2}"
+RETRY_ATTEMPTS="${RETRY_ATTEMPTS:-12}"
 # prepare writes items.json (STAC queries); materialize downloads the pixels.
 # Same flags either way -- both handlers take --workers/--retry-*/--enabled-layers/
 # --ignore-errors -- but materialize is far heavier, and running it before prepare
@@ -181,15 +191,16 @@ EOF
     fi
 
     command_json=$(
-        ENABLED_LAYERS="$ENABLED_LAYERS" WORKERS="$WORKERS" COMMAND="$COMMAND" python3 - <<'EOF'
+        ENABLED_LAYERS="$ENABLED_LAYERS" WORKERS="$WORKERS" COMMAND="$COMMAND" \
+            RETRY_BACKOFF="$RETRY_BACKOFF" RETRY_ATTEMPTS="$RETRY_ATTEMPTS" python3 - <<'EOF'
 import json, os
 print(json.dumps([
     "rslearn", "dataset", os.environ["COMMAND"],
     "--root", "{ds_path}",
     "--workers", os.environ["WORKERS"],
     "--no-use-initial-job",
-    "--retry-max-attempts", "8",
-    "--retry-backoff-seconds", "60",
+    "--retry-max-attempts", os.environ["RETRY_ATTEMPTS"],
+    "--retry-backoff-seconds", os.environ["RETRY_BACKOFF"],
     "--enabled-layers", os.environ["ENABLED_LAYERS"],
     "--ignore-errors",
 ]))
