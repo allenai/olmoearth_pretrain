@@ -32,6 +32,7 @@
 #   JOBS_PER_DATASET    repeat each dataset's launch this many times (default 1)
 #   ONLY                restrict to one dataset (staging name or base name)
 #   WORKERS             rslearn --workers (default 16; 64 drew 403 storms)
+#   PRIORITY            Beaker priority: low|normal|high|immediate|urgent (default high)
 #   LAUNCH=1            actually launch instead of printing
 
 set -uo pipefail
@@ -40,6 +41,10 @@ STAGE_ROOT="${STAGE_ROOT:-/weka/dfive-default/rslearn-eai/datasets/olmoearth_eva
 IMAGE="${IMAGE:-favyen/rslpomp20260727a}"
 WORKERS="${WORKERS:-16}"
 JOBS_PER_DATASET="${JOBS_PER_DATASET:-1}"
+# BeakerJobPriority: low | normal | high | immediate | urgent. launch_jobs
+# defaults to high; prepare is not latency-critical, so raise it only to jump a
+# busy queue.
+PRIORITY="${PRIORITY:-high}"
 ONLY="${ONLY:-}"
 LAUNCH="${LAUNCH:-}"
 
@@ -142,6 +147,7 @@ EOF
             echo "python -m rslp.main common launch_data_materialization_jobs \\"
             echo "    --image $IMAGE \\"
             echo "    --ds_path $ds_path \\"
+            echo "    --priority=$PRIORITY \\"
             for arg in "${target_args[@]}"; do echo "    $arg \\"; done
             echo "    --command '$command_json'"
         else
@@ -149,6 +155,7 @@ EOF
             python -m rslp.main common launch_data_materialization_jobs \
                 --image "$IMAGE" \
                 --ds_path "$ds_path" \
+                --priority="$PRIORITY" \
                 "${target_args[@]}" \
                 --command "$command_json" || log "FAILED to launch $name"
         fi
