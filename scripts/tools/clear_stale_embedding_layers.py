@@ -43,6 +43,9 @@ from upath import UPath
 
 logger = logging.getLogger(__name__)
 
+# Must match reanchor_year_aligned_dataset.MONTHLY_PREFIXES.
+MONTHLY_PREFIXES = ("sentinel2_l2a_mo", "sentinel1_mo")
+
 
 def stale_windows(seed_path: UPath, rule: str = "end") -> set[str]:
     """Names of seed windows whose `rule` year differs from their midpoint year.
@@ -84,6 +87,16 @@ def main() -> None:
         help="Year rule now in force.",
     )
     parser.add_argument(
+        "--clear_items",
+        action="store_true",
+        help=(
+            "Also reset the monthly imagery for the re-yeared windows: drop their "
+            "sentinel*_mo* entries from items.json and remove any materialized "
+            "monthly layers. Needed when prepare already ran under the old year, "
+            "since prepare and materialize both skip work they think is done."
+        ),
+    )
+    parser.add_argument(
         "--delete",
         action="store_true",
         help="Actually delete. Without this, only reports what would be removed.",
@@ -107,10 +120,11 @@ def main() -> None:
             "materializer's --overwrite over the whole dataset instead."
         )
 
-    removed = missing = 0
+    removed = missing = items_reset = monthly_removed = 0
     for window in dataset.storage.get_windows():
         if f"{window.group}/{window.name}" not in stale:
             continue
+
         for layer_name in layer_names:
             if not window.is_layer_completed(layer_name):
                 missing += 1
@@ -119,15 +133,42 @@ def main() -> None:
                 shutil.rmtree(str(window.get_layer_dir(layer_name)))
             removed += 1
 
+        if not args.clear_items:
+            continue
+        # Drop only the monthly imagery entries rather than deleting items.json:
+        # the label layers have no data source, so prepare would never
+        # regenerate their entries if the whole file went.
+        layer_datas = window.load_layer_datas()
+        stale_keys = [n for n in layer_datas if n.startswith(MONTHLY_PREFIXES)]
+        if stale_keys:
+            if args.delete:
+                for key in stale_keys:
+                    del layer_datas[key]
+                window.save_layer_datas(layer_datas)
+            items_reset += 1
+        for layer_name, group_idx in window.list_completed_layers():
+            if not layer_name.startswith(MONTHLY_PREFIXES):
+                continue
+            if args.delete:
+                shutil.rmtree(str(window.get_layer_dir(layer_name, group_idx)))
+            monthly_removed += 1
+
     verb = "deleted" if args.delete else "would delete"
-    logger.info(f"{verb} {removed} layer(s); {missing} already absent")
+    logger.info(f"{verb} {removed} embedding layer(s); {missing} already absent")
+    if args.clear_items:
+        logger.info(
+            f"{verb.replace('delete', 'reset')} monthly items on {items_reset} "
+            f"window(s) and {verb} {monthly_removed} materialized monthly layer(s)"
+        )
     if not args.delete:
-        logger.info("re-run with --delete, then run the embedding materializer")
+        logger.info("re-run with --delete, then re-prepare and run the materializer")
     else:
         logger.info(
             "now run: python -m olmoearth_pretrain.evals.embedding_materializer "
             f"--dataset_path {args.ds_path} --products aef"
         )
+        if args.clear_items:
+            logger.info("and re-run `rslearn dataset prepare` to refetch their items")
 
 
 if __name__ == "__main__":
