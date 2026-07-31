@@ -45,6 +45,7 @@ rebuild the model from the launching module's ``build_model_config``).
 import logging
 from dataclasses import replace
 
+from olmo_core.train.common import Duration
 from regbtl_v1_2_common import (
     FIFTY_CITIES_LOOP_EVAL_TASKS,
     LOOP_EVAL_CLUSTERS,
@@ -69,6 +70,12 @@ PROJECTION_DIMS = [128, 64]
 # point. The sup768 variant is encoder-identical to the in-flight
 # regbtl_v1_2_gdyn_d768_regsup_w0p1_newsampling_psuniform run.
 SUPERVISION_BASE_WEIGHT_W0P1 = 0.1
+# w1 (base 1.0): under the new sampler the w1 teacher leads w0p1 by ~1.4-1.9 mIoU on
+# the ps=1 PASTIS exports at 520k+ (0.6400 vs 0.6210 S2, 0.6429 vs 0.6285 S1+S2) --
+# and the teacher's ceiling is what the student inherits. The w1 sup768 arm is
+# encoder-identical to the in-flight regbtl_v1_2_gdyn_d768_regsup_w1_newsampling_
+# psuniform run.
+SUPERVISION_BASE_WEIGHT_W1 = 1.0
 
 # The PASTIS ws16/ps1 embedding evals duplicated onto the projected head at each
 # Matryoshka width: the ``_proj{d}`` tasks probe (a prefix of)
@@ -88,20 +95,22 @@ def build_proj_model_config(
     *,
     projection_type: str,
     supervision_source: str,
+    base_weight: float = SUPERVISION_BASE_WEIGHT_W0P1,
 ) -> LatentMIMConfig:
-    """d768 wideread regbtl + regsup(w0p1) + a detached [128, 64] Matryoshka student.
+    """d768 wideread regbtl + regsup + a detached [128, 64] Matryoshka student.
 
     Args:
         common: The common experiment components.
         projection_type: ``"linear"`` or ``"perceiver"`` (the student architecture).
         supervision_source: ``"registers"`` (sup768), ``"both"`` (supboth) or
             ``"projection"`` (sup128) -- where the supervision heads attach.
+        base_weight: Supervision base weight (w0p1 = 0.1 default; w1 = 1.0).
     """
     config = build_wideread_regbtl_model_config(
         common, latent_self_attn=True, register_dim=REGISTER_DIM
     )
     config = add_register_supervision(
-        config, include_latlon=False, base_weight=SUPERVISION_BASE_WEIGHT_W0P1
+        config, include_latlon=False, base_weight=base_weight
     )
     config.encoder_config.register_projection_dims = list(PROJECTION_DIMS)
     config.encoder_config.register_projection_type = projection_type
@@ -109,20 +118,48 @@ def build_proj_model_config(
     return config
 
 
-def add_proj_loop_eval_beaker_job(trainer_config, module_path: str):
+def add_proj_loop_eval_beaker_job(
+    trainer_config,
+    module_path: str,
+    *,
+    embedding_eval_interval_steps: int | None = None,
+):
     """In-loop evals on BOTH heads, routed through Beaker.
 
     The standard fifty_cities + PASTIS embedding evals probe the d768 registers as
     usual; the ``_proj128`` / ``_proj64`` duplicates probe the detached student (full
     width / 64d Matryoshka prefix), so the distillation quality is tracked per
     checkpoint at every shipped width without a separate eval launch.
+
+    The PASTIS embedding tasks (base + projected) are placed FIRST in the task
+    order: eval jobs at urgent priority can be preempted mid-run, and the last
+    tasks in a job are the ones that systematically lose their metrics -- these
+    six are the program's primary readout, so they run before the catalog tasks.
+
+    ``embedding_eval_interval_steps`` overrides the 20k-step default on the
+    embedding tasks (base + projected + fifty_cities). The proj runs' 14-task
+    eval jobs run LONGER than 20k training steps, so consecutive jobs overlap
+    while sharing one resumed W&B run, and the overlapping writer's rows are
+    silently dropped (observed as missing S1+S2 projected metrics). 40k gives
+    the job time to finish before the next one spawns. Must be a multiple of
+    the checkpointer save_interval (5000).
     """
-    evaluator = trainer_config.callbacks["downstream_evaluator"]
-    evaluator.tasks = {
-        **evaluator.tasks,
-        **FIFTY_CITIES_LOOP_EVAL_TASKS,
+    embedding_tasks = {
         **PASTIS_EMBEDDING_LOOP_EVAL_TASKS,
         **PASTIS_PROJ_EMBEDDING_LOOP_EVAL_TASKS,
+        **FIFTY_CITIES_LOOP_EVAL_TASKS,
+    }
+    if embedding_eval_interval_steps is not None:
+        embedding_tasks = {
+            name: replace(
+                task, eval_interval=Duration.steps(embedding_eval_interval_steps)
+            )
+            for name, task in embedding_tasks.items()
+        }
+    evaluator = trainer_config.callbacks["downstream_evaluator"]
+    evaluator.tasks = {
+        **embedding_tasks,
+        **evaluator.tasks,
     }
     evaluator.run_as_beaker_job = True
     evaluator.beaker_eval_module_path = module_path
