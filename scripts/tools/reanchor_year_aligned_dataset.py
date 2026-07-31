@@ -6,14 +6,16 @@ eval dataset, this rewrites its rslearn config.json to use the twelve ascending
 window's time range to the calendar year of its label so the imagery spans
 Jan-Dec of that year -- the same support AEF and Tessera are built over.
 
-The label year is taken from the midpoint of the window's *current* time range,
-which is what ``embedding_materializer/providers.get_target_year`` already used
-to fetch AEF/Tessera. Since the new range is (Jan 1 Y, Jan 1 Y+1) its midpoint
-stays in year Y, so **the existing AEF and Tessera layers remain correct and do
-not need re-fetching**. ``plan`` prints the year histogram so you can confirm
-that mapping per dataset before writing (it is exact for canada, whose windows
-are (DATE_COLL - 1yr, DATE_COLL); verify ethiopia_crops and us_trees, whose
-anchors are not mid-year).
+How the label year is read off the window's current time range is per-dataset --
+see YEAR_RULES. Most datasets use "midpoint", matching what
+``embedding_materializer/providers.get_target_year`` used to fetch AEF/Tessera,
+so their existing embedding layers stay valid and need no re-fetching. canada
+uses "end" instead, because its windows are (DATE_COLL - 1yr, DATE_COLL) and a
+June collection date puts the midpoint in the previous year -- 221 of 16 079
+coarse windows. ``plan`` prints the year histogram under the chosen rule and
+counts how many windows it moves off the midpoint year; those are exactly the
+windows whose AEF/Tessera layers must be re-materialized, since the baselines
+would otherwise read a different year than OlmoEarth.
 
 Runbook, per dataset::
 
@@ -52,8 +54,10 @@ Runbook, per dataset::
         --start-time <YYYY>-01-01 --end-time <YYYY>-12-31 --register
 
 Step 4's start/end are only a fallback for timestamp synthesis, and a single
-dataset-level range cannot describe a multi-year dataset at all; prefer landing
-the per-window timestamp fix so the real acquisition dates are used.
+dataset-level range cannot describe a multi-year dataset at all. Since the
+per-window timestamp fix landed (``rslearn_dataset._build_timestamps``) the
+loader reads each timestep's real acquisition date off the imagery, so these
+flags no longer matter for datasets whose rasters carry time ranges.
 
 NOTE, unresolved: the AEF/Tessera layers live in the *eval_datasets* copy (the
 embedding materializer and wire_embedding_modalities.py both run there), not in
@@ -90,6 +94,56 @@ PRETRAIN_CONFIGS = ("config_sentinel2_l2a.json", "config_sentinel1.json")
 MONTHLY_PREFIXES = ("sentinel2_l2a_mo", "sentinel1_mo")
 DROP_LAYERS = {"sentinel2", "sentinel1"}
 
+# How to read a window's label year off its current time range.
+#
+# "midpoint" is what embedding_materializer/providers.get_target_year() uses, so
+# it is the rule that keeps a window's existing AEF/Tessera layer valid. But it
+# is only *correct* when the midpoint lands in the label's own year, and for
+# observation-anchored windows -- range (obs - 1yr, obs) -- the midpoint is the
+# observation minus ~6 months. So it is right for Jul-Dec observations and off by
+# one for Jan-Jun ones.
+#
+# Measured 2026-07-31 on the seeds:
+#   canada_crops_coarse  15858/16079 agree (DATE_COLL is Jun-Oct; the 210 June
+#                        windows land in the previous year) -> use "end"
+#   us_trees             23520/45382 agree (GBIF eventdates run year-round)
+#   everything else      midpoint verified correct via `plan`: the four
+#                        calendar-aligned datasets have range (Jan 1 Y, Jan 1
+#                        Y+1) so the midpoint is always Jul 1 of Y, and
+#                        ethiopia_crops / pastis each resolve to their single
+#                        known label year.
+#
+# us_trees deliberately stays on "midpoint": correcting it would re-year ~22k
+# windows and require re-materializing AEF for all of them, and tree genus does
+# not change between adjacent years, so the offset costs almost nothing. Record
+# it as "aligned to AEF" rather than "aligned to the label".
+YEAR_RULES = {
+    "canada_crops_coarse": "end",
+    "canada_crops_fine": "end",
+}
+DEFAULT_YEAR_RULE = "midpoint"
+YEAR_RULE_CHOICES = ("midpoint", "start", "end")
+
+
+def resolve_year_rule(ds_path: UPath, override: str | None = None) -> str:
+    """Pick the label-year rule for a dataset, by name unless overridden."""
+    if override is not None:
+        return override
+    name = ds_path.name.removesuffix("_year_aligned")
+    return YEAR_RULES.get(name, DEFAULT_YEAR_RULE)
+
+
+def label_year(time_range: tuple[datetime, datetime], rule: str) -> int:
+    """Read the label year off a window's current time range."""
+    start, end = time_range
+    if rule == "start":
+        return start.year
+    if rule == "end":
+        return end.year
+    if rule == "midpoint":
+        return (start + (end - start) / 2).year
+    raise ValueError(f"unknown year rule {rule!r}; expected one of {YEAR_RULE_CHOICES}")
+
 
 def is_monthly(layer_name: str) -> bool:
     """Whether a layer belongs to the twelve-month imagery scheme."""
@@ -115,20 +169,34 @@ def build_monthly_layers() -> dict:
     return layers
 
 
-def label_years(dataset: Dataset) -> tuple[Counter, int]:
-    """Histogram of label years (current time-range midpoint) and range-less count."""
+def label_years(dataset: Dataset, rule: str) -> tuple[Counter, int, int]:
+    """Histogram of label years under `rule`, plus range-less and re-yeared counts.
+
+    Args:
+        dataset: the rslearn dataset to scan.
+        rule: one of YEAR_RULE_CHOICES.
+
+    Returns:
+        (year histogram, windows without a time range, windows whose year
+        differs from the midpoint rule). The last is the scope of any AEF /
+        Tessera re-materialization, since those layers were fetched on the
+        midpoint year.
+    """
     years: Counter = Counter()
     missing = 0
+    differs = 0
     for window in dataset.storage.get_windows():
         if window.time_range is None:
             missing += 1
             continue
-        start, end = window.time_range
-        years[(start + (end - start) / 2).year] += 1
-    return years, missing
+        year = label_year(window.time_range, rule)
+        years[year] += 1
+        if year != label_year(window.time_range, "midpoint"):
+            differs += 1
+    return years, missing, differs
 
 
-def plan(ds_path: UPath) -> None:
+def plan(ds_path: UPath, rule: str) -> None:
     """Report what apply() would change, without writing anything."""
     dataset = Dataset(ds_path)
     config = json.loads((ds_path / "config.json").read_text())
@@ -143,19 +211,28 @@ def plan(ds_path: UPath) -> None:
     print(f"  layers kept    ({len(kept)}): {', '.join(sorted(kept)) or '-'}")
     print(f"  layers added   ({len(added)}): {added[0]} .. {added[-1]}")
 
-    years, missing = label_years(dataset)
+    years, missing, differs = label_years(dataset, rule)
     total = sum(years.values())
-    print(f"\n  label year (from current midpoint), {total} windows:")
+    print(f"\n  label year (rule: {rule}), {total} windows:")
     for year in sorted(years):
         print(f"    {year} -> ({year}-01-01, {year + 1}-01-01)   n={years[year]}")
     if missing:
         print(f"  !! {missing} windows have no time range and will be skipped")
-    print("\n  AEF/Tessera target year is the new midpoint (Jul 1) -> unchanged,")
-    print("  so existing embedding layers stay valid. Confirm the mapping above")
-    print("  looks like this dataset's label years before running apply.")
+
+    if differs == 0:
+        print("\n  Every window's year matches the midpoint rule, which is what")
+        print("  get_target_year used, so existing AEF/Tessera layers stay valid.")
+    else:
+        print(f"\n  !! {differs} of {total} windows get a DIFFERENT year than the")
+        print("  midpoint rule. Their existing AEF/Tessera layers were fetched on")
+        print("  the midpoint year and are now off by one, so re-materialize those")
+        print("  products for the affected windows or the baselines will be reading")
+        print("  a different year than OlmoEarth. Windows that gapped under the old")
+        print("  year may also gain a layer and re-enter the dataset, changing the")
+        print("  window count relative to previously recorded numbers.")
 
 
-def apply(ds_path: UPath) -> None:
+def apply(ds_path: UPath, rule: str) -> None:
     """Rewrite config.json and re-anchor every window to its label year."""
     config_path = ds_path / "config.json"
     config = json.loads(config_path.read_text())
@@ -172,20 +249,30 @@ def apply(ds_path: UPath) -> None:
     logger.info(f"wrote {config_path} with {len(layers)} layers")
 
     dataset = Dataset(ds_path)
-    moved = skipped = 0
+    moved = skipped = differs = 0
     for window in dataset.storage.get_windows():
         if window.time_range is None:
             skipped += 1
             continue
-        start, end = window.time_range
-        year = (start + (end - start) / 2).year
+        year = label_year(window.time_range, rule)
+        if year != label_year(window.time_range, "midpoint"):
+            differs += 1
         window.time_range = (
             datetime(year, 1, 1, tzinfo=UTC),
             datetime(year + 1, 1, 1, tzinfo=UTC),
         )
         window.save()
         moved += 1
-    logger.info(f"re-anchored {moved} windows, skipped {skipped} without a time range")
+    logger.info(
+        f"re-anchored {moved} windows using rule {rule!r}, "
+        f"skipped {skipped} without a time range"
+    )
+    if differs:
+        logger.warning(
+            f"{differs} windows moved to a year other than the midpoint year; "
+            "re-materialize AEF/Tessera for them so the baselines read the same "
+            "year as OlmoEarth"
+        )
 
 
 def main() -> None:
@@ -198,13 +285,25 @@ def main() -> None:
         required=True,
         help="Path to the DESTINATION dataset copy (never the original).",
     )
+    parser.add_argument(
+        "--year_from",
+        choices=YEAR_RULE_CHOICES,
+        default=None,
+        help=(
+            "Override how the label year is read off the current time range. "
+            "Defaults to this dataset's entry in YEAR_RULES, else "
+            f"{DEFAULT_YEAR_RULE!r}."
+        ),
+    )
     args = parser.parse_args()
 
     ds_path = UPath(args.ds_path)
+    rule = resolve_year_rule(ds_path, args.year_from)
+    logger.info(f"label-year rule: {rule}")
     if args.command == "plan":
-        plan(ds_path)
+        plan(ds_path, rule)
     else:
-        apply(ds_path)
+        apply(ds_path, rule)
 
 
 if __name__ == "__main__":
