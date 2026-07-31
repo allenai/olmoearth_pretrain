@@ -73,7 +73,11 @@ def main() -> None:
     """CLI entry point."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--seed_path", required=True, help="Untouched seed dataset.")
+    parser.add_argument(
+        "--seed_path",
+        required=False,
+        help="Untouched seed dataset. Not needed with --all_windows.",
+    )
     parser.add_argument("--ds_path", required=True, help="Re-anchored staging dataset.")
     parser.add_argument(
         "--products",
@@ -85,6 +89,16 @@ def main() -> None:
         default="end",
         choices=["end", "start"],
         help="Year rule now in force.",
+    )
+    parser.add_argument(
+        "--all_windows",
+        action="store_true",
+        help=(
+            "Treat EVERY window as stale instead of only the re-yeared ones. "
+            "Needed for pastis_year_aligned, whose seed already had mo* layers: "
+            "the rsync excluded their directories but not items.json, so prepare "
+            "saw the original Sep-2018-anchored entries and skipped all 24 layers."
+        ),
     )
     parser.add_argument(
         "--clear_items",
@@ -102,10 +116,16 @@ def main() -> None:
         help="Actually delete. Without this, only reports what would be removed.",
     )
     args = parser.parse_args()
+    if not args.all_windows and not args.seed_path:
+        raise SystemExit("--seed_path is required unless --all_windows is given")
 
     layer_names = [n.strip() for n in args.products.split(",") if n.strip()]
-    stale = stale_windows(UPath(args.seed_path), args.rule)
-    logger.info(f"{len(stale)} windows changed year under rule {args.rule!r}")
+    if args.all_windows:
+        stale = None
+        logger.info("treating every window as stale (--all_windows)")
+    else:
+        stale = stale_windows(UPath(args.seed_path), args.rule)
+        logger.info(f"{len(stale)} windows changed year under rule {args.rule!r}")
 
     dataset = Dataset(UPath(args.ds_path))
     # The "completed" marker is a file inside the layer directory for file-based
@@ -122,7 +142,7 @@ def main() -> None:
 
     removed = missing = items_reset = monthly_removed = 0
     for window in dataset.storage.get_windows():
-        if f"{window.group}/{window.name}" not in stale:
+        if stale is not None and f"{window.group}/{window.name}" not in stale:
             continue
 
         for layer_name in layer_names:

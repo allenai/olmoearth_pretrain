@@ -140,26 +140,37 @@ sys.exit(0 if 'sentinel2_l2a_mo12' in layers and 'sentinel1_mo12' in layers else
     # dataset, so sample a few windows and check they carry all 24 monthly
     # entries in items.json.
     if [[ "$COMMAND" == "materialize" ]]; then
+        # items.json is a LIST of serialized WindowLayerData dicts, each with a
+        # "layer_name" key -- not a mapping. Any exception prints, so the check
+        # fails closed (non-empty output => skip) rather than passing silently.
         readiness=$(DS_PATH="$ds_path" python3 - <<'EOF'
-import json, os, pathlib, random
-root = pathlib.Path(os.environ["DS_PATH"]) / "windows"
-windows = [p for p in root.glob("*/*") if p.is_dir()]
-if not windows:
-    print("no windows found"); raise SystemExit(0)
-random.seed(0)
-sample = random.sample(windows, min(25, len(windows)))
-short = 0
-for w in sample:
-    items = w / "items.json"
-    if not items.exists():
-        short += 1
-        continue
-    names = set(json.loads(items.read_text()))
-    n = sum(1 for k in names if k.startswith(("sentinel2_l2a_mo", "sentinel1_mo")))
-    if n < 24:
-        short += 1
-if short:
-    print(f"{short}/{len(sample)} sampled windows lack all 24 monthly item entries")
+import json, os, pathlib, random, traceback
+try:
+    root = pathlib.Path(os.environ["DS_PATH"]) / "windows"
+    windows = [p for p in root.glob("*/*") if p.is_dir()]
+    if not windows:
+        print("no windows found")
+        raise SystemExit(0)
+    random.seed(0)
+    sample = random.sample(windows, min(25, len(windows)))
+    short = 0
+    for w in sample:
+        items = w / "items.json"
+        if not items.exists():
+            short += 1
+            continue
+        entries = json.loads(items.read_text())
+        n = sum(
+            1
+            for e in entries
+            if e["layer_name"].startswith(("sentinel2_l2a_mo", "sentinel1_mo"))
+        )
+        if n < 24:
+            short += 1
+    if short:
+        print(f"{short}/{len(sample)} sampled windows lack all 24 monthly item entries")
+except Exception:
+    print("readiness check errored: " + traceback.format_exc(limit=1).replace("\n", " "))
 EOF
 )
         if [[ -n "$readiness" ]]; then
