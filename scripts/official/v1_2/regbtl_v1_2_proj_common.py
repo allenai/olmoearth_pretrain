@@ -47,6 +47,7 @@ from dataclasses import replace
 
 from olmo_core.train.common import Duration
 from regbtl_v1_2_common import (
+    ENCODER_SIZE_NAME,
     FIFTY_CITIES_LOOP_EVAL_TASKS,
     LOOP_EVAL_CLUSTERS,
     PASTIS_EMBEDDING_LOOP_EVAL_TASKS,
@@ -56,6 +57,7 @@ from regbtl_v1_2_regsup_common import add_register_supervision
 
 from olmoearth_pretrain.internal.experiment import CommonComponents
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
+from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +79,18 @@ SUPERVISION_BASE_WEIGHT_W0P1 = 0.1
 # psuniform run.
 SUPERVISION_BASE_WEIGHT_W1 = 1.0
 
+# --- the ``small`` backbone arms -------------------------------------------------
+# The v1.2 size sweep's ViT-Small (384-d, depth 12, 6 heads) is very strong relative
+# to base for its cost, so the w1 pcv students are re-run on it. The register width
+# drops with the backbone (768 -> 384): wideread ties the bottleneck's ATTENTION to
+# the encoder width, so d768 storage on a 384-d encoder would be wider than anything
+# it reads. The student stays at [128, 64] -- the shipped widths don't change.
+SMALL_SIZE_NAME = "small_shallow_decoder"
+SMALL_REGISTER_DIM = 384
+# ``small.py``'s LR from the size-sweep best-LR search: the small encoder trains at
+# 2e-4, not the base recipe's 1e-4 that the regbtl chain otherwise inherits.
+SMALL_LEARNING_RATE = 0.0002
+
 # The PASTIS ws16/ps1 embedding evals duplicated onto the projected head at each
 # Matryoshka width: the ``_proj{d}`` tasks probe (a prefix of)
 # ``projected_registers`` instead of the register grid, so every in-loop eval step
@@ -96,8 +110,10 @@ def build_proj_model_config(
     projection_type: str,
     supervision_source: str,
     base_weight: float = SUPERVISION_BASE_WEIGHT_W0P1,
+    register_dim: int = REGISTER_DIM,
+    size_name: str = ENCODER_SIZE_NAME,
 ) -> LatentMIMConfig:
-    """d768 wideread regbtl + regsup + a detached [128, 64] Matryoshka student.
+    """Wideread regbtl + regsup + a detached [128, 64] Matryoshka student.
 
     Args:
         common: The common experiment components.
@@ -105,9 +121,15 @@ def build_proj_model_config(
         supervision_source: ``"registers"`` (sup768), ``"both"`` (supboth) or
             ``"projection"`` (sup128) -- where the supervision heads attach.
         base_weight: Supervision base weight (w0p1 = 0.1 default; w1 = 1.0).
+        register_dim: Teacher (primary bottleneck) width; 768 on the base backbone,
+            :data:`SMALL_REGISTER_DIM` on the small one.
+        size_name: Encoder/decoder size preset (base by default).
     """
     config = build_wideread_regbtl_model_config(
-        common, latent_self_attn=True, register_dim=REGISTER_DIM
+        common,
+        latent_self_attn=True,
+        register_dim=register_dim,
+        size_name=size_name,
     )
     config = add_register_supervision(
         config, include_latlon=False, base_weight=base_weight
@@ -115,6 +137,19 @@ def build_proj_model_config(
     config.encoder_config.register_projection_dims = list(PROJECTION_DIMS)
     config.encoder_config.register_projection_type = projection_type
     config.supervision_source = supervision_source
+    return config
+
+
+def apply_small_learning_rate(
+    config: LatentMIMTrainModuleConfig,
+) -> LatentMIMTrainModuleConfig:
+    """Swap the base recipe's LR for the small preset's, in place.
+
+    Everything else about the optimizer (fused AdamW, weight decay, warmup schedule,
+    grad clipping) is left as the faster recipe sets it -- only the LR is a function
+    of backbone size, and ``small.py`` sets it from the size sweep's best-LR search.
+    """
+    config.optim_config.lr = SMALL_LEARNING_RATE
     return config
 
 

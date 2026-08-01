@@ -39,6 +39,7 @@ built from these fragments:
 | fragment | meaning |
 |---|---|
 | `regbtl` | spatial register bottleneck (Perceiver-style read into a register grid) |
+| `small` | encoder/decoder size preset `small_shallow_decoder` (384-d, depth 12, 6 heads) at the size sweep's LR (2e-4); absent means the v1.2 base encoder |
 | `gdyn` | dynamic single-latent register grid (`register_grid_size=0`) |
 | `il` | interleaved reads — `[read → self] × 4` |
 | `pdproj` | per-depth read projections |
@@ -48,7 +49,7 @@ built from these fragments:
 | `1fwd` | one forward pass per batch instead of two (valid once contrastive is off) |
 | `fusedadamw` | fused AdamW kernel |
 | `faster` | all validated speedups: 1fwd + fused AdamW + projection-only target + replicated DP + bf16 |
-| `wideread` | bottleneck attention decoupled to **encoder** width (`register_attn_dim=768`); `register_dim` becomes pure storage width |
+| `wideread` | bottleneck attention decoupled to **encoder** width (`register_attn_dim` = `embedding_size`, 768 at base / 384 at small); `register_dim` becomes pure storage width |
 | `regsup` | register-grid supervision (auxiliary decode heads on the register grid) |
 | `latlon` | latlon regression arm — a supervised **target**, never a model input |
 | `ndvi` | time-conditioned NDVI arm: MLP on `[register_cell ; φ(day_of_year)]` regresses each cell's NDVI at every observed timestep |

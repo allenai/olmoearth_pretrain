@@ -36,7 +36,8 @@ the rebuilt eval-job model must match the trained checkpoint exactly.
 import logging
 from dataclasses import replace
 
-from base import build_model_config as _base_build_model_config
+from base import PATCH_EMBED_HIDDEN_SIZES
+from base import build_size_model_config as _base_build_size_model_config
 from olmo_core.train.common import Duration
 
 from olmoearth_pretrain.internal.all_evals import (
@@ -57,6 +58,11 @@ logger = logging.getLogger(__name__)
 
 # The register bottleneck width (the gdyn_d768 frontier).
 REGISTER_DIM = 768
+# Encoder/decoder size preset. The whole regbtl program runs on the v1.2 BASE encoder;
+# the ``small`` arms pass ``small_shallow_decoder`` explicitly. Passing the preset name
+# (rather than calling ``base.build_model_config``) is what lets a run swap the backbone
+# without touching anything else -- the default is byte-identical to the old behaviour.
+ENCODER_SIZE_NAME = "base_shallow_decoder"
 # Latent-transformer depth over the register grid. With interleave this is also the number
 # of cross-attention reads, giving the ``[read -> self] x4`` schedule (nolsa keeps the 4
 # reads and drops only the self-attention blocks).
@@ -146,15 +152,17 @@ def build_regbtl_model_config(
     *,
     latent_self_attn: bool,
     register_dim: int = REGISTER_DIM,
+    size_name: str = ENCODER_SIZE_NAME,
 ) -> LatentMIMConfig:
     """v1.2 base + spatial register bottleneck: ``gdyn`` + ``il`` + ``pdproj``.
 
     The encoder keeps v1.2's 3D mixed RoPE; the bottleneck reads spatially (2D). The
     decoder is switched to 2D RoPE so its mask tokens cross-attend the register grid.
     ``latent_self_attn`` toggles the bottleneck's latent self-attention (lsa / nolsa);
-    ``register_dim`` sets the bottleneck width (d768 is the original frontier).
+    ``register_dim`` sets the bottleneck width (d768 is the original frontier);
+    ``size_name`` picks the encoder/decoder size preset (``MODEL_SIZE_ARGS``).
     """
-    config = _base_build_model_config(common)
+    config = _base_build_size_model_config(common, size_name, PATCH_EMBED_HIDDEN_SIZES)
     encoder_config = config.encoder_config
     decoder_config = config.decoder_config
 

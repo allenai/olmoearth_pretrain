@@ -25,7 +25,7 @@ import logging
 
 from olmo_core.config import DType
 from olmo_core.distributed.parallel import DataParallelConfig, DataParallelType
-from regbtl_v1_2_common import build_regbtl_model_config
+from regbtl_v1_2_common import ENCODER_SIZE_NAME, build_regbtl_model_config
 from regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_1fwd_fusedadamw import (
     build_train_module_config as _build_fusedadamw_train_module_config,
 )
@@ -75,7 +75,11 @@ def build_faster_train_module_config(
 
 
 def build_wideread_regbtl_model_config(
-    common: CommonComponents, *, latent_self_attn: bool, register_dim: int
+    common: CommonComponents,
+    *,
+    latent_self_attn: bool,
+    register_dim: int,
+    size_name: str = ENCODER_SIZE_NAME,
 ) -> LatentMIMConfig:
     """Register-bottleneck model whose bottleneck attention runs at ENCODER width.
 
@@ -90,9 +94,16 @@ def build_wideread_regbtl_model_config(
 
     ``register_num_heads`` is deliberately left unset so the bottleneck inherits the
     encoder's head count. Projection-only target included (all exits 0, no EMA).
+
+    ``size_name`` selects the encoder/decoder size preset; because the bottleneck's
+    attention width IS the encoder width, a smaller backbone narrows the reads too
+    (small: 6 x 64 at attn_dim 384, keeping the 64-dim heads RoPE needs).
     """
     config = build_regbtl_model_config(
-        common, latent_self_attn=latent_self_attn, register_dim=register_dim
+        common,
+        latent_self_attn=latent_self_attn,
+        register_dim=register_dim,
+        size_name=size_name,
     )
     config.encoder_config.register_attn_dim = config.encoder_config.embedding_size
     config.projection_only_target = True
