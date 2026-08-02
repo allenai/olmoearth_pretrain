@@ -96,6 +96,8 @@ def build_proj_model_config(
     projection_type: str,
     supervision_source: str,
     base_weight: float = SUPERVISION_BASE_WEIGHT_W0P1,
+    include_ndvi: bool = False,
+    temporal_anchor: str | None = None,
 ) -> LatentMIMConfig:
     """d768 wideread regbtl + regsup + a detached [128, 64] Matryoshka student.
 
@@ -105,12 +107,24 @@ def build_proj_model_config(
         supervision_source: ``"registers"`` (sup768), ``"both"`` (supboth) or
             ``"projection"`` (sup128) -- where the supervision heads attach.
         base_weight: Supervision base weight (w0p1 = 0.1 default; w1 = 1.0).
+        include_ndvi: Add the time-conditioned NDVI supervision arm (requires the
+            ndvi extra-decode dataset/dataloader/train-module builders from
+            ``regbtl_v1_2_regsup_common`` in the run script).
+        temporal_anchor: If set (``"year_start"``), the register READ becomes
+            temporally anchored (tanchor). NOTE: the perceiver student mirrors the
+            primary's ``register_temporal_anchor``, so a tanchor arm changes both
+            the teacher's and the pcv student's reads at once.
     """
     config = build_wideread_regbtl_model_config(
         common, latent_self_attn=True, register_dim=REGISTER_DIM
     )
+    if temporal_anchor is not None:
+        config.encoder_config.register_temporal_anchor = temporal_anchor
     config = add_register_supervision(
-        config, include_latlon=False, base_weight=base_weight
+        config,
+        include_latlon=False,
+        include_ndvi=include_ndvi,
+        base_weight=base_weight,
     )
     config.encoder_config.register_projection_dims = list(PROJECTION_DIMS)
     config.encoder_config.register_projection_type = projection_type
