@@ -2,7 +2,7 @@
 
 import logging
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -17,10 +17,7 @@ from torch.distributed.tensor import DTensor
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.nn.flexi_vit import (
-    DEFAULT_REGISTER_STUDENT_NAME,
-    TokensAndMasks,
-)
+from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.supervision_head import (
     SupervisionHead,
     SupervisionHeadConfig,
@@ -75,24 +72,6 @@ class FrozenTargetProjection(nn.Module):
         return {"tokens_and_masks": output}
 
 
-def _scaled_supervision_head_config(
-    config: SupervisionHeadConfig, scale: float
-) -> SupervisionHeadConfig:
-    """Copy a supervision head config with every modality weight scaled.
-
-    The per-modality weights are already ``base_weight * TASK_TYPE_WEIGHTS[task]``,
-    so a uniform scale is exactly a change of base weight -- scaling a w1 config by
-    0.1 gives the w0p1 recipe, with the classification/regression balance intact.
-    """
-    return replace(
-        config,
-        modality_configs={
-            name: replace(modality, weight=modality.weight * scale)
-            for name, modality in config.modality_configs.items()
-        },
-    )
-
-
 class LatentMIM(nn.Module, DistributedMixins):
     """Latent MIM Style."""
 
@@ -104,8 +83,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         decoder: nn.Module,
         reconstructor: torch.nn.Module | None = None,
         supervision_head: SupervisionHead | None = None,
-        projection_supervision_heads: dict[str, dict[int, SupervisionHead]]
-        | None = None,
+        projection_supervision_heads: dict[int, SupervisionHead] | None = None,
         projection_only_target: bool = False,
     ):
         """Initialize the Latent MIM Style.
@@ -116,14 +94,13 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructor: Optional reconstructor for auto-encoding.
             supervision_head: Optional supervision head for direct supervision
                 of decode-only modalities from decoder output.
-            projection_supervision_heads: Optional supervision heads reading the
-                encoder's DETACHED low-dim students (``projected_registers``)
-                instead of the register grid, keyed by student name and then by
-                Matryoshka prefix width (head ``d`` of student ``s`` reads
-                ``projected_registers[s][..., :d]``). Their gradients train that
-                student's projection (and themselves) only -- never the encoder,
-                and never another student. Requires the encoder's
-                ``register_projection_dims`` or ``register_students``.
+            projection_supervision_heads: Optional per-prefix supervision heads
+                reading the encoder's DETACHED low-dim register projection
+                (``projected_registers``) instead of the register grid, keyed by
+                Matryoshka prefix width (head ``d`` reads
+                ``projected_registers[..., :d]``). Their gradients train the
+                projection (and themselves) only -- never the encoder. Requires the
+                encoder's ``register_projection_dims``.
             projection_only_target: If True, the target encoder is only the frozen
                 initial projection (patch embeddings + optional embedding projector)
                 instead of a full copy of the encoder. Only valid when all token
@@ -135,16 +112,10 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.decoder = decoder
         self.reconstructor = reconstructor
         self.supervision_head = supervision_head
-        # Nested ModuleDict: student name -> str(prefix width) -> head. Keys must be
-        # strings, so prefix widths are kept as str(dim).
+        # ModuleDict keys must be strings; keep prefix widths as str(dim).
         self.projection_supervision_heads = (
             nn.ModuleDict(
-                {
-                    name: nn.ModuleDict(
-                        {str(dim): head for dim, head in per_dim.items()}
-                    )
-                    for name, per_dim in projection_supervision_heads.items()
-                }
+                {str(dim): head for dim, head in projection_supervision_heads.items()}
             )
             if projection_supervision_heads
             else None
@@ -251,31 +222,24 @@ class LatentMIM(nn.Module, DistributedMixins):
                 supervision_preds = self.supervision_head(decoded, x)
 
         projection_outputs = None
-        if projected_registers:
+        if projected_registers is not None:
             projection_supervision_preds = None
             if self.projection_supervision_heads is not None:
                 # Same grid as the registers (the student mirrors the primary's grid).
                 # Head d reads the first d dims (the Matryoshka prefix), so every
                 # listed width is supervised as a self-sufficient embedding. The
                 # student input is already detached inside the encoder, so these
-                # gradients stop at that student's projection -- supervising one
-                # student cannot perturb another, which is what lets several
-                # supervision weights be compared inside one run.
+                # gradients stop at the projection.
                 n_h, n_w = self.encoder.register_bottleneck.register_grid
-                projection_supervision_preds = {}
-                for name, per_dim in self.projection_supervision_heads.items():
-                    student_out = projected_registers[name]
-                    projected_grid = student_out.reshape(
-                        student_out.shape[0], n_h, n_w, -1
+                projected_grid = projected_registers.reshape(
+                    projected_registers.shape[0], n_h, n_w, -1
+                )
+                projection_supervision_preds = {
+                    dim_str: head(
+                        decoded, x, register_grid=projected_grid[..., : int(dim_str)]
                     )
-                    projection_supervision_preds[name] = {
-                        dim_str: head(
-                            decoded,
-                            x,
-                            register_grid=projected_grid[..., : int(dim_str)],
-                        )
-                        for dim_str, head in per_dim.items()
-                    }
+                    for dim_str, head in self.projection_supervision_heads.items()
+                }
             projection_outputs = {
                 "registers": decoder_kwargs.get("registers"),
                 "projected_registers": projected_registers,
@@ -318,9 +282,8 @@ class LatentMIM(nn.Module, DistributedMixins):
         if self.supervision_head is not None:
             fully_shard(self.supervision_head, **fsdp_config)
         if self.projection_supervision_heads is not None:
-            for per_dim in self.projection_supervision_heads.values():
-                for head in per_dim.values():
-                    fully_shard(head, **fsdp_config)
+            for head in self.projection_supervision_heads.values():
+                fully_shard(head, **fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
@@ -339,9 +302,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             self.supervision_head = torch.compile(self.supervision_head)
             logger.info("Applied torch.compile to the supervision head")
         if self.projection_supervision_heads is not None:
-            for per_dim in self.projection_supervision_heads.values():
-                for dim_str, head in per_dim.items():
-                    per_dim[dim_str] = torch.compile(head)
+            for dim_str, head in self.projection_supervision_heads.items():
+                self.projection_supervision_heads[dim_str] = torch.compile(head)
             logger.info("Applied torch.compile to the projection supervision heads")
 
 
@@ -360,20 +322,6 @@ class LatentMIMConfig(Config):
     # heads, one per source). Only meaningful with register_supervision=True; sources
     # other than "registers" require encoder_config.register_projection_dim.
     supervision_source: str = "registers"
-    # Per-student supervision heads at per-student weights, keyed by student name and
-    # given as a SCALE on the register head's base weight -- so with a w1 teacher,
-    # {"sup_w0p1": 0.1} is the w0p1 arm and 0.01 the w0p01 arm. Setting this REPLACES
-    # supervision_source's control of the projection heads (the register head is
-    # still governed by supervision_source), and is the only way to supervise
-    # students in a multi-student run, since the heads are otherwise keyed by
-    # Matryoshka width alone and could not be attributed to an arm.
-    #
-    # Why it exists: on the single-student runs, supervising the student at the
-    # teacher's own weight cost 2-5 mIoU on the projected PASTIS probes, while 0.1x
-    # was roughly neutral -- the optimum over {0, 0.1, 1.0} sat at zero. Testing the
-    # tail of that curve as separate runs means one pretraining run per weight; as
-    # per-student scales it is one arm each in a single run, against one teacher.
-    projection_supervision_weight_scales: dict[str, float] | None = None
     projection_only_target: bool = False
 
     def validate(self) -> None:
@@ -437,58 +385,11 @@ class LatentMIMConfig(Config):
                     "supervision_source='projection'/'both' requires a "
                     "supervision_head_config with register_supervision=True"
                 )
-            students = getattr(self.encoder_config, "register_students", None)
-            if (
-                getattr(self.encoder_config, "register_projection_dims", None) is None
-                and not students
-            ):
+            if getattr(self.encoder_config, "register_projection_dims", None) is None:
                 raise ValueError(
                     "supervision_source='projection'/'both' requires "
                     "encoder_config.register_projection_dims (the detached student "
                     "the projection heads read)"
-                )
-            if (
-                students
-                and len(students) > 1
-                and not self.projection_supervision_weight_scales
-            ):
-                raise ValueError(
-                    "supervision_source='projection'/'both' requires a single "
-                    "register student: the projection supervision heads are keyed by "
-                    "Matryoshka width alone, so they cannot be attributed across "
-                    f"{len(students)} students. Set "
-                    "projection_supervision_weight_scales to supervise named "
-                    "students, or use supervision_source='registers'."
-                )
-        if self.projection_supervision_weight_scales:
-            if self.supervision_head_config is None or not getattr(
-                self.supervision_head_config, "register_supervision", False
-            ):
-                raise ValueError(
-                    "projection_supervision_weight_scales requires a "
-                    "supervision_head_config with register_supervision=True"
-                )
-            known = {
-                spec.name
-                for spec in (
-                    getattr(self.encoder_config, "register_students", None) or []
-                )
-            } or {DEFAULT_REGISTER_STUDENT_NAME}
-            unknown = set(self.projection_supervision_weight_scales) - known
-            if unknown:
-                raise ValueError(
-                    "projection_supervision_weight_scales names unknown students "
-                    f"{sorted(unknown)}; the encoder has {sorted(known)}"
-                )
-            negative = [
-                name
-                for name, scale in self.projection_supervision_weight_scales.items()
-                if scale < 0
-            ]
-            if negative:
-                raise ValueError(
-                    "projection_supervision_weight_scales must be non-negative, "
-                    f"got negative values for {sorted(negative)}"
                 )
 
     def build(self) -> "LatentMIM":
@@ -514,50 +415,16 @@ class LatentMIMConfig(Config):
                         embedding_dim=embedding_dim,
                         max_patch_size=self.encoder_config.max_patch_size,
                     )
-                specs = getattr(self.encoder_config, "register_students", None)
-                dims_by_student = (
-                    {spec.name: spec.dims for spec in specs}
-                    if specs
-                    else {
-                        DEFAULT_REGISTER_STUDENT_NAME: (
-                            self.encoder_config.register_projection_dims
-                        )
-                    }
-                )
-                if self.projection_supervision_weight_scales:
-                    # Named students, each at its own weight: the head config's
-                    # per-modality weights are scaled, so a scale of 0.1 against a
-                    # w1 register head is the w0p1 arm. Scale 0 means "no heads",
-                    # which is the same arm as leaving the student out entirely.
-                    projection_supervision_heads = {
-                        name: {
-                            dim: _scaled_supervision_head_config(
-                                self.supervision_head_config, scale
-                            ).build(
-                                embedding_dim=dim,
-                                max_patch_size=self.encoder_config.max_patch_size,
-                            )
-                            for dim in dims_by_student[name]
-                        }
-                        for name, scale in (
-                            self.projection_supervision_weight_scales.items()
-                        )
-                        if scale > 0
-                    } or None
-                elif self.supervision_source in ("projection", "both"):
+                if self.supervision_source in ("projection", "both"):
                     # SEPARATE heads (their own parameters), one per Matryoshka
                     # prefix width, each reading the first d dims of the detached
-                    # student grid. validate() has already restricted this to a
-                    # single student, so its dims are unambiguous.
-                    name = next(iter(dims_by_student))
+                    # student grid.
                     projection_supervision_heads = {
-                        name: {
-                            dim: self.supervision_head_config.build(
-                                embedding_dim=dim,
-                                max_patch_size=self.encoder_config.max_patch_size,
-                            )
-                            for dim in dims_by_student[name]
-                        }
+                        dim: self.supervision_head_config.build(
+                            embedding_dim=dim,
+                            max_patch_size=self.encoder_config.max_patch_size,
+                        )
+                        for dim in self.encoder_config.register_projection_dims
                     }
             else:
                 output_embed_size = getattr(

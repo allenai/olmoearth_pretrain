@@ -106,7 +106,6 @@ class TestPoolProjectedRegisters:
         eval_projection_dim: int | None = None,
         eval_on_projected_registers: bool = True,
         eval_on_encoder_tokens: bool = False,
-        eval_projection_student: str | None = None,
     ) -> OlmoEarthEvalWrapper:
         model = SimpleNamespace(
             register_bottleneck=SimpleNamespace(register_grid=self.GRID),
@@ -119,19 +118,13 @@ class TestPoolProjectedRegisters:
             eval_on_projected_registers=eval_on_projected_registers,
             eval_on_encoder_tokens=eval_on_encoder_tokens,
             eval_projection_dim=eval_projection_dim,
-            eval_projection_student=eval_projection_student,
         )
 
-    def _encoder_output(
-        self, batch: int = 2, students: tuple[str, ...] = ("default",)
-    ) -> dict[str, torch.Tensor]:
+    def _encoder_output(self, batch: int = 2) -> dict[str, torch.Tensor]:
         n_h, n_w = self.GRID
         return {
             "registers": torch.randn(batch, n_h * n_w, self.DIM),
-            # Students are keyed by name; a single-student encoder has one entry.
-            "projected_registers": {
-                name: torch.randn(batch, n_h * n_w, self.PROJ_DIM) for name in students
-            },
+            "projected_registers": torch.randn(batch, n_h * n_w, self.PROJ_DIM),
         }
 
     def test_projected_grid_for_segmentation(self) -> None:
@@ -147,7 +140,7 @@ class TestPoolProjectedRegisters:
         out = wrapper._pool_registers(encoder_output)
         assert out.shape == (2, *self.GRID, 4)
         n_h, n_w = self.GRID
-        expected = encoder_output["projected_registers"]["default"][..., :4].reshape(
+        expected = encoder_output["projected_registers"][..., :4].reshape(
             2, n_h, n_w, 4
         )
         assert torch.equal(out, expected)
@@ -157,25 +150,6 @@ class TestPoolProjectedRegisters:
         wrapper = self._wrapper()
         with pytest.raises(ValueError, match="register_projection_dims"):
             wrapper._pool_registers({"registers": torch.randn(2, 16, self.DIM)})
-
-    def test_multi_student_requires_explicit_selection(self) -> None:
-        """With several students, the wrapper refuses to guess which arm to probe."""
-        encoder_output = self._encoder_output(students=("fast_lr", "slow_lr"))
-        with pytest.raises(ValueError, match="eval_projection_student"):
-            self._wrapper()._pool_registers(encoder_output)
-
-        wrapper = self._wrapper(eval_projection_student="slow_lr")
-        out = wrapper._pool_registers(encoder_output)
-        expected = encoder_output["projected_registers"]["slow_lr"].reshape(
-            2, *self.GRID, self.PROJ_DIM
-        )
-        assert torch.equal(out, expected)
-
-    def test_unknown_student_raises(self) -> None:
-        """A student name the encoder does not have is an error, not a fallback."""
-        wrapper = self._wrapper(eval_projection_student="nope")
-        with pytest.raises(ValueError, match="not one of this model"):
-            wrapper._pool_registers(self._encoder_output())
 
     def test_projected_and_encoder_tokens_mutually_exclusive(self) -> None:
         """Both opt-outs at once are contradictory."""

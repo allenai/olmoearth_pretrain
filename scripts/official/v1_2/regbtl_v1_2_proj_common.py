@@ -45,8 +45,6 @@ rebuild the model from the launching module's ``build_model_config``).
 import logging
 from dataclasses import replace
 
-from olmo_core.optim import OptimGroupOverride
-from olmo_core.optim.scheduler import ConstantWithWarmup, Scheduler
 from olmo_core.train.common import Duration
 from regbtl_v1_2_common import (
     ENCODER_SIZE_NAME,
@@ -58,7 +56,6 @@ from regbtl_v1_2_faster_common import build_wideread_regbtl_model_config
 from regbtl_v1_2_regsup_common import add_register_supervision
 
 from olmoearth_pretrain.internal.experiment import CommonComponents
-from olmoearth_pretrain.nn.flexi_vit import RegisterStudentSpec
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
@@ -81,10 +78,6 @@ SUPERVISION_BASE_WEIGHT_W0P1 = 0.1
 # encoder-identical to the in-flight regbtl_v1_2_gdyn_d768_regsup_w1_newsampling_
 # psuniform run.
 SUPERVISION_BASE_WEIGHT_W1 = 1.0
-
-# Param-group tag shared by every student group, so one scheduler override covers
-# them all and their LR is logged as ``optim/LR (students)``.
-STUDENT_LR_GROUP = "students"
 
 # --- the ``small`` backbone arms -------------------------------------------------
 # The v1.2 size sweep's ViT-Small (384-d, depth 12, 6 heads) is very strong relative
@@ -109,203 +102,6 @@ PASTIS_PROJ_EMBEDDING_LOOP_EVAL_TASKS = {
     for name, task in PASTIS_EMBEDDING_LOOP_EVAL_TASKS.items()
     for dim in PROJECTION_DIMS
 }
-
-
-def build_multi_student_model_config(
-    common: CommonComponents,
-    students: list[RegisterStudentSpec],
-    *,
-    base_weight: float = SUPERVISION_BASE_WEIGHT_W1,
-    supervision_weight_scales: dict[str, float] | None = None,
-    register_dim: int = REGISTER_DIM,
-    size_name: str = ENCODER_SIZE_NAME,
-    include_ndvi: bool = False,
-    temporal_anchor: str | None = None,
-) -> LatentMIMConfig:
-    """Wideread regbtl + regsup + SEVERAL detached students on one encoder.
-
-    Students are detached from the encoder and from each other, so this is the
-    single-teacher form of a student-side sweep: N arms share one encoder
-    trajectory, one data order and one seed, and the only thing that differs
-    between them is the arm. The register (teacher) supervision head is always on;
-    ``supervision_weight_scales`` optionally adds a per-student head at a scale of
-    the teacher's base weight, which is how a supervision-weight sweep becomes arms
-    of one run rather than one pretraining run per weight.
-
-    Args:
-        common: The common experiment components.
-        students: The arms, one :class:`RegisterStudentSpec` each. Names become the
-            metric namespace (``projection/<name>/...``), the eval task selector and
-            the optimizer parameter glob, so keep them short and stable.
-        base_weight: Register-supervision base weight (w1 = 1.0 by default: the
-            teacher's ceiling is what every student inherits).
-        supervision_weight_scales: Per-student supervision head weight, as a SCALE
-            on ``base_weight`` -- with the w1 default, 0.1 is the w0p1 arm and 0.01
-            the w0p01 arm. Students omitted (or given 0.0) get no supervision head,
-            which is the ``sup768`` recipe the in-flight runs use.
-        register_dim: Teacher (primary bottleneck) width.
-        size_name: Encoder/decoder size preset.
-        include_ndvi: Add the time-conditioned NDVI supervision arm.
-        temporal_anchor: If set, the register read becomes temporally anchored.
-    """
-    config = build_wideread_regbtl_model_config(
-        common,
-        latent_self_attn=True,
-        register_dim=register_dim,
-        size_name=size_name,
-    )
-    if temporal_anchor is not None:
-        config.encoder_config.register_temporal_anchor = temporal_anchor
-    config = add_register_supervision(
-        config,
-        include_latlon=False,
-        include_ndvi=include_ndvi,
-        base_weight=base_weight,
-    )
-    config.encoder_config.register_students = students
-    config.supervision_source = "registers"
-    if supervision_weight_scales:
-        config.projection_supervision_weight_scales = dict(supervision_weight_scales)
-    return config
-
-
-def student_constant_scheduler(
-    train_module_config: LatentMIMTrainModuleConfig,
-) -> ConstantWithWarmup:
-    """Constant student LR that MIRRORS the encoder's warmup, then stops decaying.
-
-    Warmup is copied from the shared scheduler rather than restated, so the two can
-    never drift apart. Mirroring it matters: during warmup the teacher's own LR is
-    still ramping and its representation is moving fastest, so a student pinned at
-    full LR from step 0 would be chasing its most unstable target at its largest
-    step. After warmup the schedules separate -- the encoder decays toward its
-    ``alpha_f`` floor, the student holds -- which is the whole contrast being tested.
-    """
-    shared = train_module_config.scheduler
-    return ConstantWithWarmup(
-        warmup=getattr(shared, "warmup", None),
-        warmup_steps=getattr(shared, "warmup_steps", None),
-        warmup_fraction=getattr(shared, "warmup_fraction", None),
-        warmup_min_lr=getattr(shared, "warmup_min_lr", 0.0),
-        units=getattr(shared, "units", "steps"),
-    )
-
-
-def add_student_lr_groups(
-    train_module_config: LatentMIMTrainModuleConfig,
-    student_lrs: dict[str, float],
-    *,
-    group_name: str = STUDENT_LR_GROUP,
-    scheduler: Scheduler | None = None,
-) -> LatentMIMTrainModuleConfig:
-    """Give named students their own LR (and optionally their own schedule shape).
-
-    The encoder's ``CosWithWarmup(alpha_f=0.1)`` decays the LR 10x over a run, which
-    the students inherit only because they sit in the same param group. That is the
-    wrong default for them: they chase a teacher that is still improving at the end
-    of training, so their step size shrinks while their target keeps moving. Passing
-    a ``scheduler`` here decouples the schedule SHAPE -- see
-    :func:`student_constant_scheduler`, which keeps the encoder's warmup and drops
-    only the decay. ``student_lrs`` decouples the peak.
-
-    Args:
-        train_module_config: The train module config to modify in place.
-        student_lrs: Peak LR per student name.
-        group_name: Tag shared by the student groups, used to look up ``scheduler``.
-            Also the label their LR is logged under (``optim/LR (<group_name>)``).
-        scheduler: Schedule for the student groups. None keeps the shared one.
-
-    Returns:
-        The modified config.
-    """
-    overrides = list(train_module_config.optim_config.group_overrides or [])
-    for name, lr in student_lrs.items():
-        overrides.append(
-            OptimGroupOverride(
-                params=[f"*register_students.{name}.*"],
-                opts={"lr": lr, "group_name": group_name},
-            )
-        )
-    train_module_config.optim_config.group_overrides = overrides
-    if scheduler is not None:
-        train_module_config.scheduler_overrides = {
-            **(train_module_config.scheduler_overrides or {}),
-            group_name: scheduler,
-        }
-    return train_module_config
-
-
-def build_multi_student_eval_tasks(
-    student_names: list[str],
-    dims: list[int] | None = None,
-    task_names: list[str] | None = None,
-) -> dict:
-    """PASTIS embedding tasks duplicated per (student, Matryoshka width).
-
-    The d768 teacher tasks are unchanged; each student adds
-    ``<task>_<student>_proj{dim}`` so one eval job scores every arm against the same
-    checkpoint. Task count is ``len(students) * len(dims) * len(task_names)``, so a
-    wide sweep must narrow ``dims`` and/or ``task_names``: the note on
-    :func:`add_proj_loop_eval_beaker_job` explains why long eval jobs silently drop
-    their tail metrics. Both default to everything.
-    """
-    tasks = {}
-    base_tasks = {
-        name: task
-        for name, task in PASTIS_EMBEDDING_LOOP_EVAL_TASKS.items()
-        if task_names is None or name in task_names
-    }
-    if task_names is not None and len(base_tasks) != len(task_names):
-        raise ValueError(
-            f"unknown PASTIS embedding task(s) {sorted(set(task_names) - set(base_tasks))}; "
-            f"available: {sorted(PASTIS_EMBEDDING_LOOP_EVAL_TASKS)}"
-        )
-    for student in student_names:
-        for name, task in base_tasks.items():
-            for dim in dims if dims is not None else PROJECTION_DIMS:
-                tasks[f"{name}_{student}_proj{dim}"] = replace(
-                    task,
-                    eval_on_projected_registers=True,
-                    eval_projection_dim=dim,
-                    eval_projection_student=student,
-                )
-    return tasks
-
-
-def add_multi_student_loop_eval_beaker_job(
-    trainer_config,
-    module_path: str,
-    student_names: list[str],
-    *,
-    dims: list[int] | None = None,
-    task_names: list[str] | None = None,
-    embedding_eval_interval_steps: int | None = None,
-):
-    """In-loop evals on the d768 teacher head and on every student, via Beaker.
-
-    The multi-student analogue of :func:`add_proj_loop_eval_beaker_job`. Since one
-    job now scores every arm, the task list grows with the sweep -- keep ``dims``
-    narrow and the interval long enough that consecutive jobs cannot overlap (see
-    that function's note on dropped tail metrics).
-    """
-    embedding_tasks = {
-        **PASTIS_EMBEDDING_LOOP_EVAL_TASKS,
-        **build_multi_student_eval_tasks(student_names, dims, task_names),
-        **FIFTY_CITIES_LOOP_EVAL_TASKS,
-    }
-    if embedding_eval_interval_steps is not None:
-        embedding_tasks = {
-            name: replace(
-                task, eval_interval=Duration.steps(embedding_eval_interval_steps)
-            )
-            for name, task in embedding_tasks.items()
-        }
-    evaluator = trainer_config.callbacks["downstream_evaluator"]
-    evaluator.tasks = {**embedding_tasks, **evaluator.tasks}
-    evaluator.run_as_beaker_job = True
-    evaluator.beaker_eval_module_path = module_path
-    evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
-    return trainer_config
 
 
 def build_proj_model_config(

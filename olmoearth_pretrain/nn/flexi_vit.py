@@ -3,7 +3,7 @@
 import logging
 import math
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -2171,171 +2171,6 @@ class SpatialRegisterBottleneck(nn.Module):
         return self.norm(registers), register_positions
 
 
-#: Name given to the student synthesized from the legacy scalar
-#: ``register_projection_dims`` / ``register_projection_type`` fields. Also the key
-#: legacy checkpoints are remapped onto, so single-student runs keep loading.
-DEFAULT_REGISTER_STUDENT_NAME = "default"
-
-
-@dataclass
-class RegisterStudentSpec(Config):
-    """One detached low-dim student readout of the register grid.
-
-    Several students can be attached to a single encoder. They are mutually
-    independent AND detached from the encoder, so a run carrying N students trains
-    exactly the encoder it would with none, and the students never interact -- which
-    makes an N-student run an N-arm hyperparameter comparison against ONE teacher
-    trajectory, with no cross-run variance in the thing being distilled.
-
-    Attributes:
-        name: Identifies the student in ``projected_registers``, in the distillation
-            metrics (``projection/<name>/...``), in the eval task selector
-            (``eval_projection_student``), and in optimizer parameter-name globs --
-            so a per-student LR is an ``OptimGroupOverride`` on
-            ``*register_students.<name>.*``.
-        projection_type: ``"linear"`` (per-cell ``Linear(register_dim, dims[0])`` on
-            the detached registers) or ``"perceiver"`` (a second wideread bottleneck
-            at the student width re-reading the detached final-layer tokens).
-        dims: Student width plus its Matryoshka prefixes, e.g. ``[128, 64]``: the
-            student runs at ``max(dims)`` and every smaller entry is trained as a
-            self-sufficient prefix (its own back-projection and Gram term). Stored
-            descending.
-    """
-
-    name: str = DEFAULT_REGISTER_STUDENT_NAME
-    projection_type: str = "linear"
-    dims: list[int] = field(default_factory=lambda: [128])
-
-    def __post_init__(self) -> None:
-        """Store dims descending and de-duplicated (the student runs at dims[0])."""
-        self.dims = sorted(set(self.dims), reverse=True)
-
-    def validate(self) -> None:
-        """Reject malformed student specs."""
-        if not self.name:
-            raise ValueError("register student name must be non-empty")
-        if "." in self.name:
-            raise ValueError(
-                "register student name must not contain '.' (it becomes a module "
-                f"key and an optimizer parameter-name glob), got {self.name!r}"
-            )
-        if not self.dims or any(d <= 0 for d in self.dims):
-            raise ValueError(
-                "register student dims must be a non-empty list of positive ints, "
-                f"got {self.dims} (student {self.name!r})"
-            )
-        if self.projection_type not in ("linear", "perceiver"):
-            raise ValueError(
-                "register student projection_type must be 'linear' or 'perceiver', "
-                f"got {self.projection_type!r} (student {self.name!r})"
-            )
-
-
-def resolve_register_student_specs(
-    *,
-    register_students: list[RegisterStudentSpec] | None,
-    register_projection_dims: list[int] | None,
-    register_projection_type: str,
-) -> list[RegisterStudentSpec]:
-    """Normalize the two ways of declaring students into one validated list.
-
-    ``register_students`` is the general form; the scalar
-    ``register_projection_dims`` / ``register_projection_type`` pair is shorthand for
-    a single student named :data:`DEFAULT_REGISTER_STUDENT_NAME` (and is what every
-    pre-multi-student config and checkpoint uses). Supplying both is an error rather
-    than a merge, so a config can never half-describe its students.
-
-    Returns:
-        The resolved specs, or an empty list when the encoder has no student.
-    """
-    if register_students:
-        if register_projection_dims is not None:
-            raise ValueError(
-                "register_students and register_projection_dims are mutually "
-                "exclusive: the scalar fields are shorthand for a single student, "
-                "so set one or the other"
-            )
-        specs = [
-            spec
-            if isinstance(spec, RegisterStudentSpec)
-            else RegisterStudentSpec(**spec)
-            for spec in register_students
-        ]
-        names = [spec.name for spec in specs]
-        if len(set(names)) != len(names):
-            raise ValueError(f"register_students names must be unique, got {names}")
-        for spec in specs:
-            spec.validate()
-        return specs
-    if register_projection_dims is None:
-        return []
-    spec = RegisterStudentSpec(
-        name=DEFAULT_REGISTER_STUDENT_NAME,
-        projection_type=register_projection_type,
-        dims=list(register_projection_dims),
-    )
-    spec.validate()
-    return [spec]
-
-
-class RegisterStudent(nn.Module):
-    """A detached student readout plus its per-prefix back-projections.
-
-    ``projection`` is either a per-cell ``Linear`` consuming the DETACHED register
-    grid, or a :class:`SpatialRegisterBottleneck` re-reading the DETACHED final-layer
-    patch tokens; ``reads_tokens`` says which. Either way the input is detached
-    upstream, so nothing here reaches the encoder.
-
-    ``back_projections`` holds one learned ``d -> register_dim`` map per Matryoshka
-    prefix: prefix ``d`` reconstructs the teacher from ``student[..., :d]``, which is
-    what forces the first ``d`` dims to stand alone.
-    """
-
-    def __init__(
-        self,
-        *,
-        name: str,
-        dims: list[int],
-        register_dim: int,
-        projection: nn.Module,
-        reads_tokens: bool,
-    ):
-        """Wrap a built projection module with its per-prefix back-projections."""
-        super().__init__()
-        self.student_name = name
-        self.dims = list(dims)
-        self.reads_tokens = reads_tokens
-        self.projection = projection
-        self.back_projections = nn.ModuleDict(
-            {str(d): nn.Linear(d, register_dim) for d in dims}
-        )
-
-    def forward(
-        self,
-        *,
-        registers: Tensor,
-        tokens: Tensor,
-        **bottleneck_kwargs: Any,
-    ) -> Tensor:
-        """Project the detached teacher state to the student width.
-
-        Args:
-            registers: DETACHED register grid ``[B, N, register_dim]`` (the linear
-                student's input).
-            tokens: DETACHED final-layer patch tokens (the perceiver student's
-                read source).
-            **bottleneck_kwargs: Forwarded to the perceiver student's read
-                (positions, masks, grid); ignored by the linear student.
-
-        Returns:
-            The student grid ``[B, N, max(dims)]``.
-        """
-        if self.reads_tokens:
-            projected, _ = self.projection(patch_tokens=tokens, **bottleneck_kwargs)
-            return projected
-        return self.projection(registers)
-
-
 class Encoder(FlexiVitBase):
     """Encoder module that processes masked input samples into token representations."""
 
@@ -2395,7 +2230,6 @@ class Encoder(FlexiVitBase):
         register_contrastive_source: str = "registers",
         register_projection_dims: list[int] | None = None,
         register_projection_type: str = "linear",
-        register_students: list[RegisterStudentSpec] | None = None,
     ):
         """Initialize the encoder.
 
@@ -2563,16 +2397,6 @@ class Encoder(FlexiVitBase):
                 final-layer patch tokens -- the deployed narrow-bottleneck
                 architecture, trained by distillation instead of the pretext loss.
                 Defaults to ``"linear"``.
-            register_students: Explicit list of :class:`RegisterStudentSpec`, for
-                attaching SEVERAL independent students to one encoder. Students are
-                detached from the encoder and from each other, so N students cost N
-                readouts of compute and change nothing about the encoder's
-                trajectory -- one run then compares N student-side configurations
-                (architecture, LR, schedule, distillation weights) against a single
-                shared teacher. Mutually exclusive with the scalar
-                ``register_projection_dims`` / ``register_projection_type`` pair,
-                which is shorthand for a single student named
-                ``DEFAULT_REGISTER_STUDENT_NAME``.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2646,22 +2470,18 @@ class Encoder(FlexiVitBase):
 
         self.use_register_bottleneck = use_register_bottleneck
         self.register_bottleneck: SpatialRegisterBottleneck | None = None
-        # Detached low-dim student readouts of the register grid (see docstring).
-        # The scalar register_projection_* pair is shorthand for a single student;
-        # register_students is the general form. Dims are stored descending -- each
-        # student runs at dims[0], smaller entries are Matryoshka prefixes.
-        self.register_student_specs = resolve_register_student_specs(
-            register_students=register_students,
-            register_projection_dims=register_projection_dims,
-            register_projection_type=register_projection_type,
-        )
-        # Retained so downstream code (evals, configs, checkpoints) can still ask
-        # "what widths does this encoder export?" without knowing about students.
+        # Detached low-dim student readout of the register grid (see docstring).
+        # Dims are stored descending; the student runs at dims[0] and the smaller
+        # entries are Matryoshka prefixes of its output.
         self.register_projection_dims = (
-            self.register_student_specs[0].dims if self.register_student_specs else None
+            sorted(set(register_projection_dims), reverse=True)
+            if register_projection_dims
+            else None
         )
         self.register_projection_type = register_projection_type
-        self.register_students: nn.ModuleDict | None = None
+        self.register_projection: nn.Linear | None = None
+        self.register_projection_student: SpatialRegisterBottleneck | None = None
+        self.register_back_projections: nn.ModuleDict | None = None
         self.register_temporal_anchor = register_temporal_anchor
         if register_temporal_anchor is not None:
             if not use_register_bottleneck:
@@ -2732,12 +2552,21 @@ class Encoder(FlexiVitBase):
             # variants consume DETACHED inputs, so the student is invisible to the
             # encoder's training; the per-prefix back-projections fund the cosine
             # distillation terms (student prefix -> teacher width) in the train module.
-            students: dict[str, nn.Module] = {}
-            for spec in self.register_student_specs:
-                student_dim = spec.dims[0]
-                if spec.projection_type == "linear":
+            if self.register_projection_dims is not None:
+                if register_projection_type not in ("linear", "perceiver"):
+                    raise ValueError(
+                        "register_projection_type must be 'linear' or 'perceiver', "
+                        f"got {register_projection_type!r}"
+                    )
+                if any(d <= 0 for d in self.register_projection_dims):
+                    raise ValueError(
+                        "register_projection_dims must be positive, got "
+                        f"{register_projection_dims}"
+                    )
+                student_dim = self.register_projection_dims[0]
+                if register_projection_type == "linear":
                     # Per-cell linear map on the detached register grid.
-                    projection: nn.Module = nn.Linear(
+                    self.register_projection = nn.Linear(
                         resolved_register_dim, student_dim
                     )
                 else:
@@ -2747,7 +2576,7 @@ class Encoder(FlexiVitBase):
                     # cannot fund both head count and head dim (see register_attn_dim).
                     # Mirrors the primary's grid mode and schedule; always reads the
                     # final layer (no multi-depth), whatever the primary does.
-                    projection = SpatialRegisterBottleneck(
+                    self.register_projection_student = SpatialRegisterBottleneck(
                         encoder_embedding_size=embedding_size,
                         register_dim=student_dim,
                         register_grid=(
@@ -2773,24 +2602,19 @@ class Encoder(FlexiVitBase):
                         temporal_rope_dim_frac=temporal_rope_dim_frac,
                         rope_temporal_base=rope_temporal_base,
                     )
-                # RegisterStudent adds one back-projection per Matryoshka prefix:
-                # dim d reconstructs the teacher from student[..., :d], forcing the
-                # first d dims to be self-sufficient (Tessera-v2 per-prefix heads).
-                students[spec.name] = RegisterStudent(
-                    name=spec.name,
-                    dims=spec.dims,
-                    register_dim=resolved_register_dim,
-                    projection=projection,
-                    reads_tokens=spec.projection_type == "perceiver",
+                # One back-projection per Matryoshka prefix: dim d reconstructs the
+                # teacher from student[..., :d], forcing the first d dims to be
+                # self-sufficient (Tessera-v2 per-prefix heads).
+                self.register_back_projections = nn.ModuleDict(
+                    {
+                        str(d): nn.Linear(d, resolved_register_dim)
+                        for d in self.register_projection_dims
+                    }
                 )
-            if students:
-                self.register_students = nn.ModuleDict(students)
-                # Single-student runs predate the ModuleDict, so their checkpoints
-                # store the projection and back-projections at the old top-level
-                # names. Remap on load so those checkpoints keep working.
-                self._register_load_state_dict_pre_hook(self._remap_legacy_student_hook)
-        elif self.register_student_specs:
-            raise ValueError("register students require use_register_bottleneck=True")
+        elif register_projection_dims is not None:
+            raise ValueError(
+                "register_projection_dims requires use_register_bottleneck=True"
+            )
 
         if register_contrastive_source not in ("registers", "encoder_tokens"):
             raise ValueError(
@@ -2823,31 +2647,6 @@ class Encoder(FlexiVitBase):
                 p.requires_grad = False
         if self.has_register_tokens:
             self._init_register_tokens()
-
-    @staticmethod
-    def _remap_legacy_student_hook(
-        state_dict: dict, prefix: str, *args: object, **kwargs: object
-    ) -> None:
-        """Load pre-multi-student checkpoints into the ``register_students`` dict.
-
-        Before students became a list, the single student's modules lived at
-        ``register_projection`` (linear), ``register_projection_student``
-        (perceiver) and ``register_back_projections``. They now live under
-        ``register_students.<name>.{projection,back_projections}``. Both legacy
-        projection names map onto ``projection``, since ``RegisterStudent`` holds
-        whichever variant it was built with under that one attribute.
-        """
-        target = f"{prefix}register_students.{DEFAULT_REGISTER_STUDENT_NAME}."
-        renames = {
-            f"{prefix}register_projection_student.": f"{target}projection.",
-            f"{prefix}register_projection.": f"{target}projection.",
-            f"{prefix}register_back_projections.": f"{target}back_projections.",
-        }
-        for key in list(state_dict.keys()):
-            for legacy, new in renames.items():
-                if key.startswith(legacy):
-                    state_dict[new + key[len(legacy) :]] = state_dict.pop(key)
-                    break
 
     def enable_band_dropout(self) -> None:
         """Enable band dropout using the configured rate.
@@ -3434,31 +3233,27 @@ class Encoder(FlexiVitBase):
                 "registers": registers,
                 "register_positions": register_positions,
             }
-            # Detached student readouts: reuse this pass's encodings (no second
+            # Detached student readout: reuses this pass's encodings (no second
             # encoder forward) -- the linear variant re-projects the registers just
             # computed; the perceiver variant re-reads the same final-layer tokens.
             # Both consume DETACHED tensors, so no student gradient reaches the
-            # encoder or the primary bottleneck. Students are independent of each
-            # other too, so several can ride along as parallel experiment arms.
-            if self.register_students is not None:
-                detached_registers = registers.detach()
-                detached_tokens = tokens.detach()
-                register_output["projected_registers"] = {
-                    name: student(
-                        registers=detached_registers,
-                        tokens=detached_tokens,
-                        patch_positions=register_kv_positions,
-                        visible_mask=bool_mask,
-                        spatial_grid=spatial_grid,
-                        window_half_extent=window_half_extent,
-                        patch_is_global=(
-                            ~patch_spatial_flag
-                            if patch_spatial_flag is not None
-                            else None
-                        ),
-                    )
-                    for name, student in self.register_students.items()
-                }
+            # encoder or the primary bottleneck.
+            if self.register_projection is not None:
+                register_output["projected_registers"] = self.register_projection(
+                    registers.detach()
+                )
+            elif self.register_projection_student is not None:
+                projected, _ = self.register_projection_student(
+                    patch_tokens=tokens.detach(),
+                    patch_positions=register_kv_positions,
+                    visible_mask=bool_mask,
+                    spatial_grid=spatial_grid,
+                    window_half_extent=window_half_extent,
+                    patch_is_global=(
+                        ~patch_spatial_flag if patch_spatial_flag is not None else None
+                    ),
+                )
+                register_output["projected_registers"] = projected
 
         tokens_per_modality_dict = self.split_and_expand_per_modality(
             tokens, modalities_to_dims_dict
@@ -4214,15 +4009,6 @@ class EncoderConfig(Config):
     # narrow-bottleneck architecture trained by distillation instead of the pretext
     # loss). Ignored without register_projection_dims.
     register_projection_type: str = "linear"
-    # Several independent students on one encoder, the general form of the scalar
-    # register_projection_* pair above (which is shorthand for a single student named
-    # DEFAULT_REGISTER_STUDENT_NAME; setting both is an error). Because students are
-    # detached from the encoder AND from each other, N students leave the encoder's
-    # trajectory untouched and cost only their own readouts -- so one run can compare
-    # N student-side configurations (architecture, LR, schedule, distillation
-    # weights) against a single shared teacher, with none of the cross-run variance
-    # that separate runs would introduce. Requires use_register_bottleneck.
-    register_students: list[RegisterStudentSpec] | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -4372,13 +4158,6 @@ class EncoderConfig(Config):
                         "register_projection_type must be 'linear' or 'perceiver', "
                         f"got {self.register_projection_type!r}"
                     )
-            # Resolves the two declaration forms and validates each spec (unique
-            # names, positive dims, known projection types).
-            resolve_register_student_specs(
-                register_students=self.register_students,
-                register_projection_dims=self.register_projection_dims,
-                register_projection_type=self.register_projection_type,
-            )
         elif self.register_read_layers is not None:
             raise ValueError(
                 "register_read_layers requires use_register_bottleneck=True"
@@ -4391,8 +4170,6 @@ class EncoderConfig(Config):
             raise ValueError(
                 "register_projection_dims requires use_register_bottleneck=True"
             )
-        elif self.register_students:
-            raise ValueError("register_students requires use_register_bottleneck=True")
         if self.register_contrastive_source not in ("registers", "encoder_tokens"):
             raise ValueError(
                 "register_contrastive_source must be 'registers' or 'encoder_tokens', "

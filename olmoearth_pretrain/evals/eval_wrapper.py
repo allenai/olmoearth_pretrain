@@ -52,7 +52,6 @@ class EvalWrapper:
         eval_on_encoder_tokens: bool = False,
         eval_on_projected_registers: bool = False,
         eval_projection_dim: int | None = None,
-        eval_projection_student: str | None = None,
         use_center_token: bool = False,
     ):
         """Initialize the eval wrapper.
@@ -77,10 +76,6 @@ class EvalWrapper:
                 first ``eval_projection_dim`` dims of the student (a Matryoshka
                 prefix, e.g. 64 of a [128, 64] student). None (default) probes the
                 full student width.
-            eval_projection_student: Which student to probe when the encoder carries
-                several (``EncoderConfig.register_students``). Required in that case,
-                since the choice of arm is the whole point of a multi-student run;
-                optional when there is only one.
             use_center_token: Whether to use the center spatial patch embedding instead
                 of pooling across all patches for classification tasks.
         """
@@ -101,7 +96,6 @@ class EvalWrapper:
         self.eval_on_encoder_tokens = eval_on_encoder_tokens
         self.eval_on_projected_registers = eval_on_projected_registers
         self.eval_projection_dim = eval_projection_dim
-        self.eval_projection_student = eval_projection_student
         self.use_center_token = use_center_token
         if self.eval_on_projected_registers and self.eval_on_encoder_tokens:
             raise ValueError(
@@ -114,13 +108,6 @@ class EvalWrapper:
         ):
             raise ValueError(
                 "eval_projection_dim requires eval_on_projected_registers=True"
-            )
-        if (
-            self.eval_projection_student is not None
-            and not self.eval_on_projected_registers
-        ):
-            raise ValueError(
-                "eval_projection_student requires eval_on_projected_registers=True"
             )
         if self.use_center_token and self.spatial_pool:
             raise ValueError(
@@ -200,28 +187,13 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         ``eval_projection_dim`` keeps only the first d dims (a Matryoshka prefix).
         """
         if self.eval_on_projected_registers:
-            if not encoder_output.get("projected_registers"):
+            if "projected_registers" not in encoder_output:
                 raise ValueError(
                     "eval_on_projected_registers requires a model with "
                     "register_projection_dims (no projected_registers in the encoder "
                     "output)"
                 )
-            students = encoder_output["projected_registers"]  # {name: [B, n_reg, d]}
-            if self.eval_projection_student is not None:
-                if self.eval_projection_student not in students:
-                    raise ValueError(
-                        f"eval_projection_student={self.eval_projection_student!r} is "
-                        f"not one of this model's students: {sorted(students)}"
-                    )
-                registers = students[self.eval_projection_student]
-            elif len(students) > 1:
-                raise ValueError(
-                    "this model has several register students "
-                    f"({sorted(students)}), so eval_projection_student must say "
-                    "which one to probe"
-                )
-            else:
-                registers = next(iter(students.values()))
+            registers = encoder_output["projected_registers"]  # [B, n_reg, d]
             if self.eval_projection_dim is not None:
                 registers = registers[..., : self.eval_projection_dim]
         else:
