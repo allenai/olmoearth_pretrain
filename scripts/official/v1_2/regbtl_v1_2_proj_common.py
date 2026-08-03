@@ -84,12 +84,15 @@ SUPERVISION_BASE_WEIGHT_W1 = 1.0
 # Param-group tag for the detached student, so one scheduler override covers it and
 # its LR is logged as ``optim/LR (student)``.
 STUDENT_LR_GROUP = "student"
-# Every parameter of the detached student: the projection itself (linear or the
-# perceiver bottleneck) plus its per-prefix back-projections.
+# Every parameter of the detached student: the projection itself plus its per-prefix
+# back-projections. The projection lives under DIFFERENT attribute names per
+# architecture -- ``register_projection`` for linear, ``register_projection_student``
+# for perceiver -- so the glob must cover both without a trailing dot, since
+# OptimConfig.build_groups is strict and raises when a pattern matches no parameter
+# (a per-architecture pattern list would fail on whichever variant is not in use).
 STUDENT_PARAM_GLOBS = [
-    "*register_projection.*",
-    "*register_projection_student.*",
-    "*register_back_projections.*",
+    "*register_projection*",
+    "*register_back_projections*",
 ]
 
 # --- the ``small`` backbone arms -------------------------------------------------
