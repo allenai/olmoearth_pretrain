@@ -1327,12 +1327,19 @@ def _aef_ps1_task(
 
 
 def _pastis_ps1_task(
-    input_modalities: list[str], window_size: int = 16
+    input_modalities: list[str],
+    window_size: int = 16,
+    dataset: str = "pastis_rslearn",
 ) -> DownstreamTaskConfig:
-    """PASTIS (rslearn export) under the per-pixel embedding-product convention."""
+    """PASTIS (rslearn export) under the per-pixel embedding-product convention.
+
+    ``dataset`` selects the registered rslearn dataset: the default
+    ``pastis_rslearn`` (official benchmark mirror) or ``pastis2_drom`` (the
+    France-DROM extension, 26 classes, same 12-monthly-mosaic convention).
+    """
     scale = _embedding_eval_batch_scale(window_size)
     return DownstreamTaskConfig(
-        dataset="pastis_rslearn",
+        dataset=dataset,
         # At ws16, 64 = one full 128x128 stored sample (8x8 tiles of 16x16)
         # per batch, so each DataLoader worker's batch maps to exactly one
         # base-sample load with the tiled-__getitem__ cache; the (16/ws)^2
@@ -1373,6 +1380,18 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
                     [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
                     window_size=_ws,
                 )
+            ),
+            # PASTIS2 France-DROM extension (26 classes) on the same
+            # 12-monthly-mosaic convention; registered as `pastis2_drom`.
+            f"pastis2_drom_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom",
+            ),
+            f"pastis2_drom_ws{_ws}_ps1_sentinel1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom",
             ),
             **{
                 f"{name}_ws{_ws}_ps1": _aef_ps1_task(
