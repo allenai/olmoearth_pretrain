@@ -1333,6 +1333,24 @@ AEF_SUPPLEMENTAL_DATASETS = (
     "us_trees",
 )
 
+# Matched-subset siblings: the same windows as their parent dataset, but with
+# every embedding product marked required, so rslearn resolves ONE window set
+# and OlmoEarth / AEF / Tessera are scored on exactly those windows.
+#
+# These exist for datasets where a product's coverage sits below the
+# --min_coverage gate in wire_embedding_modalities.py. Enabling the product on
+# the parent entry would drop its coverage-gap windows from every eval on that
+# dataset — silently re-baselining numbers already recorded — so the stricter
+# input set gets its own entry instead. us_trees_tessera: Tessera covers
+# 44 894/45 382 (98.92%) vs the 99% gate; see docs/PrecomputedEmbeddingCoverage.md.
+#
+# Deliberately NOT part of AEF_SUPPLEMENTAL_DATASETS: that tuple is also the
+# default --datasets for materialize_aef_supplemental_embeddings.py, and these
+# names share their parent's weka_path, so including them would re-walk the same
+# 45k windows under a second name. Registered at ws16 only — the point is the
+# three-way comparison, and the precomputed baselines are ws16-only.
+MATCHED_SUBSET_DATASETS = ("us_trees_tessera",)
+
 
 # Window sizes the embedding evals run at by default for OlmoEarth
 # checkpoints: the ws16 embedding-product convention plus smaller spatial
@@ -1477,6 +1495,27 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
                 )
                 for name in AEF_SUPPLEMENTAL_DATASETS
             },
+            # Matched-subset siblings at ws16 only (see MATCHED_SUBSET_DATASETS).
+            **(
+                {
+                    f"{name}_ws16_ps1": _aef_ps1_task(
+                        name, EvalMode.LINEAR_PROBE, window_size=16
+                    )
+                    for name in MATCHED_SUBSET_DATASETS
+                }
+                if _ws == 16
+                else {}
+            ),
+            **(
+                {
+                    f"{name}_ws16_ps1_knn": _aef_ps1_task(
+                        name, EvalMode.KNN, window_size=16
+                    )
+                    for name in MATCHED_SUBSET_DATASETS
+                }
+                if _ws == 16
+                else {}
+            ),
         }
     )
 
