@@ -69,19 +69,18 @@ data:
           - vv
           - vh
         passthrough: true
-      # AEF (Google Satellite Embedding V1) — NOT in the monthly dataset. The
-      # annual AEF embedding lives in the DENSE dataset (data/national_ds, layer
-      # `aef`, 2 slots: 2018 + 2019). To run an AEF embedding eval on PASTIS2 with
-      # the SAME splits, either point a gse input at that dataset, or materialize
-      # the aef layer into national_ds_monthly and uncomment below (the olmoearth
-      # GSE modality expects the layer to be named `gse`):
-      # gse:
-      #   data_type: raster
-      #   dtype: FLOAT32
-      #   layers:
-      #     - gse            # rename/alias of our `aef` layer
-      #   use_all_bands_in_order_of_band_set_idx: 0
-      #   passthrough: true
+      # AEF (Google Satellite Embedding V1), 2019 annual embedding, single slot,
+      # materialized into national_ds_monthly as the `aef` layer (64-band). The
+      # olmoearth GSE modality is keyed `gse`, so this input is named `gse` but
+      # reads our `aef` layer. Enables `--model=aef` on PASTIS2 with the SAME
+      # splits as the OlmoEarth imagery eval.
+      gse:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+          - aef
+        use_all_bands_in_order_of_band_set_idx: 0
+        passthrough: true
       targets:
         data_type: raster
         dtype: INT32
