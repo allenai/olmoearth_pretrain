@@ -386,6 +386,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         autocast_precision: torch.dtype | None = None,
         max_grad_norm: float | None = None,
         scheduler: Scheduler | None = None,
+        scheduler_overrides: dict[str, Scheduler] | None = None,
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
@@ -415,6 +416,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             autocast_precision: Enable AMP with this data type.
             max_grad_norm: Clip gradient norms to this value.
             scheduler: Optional learning rate scheduler.
+            scheduler_overrides: Optional per-param-group schedulers, keyed
+                by the group's "group_name" tag.
             device: The device to train on.
             state_dict_save_opts: Override state dict options for saving.
             state_dict_load_opts: Override state dict options for loading.
@@ -449,6 +452,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             autocast_precision=autocast_precision,
             max_grad_norm=max_grad_norm,
             scheduler=scheduler,
+            scheduler_overrides=scheduler_overrides,
             device=device,
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
