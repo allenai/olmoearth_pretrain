@@ -236,3 +236,98 @@ def test_encoder_config_projection_requires_bottleneck() -> None:
     config.register_grid_size = 0
     with pytest.raises(ValueError, match="use_register_bottleneck"):
         config.validate()
+
+
+def test_within_scene_gram_is_opt_in_and_per_scene() -> None:
+    """The block-diagonal Gram relates cells of one scene only, and defaults off."""
+    torch.manual_seed(0)
+    B, N, D = 3, 8, REGISTER_DIM
+    teacher = torch.randn(B, N, D, requires_grad=True)
+    student_source = torch.randn(B, N, max(PROJECTION_DIMS), requires_grad=True)
+    back_projections: dict[str, torch.nn.Module] = {
+        str(d): torch.nn.Linear(d, D) for d in PROJECTION_DIMS
+    }
+    kwargs = dict(
+        teacher=teacher,
+        student=student_source * 1.0,
+        back_projections=back_projections,
+        cosine_weight=1.0,
+        gram_weight=1.0,
+        gram_max_tokens=8,
+    )
+
+    # Off by default: exactly the loss the flat-only runs were trained with.
+    _, baseline = compute_projection_distill_loss(**kwargs)
+    for d in PROJECTION_DIMS:
+        assert f"projection/distill_gram_within_d{d}" not in baseline
+
+    total, metrics = compute_projection_distill_loss(
+        **kwargs, gram_within_weight=1.0, gram_within_max_cells=4
+    )
+    assert torch.isfinite(total)
+    for d in PROJECTION_DIMS:
+        assert f"projection/distill_gram_within_d{d}" in metrics
+    total.backward()
+    assert student_source.grad is not None
+    assert teacher.grad is None
+
+    # Scenes whose cells are identical have an all-ones within-scene Gram, so a
+    # student with unrelated cells scores ~1.0 -- the term is keyed to structure
+    # WITHIN a scene, never across the batch (a foreign cell would score ~0).
+    flat_teacher = torch.randn(B, 1, D).expand(B, N, D).contiguous()
+    _, degenerate = compute_projection_distill_loss(
+        teacher=flat_teacher,
+        student=student_source * 1.0,
+        back_projections=back_projections,
+        cosine_weight=0.0,
+        gram_weight=0.0,
+        gram_max_tokens=8,
+        gram_within_weight=1.0,
+        gram_within_max_cells=N,
+    )
+    for d in PROJECTION_DIMS:
+        assert degenerate[f"projection/distill_gram_within_d{d}"] > 0.5
+
+    # A single cell per scene has no within-scene pairs, so the term is skipped.
+    _, single_cell = compute_projection_distill_loss(
+        teacher=teacher[:, :1],
+        student=student_source[:, :1] * 1.0,
+        back_projections=back_projections,
+        cosine_weight=1.0,
+        gram_weight=0.0,
+        gram_max_tokens=8,
+        gram_within_weight=1.0,
+    )
+    for d in PROJECTION_DIMS:
+        assert f"projection/distill_gram_within_d{d}" not in single_cell
+
+
+def test_projection_supervision_weight_scale_decouples_the_heads() -> None:
+    """The student's heads can run at a fraction of the register head's weight."""
+    config = _latent_mim_config("linear", "both")
+    config.projection_supervision_weight_scale = 0.1
+    model: LatentMIM = config.build()
+
+    assert model.supervision_head is not None
+    assert model.projection_supervision_heads is not None
+    register_weight = model.supervision_head.modality_configs["worldcover"].weight
+    for dim in PROJECTION_DIMS:
+        head = model.projection_supervision_heads[str(dim)]
+        assert head.modality_configs["worldcover"].weight == pytest.approx(
+            register_weight * 0.1
+        )
+
+    # Unscaled (the previous behaviour) leaves both heads at the same weight.
+    unscaled: LatentMIM = _latent_mim_config("linear", "both").build()
+    assert unscaled.projection_supervision_heads is not None
+    assert unscaled.projection_supervision_heads[
+        str(PROJECTION_DIMS[0])
+    ].modality_configs["worldcover"].weight == pytest.approx(register_weight)
+
+
+def test_projection_supervision_weight_scale_requires_projection_heads() -> None:
+    """A scale with no projection heads to scale is a silent no-op, so it raises."""
+    config = _latent_mim_config("linear", "registers")
+    config.projection_supervision_weight_scale = 0.1
+    with pytest.raises(ValueError, match="no projection heads"):
+        config.validate()

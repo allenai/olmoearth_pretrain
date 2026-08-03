@@ -2,7 +2,7 @@
 
 import logging
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import torch
@@ -322,6 +322,14 @@ class LatentMIMConfig(Config):
     # heads, one per source). Only meaningful with register_supervision=True; sources
     # other than "registers" require encoder_config.register_projection_dim.
     supervision_source: str = "registers"
+    # Scales the PROJECTION supervision heads' weights relative to the register
+    # head's, decoupling the two. Without it both are built from one
+    # supervision_head_config, so supervision_source="both" forces the student head
+    # to the teacher's weight -- and at that weight it cost 2-5 mIoU on the projected
+    # PASTIS probes, while 0.1x was roughly neutral. With a w1 register head, 0.1
+    # here is the w0p1 arm and 0.01 the w0p01 arm. None = same weight as the
+    # register head (the previous behaviour).
+    projection_supervision_weight_scale: float | None = None
     projection_only_target: bool = False
 
     def validate(self) -> None:
@@ -372,6 +380,22 @@ class LatentMIMConfig(Config):
             raise ValueError(
                 "register_supervision requires the encoder register bottleneck"
             )
+        if (
+            self.projection_supervision_weight_scale is not None
+            and self.supervision_source == "registers"
+        ):
+            raise ValueError(
+                "projection_supervision_weight_scale has no effect with "
+                "supervision_source='registers' (no projection heads exist to "
+                "scale); use 'both' or 'projection'"
+            )
+        if self.projection_supervision_weight_scale is not None and (
+            self.projection_supervision_weight_scale < 0
+        ):
+            raise ValueError(
+                "projection_supervision_weight_scale must be non-negative, got "
+                f"{self.projection_supervision_weight_scale}"
+            )
         if self.supervision_source not in ("registers", "projection", "both"):
             raise ValueError(
                 "supervision_source must be 'registers', 'projection' or 'both', "
@@ -391,6 +415,27 @@ class LatentMIMConfig(Config):
                     "encoder_config.register_projection_dims (the detached student "
                     "the projection heads read)"
                 )
+
+    def _projection_supervision_head_config(self) -> SupervisionHeadConfig:
+        """The supervision head config the PROJECTION heads are built from.
+
+        The per-modality weights are already ``base_weight * TASK_TYPE_WEIGHTS``, so
+        scaling them uniformly is exactly a change of base weight with the
+        classification/regression balance left intact.
+        """
+        assert self.supervision_head_config is not None
+        if self.projection_supervision_weight_scale is None:
+            return self.supervision_head_config
+        scale = self.projection_supervision_weight_scale
+        return replace(
+            self.supervision_head_config,
+            modality_configs={
+                name: replace(modality, weight=modality.weight * scale)
+                for name, modality in (
+                    self.supervision_head_config.modality_configs.items()
+                )
+            },
+        )
 
     def build(self) -> "LatentMIM":
         """Build the Latent Predictor."""
@@ -419,8 +464,9 @@ class LatentMIMConfig(Config):
                     # SEPARATE heads (their own parameters), one per Matryoshka
                     # prefix width, each reading the first d dims of the detached
                     # student grid.
+                    projection_head_config = self._projection_supervision_head_config()
                     projection_supervision_heads = {
-                        dim: self.supervision_head_config.build(
+                        dim: projection_head_config.build(
                             embedding_dim=dim,
                             max_patch_size=self.encoder_config.max_patch_size,
                         )

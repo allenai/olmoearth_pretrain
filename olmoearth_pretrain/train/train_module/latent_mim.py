@@ -38,6 +38,8 @@ def compute_projection_distill_loss(
     cosine_weight: float,
     gram_weight: float,
     gram_max_tokens: int,
+    gram_within_weight: float = 0.0,
+    gram_within_max_cells: int = 256,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Distill the (detached) teacher register grid into the low-dim student.
 
@@ -59,6 +61,19 @@ def compute_projection_distill_loss(
             teacher's token-token cosine-similarity matrices (relational/RKD term).
         gram_max_tokens: Max register cells entering the Gram terms (one random
             subsample shared across prefixes; bounds the O(n^2) matrices).
+        gram_within_weight: Weight of the WITHIN-SCENE (block-diagonal) Gram term:
+            the same relational MSE, but computed per scene so every pair relates
+            two cells of the SAME sample. The flat term above is built over the
+            flattened ``[B * N]`` grid, so only ~1/B of its pairs are within-scene;
+            the block-diagonal form is all of them, and cheaper per pair by a factor
+            of B (m blocks of k cells cost O(m * k^2) against O((m * k)^2)). Dense
+            probes discriminate WITHIN a scene, so this asks whether the pairs that
+            metric depends on were simply too rare to matter. 0.0 (default) leaves
+            the loss exactly as the flat-only runs saw it.
+        gram_within_max_cells: Register cells sampled PER SCENE for the within-scene
+            term (one subsample of cell positions, shared across scenes and prefixes
+            so the blocks stay spatially aligned). Scenes with fewer cells use all of
+            them; a single-cell grid skips the term (no pairs exist).
 
     Returns:
         total: The weighted sum of the enabled terms across prefixes.
@@ -80,6 +95,21 @@ def compute_projection_distill_loss(
             ]
             flat_teacher = flat_teacher[idx]
         teacher_gram = flat_teacher @ flat_teacher.T
+    # Within-scene (block-diagonal) Gram: keep the [B, N, D] layout so each matrix
+    # only ever relates two cells of the same sample. The register grid is shared
+    # across the microbatch (the dynamic bottleneck sizes one (h, w) per batch), so
+    # a single cell subsample applies to every scene and this stays a plain bmm.
+    within_idx: torch.Tensor | None = None
+    teacher_within_gram: torch.Tensor | None = None
+    if gram_within_weight > 0 and teacher.shape[1] >= 2:
+        num_cells = teacher.shape[1]
+        if num_cells > gram_within_max_cells:
+            within_idx = torch.randperm(num_cells, device=teacher.device)[
+                :gram_within_max_cells
+            ]
+        within_teacher = teacher if within_idx is None else teacher[:, within_idx]
+        within_teacher = F.normalize(within_teacher, dim=-1)
+        teacher_within_gram = within_teacher @ within_teacher.transpose(1, 2)
     for dim_str, back_projection in back_projections.items():
         prefix = student[..., : int(dim_str)]
         if cosine_weight > 0:
@@ -95,6 +125,14 @@ def compute_projection_distill_loss(
             gram = F.mse_loss(flat_prefix @ flat_prefix.T, teacher_gram)
             total = total + gram_weight * gram
             metrics[f"projection/distill_gram_d{dim_str}"] = gram.detach()
+        if teacher_within_gram is not None:
+            within_prefix = prefix if within_idx is None else prefix[:, within_idx]
+            within_prefix = F.normalize(within_prefix, dim=-1)
+            gram_within = F.mse_loss(
+                within_prefix @ within_prefix.transpose(1, 2), teacher_within_gram
+            )
+            total = total + gram_within_weight * gram_within
+            metrics[f"projection/distill_gram_within_d{dim_str}"] = gram_within.detach()
     return total, metrics
 
 
@@ -132,6 +170,11 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     # Max register cells (across the microbatch) entering the Gram term; bounds the
     # O(n^2) similarity matrices.
     projection_distill_gram_max_tokens: int = 2048
+    # Within-scene (block-diagonal) Gram: the same relational term computed per
+    # sample, so 100% of its pairs are between cells of one scene rather than the
+    # ~1/B the flat term gives. 0.0 keeps the flat-only behaviour of earlier runs.
+    projection_distill_gram_within_weight: float = 0.0
+    projection_distill_gram_within_max_cells: int = 256
 
     def build(
         self,
@@ -194,6 +237,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         autocast_precision: torch.dtype | None = None,
         max_grad_norm: float | None = None,
         scheduler: Scheduler | None = None,
+        scheduler_overrides: dict[str, Scheduler] | None = None,
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
@@ -203,6 +247,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         projection_distill_cosine_weight: float = 1.0,
         projection_distill_gram_weight: float = 1.0,
         projection_distill_gram_max_tokens: int = 2048,
+        projection_distill_gram_within_weight: float = 0.0,
+        projection_distill_gram_within_max_cells: int = 256,
     ):
         """Initialize the training module.
 
@@ -234,6 +280,12 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 distillation term for the detached register projection.
             projection_distill_gram_max_tokens: Max register cells entering the Gram
                 term per microbatch (bounds the O(n^2) similarity matrices).
+            projection_distill_gram_within_weight: Weight of the within-scene
+                (block-diagonal) Gram term. 0.0 disables it.
+            projection_distill_gram_within_max_cells: Register cells sampled per
+                scene for the within-scene Gram term.
+            scheduler_overrides: Optional per-param-group schedulers, keyed by the
+                group's "group_name" tag; groups without a match use `scheduler`.
         """
         super().__init__(
             model=model,
@@ -246,6 +298,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             autocast_precision=autocast_precision,
             max_grad_norm=max_grad_norm,
             scheduler=scheduler,
+            scheduler_overrides=scheduler_overrides,
             device=device,
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
@@ -277,6 +330,12 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         self.projection_distill_cosine_weight = projection_distill_cosine_weight
         self.projection_distill_gram_weight = projection_distill_gram_weight
         self.projection_distill_gram_max_tokens = projection_distill_gram_max_tokens
+        self.projection_distill_gram_within_weight = (
+            projection_distill_gram_within_weight
+        )
+        self.projection_distill_gram_within_max_cells = (
+            projection_distill_gram_within_max_cells
+        )
         if getattr(self.model.encoder, "register_projection_dims", None) is not None:
             self.total_loss_name = f"{self.total_loss_name}+projection"
 
@@ -445,6 +504,10 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                         cosine_weight=self.projection_distill_cosine_weight,
                         gram_weight=self.projection_distill_gram_weight,
                         gram_max_tokens=self.projection_distill_gram_max_tokens,
+                        gram_within_weight=self.projection_distill_gram_within_weight,
+                        gram_within_max_cells=(
+                            self.projection_distill_gram_within_max_cells
+                        ),
                     )
                     loss = loss + distill_loss
                     if extra_metrics is None:
