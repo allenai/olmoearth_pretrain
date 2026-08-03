@@ -34,8 +34,9 @@ python scripts/extract_tesserav2/fetch_cost_probe.py \
 |---|---|
 | **CASE A** — every window's time range is its calendar label year | Tessera v2's `*_all` layers ride the eval windows; no mirrored group needed |
 | **CASE B** — time ranges are offset (Sep–Sep) or mixed | Generalize `pastis_tessera_v2.create_windows` to take the year per window (it hardcodes `PRODUCT_YEAR = 2019`) and fetch v2 in a second group |
-| Item groups **chronological, ~monthly** | S1 monthly layers align with the S2 groups; use PASTIS's `0d…330d` / `duration: 30d` offsets |
-| Item groups **not chronological** | S1 timestep *i* won't correspond to S2 group *i*. The eval still runs (timestamps are synthesized from the registry range in `rslearn_dataset.get_timestamps`), but say so in any writeup, or scope re-materializing S2 as monthly layers |
+| Item groups **chronological, ~monthly** | A second sensor aligns by group index; mirror the S2 layer's `query_config` (see below) |
+| Item groups **reverse chronological** | Same, but the S1 layers must be listed in model.yaml in the same descending order. Also means the ascending timestamps synthesized by `rslearn_dataset.get_timestamps` currently label the series backwards |
+| Item groups **not chronological** | S1 timestep *i* won't correspond to S2 group *i*; scope re-materializing S2 before adding a second sensor |
 | Per-window label year found in `options` / the window name | That's the `year` argument replacing `PRODUCT_YEAR` |
 | Layer shapes differ across the sample | Some windows are partly materialized; the shard list must tolerate it |
 | Projected reads/files from the cost probe | The scope decision: full corpus vs a stratified v2 subsample. File count on Weka, not bytes, is the binding constraint |
@@ -45,10 +46,31 @@ Zero ascending *or* descending S1 over a window is normal (orbit geometry) and
 `build_dpixel_inputs` handles it. Zero **S2** is not — that window can't be
 embedded by v2.
 
+## Measured 2026-07-31
+
+All eight datasets fetch S2 as **one layer, 12 groups**, via
+`space_mode: PER_PERIOD_MOSAIC` + `period_duration: 30d` + `max_matches: 12`,
+`sort_by: eo:cloud_cover` (which picks the scene *within* each period, not the
+period order). The groups come back **reverse chronological** — group 0 is the
+latest 30-day period, group 11 the earliest.
+
+So the S1 layer should **mirror that `query_config` exactly** — one `sentinel1`
+layer with the same `space_mode` / `period_duration` / `max_matches` — rather
+than 12 hand-written `sentinel1_mo*` layers with `time_offset`s. Same period
+boundaries, same ordering, alignment by construction, and it works unchanged
+for the CASE B datasets whose windows start mid-year. Use the non-deprecated
+`space_mode: MOSAIC` + `period_duration` spelling and verify on one window that
+the group ordering matches S2 before scaling.
+
+The CASE A/B split is 4/4: `africa_crop_mask`, `descals`, `glance`, `lcmap_lu`
+are calendar-aligned; `canada_crops_coarse`, `canada_crops_fine`,
+`ethiopia_crops`, `us_trees` carry per-window observation-dated ranges and need
+mirrored fetch windows for Tessera v2.
+
 ## After Phase 0
 
 Batch the config churn, since doing both exports together is what saves the
-work: add the 12 monthly `sentinel1_mo*` layers **and** the `tessera_v2` layer
+work: add the `sentinel1` layer **and** the `tessera_v2` layer
 to each dataset's `config.json` in one edit (the v2 layer is inert until
 something reads it), add both `model.yaml` inputs with `required: false`, add
 both to the `Pad` transform's `image_selectors`, add both modalities to the

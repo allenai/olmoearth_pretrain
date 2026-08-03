@@ -118,6 +118,12 @@ class OlmoEarthTrainModuleConfig(Config):
     autocast_precision: DType | None = None
     max_grad_norm: float | None = None
     scheduler: Scheduler | None = None
+    # Per-param-group scheduler, keyed by the group's "group_name" tag (set via the
+    # optimizer's group_overrides opts). Lets one group follow a different schedule
+    # SHAPE from the rest -- the detached students are the motivating case, since
+    # they chase a teacher that is still improving when the encoder's cosine decay
+    # has all but stopped them. Groups without a match use `scheduler`.
+    scheduler_overrides: dict[str, Scheduler] | None = None
     find_unused_parameters: bool = True
 
     # Checkpoint settings
@@ -197,6 +203,7 @@ class OlmoEarthTrainModule(TrainModule):
         autocast_precision: torch.dtype | None = None,
         max_grad_norm: float | None = None,
         scheduler: Scheduler | None = None,
+        scheduler_overrides: dict[str, Scheduler] | None = None,
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
@@ -215,6 +222,8 @@ class OlmoEarthTrainModule(TrainModule):
             autocast_precision: Enable AMP with this data type.
             max_grad_norm: Clip gradient norms to this value.
             scheduler: Optional learning rate scheduler.
+            scheduler_overrides: Optional per-param-group schedulers, keyed by the
+                group's "group_name" tag; groups without a match use `scheduler`.
             device: The device to train on.
             state_dict_save_opts: Override state dict options for saving.
             state_dict_load_opts: Override state dict options for loading.
@@ -317,6 +326,7 @@ class OlmoEarthTrainModule(TrainModule):
         self.autocast_precision = autocast_precision
         self.max_grad_norm = max_grad_norm
         self.scheduler = scheduler
+        self.scheduler_overrides: dict[str, Scheduler] = scheduler_overrides or {}
         self.state_dict_save_opts = state_dict_save_opts or dist_cp_sd.StateDictOptions(
             flatten_optimizer_state_dict=True, cpu_offload=True
         )
@@ -505,13 +515,35 @@ class OlmoEarthTrainModule(TrainModule):
             if isinstance(self.optimizer, SkipStepOptimizer):
                 self.optimizer.latest_grad_norm = grad_norm
 
-        # Maybe adjust learning rate.
-        if self.scheduler is not None:
-            for group_idx, group in enumerate(self.optimizer.param_groups):
-                new_lr = self.scheduler.set_lr(group, self.trainer)
-                self.trainer.record_metric(
-                    f"LR (group {group_idx})", new_lr, namespace="optim"
-                )
+        # Maybe adjust learning rate. A param group tagged with "group_name" may
+        # name its own scheduler in scheduler_overrides, so groups can run different
+        # schedule SHAPES (not just different peaks, which group_overrides' lr
+        # already covers) -- e.g. a detached student on a flat LR while the encoder
+        # cosine-decays. Untagged groups fall back to the shared scheduler.
+        if self.scheduler is not None or self.scheduler_overrides:
+            groups = self.optimizer.param_groups
+            # Several groups may share a tag (one scheduler, many students). Keep
+            # their metric labels distinct anyway, so a future arm with a different
+            # peak LR cannot silently overwrite its neighbour's curve.
+            tag_counts: dict[str | None, int] = {}
+            for group in groups:
+                tag = group.get("group_name")
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+            for group_idx, group in enumerate(groups):
+                group_name: str | None = group.get("group_name")
+                scheduler = self.scheduler
+                if group_name is not None and group_name in self.scheduler_overrides:
+                    scheduler = self.scheduler_overrides[group_name]
+                if scheduler is None:
+                    continue
+                new_lr = scheduler.set_lr(group, self.trainer)
+                if group_name is None:
+                    label = f"group {group_idx}"
+                elif tag_counts[group_name] > 1:
+                    label = f"{group_name} {group_idx}"
+                else:
+                    label = group_name
+                self.trainer.record_metric(f"LR ({label})", new_lr, namespace="optim")
 
         # Step optimizer.
         self.optimizer.step()

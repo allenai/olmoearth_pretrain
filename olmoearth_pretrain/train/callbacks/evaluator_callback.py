@@ -118,6 +118,10 @@ class DownstreamTaskConfig:
     # With eval_on_projected_registers: probe only the first N dims of the student (a
     # Matryoshka prefix, e.g. 64 of a [128, 64] student). None = full student width.
     eval_projection_dim: int | None = None
+    # With eval_on_projected_registers: which student to probe when the encoder
+    # carries several (EncoderConfig.register_students). Required in that case,
+    # optional when there is only one.
+    eval_projection_student: str | None = None
     # For geobench segmentation tasks: split each native image into
     # (height_width // tile_size)**2 non-overlapping tile_size x tile_size windows
     # (keeps every pixel, shrinks the token grid the model/register-read sees).
@@ -305,6 +309,7 @@ class DownstreamEvaluator:
         self.eval_on_encoder_tokens = task.eval_on_encoder_tokens
         self.eval_on_projected_registers = task.eval_on_projected_registers
         self.eval_projection_dim = task.eval_projection_dim
+        self.eval_projection_student = task.eval_projection_student
         self.use_center_token = task.use_center_token
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
@@ -506,6 +511,7 @@ class DownstreamEvaluator:
             "eval_on_encoder_tokens": self.eval_on_encoder_tokens,
             "eval_on_projected_registers": self.eval_on_projected_registers,
             "eval_projection_dim": self.eval_projection_dim,
+            "eval_projection_student": self.eval_projection_student,
             "use_center_token": self.use_center_token,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)

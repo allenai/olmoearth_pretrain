@@ -77,6 +77,8 @@ def main() -> int:
 
     empty: Counter = Counter()
     total: Counter = Counter()
+    materialized_layers = 0
+    fully_materialized = 0
     problems: Counter = Counter()
     examples: dict[str, str] = {}
     checked = 0
@@ -138,6 +140,20 @@ def main() -> int:
                         f"{window_dir.name} {outside}",
                     )
 
+        # Materialize progress: it writes a "completed" marker inside each layer
+        # directory (storage/file.py:mark_layer_completed), so disk state is the
+        # progress signal. Layers whose period matched no scene never get one,
+        # so a window can legitimately top out just below 24.
+        done = sum(
+            1
+            for prefix in SENSORS
+            for m in range(1, MONTHS + 1)
+            if (window_dir / "layers" / f"{prefix}{m:02d}" / "completed").exists()
+        )
+        materialized_layers += done
+        if done == 2 * MONTHS:
+            fully_materialized += 1
+
         # co-registration: same month index should sit in the same 30-day period
         for month in range(1, MONTHS + 1):
             d1, d2 = dates["s1"].get(month), dates["s2"].get(month)
@@ -151,6 +167,19 @@ def main() -> int:
 
     print(f"dataset: {root.name}")
     print(f"windows sampled: {checked}/{len(sample)} (of {len(window_dirs)} total)\n")
+
+    if checked:
+        expected = checked * 2 * MONTHS
+        print("materialize progress:")
+        print(
+            f"  windows fully materialized: {fully_materialized}/{checked} "
+            f"({fully_materialized / checked:.1%})"
+        )
+        print(
+            f"  layers written:             {materialized_layers}/{expected} "
+            f"({materialized_layers / expected:.1%})"
+        )
+        print()
 
     print("empty timesteps (matched no scene):")
     for sensor in ("s2", "s1"):

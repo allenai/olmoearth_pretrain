@@ -169,6 +169,13 @@ def group_first_times(window: Window, layer_name: str) -> list[datetime | None]:
 def classify_group_ordering(times: list[datetime | None]) -> str:
     """Decide whether item groups are chronological, and monthly-spaced.
 
+    Both directions count as chronological. The supplemental datasets fetch S2
+    with ``space_mode: PER_PERIOD_MOSAIC`` / ``period_duration: 30d``, which
+    yields one mosaic per 30-day period in *descending* order -- group 0 is the
+    latest period. That is perfectly alignable for a second sensor, but it does
+    mean the stored time axis runs backwards relative to the ascending
+    timestamps ``rslearn_dataset.get_timestamps`` synthesizes.
+
     Args:
         times: per-group earliest acquisition times.
 
@@ -178,21 +185,32 @@ def classify_group_ordering(times: list[datetime | None]) -> str:
     known = [t for t in times if t is not None]
     if len(known) < 2:
         return "UNKNOWN (fewer than two dated groups)"
+
     ascending = all(a <= b for a, b in zip(known, known[1:]))
-    if not ascending:
+    descending = all(a >= b for a, b in zip(known, known[1:]))
+    if not (ascending or descending):
         return (
-            "NOT CHRONOLOGICAL -- group index does not follow calendar order, so "
-            "S1 monthly mosaics will not align with these groups"
+            "NOT CHRONOLOGICAL -- group index does not follow calendar order in "
+            "either direction, so a second sensor cannot be aligned by index"
         )
-    gaps = [(b - a).days for a, b in zip(known, known[1:])]
-    gaps.sort()
+
+    gaps = sorted(abs((b - a).days) for a, b in zip(known, known[1:]))
     median_gap = gaps[len(gaps) // 2]
-    if MONTHLY_MIN_DAYS <= median_gap <= MONTHLY_MAX_DAYS:
-        return f"CHRONOLOGICAL, ~monthly (median gap {median_gap}d)"
-    return (
-        f"CHRONOLOGICAL but not monthly (median gap {median_gap}d) -- check the "
-        "S1 time_offset spacing against this"
+    monthly = MONTHLY_MIN_DAYS <= median_gap <= MONTHLY_MAX_DAYS
+    spacing = (
+        f"~monthly (median gap {median_gap}d)"
+        if monthly
+        else f"NOT monthly (median gap {median_gap}d)"
     )
+
+    if descending and not ascending:
+        return (
+            f"REVERSE CHRONOLOGICAL, {spacing} -- group 0 is the LATEST period. "
+            "A second sensor must be listed in the same descending order to "
+            "align, and the synthesized ascending timestamps currently label "
+            "this series backwards"
+        )
+    return f"CHRONOLOGICAL, {spacing}"
 
 
 def layer_shapes(windows: list[Window]) -> Counter:
