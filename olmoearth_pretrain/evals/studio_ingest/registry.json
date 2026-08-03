@@ -3771,8 +3771,266 @@
       "use_pretrain_norm": true,
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/yemen_crop",
       "window_size": 16
+    },
+    "africa_crop_mask_year_aligned": {
+      "name": "africa_crop_mask_year_aligned",
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/africa_crop_mask_year_aligned",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/africa_crop_mask_year_aligned",
+      "task_type": "segmentation",
+      "num_classes": 2,
+      "is_multilabel": false,
+      "classes": [
+        "0",
+        "1"
+      ],
+      "split_tag_key": "eval_split",
+      "split_stats": {
+        "train": {
+          "count": 32
+        },
+        "val": {
+          "count": 4
+        },
+        "test": {
+          "count": 5
+        }
+      },
+      "modalities": [
+        "gse",
+        "sentinel2_l2a",
+        "sentinel1"
+      ],
+      "imputes": [],
+      "window_size": 32,
+      "timeseries": true,
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B02": {
+            "mean": 1152.1145512095668,
+            "std": 1608.650913286683,
+            "min": 1.0,
+            "max": 17936.0
+          },
+          "B03": {
+            "mean": 1411.9489317776863,
+            "std": 1518.1780413086576,
+            "min": 70.0,
+            "max": 16992.0
+          },
+          "B04": {
+            "mean": 1591.5328040764346,
+            "std": 1617.6935509925452,
+            "min": 4.0,
+            "max": 16376.0
+          },
+          "B08": {
+            "mean": 2912.6956066109283,
+            "std": 1448.3867064749265,
+            "min": 1.0,
+            "max": 15592.0
+          },
+          "B05": {
+            "mean": 1951.162079392818,
+            "std": 1654.4605347670808,
+            "min": 0.0,
+            "max": 16111.0
+          },
+          "B06": {
+            "mean": 2554.4166316874544,
+            "std": 1527.1860538656788,
+            "min": 0.0,
+            "max": 15788.0
+          },
+          "B07": {
+            "mean": 2798.738664593613,
+            "std": 1529.9387638216572,
+            "min": 0.0,
+            "max": 15649.0
+          },
+          "B8A": {
+            "mean": 2994.3162492004753,
+            "std": 1512.8125182884926,
+            "min": 0.0,
+            "max": 15520.0
+          },
+          "B11": {
+            "mean": 2988.21703387701,
+            "std": 1562.5463617463133,
+            "min": 0.0,
+            "max": 15164.0
+          },
+          "B12": {
+            "mean": 2296.916449652778,
+            "std": 1506.323860487796,
+            "min": 0.0,
+            "max": 15095.0
+          },
+          "B01": {
+            "mean": 952.554336994015,
+            "std": 1616.1919975314086,
+            "min": 0.0,
+            "max": 15270.0
+          },
+          "B09": {
+            "mean": 3081.9207513820356,
+            "std": 2515.523035022742,
+            "min": 0.0,
+            "max": 16615.0
+          }
+        },
+        "sentinel1": {
+          "vv": {
+            "mean": -10.526612794887253,
+            "std": 4.017473512436966,
+            "min": -32.548728942871094,
+            "max": 18.477500915527344
+          },
+          "vh": {
+            "mean": -16.627642280177067,
+            "std": 3.829170997521912,
+            "min": -34.92313003540039,
+            "max": 11.930849075317383
+          }
+        }
+      },
+      "use_pretrain_norm": true,
+      "num_timesteps": 12,
+      "start_time": "2019-01-01",
+      "end_time": "2019-12-31",
+      "config_repo_dir": "data/rslearn_dataset_configs/africa_crop_mask_year_aligned",
+      "config_json_sha256": "8f404df457fa410f89936f4b2363f78f00b43729718f91475e08d0fa1b52cbba"
+    },
+    "ethiopia_crops_year_aligned": {
+      "name": "ethiopia_crops_year_aligned",
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/ethiopia_crops_year_aligned",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/ethiopia_crops_year_aligned",
+      "task_type": "segmentation",
+      "num_classes": 4,
+      "is_multilabel": false,
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "split_tag_key": "eval_split",
+      "split_stats": {
+        "train": {
+          "count": 574
+        },
+        "val": {
+          "count": 978
+        },
+        "test": {
+          "count": 978
+        }
+      },
+      "modalities": [
+        "gse",
+        "sentinel2_l2a",
+        "sentinel1"
+      ],
+      "imputes": [],
+      "window_size": 32,
+      "timeseries": true,
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B02": {
+            "mean": 1179.5839144787583,
+            "std": 1756.387335855458,
+            "min": 0.0,
+            "max": 17936.0
+          },
+          "B03": {
+            "mean": 1402.7446283391405,
+            "std": 1576.4696140440658,
+            "min": 0.0,
+            "max": 16672.0
+          },
+          "B04": {
+            "mean": 1569.5469278829578,
+            "std": 1499.6885742964305,
+            "min": 0.0,
+            "max": 15880.0
+          },
+          "B08": {
+            "mean": 2846.229199275461,
+            "std": 1370.52766092105,
+            "min": 0.0,
+            "max": 14648.0
+          },
+          "B05": {
+            "mean": 1870.5779558596018,
+            "std": 1499.7134236954712,
+            "min": 0.0,
+            "max": 16407.0
+          },
+          "B06": {
+            "mean": 2431.395208378702,
+            "std": 1430.2213703476884,
+            "min": 0.0,
+            "max": 15252.0
+          },
+          "B07": {
+            "mean": 2677.5384196814207,
+            "std": 1440.6602131279028,
+            "min": 0.0,
+            "max": 14685.0
+          },
+          "B8A": {
+            "mean": 2886.1489776717663,
+            "std": 1424.678704633726,
+            "min": 0.0,
+            "max": 14371.0
+          },
+          "B11": {
+            "mean": 2642.015740690331,
+            "std": 1188.5502957886636,
+            "min": 0.0,
+            "max": 14197.0
+          },
+          "B12": {
+            "mean": 2001.5076205334458,
+            "std": 1071.3223989626717,
+            "min": 0.0,
+            "max": 13796.0
+          },
+          "B01": {
+            "mean": 967.7536852190857,
+            "std": 1829.9794281733823,
+            "min": 0.0,
+            "max": 17769.0
+          },
+          "B09": {
+            "mean": 3069.03481116389,
+            "std": 2520.1418479036615,
+            "min": 0.0,
+            "max": 16612.0
+          }
+        },
+        "sentinel1": {
+          "vv": {
+            "mean": -11.556149831632288,
+            "std": 11.069005247576321,
+            "min": -100.0,
+            "max": 18.428821563720703
+          },
+          "vh": {
+            "mean": -18.232894288261317,
+            "std": 10.224747935741641,
+            "min": -100.0,
+            "max": 8.97866153717041
+          }
+        }
+      },
+      "use_pretrain_norm": true,
+      "num_timesteps": 12,
+      "start_time": "2020-01-01",
+      "end_time": "2020-12-31",
+      "config_repo_dir": "data/rslearn_dataset_configs/ethiopia_crops_year_aligned",
+      "config_json_sha256": "8f404df457fa410f89936f4b2363f78f00b43729718f91475e08d0fa1b52cbba"
     }
   },
-  "updated_at": "2026-07-31T06:34:56.219853",
+  "updated_at": "2026-08-03T11:47:46.324914",
   "version": "1.0"
 }
