@@ -45,6 +45,12 @@ DATASETS=(
 # */layers/ prefix. The pastis "*_all" layers are deliberately NOT excluded --
 # tessera_v2 inference needs them.
 EXCLUDES=(
+    # rslearn caches its eval-time window list here and does NOT invalidate on
+    # windows being added or removed (train/dataset_index.py) -- only on a
+    # config.json hash change or version bump. A copied index describes the
+    # SOURCE dataset, and a stale one silently makes the eval run on a fraction
+    # of the windows. Never copy it; it rebuilds on demand.
+    --exclude='.rslearn_dataset_index'
     --exclude='*/layers/sentinel2'
     --exclude='*/layers/sentinel2.*'
     --exclude='*/layers/sentinel1'
