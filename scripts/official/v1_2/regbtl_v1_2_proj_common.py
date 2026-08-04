@@ -160,6 +160,45 @@ STUDENT_ARMS = {
         StudentArm(slug="supstu0p01", supervision_scale=0.01),
         StudentArm(slug="gramwithin", gram_weight=0.5, gram_within_weight=0.5),
         StudentArm(slug="gramonly", gram_weight=0.0, gram_within_weight=1.0),
+        # Both spatial remedies at once. The single-arm runs test two independent
+        # routes to the same deficiency -- the objective applies almost no pressure
+        # to discriminate CELLS within a scene, since the cosine term is satisfiable
+        # by the scene-mean direction and ~98% of the flat Gram's pairs are
+        # cross-scene. gramonly supplies that pressure relationally (every pair
+        # within one scene); supstu0p1 supplies it directly (each cell must predict
+        # the map modalities at its own location). Whether they compose, or one
+        # subsumes the other, is not answerable from the single-knob arms.
+        StudentArm(
+            slug="gramonly_supstu0p1",
+            supervision_scale=0.1,
+            gram_weight=0.0,
+            gram_within_weight=1.0,
+        ),
+        StudentArm(
+            slug="gramwithin_supstu0p1",
+            supervision_scale=0.1,
+            gram_weight=0.5,
+            gram_within_weight=0.5,
+        ),
+        # The same two combinations on a flat student LR. Only arms whose slug ends
+        # in ``_flatlr`` hold the LR constant after warmup; every other arm inherits
+        # the encoder's CosWithWarmup(alpha_f=0.1) and its 10x decay, which is the
+        # baseline's schedule. Run as pairs so the schedule stays attributable
+        # rather than folded into the combination.
+        StudentArm(
+            slug="gramonly_supstu0p1_flatlr",
+            constant_lr=True,
+            supervision_scale=0.1,
+            gram_weight=0.0,
+            gram_within_weight=1.0,
+        ),
+        StudentArm(
+            slug="gramwithin_supstu0p1_flatlr",
+            constant_lr=True,
+            supervision_scale=0.1,
+            gram_weight=0.5,
+            gram_within_weight=0.5,
+        ),
     ]
 }
 
