@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import sys
+from dataclasses import replace
 from logging import getLogger
 from typing import Any
 
@@ -1333,6 +1334,29 @@ AEF_SUPPLEMENTAL_DATASETS = (
     "us_trees",
 )
 
+# Year-aligned re-exports (2026-08-04): the same labels and windows, but the
+# imagery is twelve ASCENDING 30-day Sentinel-1 + Sentinel-2 layers spanning the
+# calendar year of the label, matching what AEF and Tessera are built over. The
+# parents feed OlmoEarth a trailing year from the observation date (canada,
+# ethiopia, us_trees) or a fixed Sep-Aug year (pastis), so the published
+# comparisons were not input-matched. See
+# scripts/tools/reanchor_year_aligned_dataset.py.
+#
+# Registered at ws16 only, like MATCHED_SUBSET_DATASETS below and for the same
+# reason: the point is the three-way comparison against the precomputed
+# products, which are ws16-only. Add the smaller context sizes if the
+# spatial-context ablation is wanted here too.
+#
+# glance / lcmap_lu / us_trees are absent until their materialize and ingest
+# finish; add them here once registered.
+AEF_SUPPLEMENTAL_YEAR_ALIGNED = (
+    "africa_crop_mask_year_aligned",
+    "canada_crops_coarse_year_aligned",
+    "canada_crops_fine_year_aligned",
+    "descals_year_aligned",
+    "ethiopia_crops_year_aligned",
+)
+
 # Matched-subset siblings: the same windows as their parent dataset, but with
 # every embedding product marked required, so rslearn resolves ONE window set
 # and OlmoEarth / AEF / Tessera are scored on exactly those windows.
@@ -1373,7 +1397,10 @@ def _embedding_eval_batch_scale(window_size: int) -> int:
 
 
 def _aef_ps1_task(
-    name: str, eval_mode: EvalMode, window_size: int = 16
+    name: str,
+    eval_mode: EvalMode,
+    window_size: int = 16,
+    input_modalities: list[str] | None = None,
 ) -> DownstreamTaskConfig:
     """AEF supplemental task under the per-pixel embedding-product convention.
 
@@ -1395,7 +1422,7 @@ def _aef_ps1_task(
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.01,
         eval_interval=Duration.epochs(10),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
+        input_modalities=input_modalities or [Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=eval_mode,
         primary_metric=EvalMetric.BALANCED_ACCURACY,
@@ -1518,6 +1545,55 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
             ),
         }
     )
+
+# Year-aligned tasks, ws16 only. Both a Sentinel-2-only and a Sentinel-1 +
+# Sentinel-2 variant: the S1+S2 pair is the point of the re-export, while the
+# S2-only pair isolates the year/ordering/cloud-filter change from the effect of
+# adding a sensor -- without it, a delta against the parent task confounds the
+# two. Same naming convention as the pastis embedding tasks.
+EMBEDDING_EVAL_TASKS.update(
+    {
+        f"{name}_ws16_ps1_sentinel2": _aef_ps1_task(
+            name,
+            EvalMode.LINEAR_PROBE,
+            window_size=16,
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+        )
+        for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+    }
+)
+EMBEDDING_EVAL_TASKS.update(
+    {
+        f"{name}_ws16_ps1_sentinel1_sentinel2": _aef_ps1_task(
+            name,
+            EvalMode.LINEAR_PROBE,
+            window_size=16,
+            input_modalities=[
+                Modality.SENTINEL1.name,
+                Modality.SENTINEL2_L2A.name,
+            ],
+        )
+        for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+    }
+)
+# pastis_year_aligned keeps the pastis conventions (128x128 stored samples,
+# tile_samples, mIoU) rather than the AEF center-pixel ones, so it reuses the
+# pastis helper with its dataset name overridden.
+EMBEDDING_EVAL_TASKS.update(
+    {
+        "pastis_year_aligned_ws16_ps1_sentinel2": replace(
+            _pastis_ps1_task([Modality.SENTINEL2_L2A.name], window_size=16),
+            dataset="pastis_year_aligned",
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+        ),
+    }
+)
 
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
