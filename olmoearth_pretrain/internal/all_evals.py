@@ -1347,14 +1347,15 @@ AEF_SUPPLEMENTAL_DATASETS = (
 # products, which are ws16-only. Add the smaller context sizes if the
 # spatial-context ablation is wanted here too.
 #
-# glance / lcmap_lu / us_trees are absent until their materialize and ingest
-# finish; add them here once registered.
+# glance / us_trees are absent until their materialize and ingest finish; add
+# them here once registered.
 AEF_SUPPLEMENTAL_YEAR_ALIGNED = (
     "africa_crop_mask_year_aligned",
     "canada_crops_coarse_year_aligned",
     "canada_crops_fine_year_aligned",
     "descals_year_aligned",
     "ethiopia_crops_year_aligned",
+    "lcmap_lu_year_aligned",
 )
 
 # Matched-subset siblings: the same windows as their parent dataset, but with
