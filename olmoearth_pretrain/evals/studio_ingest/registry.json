@@ -3224,7 +3224,7 @@
         "24",
         "25"
       ],
-      "config_json_sha256": "6bb8bb43c68b9ea89f63c6a3f08f078e476a92e0295b6f537da6c814c37a4580",
+      "config_json_sha256": "30fc74751e268ae56777d3cb03790d238fb40c36fde40701178d6269df1ca77c",
       "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom",
       "end_time": "2019-09-01",
       "imputes": [],
