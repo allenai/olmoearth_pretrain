@@ -3231,7 +3231,8 @@
       "is_multilabel": false,
       "modalities": [
         "sentinel1",
-        "sentinel2_l2a"
+        "sentinel2_l2a",
+        "gse"
       ],
       "name": "pastis2_drom",
       "norm_stats": {
