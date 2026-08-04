@@ -1551,31 +1551,37 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
 # S2-only pair isolates the year/ordering/cloud-filter change from the effect of
 # adding a sensor -- without it, a delta against the parent task confounds the
 # two. Same naming convention as the pastis embedding tasks.
-EMBEDDING_EVAL_TASKS.update(
-    {
-        f"{name}_ws16_ps1_sentinel2": _aef_ps1_task(
-            name,
-            EvalMode.LINEAR_PROBE,
-            window_size=16,
-            input_modalities=[Modality.SENTINEL2_L2A.name],
-        )
-        for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
-    }
-)
-EMBEDDING_EVAL_TASKS.update(
-    {
-        f"{name}_ws16_ps1_sentinel1_sentinel2": _aef_ps1_task(
-            name,
-            EvalMode.LINEAR_PROBE,
-            window_size=16,
-            input_modalities=[
-                Modality.SENTINEL1.name,
-                Modality.SENTINEL2_L2A.name,
-            ],
-        )
-        for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
-    }
-)
+#
+# Each gets a linear-probe and a kNN variant, like its parent task above: the
+# AEF paper scores every dataset as best-of-{kNN-1, kNN-3, linear}, so dropping
+# kNN here would compare our linear-probe number against their best-of-three.
+_YEAR_ALIGNED_MODALITIES = {
+    "sentinel2": [Modality.SENTINEL2_L2A.name],
+    "sentinel1_sentinel2": [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+}
+for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}": _aef_ps1_task(
+                name,
+                EvalMode.LINEAR_PROBE,
+                window_size=16,
+                input_modalities=_modalities,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_knn": _aef_ps1_task(
+                name,
+                EvalMode.KNN,
+                window_size=16,
+                input_modalities=_modalities,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
 # pastis_year_aligned keeps the pastis conventions (128x128 stored samples,
 # tile_samples, mIoU) rather than the AEF center-pixel ones, so it reuses the
 # pastis helper with its dataset name overridden.
