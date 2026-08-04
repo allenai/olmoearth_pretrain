@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-08-04T12:01:44.706640",
+  "updated_at": "2026-08-04T14:05:52.319474",
   "datasets": {
     "africa_crop_mask": {
       "name": "africa_crop_mask",
@@ -4593,6 +4593,139 @@
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/canada_crops_coarse_year_aligned",
       "config_json_sha256": "8f404df457fa410f89936f4b2363f78f00b43729718f91475e08d0fa1b52cbba"
+    },
+    "lcmap_lu_year_aligned": {
+      "name": "lcmap_lu_year_aligned",
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/lcmap_lu_year_aligned",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/lcmap_lu_year_aligned",
+      "task_type": "segmentation",
+      "num_classes": 6,
+      "is_multilabel": false,
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5"
+      ],
+      "split_tag_key": "eval_split",
+      "split_stats": {
+        "train": {
+          "count": 1800
+        },
+        "val": {
+          "count": 12356
+        },
+        "test": {
+          "count": 12357
+        }
+      },
+      "modalities": [
+        "gse",
+        "tessera",
+        "sentinel2_l2a",
+        "sentinel1"
+      ],
+      "imputes": [],
+      "window_size": 32,
+      "timeseries": true,
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B02": {
+            "mean": 1354.2569542544798,
+            "std": 2227.691709991437,
+            "min": 0.0,
+            "max": 19008.0
+          },
+          "B03": {
+            "mean": 1541.9732274028488,
+            "std": 2142.523337057925,
+            "min": 0.0,
+            "max": 17760.0
+          },
+          "B04": {
+            "mean": 1618.4378862204267,
+            "std": 2166.1665063302416,
+            "min": 0.0,
+            "max": 17008.0
+          },
+          "B08": {
+            "mean": 2785.5120535671676,
+            "std": 2021.2907250421717,
+            "min": 0.0,
+            "max": 16200.0
+          },
+          "B05": {
+            "mean": 1875.8942289948584,
+            "std": 2136.63168135718,
+            "min": 0.0,
+            "max": 16712.0
+          },
+          "B06": {
+            "mean": 2386.016982513347,
+            "std": 2021.8991353419526,
+            "min": 0.0,
+            "max": 16563.0
+          },
+          "B07": {
+            "mean": 2579.361030692021,
+            "std": 1992.148047540189,
+            "min": 0.0,
+            "max": 16381.0
+          },
+          "B8A": {
+            "mean": 2730.6264062321034,
+            "std": 1951.58307793577,
+            "min": 0.0,
+            "max": 16093.0
+          },
+          "B11": {
+            "mean": 2089.6260736023087,
+            "std": 1368.65753675305,
+            "min": 0.0,
+            "max": 15329.0
+          },
+          "B12": {
+            "mean": 1531.4819684425747,
+            "std": 1178.9466898287512,
+            "min": 0.0,
+            "max": 15186.0
+          },
+          "B01": {
+            "mean": 1150.3346072790991,
+            "std": 2164.631652359935,
+            "min": 0.0,
+            "max": 19224.0
+          },
+          "B09": {
+            "mean": 2725.119399828669,
+            "std": 2374.528284225595,
+            "min": 0.0,
+            "max": 17228.0
+          }
+        },
+        "sentinel1": {
+          "vv": {
+            "mean": -11.634570771384157,
+            "std": 5.5204155725821495,
+            "min": -100.0,
+            "max": 34.3443717956543
+          },
+          "vh": {
+            "mean": -17.988808654617376,
+            "std": 5.470669769177311,
+            "min": -100.0,
+            "max": 16.640350341796875
+          }
+        }
+      },
+      "use_pretrain_norm": true,
+      "num_timesteps": 12,
+      "start_time": null,
+      "end_time": null,
+      "config_repo_dir": "data/rslearn_dataset_configs/lcmap_lu_year_aligned",
+      "config_json_sha256": "a3a21c588774145db2a9dd575f42b3c85b481d360387871c704b64d12d03487a"
     }
   }
 }
