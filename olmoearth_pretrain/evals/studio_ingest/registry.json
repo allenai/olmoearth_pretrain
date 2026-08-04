@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-08-04T05:42:46.883341",
+  "updated_at": "2026-08-04T12:01:44.706640",
   "datasets": {
     "africa_crop_mask": {
       "name": "africa_crop_mask",
@@ -3808,88 +3808,88 @@
       "norm_stats": {
         "sentinel2_l2a": {
           "B02": {
-            "mean": 1152.1145512095668,
-            "std": 1608.650913286683,
+            "mean": 1125.3461347672608,
+            "std": 1647.9708406988702,
             "min": 1.0,
             "max": 17936.0
           },
           "B03": {
-            "mean": 1411.9489317776863,
-            "std": 1518.1780413086576,
-            "min": 70.0,
+            "mean": 1376.2284497847309,
+            "std": 1530.9872870466934,
+            "min": 1.0,
             "max": 16992.0
           },
           "B04": {
-            "mean": 1591.5328040764346,
-            "std": 1617.6935509925452,
-            "min": 4.0,
+            "mean": 1542.970141642457,
+            "std": 1581.5955648045965,
+            "min": 1.0,
             "max": 16376.0
           },
           "B08": {
-            "mean": 2912.6956066109283,
-            "std": 1448.3867064749265,
+            "mean": 2897.965727686283,
+            "std": 1399.6856088826846,
             "min": 1.0,
             "max": 15592.0
           },
           "B05": {
-            "mean": 1951.162079392818,
-            "std": 1654.4605347670808,
+            "mean": 1911.4078778086396,
+            "std": 1616.870954626914,
             "min": 0.0,
             "max": 16111.0
           },
           "B06": {
-            "mean": 2554.4166316874544,
-            "std": 1527.1860538656788,
+            "mean": 2541.6735281632773,
+            "std": 1491.8229310562863,
             "min": 0.0,
             "max": 15788.0
           },
           "B07": {
-            "mean": 2798.738664593613,
-            "std": 1529.9387638216572,
+            "mean": 2788.8937744958516,
+            "std": 1488.5298519188573,
             "min": 0.0,
             "max": 15649.0
           },
           "B8A": {
-            "mean": 2994.3162492004753,
-            "std": 1512.8125182884926,
+            "mean": 2983.0709116055536,
+            "std": 1467.9884876023877,
             "min": 0.0,
             "max": 15520.0
           },
           "B11": {
-            "mean": 2988.21703387701,
-            "std": 1562.5463617463133,
+            "mean": 2947.2860076750944,
+            "std": 1473.3318187829063,
             "min": 0.0,
             "max": 15164.0
           },
           "B12": {
-            "mean": 2296.916449652778,
-            "std": 1506.323860487796,
+            "mean": 2243.921158322537,
+            "std": 1408.4287689826492,
             "min": 0.0,
             "max": 15095.0
           },
           "B01": {
-            "mean": 952.554336994015,
-            "std": 1616.1919975314086,
+            "mean": 947.7851339624555,
+            "std": 1671.592348581624,
             "min": 0.0,
-            "max": 15270.0
+            "max": 16828.0
           },
           "B09": {
-            "mean": 3081.9207513820356,
-            "std": 2515.523035022742,
+            "mean": 3111.0269900119083,
+            "std": 2507.2028813001,
             "min": 0.0,
-            "max": 16615.0
+            "max": 17084.0
           }
         },
         "sentinel1": {
           "vv": {
-            "mean": -10.526612794887253,
-            "std": 4.017473512436966,
+            "mean": -10.25361683141047,
+            "std": 3.827782060868456,
             "min": -32.548728942871094,
-            "max": 18.477500915527344
+            "max": 19.675762176513672
           },
           "vh": {
-            "mean": -16.627642280177067,
-            "std": 3.829170997521912,
+            "mean": -16.333033272569104,
+            "std": 3.7410372916667134,
             "min": -34.92313003540039,
             "max": 11.930849075317383
           }
@@ -4027,8 +4027,8 @@
       },
       "use_pretrain_norm": true,
       "num_timesteps": 12,
-      "start_time": "2020-01-01",
-      "end_time": "2020-12-31",
+      "start_time": null,
+      "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/ethiopia_crops_year_aligned",
       "config_json_sha256": "8f404df457fa410f89936f4b2363f78f00b43729718f91475e08d0fa1b52cbba"
     },
@@ -4179,6 +4179,420 @@
       "end_time": "2019-12-31",
       "config_repo_dir": "data/rslearn_dataset_configs/pastis_year_aligned",
       "config_json_sha256": "150d6c27a8a6449b3d6c9ff029c1f0df9314a46be352f0321a0d0f14148503e2"
+    },
+    "canada_crops_fine_year_aligned": {
+      "name": "canada_crops_fine_year_aligned",
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/canada_crops_fine_year_aligned",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/canada_crops_fine_year_aligned",
+      "task_type": "segmentation",
+      "num_classes": 24,
+      "is_multilabel": false,
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23"
+      ],
+      "split_tag_key": "eval_split",
+      "split_stats": {
+        "train": {
+          "count": 5565
+        },
+        "val": {
+          "count": 4500
+        },
+        "test": {
+          "count": 4501
+        }
+      },
+      "modalities": [
+        "gse",
+        "sentinel2_l2a",
+        "sentinel1"
+      ],
+      "imputes": [],
+      "window_size": 32,
+      "timeseries": true,
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B02": {
+            "mean": 2369.364393269857,
+            "std": 3175.2016799411017,
+            "min": 0.0,
+            "max": 26352.0
+          },
+          "B03": {
+            "mean": 2505.44492574056,
+            "std": 3019.167380339812,
+            "min": 0.0,
+            "max": 21856.0
+          },
+          "B04": {
+            "mean": 2535.3649877115886,
+            "std": 3035.9973092792425,
+            "min": 0.0,
+            "max": 18288.0
+          },
+          "B08": {
+            "mean": 3968.139700846354,
+            "std": 2442.601174683867,
+            "min": 0.0,
+            "max": 17376.0
+          },
+          "B05": {
+            "mean": 2824.975693115234,
+            "std": 2927.923980123292,
+            "min": 0.0,
+            "max": 18025.0
+          },
+          "B06": {
+            "mean": 3471.3364810791018,
+            "std": 2566.7299614579683,
+            "min": 0.0,
+            "max": 16936.0
+          },
+          "B07": {
+            "mean": 3654.2862830810545,
+            "std": 2411.739795362603,
+            "min": 0.0,
+            "max": 16746.0
+          },
+          "B8A": {
+            "mean": 3769.321634358724,
+            "std": 2267.3195919974046,
+            "min": 0.0,
+            "max": 16426.0
+          },
+          "B11": {
+            "mean": 2002.0765002441406,
+            "std": 1248.1104504413474,
+            "min": 0.0,
+            "max": 28000.0
+          },
+          "B12": {
+            "mean": 1458.1341962890624,
+            "std": 1082.015320245172,
+            "min": 0.0,
+            "max": 15293.0
+          },
+          "B01": {
+            "mean": 2118.1878611653647,
+            "std": 3085.6526770991745,
+            "min": 0.0,
+            "max": 28000.0
+          },
+          "B09": {
+            "mean": 3774.305434733073,
+            "std": 2768.935162869965,
+            "min": 0.0,
+            "max": 18812.0
+          }
+        },
+        "sentinel1": {
+          "vv": {
+            "mean": -10.507223611831664,
+            "std": 4.439635773808105,
+            "min": -100.0,
+            "max": 29.005630493164062
+          },
+          "vh": {
+            "mean": -16.983872953414917,
+            "std": 4.417973244902538,
+            "min": -100.0,
+            "max": 15.775501251220703
+          }
+        }
+      },
+      "use_pretrain_norm": true,
+      "num_timesteps": 12,
+      "start_time": null,
+      "end_time": null,
+      "config_repo_dir": "data/rslearn_dataset_configs/canada_crops_fine_year_aligned",
+      "config_json_sha256": "8f404df457fa410f89936f4b2363f78f00b43729718f91475e08d0fa1b52cbba"
+    },
+    "descals_year_aligned": {
+      "name": "descals_year_aligned",
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/descals_year_aligned",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/descals_year_aligned",
+      "task_type": "segmentation",
+      "num_classes": 3,
+      "is_multilabel": false,
+      "classes": [
+        "0",
+        "1",
+        "2"
+      ],
+      "split_tag_key": "eval_split",
+      "split_stats": {
+        "train": {
+          "count": 600
+        },
+        "val": {
+          "count": 8438
+        },
+        "test": {
+          "count": 8439
+        }
+      },
+      "modalities": [
+        "gse",
+        "sentinel2_l2a",
+        "sentinel1"
+      ],
+      "imputes": [],
+      "window_size": 32,
+      "timeseries": true,
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B02": {
+            "mean": 1626.260915227522,
+            "std": 2509.9725279216354,
+            "min": 0.0,
+            "max": 23344.0
+          },
+          "B03": {
+            "mean": 1705.2314397443804,
+            "std": 2289.5420731462905,
+            "min": 0.0,
+            "max": 19008.0
+          },
+          "B04": {
+            "mean": 1519.771791335435,
+            "std": 2244.2782187689245,
+            "min": 0.0,
+            "max": 17552.0
+          },
+          "B08": {
+            "mean": 3756.9748603686953,
+            "std": 1652.604248648535,
+            "min": 0.0,
+            "max": 16736.0
+          },
+          "B05": {
+            "mean": 1967.4953666106999,
+            "std": 2287.248704244929,
+            "min": 0.0,
+            "max": 18010.0
+          },
+          "B06": {
+            "mean": 3190.919916164108,
+            "std": 1878.9368132740294,
+            "min": 0.0,
+            "max": 17098.0
+          },
+          "B07": {
+            "mean": 3716.9801058228254,
+            "std": 1798.2733963783196,
+            "min": 0.0,
+            "max": 16933.0
+          },
+          "B8A": {
+            "mean": 3924.282994391904,
+            "std": 1747.6432096150645,
+            "min": 0.0,
+            "max": 16389.0
+          },
+          "B11": {
+            "mean": 2386.8889171578035,
+            "std": 1366.5036351464807,
+            "min": 0.0,
+            "max": 12157.0
+          },
+          "B12": {
+            "mean": 1523.7432320221126,
+            "std": 1283.8128773960698,
+            "min": 0.0,
+            "max": 12344.0
+          },
+          "B01": {
+            "mean": 1531.453147700795,
+            "std": 2561.861585628556,
+            "min": 0.0,
+            "max": 27752.0
+          },
+          "B09": {
+            "mean": 4658.026544510691,
+            "std": 3702.8452922046604,
+            "min": 0.0,
+            "max": 19576.0
+          }
+        },
+        "sentinel1": {
+          "vv": {
+            "mean": -6.733150959572597,
+            "std": 2.537853187056494,
+            "min": -27.321748733520508,
+            "max": 25.85858917236328
+          },
+          "vh": {
+            "mean": -13.485692223889089,
+            "std": 2.3534905383244897,
+            "min": -30.154613494873047,
+            "max": 17.4349365234375
+          }
+        }
+      },
+      "use_pretrain_norm": true,
+      "num_timesteps": 12,
+      "start_time": null,
+      "end_time": null,
+      "config_repo_dir": "data/rslearn_dataset_configs/descals_year_aligned",
+      "config_json_sha256": "8f404df457fa410f89936f4b2363f78f00b43729718f91475e08d0fa1b52cbba"
+    },
+    "canada_crops_coarse_year_aligned": {
+      "name": "canada_crops_coarse_year_aligned",
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/canada_crops_coarse_year_aligned",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/canada_crops_coarse_year_aligned",
+      "task_type": "segmentation",
+      "num_classes": 9,
+      "is_multilabel": false,
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8"
+      ],
+      "split_tag_key": "eval_split",
+      "split_stats": {
+        "train": {
+          "count": 2831
+        },
+        "val": {
+          "count": 6624
+        },
+        "test": {
+          "count": 6624
+        }
+      },
+      "modalities": [
+        "gse",
+        "sentinel2_l2a",
+        "sentinel1"
+      ],
+      "imputes": [],
+      "window_size": 32,
+      "timeseries": true,
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B02": {
+            "mean": 2426.99008972168,
+            "std": 3210.3133084519964,
+            "min": 0.0,
+            "max": 31472.0
+          },
+          "B03": {
+            "mean": 2572.76442960612,
+            "std": 3045.076781857848,
+            "min": 0.0,
+            "max": 27520.0
+          },
+          "B04": {
+            "mean": 2622.5067588297525,
+            "std": 3050.524584795925,
+            "min": 0.0,
+            "max": 24416.0
+          },
+          "B08": {
+            "mean": 4052.0099846191406,
+            "std": 2453.6538445510455,
+            "min": 0.0,
+            "max": 19792.0
+          },
+          "B05": {
+            "mean": 2909.2657236328123,
+            "std": 2944.92236386127,
+            "min": 0.0,
+            "max": 22999.0
+          },
+          "B06": {
+            "mean": 3543.0291395670574,
+            "std": 2582.9051690577767,
+            "min": 0.0,
+            "max": 21256.0
+          },
+          "B07": {
+            "mean": 3732.0158447265626,
+            "std": 2427.9228335575,
+            "min": 0.0,
+            "max": 20385.0
+          },
+          "B8A": {
+            "mean": 3848.484598958333,
+            "std": 2279.6642009838165,
+            "min": 0.0,
+            "max": 28000.0
+          },
+          "B11": {
+            "mean": 2137.1593131917316,
+            "std": 1237.271580066369,
+            "min": 0.0,
+            "max": 28000.0
+          },
+          "B12": {
+            "mean": 1587.208529663086,
+            "std": 1092.3327421834406,
+            "min": 0.0,
+            "max": 15206.0
+          },
+          "B01": {
+            "mean": 2171.85941011556,
+            "std": 3154.2040023915556,
+            "min": 0.0,
+            "max": 35845.0
+          },
+          "B09": {
+            "mean": 3874.9847888997397,
+            "std": 2835.9547647654113,
+            "min": 0.0,
+            "max": 19450.0
+          }
+        },
+        "sentinel1": {
+          "vv": {
+            "mean": -10.49734596379598,
+            "std": 5.716611824415248,
+            "min": -100.0,
+            "max": 24.988208770751953
+          },
+          "vh": {
+            "mean": -17.206926659266156,
+            "std": 5.52213404509857,
+            "min": -100.0,
+            "max": 18.330005645751953
+          }
+        }
+      },
+      "use_pretrain_norm": true,
+      "num_timesteps": 12,
+      "start_time": null,
+      "end_time": null,
+      "config_repo_dir": "data/rslearn_dataset_configs/canada_crops_coarse_year_aligned",
+      "config_json_sha256": "8f404df457fa410f89936f4b2363f78f00b43729718f91475e08d0fa1b52cbba"
     }
   }
 }
