@@ -3232,7 +3232,8 @@
       "modalities": [
         "sentinel1",
         "sentinel2_l2a",
-        "gse"
+        "gse",
+        "tessera_v2"
       ],
       "name": "pastis2_drom",
       "norm_stats": {
