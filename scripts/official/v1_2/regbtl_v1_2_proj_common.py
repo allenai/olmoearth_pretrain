@@ -199,6 +199,38 @@ STUDENT_ARMS = {
             gram_weight=0.5,
             gram_within_weight=0.5,
         ),
+        # The same four combinations at a TENTH the student supervision weight.
+        # Supervision trades early speed for late stability -- supboth_w1 (1.0x)
+        # sits ~6 mIoU behind at 40k and only crosses sup768 at 400k, once sup768
+        # has degraded. 0.1x reproduces that shape scaled down (-1.3 at 40k, -0.6
+        # by 120k). 0.01x asks whether the protection survives at a dose small
+        # enough to cost nothing early, or whether it is simply too weak to act.
+        StudentArm(
+            slug="gramonly_supstu0p01",
+            supervision_scale=0.01,
+            gram_weight=0.0,
+            gram_within_weight=1.0,
+        ),
+        StudentArm(
+            slug="gramwithin_supstu0p01",
+            supervision_scale=0.01,
+            gram_weight=0.5,
+            gram_within_weight=0.5,
+        ),
+        StudentArm(
+            slug="gramonly_supstu0p01_flatlr",
+            constant_lr=True,
+            supervision_scale=0.01,
+            gram_weight=0.0,
+            gram_within_weight=1.0,
+        ),
+        StudentArm(
+            slug="gramwithin_supstu0p01_flatlr",
+            constant_lr=True,
+            supervision_scale=0.01,
+            gram_weight=0.5,
+            gram_within_weight=0.5,
+        ),
     ]
 }
 
