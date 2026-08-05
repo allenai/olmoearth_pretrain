@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-08-04T14:05:52.319474",
+  "updated_at": "2026-08-05T10:43:37.293305",
   "datasets": {
     "africa_crop_mask": {
       "name": "africa_crop_mask",
@@ -4726,6 +4726,172 @@
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/lcmap_lu_year_aligned",
       "config_json_sha256": "a3a21c588774145db2a9dd575f42b3c85b481d360387871c704b64d12d03487a"
+    },
+    "us_trees_year_aligned": {
+      "name": "us_trees_year_aligned",
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/us_trees_year_aligned",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/us_trees_year_aligned",
+      "task_type": "segmentation",
+      "num_classes": 39,
+      "is_multilabel": false,
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "29",
+        "30",
+        "31",
+        "32",
+        "33",
+        "34",
+        "35",
+        "36",
+        "37",
+        "38"
+      ],
+      "split_tag_key": "eval_split",
+      "split_stats": {
+        "train": {
+          "count": 11700
+        },
+        "val": {
+          "count": 16841
+        },
+        "test": {
+          "count": 16841
+        }
+      },
+      "modalities": [
+        "gse",
+        "sentinel1",
+        "sentinel2_l2a",
+        "tessera"
+      ],
+      "imputes": [],
+      "window_size": 32,
+      "timeseries": true,
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B02": {
+            "mean": 919.7823784179687,
+            "std": 1573.3191076921198,
+            "min": 0.0,
+            "max": 21576.0
+          },
+          "B03": {
+            "mean": 1101.7934900309244,
+            "std": 1505.0731335333205,
+            "min": 0.0,
+            "max": 18176.0
+          },
+          "B04": {
+            "mean": 1114.5133588053386,
+            "std": 1529.6537754033232,
+            "min": 0.0,
+            "max": 17248.0
+          },
+          "B08": {
+            "mean": 2661.043690063477,
+            "std": 1467.7985481028857,
+            "min": 0.0,
+            "max": 16464.0
+          },
+          "B05": {
+            "mean": 1432.7126264648437,
+            "std": 1485.9513469253113,
+            "min": 0.0,
+            "max": 17198.0
+          },
+          "B06": {
+            "mean": 2179.7724126790363,
+            "std": 1439.908288610184,
+            "min": 0.0,
+            "max": 16762.0
+          },
+          "B07": {
+            "mean": 2443.8438997395833,
+            "std": 1463.0467310324686,
+            "min": 0.0,
+            "max": 16536.0
+          },
+          "B8A": {
+            "mean": 2634.51216422526,
+            "std": 1446.7261298384942,
+            "min": 0.0,
+            "max": 16102.0
+          },
+          "B11": {
+            "mean": 1925.5131643473308,
+            "std": 1089.7175539018815,
+            "min": 0.0,
+            "max": 15353.0
+          },
+          "B12": {
+            "mean": 1314.3809402669272,
+            "std": 964.3140954431393,
+            "min": 0.0,
+            "max": 15202.0
+          },
+          "B01": {
+            "mean": 762.7543108317058,
+            "std": 1462.8286171946324,
+            "min": 0.0,
+            "max": 21217.0
+          },
+          "B09": {
+            "mean": 2592.732569417318,
+            "std": 1806.266930525718,
+            "min": 0.0,
+            "max": 18177.0
+          }
+        },
+        "sentinel1": {
+          "vv": {
+            "mean": -9.47825010685126,
+            "std": 4.51416687856866,
+            "min": -100.0,
+            "max": 29.221555709838867
+          },
+          "vh": {
+            "mean": -15.33361171468099,
+            "std": 4.277159663817368,
+            "min": -100.0,
+            "max": 17.07649040222168
+          }
+        }
+      },
+      "use_pretrain_norm": true,
+      "num_timesteps": 12,
+      "start_time": null,
+      "end_time": null,
+      "config_repo_dir": "data/rslearn_dataset_configs/us_trees_year_aligned",
+      "config_json_sha256": "ce4d04adf0e0065d11ff8b24e3aff007282bc7e5ebb2093de56c72c16409ae3e"
     }
   }
 }
