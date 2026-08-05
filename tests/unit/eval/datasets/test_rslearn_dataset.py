@@ -349,3 +349,75 @@ def test_masked_sample_uses_numpy_free_path() -> None:
     masked_sample, label = ds._transform_sample(input_dict, target)
     s2 = getattr(masked_sample, S2)
     assert isinstance(s2, torch.Tensor) or isinstance(s2, np.ndarray)
+
+
+class TestEvalLatlon:
+    """Tests for the window-center latlon attached to eval samples."""
+
+    @staticmethod
+    def _metadata(projection: object, bounds: tuple[int, int, int, int]) -> object:
+        from rslearn.train.model_context import SampleMetadata
+
+        return SampleMetadata(
+            window_group="g",
+            window_name="w",
+            window_bounds=bounds,
+            crop_bounds=bounds,
+            crop_idx=0,
+            num_crops_in_window=1,
+            time_range=None,
+            projection=projection,
+            dataset_source=None,
+        )
+
+    def test_center_latlon_matches_pyproj(self) -> None:
+        """The normalized latlon round-trips to the pyproj-transformed center."""
+        import pyproj
+        from rasterio.crs import CRS
+        from rslearn.utils.geometry import Projection
+
+        from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
+            _normalized_center_latlon,
+        )
+
+        # UTM 33N at 10 m: a 128x128-pixel window near (lat ~42, lon ~15).
+        proj = Projection(CRS.from_epsg(32633), 10.0, -10.0)
+        bounds = (49936, -464564, 50064, -464436)
+        out = _normalized_center_latlon(self._metadata(proj, bounds))
+        assert out is not None and out.shape == (2,)
+        lat = float(out[0]) * 180.0 - 90.0
+        lon = float(out[1]) * 360.0 - 180.0
+        # Center in CRS units: pixel * resolution.
+        cx = (bounds[0] + bounds[2]) / 2 * 10.0
+        cy = (bounds[1] + bounds[3]) / 2 * -10.0
+        tf = pyproj.Transformer.from_crs("EPSG:32633", "EPSG:4326", always_xy=True)
+        exp_lon, exp_lat = tf.transform(cx, cy)
+        assert abs(lat - exp_lat) < 0.01
+        assert abs(lon - exp_lon) < 0.01
+
+    def test_missing_or_bad_metadata_returns_none(self) -> None:
+        """No metadata, or metadata that cannot be reprojected, yields None."""
+        from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
+            _normalized_center_latlon,
+        )
+
+        assert _normalized_center_latlon(None) is None
+        assert _normalized_center_latlon(self._metadata(None, (0, 0, 1, 1))) is None
+
+    def test_transform_sample_attaches_latlon(self) -> None:
+        """With metadata the sample carries normalized latlon; without it, None."""
+        from rasterio.crs import CRS
+        from rslearn.utils.geometry import Projection
+
+        ds = build_dataset()
+        input_dict, target = make_sample(32, {(16, 16): 1})
+        proj = Projection(CRS.from_epsg(32633), 10.0, -10.0)
+        meta = self._metadata(proj, (49936, -464564, 50064, -464436))
+
+        with_meta, _ = ds._transform_sample(input_dict, target, metadata=meta)
+        assert with_meta.latlon is not None
+        assert with_meta.latlon.shape == (2,)
+        assert ((with_meta.latlon >= 0) & (with_meta.latlon <= 1)).all()
+
+        without_meta, _ = ds._transform_sample(input_dict, target)
+        assert without_meta.latlon is None

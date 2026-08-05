@@ -13,11 +13,14 @@ if TYPE_CHECKING:
     from olmoearth_pretrain.evals.studio_ingest.schema import EvalDatasetEntry
 
 import numpy as np
+import shapely
 import torch
 from dateutil.relativedelta import relativedelta
 from einops import rearrange
+from rslearn.const import WGS84_PROJECTION
 from rslearn.train.dataset import ModelDataset as RsModelDataset
-from rslearn.train.model_context import RasterImage
+from rslearn.train.model_context import RasterImage, SampleMetadata
+from rslearn.utils.geometry import STGeometry
 from torch.utils.data import Dataset, IterableDataset, Subset
 
 from olmoearth_pretrain.data.constants import (
@@ -56,6 +59,42 @@ logger = logging.getLogger(__name__)
 # record the dataset's actual time range.
 DEFAULT_START_TIME = "2022-09-01"
 DEFAULT_END_TIME = "2023-09-01"
+
+
+def _normalized_center_latlon(metadata: SampleMetadata | None) -> torch.Tensor | None:
+    """Normalized (lat, lon) of the sample's center, or None when unavailable.
+
+    Computed from the rslearn sample's ``crop_bounds`` + ``projection`` by
+    reprojecting to WGS84, then normalized with the same predefined min/max
+    convention the pretraining dataloader uses (lat [-90, 90] -> [0, 1],
+    lon [-180, 180] -> [0, 1]), so GPS-capable encoders can consume it exactly
+    like a pretraining latlon. Models without a GPS input ignore it. Any
+    failure (no metadata, degenerate geometry) returns None — the sample then
+    simply carries no latlon and GPS-capable models take their no-GPS path.
+
+    This is the center of the rslearn crop; window_size/tile crops applied later
+    in ``_transform_sample`` inherit it. At eval window scales (<= a few km) the
+    offset to a tile's own center is far below the resolution GPS conditioning
+    (climate/biome priors) responds to.
+    """
+    if metadata is None:
+        return None
+    try:
+        bounds = metadata.crop_bounds or metadata.window_bounds
+        wgs84 = STGeometry(
+            metadata.projection, shapely.box(*bounds), None
+        ).to_projection(WGS84_PROJECTION)
+        min_lon, min_lat, max_lon, max_lat = wgs84.shp.bounds
+        lat = (min_lat + max_lat) / 2.0
+        lon = (min_lon + max_lon) / 2.0
+    except Exception:
+        logger.warning("Could not derive latlon from sample metadata", exc_info=True)
+        return None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None
+    return torch.tensor(
+        [(lat + 90.0) / 180.0, (lon + 180.0) / 360.0], dtype=torch.float32
+    )
 
 
 def get_timestamps(
@@ -536,11 +575,16 @@ class RslearnToOlmoEarthDataset(Dataset):
         input_dict: dict,
         target: dict,
         tile: tuple[int, int] | None = None,
+        metadata: SampleMetadata | None = None,
     ) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
         """Transform a raw rslearn sample into (MaskedOlmoEarthSample, label).
 
         With tile set (tile_samples mode), (tile_row, tile_col) selects which
         window_size x window_size tile of the stored sample to emit.
+
+        When ``metadata`` is provided, the sample additionally carries the
+        window-center latlon (normalized), so GPS-capable encoders can use the
+        sample's location at eval time; other models ignore it.
         """
         sample_dict: dict[str, Any] = {}
         sample_timesteps: int | None = None
@@ -618,6 +662,10 @@ class RslearnToOlmoEarthDataset(Dataset):
         sample_dict["timestamps"] = self._build_timestamps(
             sample_timesteps, stored_time_ranges
         )
+
+        latlon = _normalized_center_latlon(metadata)
+        if latlon is not None:
+            sample_dict[Modality.LATLON.name] = latlon
 
         olmoearth_sample = OlmoEarthSample(**sample_dict)
         masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(olmoearth_sample)
@@ -752,14 +800,17 @@ class RslearnToOlmoEarthDataset(Dataset):
         if self._tiles_per_side > 1:
             base_idx, tile = divmod(idx, self._tiles_per_side**2)
             if self._cached_base is None or self._cached_base[0] != base_idx:
-                input_dict, target, _ = self.dataset[base_idx]
-                self._cached_base = (base_idx, (input_dict, target))
-            input_dict, target = self._cached_base[1]
+                input_dict, target, metadata = self.dataset[base_idx]
+                self._cached_base = (base_idx, (input_dict, target, metadata))
+            input_dict, target, metadata = self._cached_base[1]
             return self._transform_sample(
-                input_dict, target, tile=divmod(tile, self._tiles_per_side)
+                input_dict,
+                target,
+                tile=divmod(tile, self._tiles_per_side),
+                metadata=metadata,
             )
-        input_dict, target, _ = self.dataset[idx]
-        return self._transform_sample(input_dict, target)
+        input_dict, target, metadata = self.dataset[idx]
+        return self._transform_sample(input_dict, target, metadata=metadata)
 
 
 class IterableRslearnToOlmoEarthDataset(IterableDataset, RslearnToOlmoEarthDataset):
@@ -767,14 +818,17 @@ class IterableRslearnToOlmoEarthDataset(IterableDataset, RslearnToOlmoEarthDatas
 
     def __iter__(self) -> Iterator[tuple[MaskedOlmoEarthSample, torch.Tensor]]:
         """Iterate over the dataset."""
-        for input_dict, target, _ in self.dataset:
+        for input_dict, target, metadata in self.dataset:
             if self._tiles_per_side > 1:
                 for tile in range(self._tiles_per_side**2):
                     yield self._transform_sample(
-                        input_dict, target, tile=divmod(tile, self._tiles_per_side)
+                        input_dict,
+                        target,
+                        tile=divmod(tile, self._tiles_per_side),
+                        metadata=metadata,
                     )
             else:
-                yield self._transform_sample(input_dict, target)
+                yield self._transform_sample(input_dict, target, metadata=metadata)
 
 
 def wrap_rslearn_dataset(**kwargs: Any) -> RslearnToOlmoEarthDataset:
