@@ -386,6 +386,9 @@ def infer(
 
 def main() -> None:
     """CLI entry point."""
+    # Retargetable to another dataset/group (e.g. pastis2_drom's rpg_2019_dec31)
+    # without touching the pastis defaults; create_windows/infer read these globals.
+    global EVAL_GROUP, FETCH_GROUP
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -393,10 +396,14 @@ def main() -> None:
     p_windows = sub.add_parser("create_windows", help="Create the fetch windows")
     p_windows.add_argument("--ds_path", required=True)
     p_windows.add_argument("--year", type=int, default=PRODUCT_YEAR)
+    p_windows.add_argument("--eval_group", default=EVAL_GROUP)
+    p_windows.add_argument("--fetch_group", default=FETCH_GROUP)
 
     p_infer = sub.add_parser("infer", help="Run inference and write the layer")
     p_infer.add_argument("--ds_path", required=True)
     p_infer.add_argument("--checkpoint_path", required=True)
+    p_infer.add_argument("--eval_group", default=EVAL_GROUP)
+    p_infer.add_argument("--fetch_group", default=FETCH_GROUP)
     p_infer.add_argument(
         "--model_size",
         default="medium",
@@ -410,6 +417,8 @@ def main() -> None:
     p_infer.add_argument("--read_workers", type=int, default=4)
 
     args = parser.parse_args()
+    EVAL_GROUP = args.eval_group
+    FETCH_GROUP = args.fetch_group
     if args.command == "create_windows":
         create_windows(args.ds_path, year=args.year)
     else:
