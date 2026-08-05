@@ -14,6 +14,7 @@ from torch.distributed.fsdp import fully_shard
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
     BASE_GSD,
+    MISSING_VALUE,
     Modality,
     ModalitySpec,
     get_modality_specs_from_names,
@@ -31,6 +32,7 @@ from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
+    latlon_to_unit_xyz,
     resolve_position_encoding,
     timestamps_to_days,
 )
@@ -671,6 +673,8 @@ class CompositeEncodings(nn.Module):
         tokenization_config: TokenizationConfig | None = None,
         position_encoding: str = "absolute",
         spatial_pos_encoding: str | None = None,
+        use_gps_encoding: bool = False,
+        gps_dropout_rate: float = 0.5,
     ):
         """Initialize the composite encodings.
 
@@ -686,6 +690,15 @@ class CompositeEncodings(nn.Module):
             position_encoding: Position encoding mode; one of the
                 ``PositionEncoding`` values.
             spatial_pos_encoding: Deprecated alias for ``position_encoding``.
+            use_gps_encoding: Encode the sample's (lat, lon) — as unit-sphere
+                (x, y, z) through a 2-layer MLP — into the encoding slot that
+                absolute spatial encodings would otherwise occupy. Requires a
+                RoPE ``position_encoding`` (the slot is in use under
+                ``absolute``).
+            gps_dropout_rate: Per-sample probability of zeroing the (x, y, z)
+                input to the GPS MLP at training time, so the encoder learns a
+                usable "no GPS" embedding for GPS-less samples at eval
+                (missing latlon takes the same zeroed path).
         """
         super().__init__()
         position_encoding = resolve_position_encoding(
@@ -703,6 +716,15 @@ class CompositeEncodings(nn.Module):
                 DeprecationWarning,
                 stacklevel=2,
             )
+        if use_gps_encoding and position_encoding == PositionEncoding.ABSOLUTE:
+            raise ValueError(
+                "use_gps_encoding writes the encoding slot that absolute spatial "
+                "encodings occupy; it requires a RoPE position_encoding"
+            )
+        if not 0.0 <= gps_dropout_rate <= 1.0:
+            raise ValueError(
+                f"gps_dropout_rate must be in [0, 1], got {gps_dropout_rate}"
+            )
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [
@@ -711,6 +733,8 @@ class CompositeEncodings(nn.Module):
         self.tokenization_config = tokenization_config or TokenizationConfig()
         self.position_encoding = position_encoding
         self.embedding_size = embedding_size
+        self.use_gps_encoding = use_gps_encoding
+        self.gps_dropout_rate = float(gps_dropout_rate)
         # TODO: we need to be able to calculate the size of the param based on what types of embeddings it will get
 
         # we have 4 embeddings types (pos_in_time, pos_in_space, month, channel) so each get
@@ -723,6 +747,17 @@ class CompositeEncodings(nn.Module):
         # Month encodings
         month_tab = get_month_encoding_table(self.embedding_dim_per_embedding_type)
         self.month_embed = nn.Embedding.from_pretrained(month_tab, freeze=True)
+        # GPS encodings: a 2-layer MLP from unit-sphere (x, y, z) into the
+        # (RoPE-unused) spatial encoding slot. The all-zeros input — missing or
+        # dropped-out GPS — flows through the same MLP, so "no GPS" gets its own
+        # learned embedding rather than an all-zeros slot.
+        if use_gps_encoding:
+            n = self.embedding_dim_per_embedding_type
+            self.gps_encoder = nn.Sequential(
+                nn.Linear(3, n),
+                nn.GELU(),
+                nn.Linear(n, n),
+            )
         if not learnable_channel_embeddings and not random_channel_embeddings:
             self.per_modality_channel_embeddings = nn.ParameterDict()
             for modality in self.supported_modalities:
@@ -775,6 +810,30 @@ class CompositeEncodings(nn.Module):
         """Calculate the Ground Sample Distance ratio."""
         return input_res * patch_size / BASE_GSD
 
+    def _gps_embedding(
+        self, latlon: Tensor | None, batch_size: int, device: torch.device
+    ) -> Tensor:
+        """Per-sample GPS embedding [B, embedding_dim_per_embedding_type].
+
+        The (lat, lon) is mapped to unit-sphere (x, y, z) and passed through the
+        2-layer GPS MLP. Missing GPS — ``latlon=None`` (e.g. eval datasets
+        without coordinates) or MISSING_VALUE-sentinel samples — is encoded as
+        (0, 0, 0) through the same MLP. At training time each sample's xyz is
+        additionally zeroed with probability ``gps_dropout_rate`` so that the
+        no-GPS path is trained.
+        """
+        xyz = torch.zeros(batch_size, 3, device=device, dtype=torch.float32)
+        if latlon is not None:
+            valid = (latlon != MISSING_VALUE).all(dim=-1)
+            if valid.any():
+                xyz[valid] = latlon_to_unit_xyz(latlon[valid].to(device))
+        if self.training and self.gps_dropout_rate > 0.0:
+            keep = torch.bernoulli(
+                torch.full((batch_size, 1), 1.0 - self.gps_dropout_rate, device=device)
+            )
+            xyz = xyz * keep
+        return self.gps_encoder(xyz)
+
     def _apply_encodings_per_modality(
         self,
         modality_name: str,
@@ -784,6 +843,7 @@ class CompositeEncodings(nn.Module):
         input_res: int | None = None,
         use_modality_encodings: bool = True,
         use_temporal_encodings: bool = True,
+        gps_embed: Tensor | None = None,
     ) -> Tensor:
         """Apply the encodings to the patchified data based on modality type.
 
@@ -795,6 +855,8 @@ class CompositeEncodings(nn.Module):
             input_res: Optional input resolution for spatial encodings
             use_modality_encodings: Whether to use modality encodings
             use_temporal_encodings: Whether to use temporal encodings
+            gps_embed: Optional per-sample GPS embedding ``[B, d/4]`` written
+                into the spatial encoding slot (see ``_gps_embedding``)
 
         Returns:
             Tensor with encodings applied based on modality type
@@ -898,6 +960,12 @@ class CompositeEncodings(nn.Module):
                 spatial_embed, f"b h w d -> {ein_string}", **ein_dict
             )
             modality_embed[..., n * 3 : n * 4] += spatial_embed
+        if gps_embed is not None:
+            # GPS is a per-sample signal, broadcast to every token. It reuses the
+            # spatial-encoding slot, which is idle under RoPE position encodings
+            # (guarded against ABSOLUTE at construction).
+            gps_b = repeat(gps_embed, f"b d -> {ein_string}", **ein_dict)
+            modality_embed[..., n * 3 : n * 4] += gps_b
         return modality_tokens + modality_embed
 
     def forward(
@@ -906,6 +974,7 @@ class CompositeEncodings(nn.Module):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        latlon: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply the encodings to the patchified data.
 
@@ -914,6 +983,9 @@ class CompositeEncodings(nn.Module):
             timestamps: Timestamps of the data
             patch_size: Size of patches
             input_res: Resolution of the input data
+            latlon: Optional per-sample normalized (lat, lon) ``[B, 2]`` for the
+                GPS encoding. Ignored unless ``use_gps_encoding``; ``None``
+                takes the zeroed no-GPS path.
 
         Returns:
             Tokens only for each modality
@@ -923,6 +995,12 @@ class CompositeEncodings(nn.Module):
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
         )
+        gps_embed: Tensor | None = None
+        if self.use_gps_encoding and modalities_to_process:
+            first_tokens = per_modality_input_tokens[modalities_to_process[0]]
+            gps_embed = self._gps_embedding(
+                latlon, batch_size=first_tokens.shape[0], device=first_tokens.device
+            )
         for modality_name in modalities_to_process:
             output_dict[modality_name] = self._apply_encodings_per_modality(
                 modality_name,
@@ -930,6 +1008,7 @@ class CompositeEncodings(nn.Module):
                 timestamps=timestamps,
                 patch_size=patch_size,
                 input_res=input_res,
+                gps_embed=gps_embed,
             )
         return output_dict
 
@@ -961,6 +1040,8 @@ class FlexiVitBase(nn.Module):
         rope_temporal_base: float | None = None,
         rope_temporal_coordinate_scale: float = 1.0,
         spatial_pos_encoding: str | None = None,
+        use_gps_encoding: bool = False,
+        gps_dropout_rate: float = 0.5,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -1042,6 +1123,8 @@ class FlexiVitBase(nn.Module):
             random_channel_embeddings,
             tokenization_config=self._base_tokenization_config,
             position_encoding=self.position_encoding,
+            use_gps_encoding=use_gps_encoding,
+            gps_dropout_rate=gps_dropout_rate,
         )
         self.apply(self._init_weights)
 
@@ -2230,6 +2313,8 @@ class Encoder(FlexiVitBase):
         register_contrastive_source: str = "registers",
         register_projection_dims: list[int] | None = None,
         register_projection_type: str = "linear",
+        use_gps_encoding: bool = False,
+        gps_dropout_rate: float = 0.5,
     ):
         """Initialize the encoder.
 
@@ -2397,6 +2482,13 @@ class Encoder(FlexiVitBase):
                 final-layer patch tokens -- the deployed narrow-bottleneck
                 architecture, trained by distillation instead of the pretext loss.
                 Defaults to ``"linear"``.
+            use_gps_encoding: Encode the sample's (lat, lon) — as unit-sphere
+                (x, y, z) through a 2-layer MLP — into the encoding slot that
+                absolute spatial encodings would otherwise occupy. Requires a
+                RoPE ``position_encoding``. Defaults to False.
+            gps_dropout_rate: Per-sample probability of zeroing the (x, y, z)
+                MLP input at training time so the no-GPS path (GPS-less eval
+                samples) is itself trained. Defaults to 0.5.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2420,6 +2512,8 @@ class Encoder(FlexiVitBase):
             temporal_rope_dim_frac=temporal_rope_dim_frac,
             rope_temporal_base=rope_temporal_base,
             rope_temporal_coordinate_scale=rope_temporal_coordinate_scale,
+            use_gps_encoding=use_gps_encoding,
+            gps_dropout_rate=gps_dropout_rate,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -2947,6 +3041,7 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        latlon: Tensor | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -2964,6 +3059,7 @@ class Encoder(FlexiVitBase):
             timestamps,
             patch_size,
             input_res,
+            latlon=latlon,
         )
         positions = self.build_rope_positions(
             tokens_only_dict,
@@ -3300,6 +3396,10 @@ class Encoder(FlexiVitBase):
                     input_res=input_res,
                     token_exit_cfg=token_exit_cfg,
                     fast_pass=fast_pass,
+                    # Per-sample GPS for the composite encodings (the latlon
+                    # modality rides along decode-only in the batch; eval
+                    # samples without it take the no-GPS path).
+                    latlon=getattr(x, Modality.LATLON.name, None),
                 )
             )
         else:
@@ -4009,6 +4109,16 @@ class EncoderConfig(Config):
     # narrow-bottleneck architecture trained by distillation instead of the pretext
     # loss). Ignored without register_projection_dims.
     register_projection_type: str = "linear"
+    # GPS token encoding: the sample's (lat, lon) is mapped to unit-sphere
+    # (x, y, z) and passed through a 2-layer MLP into the additive encoding slot
+    # that absolute spatial encodings would otherwise occupy (idle under RoPE
+    # modes), broadcast to every token. Requires a RoPE position_encoding and
+    # the latlon modality riding along in the batch (the regsup_latlon
+    # decode-only pattern). Missing GPS encodes (0, 0, 0) through the same MLP.
+    use_gps_encoding: bool = False
+    # Per-sample probability of zeroing the (x, y, z) MLP input at train time so
+    # the no-GPS path (GPS-less eval datasets) is itself trained.
+    gps_dropout_rate: float = 0.5
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -4192,6 +4302,17 @@ class EncoderConfig(Config):
             raise ValueError(
                 "rope_temporal_coordinate_scale must be positive, got "
                 f"{self.rope_temporal_coordinate_scale}"
+            )
+        if self.use_gps_encoding and not PositionEncoding.is_rope(
+            self.position_encoding
+        ):
+            raise ValueError(
+                "use_gps_encoding writes the encoding slot that absolute spatial "
+                "encodings occupy; it requires a RoPE position_encoding"
+            )
+        if not 0.0 <= self.gps_dropout_rate <= 1.0:
+            raise ValueError(
+                f"gps_dropout_rate must be in [0, 1], got {self.gps_dropout_rate}"
             )
         validate_position_encoding(
             position_encoding=self.position_encoding,

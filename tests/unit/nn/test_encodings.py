@@ -18,6 +18,7 @@ from olmoearth_pretrain.nn.encodings import (
     get_month_encoding_table,
     init_2d_mixed_rope_freqs,
     init_3d_mixed_rope_freqs,
+    latlon_to_unit_xyz,
     timestamps_to_days,
 )
 
@@ -178,6 +179,33 @@ def test_get_2d_sincos_pos_encoding_with_resolution() -> None:
     )
     assert encoding.shape == (2, grid_size * grid_size, encoding_dim)
     assert torch.allclose(encoding, expected_output, atol=atol, rtol=rtol)
+
+
+def test_latlon_to_unit_xyz() -> None:
+    """Normalized (lat, lon) maps to the expected unit-sphere points."""
+    latlon = torch.tensor(
+        [
+            [0.5, 0.5],  # (0N, 0E)   -> (1, 0, 0)
+            [1.0, 0.5],  # (90N, 0E)  -> (0, 0, 1)
+            [0.0, 0.5],  # (90S, 0E)  -> (0, 0, -1)
+            [0.5, 1.0],  # (0N, 180E) -> (-1, 0, 0)
+            [0.5, 0.75],  # (0N, 90E) -> (0, 1, 0)
+        ]
+    )
+    xyz = latlon_to_unit_xyz(latlon)
+    expected = torch.tensor(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ]
+    )
+    assert torch.allclose(xyz, expected, atol=1e-6)
+    # arbitrary points still land on the unit sphere
+    xyz = latlon_to_unit_xyz(torch.rand(32, 2))
+    assert torch.allclose(xyz.norm(dim=-1), torch.ones(32), atol=1e-6)
 
 
 def test_get_month_encoding_table() -> None:

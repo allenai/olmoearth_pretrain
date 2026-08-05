@@ -93,6 +93,25 @@ _DAYS_BEFORE_MONTH = torch.tensor(
 )
 
 
+def latlon_to_unit_xyz(latlon: torch.Tensor) -> torch.Tensor:
+    """Convert normalized (lat, lon) ``[..., 2]`` to unit-sphere xyz ``[..., 3]``.
+
+    The dataloader normalizes latlon with the predefined min/max config
+    (norm_configs/predefined.json: lat [-90, 90] -> [0, 1], lon [-180, 180] ->
+    [0, 1]); undo that, then map to cartesian coordinates on the unit sphere.
+    xyz is bounded in [-1, 1] and, unlike raw lat/lon, has no +-180 dateline
+    discontinuity or pole degeneracy. Same convention as the latlon supervision
+    target (``supervision_head._latlon_unit_xyz_target``).
+    """
+    lat = torch.deg2rad(latlon[..., 0].float() * 180.0 - 90.0)
+    lon = torch.deg2rad(latlon[..., 1].float() * 360.0 - 180.0)
+    cos_lat = torch.cos(lat)
+    return torch.stack(
+        (cos_lat * torch.cos(lon), cos_lat * torch.sin(lon), torch.sin(lat)),
+        dim=-1,
+    )
+
+
 def timestamps_to_days(
     timestamps: torch.Tensor, anchor_year: int = 2000
 ) -> torch.Tensor:
