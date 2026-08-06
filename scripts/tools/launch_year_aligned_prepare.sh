@@ -16,6 +16,12 @@
 # these jobs query anonymously at the lowest tier. Keep JOBS_PER_DATASET at 1
 # unless you have raised the ceiling -- see the note at the bottom.
 #
+# MATERIALIZE is the opposite regime: worker-bound, not rate-bound, so it wants
+# more workers and a long backoff. WORKERS and RETRY_BACKOFF default per
+# COMMAND accordingly; JOBS_PER_DATASET stays at 1 either way, since the
+# launcher starts N IDENTICAL jobs (it does not shard) and the extra ones spend
+# their time re-scanning windows the others already finished.
+#
 # Prints the commands and exits unless LAUNCH=1. Beaker jobs cost real compute,
 # so a dry run is the default.
 #
@@ -35,9 +41,9 @@
 #   COMMAND             prepare (default) or materialize
 #   LAYER_SET           monthly (default) or tessera_v2_fetch -- see below
 #   GROUP               restrict to one window group (default: all)
-#   WORKERS             rslearn --workers (default 16; 64 drew 403 storms)
+#   WORKERS             rslearn --workers (default 16 prepare / 64 materialize)
 #   PRIORITY            Beaker priority: low|normal|high|immediate|urgent (default high)
-#   RETRY_BACKOFF       --retry-backoff-seconds (default 2; 60 parks workers for minutes)
+#   RETRY_BACKOFF       --retry-backoff-seconds (default 2 prepare / 60 materialize)
 #   RETRY_ATTEMPTS      --retry-max-attempts (default 12)
 #   LAUNCH=1            actually launch instead of printing
 #
@@ -54,20 +60,13 @@ set -uo pipefail
 
 STAGE_ROOT="${STAGE_ROOT:-/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals}"
 IMAGE="${IMAGE:-favyen/rslpomp20260727a}"
-WORKERS="${WORKERS:-16}"
 JOBS_PER_DATASET="${JOBS_PER_DATASET:-1}"
 # BeakerJobPriority: low | normal | high | immediate | urgent. launch_jobs
 # defaults to high; prepare is not latency-critical, so raise it only to jump a
 # busy queue.
 PRIORITY="${PRIORITY:-high}"
-# rslearn's retry() sleeps retry_backoff * (attempt + 1) * random(1..2), so
-# --retry-backoff-seconds 60 parks a worker for 60-120s on its FIRST 403.
-# Prepare queries cost ~100ms and 403s are routine, so that collapses effective
-# parallelism toward one worker. internal_docs.md uses 60 for MATERIALIZE, where
-# a retry covers a transient failure mid-download and a minute is negligible.
-# Keep this small for prepare.
-RETRY_BACKOFF="${RETRY_BACKOFF:-2}"
 RETRY_ATTEMPTS="${RETRY_ATTEMPTS:-12}"
+
 # prepare writes items.json (STAC queries); materialize downloads the pixels.
 # Same flags either way -- both handlers take --workers/--retry-*/--enabled-layers/
 # --ignore-errors -- but materialize is far heavier, and running it before prepare
@@ -76,6 +75,29 @@ COMMAND="${COMMAND:-prepare}"
 if [[ "$COMMAND" != "prepare" && "$COMMAND" != "materialize" ]]; then
     echo "ERROR: COMMAND must be 'prepare' or 'materialize', got '$COMMAND'" >&2
     exit 1
+fi
+
+# The two commands are bound by DIFFERENT resources, so they want opposite
+# settings and the defaults follow COMMAND rather than being one compromise.
+#
+# prepare is bound by the Planetary Computer STAC API, which is a per-ACCOUNT
+# limit -- more workers past the ceiling only converts throughput into 403s.
+# rslearn's retry() sleeps retry_backoff * (attempt + 1) * random(1..2), so the
+# 60 that internal_docs.md gives parks a worker for 60-120s on its FIRST 403;
+# with ~100ms queries and routine 403s that collapses effective parallelism
+# toward one worker (measured: us_trees went 0.25 -> ~2 windows/s on dropping
+# it to 2).
+#
+# materialize is bound by the workers themselves -- it downloads and writes
+# pixels, so throughput scales with concurrency until the box's network or
+# Weka saturates. Here a 60s backoff is right: a retry covers a real failure
+# mid-download and a minute is negligible against the transfer.
+if [[ "$COMMAND" == "prepare" ]]; then
+    WORKERS="${WORKERS:-16}"
+    RETRY_BACKOFF="${RETRY_BACKOFF:-2}"
+else
+    WORKERS="${WORKERS:-64}"
+    RETRY_BACKOFF="${RETRY_BACKOFF:-60}"
 fi
 LAYER_SET="${LAYER_SET:-monthly}"
 if [[ "$LAYER_SET" != "monthly" && "$LAYER_SET" != "tessera_v2_fetch" ]]; then
