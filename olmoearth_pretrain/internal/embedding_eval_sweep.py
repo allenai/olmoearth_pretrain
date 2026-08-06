@@ -238,6 +238,8 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     project_name = args.project_name or EVAL_WANDB_PROJECT
     extra = " " + " ".join(extra_cli) if extra_cli else ""
     base_run_name = _base_run_name(args) + "_emb"
+    if getattr(args, "run_suffix", ""):
+        base_run_name += f"_{args.run_suffix}"
     window_size = getattr(args, "window_size", None)
     if window_size is not None:
         base_run_name += f"_ws{window_size}"
@@ -290,6 +292,13 @@ def main() -> None:
     """Run the embedding-product eval sweep."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--cluster", type=str, required=True, help="Cluster name")
+    parser.add_argument(
+        "--run_suffix",
+        type=str,
+        default="",
+        help="Optional suffix appended to run_name (distinct save_folders / "
+        "beaker names for parallel variants, e.g. loss/grid experiments).",
+    )
     parser.add_argument(
         "--checkpoint_path",
         type=str,
