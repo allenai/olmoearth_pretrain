@@ -169,26 +169,29 @@ Notes, in rough order of how likely they are to bite:
 - **Use the same student size PASTIS used** (read `product_version` out of
   `.../pastis_rslearn/embedding_materializer_manifest_tessera_v2.json`) or the
   three datasets are not one Tessera column.
-- **S2 `max_matches` is 300 here, 150 for PASTIS.** Measured on
-  `ethiopia_crops` 2026-08-06 after step 3: 4.94% of windows had exactly 150 S2
-  item groups, i.e. they were truncated — and because the layer sorts
-  `datetime` ascending, the cap keeps the *earliest* 150 and drops the end of
-  the year, a seasonal loss rather than random attrition. Tessera itself uses
-  every acquisition, so the cap was raised. It only binds in MGRS overlap
-  zones (median ~72), so the extra download is a few percent. **PASTIS was
-  built at 150 and may carry the same truncation — measure it before putting
-  the three datasets in one table.** Re-measure after any re-prepare: a max
-  strictly below the cap proves nothing was truncated.
-- **Zero ascending S1 is normal in Ethiopia** — all 2530 windows, against 23-58
-  descending. Same query path and `sat:orbit_state` property for both, so the
-  absence is in MPC's `sentinel-1-rtc` archive, not the query; Tessera pulls
-  the same collection, so their product is descending-only there too, and
+- **S2 `max_matches` is 300 here, 150 for PASTIS.** The layers sort `datetime`
+  ascending, so hitting the cap keeps the *earliest* N scenes and drops the end
+  of the year — a seasonal loss, not random attrition. Measured 2026-08-06
+  after step 3: at 150, **4.94%** of ethiopia windows were truncated; at 300 it
+  is **0.32%** (ethiopia) / **0.35%** (africa), with S1 at 100 truncating
+  0.23–0.35% of africa windows. That residual was accepted. The cap only binds
+  in MGRS overlap zones (median ~72 S2 scenes), so the extra download is a few
+  percent. Ceiling for any future raise: the student bins valid observations at
+  256 (`tessera_v2_infer.BIN_EDGES`), so scenes past roughly 500–600 cannot
+  reach the model at all. **PASTIS was built at 150 and may carry the full
+  4.94%-scale truncation — measure its fetch group before putting the three
+  datasets in one table.**
+- **Re-preparing after a cap change needs `--force`** and re-queries the whole
+  group (rslearn cannot target just the capped windows). Note the config is
+  read once at process start, so a job already running will not pick up an
+  edited fetch config. The `duration` in the prepare summary is summed across
+  workers, not wall clock — divide by `--workers`.
+- **Zero ascending S1 is normal in Ethiopia** — all 2530 windows, against 23–58
+  descending. Not a query bug: africa, fetched identically, gets ascending fine
+  (median 30), so the absence is in MPC's `sentinel-1-rtc` archive. Tessera
+  pulls the same collection, so their product is descending-only there too, and
   `build_dpixel_inputs` handles a zero-item layer. Zero *S2* over a window is
   never normal.
-- **Re-preparing after a config change needs `--force`** — rslearn skips any
-  window that already has items for the layer, so a bare re-run silently does
-  nothing. Scope it with `--enabled-layers` to avoid re-querying the layers
-  that did not change.
 - **`--required` in step 5 changes the window set for every eval on that
   dataset**, so previously recorded OlmoEarth/AEF numbers on it are no longer
   measured on the same windows. It is the right flag *only* if inference wrote
