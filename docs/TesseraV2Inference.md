@@ -169,15 +169,26 @@ Notes, in rough order of how likely they are to bite:
 - **Use the same student size PASTIS used** (read `product_version` out of
   `.../pastis_rslearn/embedding_materializer_manifest_tessera_v2.json`) or the
   three datasets are not one Tessera column.
-- **`max_matches` is 150 for S2 and 100 per S1 orbit**, inherited verbatim from
-  the PASTIS fetch. Tessera itself uses *every* acquisition, and a window in an
-  MGRS overlap zone can see ~146 S2 scenes a year — right at the cap, which
-  `sort_by=datetime` ascending would truncate from the *end* of the year. After
-  step 3, count item groups per window and check how many sit at 150/100. If
-  it is a fraction of a percent, keep the cap and both "mirror Tessera" and
-  "mirror PASTIS" hold; if it is common, raise it in
-  `config_tessera_v2_fetch.json`, re-fetch, and record that PASTIS was built
-  with the lower cap.
+- **S2 `max_matches` is 300 here, 150 for PASTIS.** Measured on
+  `ethiopia_crops` 2026-08-06 after step 3: 4.94% of windows had exactly 150 S2
+  item groups, i.e. they were truncated — and because the layer sorts
+  `datetime` ascending, the cap keeps the *earliest* 150 and drops the end of
+  the year, a seasonal loss rather than random attrition. Tessera itself uses
+  every acquisition, so the cap was raised. It only binds in MGRS overlap
+  zones (median ~72), so the extra download is a few percent. **PASTIS was
+  built at 150 and may carry the same truncation — measure it before putting
+  the three datasets in one table.** Re-measure after any re-prepare: a max
+  strictly below the cap proves nothing was truncated.
+- **Zero ascending S1 is normal in Ethiopia** — all 2530 windows, against 23-58
+  descending. Same query path and `sat:orbit_state` property for both, so the
+  absence is in MPC's `sentinel-1-rtc` archive, not the query; Tessera pulls
+  the same collection, so their product is descending-only there too, and
+  `build_dpixel_inputs` handles a zero-item layer. Zero *S2* over a window is
+  never normal.
+- **Re-preparing after a config change needs `--force`** — rslearn skips any
+  window that already has items for the layer, so a bare re-run silently does
+  nothing. Scope it with `--enabled-layers` to avoid re-querying the layers
+  that did not change.
 - **`--required` in step 5 changes the window set for every eval on that
   dataset**, so previously recorded OlmoEarth/AEF numbers on it are no longer
   measured on the same windows. It is the right flag *only* if inference wrote

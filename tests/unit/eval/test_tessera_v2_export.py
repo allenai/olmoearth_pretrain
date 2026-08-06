@@ -1,5 +1,6 @@
 """Unit tests for the Tessera v2 export pipeline (pure logic)."""
 
+import copy
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -71,11 +72,16 @@ def test_tessera_s2_band_order() -> None:
 
 
 def test_fetch_layers_match_the_pastis_config() -> None:
-    """The shared fetch config is byte-identical to pastis's inline copy.
+    """The shared fetch config matches pastis's inline copy, bar max_matches.
 
     pastis_rslearn declares these layers inline (they predate the shared
     file). If the two drift, a v2 export on another dataset stops mirroring
     what pastis was built from.
+
+    max_matches is the one deliberate difference: pastis was fetched at the
+    original 150 for S2, which truncated 4.94% of ethiopia_crops windows (and
+    from the END of the year, since the layer sorts datetime ascending), so
+    the shared config raises it. Everything else must stay identical.
     """
     shared = json.loads(FETCH_LAYERS_CONFIG.read_text())["layers"]
     pastis = json.loads(
@@ -83,7 +89,14 @@ def test_fetch_layers_match_the_pastis_config() -> None:
     )["layers"]
     assert sorted(shared) == sorted(FETCH_LAYERS)
     for name in FETCH_LAYERS:
-        assert shared[name] == pastis[name], name
+        a, b = copy.deepcopy(shared[name]), copy.deepcopy(pastis[name])
+        for layer in (a, b):
+            layer["data_source"]["query_config"].pop("max_matches")
+        assert a == b, name
+    assert (
+        shared["sentinel2_l2a_all"]["data_source"]["query_config"]["max_matches"]
+        > (pastis["sentinel2_l2a_all"]["data_source"]["query_config"]["max_matches"])
+    )
 
 
 def _window(

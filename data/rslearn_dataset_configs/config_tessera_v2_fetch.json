@@ -4,9 +4,16 @@
     "published; see docs/TesseraV2Inference.md). Every acquisition in the",
     "window's time range, one item group per scene, chronological -- the",
     "d-pixel inputs their pipeline builds with its bash + Rust preprocessing.",
-    "Copied verbatim from config_pastis_rslearn.json, which is where they were",
-    "first written and which declares them inline; a unit test holds the two",
-    "identical.",
+    "Copied from config_pastis_rslearn.json, which is where they were first",
+    "written and which declares them inline; a unit test holds the two",
+    "identical EXCEPT for sentinel2_l2a_all's max_matches. That is 150 in the",
+    "pastis copy and 300 here: measured on ethiopia_crops 2026-08-06, 4.94% of",
+    "windows had exactly 150 S2 items, i.e. they were truncated -- and since",
+    "the layer sorts datetime ASCENDING, truncation drops the END of the year,",
+    "a seasonal bias rather than random attrition. Tessera itself uses every",
+    "acquisition. The cap only binds in MGRS overlap zones (median is ~72), so",
+    "raising it costs a few percent more download. Re-measure after prepare:",
+    "a max below the cap means nothing was truncated.",
     "This is NOT a dataset config on its own. tessera_v2_export.py",
     "write_fetch_config merges these layers with a dataset's storage/tile_store",
     "blocks into a config passed via `rslearn dataset prepare --config`, so",
@@ -135,7 +142,7 @@
           "sort_by": "datetime"
         },
         "query_config": {
-          "max_matches": 150,
+          "max_matches": 300,
           "space_mode": "INTERSECTS"
         }
       },
