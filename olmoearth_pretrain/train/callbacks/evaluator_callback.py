@@ -609,6 +609,43 @@ class DownstreamEvaluator:
                 if test_embeddings is not None:
                     test_embeddings = dequantize_embeddings(test_embeddings)
 
+        # Optional env-gated dump of raw train/test embeddings + labels for offline
+        # visualization (e.g. PASTIS2-DROM sample vis). No effect unless OE_DUMP_DIR
+        # is set; additive, does not change eval behavior.
+        _dump_dir = os.environ.get("OE_DUMP_DIR")
+        if not _dump_dir:
+            _marker = "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/oe_dump_dir.txt"
+            if os.path.exists(_marker):
+                with open(_marker) as _mf:
+                    _dump_dir = _mf.read().strip()
+        if _dump_dir and test_embeddings is not None:
+            os.makedirs(_dump_dir, exist_ok=True)
+            _hw = getattr(self.config, "height_width", None)
+            try:
+                _ntest = len(test_loader.dataset)  # type: ignore[arg-type]
+            except Exception:
+                _ntest = None
+            _mods = "-".join(sorted(self.input_modalities)) or "none"
+            _path = os.path.join(
+                _dump_dir,
+                f"{self.dataset}_hw{_hw}_ps{self.patch_size}_{_mods}_embdump.pt",
+            )
+            torch.save(
+                {
+                    "train_embeddings": train_embeddings.float().cpu(),
+                    "train_labels": train_labels.cpu(),
+                    "test_embeddings": test_embeddings.float().cpu(),
+                    "test_labels": test_labels.cpu(),
+                    "height_width": _hw,
+                    "patch_size": self.patch_size,
+                    "n_test_windows": _ntest,
+                    "dataset": self.dataset,
+                    "input_modalities": self.input_modalities,
+                },
+                _path,
+            )
+            logger.info(f"[OE_DUMP] wrote embeddings dump -> {_path}")
+
         # Reduce embedding dimensionality via PCA if specified
         if self.embedding_dim is not None:
             original_dim = train_embeddings.shape[-1]
