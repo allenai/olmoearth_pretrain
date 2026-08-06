@@ -1347,15 +1347,23 @@ AEF_SUPPLEMENTAL_DATASETS = (
 # products, which are ws16-only. Add the smaller context sizes if the
 # spatial-context ablation is wanted here too.
 #
-# glance / us_trees are absent until their materialize and ingest finish; add
-# them here once registered.
+# All eight AEF supplemental datasets are now re-exported and registered.
+#
+# lcmap_lu and us_trees additionally carry tessera as a *required* input, so on
+# those two the resolved window set is intersected with Tessera's coverage
+# (lcmap 26 409/26 513, us_trees 44 886/45 382) rather than being the
+# S1+S2+gse intersection the other six use. That keeps AEF / Tessera /
+# OlmoEarth on one identical window set per dataset -- which is the point --
+# but it does mean their window counts are not comparable to the other six.
 AEF_SUPPLEMENTAL_YEAR_ALIGNED = (
     "africa_crop_mask_year_aligned",
     "canada_crops_coarse_year_aligned",
     "canada_crops_fine_year_aligned",
     "descals_year_aligned",
     "ethiopia_crops_year_aligned",
+    "glance_year_aligned",
     "lcmap_lu_year_aligned",
+    "us_trees_year_aligned",
 )
 
 # Matched-subset siblings: the same windows as their parent dataset, but with
