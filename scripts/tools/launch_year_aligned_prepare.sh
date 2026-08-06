@@ -159,11 +159,15 @@ if [[ -z "$LAUNCH" ]]; then
     log "DRY RUN -- set LAUNCH=1 to actually submit. Nothing will be launched."
 fi
 
-# The launcher requires exactly one of hosts or clusters+num_jobs.
+# The launcher requires exactly one of hosts or clusters+num_jobs. Either way
+# ONE rslp invocation starts several jobs -- one per host, or NUM_JOBS per
+# cluster -- which is what jobs_per_launch tracks for the summary line.
 target_args=()
+jobs_per_launch=0
 if [[ -n "${HOSTS:-}" ]]; then
     for host in ${HOSTS//,/ }; do
         target_args+=("--hosts+=$host")
+        jobs_per_launch=$((jobs_per_launch + 1))
     done
 elif [[ -n "${CLUSTERS:-}" ]]; then
     if [[ -z "${NUM_JOBS:-}" ]]; then
@@ -172,6 +176,7 @@ elif [[ -n "${CLUSTERS:-}" ]]; then
     fi
     for cluster in ${CLUSTERS//,/ }; do
         target_args+=("--clusters+=$cluster")
+        jobs_per_launch=$((jobs_per_launch + NUM_JOBS))
     done
     target_args+=("--num_jobs=$NUM_JOBS")
 else
@@ -304,7 +309,9 @@ EOF
                 "${target_args[@]}" \
                 --command "$command_json" || log "FAILED to launch $name"
         fi
-        launched=$((launched + 1))
+        # One rslp invocation starts one job PER TARGET (per host, or NUM_JOBS
+        # per cluster), so the job count is not the loop count.
+        launched=$((launched + jobs_per_launch))
     done
 done
 
@@ -312,7 +319,11 @@ echo
 log "$launched job(s) $([[ -z "$LAUNCH" ]] && echo 'would be launched' || echo launched), $skipped dataset(s) skipped"
 log "Completion check per dataset: re-run $COMMAND and confirm it reports nothing"
 log "  left to do for any of: ${ENABLED_LAYERS:-the layers in $FETCH_CONFIG_NAME}"
-log "  ('Preparing 0 windows for layer ...')."
+if [[ "$COMMAND" == "prepare" ]]; then
+    log "  ('Preparing 0 windows for layer ...', and prepared=N skipped=0 in the summary)."
+else
+    log "  (no 'Materializing N item groups in layer ...' lines left to emit)."
+fi
 log "  --ignore-errors means a nonzero exit is not the signal to trust."
 if [[ -z "$LAUNCH" ]]; then
     echo
