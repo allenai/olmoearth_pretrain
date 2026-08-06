@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-08-05T10:43:37.293305",
+  "updated_at": "2026-08-05T16:52:50.157852",
   "datasets": {
     "africa_crop_mask": {
       "name": "africa_crop_mask",
@@ -4892,6 +4892,143 @@
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/us_trees_year_aligned",
       "config_json_sha256": "ce4d04adf0e0065d11ff8b24e3aff007282bc7e5ebb2093de56c72c16409ae3e"
+    },
+    "glance_year_aligned": {
+      "name": "glance_year_aligned",
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/glance_year_aligned",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/glance_year_aligned",
+      "task_type": "segmentation",
+      "num_classes": 11,
+      "is_multilabel": false,
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10"
+      ],
+      "split_tag_key": "eval_split",
+      "split_stats": {
+        "train": {
+          "count": 3300
+        },
+        "val": {
+          "count": 15792
+        },
+        "test": {
+          "count": 15793
+        }
+      },
+      "modalities": [
+        "gse",
+        "sentinel2_l2a",
+        "sentinel1"
+      ],
+      "imputes": [],
+      "window_size": 32,
+      "timeseries": true,
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B02": {
+            "mean": 1698.3622943115233,
+            "std": 2291.063508111681,
+            "min": 0.0,
+            "max": 20608.0
+          },
+          "B03": {
+            "mean": 1967.3525065917968,
+            "std": 2177.9792179010933,
+            "min": 0.0,
+            "max": 19088.0
+          },
+          "B04": {
+            "mean": 2177.661037190755,
+            "std": 2261.015750348777,
+            "min": 0.0,
+            "max": 17904.0
+          },
+          "B08": {
+            "mean": 3248.55971875,
+            "std": 2004.1913280476251,
+            "min": 0.0,
+            "max": 17232.0
+          },
+          "B05": {
+            "mean": 2447.134212443034,
+            "std": 2265.1463422041206,
+            "min": 0.0,
+            "max": 17286.0
+          },
+          "B06": {
+            "mean": 2906.83844148763,
+            "std": 2067.365201643561,
+            "min": 0.0,
+            "max": 17118.0
+          },
+          "B07": {
+            "mean": 3093.701286295573,
+            "std": 2025.205328829935,
+            "min": 0.0,
+            "max": 17093.0
+          },
+          "B8A": {
+            "mean": 3203.675485229492,
+            "std": 1983.5571148007036,
+            "min": 0.0,
+            "max": 16693.0
+          },
+          "B11": {
+            "mean": 2693.7551278889973,
+            "std": 1829.1574994037696,
+            "min": 0.0,
+            "max": 15416.0
+          },
+          "B12": {
+            "mean": 2156.379012451172,
+            "std": 1722.7676391141256,
+            "min": 0.0,
+            "max": 15380.0
+          },
+          "B01": {
+            "mean": 1478.9658655598957,
+            "std": 2323.197376669015,
+            "min": 0.0,
+            "max": 20959.0
+          },
+          "B09": {
+            "mean": 3386.3191506347657,
+            "std": 2912.780806268417,
+            "min": 0.0,
+            "max": 18291.0
+          }
+        },
+        "sentinel1": {
+          "vv": {
+            "mean": -11.059800961176554,
+            "std": 7.459149969232719,
+            "min": -100.0,
+            "max": 29.08857536315918
+          },
+          "vh": {
+            "mean": -17.386178646087647,
+            "std": 7.070710047060497,
+            "min": -100.0,
+            "max": 20.455875396728516
+          }
+        }
+      },
+      "use_pretrain_norm": true,
+      "num_timesteps": 12,
+      "start_time": null,
+      "end_time": null,
+      "config_repo_dir": "data/rslearn_dataset_configs/glance_year_aligned",
+      "config_json_sha256": "8f404df457fa410f89936f4b2363f78f00b43729718f91475e08d0fa1b52cbba"
     }
   }
 }
