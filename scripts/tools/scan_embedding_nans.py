@@ -31,6 +31,7 @@ import argparse
 import logging
 import shutil
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import rasterio
@@ -93,6 +94,12 @@ def main() -> int:
         help="Delete the layer dir for windows with ANY NaN (stricter).",
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=32,
+        help="Threads reading rasters (IO bound; default 32).",
+    )
+    parser.add_argument(
         "--write", action="store_true", help="Actually delete. Default is a dry run."
     )
     args = parser.parse_args()
@@ -101,33 +108,54 @@ def main() -> int:
     windows = Dataset(ds_path).storage.get_windows()
     if args.sample:
         windows = windows[: args.sample]
-    logger.info(f"scanning {len(windows)} windows for NaN in layer {args.layer!r}")
+    logger.info(
+        f"scanning {len(windows)} windows for NaN in layer {args.layer!r} "
+        f"({args.workers} workers)"
+    )
 
     counts: Counter = Counter()
     to_drop: list[UPath] = []
+    offenders: list[tuple[str, bool, float]] = []
     worst = 0.0
-    for i, window in enumerate(windows, 1):
+    done = 0
+
+    def inspect(window: object) -> tuple[object, UPath, tuple | None | str]:
+        """Read one window's layer; returns a sentinel string when absent."""
         layer_dir = (
             ds_path / "windows" / window.group / window.name / "layers" / args.layer
         )
         if not layer_dir.exists():
-            counts["no_layer"] += 1
-            continue
-        result = scan_window(layer_dir)
-        if result is None:
-            counts["unreadable"] += 1
-            continue
-        any_nan, center_nan, fraction = result
-        counts["scanned"] += 1
-        if any_nan:
-            counts["any_nan"] += 1
-            worst = max(worst, fraction)
-        if center_nan:
-            counts["center_nan"] += 1
-        if (args.drop_center_nan and center_nan) or (args.drop_any_nan and any_nan):
-            to_drop.append(layer_dir)
-        if i % 2000 == 0:
-            logger.info(f"  {i}/{len(windows)} ...")
+            return window, layer_dir, "no_layer"
+        try:
+            return window, layer_dir, scan_window(layer_dir)
+        except Exception as e:  # a corrupt raster should not abort a 45k scan
+            logger.warning(f"{window.group}/{window.name}: unreadable ({e})")
+            return window, layer_dir, None
+
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        for window, layer_dir, result in pool.map(inspect, windows):
+            done += 1
+            if result == "no_layer":
+                counts["no_layer"] += 1
+            elif result is None:
+                counts["unreadable"] += 1
+            else:
+                any_nan, center_nan, fraction = result
+                counts["scanned"] += 1
+                if any_nan:
+                    counts["any_nan"] += 1
+                    worst = max(worst, fraction)
+                    offenders.append(
+                        (f"{window.group}/{window.name}", center_nan, fraction)
+                    )
+                if center_nan:
+                    counts["center_nan"] += 1
+                if (args.drop_center_nan and center_nan) or (
+                    args.drop_any_nan and any_nan
+                ):
+                    to_drop.append(layer_dir)
+            if done % 5000 == 0:
+                logger.info(f"  {done}/{len(windows)} ...")
 
     scanned = counts["scanned"]
     logger.info("")
@@ -144,6 +172,17 @@ def main() -> int:
         + "   <- the ones that actually reach a ps1 probe"
     )
     logger.info(f"worst window NaN fraction: {worst:.1%}")
+
+    # With a handful of offenders the list itself is the useful artifact: it is
+    # what makes the deletion auditable afterwards.
+    if offenders and len(offenders) <= 200:
+        logger.info("")
+        logger.info("windows containing NaN (centre? / NaN fraction):")
+        for name, center_nan, fraction in sorted(offenders):
+            flag = "CENTRE" if center_nan else "      "
+            logger.info(f"  {flag}  {fraction:6.1%}  {name}")
+    elif offenders:
+        logger.info(f"({len(offenders)} offenders -- too many to list)")
 
     if not (args.drop_center_nan or args.drop_any_nan):
         logger.info("")
