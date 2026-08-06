@@ -35,6 +35,10 @@
 #   IMAGE               Beaker image (default favyen/rslpomp20260727a)
 #   HOSTS               comma/space separated Beaker hosts (one job per host)
 #   CLUSTERS            comma/space separated clusters; requires NUM_JOBS
+#                       NB: prefer HOSTS. rslp's launch_job() sets
+#                       resources={"gpuCount": 1} whenever hostname is None, so
+#                       a CLUSTERS launch reserves a GPU per job -- and neither
+#                       prepare nor materialize touches one.
 #   NUM_JOBS            jobs per cluster target
 #   JOBS_PER_DATASET    repeat each dataset's launch this many times (default 1)
 #   ONLY                restrict to one dataset (staging name or base name)
