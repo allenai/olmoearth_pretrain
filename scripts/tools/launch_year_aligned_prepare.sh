@@ -33,11 +33,22 @@
 #   JOBS_PER_DATASET    repeat each dataset's launch this many times (default 1)
 #   ONLY                restrict to one dataset (staging name or base name)
 #   COMMAND             prepare (default) or materialize
+#   LAYER_SET           monthly (default) or tessera_v2_fetch -- see below
+#   GROUP               restrict to one window group (default: all)
 #   WORKERS             rslearn --workers (default 16; 64 drew 403 storms)
 #   PRIORITY            Beaker priority: low|normal|high|immediate|urgent (default high)
 #   RETRY_BACKOFF       --retry-backoff-seconds (default 2; 60 parks workers for minutes)
 #   RETRY_ATTEMPTS      --retry-max-attempts (default 12)
 #   LAUNCH=1            actually launch instead of printing
+#
+# LAYER_SET=tessera_v2_fetch switches the job to the three all-scenes layers
+# used for our own TESSERA v2 inference (docs/TesseraV2Inference.md). Pair it
+# with GROUP=<dataset>_tessera_v2, the fetch group created by
+# olmoearth_pretrain/evals/datasets/tessera_v2_export.py -- without GROUP the
+# job would fetch a full year of scenes for the eval windows too. Example:
+#
+#   LAUNCH=1 LAYER_SET=tessera_v2_fetch GROUP=ethiopia_crops_tessera_v2 \
+#       ONLY=ethiopia_crops HOSTS=... scripts/tools/launch_year_aligned_prepare.sh
 
 set -uo pipefail
 
@@ -66,6 +77,12 @@ if [[ "$COMMAND" != "prepare" && "$COMMAND" != "materialize" ]]; then
     echo "ERROR: COMMAND must be 'prepare' or 'materialize', got '$COMMAND'" >&2
     exit 1
 fi
+LAYER_SET="${LAYER_SET:-monthly}"
+if [[ "$LAYER_SET" != "monthly" && "$LAYER_SET" != "tessera_v2_fetch" ]]; then
+    echo "ERROR: LAYER_SET must be 'monthly' or 'tessera_v2_fetch', got '$LAYER_SET'" >&2
+    exit 1
+fi
+GROUP="${GROUP:-}"
 ONLY="${ONLY:-}"
 LAUNCH="${LAUNCH:-}"
 
@@ -81,20 +98,36 @@ DATASETS=(
     pastis_year_aligned
 )
 
+log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
+
 # Restricting to the monthly layers is MANDATORY for pastis_year_aligned, whose
 # config still carries the sentinel2_l2a_all / sentinel1_*_all fetch layers
 # (max_matches 150/100, kept so tessera_v2 inference stays possible). A bare
 # prepare there would try to fetch a year of scenes per window. It is a no-op
 # for the other eight, whose remaining layers have no data_source, so it is
 # applied uniformly rather than special-cased.
-ENABLED_LAYERS=$(
-    python3 - <<'EOF'
+if [[ "$LAYER_SET" == "monthly" ]]; then
+    ENABLED_LAYERS=$(
+        python3 - <<'EOF'
 print(",".join([f"sentinel2_l2a_mo{i:02d}" for i in range(1, 13)]
              + [f"sentinel1_mo{i:02d}" for i in range(1, 13)]))
 EOF
-)
-
-log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
+    )
+    REQUIRED_LAYER=sentinel2_l2a_mo12
+else
+    # The fetch layers live in their own config (written by
+    # tessera_v2_export.py write_fetch_config), not in the dataset's
+    # config.json, so the job is scoped by --config rather than
+    # --enabled-layers. GROUP is still mandatory: the fetch config would
+    # otherwise pull a year of scenes for every eval window too.
+    ENABLED_LAYERS=""
+    FETCH_CONFIG_NAME=config_tessera_v2_fetch.json
+    if [[ -z "$GROUP" ]]; then
+        log "ERROR: LAYER_SET=tessera_v2_fetch needs GROUP=<dataset>_tessera_v2;"
+        log "  without it these layers fetch a year of scenes for the eval windows."
+        exit 1
+    fi
+fi
 
 if [[ -z "$LAUNCH" ]]; then
     log "DRY RUN -- set LAUNCH=1 to actually submit. Nothing will be launched."
@@ -133,23 +166,35 @@ for name in "${DATASETS[@]}"; do
         skipped=$((skipped + 1))
         continue
     fi
-    # Refuse to prepare a dataset that has not been re-anchored: without apply,
-    # config.json still describes the old single sentinel2 layer and the run
-    # would silently do nothing.
-    if ! python3 -c "
+    if [[ "$LAYER_SET" == "monthly" ]]; then
+        # Refuse to prepare a dataset that has not been re-anchored: without
+        # apply, config.json still describes the old single sentinel2 layer and
+        # the run would silently do nothing.
+        if ! python3 -c "
 import json, sys
 layers = json.load(open('$ds_path/config.json'))['layers']
-sys.exit(0 if 'sentinel2_l2a_mo12' in layers and 'sentinel1_mo12' in layers else 1)
+sys.exit(0 if '$REQUIRED_LAYER' in layers else 1)
 " 2>/dev/null; then
-        log "SKIP  $name -- monthly layers absent from config.json; run reanchor apply first"
-        skipped=$((skipped + 1))
-        continue
+            log "SKIP  $name -- monthly layers absent from config.json; run reanchor apply first"
+            skipped=$((skipped + 1))
+            continue
+        fi
+    else
+        fetch_config="$ds_path/$FETCH_CONFIG_NAME"
+        if [[ ! -f "$fetch_config" ]]; then
+            log "SKIP  $name -- no $FETCH_CONFIG_NAME; run"
+            log "      'python -m olmoearth_pretrain.evals.datasets.tessera_v2_export write_fetch_config --ds_path $ds_path' first"
+            skipped=$((skipped + 1))
+            continue
+        fi
     fi
 
     # Materializing before prepare has finished silently produces a partial
     # dataset, so sample a few windows and check they carry all 24 monthly
-    # entries in items.json.
-    if [[ "$COMMAND" == "materialize" ]]; then
+    # entries in items.json. Only meaningful for the monthly layer set: the
+    # fetch layers have no fixed item count per window (it is however many
+    # scenes intersected that year), so there is nothing to compare against.
+    if [[ "$COMMAND" == "materialize" && "$LAYER_SET" == "monthly" ]]; then
         # items.json is a LIST of serialized WindowLayerData dicts, each with a
         # "layer_name" key -- not a mapping. Any exception prints, so the check
         # fails closed (non-empty output => skip) rather than passing silently.
@@ -192,18 +237,26 @@ EOF
 
     command_json=$(
         ENABLED_LAYERS="$ENABLED_LAYERS" WORKERS="$WORKERS" COMMAND="$COMMAND" \
-            RETRY_BACKOFF="$RETRY_BACKOFF" RETRY_ATTEMPTS="$RETRY_ATTEMPTS" python3 - <<'EOF'
+            RETRY_BACKOFF="$RETRY_BACKOFF" RETRY_ATTEMPTS="$RETRY_ATTEMPTS" \
+            GROUP="$GROUP" FETCH_CONFIG="${FETCH_CONFIG_NAME:-}" python3 - <<'EOF'
 import json, os
-print(json.dumps([
+command = [
     "rslearn", "dataset", os.environ["COMMAND"],
     "--root", "{ds_path}",
     "--workers", os.environ["WORKERS"],
     "--no-use-initial-job",
     "--retry-max-attempts", os.environ["RETRY_ATTEMPTS"],
     "--retry-backoff-seconds", os.environ["RETRY_BACKOFF"],
-    "--enabled-layers", os.environ["ENABLED_LAYERS"],
     "--ignore-errors",
-]))
+]
+if os.environ["ENABLED_LAYERS"]:
+    command += ["--enabled-layers", os.environ["ENABLED_LAYERS"]]
+if os.environ["FETCH_CONFIG"]:
+    # {ds_path} is substituted by the launcher inside the job.
+    command += ["--config", "{ds_path}/" + os.environ["FETCH_CONFIG"]]
+if os.environ["GROUP"]:
+    command += ["--group", os.environ["GROUP"]]
+print(json.dumps(command))
 EOF
     )
 
@@ -232,7 +285,8 @@ done
 echo
 log "$launched job(s) $([[ -z "$LAUNCH" ]] && echo 'would be launched' || echo launched), $skipped dataset(s) skipped"
 log "Completion check per dataset: re-run $COMMAND and confirm it reports nothing"
-log "  left to do for all 24 layers ('Preparing 0 windows for layer ...')."
+log "  left to do for any of: ${ENABLED_LAYERS:-the layers in $FETCH_CONFIG_NAME}"
+log "  ('Preparing 0 windows for layer ...')."
 log "  --ignore-errors means a nonzero exit is not the signal to trust."
 if [[ -z "$LAUNCH" ]]; then
     echo

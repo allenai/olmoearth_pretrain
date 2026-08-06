@@ -85,6 +85,13 @@ live only on `lcmap_lu`.
 - **Tessera v1 vs v1.1 are separate products** (`tessera` / `tessera_v11`
   modalities) with their own coverage. The table above is v1; re-measure before
   reporting v1.1.
+- **`tessera_v2` is not subject to this table.** No v2 product is published, so
+  we run the released v2 students ourselves over whatever windows we choose
+  (docs/TesseraV2Inference.md) — coverage is 100% by construction, minus any
+  windows whose fetch or inference failed, which the run's manifest lists.
+  That is the route out of the two worst rows here: `africa_crop_mask` (v1
+  59.8%) and `ethiopia_crops` (v1 8.1%) are being re-done as v2 on their
+  `*_year_aligned` copies.
 
 ## Regenerating these numbers
 

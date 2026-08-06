@@ -8,9 +8,10 @@ hang on what it prints:
    year* of observations per pixel. If every window's time range already is
    its label year, the ``*_all`` fetch layers can ride the eval windows
    directly (CASE A). If not, v2 needs mirrored fetch windows in a second
-   group, the way ``pastis_tessera_v2.create_windows`` builds
-   ``pastis_tessera_v2`` from ``pastis`` (CASE B) -- generalized to take the
-   year per window instead of a module constant.
+   group, the way ``tessera_v2_export.create_windows`` builds
+   ``pastis_tessera_v2`` from ``pastis`` (CASE B). That script now reads the
+   year per window, so CASE A datasets use the same path; the mirrored group
+   is kept either way, to keep the ``*_all`` items off the eval windows.
 
 2. **Are the imagery layer's item groups chronological monthly mosaics?** The
    supplemental datasets store imagery as one layer with N item groups

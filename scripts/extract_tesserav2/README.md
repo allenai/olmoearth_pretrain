@@ -33,7 +33,7 @@ python scripts/extract_tesserav2/fetch_cost_probe.py \
 | Finding | Consequence |
 |---|---|
 | **CASE A** — every window's time range is its calendar label year | Tessera v2's `*_all` layers ride the eval windows; no mirrored group needed |
-| **CASE B** — time ranges are offset (Sep–Sep) or mixed | Generalize `pastis_tessera_v2.create_windows` to take the year per window (it hardcodes `PRODUCT_YEAR = 2019`) and fetch v2 in a second group |
+| **CASE B** — time ranges are offset (Sep–Sep) or mixed | Generalize `create_windows` to take the year per window and fetch v2 in a second group — DONE, see `tessera_v2_export.py` |
 | Item groups **chronological, ~monthly** | A second sensor aligns by group index; mirror the S2 layer's `query_config` (see below) |
 | Item groups **reverse chronological** | Same, but the S1 layers must be listed in model.yaml in the same descending order. Also means the ascending timestamps synthesized by `rslearn_dataset.get_timestamps` currently label the series backwards |
 | Item groups **not chronological** | S1 timestep *i* won't correspond to S2 group *i*; scope re-materializing S2 before adding a second sensor |
@@ -84,3 +84,13 @@ through the dataset config, so they never need declaring. This also defuses the
 landmine in `docs/TesseraV2Inference.md`: a `prepare`/`materialize` that forgets
 `--enabled-layers` against a config containing `*_all` would fetch a year of
 scenes for 160k windows.
+
+IMPLEMENTED 2026-08-06 for `africa_crop_mask_year_aligned` and
+`ethiopia_crops_year_aligned`: the layers live in
+`data/rslearn_dataset_configs/config_tessera_v2_fetch.json`, and
+`tessera_v2_export.py write_fetch_config` merges them with the target
+dataset's `storage`/`tile_store` blocks into a standalone config for
+`--config`. Both are CASE A in their `*_year_aligned` form — re-anchored to
+`(Jan 1 Y, Jan 1 Y+1)` — so `create_windows` reads the product year off each
+window rather than taking a `--year`; the mirrored fetch group is kept anyway,
+because the eval windows must not carry the `*_all` items.

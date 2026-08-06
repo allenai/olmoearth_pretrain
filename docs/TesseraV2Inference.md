@@ -1,4 +1,4 @@
-# Running TESSERA v2 inference ourselves for PASTIS
+# Running TESSERA v2 inference ourselves
 
 Status (2026-07-27): TESSERA v2 **weights + inference code are public**
 (github.com/ucam-eo/tessera, branch `v2`; HF org `geotessera`), but **v2
@@ -6,7 +6,10 @@ precomputed embeddings are not** — the distribution bucket
 (`s3://tessera-embeddings/`) holds only `v1/` and `v1.1/`, and v2 embeddings
 are pre-request-only while their infra ramps up. To eval PASTIS against v2 we
 must run their inference ourselves. This doc is the plan plus time / storage /
-FLOPs estimates.
+FLOPs estimates. It was written for PASTIS, which is where the pipeline was
+built; the same pipeline now runs on any rslearn eval dataset — see
+"Other datasets" below for `africa_crop_mask_year_aligned` and
+`ethiopia_crops_year_aligned`.
 
 All Tessera facts below were read from their released code (`tessera_infer_v2/`,
 `student/{model,infer}.py`, `teacher/model.py`, Rust stackers), model cards, and
@@ -46,10 +49,12 @@ the AWS path uses OPERA RTC-S1 which only exists from ~2021) → Rust
 Scope: **PASTIS patch footprints only** (2,433 128×128 windows ≈ 3,990 km² ≈
 8% of the 4-tile area). Instead of their bash + Rust preprocessing we reuse
 rslearn against Planetary Computer — the fetch is expressed as three
-all-scenes layers in `config_pastis_rslearn.json` (`sentinel2_l2a_all` with
+all-scenes layers in `config_tessera_v2_fetch.json` (`sentinel2_l2a_all` with
 an SCL band set, `sentinel1_ascending_all`, `sentinel1_descending_all`;
-`space_mode=INTERSECTS`, `sort_by=datetime`, one item group per acquisition),
-and inference is `olmoearth_pretrain/evals/datasets/pastis_tessera_v2.py`
+`space_mode=INTERSECTS`, `sort_by=datetime`, one item group per acquisition;
+declared inline in `config_pastis_rslearn.json`, which is where they were
+first written and which a unit test holds byte-identical to the shared file),
+and inference is `olmoearth_pretrain/evals/datasets/tessera_v2_export.py`
 running the vendored v2 student
 (`olmoearth_pretrain/evals/models/tessera/tessera_v2_{model,infer}.py`,
 vendored from their repo; param counts reproduce the model cards exactly).
@@ -64,20 +69,26 @@ Runbook (details in the script docstring):
 ```
 export DS_PATH=/weka/dfive-default/rslearn-eai/datasets/pastis_rslearn
 # 1. Calendar-2019 fetch windows mirroring the eval windows (group pastis):
-python -m olmoearth_pretrain.evals.datasets.pastis_tessera_v2 create_windows --ds_path $DS_PATH
+python -m olmoearth_pretrain.evals.datasets.tessera_v2_export create_windows \
+    --ds_path $DS_PATH --dataset pastis_rslearn
 # 2. Fetch every 2019 acquisition (restrict to the new layers!):
-rslearn dataset prepare     --root $DS_PATH --group pastis_tessera_v2 --workers 64 \
-    --no-use-initial-job --retry-max-attempts 8 --retry-backoff-seconds 60 \
+rslearn dataset prepare     --root $DS_PATH --group pastis_tessera_v2 --workers 16 \
+    --no-use-initial-job --retry-max-attempts 12 --retry-backoff-seconds 2 \
     --enabled-layers sentinel2_l2a_all,sentinel1_ascending_all,sentinel1_descending_all
-rslearn dataset materialize ... (same flags)   # or fan out with rslearn_projects:
-# python -m rslp.main common launch_data_materialization_jobs --image <img> \
-#     --ds_path $DS_PATH --command '["rslearn","dataset","materialize",...]'
+rslearn dataset materialize ... (same flags, --retry-backoff-seconds 60)
+# or fan out with scripts/tools/launch_year_aligned_prepare.sh (LAYER_SET=tessera_v2_fetch)
 # 3. Download student weights (HF geotessera/TESSERA-V-2.0-2B-M -> ckpt/student_medium.pt), then:
-python -m olmoearth_pretrain.evals.datasets.pastis_tessera_v2 infer \
-    --ds_path $DS_PATH --checkpoint_path <student_medium.pt> --model_size medium
+python -m olmoearth_pretrain.evals.datasets.tessera_v2_export infer \
+    --ds_path $DS_PATH --dataset pastis_rslearn \
+    --checkpoint_path <student_medium.pt> --model_size medium
 # 4. Eval (identical probes/splits/metrics as AEF / tessera / tessera_v11):
 python -m olmoearth_pretrain.internal.embedding_eval_sweep --cluster=... --model=tessera_v2_precomputed
 ```
+
+`--retry-backoff-seconds` is deliberately small for prepare: rslearn sleeps
+`backoff * (attempt+1) * random(1..2)`, so 60 parks a worker for 60-120s on its
+first (routine) 403 and collapses effective parallelism to ~1 worker. Keep 60
+for materialize, where a retry covers a real mid-download failure.
 
 The `tessera_v2` modality/layer plumbing (constants, datatypes, model.yaml,
 registry, `tessera_v2_precomputed` baseline) is in place; `tessera_v11` got
@@ -97,6 +108,90 @@ hardcoded v2 normalization stats would be off-distribution. Keep as a fallback
 normalization stats without stating whether they match MPC or AWS sources
 (v1.1 shipped separate checkpoints per source); pre-2021 their own global runs
 can only have used MPC, so MPC is the safer bet.
+
+## Other datasets: africa_crop_mask_year_aligned, ethiopia_crops_year_aligned
+
+Why these two: published Tessera v1 covers **59.8%** of `africa_crop_mask` and
+**8.1%** of `ethiopia_crops` (docs/PrecomputedEmbeddingCoverage.md) — the
+product is global for 2024 only, reaching back to 2017 for the US/EU — so
+neither can carry a reportable Tessera number today. Running v2 ourselves is
+the only way to get a Tessera column on non-US, non-2024 data, and it lands at
+100% coverage by construction.
+
+Two things make this simpler than PASTIS. The `*_year_aligned` copies were
+already re-anchored to `(Jan 1 Y, Jan 1 Y+1)`
+(`scripts/tools/reanchor_year_aligned_dataset.py`), so **the eval window's own
+range is the product year** — `create_windows` reads it per window instead of
+taking a `--year`, which is what a multi-year dataset needs. And the windows
+are 32×32 rather than 128×128: 2,556 + 2,530 windows ≈ **5.2M pixels total**,
+13% of PASTIS, so student inference is minutes.
+
+Runbook (weka-side; `$NAME` is `africa_crop_mask_year_aligned` or
+`ethiopia_crops_year_aligned`):
+
+```
+STAGE=/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/$NAME
+EVAL=/weka/dfive-default/olmoearth/eval_datasets/$NAME
+EXPORT="python -m olmoearth_pretrain.evals.datasets.tessera_v2_export"
+
+# 1. Write the standalone fetch config (the *_all layers stay OUT of the
+#    dataset's own config.json; prepare/materialize take them via --config).
+$EXPORT write_fetch_config --ds_path $STAGE
+
+# 2. Fetch group, one window per eval window, on that window's calendar year.
+$EXPORT create_windows --ds_path $STAGE --dataset $NAME
+#    -> logs the year histogram; sanity-check it against the label years.
+
+# 3. Fetch a year of scenes for THAT GROUP ONLY.
+LAUNCH=1 LAYER_SET=tessera_v2_fetch GROUP=${NAME%_year_aligned}_tessera_v2 \
+    ONLY=$NAME HOSTS=... scripts/tools/launch_year_aligned_prepare.sh
+LAUNCH=1 COMMAND=materialize RETRY_BACKOFF=60 LAYER_SET=tessera_v2_fetch \
+    GROUP=${NAME%_year_aligned}_tessera_v2 ONLY=$NAME HOSTS=... \
+    scripts/tools/launch_year_aligned_prepare.sh
+
+# 4. Inference: read scenes from staging, write the layer + manifest into the
+#    ingested copy model.yaml actually points at (same windows, same grids).
+$EXPORT infer --ds_path $STAGE --eval_ds_path $EVAL --dataset $NAME \
+    --checkpoint_path <student_medium.pt> --model_size medium
+
+# 5. Wire the layer up, then re-stamp provenance and commit.
+python scripts/tools/wire_embedding_modalities.py \
+    --datasets $NAME --products tessera_v2 --required
+python scripts/tools/backfill_eval_registry_provenance.py
+
+# 6. Eval.
+python -m olmoearth_pretrain.internal.embedding_eval_sweep \
+    --cluster=... --model=tessera_v2_precomputed
+```
+
+Notes, in rough order of how likely they are to bite:
+
+- **Use the same student size PASTIS used** (read `product_version` out of
+  `.../pastis_rslearn/embedding_materializer_manifest_tessera_v2.json`) or the
+  three datasets are not one Tessera column.
+- **`max_matches` is 150 for S2 and 100 per S1 orbit**, inherited verbatim from
+  the PASTIS fetch. Tessera itself uses *every* acquisition, and a window in an
+  MGRS overlap zone can see ~146 S2 scenes a year — right at the cap, which
+  `sort_by=datetime` ascending would truncate from the *end* of the year. After
+  step 3, count item groups per window and check how many sit at 150/100. If
+  it is a fraction of a percent, keep the cap and both "mirror Tessera" and
+  "mirror PASTIS" hold; if it is common, raise it in
+  `config_tessera_v2_fetch.json`, re-fetch, and record that PASTIS was built
+  with the lower cap.
+- **`--required` in step 5 changes the window set for every eval on that
+  dataset**, so previously recorded OlmoEarth/AEF numbers on it are no longer
+  measured on the same windows. It is the right flag *only* if inference wrote
+  every window (the manifest's `num_windows_failed` is 0); drop it and re-run
+  the wiring later otherwise.
+- The fetch group is disposable: delete `$STAGE/windows/<fetch group>` once
+  step 4 succeeds. It is only ~15 GB, but ~3M small files.
+- Unlike PASTIS, these datasets' `config.json` never learns about the `*_all`
+  layers — they are handed to rslearn as a separate `--config`, and the
+  inference reads the rasters through `window.get_raster_dir(...)` rather than
+  the dataset config. So a later `prepare`/`materialize` that forgets
+  `--enabled-layers` cannot accidentally fetch a year of scenes here, and an
+  ingest that overwrites `config.json` cannot silently drop the layers. On
+  `pastis_rslearn` (built first, layers inline) both hazards are still live.
 
 ## Estimates
 

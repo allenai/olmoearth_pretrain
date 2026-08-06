@@ -142,12 +142,16 @@ def test_generated_layer_matches_the_committed_pastis_block(
 
 
 def test_product_map_covers_the_materializer_products(wire: types.ModuleType) -> None:
-    """Every product the materializer can bake can also be wired."""
+    """Every product the materializer can bake can also be wired.
+
+    Plus tessera_v2, which our own inference bakes (tessera_v2_export.py) in
+    the materializer's manifest shape rather than via a published product.
+    """
     from olmoearth_pretrain.evals.embedding_materializer.fetchers import (
         TESSERA_PRODUCTS,
     )
 
-    assert set(wire.PRODUCT_TO_MODALITY) == {"aef", *TESSERA_PRODUCTS}
+    assert set(wire.PRODUCT_TO_MODALITY) == {"aef", "tessera_v2", *TESSERA_PRODUCTS}
 
 
 def _write_manifest(wire: types.ModuleType, path: Path, **fields: int) -> None:
