@@ -357,6 +357,7 @@ def train_and_eval_probe(
     use_dice_loss: bool = False,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    dump_tag: str | None = None,
 ) -> EvalTaskResult:
     """Run a linear probe on the OlmoEarth Pretrain model.
 
@@ -555,6 +556,29 @@ def train_and_eval_probe(
             probe_type=probe_type,
             task_type=config.task_type,
         )
+
+        # Optional marker-gated dump of the literal best-probe test predictions
+        # (+ labels) for offline visualization. No effect unless the weka marker
+        # file exists. Keyed by dump_tag (model/dataset/modalities) + lr.
+        import os as _os
+        _pmark = "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/oe_pred_dir.txt"
+        if dump_tag is not None and _os.path.exists(_pmark):
+            with open(_pmark) as _mf:
+                _pdir = _mf.read().strip()
+            if _pdir:
+                _os.makedirs(_pdir, exist_ok=True)
+                _pp = _os.path.join(_pdir, f"{dump_tag}_lr{lr}_preds.pt")
+                torch.save(
+                    {
+                        "preds": all_preds.cpu(),
+                        "labels": all_labels.cpu(),
+                        "lr": lr,
+                        "dump_tag": dump_tag,
+                        "height_width": getattr(config, "height_width", None),
+                    },
+                    _pp,
+                )
+                logger.info(f"[OE_PRED_DUMP] wrote {_pp} preds={tuple(all_preds.shape)}")
 
         # Map regression preds/labels back to original target units so the
         # downstream metrics (and bootstrap resamples of them) are reported

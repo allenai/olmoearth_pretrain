@@ -393,6 +393,10 @@ class DownstreamEvaluator:
                     use_dice_loss=self.use_dice_loss,
                     primary_metric=self.primary_metric,
                     primary_metric_class=self.primary_metric_class,
+                    dump_tag=(
+                        f"{self.dataset}_hw{getattr(self.config, 'height_width', None)}"
+                        f"_{'-'.join(sorted(self.input_modalities))}"
+                    ),
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
                 else None
