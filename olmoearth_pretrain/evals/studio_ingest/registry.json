@@ -5061,7 +5061,7 @@
     "24",
     "25"
    ],
-   "config_json_sha256": "30fc74751e268ae56777d3cb03790d238fb40c36fde40701178d6269df1ca77c",
+   "config_json_sha256": "d83da2b3989678667b96ecdc3361e5ec1f333ec3edc1595b5d1be37511626964",
    "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom",
    "end_time": "2019-09-01",
    "imputes": [],
@@ -5070,7 +5070,8 @@
     "sentinel1",
     "sentinel2_l2a",
     "gse",
-    "tessera_v2"
+    "tessera_v2",
+    "landsat"
    ],
    "name": "pastis2_drom",
    "norm_stats": {

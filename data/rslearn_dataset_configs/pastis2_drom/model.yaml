@@ -94,6 +94,40 @@ data:
         required: false
         use_all_bands_in_order_of_band_set_idx: 0
         passthrough: true
+      # Landsat 8/9 OLI-TIRS monthly mosaics (aws_landsat), 12 slots. required:
+      # false so S2/S1-only evals run before landsat is materialized (the eval
+      # loader supports ragged/optional Landsat). Band order = Modality.LANDSAT.
+      landsat:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+          - landsat_mo01
+          - landsat_mo02
+          - landsat_mo03
+          - landsat_mo04
+          - landsat_mo05
+          - landsat_mo06
+          - landsat_mo07
+          - landsat_mo08
+          - landsat_mo09
+          - landsat_mo10
+          - landsat_mo11
+          - landsat_mo12
+        load_all_layers: true
+        required: false
+        bands:
+          - B8
+          - B1
+          - B2
+          - B3
+          - B4
+          - B5
+          - B6
+          - B7
+          - B9
+          - B10
+          - B11
+        passthrough: true
       targets:
         data_type: raster
         dtype: INT32
