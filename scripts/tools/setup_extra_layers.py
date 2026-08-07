@@ -144,6 +144,14 @@ DEFAULT_STAGE_ROOT = "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals"
 DEFAULT_IMAGE = "favyen/rslpomp20260727a"
 DEFAULT_RSLP_DIR = REPO_ROOT.parent / "rslearn_projects"
 
+# tessera_v2_export.py adds a `<dataset>_tessera_v2` fetch group beside the
+# eval windows (africa_crop_mask and ethiopia_crops carry one). Those windows
+# have no monthly layers and are not part of any eval, so they are excluded
+# from window listings and every Beaker job is scoped to the surviving groups
+# -- otherwise a Landsat prepare/materialize would fetch a year of Landsat
+# for thousands of fetch-only windows.
+FETCH_GROUP_SUFFIX = "_tessera_v2"
+
 
 def layer_names(layer_set: str) -> list[str]:
     """The twelve monthly layer names of a layer set."""
@@ -289,10 +297,17 @@ def window_state(window: Window, layer_set: str) -> str:
 
 
 def list_windows(ds_path: UPath, group: str | None, workers: int = 8) -> list[Window]:
-    """List a dataset's windows, restricted to one group when set."""
-    return Dataset(ds_path).storage.get_windows(
+    """List a dataset's windows, restricted to one group when set.
+
+    Without an explicit group, tessera_v2 fetch groups are excluded (see
+    FETCH_GROUP_SUFFIX).
+    """
+    windows = Dataset(ds_path).storage.get_windows(
         groups=[group] if group else None, workers=workers
     )
+    if group is None:
+        windows = [w for w in windows if not w.group.endswith(FETCH_GROUP_SUFFIX)]
+    return windows
 
 
 def apply_dataset(
@@ -399,7 +414,7 @@ def launch_stage(states: Counter, layer_set: str) -> str | None:
 def job_command(
     stage: str,
     layer_set: str,
-    group: str | None,
+    groups: list[str],
     args: argparse.Namespace,
 ) -> list[str]:
     """The in-job rslearn command; {ds_path} is substituted by the launcher.
@@ -435,8 +450,10 @@ def job_command(
         "--enabled-layers",
         ",".join(layer_names(layer_set)),
     ]
-    if group:
-        command += ["--group", group]
+    if groups:
+        # Scope to the eval window groups (rslearn's --group takes several),
+        # keeping the job off any tessera_v2 fetch group.
+        command += ["--group", *groups]
     return command
 
 
@@ -444,7 +461,7 @@ def launch_job(
     ds_path: UPath,
     stage: str,
     layer_set: str,
-    group: str | None,
+    groups: list[str],
     host: str | None,
     clusters: list[str],
     args: argparse.Namespace,
@@ -471,7 +488,7 @@ def launch_job(
     else:
         argv.extend(f"--clusters+={c}" for c in clusters)
         argv.append("--num_jobs=1")
-    argv += ["--command", json.dumps(job_command(stage, layer_set, group, args))]
+    argv += ["--command", json.dumps(job_command(stage, layer_set, groups, args))]
 
     if not args.go:
         print("\n" + " ".join(shlex.quote(a) for a in argv))
@@ -632,6 +649,10 @@ def main() -> int:
 
         if do_launch:
             windows = list_windows(ds_path, group)
+            if not windows:
+                print("  SKIP -- no eval windows")
+                continue
+            groups = sorted({w.group for w in windows})
             random.seed(0)
             sampled = random.sample(windows, min(25, len(windows)))
             for layer_set in target_sets:
@@ -643,7 +664,7 @@ def main() -> int:
                     continue
                 host = hosts[launched % len(hosts)] if hosts else None
                 if not launch_job(
-                    ds_path, stage, layer_set, group, host, clusters, args
+                    ds_path, stage, layer_set, groups, host, clusters, args
                 ):
                     failures += 1
                 launched += 1
