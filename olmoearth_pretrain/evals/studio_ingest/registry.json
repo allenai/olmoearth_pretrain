@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-08-07T15:21:47.211850",
+  "updated_at": "2026-08-07T17:27:22.851674",
   "datasets": {
     "africa_crop_mask": {
       "name": "africa_crop_mask",
@@ -4180,7 +4180,7 @@
       "start_time": "2019-01-01",
       "end_time": "2019-12-31",
       "config_repo_dir": "data/rslearn_dataset_configs/pastis_year_aligned",
-      "config_json_sha256": "150d6c27a8a6449b3d6c9ff029c1f0df9314a46be352f0321a0d0f14148503e2"
+      "config_json_sha256": "5b3431de95c7020af9590e003dc25b60f8e485ffca03fcaa6211edc636c0009e"
     },
     "canada_crops_fine_year_aligned": {
       "name": "canada_crops_fine_year_aligned",
@@ -4330,7 +4330,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/canada_crops_fine_year_aligned",
-      "config_json_sha256": "8f404df457fa410f89936f4b2363f78f00b43729718f91475e08d0fa1b52cbba"
+      "config_json_sha256": "88dc402349435f00d76c81bed677c308cfbfc6741457c0c00d87e64e6f7e27f7"
     },
     "descals_year_aligned": {
       "name": "descals_year_aligned",
@@ -4459,7 +4459,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/descals_year_aligned",
-      "config_json_sha256": "8f404df457fa410f89936f4b2363f78f00b43729718f91475e08d0fa1b52cbba"
+      "config_json_sha256": "88dc402349435f00d76c81bed677c308cfbfc6741457c0c00d87e64e6f7e27f7"
     },
     "canada_crops_coarse_year_aligned": {
       "name": "canada_crops_coarse_year_aligned",
@@ -4594,7 +4594,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/canada_crops_coarse_year_aligned",
-      "config_json_sha256": "8f404df457fa410f89936f4b2363f78f00b43729718f91475e08d0fa1b52cbba"
+      "config_json_sha256": "88dc402349435f00d76c81bed677c308cfbfc6741457c0c00d87e64e6f7e27f7"
     },
     "lcmap_lu_year_aligned": {
       "name": "lcmap_lu_year_aligned",
@@ -4727,7 +4727,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/lcmap_lu_year_aligned",
-      "config_json_sha256": "a3a21c588774145db2a9dd575f42b3c85b481d360387871c704b64d12d03487a"
+      "config_json_sha256": "67f04676c41ea6dd40e23d6fd4efaa95bb34e24802ec0c38ee47db29517f5c57"
     },
     "us_trees_year_aligned": {
       "name": "us_trees_year_aligned",
@@ -4893,7 +4893,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/us_trees_year_aligned",
-      "config_json_sha256": "ce4d04adf0e0065d11ff8b24e3aff007282bc7e5ebb2093de56c72c16409ae3e"
+      "config_json_sha256": "8c740c9528af3b15a56a067884fce5be2f26e990d5f425f0e5d9e19227fe727d"
     },
     "glance_year_aligned": {
       "name": "glance_year_aligned",
@@ -5030,7 +5030,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/glance_year_aligned",
-      "config_json_sha256": "8f404df457fa410f89936f4b2363f78f00b43729718f91475e08d0fa1b52cbba"
+      "config_json_sha256": "88dc402349435f00d76c81bed677c308cfbfc6741457c0c00d87e64e6f7e27f7"
     }
   }
 }
