@@ -14,6 +14,14 @@ data:
   init_args:
     path: /weka/dfive-default/olmoearth/eval_datasets/ethiopia_crops_year_aligned
     inputs:
+      tessera_v2:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+          - tessera_v2
+        required: true
+        use_all_bands_in_order_of_band_set_idx: 0
+        passthrough: true
       sentinel2_l2a:
         data_type: raster
         dtype: FLOAT32

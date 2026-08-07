@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-08-05T16:52:50.157852",
+  "updated_at": "2026-08-07T13:59:57.705066",
   "datasets": {
     "africa_crop_mask": {
       "name": "africa_crop_mask",
@@ -3799,8 +3799,9 @@
       },
       "modalities": [
         "gse",
+        "sentinel1",
         "sentinel2_l2a",
-        "sentinel1"
+        "tessera_v2"
       ],
       "imputes": [],
       "window_size": 32,
@@ -3900,7 +3901,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/africa_crop_mask_year_aligned",
-      "config_json_sha256": "8f404df457fa410f89936f4b2363f78f00b43729718f91475e08d0fa1b52cbba"
+      "config_json_sha256": "285a30c463dd33e9e0c06501101570c91d78d0f91d6e06bed6213a4b39ea7b5b"
     },
     "ethiopia_crops_year_aligned": {
       "name": "ethiopia_crops_year_aligned",
@@ -3929,8 +3930,9 @@
       },
       "modalities": [
         "gse",
+        "sentinel1",
         "sentinel2_l2a",
-        "sentinel1"
+        "tessera_v2"
       ],
       "imputes": [],
       "window_size": 32,
@@ -4030,7 +4032,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/ethiopia_crops_year_aligned",
-      "config_json_sha256": "8f404df457fa410f89936f4b2363f78f00b43729718f91475e08d0fa1b52cbba"
+      "config_json_sha256": "285a30c463dd33e9e0c06501101570c91d78d0f91d6e06bed6213a4b39ea7b5b"
     },
     "pastis_year_aligned": {
       "name": "pastis_year_aligned",
