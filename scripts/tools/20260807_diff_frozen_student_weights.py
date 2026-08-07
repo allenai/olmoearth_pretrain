@@ -28,6 +28,7 @@ Reading the output:
 
 import argparse
 import dataclasses
+import io
 import sys
 from pathlib import Path
 
@@ -125,17 +126,19 @@ def find_dcp_dir(step_dir: Path) -> Path:
 
 
 def load_student(step_dir: Path) -> dict[str, torch.Tensor]:
-    """Load just the student tensors out of a sharded checkpoint."""
-    try:
-        from torch.distributed.checkpoint.state_dict_loader import (
-            _load_state_dict_from_keys,
-        )
-    except ImportError:  # pragma: no cover - depends on torch version
-        raise SystemExit(
-            "this torch has no _load_state_dict_from_keys; needs torch >= 2.2"
-        )
-    reader = CompatFileSystemReader(find_dcp_dir(step_dir))
-    all_keys = list(reader.read_metadata().state_dict_metadata)
+    """Load just the student tensors out of a sharded checkpoint.
+
+    Reads the bytes directly rather than going through DCP's load planner. The
+    planner path calls ``FileSystemReader.read_data``, which touches
+    ``_StorageInfo.transform_descriptors`` -- a field ``__getstate__`` drops when
+    it is None, so checkpoints written by one torch build raise AttributeError
+    when read by another. Nothing here needs the planner: the metadata gives us
+    (relative_path, offset, length) per tensor, and with no transforms recorded
+    the slice at that offset is a plain ``torch.save``d tensor.
+    """
+    base = find_dcp_dir(step_dir)
+    metadata = CompatFileSystemReader(base).read_metadata()
+    all_keys = list(metadata.state_dict_metadata)
     # Model tensors are normally under a "model." prefix (the optimizer's live
     # under "optim."), but do not hard-depend on that -- just exclude optim.
     keys = [
@@ -148,16 +151,38 @@ def load_student(step_dir: Path) -> dict[str, torch.Tensor]:
             f"no student tensors matched {PATTERNS} in {step_dir}.\n"
             f"first 20 keys present: {all_keys[:20]}"
         )
-    loaded = _load_state_dict_from_keys(set(keys), storage_reader=reader)
+
+    shards: dict[str, list] = {k: [] for k in keys}
+    for index, storage_info in metadata.storage_data.items():
+        fqn = getattr(index, "fqn", None)
+        if fqn in shards:
+            shards[fqn].append((index, storage_info))
+
     out = {}
-    for k in keys:
-        if k in loaded:  # flat, dotted keys (what this API returns today)
-            value = loaded[k]
-        else:  # nested tree, in case that changes
-            value = loaded
-            for part in k.split("."):
-                value = value[part]
-        out[k] = value.detach().to(torch.float32)
+    for key in keys:
+        entries = shards[key]
+        if not entries:
+            raise SystemExit(f"{key} has metadata but no storage entry in {base}")
+        pieces = []
+        for index, storage_info in entries:
+            with open(base / storage_info.relative_path, "rb") as handle:
+                handle.seek(storage_info.offset)
+                raw = handle.read(storage_info.length)
+            piece = torch.load(io.BytesIO(raw), map_location="cpu", weights_only=True)
+            pieces.append((index, piece))
+        full_size = tuple(getattr(metadata.state_dict_metadata[key], "size", ()) or ())
+        if len(pieces) == 1 and (
+            not full_size or tuple(pieces[0][1].shape) == full_size
+        ):
+            tensor = pieces[0][1]
+        else:  # sharded save: place each chunk at its recorded offset
+            tensor = torch.zeros(full_size, dtype=pieces[0][1].dtype)
+            for index, piece in pieces:
+                offsets = tuple(getattr(index, "offset", None) or (0,) * piece.dim())
+                tensor[tuple(slice(o, o + s) for o, s in zip(offsets, piece.shape))] = (
+                    piece
+                )
+        out[key] = tensor.detach().to(torch.float32)
     return out
 
 
