@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-08-07T13:59:57.705066",
+  "updated_at": "2026-08-07T15:21:47.211850",
   "datasets": {
     "africa_crop_mask": {
       "name": "africa_crop_mask",
@@ -3901,7 +3901,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/africa_crop_mask_year_aligned",
-      "config_json_sha256": "285a30c463dd33e9e0c06501101570c91d78d0f91d6e06bed6213a4b39ea7b5b"
+      "config_json_sha256": "f21e01b5da6d3339b4a77d42db63aa8c60447d17de8b95e34e307ef7bca75639"
     },
     "ethiopia_crops_year_aligned": {
       "name": "ethiopia_crops_year_aligned",
@@ -4032,7 +4032,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/ethiopia_crops_year_aligned",
-      "config_json_sha256": "285a30c463dd33e9e0c06501101570c91d78d0f91d6e06bed6213a4b39ea7b5b"
+      "config_json_sha256": "f21e01b5da6d3339b4a77d42db63aa8c60447d17de8b95e34e307ef7bca75639"
     },
     "pastis_year_aligned": {
       "name": "pastis_year_aligned",
