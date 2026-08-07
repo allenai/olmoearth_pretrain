@@ -1543,6 +1543,32 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
                 window_size=_ws,
                 dataset="pastis2_drom",
             ),
+            # Modality-combination sweep (adds Landsat + S1-only to the S2 / S1+S2
+            # above): S1, Landsat, S2+Landsat, S1+S2+Landsat.
+            f"pastis2_drom_ws{_ws}_ps1_sentinel1": _pastis_ps1_task(
+                [Modality.SENTINEL1.name],
+                window_size=_ws,
+                dataset="pastis2_drom",
+            ),
+            f"pastis2_drom_ws{_ws}_ps1_landsat": _pastis_ps1_task(
+                [Modality.LANDSAT.name],
+                window_size=_ws,
+                dataset="pastis2_drom",
+            ),
+            f"pastis2_drom_ws{_ws}_ps1_sentinel2_landsat": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=_ws,
+                dataset="pastis2_drom",
+            ),
+            f"pastis2_drom_ws{_ws}_ps1_sentinel1_sentinel2_landsat": _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=_ws,
+                dataset="pastis2_drom",
+            ),
             **{
                 f"{name}_ws{_ws}_ps1": _aef_ps1_task(
                     name, EvalMode.LINEAR_PROBE, window_size=_ws
