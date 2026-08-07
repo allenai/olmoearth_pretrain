@@ -275,23 +275,53 @@ def _acquisition_times(window: Window, layer_name: str) -> list[datetime]:
     return times
 
 
+def _no_scenes(
+    window: Window, band_sets: tuple[list[str], ...]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Empty (0, H, W, C) / (0,) arrays for a layer with nothing to read."""
+    height = window.bounds[3] - window.bounds[1]
+    width = window.bounds[2] - window.bounds[0]
+    num_bands = sum(len(bands) for bands in band_sets)
+    return (
+        np.zeros((0, height, width, num_bands), dtype=np.float32),
+        np.zeros((0,), dtype=np.int64),
+    )
+
+
 def _read_scenes(
     window: Window,
     layer_name: str,
     band_sets: tuple[list[str], ...],
     resampling: Resampling = Resampling.bilinear,
+    allow_unmaterialized: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Read every completed scene of a layer onto the window grid.
 
     A layer that was prepared but matched zero items (e.g. no descending S1
     passes over the window) yields empty (0, H, W, C) / (0,) arrays — the
     Tessera inference handles missing sources. A layer with prepared items
-    but no materialized scenes raises (materialization incomplete).
+    but no materialized scenes raises, because that normally means
+    materialization is incomplete and the embedding would silently be built
+    from less data than intended.
+
+    Args:
+        window: the fetch window to read.
+        layer_name: layer to read.
+        band_sets: band sets to concatenate, in order.
+        resampling: resampling for band sets coarser than the window.
+        allow_unmaterialized: downgrade the "prepared but not materialized"
+            case to a warning and return empty arrays. Only for scenes
+            confirmed unfetchable at the source (see infer's
+            --allow_unmaterialized_s1).
 
     Returns:
         (T, H, W, C) float32 array (band sets concatenated in the given
         order, coarser band sets resampled to the window resolution) and the
         (T,) int day-of-year array, chronologically sorted.
+
+    Raises:
+        ValueError: if the layer has prepared items but no materialized
+            scenes and allow_unmaterialized is False.
     """
     completed = sorted(
         group_idx
@@ -300,13 +330,14 @@ def _read_scenes(
     )
     times = _acquisition_times(window, layer_name)
     if not times:
-        height = window.bounds[3] - window.bounds[1]
-        width = window.bounds[2] - window.bounds[0]
-        num_bands = sum(len(bands) for bands in band_sets)
-        return (
-            np.zeros((0, height, width, num_bands), dtype=np.float32),
-            np.zeros((0,), dtype=np.int64),
+        return _no_scenes(window, band_sets)
+    if not completed and allow_unmaterialized:
+        logger.warning(
+            f"window {window.group}/{window.name}: {layer_name} has "
+            f"{len(times)} prepared items but none materialized; treating the "
+            "layer as absent"
         )
+        return _no_scenes(window, band_sets)
     raster_format = GeotiffRasterFormat()
     scenes = []
     for group_idx in completed:
@@ -334,8 +365,23 @@ def _read_scenes(
     return stacked, doys[order]
 
 
-def build_dpixel_inputs(fetch_window: Window) -> dict[str, np.ndarray]:
-    """Assemble the tessera_v2_infer.encode_tile inputs for one window."""
+def build_dpixel_inputs(
+    fetch_window: Window, allow_unmaterialized_s1: bool = False
+) -> dict[str, np.ndarray]:
+    """Assemble the tessera_v2_infer.encode_tile inputs for one window.
+
+    Args:
+        fetch_window: the window holding the materialized year of scenes.
+        allow_unmaterialized_s1: treat an S1 layer whose items all failed to
+            materialize as absent instead of raising. S2 stays strict.
+
+    Returns:
+        the keyword arguments for encode_tile.
+
+    Raises:
+        ValueError: if the window has no S2 scenes, or an S1 layer is
+            unmaterialized and allow_unmaterialized_s1 is False.
+    """
     s2, s2_doys = _read_scenes(fetch_window, S2_LAYER, S2_BAND_SETS)
     if s2.shape[0] == 0:
         # Missing S1 passes can be real (orbit geometry); zero S2 scenes over
@@ -354,7 +400,12 @@ def build_dpixel_inputs(fetch_window: Window) -> dict[str, np.ndarray]:
 
     s1 = {}
     for layer in S1_LAYERS:
-        raw, doys = _read_scenes(fetch_window, layer, (S1_BAND_SET,))
+        raw, doys = _read_scenes(
+            fetch_window,
+            layer,
+            (S1_BAND_SET,),
+            allow_unmaterialized=allow_unmaterialized_s1,
+        )
         s1[layer] = (s1_raw_to_tessera_units(raw), doys)
 
     return {
@@ -520,6 +571,7 @@ def infer(
     device: str | None = None,
     overwrite: bool = False,
     read_workers: int = 8,
+    allow_unmaterialized_s1: bool = False,
 ) -> None:
     """Run v2 student inference per window and write the tessera_v2 layer.
 
@@ -535,6 +587,12 @@ def infer(
         device: torch device string; default cuda when available.
         overwrite: re-run windows that already carry the layer.
         read_workers: threads assembling d-pixel inputs.
+        allow_unmaterialized_s1: embed a window whose S1 layer has prepared
+            items that all failed to materialize, treating that layer as
+            absent. Only for scenes confirmed unfetchable at the source (a
+            persistent 404 on Planetary Computer, say) — otherwise it masks an
+            incomplete materialize. The affected windows are listed in the
+            manifest. S2 stays strict either way.
 
     Raises:
         SystemExit: if an eval window has no matching fetch window.
@@ -567,7 +625,10 @@ def infer(
         if not overwrite and provider.is_layer_written(eval_window, LAYER_NAME):
             return eval_window, None, False
         try:
-            inputs = build_dpixel_inputs(fetch_windows[eval_window.name])
+            inputs = build_dpixel_inputs(
+                fetch_windows[eval_window.name],
+                allow_unmaterialized_s1=allow_unmaterialized_s1,
+            )
         except Exception:
             logger.exception(f"window {eval_window.name}: reading inputs failed")
             return eval_window, None, True
@@ -652,6 +713,7 @@ def infer(
                 "fetch_dataset_path": ds_path,
                 "fetch_group": spec.fetch_group,
                 "model_size": model_size,
+                "allow_unmaterialized_s1": allow_unmaterialized_s1,
             },
         },
     )
@@ -726,6 +788,13 @@ def main() -> None:
     p_infer.add_argument("--device", default=None)
     p_infer.add_argument("--overwrite", action="store_true")
     p_infer.add_argument("--read_workers", type=int, default=8)
+    p_infer.add_argument(
+        "--allow_unmaterialized_s1",
+        action="store_true",
+        help="Embed windows whose S1 layer failed to materialize entirely, "
+        "treating it as absent. Only for scenes confirmed unfetchable at the "
+        "source; otherwise it masks an incomplete materialize.",
+    )
 
     args = parser.parse_args()
     if args.command == "write_fetch_config":
@@ -748,6 +817,7 @@ def main() -> None:
             device=args.device,
             overwrite=args.overwrite,
             read_workers=args.read_workers,
+            allow_unmaterialized_s1=args.allow_unmaterialized_s1,
         )
 
 

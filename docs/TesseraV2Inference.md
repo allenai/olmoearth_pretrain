@@ -192,6 +192,14 @@ Notes, in rough order of how likely they are to bite:
   read once at process start, so a job already running will not pick up an
   edited fetch config. The `duration` in the prepare summary is summed across
   workers, not wall clock — divide by `--workers`.
+- **A window whose S1 layer has prepared items but none materialized fails by
+  default**, because that normally means materialize is incomplete. Africa hit
+  this on the 3 windows whose ascending scenes 404 (`2553 written, 3 failed`).
+  Left as-is: 0.12% of windows, and `--required` resolves the same set for
+  every model, so the comparison is unaffected. `infer
+  --allow_unmaterialized_s1` embeds them with that layer treated as absent —
+  use it only for scenes confirmed unfetchable at the source, and note it is
+  recorded in the manifest's `cli_args`. S2 stays strict either way.
 - **Zero ascending S1 is normal in Ethiopia** — all 2530 windows, against 23–58
   descending. Not a query bug: africa, fetched identically, gets ascending fine
   (median 30), so the absence is in MPC's `sentinel-1-rtc` archive. Tessera

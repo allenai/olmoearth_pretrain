@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 import torch
 
+from olmoearth_pretrain.evals.datasets import tessera_v2_export
 from olmoearth_pretrain.evals.datasets.tessera_v2_export import (
     DATASETS,
     FETCH_LAYERS,
@@ -156,6 +157,42 @@ def test_resolve_spec_presets_and_overrides() -> None:
         resolve_spec("nope")
     with pytest.raises(SystemExit, match="pass --dataset or --fetch_group"):
         resolve_spec(None)
+
+
+def test_read_scenes_distinguishes_absent_from_unmaterialized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No items is fine; items that never materialized is an error by default.
+
+    The difference matters: a layer with zero matches is normal orbit
+    geometry, while prepared-but-unmaterialized normally means the
+    materialize step is incomplete and the embedding would quietly be built
+    from less data than intended. It is downgraded only for scenes confirmed
+    unfetchable at the source.
+    """
+    bands = (["vv", "vh"],)
+
+    def window(n_items: int) -> SimpleNamespace:
+        """Window with n_items prepared and nothing materialized."""
+        monkeypatch.setattr(
+            tessera_v2_export,
+            "_acquisition_times",
+            lambda w, layer: [datetime(2020, 1, 1, tzinfo=UTC)] * n_items,
+        )
+        return SimpleNamespace(
+            group="g", name="w", bounds=(0, 0, 4, 4), list_completed_layers=list
+        )
+
+    scenes, doys = tessera_v2_export._read_scenes(window(0), "layer", bands)
+    assert scenes.shape == (0, 4, 4, 2) and doys.shape == (0,)
+
+    with pytest.raises(ValueError, match="no materialized layer scenes"):
+        tessera_v2_export._read_scenes(window(5), "layer", bands)
+
+    scenes, doys = tessera_v2_export._read_scenes(
+        window(5), "layer", bands, allow_unmaterialized=True
+    )
+    assert scenes.shape == (0, 4, 4, 2) and doys.shape == (0,)
 
 
 def test_write_fetch_config_keeps_storage_and_leaves_the_dataset_alone(
