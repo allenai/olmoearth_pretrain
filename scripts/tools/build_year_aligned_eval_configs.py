@@ -73,6 +73,24 @@ MONTHLY_LAYERS = {
     "sentinel1": [f"sentinel1_mo{i:02d}" for i in range(1, 13)],
 }
 
+# S2 scene-classification layers, added on weka by setup_extra_layers.py.
+# The loader turns them into per-pixel cloud masks (scl_cloud_mask=True); they
+# are never fed to the model as a modality. required stays False: a required
+# input shrinks the evaluated window set for EVERY model on the dataset, which
+# would detach it from the published year-aligned numbers.
+SCL_LAYERS = [f"sentinel2_scl_mo{i:02d}" for i in range(1, 13)]
+
+# Landsat monthlies, also added on weka by setup_extra_layers.py (input parity
+# with AEF, which ingests Landsat). A real modality, unlike scl -- but
+# required stays False for the same window-set reason, which means windows
+# with Landsat coverage gaps lack the input entirely: measure per-dataset
+# completeness before registering any landsat eval task.
+LANDSAT_LAYERS = [f"landsat_mo{i:02d}" for i in range(1, 13)]
+
+# Band order must match Modality.LANDSAT.band_order (B8 first: its band sets
+# list the 15 m pan band before the 30 m bands), same rationale as BANDS.
+LANDSAT_BANDS = ["B8", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"]
+
 # Band order must match the OlmoEarth modality band_order so the eval-time
 # normalizer sees channels in the expected order (same rationale as the
 # comment at the top of pastis_rslearn/model.yaml).
@@ -118,6 +136,32 @@ def imagery_input(modality: str) -> dict:
         "load_all_layers": True,
         "bands": list(BANDS[modality]),
         "passthrough": True,
+    }
+
+
+def scl_input() -> dict:
+    """Build the optional model.yaml input block for the SCL cloud-mask layers."""
+    return {
+        "data_type": "raster",
+        "dtype": "FLOAT32",
+        "layers": list(SCL_LAYERS),
+        "load_all_layers": True,
+        "bands": ["SCL"],
+        "passthrough": True,
+        "required": False,
+    }
+
+
+def landsat_input() -> dict:
+    """Build the optional model.yaml input block for the Landsat monthlies."""
+    return {
+        "data_type": "raster",
+        "dtype": "FLOAT32",
+        "layers": list(LANDSAT_LAYERS),
+        "load_all_layers": True,
+        "bands": list(LANDSAT_BANDS),
+        "passthrough": True,
+        "required": False,
     }
 
 
@@ -170,12 +214,16 @@ def convert(
 
     # Replace whatever imagery the source used with the monthly layer scheme,
     # dropping any single-layer sentinel2 input, and insert both modalities in
-    # a stable order ahead of the non-imagery inputs.
-    for modality in ("sentinel2_l2a", "sentinel1", "sentinel2"):
+    # a stable order ahead of the non-imagery inputs. scl rides along as the
+    # optional cloud-mask input (see scl_input), landsat as the optional
+    # third sensor (see landsat_input).
+    for modality in ("sentinel2_l2a", "sentinel1", "sentinel2", "scl", "landsat"):
         inputs.pop(modality, None)
     rebuilt = {
         "sentinel2_l2a": imagery_input("sentinel2_l2a"),
         "sentinel1": imagery_input("sentinel1"),
+        "scl": scl_input(),
+        "landsat": landsat_input(),
     }
     for name, block in inputs.items():
         # Keep "targets" last so a carried-over input reads next to the other
@@ -188,12 +236,16 @@ def convert(
         rebuilt.update(carry_over)
     init_args["inputs"] = rebuilt
 
-    # Any Pad transform must cover the newly added modality too, otherwise S1
-    # keeps its native size and the shape check in the eval dataset trips.
+    # Any Pad transform must cover the newly added modalities too, otherwise
+    # S1/SCL/Landsat keep their native size and the shape check in the eval
+    # dataset trips (for SCL, the mask would be misaligned with the padded
+    # imagery).
     for transform in init_args.get("default_config", {}).get("transforms", []):
         selectors = transform.get("init_args", {}).get("image_selectors")
-        if selectors and "sentinel2_l2a" in selectors and "sentinel1" not in selectors:
-            selectors.insert(selectors.index("sentinel2_l2a") + 1, "sentinel1")
+        if selectors and "sentinel2_l2a" in selectors:
+            for extra in ("sentinel1", "scl", "landsat"):
+                if extra not in selectors:
+                    selectors.insert(selectors.index("sentinel2_l2a") + 1, extra)
 
     return out
 

@@ -9,6 +9,7 @@ import torch
 from rslearn.train.model_context import RasterImage
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
     RslearnToOlmoEarthDataset,
 )
@@ -26,6 +27,7 @@ def build_dataset(
     tile_samples: bool = False,
     sample_size: int | None = None,
     model_dataset: list | None = None,
+    scl_cloud_mask: bool = False,
 ) -> RslearnToOlmoEarthDataset:
     """Build a wrapper with no underlying model dataset (transform-only tests)."""
     return RslearnToOlmoEarthDataset(
@@ -36,6 +38,7 @@ def build_dataset(
         label_at_center_pixel=label_at_center_pixel,
         tile_samples=tile_samples,
         sample_size=sample_size,
+        scl_cloud_mask=scl_cloud_mask,
     )
 
 
@@ -349,3 +352,93 @@ def test_masked_sample_uses_numpy_free_path() -> None:
     masked_sample, label = ds._transform_sample(input_dict, target)
     s2 = getattr(masked_sample, S2)
     assert isinstance(s2, torch.Tensor) or isinstance(s2, np.ndarray)
+
+
+def make_scl(
+    size: int, num_timesteps: int, cloudy: dict[tuple[int, int, int], int] | None = None
+) -> RasterImage:
+    """Build an SCL RasterImage: vegetation (4) except `cloudy` (h, w, t) -> class."""
+    scl = torch.full((1, num_timesteps, size, size), 4.0)
+    for (row, col, t), value in (cloudy or {}).items():
+        scl[0, t, row, col] = float(value)
+    return RasterImage(image=scl)
+
+
+class TestSclCloudMask:
+    """Tests for scl_cloud_mask through _transform_sample."""
+
+    S2_MASK = MaskedOlmoEarthSample.get_masked_modality_name(S2)
+
+    def test_cloudy_pixel_timestep_masked_missing(self) -> None:
+        """SCL cloud classes become MISSING; clear pixels stay ONLINE_ENCODER."""
+        ds = build_dataset(scl_cloud_mask=True)
+        input_dict, target = make_sample(8, {(4, 4): 1})
+        input_dict["scl"] = make_scl(8, 2, {(2, 3, 0): 9, (5, 6, 1): 3})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask[2, 3, 0] == MaskValue.MISSING.value).all()
+        assert (mask[5, 6, 0] == MaskValue.ONLINE_ENCODER.value).all()
+        assert (mask[5, 6, 1] == MaskValue.MISSING.value).all()
+        assert (mask[2, 3, 1] == MaskValue.ONLINE_ENCODER.value).all()
+        assert (mask[0, 0] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_fully_cloudy_pixel_left_unmasked(self) -> None:
+        """A pixel cloudy at every timestep keeps all timesteps."""
+        ds = build_dataset(scl_cloud_mask=True)
+        input_dict, target = make_sample(8, {(4, 4): 1})
+        input_dict["scl"] = make_scl(8, 2, {(1, 1, 0): 9, (1, 1, 1): 8})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask[1, 1] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_missing_scl_input_leaves_sample_unmasked(self) -> None:
+        """No scl input -> warn and proceed unmasked, never crash."""
+        ds = build_dataset(scl_cloud_mask=True)
+        input_dict, target = make_sample(8, {(4, 4): 1})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_flag_off_ignores_scl_input(self) -> None:
+        """scl_cloud_mask=False leaves the mask untouched even with SCL present."""
+        ds = build_dataset(scl_cloud_mask=False)
+        input_dict, target = make_sample(8, {(4, 4): 1})
+        input_dict["scl"] = make_scl(8, 2, {(2, 3, 0): 9})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_mask_follows_center_crop(self) -> None:
+        """With window_size, SCL takes the same crop as the imagery."""
+        ds = build_dataset(
+            window_size=16, label_at_center_pixel=True, scl_cloud_mask=True
+        )
+        input_dict, target = make_sample(32, {(12, 20): 5})
+        # Crop is rows 4..20, cols 12..28; cloudy pixel at raster (6, 14)
+        # lands at cropped (2, 2).
+        input_dict["scl"] = make_scl(32, 2, {(6, 14, 1): 10})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask[2, 2, 1] == MaskValue.MISSING.value).all()
+        assert (mask[2, 2, 0] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_half_resolution_scl_is_upsampled(self) -> None:
+        """A 20m-grid SCL read (half resolution) is nearest-upsampled to match."""
+        ds = build_dataset(scl_cloud_mask=True)
+        input_dict, target = make_sample(8, {(4, 4): 1})
+        # 4x4 SCL against 8x8 imagery: pixel (1, 1) covers imagery (2:4, 2:4).
+        input_dict["scl"] = make_scl(4, 2, {(1, 1, 0): 9})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask[2:4, 2:4, 0] == MaskValue.MISSING.value).all()
+        assert (mask[2:4, 2:4, 1] == MaskValue.ONLINE_ENCODER.value).all()
+        assert (mask[0:2, 0:2, 0] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_shape_mismatch_skips_masking(self) -> None:
+        """An SCL grid that is neither matching nor half resolution is skipped."""
+        ds = build_dataset(scl_cloud_mask=True)
+        input_dict, target = make_sample(8, {(4, 4): 1})
+        input_dict["scl"] = make_scl(5, 2, {(1, 1, 0): 9})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask == MaskValue.ONLINE_ENCODER.value).all()

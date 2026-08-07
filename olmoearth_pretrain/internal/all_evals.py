@@ -1410,6 +1410,7 @@ def _aef_ps1_task(
     eval_mode: EvalMode,
     window_size: int = 16,
     input_modalities: list[str] | None = None,
+    scl_cloud_mask: bool = False,
 ) -> DownstreamTaskConfig:
     """AEF supplemental task under the per-pixel embedding-product convention.
 
@@ -1440,6 +1441,7 @@ def _aef_ps1_task(
         quantize_embeddings=True,
         use_center_token=True,
         label_at_center_pixel=True,
+        scl_cloud_mask=scl_cloud_mask,
     )
 
 
@@ -1591,6 +1593,37 @@ for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
             for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
         }
     )
+    # SCL cloud-masked siblings: identical except cloud-contaminated S2
+    # pixel-timesteps are masked MISSING at load time (scl_cloud_mask), which
+    # reproduces the pre-year-aligned exports' eo:cloud_cover scene filter at
+    # pixel granularity. Requires the SCL layers on weka
+    # (setup_extra_layers.py); without them the tasks run unmasked and
+    # match the plain variants. The window set is unchanged, so plain vs
+    # _sclmask deltas isolate the cloud effect (descals is the motivation).
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_sclmask": _aef_ps1_task(
+                name,
+                EvalMode.LINEAR_PROBE,
+                window_size=16,
+                input_modalities=_modalities,
+                scl_cloud_mask=True,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_sclmask_knn": _aef_ps1_task(
+                name,
+                EvalMode.KNN,
+                window_size=16,
+                input_modalities=_modalities,
+                scl_cloud_mask=True,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
 # pastis_year_aligned keeps the pastis conventions (128x128 stored samples,
 # tile_samples, mIoU) rather than the AEF center-pixel ones, so it reuses the
 # pastis helper with its dataset name overridden.
@@ -1606,6 +1639,20 @@ EMBEDDING_EVAL_TASKS.update(
                 window_size=16,
             ),
             dataset="pastis_year_aligned",
+        ),
+        # SCL cloud-masked siblings (see the _sclmask comment above).
+        "pastis_year_aligned_ws16_ps1_sentinel2_sclmask": replace(
+            _pastis_ps1_task([Modality.SENTINEL2_L2A.name], window_size=16),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_sclmask": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
         ),
     }
 )

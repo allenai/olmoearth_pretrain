@@ -151,6 +151,12 @@ class DownstreamTaskConfig:
     # labeled pixel; pair with use_center_token=True (and patch_size=1) so the
     # probe reads exactly that token.
     label_at_center_pixel: bool = False
+    # For registry (rslearn) datasets carrying the optional "scl" input
+    # (setup_extra_layers.py): mask cloud-contaminated S2 pixel-timesteps
+    # MISSING at load time, reproducing the pre-year-aligned exports'
+    # eo:cloud_cover scene filter at pixel granularity. Never changes the
+    # window set; windows without SCL are just left unmasked.
+    scl_cloud_mask: bool = False
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: NormMethod = field(
@@ -233,6 +239,7 @@ class DownstreamEvaluator:
         self._is_registry_dataset = task.dataset not in DATASET_TO_CONFIG
         self.window_size = task.window_size
         self.label_at_center_pixel = task.label_at_center_pixel
+        self.scl_cloud_mask = task.scl_cloud_mask
         self.tile_samples = task.tile_samples
         if self.tile_samples:
             if not self._is_registry_dataset:
@@ -274,6 +281,11 @@ class DownstreamEvaluator:
             # task is a classification task over per-sample embeddings.
             self.config = dataclasses.replace(
                 self.config, task_type=TaskType.CLASSIFICATION, height_width=None
+            )
+        if self.scl_cloud_mask and not self._is_registry_dataset:
+            raise ValueError(
+                f"scl_cloud_mask is only supported for registry datasets, "
+                f"got dataset '{task.dataset}'"
             )
         self.trainer = trainer
         self.device = device
@@ -439,6 +451,8 @@ class DownstreamEvaluator:
                 extra_kwargs["label_at_center_pixel"] = True
             if self.tile_samples:
                 extra_kwargs["tile_samples"] = True
+            if self.scl_cloud_mask:
+                extra_kwargs["scl_cloud_mask"] = True
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities
