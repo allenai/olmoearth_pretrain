@@ -51,6 +51,7 @@ VERIFYING THE FREEZE. Two signals, both visible within an hour:
 """
 
 import logging
+from dataclasses import replace
 
 from olmo_core.optim.scheduler import ConstantWithWarmup
 from regbtl_v1_2_proj_common import add_student_lr_group
@@ -101,6 +102,14 @@ def freeze_all_but_student(
             f"{warmup_steps}; pass 1 for no warmup"
         )
     config.optim_config.lr = 0.0
+    # The shared scheduler now governs a group whose initial_lr is 0, and its
+    # linear warmup asserts ``0 <= warmup_min_lr < initial_lr`` -- which 0 < 0
+    # fails, crashing every rank on the first scheduler step. Dropping the warmup
+    # sends the frozen group straight to the cosine branch, which returns
+    # ``eta_min + (0 - eta_min) * ...`` = 0.0 at every step. The warmup value is
+    # meaningless for a group pinned at 0 either way; the student's own schedule
+    # is a separate override and keeps its warmup.
+    config.scheduler = replace(config.scheduler, warmup=0)
     return add_student_lr_group(
         config,
         lr=student_lr,
