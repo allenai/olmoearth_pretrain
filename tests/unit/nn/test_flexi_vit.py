@@ -9,6 +9,7 @@ from einops import repeat
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
+    get_simple_temporal_encoding,
     timestamps_to_days,
 )
 from olmoearth_pretrain.nn.flexi_vit import (
@@ -173,6 +174,117 @@ class TestCompositeEncodings:
         expected_time = get_1d_sincos_pos_encoding(torch.arange(T), n)
         actual_time = result[0, 0, 0, :, 0, n : 2 * n]
         assert torch.allclose(actual_time, expected_time, atol=1e-5)
+
+
+class TestSimpleTemporalEncoding:
+    """Unit tests for the simple-temporal (month-slot replacement) encoding."""
+
+    embedding_size = 16
+    n = embedding_size // 4  # embedding_dim_per_embedding_type
+
+    def _encodings(self, temporal_year_dropout_rate: float = 0.5) -> CompositeEncodings:
+        return CompositeEncodings(
+            embedding_size=self.embedding_size,
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.WORLDCOVER],
+            random_channel_embeddings=True,
+            position_encoding="rope_3d_mixed",
+            use_simple_temporal_encoding=True,
+            temporal_year_dropout_rate=temporal_year_dropout_rate,
+        )
+
+    @staticmethod
+    def _batch(
+        batch_size: int, years: list[int] | None = None
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        H, W, T, C = 2, 2, 3, 3
+        tokens = {"sentinel2_l2a": torch.zeros(batch_size, H, W, T, C, 16)}
+        base = torch.tensor(
+            [[15, 3, 2022], [15, 7, 2022], [15, 11, 2022]], dtype=torch.long
+        )
+        timestamps = repeat(base, "... -> b ...", b=batch_size).clone()
+        if years is not None:
+            for i, y in enumerate(years):
+                timestamps[i, :, 2] = y
+        return tokens, timestamps
+
+    def _slot(
+        self,
+        ce: CompositeEncodings,
+        batch_size: int = 4,
+        years: list[int] | None = None,
+    ) -> torch.Tensor:
+        tokens, timestamps = self._batch(batch_size, years)
+        out = ce.forward(tokens, timestamps, patch_size=4, input_res=10)
+        return out["sentinel2_l2a"][..., 2 * self.n : 3 * self.n]
+
+    def test_slot_matches_mlp_of_four_numbers(self) -> None:
+        """The month slot carries exactly the MLP of the 4-number encoding."""
+        ce = self._encodings().eval()
+        tokens, timestamps = self._batch(4)
+        slot = self._slot(ce)
+        expected = ce.temporal_encoder(get_simple_temporal_encoding(timestamps))
+        # per (sample, timestep), broadcast over space/bandsets
+        assert torch.allclose(slot[:, 0, 0, :, 0, :], expected, atol=1e-6)
+        assert torch.allclose(slot[:, 1, 1, :, 2, :], expected, atol=1e-6)
+
+    def test_month_table_is_not_applied(self) -> None:
+        """The frozen month table no longer contributes to the slot."""
+        ce_on = self._encodings().eval()
+        ce_off = CompositeEncodings(
+            embedding_size=self.embedding_size,
+            supported_modalities=[Modality.SENTINEL2_L2A],
+            random_channel_embeddings=True,
+            position_encoding="rope_3d_mixed",
+        ).eval()
+        tokens, timestamps = self._batch(4)
+        slot_off = ce_off.forward(tokens, timestamps, 4, 10)["sentinel2_l2a"][
+            ..., 2 * self.n : 3 * self.n
+        ]
+        months = timestamps[:, :, 1]
+        month_embed = ce_off.month_embed(months)
+        assert torch.allclose(slot_off[:, 0, 0, :, 0, :], month_embed, atol=1e-6)
+        assert not torch.allclose(
+            self._slot(ce_on)[:, 0, 0, :, 0, :], month_embed, atol=1e-3
+        )
+
+    def test_year_dropout_equals_year_zero_sentinel(self) -> None:
+        """rate=1.0 in train mode reproduces the year==0 'unknown' encoding."""
+        ce = self._encodings(temporal_year_dropout_rate=1.0)
+        ce.train()
+        dropped = self._slot(ce, years=[2020, 2021, 2022, 2023])
+        ce.eval()
+        sentinel = self._slot(ce, years=[0, 0, 0, 0])
+        assert torch.allclose(dropped, sentinel, atol=1e-6)
+
+    def test_dropout_is_per_sample_and_keeps_phase(self) -> None:
+        """At rate=0.5 samples are either full or year-dropped, never phase-dropped."""
+        torch.manual_seed(0)
+        ce = self._encodings(temporal_year_dropout_rate=0.5).train()
+        B = 64
+        tokens, timestamps = self._batch(B)
+        slot = ce.forward(tokens, timestamps, 4, 10)["sentinel2_l2a"][
+            :, 0, 0, :, 0, 2 * self.n : 3 * self.n
+        ]
+        feats = get_simple_temporal_encoding(timestamps)
+        full = ce.temporal_encoder(feats)
+        year_dropped = ce.temporal_encoder(feats * torch.tensor([0.0, 1.0, 1.0, 0.0]))
+        is_full = torch.isclose(slot, full, atol=1e-6).all(dim=(-2, -1))
+        is_dropped = torch.isclose(slot, year_dropped, atol=1e-6).all(dim=(-2, -1))
+        assert (is_full | is_dropped).all()
+        assert is_full.any() and is_dropped.any()
+
+    def test_eval_mode_is_deterministic(self) -> None:
+        """No dropout in eval mode at any rate < 1."""
+        ce = self._encodings(temporal_year_dropout_rate=0.5).eval()
+        assert torch.equal(self._slot(ce), self._slot(ce))
+
+    def test_static_modalities_get_no_temporal_slot(self) -> None:
+        """Non-multitemporal modalities keep an empty temporal slot."""
+        ce = self._encodings().eval()
+        tokens, timestamps = self._batch(4)
+        wc = {"worldcover": torch.zeros(4, 2, 2, 1, 16)}
+        out = ce.forward(wc, timestamps, 4, 10)["worldcover"]
+        assert (out[..., 2 * self.n : 3 * self.n] == 0).all()
 
 
 # TODO: Add tests for when the inputs are completely masked or different dims or something
@@ -562,6 +674,33 @@ class TestEncoder:
             position_encoding="rope_mixed",
         )
         with pytest.raises(ValueError, match="head_dim divisible by 4"):
+            config.build()
+
+    def test_encoder_config_simple_temporal(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """The simple temporal encoding builds and creates the 2-layer MLP."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=16,
+            num_heads=2,
+            use_simple_temporal_encoding=True,
+        )
+        encoder = config.build()
+        assert encoder.composite_encodings.use_simple_temporal_encoding
+        assert encoder.composite_encodings.temporal_year_dropout_rate == 0.5
+        assert isinstance(
+            encoder.composite_encodings.temporal_encoder[0], torch.nn.Linear
+        )
+
+    def test_encoder_config_temporal_dropout_rate_validated(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Out-of-range dropout rates are rejected."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(supported_modality_names, temporal_year_dropout_rate=1.5)
+        with pytest.raises(ValueError, match="temporal_year_dropout_rate"):
             config.build()
 
     def test_position_encoding_deprecated_alias(
