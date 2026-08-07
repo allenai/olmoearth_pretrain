@@ -27,11 +27,60 @@ Reading the output:
 """
 
 import argparse
+import dataclasses
 import sys
 from pathlib import Path
 
 import torch
 from torch.distributed.checkpoint import FileSystemReader
+
+
+def _backfill_dataclass(obj: object) -> None:
+    """Give an unpickled dataclass any field its class gained since it was saved.
+
+    The checkpoints' ``.metadata`` holds pickled ``_StorageInfo`` objects, and
+    pickle restores ``__dict__`` verbatim -- so a field added to the class after
+    the checkpoint was written is simply absent, and a newer torch reading an
+    older checkpoint dies with AttributeError (``transform_descriptors`` is the
+    one that bites here). Fill from the field's declared default, falling back to
+    None for fields that have none.
+    """
+    cls = type(obj)
+    if not dataclasses.is_dataclass(cls):
+        return
+    for field in dataclasses.fields(cls):
+        if field.name in vars(obj):
+            continue
+        if field.default is not dataclasses.MISSING:
+            value = field.default
+        elif field.default_factory is not dataclasses.MISSING:  # type: ignore[misc]
+            value = field.default_factory()  # type: ignore[misc]
+        else:
+            # transform_descriptors is a sequence torch iterates over; None would
+            # crash differently. An empty tuple means "no transforms applied".
+            value = () if "descriptors" in field.name else None
+        try:
+            setattr(obj, field.name, value)
+        except AttributeError:  # slotted dataclass; nothing we can do, keep going
+            print(
+                f"  warning: could not backfill {cls.__name__}.{field.name}",
+                file=sys.stderr,
+            )
+
+
+class CompatFileSystemReader(FileSystemReader):
+    """FileSystemReader that tolerates checkpoints from an older torch.
+
+    ``_load_state_dict`` calls ``read_metadata()`` itself, so patching here
+    covers both our own read and the one inside the loader.
+    """
+
+    def read_metadata(self):  # noqa: D102 - inherited contract
+        metadata = super().read_metadata()
+        for storage_info in getattr(metadata, "storage_data", {}).values():
+            _backfill_dataclass(storage_info)
+        return metadata
+
 
 ROOT = "/weka/dfive-default/olmoearth_pretrain/checkpoints/gabrielt"
 PARENT_RUN = "regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsamp_psuniform"
@@ -58,7 +107,7 @@ def load_student(step_dir: Path) -> dict[str, torch.Tensor]:
         raise SystemExit(
             "this torch has no _load_state_dict_from_keys; needs torch >= 2.2"
         )
-    reader = FileSystemReader(find_dcp_dir(step_dir))
+    reader = CompatFileSystemReader(find_dcp_dir(step_dir))
     all_keys = list(reader.read_metadata().state_dict_metadata)
     # Model tensors are normally under a "model." prefix (the optimizer's live
     # under "optim."), but do not hard-depend on that -- just exclude optim.
