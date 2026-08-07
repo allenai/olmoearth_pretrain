@@ -239,13 +239,16 @@ def convert(
     # Any Pad transform must cover the newly added modalities too, otherwise
     # S1/SCL/Landsat keep their native size and the shape check in the eval
     # dataset trips (for SCL, the mask would be misaligned with the padded
-    # imagery).
+    # imagery). scl/landsat are OPTIONAL inputs (required: false), absent on
+    # windows without their layers -- and rslearn selectors hard-fail on
+    # missing keys unless skip_missing is set, so it must be.
     for transform in init_args.get("default_config", {}).get("transforms", []):
         selectors = transform.get("init_args", {}).get("image_selectors")
         if selectors and "sentinel2_l2a" in selectors:
             for extra in ("sentinel1", "scl", "landsat"):
                 if extra not in selectors:
                     selectors.insert(selectors.index("sentinel2_l2a") + 1, extra)
+            transform["init_args"]["skip_missing"] = True
 
     return out
 

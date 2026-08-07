@@ -170,3 +170,4 @@ data:
           - sentinel1
           - target/eval_task/classes
           - target/eval_task/valid
+          skip_missing: true
