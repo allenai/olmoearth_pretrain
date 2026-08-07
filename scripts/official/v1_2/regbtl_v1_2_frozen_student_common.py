@@ -54,7 +54,7 @@ import logging
 from dataclasses import replace
 
 from olmo_core.optim.scheduler import ConstantWithWarmup
-from regbtl_v1_2_proj_common import add_student_lr_group
+from regbtl_v1_2_proj_common import STUDENT_LR_GROUP, add_student_lr_group
 
 from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
@@ -75,12 +75,24 @@ PARENT_CHECKPOINT = (
 # 1e-4 with fresh Adam moments.
 REWARM_WARMUP_STEPS = 2000
 
+# ``supboth`` arms hang per-prefix supervision heads off the STUDENT, at
+# ``LatentMIM.projection_supervision_heads`` (latent_mim.py). Those are student
+# parameters in every sense but are not matched by proj_common's
+# STUDENT_PARAM_GLOBS (``*register_projection*`` / ``*register_back_projections*``),
+# so without this the freeze would pin them while the projection they read from
+# kept moving -- turning the supervision term into a stale-head regulariser
+# pulling against the student. Pass to ``extra_trainable_globs`` on supboth arms
+# ONLY: OptimConfig.build_groups is strict, so a glob matching nothing (as this
+# one would on a sup768 arm) raises.
+STUDENT_SUPERVISION_HEAD_GLOB = "*projection_supervision_heads*"
+
 
 def freeze_all_but_student(
     config: LatentMIMTrainModuleConfig,
     *,
     student_lr: float,
     warmup_steps: int,
+    extra_trainable_globs: list[str] | None = None,
 ) -> LatentMIMTrainModuleConfig:
     """Zero the shared LR and give the student its own group and schedule.
 
@@ -92,6 +104,12 @@ def freeze_all_but_student(
             rejects None outright. Pass 1 for "no warmup" -- that puts step 0 at
             lr 0 and every step after at full LR, which is what the floor arm
             wants since it is already sitting at this LR.
+        extra_trainable_globs: Additional parameter globs to train alongside the
+            student, appended to the student's group. For supboth arms, pass
+            ``[STUDENT_SUPERVISION_HEAD_GLOB]`` so the student's own supervision
+            heads keep training. Must match at least one parameter --
+            ``OptimConfig.build_groups`` is strict -- so do not pass the head
+            glob on a sup768 arm, which has no such heads.
 
     Returns:
         The modified config.
@@ -110,7 +128,7 @@ def freeze_all_but_student(
     # meaningless for a group pinned at 0 either way; the student's own schedule
     # is a separate override and keeps its warmup.
     config.scheduler = replace(config.scheduler, warmup=0)
-    return add_student_lr_group(
+    add_student_lr_group(
         config,
         lr=student_lr,
         # Constant, not cosine: with a stationary target the student is trying to
@@ -118,3 +136,14 @@ def freeze_all_but_student(
         # length would just re-impose the LR floor this run exists to escape.
         scheduler=ConstantWithWarmup(warmup_steps=warmup_steps, units="steps"),
     )
+    if extra_trainable_globs:
+        for override in config.optim_config.group_overrides or []:
+            if override.opts.get("group_name") == STUDENT_LR_GROUP:
+                override.params = [*override.params, *extra_trainable_globs]
+                break
+        else:
+            raise RuntimeError(
+                "no student group override to extend; add_student_lr_group() "
+                "should have created one"
+            )
+    return config
