@@ -77,10 +77,11 @@ rslearn dataset prepare     --root $DS_PATH --group pastis_tessera_v2 --workers 
     --enabled-layers sentinel2_l2a_all,sentinel1_ascending_all,sentinel1_descending_all
 rslearn dataset materialize ... (same flags, --retry-backoff-seconds 60)
 # or fan out with scripts/tools/launch_year_aligned_prepare.sh (LAYER_SET=tessera_v2_fetch)
-# 3. Download student weights (HF geotessera/TESSERA-V-2.0-2B-M -> ckpt/student_medium.pt), then:
+# 3. Student weights (HF geotessera/TESSERA-V-2.0-2B-L); already on weka at
+#    /weka/dfive-default/helios/models/tessera_v2/ckpt/student_large.pt
 python -m olmoearth_pretrain.evals.datasets.tessera_v2_export infer \
     --ds_path $DS_PATH --dataset pastis_rslearn \
-    --checkpoint_path <student_medium.pt> --model_size medium
+    --checkpoint_path $CKPT --model_size large
 # 4. Eval (identical probes/splits/metrics as AEF / tessera / tessera_v11):
 python -m olmoearth_pretrain.internal.embedding_eval_sweep --cluster=... --model=tessera_v2_precomputed
 ```
@@ -133,6 +134,7 @@ Runbook (weka-side; `$NAME` is `africa_crop_mask_year_aligned` or
 STAGE=/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/$NAME
 EVAL=/weka/dfive-default/olmoearth/eval_datasets/$NAME
 EXPORT="python -m olmoearth_pretrain.evals.datasets.tessera_v2_export"
+CKPT=/weka/dfive-default/helios/models/tessera_v2/ckpt/student_large.pt
 
 # 1. Write the standalone fetch config (the *_all layers stay OUT of the
 #    dataset's own config.json; prepare/materialize take them via --config).
@@ -144,15 +146,15 @@ $EXPORT create_windows --ds_path $STAGE --dataset $NAME
 
 # 3. Fetch a year of scenes for THAT GROUP ONLY.
 LAUNCH=1 LAYER_SET=tessera_v2_fetch GROUP=${NAME%_year_aligned}_tessera_v2 \
-    ONLY=$NAME HOSTS=... scripts/tools/launch_year_aligned_prepare.sh
-LAUNCH=1 COMMAND=materialize RETRY_BACKOFF=60 LAYER_SET=tessera_v2_fetch \
+    ONLY=$NAME HOSTS=<host>,<host> scripts/tools/launch_year_aligned_prepare.sh
+LAUNCH=1 COMMAND=materialize LAYER_SET=tessera_v2_fetch \
     GROUP=${NAME%_year_aligned}_tessera_v2 ONLY=$NAME HOSTS=... \
     scripts/tools/launch_year_aligned_prepare.sh
 
 # 4. Inference: read scenes from staging, write the layer + manifest into the
 #    ingested copy model.yaml actually points at (same windows, same grids).
 $EXPORT infer --ds_path $STAGE --eval_ds_path $EVAL --dataset $NAME \
-    --checkpoint_path <student_medium.pt> --model_size medium
+    --checkpoint_path $CKPT --model_size large
 
 # 5. Wire the layer up, then re-stamp provenance and commit.
 python scripts/tools/wire_embedding_modalities.py \
@@ -166,9 +168,13 @@ python -m olmoearth_pretrain.internal.embedding_eval_sweep \
 
 Notes, in rough order of how likely they are to bite:
 
-- **Use the same student size PASTIS used** (read `product_version` out of
-  `.../pastis_rslearn/embedding_materializer_manifest_tessera_v2.json`) or the
-  three datasets are not one Tessera column.
+- **The student is `large`**, at
+  `/weka/dfive-default/helios/models/tessera_v2/ckpt/student_large.pt`. That is
+  what PASTIS was run with (`product_version: v2-large` in
+  `/weka/dfive-default/rslearn-eai/datasets/pastis_rslearn/embedding_materializer_manifest_tessera_v2.json`
+  — note the manifest lives on the rslearn-eai source, not the ingested copy),
+  and every dataset must match it or the three are not one Tessera column.
+  `--model_size` defaults to `medium`, so pass it explicitly.
 - **S2 `max_matches` is 300 here, 150 for PASTIS.** The layers sort `datetime`
   ascending, so hitting the cap keeps the *earliest* N scenes and drops the end
   of the year — a seasonal loss, not random attrition. Measured 2026-08-06
