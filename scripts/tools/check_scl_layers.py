@@ -146,7 +146,13 @@ def main() -> int:
     args = parser.parse_args()
 
     root = Path(args.ds_path)
-    window_dirs = [p for p in (root / "windows").glob("*/*") if p.is_dir()]
+    # Exclude tessera_v2 fetch groups (no monthly layers, not eval windows);
+    # same exclusion as setup_extra_layers.py.
+    window_dirs = [
+        p
+        for p in (root / "windows").glob("*/*")
+        if p.is_dir() and not p.parent.name.endswith("_tessera_v2")
+    ]
     if not window_dirs:
         print(f"no windows under {root}/windows")
         return 1
