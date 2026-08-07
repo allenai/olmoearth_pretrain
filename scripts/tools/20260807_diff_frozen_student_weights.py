@@ -241,23 +241,36 @@ def main() -> None:
 
     drift_rewarm = compare(sd["parent"], sd["rewarm(1e-4)"], "parent -> rewarm (1e-4)")
     drift_floor = compare(sd["parent"], sd["floor(1e-5)"], "parent -> floor (1e-5)")
-    compare(sd["floor(1e-5)"], sd["rewarm(1e-4)"], "floor -> rewarm (arm vs arm)")
+    drift_arms = compare(
+        sd["floor(1e-5)"], sd["rewarm(1e-4)"], "floor -> rewarm (arm vs arm)"
+    )
 
     print("\n=== verdict")
     print(f"drift(rewarm) = {drift_rewarm:.3e}   drift(floor) = {drift_floor:.3e}")
-    if max(drift_rewarm, drift_floor) < 1e-6:
+    print(f"arm vs arm    = {drift_arms:.3e}")
+    # Deliberately NOT keyed on drift_rewarm/drift_floor ~ 10. Adam's per-step
+    # displacement is ~lr regardless of gradient scale, so displacement grows
+    # like lr*N only while the run is on a coherent descent trajectory. Once it
+    # equilibrates in a basin, displacement saturates at a radius set by
+    # curvature against gradient noise and scales like sqrt(lr) or weaker -- so a
+    # ratio well under 10 is what a CONVERGED student looks like, not a bug. The
+    # question this script can actually answer is simply: did the weights move,
+    # and did the two arms end up in different places?
+    if max(drift_rewarm, drift_floor) < 1e-4:
         print("  NOT TRAINING: neither student moved. The freeze is too aggressive.")
-    elif drift_floor > 0 and drift_rewarm / drift_floor > 3:
+    elif drift_arms < 1e-4:
         print(
-            f"  TRAINING NORMALLY: rewarm moved {drift_rewarm / drift_floor:.1f}x "
-            "more, consistent with its 10x LR. The flat loss is a real finding --"
-            " the student is converged against this frozen teacher."
+            "  LR NOT APPLIED: the arms are in the same place despite different "
+            "configured LRs. Check the student param group reaches the optimizer."
         )
     else:
         print(
-            f"  SUSPICIOUS: ratio {drift_rewarm / max(drift_floor, 1e-12):.2f} does "
-            "not reflect the 10x LR gap. Check that the student param group's LR "
-            "is reaching the optimizer."
+            f"  TRAINING, AND THE ARMS DIVERGED ({drift_arms:.1%} apart). The "
+            "student and its per-group LR are both live.\n"
+            "  Now compare against the loss: if the arms are this far apart in "
+            "weights while their\n  distillation loss agrees to ~1e-5, the student "
+            "is wandering in flat directions of\n  the objective -- i.e. converged, "
+            "and more optimisation will not buy retention."
         )
 
 
