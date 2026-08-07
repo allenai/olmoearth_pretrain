@@ -68,11 +68,38 @@ def _backfill_dataclass(obj: object) -> None:
             )
 
 
-class CompatFileSystemReader(FileSystemReader):
-    """FileSystemReader that tolerates checkpoints from an older torch.
+def install_storage_info_compat() -> str:
+    """Give ``_StorageInfo`` class-level defaults for fields old pickles lack.
 
-    ``_load_state_dict`` calls ``read_metadata()`` itself, so patching here
-    covers both our own read and the one inside the loader.
+    Patching the unpickled instances is not enough on its own: the loader keeps
+    its own reference to the storage_data it read, and ``read_data`` resolves
+    ``item_md`` from that, so an instance-level fix applied to our copy never
+    reaches the objects it actually touches. A CLASS attribute does, because
+    normal attribute lookup falls back to it for every instance whose __dict__
+    lacks the field -- which is exactly what an older pickle produces.
+
+    Returns a one-line description of what it did, for the startup banner.
+    """
+    from torch.distributed.checkpoint import filesystem as fs_module
+
+    cls = getattr(fs_module, "_StorageInfo", None)
+    if cls is None:
+        return "compat: no _StorageInfo to patch"
+    if getattr(cls, "__slots__", None):
+        return "compat: _StorageInfo is slotted, cannot add class defaults"
+    added = []
+    for name, default in (("transform_descriptors", ()),):
+        if not hasattr(cls, name):
+            setattr(cls, name, default)
+            added.append(name)
+    return f"compat: added class defaults {added}" if added else "compat: not needed"
+
+
+class CompatFileSystemReader(FileSystemReader):
+    """FileSystemReader that also backfills the metadata it reads.
+
+    Belt and braces alongside :func:`install_storage_info_compat` -- that one
+    handles attribute lookup, this one fixes up any instance we can reach.
     """
 
     def read_metadata(self):  # noqa: D102 - inherited contract
@@ -163,6 +190,8 @@ def main() -> None:
     p.add_argument("--step", type=int, default=5000, help="step of the two arms")
     p.add_argument("--parent-step", type=int, default=667200)
     args = p.parse_args()
+
+    print(f"torch {torch.__version__} | {install_storage_info_compat()}")
 
     root = Path(args.root)
     paths = {
