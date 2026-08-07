@@ -551,6 +551,9 @@ def main() -> int:
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout
     )
+    # rslearn logs one INFO line per items.json save -- 162k lines across the
+    # eval datasets; this script's own progress lines cover it.
+    logging.getLogger("rslearn.dataset.storage.file").setLevel(logging.WARNING)
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -628,7 +631,10 @@ def main() -> int:
         if bool(args.hosts) == bool(args.clusters):
             parser.error("launch needs exactly one of --hosts or --clusters")
         if not args.go:
-            logger.info("DRY RUN -- pass --go to actually submit Beaker jobs.")
+            logger.info(
+                "DRY RUN -- pass --go to actually write changes and submit "
+                "Beaker jobs. Nothing is modified or launched without it."
+            )
     hosts = [h for h in (args.hosts or "").replace(",", " ").split() if h]
     clusters = [c for c in (args.clusters or "").replace(",", " ").split() if c]
 
@@ -645,7 +651,23 @@ def main() -> int:
             continue
 
         if do_apply:
-            apply_dataset(ds_path, group, target_sets, args.copy_workers)
+            # In `run` mode --go gates the weka writes too, so a dry run is
+            # fully read-only; the explicit `apply` command always executes.
+            if args.command == "apply" or args.go:
+                apply_dataset(ds_path, group, target_sets, args.copy_workers)
+            else:
+                config = json.loads((ds_path / "config.json").read_text())
+                for layer_set in target_sets:
+                    try:
+                        _, added, present = config_with_layers(config, layer_set)
+                    except ValueError as e:
+                        print(f"  [{layer_set}] BLOCKED -- {e}")
+                        continue
+                    print(
+                        f"  DRY RUN [{layer_set}]: would add {len(added)} config "
+                        f"layers ({len(present)} present)"
+                        + (" and copy window items" if layer_set == "scl" else "")
+                    )
 
         if do_launch:
             windows = list_windows(ds_path, group)
