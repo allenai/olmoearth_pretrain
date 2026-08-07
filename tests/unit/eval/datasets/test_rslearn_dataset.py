@@ -28,6 +28,7 @@ def build_dataset(
     sample_size: int | None = None,
     model_dataset: list | None = None,
     scl_cloud_mask: bool = False,
+    scl_cloud_classes: tuple[int, ...] | None = None,
 ) -> RslearnToOlmoEarthDataset:
     """Build a wrapper with no underlying model dataset (transform-only tests)."""
     return RslearnToOlmoEarthDataset(
@@ -39,6 +40,7 @@ def build_dataset(
         tile_samples=tile_samples,
         sample_size=sample_size,
         scl_cloud_mask=scl_cloud_mask,
+        scl_cloud_classes=scl_cloud_classes,
     )
 
 
@@ -381,6 +383,17 @@ class TestSclCloudMask:
         assert (mask[5, 6, 1] == MaskValue.MISSING.value).all()
         assert (mask[2, 3, 1] == MaskValue.ONLINE_ENCODER.value).all()
         assert (mask[0, 0] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_custom_cloud_classes_narrow_the_mask(self) -> None:
+        """The cloudless policy (8, 9) leaves shadow (3) pixels unmasked."""
+        ds = build_dataset(scl_cloud_mask=True, scl_cloud_classes=(8, 9))
+        input_dict, target = make_sample(8, {(4, 4): 1})
+        input_dict["scl"] = make_scl(8, 2, {(2, 3, 0): 9, (5, 6, 0): 3})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask[2, 3, 0] == MaskValue.MISSING.value).all()
+        # Shadow is not in the cloudless class set, so it stays visible.
+        assert (mask[5, 6, 0] == MaskValue.ONLINE_ENCODER.value).all()
 
     def test_fully_cloudy_pixel_left_unmasked(self) -> None:
         """A pixel cloudy at every timestep keeps all timesteps."""

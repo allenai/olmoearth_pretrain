@@ -22,6 +22,7 @@ from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.datasets.rslearn_dataset import SCL_CLOUDLESS_CLASSES
 from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
 from olmoearth_pretrain.internal.experiment import (
@@ -1411,6 +1412,7 @@ def _aef_ps1_task(
     window_size: int = 16,
     input_modalities: list[str] | None = None,
     scl_cloud_mask: bool = False,
+    scl_cloud_classes: tuple[int, ...] | None = None,
 ) -> DownstreamTaskConfig:
     """AEF supplemental task under the per-pixel embedding-product convention.
 
@@ -1442,6 +1444,7 @@ def _aef_ps1_task(
         use_center_token=True,
         label_at_center_pixel=True,
         scl_cloud_mask=scl_cloud_mask,
+        scl_cloud_classes=scl_cloud_classes,
     )
 
 
@@ -1624,6 +1627,36 @@ for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
             for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
         }
     )
+    # "Cloudless" siblings: same mechanism, narrower policy -- only
+    # unambiguous cloud (SCL 8 medium / 9 high probability) is masked, leaving
+    # shadow/cirrus/nodata in place. With the plain and _sclmask variants this
+    # gives a three-point masking-aggressiveness ladder per task.
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_cloudless": _aef_ps1_task(
+                name,
+                EvalMode.LINEAR_PROBE,
+                window_size=16,
+                input_modalities=_modalities,
+                scl_cloud_mask=True,
+                scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_cloudless_knn": _aef_ps1_task(
+                name,
+                EvalMode.KNN,
+                window_size=16,
+                input_modalities=_modalities,
+                scl_cloud_mask=True,
+                scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
 # pastis_year_aligned keeps the pastis conventions (128x128 stored samples,
 # tile_samples, mIoU) rather than the AEF center-pixel ones, so it reuses the
 # pastis helper with its dataset name overridden.
@@ -1653,6 +1686,22 @@ EMBEDDING_EVAL_TASKS.update(
             ),
             dataset="pastis_year_aligned",
             scl_cloud_mask=True,
+        ),
+        # "Cloudless" siblings (see the _cloudless comment above).
+        "pastis_year_aligned_ws16_ps1_sentinel2_cloudless": replace(
+            _pastis_ps1_task([Modality.SENTINEL2_L2A.name], window_size=16),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_cloudless": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
         ),
     }
 )

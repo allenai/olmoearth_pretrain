@@ -66,8 +66,14 @@ SCL_INPUT_NAME = "scl"
 # SCL classes treated as cloud-contaminated: 0 nodata, 1 saturated/defective,
 # 3 cloud shadow, 8 cloud medium probability, 9 cloud high probability,
 # 10 thin cirrus. Everything else (vegetation, bare, water, unclassified,
-# snow) is real surface signal and stays.
+# snow) is real surface signal and stays. The default for scl_cloud_mask;
+# override per task with scl_cloud_classes.
 SCL_CLOUD_CLASSES = (0, 1, 3, 8, 9, 10)
+
+# The narrower "cloudless" policy: unambiguous cloud only (medium + high
+# probability), leaving shadow/cirrus/nodata in place. Sits between unmasked
+# and SCL_CLOUD_CLASSES on the masking-aggressiveness ladder.
+SCL_CLOUDLESS_CLASSES = (8, 9)
 
 
 def get_timestamps(
@@ -180,6 +186,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         tile_samples: bool = False,
         sample_size: int | None = None,
         scl_cloud_mask: bool = False,
+        scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
@@ -231,6 +238,8 @@ class RslearnToOlmoEarthDataset(Dataset):
                 entirely; this also keeps zero-padding pixels, whose SCL is
                 0 everywhere, behaving as before). Windows without the scl
                 input are left unmasked with a once-per-run warning.
+            scl_cloud_classes: SCL classes to treat as cloud when
+                scl_cloud_mask is set. None uses SCL_CLOUD_CLASSES.
         """
         if (
             not norm_stats_from_pretrained
@@ -261,6 +270,11 @@ class RslearnToOlmoEarthDataset(Dataset):
         self._warned_synthesized_timestamps = False
 
         self.scl_cloud_mask = scl_cloud_mask
+        self.scl_cloud_classes = (
+            tuple(scl_cloud_classes)
+            if scl_cloud_classes is not None
+            else SCL_CLOUD_CLASSES
+        )
         self._warned_scl_mask = False
 
         # Target parsing config - derived from Task structure
@@ -344,6 +358,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         tile_samples: bool = False,
         sample_size: int | None = None,
         scl_cloud_mask: bool = False,
+        scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -381,6 +396,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             sample_size: Stored sample height/width, required with tile_samples.
             scl_cloud_mask: Mask cloudy S2 pixel-timesteps MISSING using the
                 optional "scl" input (see RslearnToOlmoEarthDataset).
+            scl_cloud_classes: SCL classes to treat as cloud (None =
+                SCL_CLOUD_CLASSES).
         """
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
@@ -443,6 +460,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             tile_samples=tile_samples,
             sample_size=sample_size,
             scl_cloud_mask=scl_cloud_mask,
+            scl_cloud_classes=scl_cloud_classes,
         )
 
     @staticmethod
@@ -732,7 +750,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             )
             return
 
-        cloudy = np.isin(scl, SCL_CLOUD_CLASSES)
+        cloudy = np.isin(scl, self.scl_cloud_classes)
         # Never blank a pixel entirely: a pixel cloudy at every timestep keeps
         # all of them (better a cloudy token than none, and zero-padding
         # pixels -- SCL 0 everywhere -- keep behaving exactly as unmasked).
@@ -897,6 +915,7 @@ def from_registry_entry(
     label_at_center_pixel: bool = False,
     tile_samples: bool = False,
     scl_cloud_mask: bool = False,
+    scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -933,6 +952,8 @@ def from_registry_entry(
             the registry entry's window_size (see RslearnToOlmoEarthDataset).
         scl_cloud_mask: Mask cloudy S2 pixel-timesteps MISSING using the
             optional "scl" input (see RslearnToOlmoEarthDataset).
+        scl_cloud_classes: SCL classes to treat as cloud (None =
+            SCL_CLOUD_CLASSES).
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -1048,4 +1069,5 @@ def from_registry_entry(
         tile_samples=tile_samples,
         sample_size=entry.window_size if tile_samples else None,
         scl_cloud_mask=scl_cloud_mask,
+        scl_cloud_classes=scl_cloud_classes,
     )

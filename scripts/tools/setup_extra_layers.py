@@ -609,9 +609,19 @@ def main() -> int:
     parser.add_argument(
         "--copy_workers", type=int, default=32, help="Items-copy threads."
     )
-    # Launch targeting: hosts round-robin, one job per dataset x layer set.
-    # Host-pinned jobs reserve no GPU.
+    # Launch targeting: hosts round-robin, one job per dataset x layer set
+    # (times --jobs_per_dataset). Host-pinned jobs reserve no GPU.
     parser.add_argument("--hosts", default=None, help="Comma-separated Beaker hosts.")
+    parser.add_argument(
+        "--jobs_per_dataset",
+        type=int,
+        default=1,
+        help="Identical jobs per dataset x layer set, rotated across hosts. "
+        "Effective for MATERIALIZE: rslearn shuffles each job's window order, "
+        "so concurrent jobs work mostly-disjoint windows and skip completed "
+        "ones cheaply (some duplicated work near the tail). Near-useless for "
+        "prepare, which is bound by per-account rate limits, not workers.",
+    )
     parser.add_argument("--image", default=DEFAULT_IMAGE)
     parser.add_argument(
         "--priority",
@@ -699,12 +709,13 @@ def main() -> int:
                     print(f"  SKIP {layer_set} -- not ready: {dict(states)}; run apply")
                     failures += 1
                     continue
-                host = hosts[launched % len(hosts)]
-                if not launch_job(
-                    beaker_client, ds_path, stage, layer_set, groups, host, args
-                ):
-                    failures += 1
-                launched += 1
+                for _ in range(max(1, args.jobs_per_dataset)):
+                    host = hosts[launched % len(hosts)]
+                    if not launch_job(
+                        beaker_client, ds_path, stage, layer_set, groups, host, args
+                    ):
+                        failures += 1
+                    launched += 1
 
     if args.command == "plan":
         print(
