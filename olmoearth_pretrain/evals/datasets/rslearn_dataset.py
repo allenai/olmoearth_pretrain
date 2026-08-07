@@ -276,6 +276,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             else SCL_CLOUD_CLASSES
         )
         self._warned_scl_mask = False
+        self._warned_ragged = False
 
         # Target parsing config - derived from Task structure
         self.target_task_name = target_task_name  # For MultiTask, e.g., "segment"
@@ -618,10 +619,22 @@ class RslearnToOlmoEarthDataset(Dataset):
         elif self.window_size is not None or self.label_at_center_pixel:
             crop_rows, crop_cols, label = self._label_crop_slices(label)
 
+        # First pass: read every present modality (crop, dB-convert), keeping
+        # the raw arrays so ragged imagery can be aligned onto a shared
+        # temporal axis before normalization.
+        raw: dict[str, np.ndarray] = {}
+        absent: list[str] = []
         for modality in self.input_modalities:
-            if modality not in input_dict:
-                raise ValueError(f"Modality {modality} not found in dataset inputs")
-            x = input_dict[modality]
+            x = input_dict.get(modality)
+            if x is None:
+                # Optional imagery (landsat) is simply absent on windows with
+                # no coverage; it is represented as all-MISSING below. A
+                # precomputed embedding product keeps the loud failure -- a
+                # coverage gap there must not silently become a zero vector.
+                if modality in EMBEDDING_PRODUCT_MODALITIES:
+                    raise ValueError(f"Modality {modality} not found in dataset inputs")
+                absent.append(modality)
+                continue
             if not isinstance(x, RasterImage):
                 raise TypeError(
                     f"Input modality '{modality}' must be RasterImage, got {type(x).__name__}"
@@ -633,16 +646,55 @@ class RslearnToOlmoEarthDataset(Dataset):
             img = x.image
             if isinstance(img, torch.Tensor):
                 img = img.numpy()
-            x = rearrange(img, "c t h w -> h w t c")
+            arr = rearrange(img, "c t h w -> h w t c")
             if crop_rows is not None and crop_cols is not None:
-                x = x[crop_rows, crop_cols]
-
-            if sample_timesteps is None:
-                sample_timesteps = x.shape[2]
+                arr = arr[crop_rows, crop_cols]
 
             if modality == Modality.SENTINEL1.name:
-                x = convert_to_db(x)
+                arr = convert_to_db(arr)
+            raw[modality] = arr
 
+        if not raw:
+            raise ValueError("No input modalities present in sample")
+
+        # Canonical temporal axis: the longest present imagery modality,
+        # preferring one with stored acquisition times (the S2/S1 monthlies
+        # in practice -- required inputs, so complete on surviving windows).
+        # Embedding products are exempt from alignment: they are consumed
+        # exactly as stored (typically T=1 annual) and bypass time encodings.
+        imagery = [m for m in raw if m not in EMBEDDING_PRODUCT_MODALITIES]
+        canonical = max(
+            imagery or raw,
+            key=lambda m: (raw[m].shape[2], m in stored_time_ranges),
+        )
+        canonical_t = raw[canonical].shape[2]
+        sample_timesteps = canonical_t
+        height, width = raw[canonical].shape[:2]
+
+        # Slots each ragged modality is missing on the canonical axis; they
+        # get MaskValue.MISSING after the masked sample is built.
+        ragged_missing: dict[str, list[int]] = {}
+        for modality in absent:
+            n_bands = len(Modality.get(modality).band_order)
+            raw[modality] = np.zeros(
+                (height, width, canonical_t, n_bands), dtype=np.float32
+            )
+            ragged_missing[modality] = list(range(canonical_t))
+            self._warn_ragged_once(f"'{modality}' absent from sample")
+        for modality in imagery:
+            if raw[modality].shape[2] == canonical_t:
+                continue
+            raw[modality], missing = self._align_to_canonical(
+                modality,
+                raw[modality],
+                stored_time_ranges.get(modality),
+                stored_time_ranges.get(canonical),
+                canonical_t,
+            )
+            ragged_missing[modality] = missing
+
+        for modality in self.input_modalities:
+            x = raw[modality]
             if modality in EMBEDDING_PRODUCT_MODALITIES:
                 # Precomputed embedding products are consumed exactly as
                 # stored; imagery normalization does not apply, and dataset
@@ -672,6 +724,17 @@ class RslearnToOlmoEarthDataset(Dataset):
         olmoearth_sample = OlmoEarthSample(**sample_dict)
         masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(olmoearth_sample)
 
+        # Slots a ragged/absent modality has no observation for are MISSING,
+        # so the encoder ignores them instead of reading zeros as data.
+        for modality, slots in ragged_missing.items():
+            if not slots:
+                continue
+            mask = getattr(
+                masked_sample,
+                MaskedOlmoEarthSample.get_masked_modality_name(modality),
+            )
+            mask[:, :, slots, :] = MaskValue.MISSING.value
+
         if self.scl_cloud_mask and Modality.SENTINEL2_L2A.name in self.input_modalities:
             self._apply_scl_cloud_mask(masked_sample, input_dict, crop_rows, crop_cols)
 
@@ -699,6 +762,72 @@ class RslearnToOlmoEarthDataset(Dataset):
         if not self._warned_scl_mask:
             logger.warning(f"scl_cloud_mask: {reason}; leaving S2 unmasked")
             self._warned_scl_mask = True
+
+    def _warn_ragged_once(self, reason: str) -> None:
+        """Warn about ragged/absent optional imagery once per dataset instance."""
+        if not self._warned_ragged:
+            logger.warning(
+                f"ragged imagery: {reason}; representing missing timesteps as "
+                "MaskValue.MISSING (expected for optional inputs with coverage "
+                "gaps, e.g. landsat)"
+            )
+            self._warned_ragged = True
+
+    def _align_to_canonical(
+        self,
+        modality: str,
+        arr: np.ndarray,
+        ranges: list[tuple[datetime, datetime]] | None,
+        canonical_ranges: list[tuple[datetime, datetime]] | None,
+        canonical_t: int,
+    ) -> tuple[np.ndarray, list[int]]:
+        """Scatter a ragged modality's timesteps onto the canonical time axis.
+
+        A modality with coverage gaps (landsat at a 16-day revisit misses
+        whole months) arrives with T < canonical_t, and its timestep i is NOT
+        month i -- consuming it positionally would desynchronize the data
+        from the shared timestamps tensor and its own mask. Each timestep is
+        placed into the canonical slot whose acquisition period it belongs to
+        (nearest period start, within half a period), and unfilled slots are
+        reported for MISSING-masking.
+
+        Args:
+            modality: the modality name (for the warning).
+            arr: (H, W, T, C) with T < canonical_t.
+            ranges: the modality's stored acquisition ranges (len T), if any.
+            canonical_ranges: the canonical modality's ranges (len
+                canonical_t), if any.
+            canonical_t: the shared temporal length.
+
+        Returns:
+            ((H, W, canonical_t, C) array, canonical slots left unfilled).
+        """
+        height, width, t, channels = arr.shape
+        aligned = np.zeros((height, width, canonical_t, channels), dtype=arr.dtype)
+        filled: set[int] = set()
+        if ranges and canonical_ranges and len(canonical_ranges) == canonical_t:
+            for i, (start, _) in enumerate(ranges):
+                deltas = [
+                    abs((start - c_start).days) for c_start, _ in canonical_ranges
+                ]
+                slot = min(range(canonical_t), key=deltas.__getitem__)
+                if deltas[slot] <= 16 and slot not in filled:
+                    aligned[:, :, slot] = arr[:, :, i]
+                    filled.add(slot)
+            self._warn_ragged_once(
+                f"'{modality}' has {t}/{canonical_t} timesteps; aligned by "
+                "acquisition date"
+            )
+        else:
+            # No dates to align on -- place positionally and mask the tail.
+            # Defensive: the monthly exports always carry acquisition times.
+            aligned[:, :, :t] = arr
+            filled = set(range(t))
+            self._warn_ragged_once(
+                f"'{modality}' has {t}/{canonical_t} timesteps and no "
+                "acquisition dates; padded positionally"
+            )
+        return aligned, sorted(set(range(canonical_t)) - filled)
 
     def _apply_scl_cloud_mask(
         self,

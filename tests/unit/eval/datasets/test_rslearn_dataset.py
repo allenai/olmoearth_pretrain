@@ -29,11 +29,12 @@ def build_dataset(
     model_dataset: list | None = None,
     scl_cloud_mask: bool = False,
     scl_cloud_classes: tuple[int, ...] | None = None,
+    input_modalities: list[str] | None = None,
 ) -> RslearnToOlmoEarthDataset:
     """Build a wrapper with no underlying model dataset (transform-only tests)."""
     return RslearnToOlmoEarthDataset(
         model_dataset=model_dataset,  # type: ignore[arg-type]
-        input_modalities=[S2],
+        input_modalities=input_modalities or [S2],
         target_task_type=target_task_type,
         window_size=window_size,
         label_at_center_pixel=label_at_center_pixel,
@@ -455,3 +456,82 @@ class TestSclCloudMask:
         masked_sample, _ = ds._transform_sample(input_dict, target)
         mask = getattr(masked_sample, self.S2_MASK)
         assert (mask == MaskValue.ONLINE_ENCODER.value).all()
+
+
+LANDSAT = Modality.LANDSAT.name
+NUM_LANDSAT_BANDS = len(Modality.get(LANDSAT).band_order)
+
+
+def monthly_ranges(year: int, months: list[int]) -> list[tuple]:
+    """(start, end) ranges for the given month slots of `year`'s 30-day grid."""
+    jan1 = datetime(year, 1, 1, tzinfo=UTC)
+    return [
+        (jan1 + timedelta(days=30 * m), jan1 + timedelta(days=30 * (m + 1)))
+        for m in months
+    ]
+
+
+class TestRaggedModalities:
+    """Optional imagery with coverage gaps aligns onto the canonical axis."""
+
+    LANDSAT_MASK = MaskedOlmoEarthSample.get_masked_modality_name(LANDSAT)
+    S2_MASK = MaskedOlmoEarthSample.get_masked_modality_name(S2)
+
+    @staticmethod
+    def sample_with_landsat(landsat_months: list[int] | None) -> tuple[dict, dict]:
+        """An S2 (T=12, dated) sample plus a landsat tensor for given months."""
+        input_dict, target = make_sample(8, {(4, 4): 1}, num_timesteps=12)
+        input_dict[S2] = RasterImage(
+            image=input_dict[S2].image, timestamps=monthly_ranges(2020, list(range(12)))
+        )
+        if landsat_months is not None:
+            image = torch.rand(NUM_LANDSAT_BANDS, len(landsat_months), 8, 8)
+            input_dict[LANDSAT] = RasterImage(
+                image=image, timestamps=monthly_ranges(2020, landsat_months)
+            )
+        return input_dict, target
+
+    def test_partial_landsat_aligns_by_date(self) -> None:
+        """Months 2 and 6 missing -> those canonical slots read MISSING."""
+        ds = build_dataset(input_modalities=[S2, LANDSAT])
+        months = [m for m in range(12) if m not in (2, 6)]
+        input_dict, target = self.sample_with_landsat(months)
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+
+        landsat = getattr(masked_sample, LANDSAT)
+        assert landsat.shape == (8, 8, 12, NUM_LANDSAT_BANDS)
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        for slot in range(12):
+            expected = (
+                MaskValue.MISSING.value
+                if slot in (2, 6)
+                else MaskValue.ONLINE_ENCODER.value
+            )
+            assert (mask[:, :, slot] == expected).all(), slot
+        # S2 is untouched and the shared timestamps keep the full year.
+        assert (
+            getattr(masked_sample, self.S2_MASK) == MaskValue.ONLINE_ENCODER.value
+        ).all()
+        assert masked_sample.timestamps.shape == (12, 3)
+
+    def test_absent_landsat_is_all_missing(self) -> None:
+        """A window with no landsat at all yields zeros + an all-MISSING mask."""
+        ds = build_dataset(input_modalities=[S2, LANDSAT])
+        input_dict, target = self.sample_with_landsat(None)
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+
+        landsat = getattr(masked_sample, LANDSAT)
+        assert landsat.shape == (8, 8, 12, NUM_LANDSAT_BANDS)
+        assert (
+            getattr(masked_sample, self.LANDSAT_MASK) == MaskValue.MISSING.value
+        ).all()
+        assert (
+            getattr(masked_sample, self.S2_MASK) == MaskValue.ONLINE_ENCODER.value
+        ).all()
+
+    def test_absent_embedding_product_still_raises(self) -> None:
+        """A precomputed-embedding coverage gap must stay a loud failure."""
+        ds = build_dataset(input_modalities=[S2, Modality.GSE.name])
+        input_dict, target = self.sample_with_landsat(None)
+        with pytest.raises(ValueError, match="not found"):
+            ds._transform_sample(input_dict, target)

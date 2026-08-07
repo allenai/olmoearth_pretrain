@@ -1572,6 +1572,19 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
 _YEAR_ALIGNED_MODALITIES = {
     "sentinel2": [Modality.SENTINEL2_L2A.name],
     "sentinel1_sentinel2": [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+    # The everything-config, and the sensor-fair match to AEF (which fuses
+    # Landsat internally). Landsat's marginal value is read against the
+    # sentinel1_sentinel2 pair; an S2+Landsat pair can be added here if the
+    # S1-free version of that question becomes worth its eval time. Requires
+    # the landsat_moNN layers on weka (setup_extra_layers.py, layer set
+    # `landsat`); the input is optional in every model.yaml, so windows the
+    # Landsat prepare/materialize has not reached run with S2(+S1) only
+    # rather than failing.
+    "sentinel1_sentinel2_landsat": [
+        Modality.SENTINEL1.name,
+        Modality.SENTINEL2_L2A.name,
+        Modality.LANDSAT.name,
+    ],
 }
 for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
     EMBEDDING_EVAL_TASKS.update(
@@ -1697,6 +1710,43 @@ EMBEDDING_EVAL_TASKS.update(
         "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_cloudless": replace(
             _pastis_ps1_task(
                 [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+        ),
+        # Landsat siblings (see the _YEAR_ALIGNED_MODALITIES comment above).
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_sclmask": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_cloudless": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
                 window_size=16,
             ),
             dataset="pastis_year_aligned",
