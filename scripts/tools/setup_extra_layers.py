@@ -31,15 +31,14 @@ Commands:
   readiness, materialize progress, and the next launch stage. Read-only;
   re-run any time to watch progress.
 - ``apply``  -- weka-side config.json edits + the SCL items copy.
-- ``launch`` -- submit one Beaker job per dataset x layer set via rslp's
-  ``common launch_data_materialization_jobs`` (the launcher used by
-  launch_year_aligned_prepare.sh), hosts round-robin. ``--enabled-layers``
-  restricts each job to its layer set, so the existing imagery layers are
-  never rescanned (and pastis's *_all fetch layers cannot trigger); their
-  rasters stay byte-identical to what the published year-aligned numbers
-  were measured on. Prepare jobs get the rate-limited regime defaults
-  (fewer workers, short backoff); materialize the worker-bound ones.
-  Dry-run unless ``--go``.
+- ``launch`` -- submit one Beaker job per dataset x layer set directly via
+  beaker-py (no rslp checkout needed), hosts round-robin, host-pinned so no
+  GPU is reserved. ``--enabled-layers`` restricts each job to its layer
+  set, so the existing imagery layers are never rescanned (and pastis's
+  *_all fetch layers cannot trigger); their rasters stay byte-identical to
+  what the published year-aligned numbers were measured on. Prepare jobs
+  get the rate-limited regime defaults (fewer workers, short backoff);
+  materialize the worker-bound ones. Dry-run unless ``--go``.
 - ``run``    -- apply then launch.
 
 The PRETRAINING rslearn dataset is opt-in and off by default. It uses the
@@ -65,11 +64,15 @@ Usage, from the helios repo root on a weka-mounted machine::
     # include the pretraining dataset (SCL only)
     python scripts/tools/setup_extra_layers.py run --pretrain_ds_path /weka/... --hosts ... --go
 
-rslp is invoked from its own checkout/venv (``--rslp_dir``, default the
-``rslearn_projects`` sibling of this repo). Beaker jobs query data sources
-anonymously (the launcher cannot forward PC_SDK_SUBSCRIPTION_KEY); for
-prepare that caps useful parallelism, so fan out across datasets, not by
-stacking jobs on one dataset (the launcher does not shard).
+Jobs are submitted with beaker-py from this repo's own environment, so the
+launch machine only needs Beaker auth (BEAKER_TOKEN or ~/.beaker/config.yml).
+Experiments get readable names (``<layer_set>-<stage>-<dataset>-<suffix>``).
+SCL jobs query Planetary Computer anonymously; Landsat jobs get AWS
+credentials injected from the workspace secrets named AWS_ACCESS_KEY_ID /
+AWS_SECRET_ACCESS_KEY -- the usgs-landsat bucket is requester-pays, so
+prepare/materialize fail with NoCredentialsError without them. Rate limits
+are per-account either way, so fan out across datasets, not by stacking
+jobs on one dataset (identical jobs do not shard).
 
 After materialize completes (re-run ``plan`` until progress is ~100%):
 
@@ -100,12 +103,12 @@ import argparse
 import json
 import logging
 import random
-import shlex
-import subprocess  # nosec B404
 import sys
+import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 from rslearn.dataset import Dataset
 from rslearn.dataset.window import Window, WindowLayerData
@@ -142,7 +145,14 @@ DATASETS = (
 
 DEFAULT_STAGE_ROOT = "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals"
 DEFAULT_IMAGE = "favyen/rslpomp20260727a"
-DEFAULT_RSLP_DIR = REPO_ROOT.parent / "rslearn_projects"
+
+# Beaker submission settings (mirroring rslp's data-materialization launcher).
+BEAKER_WORKSPACE = "ai2/earth-systems"
+BEAKER_BUDGET = "ai2/atec-olmoearth"
+WEKA_BUCKET = "dfive-default"
+# Workspace secrets holding AWS credentials, injected into Landsat jobs only
+# (the usgs-landsat bucket is requester-pays; SCL reads PC anonymously).
+AWS_SECRET_NAMES = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
 
 # tessera_v2_export.py adds a `<dataset>_tessera_v2` fetch group beside the
 # eval windows (africa_crop_mask and ethiopia_crops carry one). Those windows
@@ -412,12 +422,13 @@ def launch_stage(states: Counter, layer_set: str) -> str | None:
 
 
 def job_command(
+    ds_path: UPath,
     stage: str,
     layer_set: str,
     groups: list[str],
     args: argparse.Namespace,
 ) -> list[str]:
-    """The in-job rslearn command; {ds_path} is substituted by the launcher.
+    """The rslearn command the Beaker job runs.
 
     prepare and materialize are bound by different resources, so they get
     different worker/backoff defaults (see launch_year_aligned_prepare.sh
@@ -435,7 +446,7 @@ def job_command(
         "dataset",
         stage,
         "--root",
-        "{ds_path}",
+        str(ds_path),
         "--workers",
         str(workers),
         "--no-use-initial-job",
@@ -457,50 +468,60 @@ def job_command(
     return command
 
 
+def get_beaker_client() -> Any:
+    """Create the Beaker client (lazy import so plan/apply need no beaker)."""
+    from beaker import Beaker
+
+    return Beaker.from_env(default_workspace=BEAKER_WORKSPACE)
+
+
 def launch_job(
+    beaker_client: Any,
     ds_path: UPath,
     stage: str,
     layer_set: str,
     groups: list[str],
-    host: str | None,
-    clusters: list[str],
+    host: str,
     args: argparse.Namespace,
 ) -> bool:
-    """Submit (or print) one Beaker job for one dataset x layer set."""
-    rslp_python = Path(args.rslp_dir) / ".venv" / "bin" / "python"
-    if not rslp_python.exists():
-        rslp_python = Path("python")
+    """Submit (or print) one host-pinned Beaker job for one dataset x layer set.
 
-    argv = [
-        str(rslp_python),
-        "-m",
-        "rslp.main",
-        "common",
-        "launch_data_materialization_jobs",
-        "--image",
-        args.image,
-        "--ds_path",
-        str(ds_path),
-        f"--priority={args.priority}",
-    ]
-    if host is not None:
-        argv.append(f"--hosts+={host}")
-    else:
-        argv.extend(f"--clusters+={c}" for c in clusters)
-        argv.append("--num_jobs=1")
-    argv += ["--command", json.dumps(job_command(stage, layer_set, groups, args))]
+    Host-pinned jobs reserve no GPU. Landsat jobs carry AWS credentials from
+    the workspace secrets in AWS_SECRET_NAMES (requester-pays bucket).
+    """
+    command = job_command(ds_path, stage, layer_set, groups, args)
+    name = f"{layer_set}-{stage}-{ds_path.name}-{uuid.uuid4().hex[:8]}"
 
     if not args.go:
-        print("\n" + " ".join(shlex.quote(a) for a in argv))
+        print(f"\n  would submit {name} on {host}:\n    {' '.join(command)}")
         return True
-    logger.info(
-        f"  launching {layer_set} {stage} for {ds_path.name} on {host or clusters}"
+
+    from beaker import Constraints, DataMount, DataSource, EnvVar, ExperimentSpec
+
+    env_vars = []
+    if layer_set == "landsat":
+        env_vars = [EnvVar(name=secret, secret=secret) for secret in AWS_SECRET_NAMES]
+    spec = ExperimentSpec.new(
+        budget=BEAKER_BUDGET,
+        task_name=name,
+        beaker_image=args.image,
+        priority=args.priority,
+        command=command,
+        env_vars=env_vars,
+        datasets=[
+            DataMount(
+                source=DataSource(weka=WEKA_BUCKET),
+                mount_path=f"/weka/{WEKA_BUCKET}",
+            )
+        ],
+        constraints=Constraints(hostname=[host]),
+        preemptible=True,
     )
-    # argv is a fixed arg list (no shell); the only variable parts are local
-    # paths and the operator's own CLI values.
-    result = subprocess.run(argv, cwd=args.rslp_dir)  # nosec B603
-    if result.returncode != 0:
-        logger.error(f"  FAILED to launch {ds_path.name}")
+    logger.info(f"  submitting {name} on {host}")
+    try:
+        beaker_client.experiment.create(name, spec)
+    except Exception:
+        logger.exception(f"  FAILED to submit {name}")
         return False
     return True
 
@@ -588,16 +609,9 @@ def main() -> int:
     parser.add_argument(
         "--copy_workers", type=int, default=32, help="Items-copy threads."
     )
-    # Launch targeting: hosts round-robin (one job per dataset x layer set),
-    # or clusters.
+    # Launch targeting: hosts round-robin, one job per dataset x layer set.
+    # Host-pinned jobs reserve no GPU.
     parser.add_argument("--hosts", default=None, help="Comma-separated Beaker hosts.")
-    parser.add_argument(
-        "--clusters",
-        default=None,
-        help="Comma-separated Beaker clusters. NB: cluster launches reserve a "
-        "GPU per job (rslp sets gpuCount=1 when no host is pinned) and "
-        "neither prepare nor materialize touches one -- prefer --hosts.",
-    )
     parser.add_argument("--image", default=DEFAULT_IMAGE)
     parser.add_argument(
         "--priority",
@@ -609,7 +623,6 @@ def main() -> int:
     parser.add_argument("--prepare_workers", type=int, default=16)
     parser.add_argument("--prepare_retry_backoff", type=int, default=2)
     parser.add_argument("--retry_attempts", type=int, default=12)
-    parser.add_argument("--rslp_dir", default=str(DEFAULT_RSLP_DIR))
     parser.add_argument(
         "--go",
         action="store_true",
@@ -627,16 +640,18 @@ def main() -> int:
     do_apply = args.command in ("apply", "run")
     do_launch = args.command in ("launch", "run")
 
+    hosts = [h for h in (args.hosts or "").replace(",", " ").split() if h]
+    beaker_client = None
     if do_launch:
-        if bool(args.hosts) == bool(args.clusters):
-            parser.error("launch needs exactly one of --hosts or --clusters")
+        if not hosts:
+            parser.error("launch needs --hosts")
         if not args.go:
             logger.info(
                 "DRY RUN -- pass --go to actually write changes and submit "
                 "Beaker jobs. Nothing is modified or launched without it."
             )
-    hosts = [h for h in (args.hosts or "").replace(",", " ").split() if h]
-    clusters = [c for c in (args.clusters or "").replace(",", " ").split() if c]
+        else:
+            beaker_client = get_beaker_client()
 
     failures = 0
     launched = 0
@@ -684,9 +699,9 @@ def main() -> int:
                     print(f"  SKIP {layer_set} -- not ready: {dict(states)}; run apply")
                     failures += 1
                     continue
-                host = hosts[launched % len(hosts)] if hosts else None
+                host = hosts[launched % len(hosts)]
                 if not launch_job(
-                    ds_path, stage, layer_set, groups, host, clusters, args
+                    beaker_client, ds_path, stage, layer_set, groups, host, args
                 ):
                     failures += 1
                 launched += 1
