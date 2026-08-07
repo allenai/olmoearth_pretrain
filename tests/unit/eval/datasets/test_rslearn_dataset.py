@@ -9,6 +9,7 @@ import torch
 from rslearn.train.model_context import RasterImage
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
     RslearnToOlmoEarthDataset,
 )
@@ -26,16 +27,21 @@ def build_dataset(
     tile_samples: bool = False,
     sample_size: int | None = None,
     model_dataset: list | None = None,
+    scl_cloud_mask: bool = False,
+    scl_cloud_classes: tuple[int, ...] | None = None,
+    input_modalities: list[str] | None = None,
 ) -> RslearnToOlmoEarthDataset:
     """Build a wrapper with no underlying model dataset (transform-only tests)."""
     return RslearnToOlmoEarthDataset(
         model_dataset=model_dataset,  # type: ignore[arg-type]
-        input_modalities=[S2],
+        input_modalities=input_modalities or [S2],
         target_task_type=target_task_type,
         window_size=window_size,
         label_at_center_pixel=label_at_center_pixel,
         tile_samples=tile_samples,
         sample_size=sample_size,
+        scl_cloud_mask=scl_cloud_mask,
+        scl_cloud_classes=scl_cloud_classes,
     )
 
 
@@ -349,3 +355,183 @@ def test_masked_sample_uses_numpy_free_path() -> None:
     masked_sample, label = ds._transform_sample(input_dict, target)
     s2 = getattr(masked_sample, S2)
     assert isinstance(s2, torch.Tensor) or isinstance(s2, np.ndarray)
+
+
+def make_scl(
+    size: int, num_timesteps: int, cloudy: dict[tuple[int, int, int], int] | None = None
+) -> RasterImage:
+    """Build an SCL RasterImage: vegetation (4) except `cloudy` (h, w, t) -> class."""
+    scl = torch.full((1, num_timesteps, size, size), 4.0)
+    for (row, col, t), value in (cloudy or {}).items():
+        scl[0, t, row, col] = float(value)
+    return RasterImage(image=scl)
+
+
+class TestSclCloudMask:
+    """Tests for scl_cloud_mask through _transform_sample."""
+
+    S2_MASK = MaskedOlmoEarthSample.get_masked_modality_name(S2)
+
+    def test_cloudy_pixel_timestep_masked_missing(self) -> None:
+        """SCL cloud classes become MISSING; clear pixels stay ONLINE_ENCODER."""
+        ds = build_dataset(scl_cloud_mask=True)
+        input_dict, target = make_sample(8, {(4, 4): 1})
+        input_dict["scl"] = make_scl(8, 2, {(2, 3, 0): 9, (5, 6, 1): 3})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask[2, 3, 0] == MaskValue.MISSING.value).all()
+        assert (mask[5, 6, 0] == MaskValue.ONLINE_ENCODER.value).all()
+        assert (mask[5, 6, 1] == MaskValue.MISSING.value).all()
+        assert (mask[2, 3, 1] == MaskValue.ONLINE_ENCODER.value).all()
+        assert (mask[0, 0] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_custom_cloud_classes_narrow_the_mask(self) -> None:
+        """The cloudless policy (8, 9) leaves shadow (3) pixels unmasked."""
+        ds = build_dataset(scl_cloud_mask=True, scl_cloud_classes=(8, 9))
+        input_dict, target = make_sample(8, {(4, 4): 1})
+        input_dict["scl"] = make_scl(8, 2, {(2, 3, 0): 9, (5, 6, 0): 3})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask[2, 3, 0] == MaskValue.MISSING.value).all()
+        # Shadow is not in the cloudless class set, so it stays visible.
+        assert (mask[5, 6, 0] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_fully_cloudy_pixel_left_unmasked(self) -> None:
+        """A pixel cloudy at every timestep keeps all timesteps."""
+        ds = build_dataset(scl_cloud_mask=True)
+        input_dict, target = make_sample(8, {(4, 4): 1})
+        input_dict["scl"] = make_scl(8, 2, {(1, 1, 0): 9, (1, 1, 1): 8})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask[1, 1] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_missing_scl_input_leaves_sample_unmasked(self) -> None:
+        """No scl input -> warn and proceed unmasked, never crash."""
+        ds = build_dataset(scl_cloud_mask=True)
+        input_dict, target = make_sample(8, {(4, 4): 1})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_flag_off_ignores_scl_input(self) -> None:
+        """scl_cloud_mask=False leaves the mask untouched even with SCL present."""
+        ds = build_dataset(scl_cloud_mask=False)
+        input_dict, target = make_sample(8, {(4, 4): 1})
+        input_dict["scl"] = make_scl(8, 2, {(2, 3, 0): 9})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_mask_follows_center_crop(self) -> None:
+        """With window_size, SCL takes the same crop as the imagery."""
+        ds = build_dataset(
+            window_size=16, label_at_center_pixel=True, scl_cloud_mask=True
+        )
+        input_dict, target = make_sample(32, {(12, 20): 5})
+        # Crop is rows 4..20, cols 12..28; cloudy pixel at raster (6, 14)
+        # lands at cropped (2, 2).
+        input_dict["scl"] = make_scl(32, 2, {(6, 14, 1): 10})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask[2, 2, 1] == MaskValue.MISSING.value).all()
+        assert (mask[2, 2, 0] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_half_resolution_scl_is_upsampled(self) -> None:
+        """A 20m-grid SCL read (half resolution) is nearest-upsampled to match."""
+        ds = build_dataset(scl_cloud_mask=True)
+        input_dict, target = make_sample(8, {(4, 4): 1})
+        # 4x4 SCL against 8x8 imagery: pixel (1, 1) covers imagery (2:4, 2:4).
+        input_dict["scl"] = make_scl(4, 2, {(1, 1, 0): 9})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask[2:4, 2:4, 0] == MaskValue.MISSING.value).all()
+        assert (mask[2:4, 2:4, 1] == MaskValue.ONLINE_ENCODER.value).all()
+        assert (mask[0:2, 0:2, 0] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_shape_mismatch_skips_masking(self) -> None:
+        """An SCL grid that is neither matching nor half resolution is skipped."""
+        ds = build_dataset(scl_cloud_mask=True)
+        input_dict, target = make_sample(8, {(4, 4): 1})
+        input_dict["scl"] = make_scl(5, 2, {(1, 1, 0): 9})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.S2_MASK)
+        assert (mask == MaskValue.ONLINE_ENCODER.value).all()
+
+
+LANDSAT = Modality.LANDSAT.name
+NUM_LANDSAT_BANDS = len(Modality.get(LANDSAT).band_order)
+
+
+def monthly_ranges(year: int, months: list[int]) -> list[tuple]:
+    """(start, end) ranges for the given month slots of `year`'s 30-day grid."""
+    jan1 = datetime(year, 1, 1, tzinfo=UTC)
+    return [
+        (jan1 + timedelta(days=30 * m), jan1 + timedelta(days=30 * (m + 1)))
+        for m in months
+    ]
+
+
+class TestRaggedModalities:
+    """Optional imagery with coverage gaps aligns onto the canonical axis."""
+
+    LANDSAT_MASK = MaskedOlmoEarthSample.get_masked_modality_name(LANDSAT)
+    S2_MASK = MaskedOlmoEarthSample.get_masked_modality_name(S2)
+
+    @staticmethod
+    def sample_with_landsat(landsat_months: list[int] | None) -> tuple[dict, dict]:
+        """An S2 (T=12, dated) sample plus a landsat tensor for given months."""
+        input_dict, target = make_sample(8, {(4, 4): 1}, num_timesteps=12)
+        input_dict[S2] = RasterImage(
+            image=input_dict[S2].image, timestamps=monthly_ranges(2020, list(range(12)))
+        )
+        if landsat_months is not None:
+            image = torch.rand(NUM_LANDSAT_BANDS, len(landsat_months), 8, 8)
+            input_dict[LANDSAT] = RasterImage(
+                image=image, timestamps=monthly_ranges(2020, landsat_months)
+            )
+        return input_dict, target
+
+    def test_partial_landsat_aligns_by_date(self) -> None:
+        """Months 2 and 6 missing -> those canonical slots read MISSING."""
+        ds = build_dataset(input_modalities=[S2, LANDSAT])
+        months = [m for m in range(12) if m not in (2, 6)]
+        input_dict, target = self.sample_with_landsat(months)
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+
+        landsat = getattr(masked_sample, LANDSAT)
+        assert landsat.shape == (8, 8, 12, NUM_LANDSAT_BANDS)
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        for slot in range(12):
+            expected = (
+                MaskValue.MISSING.value
+                if slot in (2, 6)
+                else MaskValue.ONLINE_ENCODER.value
+            )
+            assert (mask[:, :, slot] == expected).all(), slot
+        # S2 is untouched and the shared timestamps keep the full year.
+        assert (
+            getattr(masked_sample, self.S2_MASK) == MaskValue.ONLINE_ENCODER.value
+        ).all()
+        assert masked_sample.timestamps.shape == (12, 3)
+
+    def test_absent_landsat_is_all_missing(self) -> None:
+        """A window with no landsat at all yields zeros + an all-MISSING mask."""
+        ds = build_dataset(input_modalities=[S2, LANDSAT])
+        input_dict, target = self.sample_with_landsat(None)
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+
+        landsat = getattr(masked_sample, LANDSAT)
+        assert landsat.shape == (8, 8, 12, NUM_LANDSAT_BANDS)
+        assert (
+            getattr(masked_sample, self.LANDSAT_MASK) == MaskValue.MISSING.value
+        ).all()
+        assert (
+            getattr(masked_sample, self.S2_MASK) == MaskValue.ONLINE_ENCODER.value
+        ).all()
+
+    def test_absent_embedding_product_still_raises(self) -> None:
+        """A precomputed-embedding coverage gap must stay a loud failure."""
+        ds = build_dataset(input_modalities=[S2, Modality.GSE.name])
+        input_dict, target = self.sample_with_landsat(None)
+        with pytest.raises(ValueError, match="not found"):
+            ds._transform_sample(input_dict, target)

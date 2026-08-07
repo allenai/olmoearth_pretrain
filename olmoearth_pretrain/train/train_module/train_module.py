@@ -412,9 +412,25 @@ class OlmoEarthTrainModule(TrainModule):
     def state_dict_to_load(
         self, metadata: Metadata, optim: bool | None = None
     ) -> dict[str, Any]:
-        """Get the state dict to load."""
+        """Get the state dict to load.
+
+        ``optim=False`` (from ``TrainerConfig.load_optim_state``) omits optimizer
+        state from the load plan. Honouring it matters when resuming with a
+        DIFFERENT optimizer param-group layout than the checkpoint was saved
+        with -- adding a group override renames the per-parameter
+        ``optim.param_groups.<fqn>.group_name`` keys, and requesting them raises
+        "Missing key in checkpoint state_dict". Note this is NOT the same path as
+        ``OE_LOAD_SKIP_MISMATCHED_KEYS``, which only drops optimizer state as a
+        side effect of dropping shape-mismatched model weights, and so does
+        nothing when the architecture is unchanged.
+        """
         load_opts = self.state_dict_load_opts
         state_dict = self._get_state_dict(load_opts)
+        if optim is False and state_dict.pop("optim", None) is not None:
+            logger.warning(
+                "load_optim_state=False: omitting optimizer state from the load "
+                "plan; the optimizer keeps its fresh state."
+            )
         if os.environ.get("OE_LOAD_SKIP_MISMATCHED_KEYS"):
             self._drop_mismatched_keys(state_dict, metadata)
         return state_dict

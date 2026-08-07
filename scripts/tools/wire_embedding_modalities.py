@@ -73,9 +73,13 @@ logger = logging.getLogger(__name__)
 
 # Materializer product name -> the modality whose name is the layer/input name.
 # Mirrors embedding_materializer.fetchers.build_fetcher so the two cannot drift.
+# tessera_v2 is the exception: no v2 product is published, so its layer is
+# baked by our own inference run (evals/datasets/tessera_v2_export.py), which
+# writes a manifest in the materializer's shape so the gate below still works.
 PRODUCT_TO_MODALITY: dict[str, ModalitySpec] = {
     "aef": Modality.GSE,
     **{name: product.modality for name, product in TESSERA_PRODUCTS.items()},
+    "tessera_v2": Modality.TESSERA_V2,
 }
 
 # Backup of the pre-edit config.json, written once so re-runs keep the

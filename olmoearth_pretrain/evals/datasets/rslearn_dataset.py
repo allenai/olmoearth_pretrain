@@ -27,6 +27,7 @@ from olmoearth_pretrain.data.constants import (
 )
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 from olmoearth_pretrain.data.utils import convert_to_db
+from olmoearth_pretrain.datatypes import MaskValue
 from olmoearth_pretrain.evals.constants import (
     RSLEARN_TO_OLMOEARTH,
     resolve_rslearn_layer_name,
@@ -56,6 +57,23 @@ logger = logging.getLogger(__name__)
 # record the dataset's actual time range.
 DEFAULT_START_TIME = "2022-09-01"
 DEFAULT_END_TIME = "2023-09-01"
+
+# model.yaml input name of the optional Sentinel-2 SCL (scene classification)
+# layers written by scripts/tools/setup_extra_layers.py. Never fed to the
+# model; scl_cloud_mask=True turns it into per-pixel MISSING masks on S2.
+SCL_INPUT_NAME = "scl"
+
+# SCL classes treated as cloud-contaminated: 0 nodata, 1 saturated/defective,
+# 3 cloud shadow, 8 cloud medium probability, 9 cloud high probability,
+# 10 thin cirrus. Everything else (vegetation, bare, water, unclassified,
+# snow) is real surface signal and stays. The default for scl_cloud_mask;
+# override per task with scl_cloud_classes.
+SCL_CLOUD_CLASSES = (0, 1, 3, 8, 9, 10)
+
+# The narrower "cloudless" policy: unambiguous cloud only (medium + high
+# probability), leaving shadow/cirrus/nodata in place. Sits between unmasked
+# and SCL_CLOUD_CLASSES on the masking-aggressiveness ladder.
+SCL_CLOUDLESS_CLASSES = (8, 9)
 
 
 def get_timestamps(
@@ -167,6 +185,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         label_at_center_pixel: bool = False,
         tile_samples: bool = False,
         sample_size: int | None = None,
+        scl_cloud_mask: bool = False,
+        scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
@@ -209,6 +229,17 @@ class RslearnToOlmoEarthDataset(Dataset):
                 label_at_center_pixel.
             sample_size: Stored sample height/width in pixels (required with
                 tile_samples; must be divisible by window_size).
+            scl_cloud_mask: If set, the optional "scl" input (Sentinel-2
+                scene classification, one layer per S2 monthly layer) is read
+                and every pixel-timestep whose SCL class is in
+                SCL_CLOUD_CLASSES gets MaskValue.MISSING in the S2 mask, so
+                the encoder ignores cloud-contaminated tokens. Pixels cloudy
+                at every timestep are left unmasked (never blank a pixel
+                entirely; this also keeps zero-padding pixels, whose SCL is
+                0 everywhere, behaving as before). Windows without the scl
+                input are left unmasked with a once-per-run warning.
+            scl_cloud_classes: SCL classes to treat as cloud when
+                scl_cloud_mask is set. None uses SCL_CLOUD_CLASSES.
         """
         if (
             not norm_stats_from_pretrained
@@ -237,6 +268,15 @@ class RslearnToOlmoEarthDataset(Dataset):
         self.end_time = end_time
         self.max_timesteps = num_timesteps  # Max expected timesteps (for validation)
         self._warned_synthesized_timestamps = False
+
+        self.scl_cloud_mask = scl_cloud_mask
+        self.scl_cloud_classes = (
+            tuple(scl_cloud_classes)
+            if scl_cloud_classes is not None
+            else SCL_CLOUD_CLASSES
+        )
+        self._warned_scl_mask = False
+        self._warned_ragged = False
 
         # Target parsing config - derived from Task structure
         self.target_task_name = target_task_name  # For MultiTask, e.g., "segment"
@@ -318,6 +358,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         label_at_center_pixel: bool = False,
         tile_samples: bool = False,
         sample_size: int | None = None,
+        scl_cloud_mask: bool = False,
+        scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -353,6 +395,10 @@ class RslearnToOlmoEarthDataset(Dataset):
                 windows instead of center-cropping (see
                 RslearnToOlmoEarthDataset).
             sample_size: Stored sample height/width, required with tile_samples.
+            scl_cloud_mask: Mask cloudy S2 pixel-timesteps MISSING using the
+                optional "scl" input (see RslearnToOlmoEarthDataset).
+            scl_cloud_classes: SCL classes to treat as cloud (None =
+                SCL_CLOUD_CLASSES).
         """
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
@@ -387,6 +433,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             layers = get_modality_layers(model_config)
             input_modalities = []
             for layer in layers:
+                # SCL is a mask input, not a model modality (see scl_cloud_mask).
+                if layer.startswith("sentinel2_scl"):
+                    continue
                 resolved = resolve_rslearn_layer_name(layer)
                 if resolved is not None:
                     input_modalities.append(RSLEARN_TO_OLMOEARTH[resolved].name)
@@ -411,6 +460,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             label_at_center_pixel=label_at_center_pixel,
             tile_samples=tile_samples,
             sample_size=sample_size,
+            scl_cloud_mask=scl_cloud_mask,
+            scl_cloud_classes=scl_cloud_classes,
         )
 
     @staticmethod
@@ -568,10 +619,22 @@ class RslearnToOlmoEarthDataset(Dataset):
         elif self.window_size is not None or self.label_at_center_pixel:
             crop_rows, crop_cols, label = self._label_crop_slices(label)
 
+        # First pass: read every present modality (crop, dB-convert), keeping
+        # the raw arrays so ragged imagery can be aligned onto a shared
+        # temporal axis before normalization.
+        raw: dict[str, np.ndarray] = {}
+        absent: list[str] = []
         for modality in self.input_modalities:
-            if modality not in input_dict:
-                raise ValueError(f"Modality {modality} not found in dataset inputs")
-            x = input_dict[modality]
+            x = input_dict.get(modality)
+            if x is None:
+                # Optional imagery (landsat) is simply absent on windows with
+                # no coverage; it is represented as all-MISSING below. A
+                # precomputed embedding product keeps the loud failure -- a
+                # coverage gap there must not silently become a zero vector.
+                if modality in EMBEDDING_PRODUCT_MODALITIES:
+                    raise ValueError(f"Modality {modality} not found in dataset inputs")
+                absent.append(modality)
+                continue
             if not isinstance(x, RasterImage):
                 raise TypeError(
                     f"Input modality '{modality}' must be RasterImage, got {type(x).__name__}"
@@ -583,16 +646,55 @@ class RslearnToOlmoEarthDataset(Dataset):
             img = x.image
             if isinstance(img, torch.Tensor):
                 img = img.numpy()
-            x = rearrange(img, "c t h w -> h w t c")
+            arr = rearrange(img, "c t h w -> h w t c")
             if crop_rows is not None and crop_cols is not None:
-                x = x[crop_rows, crop_cols]
-
-            if sample_timesteps is None:
-                sample_timesteps = x.shape[2]
+                arr = arr[crop_rows, crop_cols]
 
             if modality == Modality.SENTINEL1.name:
-                x = convert_to_db(x)
+                arr = convert_to_db(arr)
+            raw[modality] = arr
 
+        if not raw:
+            raise ValueError("No input modalities present in sample")
+
+        # Canonical temporal axis: the longest present imagery modality,
+        # preferring one with stored acquisition times (the S2/S1 monthlies
+        # in practice -- required inputs, so complete on surviving windows).
+        # Embedding products are exempt from alignment: they are consumed
+        # exactly as stored (typically T=1 annual) and bypass time encodings.
+        imagery = [m for m in raw if m not in EMBEDDING_PRODUCT_MODALITIES]
+        canonical = max(
+            imagery or raw,
+            key=lambda m: (raw[m].shape[2], m in stored_time_ranges),
+        )
+        canonical_t = raw[canonical].shape[2]
+        sample_timesteps = canonical_t
+        height, width = raw[canonical].shape[:2]
+
+        # Slots each ragged modality is missing on the canonical axis; they
+        # get MaskValue.MISSING after the masked sample is built.
+        ragged_missing: dict[str, list[int]] = {}
+        for modality in absent:
+            n_bands = len(Modality.get(modality).band_order)
+            raw[modality] = np.zeros(
+                (height, width, canonical_t, n_bands), dtype=np.float32
+            )
+            ragged_missing[modality] = list(range(canonical_t))
+            self._warn_ragged_once(f"'{modality}' absent from sample")
+        for modality in imagery:
+            if raw[modality].shape[2] == canonical_t:
+                continue
+            raw[modality], missing = self._align_to_canonical(
+                modality,
+                raw[modality],
+                stored_time_ranges.get(modality),
+                stored_time_ranges.get(canonical),
+                canonical_t,
+            )
+            ragged_missing[modality] = missing
+
+        for modality in self.input_modalities:
+            x = raw[modality]
             if modality in EMBEDDING_PRODUCT_MODALITIES:
                 # Precomputed embedding products are consumed exactly as
                 # stored; imagery normalization does not apply, and dataset
@@ -622,6 +724,20 @@ class RslearnToOlmoEarthDataset(Dataset):
         olmoearth_sample = OlmoEarthSample(**sample_dict)
         masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(olmoearth_sample)
 
+        # Slots a ragged/absent modality has no observation for are MISSING,
+        # so the encoder ignores them instead of reading zeros as data.
+        for modality, slots in ragged_missing.items():
+            if not slots:
+                continue
+            mask = getattr(
+                masked_sample,
+                MaskedOlmoEarthSample.get_masked_modality_name(modality),
+            )
+            mask[:, :, slots, :] = MaskValue.MISSING.value
+
+        if self.scl_cloud_mask and Modality.SENTINEL2_L2A.name in self.input_modalities:
+            self._apply_scl_cloud_mask(masked_sample, input_dict, crop_rows, crop_cols)
+
         for modality in self.input_modalities:
             modality_spec = Modality.get(modality)
             if modality_spec.is_spatial:
@@ -640,6 +756,135 @@ class RslearnToOlmoEarthDataset(Dataset):
                     )
 
         return masked_sample, label
+
+    def _warn_scl_once(self, reason: str) -> None:
+        """Warn about a skipped cloud mask once per dataset instance."""
+        if not self._warned_scl_mask:
+            logger.warning(f"scl_cloud_mask: {reason}; leaving S2 unmasked")
+            self._warned_scl_mask = True
+
+    def _warn_ragged_once(self, reason: str) -> None:
+        """Warn about ragged/absent optional imagery once per dataset instance."""
+        if not self._warned_ragged:
+            logger.warning(
+                f"ragged imagery: {reason}; representing missing timesteps as "
+                "MaskValue.MISSING (expected for optional inputs with coverage "
+                "gaps, e.g. landsat)"
+            )
+            self._warned_ragged = True
+
+    def _align_to_canonical(
+        self,
+        modality: str,
+        arr: np.ndarray,
+        ranges: list[tuple[datetime, datetime]] | None,
+        canonical_ranges: list[tuple[datetime, datetime]] | None,
+        canonical_t: int,
+    ) -> tuple[np.ndarray, list[int]]:
+        """Scatter a ragged modality's timesteps onto the canonical time axis.
+
+        A modality with coverage gaps (landsat at a 16-day revisit misses
+        whole months) arrives with T < canonical_t, and its timestep i is NOT
+        month i -- consuming it positionally would desynchronize the data
+        from the shared timestamps tensor and its own mask. Each timestep is
+        placed into the canonical slot whose acquisition period it belongs to
+        (nearest period start, within half a period), and unfilled slots are
+        reported for MISSING-masking.
+
+        Args:
+            modality: the modality name (for the warning).
+            arr: (H, W, T, C) with T < canonical_t.
+            ranges: the modality's stored acquisition ranges (len T), if any.
+            canonical_ranges: the canonical modality's ranges (len
+                canonical_t), if any.
+            canonical_t: the shared temporal length.
+
+        Returns:
+            ((H, W, canonical_t, C) array, canonical slots left unfilled).
+        """
+        height, width, t, channels = arr.shape
+        aligned = np.zeros((height, width, canonical_t, channels), dtype=arr.dtype)
+        filled: set[int] = set()
+        if ranges and canonical_ranges and len(canonical_ranges) == canonical_t:
+            for i, (start, _) in enumerate(ranges):
+                deltas = [
+                    abs((start - c_start).days) for c_start, _ in canonical_ranges
+                ]
+                slot = min(range(canonical_t), key=deltas.__getitem__)
+                if deltas[slot] <= 16 and slot not in filled:
+                    aligned[:, :, slot] = arr[:, :, i]
+                    filled.add(slot)
+            self._warn_ragged_once(
+                f"'{modality}' has {t}/{canonical_t} timesteps; aligned by "
+                "acquisition date"
+            )
+        else:
+            # No dates to align on -- place positionally and mask the tail.
+            # Defensive: the monthly exports always carry acquisition times.
+            aligned[:, :, :t] = arr
+            filled = set(range(t))
+            self._warn_ragged_once(
+                f"'{modality}' has {t}/{canonical_t} timesteps and no "
+                "acquisition dates; padded positionally"
+            )
+        return aligned, sorted(set(range(canonical_t)) - filled)
+
+    def _apply_scl_cloud_mask(
+        self,
+        masked_sample: MaskedOlmoEarthSample,
+        input_dict: dict[str, Any],
+        crop_rows: slice | None,
+        crop_cols: slice | None,
+    ) -> None:
+        """Set S2 mask to MISSING where SCL says cloud, in place.
+
+        SCL rides through the same Pad transform as the imagery (the
+        year-aligned model.yamls list it in image_selectors), so it arrives
+        on the S2 pixel grid and takes the same crop. Any window where that
+        does not hold (no scl input, unexpected shape) is left unmasked --
+        the conservative direction -- with a once-per-run warning.
+        """
+        scl_image = input_dict.get(SCL_INPUT_NAME)
+        if not isinstance(scl_image, RasterImage):
+            self._warn_scl_once(f"no '{SCL_INPUT_NAME}' input in sample")
+            return
+        img = scl_image.image
+        if isinstance(img, torch.Tensor):
+            img = img.numpy()
+        scl = rearrange(img, "c t h w -> h w t c")[..., 0]
+
+        s2 = input_dict[Modality.SENTINEL2_L2A.name].image
+        if scl.shape[:2] != tuple(s2.shape[2:]):
+            # SCL is stored at 20 m (zoom_offset -1); rslearn reads it back on
+            # the window grid, but repair an exact half-resolution read rather
+            # than silently misaligning the crop below.
+            if tuple(x * 2 for x in scl.shape[:2]) == tuple(s2.shape[2:]):
+                scl = scl.repeat(2, axis=0).repeat(2, axis=1)
+            else:
+                self._warn_scl_once(
+                    f"SCL spatial shape {scl.shape[:2]} does not match S2 {tuple(s2.shape[2:])}"
+                )
+                return
+        if crop_rows is not None and crop_cols is not None:
+            scl = scl[crop_rows, crop_cols]
+
+        mask_name = MaskedOlmoEarthSample.get_masked_modality_name(
+            Modality.SENTINEL2_L2A.name
+        )
+        mask = getattr(masked_sample, mask_name)
+        if mask is None or scl.shape != tuple(mask.shape[:3]):
+            self._warn_scl_once(
+                f"SCL shape {scl.shape} does not match S2 mask "
+                f"{None if mask is None else tuple(mask.shape)}"
+            )
+            return
+
+        cloudy = np.isin(scl, self.scl_cloud_classes)
+        # Never blank a pixel entirely: a pixel cloudy at every timestep keeps
+        # all of them (better a cloudy token than none, and zero-padding
+        # pixels -- SCL 0 everywhere -- keep behaving exactly as unmasked).
+        cloudy[cloudy.all(axis=2)] = False
+        mask[torch.from_numpy(cloudy)] = MaskValue.MISSING.value
 
     def _build_timestamps(
         self,
@@ -798,6 +1043,8 @@ def from_registry_entry(
     window_size: int | None = None,
     label_at_center_pixel: bool = False,
     tile_samples: bool = False,
+    scl_cloud_mask: bool = False,
+    scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -832,6 +1079,10 @@ def from_registry_entry(
         tile_samples: Tile every sample into window_size x window_size windows
             instead of center-cropping; the stored sample size is taken from
             the registry entry's window_size (see RslearnToOlmoEarthDataset).
+        scl_cloud_mask: Mask cloudy S2 pixel-timesteps MISSING using the
+            optional "scl" input (see RslearnToOlmoEarthDataset).
+        scl_cloud_classes: SCL classes to treat as cloud (None =
+            SCL_CLOUD_CLASSES).
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -946,4 +1197,6 @@ def from_registry_entry(
         label_at_center_pixel=label_at_center_pixel,
         tile_samples=tile_samples,
         sample_size=entry.window_size if tile_samples else None,
+        scl_cloud_mask=scl_cloud_mask,
+        scl_cloud_classes=scl_cloud_classes,
     )

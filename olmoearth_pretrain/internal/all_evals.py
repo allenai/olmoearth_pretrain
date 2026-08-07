@@ -22,6 +22,7 @@ from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.datasets.rslearn_dataset import SCL_CLOUDLESS_CLASSES
 from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
 from olmoearth_pretrain.internal.experiment import (
@@ -1347,15 +1348,23 @@ AEF_SUPPLEMENTAL_DATASETS = (
 # products, which are ws16-only. Add the smaller context sizes if the
 # spatial-context ablation is wanted here too.
 #
-# glance / us_trees are absent until their materialize and ingest finish; add
-# them here once registered.
+# All eight AEF supplemental datasets are now re-exported and registered.
+#
+# lcmap_lu and us_trees additionally carry tessera as a *required* input, so on
+# those two the resolved window set is intersected with Tessera's coverage
+# (lcmap 26 409/26 513, us_trees 44 886/45 382) rather than being the
+# S1+S2+gse intersection the other six use. That keeps AEF / Tessera /
+# OlmoEarth on one identical window set per dataset -- which is the point --
+# but it does mean their window counts are not comparable to the other six.
 AEF_SUPPLEMENTAL_YEAR_ALIGNED = (
     "africa_crop_mask_year_aligned",
     "canada_crops_coarse_year_aligned",
     "canada_crops_fine_year_aligned",
     "descals_year_aligned",
     "ethiopia_crops_year_aligned",
+    "glance_year_aligned",
     "lcmap_lu_year_aligned",
+    "us_trees_year_aligned",
 )
 
 # Matched-subset siblings: the same windows as their parent dataset, but with
@@ -1402,6 +1411,8 @@ def _aef_ps1_task(
     eval_mode: EvalMode,
     window_size: int = 16,
     input_modalities: list[str] | None = None,
+    scl_cloud_mask: bool = False,
+    scl_cloud_classes: tuple[int, ...] | None = None,
 ) -> DownstreamTaskConfig:
     """AEF supplemental task under the per-pixel embedding-product convention.
 
@@ -1432,6 +1443,8 @@ def _aef_ps1_task(
         quantize_embeddings=True,
         use_center_token=True,
         label_at_center_pixel=True,
+        scl_cloud_mask=scl_cloud_mask,
+        scl_cloud_classes=scl_cloud_classes,
     )
 
 
@@ -1578,6 +1591,19 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
 _YEAR_ALIGNED_MODALITIES = {
     "sentinel2": [Modality.SENTINEL2_L2A.name],
     "sentinel1_sentinel2": [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+    # The everything-config, and the sensor-fair match to AEF (which fuses
+    # Landsat internally). Landsat's marginal value is read against the
+    # sentinel1_sentinel2 pair; an S2+Landsat pair can be added here if the
+    # S1-free version of that question becomes worth its eval time. Requires
+    # the landsat_moNN layers on weka (setup_extra_layers.py, layer set
+    # `landsat`); the input is optional in every model.yaml, so windows the
+    # Landsat prepare/materialize has not reached run with S2(+S1) only
+    # rather than failing.
+    "sentinel1_sentinel2_landsat": [
+        Modality.SENTINEL1.name,
+        Modality.SENTINEL2_L2A.name,
+        Modality.LANDSAT.name,
+    ],
 }
 for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
     EMBEDDING_EVAL_TASKS.update(
@@ -1602,6 +1628,67 @@ for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
             for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
         }
     )
+    # SCL cloud-masked siblings: identical except cloud-contaminated S2
+    # pixel-timesteps are masked MISSING at load time (scl_cloud_mask), which
+    # reproduces the pre-year-aligned exports' eo:cloud_cover scene filter at
+    # pixel granularity. Requires the SCL layers on weka
+    # (setup_extra_layers.py); without them the tasks run unmasked and
+    # match the plain variants. The window set is unchanged, so plain vs
+    # _sclmask deltas isolate the cloud effect (descals is the motivation).
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_sclmask": _aef_ps1_task(
+                name,
+                EvalMode.LINEAR_PROBE,
+                window_size=16,
+                input_modalities=_modalities,
+                scl_cloud_mask=True,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_sclmask_knn": _aef_ps1_task(
+                name,
+                EvalMode.KNN,
+                window_size=16,
+                input_modalities=_modalities,
+                scl_cloud_mask=True,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+    # "Cloudless" siblings: same mechanism, narrower policy -- only
+    # unambiguous cloud (SCL 8 medium / 9 high probability) is masked, leaving
+    # shadow/cirrus/nodata in place. With the plain and _sclmask variants this
+    # gives a three-point masking-aggressiveness ladder per task.
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_cloudless": _aef_ps1_task(
+                name,
+                EvalMode.LINEAR_PROBE,
+                window_size=16,
+                input_modalities=_modalities,
+                scl_cloud_mask=True,
+                scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_cloudless_knn": _aef_ps1_task(
+                name,
+                EvalMode.KNN,
+                window_size=16,
+                input_modalities=_modalities,
+                scl_cloud_mask=True,
+                scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
 # pastis_year_aligned keeps the pastis conventions (128x128 stored samples,
 # tile_samples, mIoU) rather than the AEF center-pixel ones, so it reuses the
 # pastis helper with its dataset name overridden.
@@ -1617,6 +1704,73 @@ EMBEDDING_EVAL_TASKS.update(
                 window_size=16,
             ),
             dataset="pastis_year_aligned",
+        ),
+        # SCL cloud-masked siblings (see the _sclmask comment above).
+        "pastis_year_aligned_ws16_ps1_sentinel2_sclmask": replace(
+            _pastis_ps1_task([Modality.SENTINEL2_L2A.name], window_size=16),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_sclmask": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+        ),
+        # "Cloudless" siblings (see the _cloudless comment above).
+        "pastis_year_aligned_ws16_ps1_sentinel2_cloudless": replace(
+            _pastis_ps1_task([Modality.SENTINEL2_L2A.name], window_size=16),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_cloudless": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+        ),
+        # Landsat siblings (see the _YEAR_ALIGNED_MODALITIES comment above).
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_sclmask": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_cloudless": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
         ),
     }
 )

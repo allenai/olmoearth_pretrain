@@ -66,6 +66,58 @@ data:
         - vv
         - vh
         passthrough: true
+      scl:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+        - sentinel2_scl_mo01
+        - sentinel2_scl_mo02
+        - sentinel2_scl_mo03
+        - sentinel2_scl_mo04
+        - sentinel2_scl_mo05
+        - sentinel2_scl_mo06
+        - sentinel2_scl_mo07
+        - sentinel2_scl_mo08
+        - sentinel2_scl_mo09
+        - sentinel2_scl_mo10
+        - sentinel2_scl_mo11
+        - sentinel2_scl_mo12
+        load_all_layers: true
+        bands:
+        - SCL
+        passthrough: true
+        required: false
+      landsat:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+        - landsat_mo01
+        - landsat_mo02
+        - landsat_mo03
+        - landsat_mo04
+        - landsat_mo05
+        - landsat_mo06
+        - landsat_mo07
+        - landsat_mo08
+        - landsat_mo09
+        - landsat_mo10
+        - landsat_mo11
+        - landsat_mo12
+        load_all_layers: true
+        bands:
+        - B8
+        - B1
+        - B2
+        - B3
+        - B4
+        - B5
+        - B6
+        - B7
+        - B9
+        - B10
+        - B11
+        passthrough: true
+        required: false
       gse:
         data_type: raster
         dtype: FLOAT32
@@ -105,6 +157,9 @@ data:
           size: 32
           image_selectors:
           - sentinel2_l2a
+          - landsat
+          - scl
           - sentinel1
           - target/eval_task/classes
           - target/eval_task/valid
+          skip_missing: true

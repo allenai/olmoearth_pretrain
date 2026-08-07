@@ -1,0 +1,155 @@
+{
+  "_comment": [
+    "Fetch layers for running TESSERA v2 inference ourselves (no v2 product is",
+    "published; see docs/TesseraV2Inference.md). Every acquisition in the",
+    "window's time range, one item group per scene, chronological -- the",
+    "d-pixel inputs their pipeline builds with its bash + Rust preprocessing.",
+    "Copied from config_pastis_rslearn.json, which is where they were first",
+    "written and which declares them inline; a unit test holds the two",
+    "identical EXCEPT for sentinel2_l2a_all's max_matches (150 there, 300",
+    "here).",
+    "MAX_MATCHES, measured 2026-08-06. The layers sort datetime ASCENDING, so",
+    "hitting the cap drops the END of the year -- a seasonal loss, not random",
+    "attrition. At S2=150 (the pastis value) 4.94% of ethiopia_crops windows",
+    "were truncated; at 300 that is 0.32% (ethiopia) / 0.35% (africa), and S1",
+    "at 100 truncates 0.23-0.35% of africa windows (zero on ethiopia, which",
+    "has no ascending coverage at all in MPC's RTC archive). That residual was",
+    "accepted rather than raising again. Ceiling for any future raise: the v2",
+    "student bins valid observations at 256 (tessera_v2_infer.BIN_EDGES), so",
+    "scenes beyond roughly 500-600 cannot reach the model.",
+    "This is NOT a dataset config on its own. tessera_v2_export.py",
+    "write_fetch_config merges these layers with a dataset's storage/tile_store",
+    "blocks into a config passed via `rslearn dataset prepare --config`, so",
+    "they never enter the dataset's own config.json -- these layers are",
+    "EXPENSIVE (a year of scenes per window), and a run that forgot",
+    "--enabled-layers against a config carrying them would fetch a year of",
+    "imagery for every eval window. Always pair them with --group <fetch",
+    "group>."
+  ],
+  "layers": {
+    "sentinel1_ascending_all": {
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32",
+          "nodata_value": -32768
+        }
+      ],
+      "data_source": {
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "ingest": false,
+        "init_args": {
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            },
+            "sat:orbit_state": {
+              "eq": "ascending"
+            }
+          },
+          "sort_ascending": true,
+          "sort_by": "datetime"
+        },
+        "query_config": {
+          "max_matches": 100,
+          "space_mode": "INTERSECTS"
+        }
+      },
+      "type": "raster"
+    },
+    "sentinel1_descending_all": {
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32",
+          "nodata_value": -32768
+        }
+      ],
+      "data_source": {
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "ingest": false,
+        "init_args": {
+          "query": {
+            "sar:instrument_mode": {
+              "eq": "IW"
+            },
+            "sar:polarizations": {
+              "eq": [
+                "VV",
+                "VH"
+              ]
+            },
+            "sat:orbit_state": {
+              "eq": "descending"
+            }
+          },
+          "sort_ascending": true,
+          "sort_by": "datetime"
+        },
+        "query_config": {
+          "max_matches": 100,
+          "space_mode": "INTERSECTS"
+        }
+      },
+      "type": "raster"
+    },
+    "sentinel2_l2a_all": {
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "SCL"
+          ],
+          "dtype": "uint8",
+          "zoom_offset": -1
+        }
+      ],
+      "data_source": {
+        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "ingest": false,
+        "init_args": {
+          "harmonize": true,
+          "sort_ascending": true,
+          "sort_by": "datetime"
+        },
+        "query_config": {
+          "max_matches": 300,
+          "space_mode": "INTERSECTS"
+        }
+      },
+      "type": "raster"
+    }
+  }
+}
