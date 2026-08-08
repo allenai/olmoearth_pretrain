@@ -22,8 +22,9 @@ This guide explains how we launch evaluations for OlmoEarth checkpoints and base
 4. [KNN / Linear Probing](#knn--linear-probing)
 5. [Finetune](#finetune-sweep)
 6. [Monitoring & Outputs](#monitoring--outputs)
-7. [Helpful Files](#helpful-files)
-8. [Adding New Eval Datasets (Internal)](#adding-new-eval-datasets-internal)
+7. [Cloud-Masked & Landsat Eval Variants](#cloud-masked--landsat-eval-variants-year-aligned-internal)
+8. [Helpful Files](#helpful-files)
+9. [Adding New Eval Datasets (Internal)](#adding-new-eval-datasets-internal)
 
 ---
 
@@ -312,6 +313,56 @@ python -m olmoearth_pretrain.internal.full_eval_sweep_finetune \
 
 - **W&B logging:** Both scripts default to `EVAL_WANDB_PROJECT`. Override with `--project_name` or disable W&B via `--trainer.callbacks.wandb.enabled=False`.
 - **Inspecting results:** Use [`scripts/tools/get_max_eval_metrics_from_wandb.py`](../scripts/tools/get_max_eval_metrics_from_wandb.py) to pull the best metric per task across runs.
+
+---
+
+## Cloud-Masked & Landsat Eval Variants (Year-Aligned, Internal)
+
+The `*_year_aligned` embedding tasks exist in masked and Landsat variants,
+selected purely by task-name suffix in `EMBEDDING_EVAL_TASKS`:
+
+| suffix | what it does | data prerequisite on the **registered** tree (`registry weka_path`) |
+|---|---|---|
+| `_sclmask` | S2 pixels whose SCL class ∈ {0,1,3,8,9,10} are masked MISSING | `sentinel2_scl_mo*` layers |
+| `_cloudless` | same, narrower classes {8,9} (cloud-med/high only) | `sentinel2_scl_mo*` layers |
+| `..._landsat` | adds Landsat as an input modality | `landsat_mo*` layers **and** `landsat` in the registry entry's `modalities` |
+| `_l8mask` | Landsat months whose scene `cloud_cover` ≥ 50 masked MISSING | `landsat_cloud_cover.json` sidecar at the dataset root |
+
+**Setup** (once per dataset; see each script's docstring for the full runbook):
+
+1. `scripts/tools/setup_extra_layers.py` — adds the SCL/Landsat layers to the
+   dataset config, prepares/materializes them via Beaker jobs. **Mind the
+   two trees**: materialization typically runs on the staging tree
+   (`rslearn-eai/datasets/olmoearth_evals`), but evals read the registered
+   tree (`olmoearth/eval_datasets`) — rasters must be copied across, and
+   `backfill_eval_registry_provenance.py` must re-stamp the config hash
+   after any config.json change (evals fail loudly on a stale stamp).
+2. `scripts/tools/build_landsat_cloud_cover_sidecar.py` — required for
+   `_l8mask` only. Reads the `cloud_cover` that rslearn persists in the
+   **staging** tree's items.json and writes the sidecar to the
+   **registered** dataset root:
+
+   ```bash
+   python scripts/tools/build_landsat_cloud_cover_sidecar.py \
+       --ds_path  $STAGING/<name>_year_aligned \
+       --out      $REGISTERED/<name>_year_aligned
+   ```
+
+3. `scripts/tools/check_scl_layers.py` verifies the SCL layers (and prints
+   the measured cloud climatology with `--pixels`).
+
+**Failure modes are graceful but silent-ish — check the job logs.** All the
+extra inputs are `required: false`, so a dataset missing them does not crash:
+
+- Missing SCL layers → masked tasks run **unmasked** (once-per-run
+  `scl_cloud_mask: ... leaving S2 unmasked` warning; masked scores equal to
+  the plain variant are the tell).
+- Missing Landsat rasters → the modality runs **all-MISSING** (`ragged
+  imagery` warnings clustered at loader startup — one per worker within
+  seconds — instead of scattered singles; landsat scores equal to the
+  non-landsat variant are the tell).
+- Missing `_l8mask` sidecar → Landsat runs **uncloud-masked**
+  (`landsat_cloud_cover_max: ...` warning).
 
 ---
 
