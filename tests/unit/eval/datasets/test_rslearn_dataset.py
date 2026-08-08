@@ -535,3 +535,60 @@ class TestRaggedModalities:
         input_dict, target = self.sample_with_landsat(None)
         with pytest.raises(ValueError, match="not found"):
             ds._transform_sample(input_dict, target)
+
+
+class TestLandsatCloudMask:
+    """Scene-level Landsat cloud masking via the sidecar table."""
+
+    LANDSAT_MASK = MaskedOlmoEarthSample.get_masked_modality_name(LANDSAT)
+
+    @staticmethod
+    def dataset_with_table(table: dict | None) -> RslearnToOlmoEarthDataset:
+        """A wrapper with the L8 mask armed at threshold 50."""
+        ds = build_dataset(input_modalities=[S2, LANDSAT])
+        ds.landsat_cloud_cover_max = 50.0
+        ds.landsat_cloud_cover_table = table
+        return ds
+
+    def test_cloudy_months_masked(self) -> None:
+        """Months at/over threshold go MISSING; below, unknown (-1) stay."""
+        table = {"g/w1": {"mo01": 80.0, "mo02": 49.9, "mo03": -1, "mo04": 50.0}}
+        ds = self.dataset_with_table(table)
+        input_dict, target = TestRaggedModalities.sample_with_landsat(list(range(12)))
+        masked_sample, _ = ds._transform_sample(input_dict, target, window_key="g/w1")
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        assert (mask[:, :, 0] == MaskValue.MISSING.value).all()  # mo01: 80
+        assert (mask[:, :, 1] == MaskValue.ONLINE_ENCODER.value).all()  # 49.9
+        assert (mask[:, :, 2] == MaskValue.ONLINE_ENCODER.value).all()  # unknown
+        assert (mask[:, :, 3] == MaskValue.MISSING.value).all()  # exactly 50
+        assert (mask[:, :, 4:] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_merges_with_coverage_gaps(self) -> None:
+        """Cloud-masked slots union with ragged coverage-gap slots."""
+        table = {"g/w1": {"mo01": 90.0}}
+        ds = self.dataset_with_table(table)
+        # landsat missing month index 6 entirely (coverage gap)
+        months = [m for m in range(12) if m != 6]
+        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
+        masked_sample, _ = ds._transform_sample(input_dict, target, window_key="g/w1")
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        for slot in range(12):
+            expected = (
+                MaskValue.MISSING.value
+                if slot in (0, 6)
+                else MaskValue.ONLINE_ENCODER.value
+            )
+            assert (mask[:, :, slot] == expected).all(), slot
+
+    def test_unknown_window_or_missing_table_no_op(self) -> None:
+        """No sidecar entry (or no table) -> unmasked, never a crash."""
+        for table in (None, {"g/other": {"mo01": 99.0}}):
+            ds = self.dataset_with_table(table)
+            input_dict, target = TestRaggedModalities.sample_with_landsat(
+                list(range(12))
+            )
+            masked_sample, _ = ds._transform_sample(
+                input_dict, target, window_key="g/w1"
+            )
+            mask = getattr(masked_sample, self.LANDSAT_MASK)
+            assert (mask == MaskValue.ONLINE_ENCODER.value).all()

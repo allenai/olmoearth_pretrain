@@ -1413,6 +1413,7 @@ def _aef_ps1_task(
     input_modalities: list[str] | None = None,
     scl_cloud_mask: bool = False,
     scl_cloud_classes: tuple[int, ...] | None = None,
+    landsat_cloud_cover_max: float | None = None,
 ) -> DownstreamTaskConfig:
     """AEF supplemental task under the per-pixel embedding-product convention.
 
@@ -1445,6 +1446,7 @@ def _aef_ps1_task(
         label_at_center_pixel=True,
         scl_cloud_mask=scl_cloud_mask,
         scl_cloud_classes=scl_cloud_classes,
+        landsat_cloud_cover_max=landsat_cloud_cover_max,
     )
 
 
@@ -1572,14 +1574,21 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
 _YEAR_ALIGNED_MODALITIES = {
     "sentinel2": [Modality.SENTINEL2_L2A.name],
     "sentinel1_sentinel2": [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
-    # The everything-config, and the sensor-fair match to AEF (which fuses
-    # Landsat internally). Landsat's marginal value is read against the
-    # sentinel1_sentinel2 pair; an S2+Landsat pair can be added here if the
-    # S1-free version of that question becomes worth its eval time. Requires
-    # the landsat_moNN layers on weka (setup_extra_layers.py, layer set
-    # `landsat`); the input is optional in every model.yaml, so windows the
-    # Landsat prepare/materialize has not reached run with S2(+S1) only
-    # rather than failing.
+    # The Landsat pairs. Both require the landsat_moNN layers on weka
+    # (setup_extra_layers.py, layer set `landsat`); the input is optional in
+    # every model.yaml, so windows the Landsat prepare/materialize has not
+    # reached run without it rather than failing.
+    #
+    # sentinel2_landsat isolates Landsat's optical-only contribution (vs the
+    # sentinel2 pair); sentinel1_sentinel2_landsat is the everything-config
+    # and the sensor-fair match to AEF, which fuses Landsat internally.
+    # Together with the S1 pairs this completes the sensor half-lattice —
+    # every single-sensor addition to S2 is measurable in isolation and in
+    # combination.
+    "sentinel2_landsat": [
+        Modality.SENTINEL2_L2A.name,
+        Modality.LANDSAT.name,
+    ],
     "sentinel1_sentinel2_landsat": [
         Modality.SENTINEL1.name,
         Modality.SENTINEL2_L2A.name,
@@ -1670,6 +1679,45 @@ for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
             for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
         }
     )
+# Scene-level Landsat cloud-mask siblings of the landsat tasks: months whose
+# chosen Landsat scene reports cloud_cover >= this are masked MISSING (the
+# same threshold convention as the original exports' S2 scene filter).
+# Requires the landsat_cloud_cover.json sidecar at each dataset root
+# (build_landsat_cloud_cover_sidecar.py); without it the tasks run unmasked
+# with a warning, like _sclmask without SCL layers.
+L8MASK_CLOUD_COVER_MAX = 50.0
+_L8_TRIO = [
+    Modality.SENTINEL1.name,
+    Modality.SENTINEL2_L2A.name,
+    Modality.LANDSAT.name,
+]
+for _mode, _knn in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn")):
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_sentinel1_sentinel2_landsat_l8mask{_knn}": _aef_ps1_task(
+                name,
+                _mode,
+                window_size=16,
+                input_modalities=_L8_TRIO,
+                landsat_cloud_cover_max=L8MASK_CLOUD_COVER_MAX,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_sentinel1_sentinel2_landsat_sclmask_l8mask{_knn}": _aef_ps1_task(
+                name,
+                _mode,
+                window_size=16,
+                input_modalities=_L8_TRIO,
+                scl_cloud_mask=True,
+                landsat_cloud_cover_max=L8MASK_CLOUD_COVER_MAX,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+
 # pastis_year_aligned keeps the pastis conventions (128x128 stored samples,
 # tile_samples, mIoU) rather than the AEF center-pixel ones, so it reuses the
 # pastis helper with its dataset name overridden.
@@ -1717,6 +1765,30 @@ EMBEDDING_EVAL_TASKS.update(
             scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
         ),
         # Landsat siblings (see the _YEAR_ALIGNED_MODALITIES comment above).
+        "pastis_year_aligned_ws16_ps1_sentinel2_landsat": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel2_landsat_sclmask": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel2_landsat_cloudless": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+        ),
         "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat": replace(
             _pastis_ps1_task(
                 [

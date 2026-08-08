@@ -75,6 +75,13 @@ SCL_CLOUD_CLASSES = (0, 1, 3, 8, 9, 10)
 # and SCL_CLOUD_CLASSES on the masking-aggressiveness ladder.
 SCL_CLOUDLESS_CLASSES = (8, 9)
 
+# Sidecar mapping "group/window" -> {"mo01": scene cloud_cover, ...} for the
+# Landsat monthlies, written by
+# scripts/tools/build_landsat_cloud_cover_sidecar.py from the cloud_cover
+# rslearn's LandsatOliTirsItem persists in items.json. Scene-level (whole
+# Landsat scene metadata), unlike the pixel-level SCL mask; -1 = unknown.
+LANDSAT_CLOUD_COVER_SIDECAR = "landsat_cloud_cover.json"
+
 
 def get_timestamps(
     start_time: str,
@@ -144,6 +151,15 @@ def timestamps_from_time_ranges(
     )
 
 
+def _window_key(metadata: Any) -> str | None:
+    """Rslearn SampleMetadata -> the "group/name" key used by sidecars."""
+    group = getattr(metadata, "window_group", None)
+    name = getattr(metadata, "window_name", None)
+    if name is None:
+        return None
+    return f"{group}/{name}" if group else str(name)
+
+
 class RslearnToOlmoEarthDataset(Dataset):
     """Convert rslearn ModelDataset to OlmoEarth Pretrain MaskedOlmoEarthSample dataset.
 
@@ -187,6 +203,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         sample_size: int | None = None,
         scl_cloud_mask: bool = False,
         scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
+        landsat_cloud_cover_max: float | None = None,
+        landsat_cloud_cover_table: dict[str, dict[str, float]] | None = None,
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
@@ -240,6 +258,12 @@ class RslearnToOlmoEarthDataset(Dataset):
                 input are left unmasked with a once-per-run warning.
             scl_cloud_classes: SCL classes to treat as cloud when
                 scl_cloud_mask is set. None uses SCL_CLOUD_CLASSES.
+            landsat_cloud_cover_max: If set, Landsat months whose chosen
+                scene's cloud_cover meets/exceeds this threshold are masked
+                MISSING (scene-level, from the sidecar table). Unknown cover
+                (-1) is never masked.
+            landsat_cloud_cover_table: The parsed sidecar ("group/window" ->
+                {"moNN": cover}); required for the threshold to do anything.
         """
         if (
             not norm_stats_from_pretrained
@@ -277,6 +301,10 @@ class RslearnToOlmoEarthDataset(Dataset):
         )
         self._warned_scl_mask = False
         self._warned_ragged = False
+
+        self.landsat_cloud_cover_max = landsat_cloud_cover_max
+        self.landsat_cloud_cover_table = landsat_cloud_cover_table
+        self._warned_l8_mask = False
 
         # Target parsing config - derived from Task structure
         self.target_task_name = target_task_name  # For MultiTask, e.g., "segment"
@@ -360,6 +388,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         sample_size: int | None = None,
         scl_cloud_mask: bool = False,
         scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
+        landsat_cloud_cover_max: float | None = None,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -399,6 +428,9 @@ class RslearnToOlmoEarthDataset(Dataset):
                 optional "scl" input (see RslearnToOlmoEarthDataset).
             scl_cloud_classes: SCL classes to treat as cloud (None =
                 SCL_CLOUD_CLASSES).
+            landsat_cloud_cover_max: Scene-level Landsat cloud threshold; the
+                sidecar is read from source_path (see
+                RslearnToOlmoEarthDataset).
         """
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
@@ -444,6 +476,19 @@ class RslearnToOlmoEarthDataset(Dataset):
 
         task_info = get_task_info(model_config)
 
+        landsat_cloud_cover_table = None
+        if landsat_cloud_cover_max is not None:
+            sidecar = f"{str(source_path).rstrip('/')}/{LANDSAT_CLOUD_COVER_SIDECAR}"
+            try:
+                with open(sidecar) as f:
+                    landsat_cloud_cover_table = json.load(f)["windows"]
+            except (OSError, KeyError, json.JSONDecodeError) as e:
+                logger.warning(
+                    f"landsat_cloud_cover_max set but sidecar unusable at "
+                    f"{sidecar} ({type(e).__name__}: {e}); Landsat cloud "
+                    "masking disabled for this dataset"
+                )
+
         return wrap_rslearn_dataset(
             model_dataset=model_dataset,
             input_modalities=input_modalities,
@@ -462,6 +507,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             sample_size=sample_size,
             scl_cloud_mask=scl_cloud_mask,
             scl_cloud_classes=scl_cloud_classes,
+            landsat_cloud_cover_max=landsat_cloud_cover_max,
+            landsat_cloud_cover_table=landsat_cloud_cover_table,
         )
 
     @staticmethod
@@ -587,11 +634,13 @@ class RslearnToOlmoEarthDataset(Dataset):
         input_dict: dict,
         target: dict,
         tile: tuple[int, int] | None = None,
+        window_key: str | None = None,
     ) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
         """Transform a raw rslearn sample into (MaskedOlmoEarthSample, label).
 
         With tile set (tile_samples mode), (tile_row, tile_col) selects which
         window_size x window_size tile of the stored sample to emit.
+        window_key ("group/name") keys the Landsat cloud-cover sidecar.
         """
         sample_dict: dict[str, Any] = {}
         sample_timesteps: int | None = None
@@ -693,6 +742,14 @@ class RslearnToOlmoEarthDataset(Dataset):
             )
             ragged_missing[modality] = missing
 
+        # Scene-level Landsat cloud mask: months whose chosen scene is over
+        # the threshold join the MISSING slots (union with coverage gaps).
+        if self.landsat_cloud_cover_max is not None and Modality.LANDSAT.name in raw:
+            cloudy = self._landsat_cloud_slots(window_key, canonical_t)
+            if cloudy:
+                merged = set(ragged_missing.get(Modality.LANDSAT.name, []))
+                ragged_missing[Modality.LANDSAT.name] = sorted(merged | set(cloudy))
+
         for modality in self.input_modalities:
             x = raw[modality]
             if modality in EMBEDDING_PRODUCT_MODALITIES:
@@ -762,6 +819,41 @@ class RslearnToOlmoEarthDataset(Dataset):
         if not self._warned_scl_mask:
             logger.warning(f"scl_cloud_mask: {reason}; leaving S2 unmasked")
             self._warned_scl_mask = True
+
+    def _warn_l8_once(self, reason: str) -> None:
+        """Warn about a skipped Landsat cloud mask once per dataset instance."""
+        if not self._warned_l8_mask:
+            logger.warning(f"landsat_cloud_cover_max: {reason}; not masking")
+            self._warned_l8_mask = True
+
+    def _landsat_cloud_slots(
+        self, window_key: str | None, canonical_t: int
+    ) -> list[int]:
+        """Canonical slots whose Landsat scene cloud_cover is over threshold.
+
+        Scene-level: the sidecar records the cloud_cover of each month's top
+        mosaic scene. moNN maps to slot NN-1 -- the aligned exports' canonical
+        axis is the twelve ascending monthly layers by construction. -1
+        (unknown cover) is never masked.
+        """
+        if self.landsat_cloud_cover_table is None:
+            self._warn_l8_once("no sidecar table loaded")
+            return []
+        if canonical_t != 12:
+            self._warn_l8_once(f"canonical axis has {canonical_t} slots, expected 12")
+            return []
+        months = self.landsat_cloud_cover_table.get(window_key or "")
+        if months is None:
+            self._warn_l8_once(f"window {window_key!r} not in sidecar")
+            return []
+        assert self.landsat_cloud_cover_max is not None
+        return sorted(
+            int(month[2:]) - 1
+            for month, cover in months.items()
+            if cover is not None
+            and 0 <= cover
+            and cover >= self.landsat_cloud_cover_max
+        )
 
     def _warn_ragged_once(self, reason: str) -> None:
         """Warn about ragged/absent optional imagery once per dataset instance."""
@@ -997,14 +1089,22 @@ class RslearnToOlmoEarthDataset(Dataset):
         if self._tiles_per_side > 1:
             base_idx, tile = divmod(idx, self._tiles_per_side**2)
             if self._cached_base is None or self._cached_base[0] != base_idx:
-                input_dict, target, _ = self.dataset[base_idx]
-                self._cached_base = (base_idx, (input_dict, target))
-            input_dict, target = self._cached_base[1]
+                input_dict, target, metadata = self.dataset[base_idx]
+                self._cached_base = (
+                    base_idx,
+                    (input_dict, target, _window_key(metadata)),
+                )
+            input_dict, target, window_key = self._cached_base[1]
             return self._transform_sample(
-                input_dict, target, tile=divmod(tile, self._tiles_per_side)
+                input_dict,
+                target,
+                tile=divmod(tile, self._tiles_per_side),
+                window_key=window_key,
             )
-        input_dict, target, _ = self.dataset[idx]
-        return self._transform_sample(input_dict, target)
+        input_dict, target, metadata = self.dataset[idx]
+        return self._transform_sample(
+            input_dict, target, window_key=_window_key(metadata)
+        )
 
 
 class IterableRslearnToOlmoEarthDataset(IterableDataset, RslearnToOlmoEarthDataset):
@@ -1012,14 +1112,18 @@ class IterableRslearnToOlmoEarthDataset(IterableDataset, RslearnToOlmoEarthDatas
 
     def __iter__(self) -> Iterator[tuple[MaskedOlmoEarthSample, torch.Tensor]]:
         """Iterate over the dataset."""
-        for input_dict, target, _ in self.dataset:
+        for input_dict, target, metadata in self.dataset:
+            window_key = _window_key(metadata)
             if self._tiles_per_side > 1:
                 for tile in range(self._tiles_per_side**2):
                     yield self._transform_sample(
-                        input_dict, target, tile=divmod(tile, self._tiles_per_side)
+                        input_dict,
+                        target,
+                        tile=divmod(tile, self._tiles_per_side),
+                        window_key=window_key,
                     )
             else:
-                yield self._transform_sample(input_dict, target)
+                yield self._transform_sample(input_dict, target, window_key=window_key)
 
 
 def wrap_rslearn_dataset(**kwargs: Any) -> RslearnToOlmoEarthDataset:
@@ -1045,6 +1149,7 @@ def from_registry_entry(
     tile_samples: bool = False,
     scl_cloud_mask: bool = False,
     scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
+    landsat_cloud_cover_max: float | None = None,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -1083,6 +1188,8 @@ def from_registry_entry(
             optional "scl" input (see RslearnToOlmoEarthDataset).
         scl_cloud_classes: SCL classes to treat as cloud (None =
             SCL_CLOUD_CLASSES).
+        landsat_cloud_cover_max: Scene-level Landsat cloud threshold (see
+            RslearnToOlmoEarthDataset).
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -1199,4 +1306,5 @@ def from_registry_entry(
         sample_size=entry.window_size if tile_samples else None,
         scl_cloud_mask=scl_cloud_mask,
         scl_cloud_classes=scl_cloud_classes,
+        landsat_cloud_cover_max=landsat_cloud_cover_max,
     )

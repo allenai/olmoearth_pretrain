@@ -161,6 +161,11 @@ class DownstreamTaskConfig:
     # set (nodata/saturated/shadow/cloud-med/cloud-high/cirrus); the
     # "cloudless" variants pass (8, 9) for unambiguous cloud only.
     scl_cloud_classes: tuple[int, ...] | None = None
+    # Scene-level Landsat cloud threshold: months whose chosen scene's
+    # cloud_cover meets/exceeds this are masked MISSING, using the
+    # landsat_cloud_cover.json sidecar at the dataset root
+    # (build_landsat_cloud_cover_sidecar.py). None = no Landsat masking.
+    landsat_cloud_cover_max: float | None = None
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: NormMethod = field(
@@ -245,6 +250,7 @@ class DownstreamEvaluator:
         self.label_at_center_pixel = task.label_at_center_pixel
         self.scl_cloud_mask = task.scl_cloud_mask
         self.scl_cloud_classes = task.scl_cloud_classes
+        self.landsat_cloud_cover_max = task.landsat_cloud_cover_max
         self.tile_samples = task.tile_samples
         if self.tile_samples:
             if not self._is_registry_dataset:
@@ -460,6 +466,8 @@ class DownstreamEvaluator:
                 extra_kwargs["scl_cloud_mask"] = True
                 if self.scl_cloud_classes is not None:
                     extra_kwargs["scl_cloud_classes"] = self.scl_cloud_classes
+            if self.landsat_cloud_cover_max is not None:
+                extra_kwargs["landsat_cloud_cover_max"] = self.landsat_cloud_cover_max
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities
