@@ -1686,37 +1686,34 @@ for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
 # (build_landsat_cloud_cover_sidecar.py); without it the tasks run unmasked
 # with a warning, like _sclmask without SCL layers.
 L8MASK_CLOUD_COVER_MAX = 50.0
-_L8_TRIO = [
-    Modality.SENTINEL1.name,
-    Modality.SENTINEL2_L2A.name,
-    Modality.LANDSAT.name,
-]
-for _mode, _knn in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn")):
-    EMBEDDING_EVAL_TASKS.update(
-        {
-            f"{name}_ws16_ps1_sentinel1_sentinel2_landsat_l8mask{_knn}": _aef_ps1_task(
-                name,
-                _mode,
-                window_size=16,
-                input_modalities=_L8_TRIO,
-                landsat_cloud_cover_max=L8MASK_CLOUD_COVER_MAX,
-            )
-            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
-        }
-    )
-    EMBEDDING_EVAL_TASKS.update(
-        {
-            f"{name}_ws16_ps1_sentinel1_sentinel2_landsat_sclmask_l8mask{_knn}": _aef_ps1_task(
-                name,
-                _mode,
-                window_size=16,
-                input_modalities=_L8_TRIO,
-                scl_cloud_mask=True,
-                landsat_cloud_cover_max=L8MASK_CLOUD_COVER_MAX,
-            )
-            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
-        }
-    )
+for _suffix in ("sentinel2_landsat", "sentinel1_sentinel2_landsat"):
+    _modalities = _YEAR_ALIGNED_MODALITIES[_suffix]
+    for _mode, _knn in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn")):
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}_l8mask{_knn}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                    landsat_cloud_cover_max=L8MASK_CLOUD_COVER_MAX,
+                )
+                for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+            }
+        )
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}_sclmask_l8mask{_knn}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                    scl_cloud_mask=True,
+                    landsat_cloud_cover_max=L8MASK_CLOUD_COVER_MAX,
+                )
+                for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+            }
+        )
 
 # pastis_year_aligned keeps the pastis conventions (128x128 stored samples,
 # tile_samples, mIoU) rather than the AEF center-pixel ones, so it reuses the
