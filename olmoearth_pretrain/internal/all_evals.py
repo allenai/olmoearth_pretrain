@@ -1569,6 +1569,24 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
                 window_size=_ws,
                 dataset="pastis2_drom",
             ),
+            # Benchmark B (drop-6, 11-class): same data/split as pastis2_drom, but
+            # the registered `pastis2_drom_islands11` dataset + model.yaml remap the
+            # 6 rare classes to nodata (11-class head). S2 / S1+S2 / S2+Landsat.
+            f"pastis2_drom_islands11_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_islands11",
+            ),
+            f"pastis2_drom_islands11_ws{_ws}_ps1_sentinel1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_islands11",
+            ),
+            f"pastis2_drom_islands11_ws{_ws}_ps1_sentinel2_landsat": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=_ws,
+                dataset="pastis2_drom_islands11",
+            ),
             **{
                 f"{name}_ws{_ws}_ps1": _aef_ps1_task(
                     name, EvalMode.LINEAR_PROBE, window_size=_ws
