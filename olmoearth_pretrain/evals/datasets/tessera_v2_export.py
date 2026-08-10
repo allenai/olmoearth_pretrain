@@ -246,6 +246,21 @@ def resolve_spec(
     return spec
 
 
+class NoS2ScenesError(ValueError):
+    """A fetch window's S2 layer was prepared but matched zero scenes.
+
+    Zero S2 over a window is a real archive outcome, not only a pipeline
+    failure: glance has 4 windows hard against the antimeridian (Chukotka /
+    Wrangel Island, UTM zones 1 and 60) where Planetary Computer returns no
+    S2 for the whole year -- and the same gap hit their monthly eval layers,
+    so no eval reads those windows either. ``infer`` records them as
+    coverage gaps in the manifest (no imagery means no product, exactly like
+    a published product's coverage hole) rather than failures, which would
+    hard-block wire_embedding_modalities.py. An *unmaterialized* S2 layer
+    still raises a plain ValueError and counts as a failure.
+    """
+
+
 def scl_to_valid_mask(scl: np.ndarray) -> np.ndarray:
     """Per-pixel validity from the SCL band (1 = clear, 0 = cloud/nodata)."""
     return (~np.isin(scl, INVALID_SCL_CLASSES)).astype(np.uint8)
@@ -396,9 +411,11 @@ def build_dpixel_inputs(
     """
     s2, s2_doys = _read_scenes(fetch_window, S2_LAYER, S2_BAND_SETS)
     if s2.shape[0] == 0:
-        # Missing S1 passes can be real (orbit geometry); zero S2 scenes over
-        # an eval window can only be a fetch-pipeline failure.
-        raise ValueError(
+        # Missing S1 passes can be real (orbit geometry). Zero prepared S2
+        # scenes is a real archive gap too (see NoS2ScenesError) -- but the
+        # window cannot be embedded, so it is typed for infer to record as a
+        # coverage gap.
+        raise NoS2ScenesError(
             f"window {fetch_window.group}/{fetch_window.name} has zero "
             f"{S2_LAYER} scenes"
         )
@@ -632,19 +649,22 @@ def infer(
 
     def read_one(
         eval_window: Window,
-    ) -> tuple[Window, dict[str, Any] | None, bool]:
-        """Load one window's inputs -> (window, inputs or None, failed)."""
+    ) -> tuple[Window, dict[str, Any] | None, str]:
+        """Load one window's inputs -> (window, inputs or None, status)."""
         if not overwrite and provider.is_layer_written(eval_window, LAYER_NAME):
-            return eval_window, None, False
+            return eval_window, None, "skipped"
         try:
             inputs = build_dpixel_inputs(
                 fetch_windows[eval_window.name],
                 allow_unmaterialized_s1=allow_unmaterialized_s1,
             )
+        except NoS2ScenesError as e:
+            logger.warning(f"window {eval_window.name}: coverage gap -- {e}")
+            return eval_window, None, "gap"
         except Exception:
             logger.exception(f"window {eval_window.name}: reading inputs failed")
-            return eval_window, None, True
-        return eval_window, inputs, False
+            return eval_window, None, "failed"
+        return eval_window, inputs, "ok"
 
     def bounded_map(pool: ThreadPoolExecutor, windows: list[Window]) -> Any:
         """pool.map with bounded read-ahead.
@@ -666,13 +686,17 @@ def infer(
     written = 0
     skipped = 0
     failed: list[str] = []
+    coverage_gaps: list[str] = []
     # Overlap raster reads (I/O-bound) with GPU inference.
     with ThreadPoolExecutor(max_workers=read_workers) as pool:
-        for eval_window, inputs, read_failed in bounded_map(pool, eval_windows):
-            if read_failed:
+        for eval_window, inputs, status in bounded_map(pool, eval_windows):
+            if status == "failed":
                 failed.append(eval_window.name)
                 continue
-            if inputs is None:
+            if status == "gap":
+                coverage_gaps.append(eval_window.name)
+                continue
+            if status == "skipped":
                 skipped += 1
                 continue
             try:
@@ -697,9 +721,10 @@ def infer(
                 logger.info(f"{written}/{len(eval_windows)} windows written")
 
     # Same key names the embedding materializer writes, so the coverage gate in
-    # wire_embedding_modalities.py reads this manifest unchanged. There is no
-    # coverage-gap category here: we run the model ourselves, so a window
-    # either succeeds or lands in windows_failed.
+    # wire_embedding_modalities.py reads this manifest unchanged. Coverage
+    # gaps are windows whose S2 layer was prepared but matched zero scenes
+    # (see NoS2ScenesError): no imagery, no product -- distinct from
+    # windows_failed, which hard-blocks the wiring script.
     write_manifest(
         UPath(out_ds_path),
         LAYER_NAME,
@@ -714,8 +739,8 @@ def infer(
             ),
             "num_windows_written": written,
             "num_windows_skipped_existing": skipped,
-            "num_coverage_gaps": 0,
-            "coverage_gaps": [],
+            "num_coverage_gaps": len(coverage_gaps),
+            "coverage_gaps": sorted(coverage_gaps),
             "num_windows_without_year": 0,
             "windows_without_year": [],
             "num_windows_failed": len(failed),
@@ -729,7 +754,10 @@ def infer(
             },
         },
     )
-    logger.info(f"Done: {written} written, {skipped} skipped, {len(failed)} failed")
+    logger.info(
+        f"Done: {written} written, {skipped} skipped, "
+        f"{len(coverage_gaps)} coverage gaps, {len(failed)} failed"
+    )
     if failed:
         logger.warning(
             f"{len(failed)} windows failed; re-run to retry them "

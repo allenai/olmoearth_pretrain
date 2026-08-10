@@ -159,6 +159,27 @@ def test_resolve_spec_presets_and_overrides() -> None:
         resolve_spec(None)
 
 
+def test_zero_s2_scenes_raises_the_typed_coverage_gap_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prepared-but-zero-matches S2 is typed so infer records a coverage gap.
+
+    Real case: glance has 4 antimeridian windows with no S2 in the archive at
+    all. They must land in the manifest's coverage_gaps (tolerated by the
+    wiring coverage gate), not windows_failed (hard-blocks wiring).
+    """
+    empty = (
+        np.zeros((0, 2, 2, 10), dtype=np.float32),
+        np.zeros((0,), dtype=np.int64),
+    )
+    monkeypatch.setattr(tessera_v2_export, "_read_scenes", lambda *a, **k: empty)
+    window = SimpleNamespace(group="g", name="w", bounds=(0, 0, 2, 2))
+    with pytest.raises(tessera_v2_export.NoS2ScenesError):
+        tessera_v2_export.build_dpixel_inputs(window)
+    # Callers catching the old ValueError keep working.
+    assert issubclass(tessera_v2_export.NoS2ScenesError, ValueError)
+
+
 def test_every_year_aligned_dataset_has_a_per_window_year_preset() -> None:
     """All eight supplemental datasets resolve with per-window years.
 
