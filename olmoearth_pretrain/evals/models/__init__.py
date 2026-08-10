@@ -16,6 +16,10 @@ from olmoearth_pretrain.evals.models.panopticon.panopticon import (
     Panopticon,
     PanopticonConfig,
 )
+from olmoearth_pretrain.evals.models.precomputed.precomputed import (
+    PrecomputedEmbedding,
+    PrecomputedEmbeddingConfig,
+)
 from olmoearth_pretrain.evals.models.presto.presto import PrestoConfig, PrestoWrapper
 from olmoearth_pretrain.evals.models.prithviv2.prithviv2 import (
     PrithviV2,
@@ -45,6 +49,9 @@ class BaselineModelName(StrEnum):
     PRITHVI_V2 = "prithvi_v2"
     TERRAMIND = "terramind"
     CLAY = "clay"
+    # Precomputed embedding products (no forward pass; read off the sample)
+    AEF = "aef"
+    TESSERA_PRECOMPUTED = "tessera_precomputed"
 
 
 MODELS_WITH_MULTIPLE_SIZES: dict[BaselineModelName, Any] = {
@@ -80,6 +87,12 @@ def get_launch_script_path(model_name: str) -> str:
         return "olmoearth_pretrain/evals/models/tessera/tessera_launch.py"
     elif model_name == BaselineModelName.PRITHVI_V2:
         return "olmoearth_pretrain/evals/models/prithviv2/prithviv2_launch.py"
+    elif model_name == BaselineModelName.AEF:
+        return "olmoearth_pretrain/evals/models/precomputed/aef_launch.py"
+    elif model_name == BaselineModelName.TESSERA_PRECOMPUTED:
+        return (
+            "olmoearth_pretrain/evals/models/precomputed/tessera_precomputed_launch.py"
+        )
     else:
         raise ValueError(f"Invalid model name: {model_name}")
 
@@ -108,4 +121,6 @@ __all__ = [
     "TesseraConfig",
     "PrithviV2",
     "PrithviV2Config",
+    "PrecomputedEmbedding",
+    "PrecomputedEmbeddingConfig",
 ]

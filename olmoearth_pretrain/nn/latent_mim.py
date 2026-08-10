@@ -13,10 +13,15 @@ from torch.distributed.fsdp import (
     fully_shard,
     register_fsdp_forward_method,
 )
+from torch.distributed.tensor import DTensor
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.nn.supervision_head import (
+    SupervisionHead,
+    SupervisionHeadConfig,
+)
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
 
 logger = logging.getLogger(__name__)
@@ -77,6 +82,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         encoder: nn.Module,
         decoder: nn.Module,
         reconstructor: torch.nn.Module | None = None,
+        supervision_head: SupervisionHead | None = None,
         projection_only_target: bool = False,
     ):
         """Initialize the Latent MIM Style.
@@ -85,6 +91,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             encoder: The encoder to use.
             decoder: The decoder to use.
             reconstructor: Optional reconstructor for auto-encoding.
+            supervision_head: Optional supervision head for direct supervision
+                of decode-only modalities from decoder output.
             projection_only_target: If True, the target encoder is only the frozen
                 initial projection (patch embeddings + optional embedding projector)
                 instead of a full copy of the encoder. Only valid when all token
@@ -95,6 +103,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.encoder = encoder
         self.decoder = decoder
         self.reconstructor = reconstructor
+        self.supervision_head = supervision_head
         if projection_only_target:
             self.target_encoder: nn.Module = FrozenTargetProjection(self.encoder)
         else:
@@ -110,6 +119,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         torch.Tensor,
         TokensAndMasks | None,
         dict[str, Any],
+        dict[str, torch.Tensor] | None,
     ]:
         """Forward pass for the Latent MIM Style.
 
@@ -118,6 +128,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             decoded: predictions from decoder for masked tokens
             latent_projected_and_pooled: pooled tokens for contrastive loss
             reconstructed: MAE predictions if enabled
+            extra_metrics: additional metrics to log
+            supervision_preds: per-modality supervision predictions (or None)
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         output_dict = self.encoder(x, patch_size=patch_size)
@@ -128,18 +140,69 @@ class LatentMIM(nn.Module, DistributedMixins):
         extra_metrics = {}
         if token_norm_stats is not None:
             extra_metrics["token_norm_stats"] = token_norm_stats
+        # Log the learned per-read residual gates (when enabled) keyed by encoder read
+        # depth, so we can see whether the multi-depth reads stay distributed or collapse
+        # toward the final layer. Tiny (one scalar per read); full_tensor() gathers the
+        # FSDP-sharded parameter (a collective all ranks hit, since the flag is uniform).
+        register_bottleneck = getattr(self.encoder, "register_bottleneck", None)
+        if register_bottleneck is not None and getattr(
+            register_bottleneck, "learned_read_weighting", False
+        ):
+            gates = register_bottleneck.read_gates.detach()
+            if isinstance(gates, DTensor):
+                gates = gates.full_tensor()
+            read_layers = register_bottleneck.read_layers or list(
+                range(1, gates.numel() + 1)
+            )
+            extra_metrics["register_read_gates"] = {
+                str(layer): gates[i].item() for i, layer in enumerate(read_layers)
+            }
+        # Log the per-depth contribution norms of the fused read source (when enabled),
+        # keyed by encoder read depth. In the learned arm, drift of these norms (e.g.
+        # collapse onto the final layer) is the signal the A/B exists to measure; in the
+        # uniform arm they are ~constant by construction. Activations, not parameters, so
+        # no FSDP gather is needed.
+        if (
+            register_bottleneck is not None
+            and getattr(register_bottleneck, "fused_read", None) is not None
+            and register_bottleneck.last_read_source_norms is not None
+        ):
+            source_norms = register_bottleneck.last_read_source_norms
+            assert register_bottleneck.read_layers is not None
+            extra_metrics["register_read_source_norms"] = {
+                str(layer): source_norms[i].item()
+                for i, layer in enumerate(register_bottleneck.read_layers)
+            }
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
         decoded = self.decoder(
             latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
         )
+
+        supervision_preds = None
+        if self.supervision_head is not None:
+            if getattr(self.supervision_head, "register_supervision", False):
+                # Supervise the register grid directly: reshape [B, n_reg, D] to the
+                # spatial grid [B, n_h, n_w, D] the heads expect.
+                registers = decoder_kwargs.get("registers")
+                n_h, n_w = self.encoder.register_bottleneck.register_grid
+                register_grid = registers.reshape(
+                    registers.shape[0], n_h, n_w, registers.shape[-1]
+                )
+                supervision_preds = self.supervision_head(
+                    decoded, x, register_grid=register_grid
+                )
+            else:
+                supervision_preds = self.supervision_head(decoded, x)
+
         return (
             latent,
             decoded,
             latent_projected_and_pooled,
             reconstructed,
             extra_metrics,
+            supervision_preds,
         )
 
     def apply_fsdp(
@@ -165,6 +228,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             self.target_encoder.apply_fsdp(**fsdp_config)
         if self.reconstructor:
             self.reconstructor.apply_fsdp(**fsdp_config)
+        if self.supervision_head is not None:
+            fully_shard(self.supervision_head, **fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
@@ -179,6 +244,9 @@ class LatentMIM(nn.Module, DistributedMixins):
         if hasattr(self.target_encoder, "apply_compile"):
             self.target_encoder.apply_compile()
             logger.info("Applied torch.compile to the target encoder")
+        if self.supervision_head is not None:
+            self.supervision_head = torch.compile(self.supervision_head)
+            logger.info("Applied torch.compile to the supervision head")
 
 
 @dataclass
@@ -188,6 +256,7 @@ class LatentMIMConfig(Config):
     encoder_config: Config
     decoder_config: Config
     reconstructor_config: Config | None = None
+    supervision_head_config: SupervisionHeadConfig | None = None
     projection_only_target: bool = False
 
     def validate(self) -> None:
@@ -210,6 +279,34 @@ class LatentMIMConfig(Config):
         )
         if encoder_output_size != self.decoder_config.encoder_embedding_size:
             raise ValueError("Encoder embedding size must be consistent!")
+        encoder_uses_registers = getattr(
+            self.encoder_config, "use_register_bottleneck", False
+        )
+        decoder_uses_registers = getattr(
+            self.decoder_config, "use_register_bottleneck", False
+        )
+        if encoder_uses_registers != decoder_uses_registers:
+            raise ValueError(
+                "use_register_bottleneck must match between encoder and decoder"
+            )
+        if encoder_uses_registers:
+            encoder_register_dim = self.encoder_config.register_dim or (
+                self.encoder_config.embedding_size // 2
+            )
+            if self.decoder_config.register_dim != encoder_register_dim:
+                raise ValueError(
+                    "decoder_config.register_dim "
+                    f"({self.decoder_config.register_dim}) must match the encoder "
+                    f"register dim ({encoder_register_dim})"
+                )
+        if (
+            self.supervision_head_config is not None
+            and getattr(self.supervision_head_config, "register_supervision", False)
+            and not encoder_uses_registers
+        ):
+            raise ValueError(
+                "register_supervision requires the encoder register bottleneck"
+            )
 
     def build(self) -> "LatentMIM":
         """Build the Latent Predictor."""
@@ -221,9 +318,30 @@ class LatentMIMConfig(Config):
             if self.reconstructor_config is not None
             else None
         )
+        supervision_head = None
+        if self.supervision_head_config is not None:
+            if getattr(self.supervision_head_config, "register_supervision", False):
+                # Heads read the register grid, so embedding_dim is the register dim.
+                embedding_dim = self.encoder_config.register_dim or (
+                    self.encoder_config.embedding_size // 2
+                )
+            else:
+                output_embed_size = getattr(
+                    self.decoder_config, "output_embedding_size", None
+                )
+                embedding_dim = (
+                    output_embed_size
+                    if output_embed_size is not None
+                    else self.encoder_config.embedding_size
+                )
+            supervision_head = self.supervision_head_config.build(
+                embedding_dim=embedding_dim,
+                max_patch_size=self.encoder_config.max_patch_size,
+            )
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
+            supervision_head=supervision_head,
             projection_only_target=self.projection_only_target,
         )

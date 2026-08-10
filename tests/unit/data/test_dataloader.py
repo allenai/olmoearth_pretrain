@@ -2,6 +2,7 @@
 
 import functools
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
@@ -116,6 +117,183 @@ def test_get_batch_item_params_iterator(tmp_path: Path, setup_h5py_dir: Path) ->
         third_sampled_hw_p = third_batch[0][2]
         assert all(item[1] == third_patch_size for item in third_batch)
         assert all(item[2] == third_sampled_hw_p for item in third_batch)
+
+
+def _build_shape_sampling_dataloader(
+    tmp_path: Path,
+    setup_h5py_dir: Path,
+    *,
+    token_budget: int,
+    sampled_hw_p_list: list[int],
+    time_priority_prob: float,
+    exclude_only_decode_from_budget: bool,
+    patch_size_probs: list[float] | None = None,
+    temporal_bias: float = 0.0,
+    min_tokens_per_instance: int = 0,
+    min_patch_size: int = 1,
+    max_patch_size: int = 1,
+    tile_size: int = 256,
+) -> OlmoEarthDataLoader:
+    """Build a dataloader exercising the (patch_size, hw_p, t) shape sampler."""
+    training_modalities = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+        Modality.WORLDCOVER.name,
+        Modality.OPENSTREETMAP_RASTER.name,
+    ]
+    dataset = OlmoEarthDataset(
+        h5py_dir=setup_h5py_dir,
+        training_modalities=training_modalities,
+        dtype=np.float32,
+    )
+    masking_strategy = MaskingConfig(
+        strategy_config={
+            "type": "random_time_with_decode",
+            "only_decode_modalities": [
+                Modality.WORLDCOVER.name,
+                Modality.OPENSTREETMAP_RASTER.name,
+            ],
+        }
+    ).build()
+    collator = functools.partial(
+        collate_single_masked_batched, transform=None, masking_strategy=masking_strategy
+    )
+    dataset.prepare()
+    return OlmoEarthDataLoader(
+        dataset=dataset,
+        work_dir=tmp_path,
+        global_batch_size=1,
+        dp_world_size=1,
+        dp_rank=0,
+        fs_local_rank=0,
+        seed=0,
+        shuffle=True,
+        num_workers=0,
+        collator=collator,
+        target_device_type="cpu",
+        token_budget=token_budget,
+        min_patch_size=min_patch_size,
+        max_patch_size=max_patch_size,
+        sampled_hw_p_list=sampled_hw_p_list,
+        patch_size_probs=patch_size_probs,
+        time_priority_prob=time_priority_prob,
+        temporal_bias=temporal_bias,
+        min_tokens_per_instance=min_tokens_per_instance,
+        max_timesteps=12,
+        tile_size=tile_size,
+        exclude_only_decode_from_budget=exclude_only_decode_from_budget,
+        masking_strategy=masking_strategy,
+        num_masked_views=1,
+    )
+
+
+def test_shape_sampler_emits_target_t_and_respects_budget(
+    tmp_path: Path, setup_h5py_dir: Path
+) -> None:
+    """target_t is emitted, capped by the budget, and hw_p>12 is reachable."""
+    dl = _build_shape_sampling_dataloader(
+        tmp_path,
+        setup_h5py_dir,
+        token_budget=4096,
+        sampled_hw_p_list=[4, 8, 16, 24],
+        time_priority_prob=0.5,
+        exclude_only_decode_from_budget=True,
+    )
+    dl.reshuffle()
+    dw = _IterableDatasetWrapper(dl)
+
+    st, so = dl._st_bandsets, dl._so_bandsets
+    static, tbs = dl._static_bandsets, dl._time_bandsets
+    assert dl.token_budget is not None
+    budget = cast(int, dl.token_budget)
+
+    def budget_max_t(hw: int) -> int:
+        per_t = st * hw * hw + tbs
+        remaining = budget - (so * hw * hw + static)
+        return min(dl.max_timesteps, remaining // per_t)
+
+    items = list(
+        dw._get_batch_item_params_iterator(
+            np.arange(400), dl.patch_sizes, dl.sampled_hw_p_list, rank_batch_size=4
+        )
+    )
+
+    assert all(len(it) == 4 for it in items)
+    hw_seen: set[int] = set()
+    t_by_hw: dict[int, set[int]] = {}
+    for _idx, ps, hw, t in items:
+        assert 1 <= t <= budget_max_t(hw), f"t={t} exceeds budget cap for hw={hw}"
+        assert hw * ps <= dl.tile_size
+        hw_seen.add(hw)
+        t_by_hw.setdefault(hw, set()).add(t)
+    # Large grids (>12, impossible under the old IMAGE_TILE_SIZE cap here) are reachable.
+    assert max(hw_seen) >= 16
+    # target_t is now an independent axis: for a grid that admits a full year it is
+    # not pinned to the budget maximum, so we observe multiple distinct t values.
+    assert any(len(ts) > 1 for hw, ts in t_by_hw.items() if budget_max_t(hw) > 1)
+    # And a full-year sequence is sampled for at least one feasible grid.
+    assert any(dl.max_timesteps in ts for ts in t_by_hw.values())
+
+
+def test_min_tokens_floor_and_temporal_bias(
+    tmp_path: Path, setup_h5py_dir: Path
+) -> None:
+    """The token floor removes tiny shapes; temporal_bias favours fuller sequences."""
+    dl = _build_shape_sampling_dataloader(
+        tmp_path,
+        setup_h5py_dir,
+        token_budget=8192,
+        sampled_hw_p_list=[1, 2, 4, 8, 12],
+        time_priority_prob=0.5,
+        exclude_only_decode_from_budget=True,
+        temporal_bias=3.0,
+        min_tokens_per_instance=36,
+    )
+    dl.reshuffle()
+    dw = _IterableDatasetWrapper(dl)
+
+    st = dl._st_bandsets  # spacetime band-sets (maps excluded)
+    items = list(
+        dw._get_batch_item_params_iterator(
+            np.arange(600), dl.patch_sizes, dl.sampled_hw_p_list, rank_batch_size=4
+        )
+    )
+    tokens = [(hw, t, st * hw * hw * t) for _idx, _ps, hw, t in items]
+    # Floor holds: no shape costs fewer than min_tokens, so the hw=1,t=1 corner is gone.
+    assert all(tok >= 36 for _hw, _t, tok in tokens)
+    assert not any(hw == 1 and t == 1 for hw, t, _tok in tokens)
+    # hw=1 costs st tokens/timestep, so a 36-token floor forces t >= ceil(36/st):
+    # small grids are pushed onto long sequences.
+    min_t_h1 = -(-36 // st)
+    assert all(t >= min_t_h1 for hw, t, _tok in tokens if hw == 1)
+    # Temporal bias pushes the mean sequence length well above the uniform midpoint.
+    mean_t = float(np.mean([t for _hw, t, _tok in tokens]))
+    assert mean_t > 7.0
+
+
+def test_exclude_only_decode_frees_budget(tmp_path: Path, setup_h5py_dir: Path) -> None:
+    """Excluding decode-only maps from the budget lowers the space-only rate."""
+    with_maps = _build_shape_sampling_dataloader(
+        tmp_path / "a",
+        setup_h5py_dir,
+        token_budget=4096,
+        sampled_hw_p_list=[8, 16],
+        time_priority_prob=0.0,
+        exclude_only_decode_from_budget=False,
+    )
+    without_maps = _build_shape_sampling_dataloader(
+        tmp_path / "b",
+        setup_h5py_dir,
+        token_budget=4096,
+        sampled_hw_p_list=[8, 16],
+        time_priority_prob=0.0,
+        exclude_only_decode_from_budget=True,
+    )
+    assert without_maps.budget_exclude_modalities == frozenset(
+        [Modality.WORLDCOVER.name, Modality.OPENSTREETMAP_RASTER.name]
+    )
+    # Space-only band-set rate drops once the maps stop counting against budget.
+    assert without_maps._so_bandsets < with_maps._so_bandsets
 
 
 def _create_test_dataloader(

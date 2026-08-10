@@ -86,6 +86,7 @@ class GeobenchDataset(Dataset):
         # so when using dataset stats (e.g. for MADOS) consistency is important.
         norm_method: str = "norm_no_clip_2_std",
         visualize_samples: bool = False,
+        tile_size: int | None = None,
     ):
         """Init GeoBench dataset.
 
@@ -97,6 +98,11 @@ class GeobenchDataset(Dataset):
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
             visualize_samples: Whether to visualize samples
+            tile_size: If set, split each native image into non-overlapping
+                ``tile_size x tile_size`` windows (every pixel kept, sample count
+                scaled by ``(native // tile_size) ** 2``). Must divide the dataset's
+                native ``height_width``. Used to shrink the spatial token grid the
+                model/register-read sees. None = return the native image.
         """
         if label_fraction not in _LABEL_FRACTION_TO_PARTITION:
             valid = ", ".join(
@@ -170,6 +176,27 @@ class GeobenchDataset(Dataset):
         self.norm_method = norm_method
         self.visualize_samples = visualize_samples
 
+        # Optional tiling: each native image becomes (native // tile_size)**2
+        # non-overlapping tile_size x tile_size windows.
+        self.tile_size = tile_size
+        if tile_size is not None:
+            native = config.height_width
+            if native is None:
+                raise ValueError(
+                    f"tile_size={tile_size} requires a height_width in the config "
+                    f"for dataset {dataset}, but it is None."
+                )
+            if native % tile_size != 0:
+                raise ValueError(
+                    f"tile_size={tile_size} must evenly divide the native "
+                    f"height_width={native} for dataset {dataset}."
+                )
+            self.tiles_per_dim = native // tile_size
+            self.tiles_per_image = self.tiles_per_dim**2
+        else:
+            self.tiles_per_dim = 1
+            self.tiles_per_image = 1
+
         self.multiply_by_10_000 = False
         if dataset == "m-so2sat":
             logging.info(f"self.multiply_by_10_000 set to True for {dataset}")
@@ -230,7 +257,15 @@ class GeobenchDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
         """Return a single GeoBench data instance."""
-        sample = self.dataset[idx]
+        # With tiling, idx indexes (image, tile); recover both and the window offset.
+        if self.tile_size is not None:
+            image_idx, tile_idx = divmod(idx, self.tiles_per_image)
+            tile_row, tile_col = divmod(tile_idx, self.tiles_per_dim)
+            row0, col0 = tile_row * self.tile_size, tile_col * self.tile_size
+        else:
+            image_idx, row0, col0 = idx, 0, 0
+
+        sample = self.dataset[image_idx]
         label = sample.label
 
         x_list = [sample.bands[band_idx].data for band_idx in self.band_indices]
@@ -243,6 +278,8 @@ class GeobenchDataset(Dataset):
         )
 
         x = np.stack(x_list, axis=2)  # (h, w, 13)
+        if self.tile_size is not None:
+            x = x[row0 : row0 + self.tile_size, col0 : col0 + self.tile_size]
         if self.visualize_samples:
             self.visualize_sample_bands(x, f"./visualizations/sample_{idx}")
         if self.is_landsat:
@@ -270,6 +307,11 @@ class GeobenchDataset(Dataset):
             label = label.data
             # label is a memoryview object, convert it to a list, and then to a numpy array
             label = np.array(list(label))
+            # Segmentation label is a (h, w) mask; crop it to the same tile window as x.
+            if self.tile_size is not None and getattr(label, "ndim", 0) == 2:
+                label = label[
+                    row0 : row0 + self.tile_size, col0 : col0 + self.tile_size
+                ]
 
         target = torch.tensor(label, dtype=torch.long)
 
@@ -323,8 +365,8 @@ class GeobenchDataset(Dataset):
         return masked_sample, target
 
     def __len__(self) -> int:
-        """Length of dataset."""
-        return len(self.dataset)
+        """Length of dataset (native images x tiles per image)."""
+        return len(self.dataset) * self.tiles_per_image
 
     def visualize_sample_bands(self, x: np.ndarray, output_dir: str) -> None:
         """Visualize each band from a given array, saving each plot as a PNG file in the specified output_dir.

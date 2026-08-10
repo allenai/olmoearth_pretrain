@@ -54,6 +54,93 @@ def mock_pastis_data(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.fixture
+def mock_pastis_data_with_gse(mock_pastis_data: Path) -> tuple[Path, torch.Tensor]:
+    """Add a mock precomputed GSE embedding to the mock PASTIS data."""
+    gse = torch.randn(len(Modality.GSE.band_order), 64, 64)
+    gse_path = mock_pastis_data / "pastis_r_train" / "gse_images" / "0.pt"
+    os.makedirs(gse_path.parent, exist_ok=True)
+    torch.save(gse, gse_path)
+    return mock_pastis_data, gse
+
+
+def test_pastis_dataset_gse_embeddings(
+    mock_pastis_data_with_gse: tuple[Path, torch.Tensor],
+) -> None:
+    """Precomputed embeddings load as (H, W, 1, C) without normalization."""
+    path_to_splits, gse = mock_pastis_data_with_gse
+    dataset = PASTISRDataset(
+        path_to_splits=path_to_splits,
+        split="train",
+        input_modalities=[Modality.GSE.name],
+    )
+    sample, label = dataset[0]
+
+    assert sample.gse is not None
+    assert sample.gse.shape == (64, 64, 1, len(Modality.GSE.band_order))
+    # Consumed exactly as stored: no normalization applied.
+    torch.testing.assert_close(sample.gse[:, :, 0, :], gse.permute(1, 2, 0))
+    # Imagery is not loaded when not requested.
+    assert sample.sentinel2_l2a is None
+    assert sample.sentinel1 is None
+    assert label.shape == (64, 64)
+
+
+def test_pastis_dataset_window_size_tiles_samples(
+    mock_pastis_data_with_gse: tuple[Path, torch.Tensor],
+) -> None:
+    """window_size tiles imagery, embeddings, and labels consistently."""
+    path_to_splits, gse = mock_pastis_data_with_gse
+    full = PASTISRDataset(
+        path_to_splits=path_to_splits,
+        split="train",
+        input_modalities=[Modality.SENTINEL2_L2A.name, Modality.GSE.name],
+    )
+    tiled = PASTISRDataset(
+        path_to_splits=path_to_splits,
+        split="train",
+        input_modalities=[Modality.SENTINEL2_L2A.name, Modality.GSE.name],
+        window_size=32,
+    )
+    assert len(full) == 1
+    assert len(tiled) == 4
+
+    full_sample, full_labels = full[0]
+    # Tile 3 is (row 1, col 1) -> the bottom-right 32x32 window.
+    sample, labels = tiled[3]
+    assert sample.sentinel2_l2a is not None and sample.gse is not None
+    assert full_sample.sentinel2_l2a is not None and full_sample.gse is not None
+    assert sample.sentinel2_l2a.shape[:2] == (32, 32)
+    assert sample.gse.shape == (32, 32, 1, len(Modality.GSE.band_order))
+    assert labels.shape == (32, 32)
+    torch.testing.assert_close(
+        sample.sentinel2_l2a, full_sample.sentinel2_l2a[32:, 32:]
+    )
+    torch.testing.assert_close(sample.gse, full_sample.gse[32:, 32:])
+    torch.testing.assert_close(labels, full_labels[32:, 32:])
+
+
+def test_pastis_dataset_window_size_must_divide(mock_pastis_data: Path) -> None:
+    """A window_size that doesn't divide the sample size raises."""
+    with pytest.raises(ValueError, match="must divide"):
+        PASTISRDataset(
+            path_to_splits=mock_pastis_data,
+            split="train",
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            window_size=48,
+        )
+
+
+def test_pastis_dataset_missing_embeddings_raise(mock_pastis_data: Path) -> None:
+    """Requesting embeddings from splits without them gives a clear error."""
+    with pytest.raises(FileNotFoundError, match="--embedding_products"):
+        PASTISRDataset(
+            path_to_splits=mock_pastis_data,
+            split="train",
+            input_modalities=[Modality.TESSERA.name],
+        )
+
+
 def test_pastis_dataset_initialization(mock_pastis_data: Path) -> None:
     """Test basic initialization and functionality of PASTISRDataset."""
     # Test multimodal initialization

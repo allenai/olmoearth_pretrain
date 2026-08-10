@@ -13,6 +13,12 @@ Adding a new eval dataset requires two things:
 1. **Ingest** — copy the rslearn dataset to Weka, compute splits and band stats, register it
 2. **Wire up** — add a `DownstreamTaskConfig` to a training script so it runs as a loop eval
 
+Optionally, to make the dataset evaluable by precomputed embedding products
+(AlphaEarth/GSE, Tessera): the dataset is eligible if its windows have real
+geometry and a resolvable year. After ingest, run the embedding materializer
+over it, add a `gse`/`tessera` layer entry to its `model.yaml`, and list the
+modality in its `supported_modalities`. See `docs/PrecomputedEmbeddingEvals.md`.
+
 ---
 
 ## Prerequisites
@@ -76,6 +82,7 @@ tail -f "${NAME}_ingest.out"
 | `--overwrite` | | Re-ingest if already exists |
 | `--source-groups` | | Comma-separated list of rslearn groups to include |
 | `--untar-source` | | Use if source is a `.tar.gz` archive on GCS |
+| `--start-time` / `--end-time` | | Imagery time range (`YYYY-MM-DD`), recorded on the registry entry so eval-time (monthly) timestamps match the imagery months. Omit to use the loader default (2022-09 to 2023-09) |
 
 ### Verify
 

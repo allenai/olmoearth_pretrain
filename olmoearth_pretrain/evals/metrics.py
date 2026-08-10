@@ -12,6 +12,7 @@ import torch
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
+    balanced_accuracy_score,
     f1_score,
     roc_auc_score,
 )
@@ -21,6 +22,11 @@ class EvalMetric(StrEnum):
     """Available eval metrics."""
 
     ACCURACY = "accuracy"
+    # Mean per-class recall for single-label classification. This is the metric
+    # reported by the AlphaEarth Foundations evaluation protocol
+    # (arXiv:2507.22291), so tasks compared against AEF's published numbers
+    # should select it as their primary metric.
+    BALANCED_ACCURACY = "balanced_accuracy"
     F1 = "f1"
     CLASS_F1 = "class_f1"
     MICRO_F1 = "micro_f1"
@@ -121,6 +127,7 @@ class EvalResult:
     def from_classification(
         cls,
         accuracy: float,
+        balanced_accuracy: float | None = None,
         f1: float | None = None,
         macro_f1: float | None = None,
         per_class_f1: list[float] | None = None,
@@ -136,6 +143,8 @@ class EvalResult:
         Primary metric defaults to F1 for multilabel, ACCURACY for single-label.
         """
         metrics: dict[str, float] = {EvalMetric.ACCURACY.value: accuracy}
+        if balanced_accuracy is not None:
+            metrics[EvalMetric.BALANCED_ACCURACY.value] = balanced_accuracy
         if f1 is not None:
             metrics[EvalMetric.F1.value] = f1
         if macro_f1 is not None:
@@ -465,6 +474,7 @@ def classification_metrics(
         )
 
     accuracy = accuracy_score(labels_np, preds_np)
+    balanced_accuracy = float(balanced_accuracy_score(labels_np, preds_np))
     macro_f1 = f1_score(labels_np, preds_np, average="macro", zero_division=0)
     per_class_f1 = f1_score(labels_np, preds_np, average=None, zero_division=0).tolist()
     one_hot = _indices_to_one_hot(labels_np, scores_np.shape[-1])
@@ -472,6 +482,7 @@ def classification_metrics(
     prauc = _macro_binary_score(scores_np, one_hot, average_precision_score)
     return EvalResult.from_classification(
         accuracy,
+        balanced_accuracy=balanced_accuracy,
         macro_f1=macro_f1,
         per_class_f1=per_class_f1,
         auroc=auroc,

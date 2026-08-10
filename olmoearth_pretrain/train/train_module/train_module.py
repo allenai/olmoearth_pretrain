@@ -1,8 +1,10 @@
 """Training and optimizer abstraction for OlmoEarth Pretrain."""
 
 import contextlib
+import dataclasses
 import itertools
 import json
+import os
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from logging import getLogger
@@ -19,7 +21,7 @@ from olmo_core.distributed.parallel import (
     get_dp_mesh,
     get_dp_process_group,
 )
-from olmo_core.distributed.utils import get_world_size
+from olmo_core.distributed.utils import get_local_tensor, get_world_size
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
@@ -402,7 +404,60 @@ class OlmoEarthTrainModule(TrainModule):
     ) -> dict[str, Any]:
         """Get the state dict to load."""
         load_opts = self.state_dict_load_opts
-        return self._get_state_dict(load_opts)
+        state_dict = self._get_state_dict(load_opts)
+        if os.environ.get("OE_LOAD_SKIP_MISMATCHED_KEYS"):
+            self._drop_mismatched_keys(state_dict, metadata)
+        return state_dict
+
+    def _drop_mismatched_keys(
+        self, state_dict: dict[str, Any], metadata: Metadata
+    ) -> None:
+        """Drop keys whose checkpoint shape mismatches the current model.
+
+        Opt-in via ``OE_LOAD_SKIP_MISMATCHED_KEYS=1``, for loading a checkpoint
+        whose architecture has drifted in ways that do not matter for the run —
+        e.g. evaluating S2-only tasks with a checkpoint whose srtm
+        patch-embedding was trained at a different band count than the current
+        model builds (say [64, 4] saved vs [64, 1] now). Dropped parameters keep
+        their fresh initialization; optimizer state is skipped entirely (the
+        flattened optimizer format requires an entry per current param, so a
+        partial optimizer load is not possible), and missing-key strictness is
+        relaxed so the partial load succeeds. Never set this when resuming
+        training: a silently unloaded weight — and a fresh optimizer — is a
+        bug there, not a convenience.
+        """
+        dropped: list[str] = []
+        for key, value in list(state_dict["model"].items()):
+            shape = getattr(value, "shape", None)
+            if shape is None:
+                continue
+            meta = metadata.state_dict_metadata.get(f"model.{key}")
+            saved_size = getattr(meta, "size", None)
+            if meta is not None and (
+                saved_size is None or tuple(saved_size) == tuple(shape)
+            ):
+                continue
+            del state_dict["model"][key]
+            dropped.append(key)
+            logger.warning(
+                "OE_LOAD_SKIP_MISMATCHED_KEYS: not loading '%s' "
+                "(checkpoint: %s, model: %s); keeping fresh initialization.",
+                key,
+                tuple(saved_size) if saved_size is not None else "<absent>",
+                tuple(shape),
+            )
+        if not dropped:
+            return
+        if state_dict.pop("optim", None) is not None:
+            logger.warning(
+                "OE_LOAD_SKIP_MISMATCHED_KEYS: skipping optimizer state entirely "
+                "(%d model key(s) were dropped, and the flattened optimizer "
+                "format cannot be partially loaded).",
+                len(dropped),
+            )
+        self.state_dict_load_opts = dataclasses.replace(
+            self.state_dict_load_opts, strict=False
+        )
 
     def state_dict_to_save(self) -> dict[str, Any]:
         """Get the state dict to save."""
@@ -416,6 +471,11 @@ class OlmoEarthTrainModule(TrainModule):
             options=self.state_dict_load_opts,
         )
         gc_cuda()
+        if "optim" not in state_dict:
+            # _drop_mismatched_keys removed it (OE_LOAD_SKIP_MISMATCHED_KEYS);
+            # the optimizer keeps its fresh state.
+            logger.warning("No optimizer state in the load plan; not loading any.")
+            return
         dist_cp_sd.set_optimizer_state_dict(
             self.model,
             self.optimizer,
@@ -654,6 +714,50 @@ class OlmoEarthTrainModule(TrainModule):
             total_batch_reg,
             ReduceType.mean,
         )
+
+    def accumulate_extra_metrics(
+        self,
+        accumulator: dict[str, Any],
+        counts: dict[str, int],
+        extra_metrics: dict[str, Any],
+    ) -> None:
+        """Accumulate extra metrics across microbatches.
+
+        Extra metrics used to be logged once per microbatch, which trips
+        olmo-core's duplicate-metric warning (it keeps the first value for a
+        given step/name and warns on the rest). We instead accumulate here and
+        log once per step, like the train loss.
+
+        Flattens one level of nesting to match ``log_extra_metrics`` key naming,
+        and tracks a per-key count so metrics present in only some microbatches
+        (e.g. a supervision modality absent from a microbatch) are averaged over
+        the microbatches that actually contributed them.
+        """
+
+        def _add(name: str, value: Any) -> None:
+            if isinstance(value, torch.Tensor):
+                value = get_local_tensor(value.detach())
+            accumulator[name] = accumulator.get(name, 0) + value
+            counts[name] = counts.get(name, 0) + 1
+
+        for key, value in extra_metrics.items():
+            if isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    _add(f"{key}/{sub_key}", sub_value)
+            else:
+                _add(key, value)
+
+    def log_accumulated_extra_metrics(
+        self,
+        accumulator: dict[str, Any],
+        counts: dict[str, int],
+        reduce_type: ReduceType | None = None,
+    ) -> None:
+        """Log metrics accumulated across microbatches, averaged per key."""
+        if not counts:
+            return
+        averaged = {name: total / counts[name] for name, total in accumulator.items()}
+        self.log_extra_metrics(averaged, reduce_type=reduce_type)
 
     def log_extra_metrics(
         self, extra_metrics: dict[str, Any], reduce_type: ReduceType | None = None

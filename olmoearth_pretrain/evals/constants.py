@@ -14,6 +14,10 @@ RSLEARN_TO_OLMOEARTH: dict[str, ModalitySpec] = {
     "sentinel1_ascending": Modality.SENTINEL1,
     "sentinel1_descending": Modality.SENTINEL1,
     "landsat": Modality.LANDSAT,
+    # Precomputed embedding products, baked into eval datasets as layers by
+    # the embedding materializer or a dataset export script.
+    "gse": Modality.GSE,
+    "tessera": Modality.TESSERA,
 }
 
 

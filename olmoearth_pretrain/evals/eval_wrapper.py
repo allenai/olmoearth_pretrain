@@ -16,6 +16,7 @@ from olmoearth_pretrain.evals.models import (
     DINOv3,
     GalileoWrapper,
     Panopticon,
+    PrecomputedEmbedding,
     PrestoWrapper,
     PrithviV2,
     Satlas,
@@ -48,6 +49,7 @@ class EvalWrapper:
         pooling_type: PoolingType,
         concat_features: bool = False,
         use_pooled_tokens: bool = False,
+        eval_on_encoder_tokens: bool = False,
         use_center_token: bool = False,
     ):
         """Initialize the eval wrapper.
@@ -59,6 +61,10 @@ class EvalWrapper:
             pooling_type: The pooling type to use for the model.
             concat_features: Whether to concatenate features across modalities.
             use_pooled_tokens: Whether to use pooled tokens.
+            eval_on_encoder_tokens: If True and the model has a register bottleneck,
+                probe the pooled encoder patch tokens instead of the register latents.
+                No effect when the model has no register bottleneck (encoder tokens are
+                always used in that case).
             use_center_token: Whether to use the center spatial patch embedding instead
                 of pooling across all patches for classification tasks.
         """
@@ -76,6 +82,7 @@ class EvalWrapper:
             TaskType.PER_PIXEL_REGRESSION,
         )
         self.use_pooled_tokens = use_pooled_tokens
+        self.eval_on_encoder_tokens = eval_on_encoder_tokens
         self.use_center_token = use_center_token
         if self.use_center_token and self.spatial_pool:
             raise ValueError(
@@ -139,6 +146,19 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                     return True
         return False
 
+    def _pool_registers(self, encoder_output: dict[str, Any]) -> torch.Tensor:
+        """Pool the register grid into the eval embedding.
+
+        For spatial tasks (segmentation/regression) the grid is returned as a coarse
+        ``[B, n_h, n_w, D]`` spatial map for the downstream head to upsample; otherwise
+        the registers are pooled across the grid to ``[B, D]``.
+        """
+        registers = encoder_output["registers"]  # [B, n_reg, D]
+        if self.spatial_pool:
+            n_h, n_w = self.model.register_bottleneck.register_grid
+            return rearrange(registers, "b (h w) d -> b h w d", h=n_h, w=n_w)
+        return reduce(registers, "b n d -> b d", self.pooling_type)
+
     def __call__(
         self,
         masked_olmoearth_sample: MaskedOlmoEarthSample,
@@ -148,26 +168,39 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         """Forward pass through the model produces the embedding specified by initialization."""
         if not self.use_pooled_tokens:
             fast_pass = not self._has_missing_tokens(masked_olmoearth_sample)
-            batch_embeddings: TokensAndMasks = self.model(
+            encoder_output = self.model(
                 masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=fast_pass
-            )["tokens_and_masks"]  # (bsz, dim)
-            # Concat features across modalities in space averaged across time
-            if self.use_center_token:
-                # Get spatial embeddings (B, H, W, D) then take center patch
-                batch_embeddings = pool_unmasked_tokens(
-                    batch_embeddings,
-                    self.pooling_type,
-                    spatial_pooling=True,
-                    concat_features=self.concat_features,
-                )
-                batch_embeddings = self._extract_center_token(batch_embeddings)
+            )
+            if (
+                not self.eval_on_encoder_tokens
+                and getattr(self.model, "use_register_bottleneck", False)
+                and "registers" in encoder_output
+            ):
+                # Register bottleneck: probe the register grid (the model's compressed,
+                # spatially-anchored representation), not the per-modality patch tokens.
+                # Opt out with eval_on_encoder_tokens to fall through to the patch tokens.
+                batch_embeddings = self._pool_registers(encoder_output)
             else:
-                batch_embeddings = pool_unmasked_tokens(
-                    batch_embeddings,
-                    self.pooling_type,
-                    spatial_pooling=self.spatial_pool,
-                    concat_features=self.concat_features,
-                )
+                tokens_and_masks: TokensAndMasks = encoder_output[
+                    "tokens_and_masks"
+                ]  # (bsz, dim)
+                # Concat features across modalities in space averaged across time
+                if self.use_center_token:
+                    # Get spatial embeddings (B, H, W, D) then take center patch
+                    batch_embeddings = pool_unmasked_tokens(
+                        tokens_and_masks,
+                        self.pooling_type,
+                        spatial_pooling=True,
+                        concat_features=self.concat_features,
+                    )
+                    batch_embeddings = self._extract_center_token(batch_embeddings)
+                else:
+                    batch_embeddings = pool_unmasked_tokens(
+                        tokens_and_masks,
+                        self.pooling_type,
+                        spatial_pooling=self.spatial_pool,
+                        concat_features=self.concat_features,
+                    )
         else:
             pooled_tokens_dict = self.model(
                 masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True
@@ -457,6 +490,31 @@ class SatlasEvalWrapper(EvalWrapper):
         return batch_embeddings, labels
 
 
+class PrecomputedEmbeddingEvalWrapper(EvalWrapper):
+    """Wrapper for precomputed embedding products (e.g. AlphaEarth/GSE).
+
+    The "model" reads embeddings baked into the sample as a data modality, so
+    this wrapper only handles the shared pooling/center-token conventions.
+    """
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Read the precomputed embeddings carried by the sample."""
+        spatial_pool = self.spatial_pool or self.use_center_token
+        batch_embeddings = self.model(
+            masked_olmoearth_sample,
+            pooling=self.pooling_type,
+            spatial_pool=spatial_pool,
+        )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
+        return batch_embeddings, labels
+
+
 class TesseraEvalWrapper(EvalWrapper):
     """Wrapper for Tessera models."""
 
@@ -521,6 +579,9 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     elif isinstance(model, Tessera):
         logger.info("Using TesseraEvalWrapper")
         return TesseraEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, PrecomputedEmbedding):
+        logger.info("Using PrecomputedEmbeddingEvalWrapper")
+        return PrecomputedEmbeddingEvalWrapper(model=model, **kwargs)
     elif isinstance(model, PrithviV2):
         logger.info("Using PrithviEvalWrapper")
         return PrithviV2EvalWrapper(model=model, **kwargs)
