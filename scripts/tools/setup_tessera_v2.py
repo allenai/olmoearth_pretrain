@@ -437,6 +437,16 @@ def main() -> int:
         "MATERIALIZE (rslearn shuffles window order, so jobs cooperate); "
         "useless for prepare, which is rate-limit-bound.",
     )
+    parser.add_argument(
+        "--stage",
+        default=None,
+        choices=["prepare", "materialize"],
+        help="Force this launch stage instead of the detected one. Needed to "
+        "re-run prepare after sparse failures: a few hundred failed windows "
+        "out of tens of thousands is invisible to the readiness sample, so "
+        "detection would advance to materialize with the gaps still open. "
+        "A re-run only re-queries window-layers with no items yet.",
+    )
     parser.add_argument("--image", default=DEFAULT_IMAGE)
     parser.add_argument(
         "--priority",
@@ -533,6 +543,10 @@ def main() -> int:
 
         if not do_launch:
             continue
+        if args.stage and stage != "apply":
+            if stage != args.stage:
+                print(f"  forcing stage {args.stage} (detected: {stage})")
+            stage = args.stage
         if stage not in ("prepare", "materialize"):
             print_next_steps(name, stage, state, stage_path, eval_path, args.checkpoint)
             continue
