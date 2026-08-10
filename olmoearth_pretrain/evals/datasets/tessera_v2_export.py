@@ -150,6 +150,18 @@ class DatasetSpec:
 # (Jan 1 Y, Jan 1 Y+1) by reanchor_year_aligned_dataset.py, so their own range
 # is already the product year and is read per window -- which is what a
 # multi-year dataset needs, since no single --year would be right for it.
+# scripts/tools/setup_tessera_v2.py orchestrates the pipeline across all of
+# YEAR_ALIGNED_DATASETS.
+YEAR_ALIGNED_DATASETS = (
+    "africa_crop_mask",
+    "canada_crops_coarse",
+    "canada_crops_fine",
+    "descals",
+    "ethiopia_crops",
+    "glance",
+    "lcmap_lu",
+    "us_trees",
+)
 DATASETS: dict[str, DatasetSpec] = {
     "pastis_rslearn": DatasetSpec(
         fetch_group="pastis_tessera_v2", eval_groups=["pastis"], year=2019
@@ -157,10 +169,10 @@ DATASETS: dict[str, DatasetSpec] = {
     "pastis_year_aligned": DatasetSpec(
         fetch_group="pastis_tessera_v2", eval_groups=["pastis"], year=2019
     ),
-    "africa_crop_mask_year_aligned": DatasetSpec(
-        fetch_group="africa_crop_mask_tessera_v2"
-    ),
-    "ethiopia_crops_year_aligned": DatasetSpec(fetch_group="ethiopia_crops_tessera_v2"),
+    **{
+        f"{name}_year_aligned": DatasetSpec(fetch_group=f"{name}_tessera_v2")
+        for name in YEAR_ALIGNED_DATASETS
+    },
 }
 
 # Tessera's S2 input channel order (see tessera_v2_model.S2_BAND_ORDER),

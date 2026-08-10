@@ -159,6 +159,20 @@ def test_resolve_spec_presets_and_overrides() -> None:
         resolve_spec(None)
 
 
+def test_every_year_aligned_dataset_has_a_per_window_year_preset() -> None:
+    """All eight supplemental datasets resolve with per-window years.
+
+    setup_tessera_v2.py iterates YEAR_ALIGNED_DATASETS, so a dataset missing
+    here silently falls out of the export sweep.
+    """
+    assert len(tessera_v2_export.YEAR_ALIGNED_DATASETS) == 8
+    for base in tessera_v2_export.YEAR_ALIGNED_DATASETS:
+        spec = resolve_spec(f"{base}_year_aligned")
+        assert spec.year is None
+        assert spec.fetch_group == f"{base}_tessera_v2"
+        assert spec.eval_groups is None
+
+
 def test_read_scenes_distinguishes_absent_from_unmaterialized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
