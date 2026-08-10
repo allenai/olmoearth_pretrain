@@ -16,6 +16,7 @@ from olmoearth_pretrain.nn.encodings import (
     get_2d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
+    get_simple_temporal_encoding,
     init_2d_mixed_rope_freqs,
     init_3d_mixed_rope_freqs,
     latlon_to_unit_xyz,
@@ -206,6 +207,31 @@ def test_latlon_to_unit_xyz() -> None:
     # arbitrary points still land on the unit sphere
     xyz = latlon_to_unit_xyz(torch.rand(32, 2))
     assert torch.allclose(xyz.norm(dim=-1), torch.ones(32), atol=1e-6)
+
+
+def test_get_simple_temporal_encoding() -> None:
+    """The 4-number encoding matches its documented [frac_year, sin, cos, valid] form."""
+    import math
+
+    # (day, month0, year): Jan 1 2020, ~Jul 15 2022, and the year-0 sentinel.
+    ts = torch.tensor([[[1, 0, 2020], [15, 6, 2022], [15, 6, 0]]], dtype=torch.long)
+    out = get_simple_temporal_encoding(ts)
+    assert out.shape == (1, 3, 4)
+
+    doy = lambda day, month: month * 30.4375 + day  # noqa: E731
+    # Jan 1 2020: frac_year ~ 0, valid 1 (float32 near 2020 -> loose tolerance).
+    assert abs(out[0, 0, 0].item() - 1 / 365.25) < 1e-3
+    assert out[0, 0, 3].item() == 1.0
+    # Mid-2022: frac_year ~ 2.5, valid 1, phase matches day-of-year.
+    expected_frac = 2022 + doy(15, 6) / 365.25 - 2020
+    assert abs(out[0, 1, 0].item() - expected_frac) < 1e-4
+    phase = 2 * math.pi * doy(15, 6) / 365.25
+    assert abs(out[0, 1, 1].item() - math.sin(phase)) < 1e-5
+    assert abs(out[0, 1, 2].item() - math.cos(phase)) < 1e-5
+    # Year-0 sentinel: frac_year and valid are 0, the annual phase survives.
+    assert out[0, 2, 0].item() == 0.0
+    assert out[0, 2, 3].item() == 0.0
+    assert abs(out[0, 2, 1].item() - math.sin(phase)) < 1e-5
 
 
 def test_get_month_encoding_table() -> None:

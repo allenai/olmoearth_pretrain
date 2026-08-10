@@ -26,12 +26,14 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
+    SIMPLE_TEMPORAL_DIM,
     PositionEncoding,
     WindowSpec,
     axial_3d_dim_split,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
+    get_simple_temporal_encoding,
     latlon_to_unit_xyz,
     resolve_position_encoding,
     timestamps_to_days,
@@ -675,6 +677,8 @@ class CompositeEncodings(nn.Module):
         spatial_pos_encoding: str | None = None,
         use_gps_encoding: bool = False,
         gps_dropout_rate: float = 0.5,
+        use_simple_temporal_encoding: bool = False,
+        temporal_year_dropout_rate: float = 0.5,
     ):
         """Initialize the composite encodings.
 
@@ -699,6 +703,14 @@ class CompositeEncodings(nn.Module):
                 input to the GPS MLP at training time, so the encoder learns a
                 usable "no GPS" embedding for GPS-less samples at eval
                 (missing latlon takes the same zeroed path).
+            use_simple_temporal_encoding: Replace the frozen month table with
+                the minimal 4-number temporal encoding [frac_year (years since
+                2020), sin/cos annual phase, year_valid] passed through a
+                2-layer MLP, written into the same (month) encoding slot.
+            temporal_year_dropout_rate: Per-sample probability of dropping the
+                ABSOLUTE YEAR at training time (frac_year and year_valid are
+                zeroed; the annual-phase sin/cos stay real), so the model
+                learns to work with and without a trustworthy year.
         """
         super().__init__()
         position_encoding = resolve_position_encoding(
@@ -725,6 +737,11 @@ class CompositeEncodings(nn.Module):
             raise ValueError(
                 f"gps_dropout_rate must be in [0, 1], got {gps_dropout_rate}"
             )
+        if not 0.0 <= temporal_year_dropout_rate <= 1.0:
+            raise ValueError(
+                "temporal_year_dropout_rate must be in [0, 1], got "
+                f"{temporal_year_dropout_rate}"
+            )
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [
@@ -735,6 +752,8 @@ class CompositeEncodings(nn.Module):
         self.embedding_size = embedding_size
         self.use_gps_encoding = use_gps_encoding
         self.gps_dropout_rate = float(gps_dropout_rate)
+        self.use_simple_temporal_encoding = use_simple_temporal_encoding
+        self.temporal_year_dropout_rate = float(temporal_year_dropout_rate)
         # TODO: we need to be able to calculate the size of the param based on what types of embeddings it will get
 
         # we have 4 embeddings types (pos_in_time, pos_in_space, month, channel) so each get
@@ -755,6 +774,17 @@ class CompositeEncodings(nn.Module):
             n = self.embedding_dim_per_embedding_type
             self.gps_encoder = nn.Sequential(
                 nn.Linear(3, n),
+                nn.GELU(),
+                nn.Linear(n, n),
+            )
+        # Simple temporal encodings: a 2-layer MLP from the minimal 4-number
+        # temporal signal into the slot the frozen month table otherwise
+        # occupies (drop-in replacement — the month table is not applied when
+        # this is enabled).
+        if use_simple_temporal_encoding:
+            n = self.embedding_dim_per_embedding_type
+            self.temporal_encoder = nn.Sequential(
+                nn.Linear(SIMPLE_TEMPORAL_DIM, n),
                 nn.GELU(),
                 nn.Linear(n, n),
             )
@@ -834,6 +864,34 @@ class CompositeEncodings(nn.Module):
             xyz = xyz * keep
         return self.gps_encoder(xyz)
 
+    def _simple_temporal_embedding(self, timestamps: Tensor) -> Tensor:
+        """Per-timestep temporal embedding [B, T, embedding_dim_per_embedding_type].
+
+        The 4-number encoding [frac_year, sin, cos, year_valid] is passed
+        through the 2-layer temporal MLP. At training time the ABSOLUTE YEAR
+        is dropped per sample with probability ``temporal_year_dropout_rate``:
+        frac_year and year_valid are zeroed (matching the year==0 "unknown"
+        sentinel) while the annual-phase sin/cos stay real — the season is
+        essentially always known; it is the year that may not be trustworthy
+        (e.g. eval datasets with synthesized dates).
+        """
+        feats = get_simple_temporal_encoding(timestamps)  # [B, T, 4]
+        if self.training and self.temporal_year_dropout_rate > 0.0:
+            batch_size = feats.shape[0]
+            keep = torch.bernoulli(
+                torch.full(
+                    (batch_size, 1),
+                    1.0 - self.temporal_year_dropout_rate,
+                    device=feats.device,
+                )
+            )
+            year_channels = torch.tensor(
+                [1.0, 0.0, 0.0, 1.0], device=feats.device
+            )  # frac_year and year_valid are per-year; sin/cos are not
+            scale = 1.0 - (1.0 - keep).unsqueeze(1) * year_channels
+            feats = feats * scale
+        return self.temporal_encoder(feats)
+
     def _apply_encodings_per_modality(
         self,
         modality_name: str,
@@ -844,6 +902,7 @@ class CompositeEncodings(nn.Module):
         use_modality_encodings: bool = True,
         use_temporal_encodings: bool = True,
         gps_embed: Tensor | None = None,
+        temporal_embed: Tensor | None = None,
     ) -> Tensor:
         """Apply the encodings to the patchified data based on modality type.
 
@@ -857,6 +916,9 @@ class CompositeEncodings(nn.Module):
             use_temporal_encodings: Whether to use temporal encodings
             gps_embed: Optional per-sample GPS embedding ``[B, d/4]`` written
                 into the spatial encoding slot (see ``_gps_embedding``)
+            temporal_embed: Optional per-timestep temporal embedding
+                ``[B, T, d/4]`` that replaces the month table in its slot
+                (see ``_simple_temporal_embedding``)
 
         Returns:
             Tensor with encodings applied based on modality type
@@ -937,13 +999,21 @@ class CompositeEncodings(nn.Module):
                 time_embed = repeat(pos_embed, f"t d -> {ein_string}", **ein_dict)
                 modality_embed[..., n : n * 2] += time_embed
 
-            # Month encodings stay additive in all modes (calendar/seasonal
-            # signal is orthogonal to slot-index).
-            assert timestamps is not None
-            months = timestamps[:, :, 1]
-            month_embed = self.month_embed(months)
-            month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
-            modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
+            if temporal_embed is not None:
+                # Simple temporal encoding: drop-in replacement for the month
+                # table in the same slot (learned MLP of [frac_year, sin, cos,
+                # year_valid] — adds an absolute-year signal the month table
+                # cannot express).
+                t_b = repeat(temporal_embed, f"b t d -> {ein_string}", **ein_dict)
+                modality_embed[..., n * 2 : n * 3] += t_b
+            else:
+                # Month encodings stay additive in all modes (calendar/seasonal
+                # signal is orthogonal to slot-index).
+                assert timestamps is not None
+                months = timestamps[:, :, 1]
+                month_embed = self.month_embed(months)
+                month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
+                modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
         if modality.is_spatial and self.position_encoding == PositionEncoding.ABSOLUTE:
             # Spatial encodings
             assert input_res is not None
@@ -1001,6 +1071,9 @@ class CompositeEncodings(nn.Module):
             gps_embed = self._gps_embedding(
                 latlon, batch_size=first_tokens.shape[0], device=first_tokens.device
             )
+        temporal_embed: Tensor | None = None
+        if self.use_simple_temporal_encoding and modalities_to_process:
+            temporal_embed = self._simple_temporal_embedding(timestamps)
         for modality_name in modalities_to_process:
             output_dict[modality_name] = self._apply_encodings_per_modality(
                 modality_name,
@@ -1009,6 +1082,7 @@ class CompositeEncodings(nn.Module):
                 patch_size=patch_size,
                 input_res=input_res,
                 gps_embed=gps_embed,
+                temporal_embed=temporal_embed,
             )
         return output_dict
 
@@ -1042,6 +1116,8 @@ class FlexiVitBase(nn.Module):
         spatial_pos_encoding: str | None = None,
         use_gps_encoding: bool = False,
         gps_dropout_rate: float = 0.5,
+        use_simple_temporal_encoding: bool = False,
+        temporal_year_dropout_rate: float = 0.5,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -1125,6 +1201,8 @@ class FlexiVitBase(nn.Module):
             position_encoding=self.position_encoding,
             use_gps_encoding=use_gps_encoding,
             gps_dropout_rate=gps_dropout_rate,
+            use_simple_temporal_encoding=use_simple_temporal_encoding,
+            temporal_year_dropout_rate=temporal_year_dropout_rate,
         )
         self.apply(self._init_weights)
 
@@ -2315,6 +2393,8 @@ class Encoder(FlexiVitBase):
         register_projection_type: str = "linear",
         use_gps_encoding: bool = False,
         gps_dropout_rate: float = 0.5,
+        use_simple_temporal_encoding: bool = False,
+        temporal_year_dropout_rate: float = 0.5,
     ):
         """Initialize the encoder.
 
@@ -2489,6 +2569,13 @@ class Encoder(FlexiVitBase):
             gps_dropout_rate: Per-sample probability of zeroing the (x, y, z)
                 MLP input at training time so the no-GPS path (GPS-less eval
                 samples) is itself trained. Defaults to 0.5.
+            use_simple_temporal_encoding: Replace the frozen month-table
+                encoding with the 4-number simple temporal encoding
+                ([frac_year, sin, cos, year_valid]) through a 2-layer MLP,
+                in the same encoding slot. Defaults to False.
+            temporal_year_dropout_rate: Per-sample probability of dropping the
+                absolute year (frac_year + year_valid zeroed, annual phase
+                kept) at training time. Defaults to 0.5.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2514,6 +2601,8 @@ class Encoder(FlexiVitBase):
             rope_temporal_coordinate_scale=rope_temporal_coordinate_scale,
             use_gps_encoding=use_gps_encoding,
             gps_dropout_rate=gps_dropout_rate,
+            use_simple_temporal_encoding=use_simple_temporal_encoding,
+            temporal_year_dropout_rate=temporal_year_dropout_rate,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -3494,6 +3583,8 @@ class PredictorBase(FlexiVitBase):
         spatial_pos_encoding: str | None = None,
         use_register_bottleneck: bool = False,
         register_dim: int | None = None,
+        use_simple_temporal_encoding: bool = False,
+        temporal_year_dropout_rate: float = 0.5,
     ):
         """Initialize the predictor.
 
@@ -3529,6 +3620,11 @@ class PredictorBase(FlexiVitBase):
             use_register_bottleneck: If True, the decoder cross-attends to the encoder
                 register grid instead of the visible patch tokens.
             register_dim: Width of the register grid; required when use_register_bottleneck.
+            use_simple_temporal_encoding: Replace the frozen month-table
+                encoding with the 4-number simple temporal encoding through a
+                2-layer MLP (see Encoder). Defaults to False.
+            temporal_year_dropout_rate: Per-sample probability of dropping the
+                absolute year at training time. Defaults to 0.5.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -3552,6 +3648,8 @@ class PredictorBase(FlexiVitBase):
             temporal_rope_dim_frac=temporal_rope_dim_frac,
             rope_temporal_base=rope_temporal_base,
             rope_temporal_coordinate_scale=rope_temporal_coordinate_scale,
+            use_simple_temporal_encoding=use_simple_temporal_encoding,
+            temporal_year_dropout_rate=temporal_year_dropout_rate,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -4119,6 +4217,16 @@ class EncoderConfig(Config):
     # Per-sample probability of zeroing the (x, y, z) MLP input at train time so
     # the no-GPS path (GPS-less eval datasets) is itself trained.
     gps_dropout_rate: float = 0.5
+    # Simple temporal encoding: replace the frozen month-table encoding with the
+    # minimal 4-number temporal signal [frac_year (years since 2020), sin/cos
+    # annual phase, year_valid] through a learned 2-layer MLP, written into the
+    # same (month) encoding slot -- adds an absolute-year signal the month table
+    # cannot express. 3D RoPE's relative-time coordinate is untouched.
+    use_simple_temporal_encoding: bool = False
+    # Per-sample probability of dropping the ABSOLUTE YEAR at train time
+    # (frac_year + year_valid zeroed, annual-phase sin/cos kept), so the model
+    # works with and without a trustworthy year (year dropout, prior-art rate).
+    temporal_year_dropout_rate: float = 0.5
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -4314,6 +4422,11 @@ class EncoderConfig(Config):
             raise ValueError(
                 f"gps_dropout_rate must be in [0, 1], got {self.gps_dropout_rate}"
             )
+        if not 0.0 <= self.temporal_year_dropout_rate <= 1.0:
+            raise ValueError(
+                "temporal_year_dropout_rate must be in [0, 1], got "
+                f"{self.temporal_year_dropout_rate}"
+            )
         validate_position_encoding(
             position_encoding=self.position_encoding,
             head_dim=self.embedding_size // self.num_heads,
@@ -4372,6 +4485,11 @@ class PredictorConfig(Config):
     # encoder register grid (of width register_dim) instead of the visible patch tokens.
     use_register_bottleneck: bool = False
     register_dim: int | None = None
+    # Simple temporal encoding (see EncoderConfig): replace the month table with
+    # the 4-number [frac_year, sin, cos, year_valid] MLP encoding in the decoder's
+    # composite encodings too, so the replacement is a true drop-in on both sides.
+    use_simple_temporal_encoding: bool = False
+    temporal_year_dropout_rate: float = 0.5
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -4393,6 +4511,11 @@ class PredictorConfig(Config):
         if self.use_register_bottleneck and self.register_dim is None:
             raise ValueError(
                 "register_dim must be set when use_register_bottleneck is True"
+            )
+        if not 0.0 <= self.temporal_year_dropout_rate <= 1.0:
+            raise ValueError(
+                "temporal_year_dropout_rate must be in [0, 1], got "
+                f"{self.temporal_year_dropout_rate}"
             )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
