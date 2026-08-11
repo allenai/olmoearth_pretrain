@@ -1587,6 +1587,42 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
                 window_size=_ws,
                 dataset="pastis2_drom_islands11",
             ),
+            # FINAL "bg8" taxonomy (8-class, 9 crops -> background): full input
+            # sweep S2 / S1 / Landsat / S1+S2 / S2+Landsat / S1+S2+Landsat.
+            f"pastis2_drom_bg8_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8",
+            ),
+            f"pastis2_drom_bg8_ws{_ws}_ps1_sentinel1": _pastis_ps1_task(
+                [Modality.SENTINEL1.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8",
+            ),
+            f"pastis2_drom_bg8_ws{_ws}_ps1_landsat": _pastis_ps1_task(
+                [Modality.LANDSAT.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8",
+            ),
+            f"pastis2_drom_bg8_ws{_ws}_ps1_sentinel1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8",
+            ),
+            f"pastis2_drom_bg8_ws{_ws}_ps1_sentinel2_landsat": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8",
+            ),
+            f"pastis2_drom_bg8_ws{_ws}_ps1_sentinel1_sentinel2_landsat": _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8",
+            ),
             **{
                 f"{name}_ws{_ws}_ps1": _aef_ps1_task(
                     name, EvalMode.LINEAR_PROBE, window_size=_ws
