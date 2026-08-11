@@ -1902,6 +1902,50 @@ EMBEDDING_EVAL_TASKS.update(
             scl_cloud_mask=True,
             scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
         ),
+        # QA_PIXEL (per-pixel Landsat cloud) siblings, with and without the
+        # S2-side SCL mask. LP-only like the rest of pastis.
+        "pastis_year_aligned_ws16_ps1_sentinel2_landsat_l8pixmask": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            l8_pixel_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel2_landsat_sclmask_l8pixmask": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            l8_pixel_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_l8pixmask": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            l8_pixel_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_sclmask_l8pixmask": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            l8_pixel_cloud_mask=True,
+        ),
     }
 )
 
