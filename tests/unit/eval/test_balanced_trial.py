@@ -230,7 +230,7 @@ class TestRunBalancedTrials:
             {"train": labels[train], "val": labels[val], "test": labels[test]},
         )
 
-    def test_pools_every_split_and_caps_at_the_least_class(self) -> None:
+    def test_pools_every_split_and_sizes_off_the_least_class(self) -> None:
         """The draw pools all three splits and sizes itself off the least class."""
         embeddings, labels = self._splits()
         result = run_balanced_trials(
@@ -244,10 +244,13 @@ class TestRunBalancedTrials:
         metrics = result.results["ridge"].metrics
         assert metrics["pool_size"] == 197.0  # 100 + 60 + 25 + 12
         assert metrics["least_class"] == 12.0
-        # min(cap=300, least class) -- the cap does not bind here.
-        assert metrics["n_per_class"] == 12.0
-        assert metrics["train_size"] == 48.0
-        assert metrics["eval_size"] == 197.0 - 48.0
+        # min(cap=300, least class / 2) -- the cap does not bind, so the
+        # fraction sets the draw and half of the least class stays in the
+        # remainder rather than being consumed by the training draw.
+        assert metrics["n_per_class"] == 6.0
+        assert metrics["train_size"] == 24.0
+        assert metrics["eval_size"] == 197.0 - 24.0
+        assert metrics["eval_classes"] == metrics["pool_classes"] == 4.0
         assert metrics["n_folds"] == 3.0
 
     def test_cap_binds_when_the_least_class_is_large(self) -> None:
@@ -310,7 +313,7 @@ class TestRunBalancedTrials:
             embeddings_by_split={"train": embeddings, "test": embeddings},
             labels_by_split={"train": labels, "test": labels},
             trial_config=BalancedTrialConfig(
-                draw_pool=("train",), eval_split="test", knn_ks=()
+                draw_pool=("train",), eval_split="test", n_per_class=20, knn_ks=()
             ),
             device=torch.device("cpu"),
         )
@@ -328,7 +331,9 @@ class TestRunBalancedTrials:
             config=_config(),
             embeddings_by_split={"train": _separable_embeddings(labels)},
             labels_by_split={"train": labels},
-            trial_config=BalancedTrialConfig(draw_pool=("train",), knn_ks=()),
+            trial_config=BalancedTrialConfig(
+                draw_pool=("train",), n_per_class=20, knn_ks=()
+            ),
             device=torch.device("cpu"),
         )
         assert result.results == {}
@@ -485,3 +490,102 @@ class TestTrialTaskName:
     def test_is_stable_for_a_host_without_a_knn_suffix(self) -> None:
         """Removesuffix is a no-op when the host is not the KNN twin."""
         assert trial_task_name("some_task", "ridge") == "some_task_aeftrial_ridge"
+
+
+class TestLeastClassIsNotDrawnDry:
+    """The rarest class must survive into the eval remainder."""
+
+    def _pool(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Ethiopia-shaped: 4 classes, ~2.5k rows, least class 96."""
+        counts = [1800, 400, 233, 96]
+        labels = torch.cat(
+            [torch.full((n,), i, dtype=torch.long) for i, n in enumerate(counts)]
+        )
+        return _separable_embeddings(labels), labels
+
+    def test_draw_is_half_the_least_class_by_default(self) -> None:
+        """min(cap, least/2), not min(cap, least) -- see AEF's Table 1."""
+        embeddings, labels = self._pool()
+        result = run_balanced_trials(
+            config=_config(),
+            embeddings_by_split={"train": embeddings},
+            labels_by_split={"train": labels},
+            trial_config=BalancedTrialConfig(
+                draw_pool=("train",), n_folds=2, knn_ks=()
+            ),
+            device=torch.device("cpu"),
+        )
+        metrics = result.results["ridge"].metrics
+        assert metrics["least_class"] == 96.0
+        assert metrics["n_per_class"] == 48.0
+
+    def test_every_class_survives_into_the_eval_set(self) -> None:
+        """The failure this guards: a starved class silently shrinks the average.
+
+        With n_per_class == least_class the rarest class is entirely consumed by
+        the draw, and balanced accuracy is then averaged over K-1 classes
+        without any indication in the number itself.
+        """
+        embeddings, labels = self._pool()
+        kwargs = dict(
+            config=_config(),
+            embeddings_by_split={"train": embeddings},
+            labels_by_split={"train": labels},
+            device=torch.device("cpu"),
+        )
+        safe = (
+            run_balanced_trials(
+                trial_config=BalancedTrialConfig(
+                    draw_pool=("train",), n_folds=2, knn_ks=()
+                ),
+                **kwargs,
+            )
+            .results["ridge"]
+            .metrics
+        )
+        assert safe["eval_classes"] == safe["pool_classes"] == 4.0
+
+        # The old behaviour, reachable only by asking for it explicitly.
+        starved = (
+            run_balanced_trials(
+                trial_config=BalancedTrialConfig(
+                    draw_pool=("train",), n_per_class=96, n_folds=2, knn_ks=()
+                ),
+                **kwargs,
+            )
+            .results["ridge"]
+            .metrics
+        )
+        assert starved["eval_classes"] == 3.0
+        assert starved["pool_classes"] == 4.0
+
+    def test_fraction_is_configurable(self) -> None:
+        """A caller who wants AEF-exact-per-their-table can set the fraction."""
+        embeddings, labels = self._pool()
+        result = run_balanced_trials(
+            config=_config(),
+            embeddings_by_split={"train": embeddings},
+            labels_by_split={"train": labels},
+            trial_config=BalancedTrialConfig(
+                draw_pool=("train",),
+                least_class_draw_fraction=0.25,
+                n_folds=2,
+                knn_ks=(),
+            ),
+            device=torch.device("cpu"),
+        )
+        assert result.results["ridge"].metrics["n_per_class"] == 24.0
+
+    def test_cap_still_binds_when_it_is_the_smaller(self) -> None:
+        """The fraction only matters where the cap does not bind."""
+        embeddings, labels = self._pool()
+        result = run_balanced_trials(
+            config=_config(),
+            embeddings_by_split={"train": embeddings},
+            labels_by_split={"train": labels},
+            trial_config=BalancedTrialConfig(
+                draw_pool=("train",), cap=10, n_folds=2, knn_ks=()
+            ),
+            device=torch.device("cpu"),
+        )
+        assert result.results["ridge"].metrics["n_per_class"] == 10.0

@@ -106,14 +106,28 @@ class BalancedTrialConfig:
     # holds the eval rows constant so the fold spread isolates training-draw
     # variance.
     eval_split: str = REMAINDER
-    # None -> min(cap, least-populated class in the pool).
+    # None -> min(cap, least_class * least_class_draw_fraction).
     n_per_class: int | None = None
     # AEF's deliberate cap, "meant to represent more realistic sparse dataset
     # sizes (hundreds as opposed to thousands or millions of points)". 200 and
-    # 150 are used for some of their tasks; 300 is the common value and the odd
-    # per-class counts in their Table 1 (75/68/49) are the least class binding
-    # first, not a different cap.
+    # 150 are used for some of their tasks; 300 is the common value.
     cap: int = 300
+    # Largest share of the LEAST-populated class the draw may take. Drawing the
+    # whole of it -- which min(cap, least_class) does whenever the cap does not
+    # bind -- removes that class from the remainder entirely, and then balanced
+    # accuracy silently averages over K-1 classes, dropping the rarest and
+    # usually hardest one. On ethiopia (least class 96, cap 300) that turns a
+    # 4-class score into a 3-class score and inflates it.
+    #
+    # 0.5 also reconciles our counts with AEF's Table 1. Their max-trial values
+    # for the datasets where the cap does not bind are almost exactly half the
+    # least class: ethiopia 49, canada fine 75, canada coarse 68 against least
+    # classes of ~97, ~150, ~136. Our ethiopia least class is 96, so half is 48
+    # against their 49 -- a one-window difference, which is exactly the gap
+    # between our 2,529-window pool and their 2,530. Their framing requires
+    # this: a random-chance line at 1/K is meaningless if the eval set only
+    # contains K-1 classes.
+    least_class_draw_fraction: float = 0.5
     # None -> the S4.3 formula (or 1 when the pool is already class-balanced).
     n_folds: int | None = None
     # Backstop on the formula's 200-500 folds. None keeps AEF's count; the
@@ -355,7 +369,13 @@ def run_balanced_trials(
         return BalancedTrialResult()
     least_class_count = int(class_counts.min())
 
-    n_per_class = trial_config.n_per_class or min(trial_config.cap, least_class_count)
+    # Leave part of the least-populated class in the remainder: a class drawn in
+    # full disappears from the eval set, and balanced accuracy then averages
+    # over the classes that remain without saying so.
+    from_least_class = max(
+        1, int(least_class_count * trial_config.least_class_draw_fraction)
+    )
+    n_per_class = trial_config.n_per_class or min(trial_config.cap, from_least_class)
     if n_per_class < 1:
         logger.warning("Balanced trial: n_per_class resolved to 0; skipping")
         return BalancedTrialResult()
@@ -364,6 +384,24 @@ def run_balanced_trials(
             f"Balanced trial: n_per_class={n_per_class} exceeds the least-populated "
             f"class ({least_class_count}); that class contributes all of its rows and "
             f"the draw is not fully balanced"
+        )
+
+    # Which classes the draw would consume entirely. In remainder mode they are
+    # absent from the eval set, so every metric is computed over fewer classes
+    # than the task has -- silently, and in the direction that flatters the
+    # score, since the starved classes are the rarest and usually the hardest.
+    starved = [
+        (int(c), int(n))
+        for c, n in zip(present_classes.tolist(), class_counts.tolist())
+        if n <= n_per_class
+    ]
+    if starved and trial_config.eval_split == REMAINDER:
+        logger.warning(
+            f"Balanced trial: {len(starved)} of {present_classes.numel()} classes are "
+            f"consumed entirely by a {n_per_class}/class draw {starved} and will be "
+            f"ABSENT from the eval remainder, so metrics average over "
+            f"{present_classes.numel() - len(starved)} classes instead of "
+            f"{present_classes.numel()}. Lower least_class_draw_fraction or cap."
         )
 
     draw_size = int(class_counts.clamp(max=n_per_class).sum())
@@ -421,6 +459,7 @@ def run_balanced_trials(
     }
     train_sizes: list[int] = []
     eval_sizes: list[int] = []
+    eval_class_counts: list[int] = []
 
     for fold_idx in range(n_folds):
         generator = torch.Generator().manual_seed(trial_config.seed + fold_idx)
@@ -441,6 +480,7 @@ def run_balanced_trials(
             return BalancedTrialResult()
         train_sizes.append(int(train_labels.numel()))
         eval_sizes.append(int(eval_labels.numel()))
+        eval_class_counts.append(int(torch.unique(eval_labels).numel()))
 
         weights, bias = fit_ridge_ovr(
             train_embeddings,
@@ -491,6 +531,12 @@ def run_balanced_trials(
         "train_size": float(train_sizes[0]),
         "eval_size": float(eval_sizes[0]),
         "embedding_dim": float(pool_embeddings.shape[1]),
+        # How many classes the metrics were actually averaged over, and how many
+        # the pool has. If these differ, the draw starved a class out of the
+        # eval set and every score above is over a smaller class set than the
+        # task's -- compare them before quoting a number.
+        "eval_classes": float(min(eval_class_counts)),
+        "pool_classes": float(present_classes.numel()),
     }
 
     results: dict[str, EvalResult] = {}
