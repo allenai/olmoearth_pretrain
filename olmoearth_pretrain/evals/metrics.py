@@ -77,6 +77,11 @@ class EvalTaskResult:
     bootstrap_stats: dict[str, Any] = field(default_factory=dict)
     eval_time: float | None = None
     embedding_diagnostics: dict[str, float] = field(default_factory=dict)
+    # Metrics computed on a different protocol than val_result/test_result and
+    # so kept out of their metrics dicts -- currently the AEF balanced trials
+    # (``bt_*``, see olmoearth_pretrain/evals/balanced_trial.py). Logged
+    # alongside the task's other non-primary metrics.
+    extra_metrics: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass

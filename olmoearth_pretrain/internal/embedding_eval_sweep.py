@@ -196,6 +196,39 @@ def _window_size_args(window_size: int | None, task_names: list[str]) -> str:
     return " " + " ".join(overrides)
 
 
+def _balanced_trial_args(args: argparse.Namespace, task_names: list[str]) -> str:
+    """Per-KNN-task overrides for the AEF balanced trials.
+
+    Only the KNN tasks carry a ``balanced_trial`` config (see
+    ``_aef_ps1_task``), so these must not be applied to the LP tasks -- there is
+    no nested config there to override.
+    """
+    overrides = []
+    for name in task_names:
+        if EMBEDDING_EVAL_TASKS[name].balanced_trial is None:
+            continue
+        if args.no_balanced_trials:
+            overrides.append(_task_arg(name, "balanced_trial.enabled", "False"))
+        if args.balanced_trial_max_folds is not None:
+            overrides.append(
+                _task_arg(
+                    name, "balanced_trial.max_folds", args.balanced_trial_max_folds
+                )
+            )
+        if args.balanced_trial_draw_pool is not None:
+            pool = "[" + ",".join(args.balanced_trial_draw_pool.split(",")) + "]"
+            overrides.append(_task_arg(name, "balanced_trial.draw_pool", pool))
+        if args.balanced_trial_eval_split is not None:
+            overrides.append(
+                _task_arg(
+                    name, "balanced_trial.eval_split", args.balanced_trial_eval_split
+                )
+            )
+    if not overrides:
+        return ""
+    return " " + " ".join(overrides)
+
+
 def _select_best_val_args(task_names: list[str]) -> str:
     """Per-LP-task early-stopping args (best epoch by primary val metric)."""
     return " " + " ".join(
@@ -266,6 +299,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         cmd = common.format(run_name=f"{base_run_name}_knn")
         cmd += _model_args(model, knn_tasks)
         cmd += _window_size_args(window_size, knn_tasks)
+        cmd += _balanced_trial_args(args, knn_tasks)
         cmd += _tasks_to_run_arg(knn_tasks)
         commands.append(cmd)
     return commands
@@ -346,6 +380,45 @@ def main() -> None:
             "(EMBEDDING_EVAL_WINDOW_SIZES) — this override forces ALL "
             "selected tasks to one size, so combine it with --task_names to "
             "avoid running duplicates."
+        ),
+    )
+    parser.add_argument(
+        "--no_balanced_trials",
+        action="store_true",
+        help=(
+            "Skip the AEF balanced trials that the KNN job runs by default "
+            "(class-balanced draw from the pooled splits, scored on the "
+            "remainder, over AEF's k draws)"
+        ),
+    )
+    parser.add_argument(
+        "--balanced_trial_max_folds",
+        type=int,
+        default=None,
+        help=(
+            "Cap the balanced trials' fold count (default: AEF's "
+            "k = 1000 / (2 * log10(least class)), which is 200-500)"
+        ),
+    )
+    parser.add_argument(
+        "--balanced_trial_draw_pool",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated splits the balanced draw is taken from "
+            "(default train,val,test -- AEF pools everything). Use "
+            "'train,val' with --balanced_trial_eval_split=test to keep the "
+            "test split unspent."
+        ),
+    )
+    parser.add_argument(
+        "--balanced_trial_eval_split",
+        type=str,
+        default=None,
+        help=(
+            "Split the trials report on: 'remainder' (default, AEF's "
+            "structure) or a split held out of --balanced_trial_draw_pool, "
+            "which holds the eval rows fixed across folds"
         ),
     )
     parser.add_argument(

@@ -23,6 +23,10 @@ from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import _worker_ignore_sigterm
+from olmoearth_pretrain.evals.balanced_trial import (
+    BalancedTrialConfig,
+    run_balanced_trials,
+)
 from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
     DATASET_TO_CONFIG,
@@ -194,6 +198,16 @@ class DownstreamTaskConfig:
     embedding_dim: int | None = None
     # Use weighted dice loss instead of cross-entropy (only for specific tasks like wildfire)
     use_dice_loss: bool = False
+    # Additionally run the AlphaEarth Foundations balanced-trial protocol on the
+    # embeddings this task materializes: a class-balanced draw of
+    # min(cap, least class) points per class from the pooled splits, a
+    # closed-form ridge (and kNN) fit on the draw, and metrics on the remainder,
+    # repeated over AEF's k draws. Purely additive -- the task's own train -> val
+    # result is unchanged and the trial metrics are logged beside it as ``bt_*``.
+    # Only supported for single-label classification tasks in an embedding-based
+    # eval mode (KNN / LINEAR_PROBE); it is hosted on the KNN twin so the trials
+    # compute once instead of once per swept probe LR. None = don't run.
+    balanced_trial: BalancedTrialConfig | None = None
     # Override the default primary metric (e.g. EvalMetric.F1 instead of ACCURACY).
     # None = use the default for the task type (accuracy for classification, miou for segmentation).
     primary_metric: EvalMetric | None = None
@@ -351,6 +365,7 @@ class DownstreamEvaluator:
         self.use_dice_loss = task.use_dice_loss
         self.primary_metric = task.primary_metric
         self.primary_metric_class = task.primary_metric_class
+        self.balanced_trial = task.balanced_trial
         self.h5py_dir = task.h5py_dir
         self.pretrain_max_samples = task.pretrain_max_samples
         self.pretrain_target_modality = task.pretrain_target_modality
@@ -374,6 +389,31 @@ class DownstreamEvaluator:
             self.eval_mode = EvalMode(self.eval_mode)
 
         assert self.eval_mode in EvalMode, f"Unexpected eval mode {self.eval_mode}"
+
+        if self.balanced_trial is not None:
+            # The trials reuse the embeddings an embedding-based eval already
+            # materializes; there is nothing to hook onto in the other modes.
+            if self.eval_mode not in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
+                raise ValueError(
+                    f"balanced_trial requires an embedding-based eval mode "
+                    f"(knn/linear_probe), got '{self.eval_mode}'"
+                )
+            # One-vs-rest squared error is the wrong objective for a dense
+            # segmentation task's mIoU, and IoU is precision-aware anyway, so
+            # the balanced-accuracy pathology the trials exist to measure does
+            # not arise there. See docs/EvalMetricsAndBalancedTrials.md.
+            if self.config.task_type != TaskType.CLASSIFICATION:
+                raise ValueError(
+                    f"balanced_trial only supports classification tasks, got "
+                    f"task type '{self.config.task_type.value}' for "
+                    f"'{task.dataset}'"
+                )
+            if self.config.is_multilabel:
+                raise ValueError(
+                    f"balanced_trial does not support multilabel tasks "
+                    f"('{task.dataset}'): a balanced draw is not well defined "
+                    f"when a sample carries several classes"
+                )
 
         if self.eval_mode == EvalMode.LINEAR_PROBE:
             if self.probe_lr is None:
@@ -679,6 +719,32 @@ class DownstreamEvaluator:
         }
         result = self.eval_function(**kwargs)  # type: ignore
 
+        if self.balanced_trial is not None:
+            # Run here rather than inside the probe so the trials see exactly the
+            # embeddings the probe saw -- past the int8 round-trip and any PCA --
+            # and so no second forward pass is needed.
+            trial_start = time.time()
+            trial_result = run_balanced_trials(
+                config=self.config,
+                embeddings_by_split={
+                    "train": train_embeddings,
+                    "val": val_embeddings,
+                    "test": test_embeddings,
+                },
+                labels_by_split={
+                    "train": train_labels,
+                    "val": val_labels,
+                    "test": test_labels,
+                },
+                trial_config=self.balanced_trial,
+                device=self.device or self.trainer.device,
+            )
+            result.extra_metrics.update(trial_result.metrics)
+            logger.info(
+                f"Balanced trials for {self.dataset} took "
+                f"{time.time() - trial_start:.2f}s"
+            )
+
         # Free memory aggressively between evals
         del train_embeddings, train_labels, test_embeddings, test_labels
         del val_embeddings, val_labels
@@ -878,6 +944,25 @@ def eval_result_log_dict(
     return log_dict
 
 
+def extra_metrics_log_dict(
+    name: str, extra_metrics: dict[str, float]
+) -> dict[str, float]:
+    """Build the wandb log dict for a task's protocol-extra metrics.
+
+    These land in the same ``eval_other/{task}/{metric}`` namespace as the
+    non-primary metrics, which is what the CSV export normalizes into
+    ``eval/{task}/{metric}`` columns -- so balanced-trial metrics flow through
+    the existing analysis scripts without a special case. They are deliberately
+    NOT put under ``eval/test/``: a balanced trial's eval set is its own
+    remainder, not our test split.
+    """
+    other_prefix = _make_other_prefix("eval")
+    return {
+        f"{other_prefix}/{name}/{metric_name}": value
+        for metric_name, value in extra_metrics.items()
+    }
+
+
 def _log_eval_result_to_wandb(
     wandb_callback: Any, prefix: str, name: str, result: EvalResult
 ) -> None:
@@ -987,6 +1072,11 @@ class DownstreamEvaluatorCallback(Callback):
             logger.info(
                 f"Downstream evaluator {evaluator.evaluation_name} score: {val_result.primary} (metrics: {val_result.metrics})"
             )
+        if result.extra_metrics:
+            logger.info(
+                f"Downstream evaluator {evaluator.evaluation_name} balanced-trial "
+                f"metrics: {result.extra_metrics}"
+            )
         if self.run_on_test and test_result is not None:
             logger.info(
                 f"Downstream evaluator {evaluator.evaluation_name} test score: {test_result.primary} (metrics: {test_result.metrics})"
@@ -1010,6 +1100,12 @@ class DownstreamEvaluatorCallback(Callback):
             if val_result is not None:
                 _log_eval_result_to_wandb(
                     wandb_callback, "eval", evaluator.evaluation_name, val_result
+                )
+            if result.extra_metrics:
+                wandb_callback.wandb.log(
+                    extra_metrics_log_dict(
+                        evaluator.evaluation_name, result.extra_metrics
+                    )
                 )
             wandb_callback.wandb.log(
                 {"eval_time/" + evaluator.evaluation_name: eval_time}
