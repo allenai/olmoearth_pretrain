@@ -1874,7 +1874,42 @@ EMBED_DIAG_TASKS = {
     ),
 }
 
+def _pastis_ft_task(
+    input_modalities: list[str],
+    dataset: str = "pastis2_drom_bg8",
+    window_size: int = 16,
+) -> DownstreamTaskConfig:
+    """PASTIS2-DROM fine-tune task (encoder unfrozen, trained end-to-end)."""
+    return DownstreamTaskConfig(
+        dataset=dataset,
+        ft_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        epochs=50,
+        input_modalities=input_modalities,
+        primary_metric=EvalMetric.MIOU,
+        window_size=window_size,
+        patch_size=1,
+        tile_samples=True,
+    )
+
+
 FT_EVAL_TASKS = {
+    # PASTIS2-DROM bg8 (8-class) OlmoEarth fine-tuning: S2, S2+S1, S2+Landsat,
+    # S2+S1+Landsat (encoder unfrozen, end-to-end on the 443-window split).
+    "pastis2_drom_bg8_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name]
+    ),
+    "pastis2_drom_bg8_ft_ws16_ps1_sentinel1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name]
+    ),
+    "pastis2_drom_bg8_ft_ws16_ps1_sentinel2_landsat": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name]
+    ),
+    "pastis2_drom_bg8_ft_ws16_ps1_sentinel1_sentinel2_landsat": _pastis_ft_task(
+        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name]
+    ),
     "m_eurosat": DownstreamTaskConfig(
         dataset="m-eurosat",
         ft_batch_size=64,
