@@ -84,12 +84,10 @@ def compute_normalization_values(
             modality_bands = modality_spec.band_order
             if modality_data is None:
                 continue
-            # To avoid the case where we include missing values in the stats
-            if (modality_data == MISSING_VALUE).any():
-                logger.info(
-                    f"Skipping sample {i} because modality {modality} contains missing values."
-                )
-                continue
+            # MISSING_VALUE pixels are excluded per-band below rather than skipping
+            # the whole modality-sample: modalities like reflectance-converted
+            # landsat store the sentinel for nodata / missing timesteps in almost
+            # every sample, so a whole-sample skip would discard nearly all data.
             if modality not in norm_dict:
                 norm_dict[modality] = {}
                 for band in modality_bands:
@@ -102,14 +100,19 @@ def compute_normalization_values(
             # Compute the normalization stats for the modality
             for idx, band in enumerate(modality_bands):
                 modality_band_data = modality_data[..., idx]
+                # Always drop the global missing sentinel so nodata / missing
+                # timesteps never contaminate the mean/std.
+                modality_band_data = modality_band_data[
+                    modality_band_data != MISSING_VALUE
+                ]
                 excluded = BAND_STAT_EXCLUDED_VALUES.get((modality, band))
                 if excluded is not None:
                     modality_band_data = modality_band_data[
                         modality_band_data != excluded
                     ]
-                    if modality_band_data.size == 0:
-                        # Every pixel was the sentinel; nothing to accumulate.
-                        continue
+                if modality_band_data.size == 0:
+                    # Every pixel was a sentinel; nothing to accumulate.
+                    continue
                 current_stats = norm_dict[modality][band]
                 new_count, new_mean, new_var = update_streaming_stats(
                     current_stats["count"],

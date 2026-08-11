@@ -404,6 +404,7 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        computed_norm_config: str = "computed.json",
     ):
         """Initialize the dataset.
 
@@ -429,6 +430,10 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            computed_norm_config: Filename of the computed normalization config resource
+                to use for the COMPUTED strategy (under
+                ``olmoearth_pretrain.data.norm_configs``). Defaults to ``computed.json``;
+                set to a reflectance-specific variant when training on reflectance data.
 
         Returns:
             None
@@ -446,9 +451,12 @@ class OlmoEarthDataset(Dataset):
         self.normalize = normalize
         self.dataset_percentage = dataset_percentage
         self.seed = seed
+        self.computed_norm_config = computed_norm_config
         if self.normalize:
             self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+            self.normalizer_computed = Normalizer(
+                Strategy.COMPUTED, computed_config_filename=computed_norm_config
+            )
         self.max_sequence_length = max_sequence_length
 
         if samples_per_sec is None:
@@ -994,6 +1002,7 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    computed_norm_config: str = "computed.json"
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

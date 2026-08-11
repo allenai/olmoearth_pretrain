@@ -12,16 +12,47 @@ from rslearn.utils.geometry import PixelBounds, Projection
 from rslearn.utils.raster_array import RasterArray
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import BandSet, ModalitySpec, TimeSpan
+from olmoearth_pretrain.data.constants import BandSet, Modality, ModalitySpec, TimeSpan
 from olmoearth_pretrain.dataset.utils import get_modality_fname
 
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
+from .landsat_calibration import fetch_sun_elevation, platform_from_scene_id
 
 PIXELS_PER_TILE = 256
 EPSILON = 1e-6
 
 logger = logging.getLogger(__name__)
+
+
+def _get_base_item_dict(layer_datas: dict | None, layer_name: str) -> dict | None:
+    """Return the base (first) serialized item for a layer, or None.
+
+    For the monthly Landsat layers this is the least-cloudy scene that seeds the
+    single-coverage mosaic, which covers essentially the whole window.
+    """
+    if not layer_datas:
+        return None
+    layer_data = layer_datas.get(layer_name)
+    if layer_data is None:
+        return None
+    groups = getattr(layer_data, "serialized_item_groups", None)
+    if not groups or not groups[0]:
+        return None
+    return groups[0][0]
+
+
+def _month_landsat_calibration(
+    layer_datas: dict | None, layer_name: str
+) -> tuple[float | None, str | None]:
+    """Get (sun_elevation, platform) for a monthly Landsat layer's base scene."""
+    base = _get_base_item_dict(layer_datas, layer_name)
+    if not base:
+        return None, None
+    blob_path = base.get("blob_path")
+    platform = platform_from_scene_id(base.get("name"))
+    sun_elevation = fetch_sun_elevation(blob_path) if blob_path else None
+    return sun_elevation, platform
 
 
 def get_adjusted_projection_and_bounds(
@@ -266,6 +297,12 @@ def convert_monthly(
         band_set: [] for band_set in modality.band_sets
     }
     time_ranges = []
+    # For Landsat we also record the per-month scene sun elevation and platform so
+    # DN can be converted to reflectance / brightness temperature at h5-creation.
+    is_landsat = modality == Modality.LANDSAT
+    layer_datas = window.load_layer_datas() if is_landsat else None
+    sun_elevations: list[float | None] = []
+    platforms: list[str | None] = []
     for month_idx in range(1, 13):
         layer_name = f"{layer_prefix}_mo{month_idx:02d}"
         start_time = window.time_range[0] + timedelta(days=(month_idx - 7) * 30)
@@ -315,6 +352,12 @@ def convert_monthly(
             continue
 
         time_ranges.append((start_time.isoformat(), end_time.isoformat()))
+        if is_landsat:
+            sun_elevation, platform = _month_landsat_calibration(
+                layer_datas, layer_name
+            )
+            sun_elevations.append(sun_elevation)
+            platforms.append(platform)
         for band_set, image in cur_images.items():
             images[band_set].append(image)
 
@@ -350,14 +393,20 @@ def convert_monthly(
             writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
             writer.writeheader()
             for image_idx, (start_time, end_time) in enumerate(time_ranges):
-                writer.writerow(
-                    dict(
-                        crs=window_metadata.crs,
-                        col=window_metadata.col,
-                        row=window_metadata.row,
-                        tile_time=window_metadata.time.isoformat(),
-                        image_idx=image_idx,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
+                row = dict(
+                    crs=window_metadata.crs,
+                    col=window_metadata.col,
+                    row=window_metadata.row,
+                    tile_time=window_metadata.time.isoformat(),
+                    image_idx=image_idx,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
+                if is_landsat:
+                    sun_elevation = sun_elevations[image_idx]
+                    platform = platforms[image_idx]
+                    row["sun_elevation"] = (
+                        "" if sun_elevation is None else sun_elevation
+                    )
+                    row["platform"] = "" if platform is None else platform
+                writer.writerow(row)
