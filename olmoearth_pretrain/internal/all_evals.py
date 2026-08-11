@@ -1414,6 +1414,7 @@ def _aef_ps1_task(
     scl_cloud_mask: bool = False,
     scl_cloud_classes: tuple[int, ...] | None = None,
     landsat_cloud_cover_max: float | None = None,
+    l8_pixel_cloud_mask: bool = False,
 ) -> DownstreamTaskConfig:
     """AEF supplemental task under the per-pixel embedding-product convention.
 
@@ -1447,6 +1448,7 @@ def _aef_ps1_task(
         scl_cloud_mask=scl_cloud_mask,
         scl_cloud_classes=scl_cloud_classes,
         landsat_cloud_cover_max=landsat_cloud_cover_max,
+        l8_pixel_cloud_mask=l8_pixel_cloud_mask,
     )
 
 
@@ -1710,6 +1712,43 @@ for _suffix in ("sentinel2_landsat", "sentinel1_sentinel2_landsat"):
                     input_modalities=_modalities,
                     scl_cloud_mask=True,
                     landsat_cloud_cover_max=L8MASK_CLOUD_COVER_MAX,
+                )
+                for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+            }
+        )
+
+# Per-pixel Landsat cloud-mask siblings (QA_PIXEL / CFMask): the Landsat
+# analogue of _sclmask. Cloud/shadow/cirrus/dilated pixel-timesteps are
+# masked MISSING via the optional landsat_qa input (setup_extra_layers.py,
+# layer set `landsat_qa`); without the layers the tasks run unmasked with a
+# warning, like _sclmask without SCL. _l8pixmask isolates the Landsat-side
+# pixel mask against the plain landsat pair; _sclmask_l8pixmask masks both
+# optical sensors -- the S1+S2+L8 + SCL interaction (the one masking config
+# that ever won) is the motivating comparison.
+for _suffix in ("sentinel2_landsat", "sentinel1_sentinel2_landsat"):
+    _modalities = _YEAR_ALIGNED_MODALITIES[_suffix]
+    for _mode, _knn in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn")):
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}_l8pixmask{_knn}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                    l8_pixel_cloud_mask=True,
+                )
+                for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+            }
+        )
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}_sclmask_l8pixmask{_knn}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                    scl_cloud_mask=True,
+                    l8_pixel_cloud_mask=True,
                 )
                 for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
             }

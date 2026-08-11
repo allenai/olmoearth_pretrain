@@ -166,6 +166,12 @@ class DownstreamTaskConfig:
     # landsat_cloud_cover.json sidecar at the dataset root
     # (build_landsat_cloud_cover_sidecar.py). None = no Landsat masking.
     landsat_cloud_cover_max: float | None = None
+    # Per-pixel Landsat cloud mask: LANDSAT pixel-timesteps whose QA_PIXEL
+    # (the optional "landsat_qa" input, setup_extra_layers.py layer set
+    # `landsat_qa`) flags dilated/cirrus/cloud/shadow are masked MISSING at
+    # load time -- the Landsat analogue of scl_cloud_mask. Windows without
+    # the input are left unmasked.
+    l8_pixel_cloud_mask: bool = False
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: NormMethod = field(
@@ -251,6 +257,7 @@ class DownstreamEvaluator:
         self.scl_cloud_mask = task.scl_cloud_mask
         self.scl_cloud_classes = task.scl_cloud_classes
         self.landsat_cloud_cover_max = task.landsat_cloud_cover_max
+        self.l8_pixel_cloud_mask = task.l8_pixel_cloud_mask
         self.tile_samples = task.tile_samples
         if self.tile_samples:
             if not self._is_registry_dataset:
@@ -293,9 +300,11 @@ class DownstreamEvaluator:
             self.config = dataclasses.replace(
                 self.config, task_type=TaskType.CLASSIFICATION, height_width=None
             )
-        if self.scl_cloud_mask and not self._is_registry_dataset:
+        if (
+            self.scl_cloud_mask or self.l8_pixel_cloud_mask
+        ) and not self._is_registry_dataset:
             raise ValueError(
-                f"scl_cloud_mask is only supported for registry datasets, "
+                f"scl_cloud_mask/l8_pixel_cloud_mask are only supported for registry datasets, "
                 f"got dataset '{task.dataset}'"
             )
         self.trainer = trainer
@@ -468,6 +477,8 @@ class DownstreamEvaluator:
                     extra_kwargs["scl_cloud_classes"] = self.scl_cloud_classes
             if self.landsat_cloud_cover_max is not None:
                 extra_kwargs["landsat_cloud_cover_max"] = self.landsat_cloud_cover_max
+            if self.l8_pixel_cloud_mask:
+                extra_kwargs["l8_pixel_cloud_mask"] = True
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities

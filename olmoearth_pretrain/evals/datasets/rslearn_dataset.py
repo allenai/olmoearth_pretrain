@@ -82,6 +82,15 @@ SCL_CLOUDLESS_CLASSES = (8, 9)
 # Landsat scene metadata), unlike the pixel-level SCL mask; -1 = unknown.
 LANDSAT_CLOUD_COVER_SIDECAR = "landsat_cloud_cover.json"
 
+# Landsat QA_PIXEL (CFMask) per-pixel cloud mask, the Landsat analogue of
+# "scl". The optional "landsat_qa" input carries the QA_PIXEL band of the
+# SAME scenes as the Landsat imagery (setup_extra_layers.py clones the
+# prepared items, layer set `landsat_qa`); l8_pixel_cloud_mask=True turns it
+# into per-pixel MISSING masks on LANDSAT. Bit flags: 1 dilated cloud,
+# 2 cirrus, 3 cloud, 4 cloud shadow (Collection 2 QA_PIXEL).
+L8QA_INPUT_NAME = "landsat_qa"
+L8QA_CLOUD_BITS_MASK = 0b0000000000011110
+
 
 def get_timestamps(
     start_time: str,
@@ -205,6 +214,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
         landsat_cloud_cover_max: float | None = None,
         landsat_cloud_cover_table: dict[str, dict[str, float]] | None = None,
+        l8_pixel_cloud_mask: bool = False,
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
@@ -264,6 +274,13 @@ class RslearnToOlmoEarthDataset(Dataset):
                 (-1) is never masked.
             landsat_cloud_cover_table: The parsed sidecar ("group/window" ->
                 {"moNN": cover}); required for the threshold to do anything.
+            l8_pixel_cloud_mask: If set, the optional "landsat_qa" input
+                (QA_PIXEL of the same scenes as the Landsat imagery, one
+                layer per Landsat monthly layer) is read and every
+                pixel-timestep flagged dilated/cirrus/cloud/shadow gets
+                MaskValue.MISSING in the Landsat mask -- the Landsat analogue
+                of scl_cloud_mask, with the same never-blank-a-pixel guard
+                and the same leave-unmasked-with-a-warning fallbacks.
         """
         if (
             not norm_stats_from_pretrained
@@ -305,6 +322,9 @@ class RslearnToOlmoEarthDataset(Dataset):
         self.landsat_cloud_cover_max = landsat_cloud_cover_max
         self.landsat_cloud_cover_table = landsat_cloud_cover_table
         self._warned_l8_mask = False
+
+        self.l8_pixel_cloud_mask = l8_pixel_cloud_mask
+        self._warned_l8qa_mask = False
 
         # Target parsing config - derived from Task structure
         self.target_task_name = target_task_name  # For MultiTask, e.g., "segment"
@@ -389,6 +409,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         scl_cloud_mask: bool = False,
         scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
         landsat_cloud_cover_max: float | None = None,
+        l8_pixel_cloud_mask: bool = False,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -431,6 +452,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             landsat_cloud_cover_max: Scene-level Landsat cloud threshold; the
                 sidecar is read from source_path (see
                 RslearnToOlmoEarthDataset).
+            l8_pixel_cloud_mask: Mask cloudy Landsat pixel-timesteps MISSING
+                using the optional "landsat_qa" input (see
+                RslearnToOlmoEarthDataset).
         """
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
@@ -465,8 +489,11 @@ class RslearnToOlmoEarthDataset(Dataset):
             layers = get_modality_layers(model_config)
             input_modalities = []
             for layer in layers:
-                # SCL is a mask input, not a model modality (see scl_cloud_mask).
+                # SCL and Landsat QA are mask inputs, not model modalities
+                # (see scl_cloud_mask / l8_pixel_cloud_mask).
                 if layer.startswith("sentinel2_scl"):
+                    continue
+                if layer.startswith("landsat_qa"):
                     continue
                 resolved = resolve_rslearn_layer_name(layer)
                 if resolved is not None:
@@ -509,6 +536,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             scl_cloud_classes=scl_cloud_classes,
             landsat_cloud_cover_max=landsat_cloud_cover_max,
             landsat_cloud_cover_table=landsat_cloud_cover_table,
+            l8_pixel_cloud_mask=l8_pixel_cloud_mask,
         )
 
     @staticmethod
@@ -794,6 +822,10 @@ class RslearnToOlmoEarthDataset(Dataset):
 
         if self.scl_cloud_mask and Modality.SENTINEL2_L2A.name in self.input_modalities:
             self._apply_scl_cloud_mask(masked_sample, input_dict, crop_rows, crop_cols)
+        if self.l8_pixel_cloud_mask and Modality.LANDSAT.name in self.input_modalities:
+            self._apply_l8_pixel_cloud_mask(
+                masked_sample, input_dict, crop_rows, crop_cols
+            )
 
         for modality in self.input_modalities:
             modality_spec = Modality.get(modality)
@@ -825,6 +857,12 @@ class RslearnToOlmoEarthDataset(Dataset):
         if not self._warned_l8_mask:
             logger.warning(f"landsat_cloud_cover_max: {reason}; not masking")
             self._warned_l8_mask = True
+
+    def _warn_l8qa_once(self, reason: str) -> None:
+        """Warn about a skipped QA_PIXEL mask once per dataset instance."""
+        if not self._warned_l8qa_mask:
+            logger.warning(f"l8_pixel_cloud_mask: {reason}; leaving Landsat unmasked")
+            self._warned_l8qa_mask = True
 
     def _landsat_cloud_slots(
         self, window_key: str | None, canonical_t: int
@@ -975,6 +1013,66 @@ class RslearnToOlmoEarthDataset(Dataset):
         # Never blank a pixel entirely: a pixel cloudy at every timestep keeps
         # all of them (better a cloudy token than none, and zero-padding
         # pixels -- SCL 0 everywhere -- keep behaving exactly as unmasked).
+        cloudy[cloudy.all(axis=2)] = False
+        mask[torch.from_numpy(cloudy)] = MaskValue.MISSING.value
+
+    def _apply_l8_pixel_cloud_mask(
+        self,
+        masked_sample: MaskedOlmoEarthSample,
+        input_dict: dict[str, Any],
+        crop_rows: slice | None,
+        crop_cols: slice | None,
+    ) -> None:
+        """Set Landsat mask to MISSING where QA_PIXEL says cloud, in place.
+
+        The QA_PIXEL raster describes exactly the scene each Landsat month was
+        materialized from (the landsat_qa layers clone the imagery's prepared
+        items), and rides through the same Pad transform, so it arrives on the
+        Landsat pixel grid and takes the same crop. Mirrors
+        _apply_scl_cloud_mask, including the conservative fallbacks: any
+        window where the input is absent or misshapen is left unmasked with a
+        once-per-run warning.
+        """
+        qa_image = input_dict.get(L8QA_INPUT_NAME)
+        if not isinstance(qa_image, RasterImage):
+            self._warn_l8qa_once(f"no '{L8QA_INPUT_NAME}' input in sample")
+            return
+        img = qa_image.image
+        if isinstance(img, torch.Tensor):
+            img = img.numpy()
+        qa = rearrange(img, "c t h w -> h w t c")[..., 0]
+
+        landsat = input_dict[Modality.LANDSAT.name].image
+        if qa.shape[:2] != tuple(landsat.shape[2:]):
+            # QA is stored at 30 m (zoom_offset -1, like the multispectral
+            # band set); repair an exact half-resolution read rather than
+            # silently misaligning the crop below.
+            if tuple(x * 2 for x in qa.shape[:2]) == tuple(landsat.shape[2:]):
+                qa = qa.repeat(2, axis=0).repeat(2, axis=1)
+            else:
+                self._warn_l8qa_once(
+                    f"QA spatial shape {qa.shape[:2]} does not match Landsat "
+                    f"{tuple(landsat.shape[2:])}"
+                )
+                return
+        if crop_rows is not None and crop_cols is not None:
+            qa = qa[crop_rows, crop_cols]
+
+        mask_name = MaskedOlmoEarthSample.get_masked_modality_name(
+            Modality.LANDSAT.name
+        )
+        mask = getattr(masked_sample, mask_name)
+        if mask is None or qa.shape != tuple(mask.shape[:3]):
+            self._warn_l8qa_once(
+                f"QA shape {qa.shape} does not match Landsat mask "
+                f"{None if mask is None else tuple(mask.shape)}"
+            )
+            return
+
+        cloudy = (qa.astype(np.uint16) & L8QA_CLOUD_BITS_MASK) != 0
+        # Never blank a pixel entirely: a pixel cloudy at every timestep keeps
+        # all of them (better a cloudy token than none; QA fill/zero-padding
+        # carries no cloud bits, so padded months behave exactly as unmasked).
         cloudy[cloudy.all(axis=2)] = False
         mask[torch.from_numpy(cloudy)] = MaskValue.MISSING.value
 
