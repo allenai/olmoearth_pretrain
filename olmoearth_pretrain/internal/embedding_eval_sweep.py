@@ -202,28 +202,28 @@ def _balanced_trial_args(args: argparse.Namespace, task_names: list[str]) -> str
     Only the KNN tasks carry a ``balanced_trial`` config (see
     ``_aef_ps1_task``), so these must not be applied to the LP tasks -- there is
     no nested config there to override.
+
+    Read through ``getattr`` like ``priority``/``window_size`` above: the
+    cluster-side submitters in olmoearth_plus_cropharvest build this namespace
+    by hand, so a new field must not become a required attribute.
     """
     overrides = []
+    max_folds = getattr(args, "balanced_trial_max_folds", None)
+    draw_pool = getattr(args, "balanced_trial_draw_pool", None)
+    eval_split = getattr(args, "balanced_trial_eval_split", None)
+    disabled = getattr(args, "no_balanced_trials", False)
     for name in task_names:
         if EMBEDDING_EVAL_TASKS[name].balanced_trial is None:
             continue
-        if args.no_balanced_trials:
+        if disabled:
             overrides.append(_task_arg(name, "balanced_trial.enabled", "False"))
-        if args.balanced_trial_max_folds is not None:
-            overrides.append(
-                _task_arg(
-                    name, "balanced_trial.max_folds", args.balanced_trial_max_folds
-                )
-            )
-        if args.balanced_trial_draw_pool is not None:
-            pool = "[" + ",".join(args.balanced_trial_draw_pool.split(",")) + "]"
+        if max_folds is not None:
+            overrides.append(_task_arg(name, "balanced_trial.max_folds", max_folds))
+        if draw_pool is not None:
+            pool = "[" + ",".join(draw_pool.split(",")) + "]"
             overrides.append(_task_arg(name, "balanced_trial.draw_pool", pool))
-        if args.balanced_trial_eval_split is not None:
-            overrides.append(
-                _task_arg(
-                    name, "balanced_trial.eval_split", args.balanced_trial_eval_split
-                )
-            )
+        if eval_split is not None:
+            overrides.append(_task_arg(name, "balanced_trial.eval_split", eval_split))
     if not overrides:
         return ""
     return " " + " ".join(overrides)
