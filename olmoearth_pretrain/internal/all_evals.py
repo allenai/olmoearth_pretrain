@@ -1357,14 +1357,18 @@ AEF_SUPPLEMENTAL_DATASETS = (
 # OlmoEarth on one identical window set per dataset -- which is the point --
 # but it does mean their window counts are not comparable to the other six.
 AEF_SUPPLEMENTAL_YEAR_ALIGNED = (
-    "africa_crop_mask_year_aligned",
-    "canada_crops_coarse_year_aligned",
-    "canada_crops_fine_year_aligned",
-    "descals_year_aligned",
-    "ethiopia_crops_year_aligned",
-    "glance_year_aligned",
-    "lcmap_lu_year_aligned",
-    "us_trees_year_aligned",
+    # Ordered by window count, smallest first. Task registration order is
+    # execution order inside every eval job (the evaluator walks the registry
+    # dict), so this makes each job report its cheap datasets within minutes
+    # instead of queueing them behind us_trees's ~75-minute tasks.
+    "ethiopia_crops_year_aligned",  # 2 530 windows
+    "africa_crop_mask_year_aligned",  # 2 556
+    "canada_crops_fine_year_aligned",  # 14 566
+    "canada_crops_coarse_year_aligned",  # 16 079
+    "descals_year_aligned",  # 17 477
+    "lcmap_lu_year_aligned",  # 26 513
+    "glance_year_aligned",  # 34 885
+    "us_trees_year_aligned",  # 45 382
 )
 
 # Matched-subset siblings: the same windows as their parent dataset, but with
