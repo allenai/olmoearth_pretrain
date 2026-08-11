@@ -159,19 +159,25 @@ class BalancedTrialResult:
     per_fold: dict[str, dict[str, list[float]]] = field(default_factory=dict)
 
 
-def aef_num_folds(least_class_count: int) -> int:
+def aef_num_folds(trial_size: int) -> int:
     """AEF's S4.3 fold count ``k = 1000 / (2 * log10(c'))``.
 
-    Reproduces their published values exactly: c'=10 -> 500, 49 -> 296,
-    68 -> 273, 100 -> 250, 300 -> 202. Folds go *up* as the rarest class gets
-    smaller, and only logarithmically, so the formula never leaves the 200-500
-    band for any plausible ``c'``.
+    ``c'`` is **the per-class trial size**, not the least-populated class.
+    S4.3's prose calls it "the least-present class", but their published fold
+    counts are reproduced only by their Table 1 max-trial column: 49 -> 296
+    (ethiopia), 68 -> 273 (canada coarse), 300 -> 202 (the capped datasets).
+    Those two readings coincide whenever the trial size is set by the least
+    class, which is why the wording is ambiguous; they diverge once a cap or a
+    draw fraction binds, and then the trial size is what matches their numbers.
+
+    Folds go *up* as the trial gets smaller, and only logarithmically, so the
+    formula never leaves the 200-500 band for any plausible ``c'``.
     """
-    if least_class_count <= 1:
-        # log10(1) = 0; a single-member class admits no sampling variance worth
-        # hundreds of draws.
+    if trial_size <= 1:
+        # log10(1) = 0; a single-point-per-class trial admits no sampling
+        # variance worth hundreds of draws.
         return 1
-    return max(1, int(round(1000.0 / (2.0 * math.log10(least_class_count)))))
+    return max(1, int(round(1000.0 / (2.0 * math.log10(trial_size)))))
 
 
 def draw_balanced_indices(
@@ -421,11 +427,11 @@ def run_balanced_trials(
         # balanced draw and no sampling variance to average over (S4.3).
         n_folds = 1
     else:
-        n_folds = aef_num_folds(least_class_count)
+        n_folds = aef_num_folds(n_per_class)
     if trial_config.max_folds is not None and n_folds > trial_config.max_folds:
         logger.info(
             f"Balanced trial: capping folds at max_folds={trial_config.max_folds} "
-            f"(AEF's formula gives {n_folds} for c'={least_class_count})"
+            f"(AEF's formula gives {n_folds} for c'={n_per_class})"
         )
         n_folds = trial_config.max_folds
 

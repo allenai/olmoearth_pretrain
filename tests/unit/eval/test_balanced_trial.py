@@ -54,25 +54,25 @@ class TestAefNumFolds:
     """The S4.3 fold formula k = 1000 / (2 * log10(c'))."""
 
     @pytest.mark.parametrize(
-        "least_class_count,expected",
+        "trial_size,expected",
         [
-            # Values published in the AEF supplement / recomputed from the
-            # formula: folds go up as the rarest class gets smaller.
+            # AEF's Table 1 max-trial column against their published fold
+            # counts. Keying on the trial size (not the least class) is what
+            # reproduces these: folds go up as the trial gets smaller.
             (10, 500),
             (49, 296),  # ethiopia_crops
             (68, 273),  # canada_crops_coarse
             (100, 250),
-            (300, 202),
+            (200, 217),  # africa_crop_mask, descals -- capped datasets
+            (300, 202),  # lcmap, glance, us_trees -- capped datasets
         ],
     )
-    def test_matches_published_values(
-        self, least_class_count: int, expected: int
-    ) -> None:
+    def test_matches_published_values(self, trial_size: int, expected: int) -> None:
         """The formula reproduces AEF's published fold counts exactly."""
-        assert aef_num_folds(least_class_count) == expected
+        assert aef_num_folds(trial_size) == expected
 
-    def test_singleton_class_does_not_divide_by_zero(self) -> None:
-        """log10(1) == 0; a class of one admits no sampling variance."""
+    def test_singleton_trial_does_not_divide_by_zero(self) -> None:
+        """log10(1) == 0; one point per class admits no sampling variance."""
         assert aef_num_folds(1) == 1
         assert aef_num_folds(0) == 1
 
@@ -295,8 +295,10 @@ class TestRunBalancedTrials:
             trial_config=BalancedTrialConfig(max_folds=5, knn_ks=()),
             device=torch.device("cpu"),
         )
-        # The formula gives 1000 / (2 * log10(12)) = 463, capped to 5.
-        assert aef_num_folds(12) == 463
+        # The formula keys on the TRIAL SIZE, which is half the least class of
+        # 12: 1000 / (2 * log10(6)) = 643, then capped to 5.
+        assert aef_num_folds(6) == 643
+        assert result.results["ridge"].metrics["n_per_class"] == 6.0
         assert result.results["ridge"].metrics["n_folds"] == 5.0
 
     def test_single_fold_when_the_pool_is_already_balanced(self) -> None:
