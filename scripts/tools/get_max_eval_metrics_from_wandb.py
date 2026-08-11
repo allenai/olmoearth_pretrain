@@ -10,6 +10,9 @@ import numpy as np
 import pandas as pd
 import wandb
 
+from olmoearth_pretrain.evals.balanced_trial import (
+    TASK_SUFFIX as BALANCED_TRIAL_TASK_SUFFIX,
+)
 from olmoearth_pretrain.evals.datasets.configs import TaskType, dataset_to_config
 from olmoearth_pretrain.evals.models import (
     MODELS_WITH_MULTIPLE_SIZES,
@@ -402,6 +405,19 @@ def get_max_metrics_grouped(
                         primary_metric_name = _infer_default_primary_metric(dataset)
                     if primary_metric_name is not None:
                         additional_key = f"{normalized_key}/{primary_metric_name}"
+
+                # AEF balanced trials report under synthetic task names
+                # ("{host}_aeftrial_{predictor}", see evals/balanced_trial.py).
+                # They are not registered tasks and have no test split of their
+                # own -- their eval set is the remainder of the balanced draw --
+                # so both the has-test gate and the task-config lookup below
+                # would reject them (the latter with a KeyError).
+                if f"_{BALANCED_TRIAL_TASK_SUFFIX}_" in task_name:
+                    prev_max_val = metrics.get(normalized_key, float("-inf"))
+                    metrics[normalized_key] = max(prev_max_val, value)
+                    if value > prev_max_val:
+                        max_runs_per_metric[normalized_key] = run
+                    continue
 
                 # Ensure the run has test metrics (check both namespaces).
                 # For post-PR#504 runs, the primary test metric is at eval/test/{task}

@@ -18,10 +18,14 @@ This reproduces the evaluation protocol of *AlphaEarth Foundations* (arXiv
    (S4.1). Neither has a model-selection step, which is what makes a few hundred
    refits affordable: each ridge fit is a closed-form solve.
 
-This is purely additive: the caller's own train -> val probe result is untouched
-and the trial metrics land beside it under a ``bt_`` prefix. See
-docs/EvalMetricsAndBalancedTrials.md for why the two protocols answer different
-questions.
+This is purely additive: the caller's own train -> val probe result is untouched.
+Each trial predictor is reported as its OWN task -- ``{host}_aeftrial_{predictor}``
+with the host's ``_knn`` suffix dropped -- rather than as extra metrics on the
+host task. Filing them together would put two numbers behind one name that share
+only the embeddings: on ethiopia the host's kNN balanced accuracy is 0.49 while
+the trial's kNN at the same k is 0.77, and nothing in a metric name would tell
+them apart. See docs/EvalMetricsAndBalancedTrials.md for why the two protocols
+answer different questions.
 
 Because a trial draws from *every* split by default, the eval remainder contains
 test rows. That is the AEF protocol, but it means these numbers spend the test
@@ -39,13 +43,30 @@ import torch
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
 from olmoearth_pretrain.evals.knn import _run_knn_for_k
-from olmoearth_pretrain.evals.metrics import EvalMetric, classification_metrics
+from olmoearth_pretrain.evals.metrics import (
+    EvalMetric,
+    EvalResult,
+    classification_metrics,
+)
 
 logger = logging.getLogger(__name__)
 
-# Prefix every trial metric carries, so they are unambiguous next to the
-# headline train -> val metrics they are logged alongside.
-METRIC_PREFIX = "bt"
+# Marks the synthetic task names the trials report under, e.g.
+# "ethiopia_crops_..._sentinel2_aeftrial_ridge". The protocol lives in the TASK
+# name rather than in a metric prefix, so a trial number can never be read as
+# the host task's own kNN number -- they differ by ~25 points on ethiopia and
+# are otherwise indistinguishable (same embeddings, same k, same metric name).
+TASK_SUFFIX = "aeftrial"
+
+
+def trial_task_name(host_task: str, predictor: str) -> str:
+    """Synthetic task name a trial predictor's result is reported under.
+
+    The host is the KNN twin the trials ride on; its ``_knn`` suffix is dropped
+    because a ridge result under a ``_knn`` task name reads as a contradiction.
+    """
+    return f"{host_task.removesuffix('_knn')}_{TASK_SUFFIX}_{predictor}"
+
 
 # Metrics aggregated (mean + std) across folds. Balanced accuracy is AEF's
 # reported metric; macro F1 and accuracy are the disagreement detectors from
@@ -113,10 +134,13 @@ class BalancedTrialConfig:
 
 @dataclass
 class BalancedTrialResult:
-    """Aggregated trial metrics plus the per-fold values they came from."""
+    """One EvalResult per predictor, plus the per-fold values they came from."""
 
-    # Flat ``bt_*`` metrics, ready to log next to the headline eval metrics.
-    metrics: dict[str, float] = field(default_factory=dict)
+    # Predictor name ("ridge", "knn5", ...) -> its aggregated EvalResult. Each
+    # is reported as its own task by the caller, because a trial result shares
+    # nothing with the host task's number except the embeddings: different
+    # training set, different eval set, often a different predictor.
+    results: dict[str, EvalResult] = field(default_factory=dict)
     # predictor name -> metric name -> one value per fold.
     per_fold: dict[str, dict[str, list[float]]] = field(default_factory=dict)
 
@@ -456,46 +480,48 @@ def run_balanced_trials(
         if n_folds > 1 and (fold_idx + 1) % 25 == 0:
             logger.info(f"Balanced trial: completed {fold_idx + 1}/{n_folds} folds")
 
-    metrics: dict[str, float] = {
-        f"{METRIC_PREFIX}_n_per_class": float(n_per_class),
-        f"{METRIC_PREFIX}_n_folds": float(n_folds),
-        f"{METRIC_PREFIX}_least_class": float(least_class_count),
-        f"{METRIC_PREFIX}_pool_size": float(pool_embeddings.shape[0]),
-        f"{METRIC_PREFIX}_train_size": float(train_sizes[0]),
-        f"{METRIC_PREFIX}_eval_size": float(eval_sizes[0]),
-        f"{METRIC_PREFIX}_embedding_dim": float(pool_embeddings.shape[1]),
+    # Protocol diagnostics, repeated on every predictor's result so each row is
+    # self-describing: reading a trial number without n_per_class next to it is
+    # how a 10-shot trial gets mistaken for a max-trial one.
+    diagnostics = {
+        "n_per_class": float(n_per_class),
+        "n_folds": float(n_folds),
+        "least_class": float(least_class_count),
+        "pool_size": float(pool_embeddings.shape[0]),
+        "train_size": float(train_sizes[0]),
+        "eval_size": float(eval_sizes[0]),
+        "embedding_dim": float(pool_embeddings.shape[1]),
     }
+
+    results: dict[str, EvalResult] = {}
     for predictor, fold_metrics in per_fold.items():
+        metrics = dict(diagnostics)
         for metric_name, values in fold_metrics.items():
             mean, std, count = _mean_std_sem(values)
-            key = f"{METRIC_PREFIX}_{predictor}_{metric_name}"
-            metrics[key] = mean
+            metrics[metric_name] = mean
             # Spread across draws (how much the balanced draw itself moves the
             # score) and the error on the mean of those draws, which is the
             # error bar AEF's figures carry. They differ by sqrt(k), and k is
             # large here, so quoting the wrong one is a ~17x mistake at k=296.
-            metrics[f"{key}_std"] = std
-            metrics[f"{key}_sem"] = (
+            metrics[f"{metric_name}_std"] = std
+            metrics[f"{metric_name}_sem"] = (
                 std / math.sqrt(count) if count > 0 and not math.isnan(std) else std
             )
-
-    for predictor in predictors:
-        balanced_accuracy = metrics[
-            f"{METRIC_PREFIX}_{predictor}_{EvalMetric.BALANCED_ACCURACY.value}"
-        ]
-        std = metrics[
-            f"{METRIC_PREFIX}_{predictor}_{EvalMetric.BALANCED_ACCURACY.value}_std"
-        ]
-        sem = metrics[
-            f"{METRIC_PREFIX}_{predictor}_{EvalMetric.BALANCED_ACCURACY.value}_sem"
-        ]
+        primary_key = EvalMetric.BALANCED_ACCURACY.value
+        results[predictor] = EvalResult(
+            primary=metrics[primary_key],
+            primary_metric=EvalMetric.BALANCED_ACCURACY,
+            primary_metric_key=primary_key,
+            metrics=metrics,
+        )
         logger.info(
             f"Balanced trial [{predictor}]: balanced accuracy "
-            f"{balanced_accuracy:.4f} (std {std:.4f} across draws, sem {sem:.4f}) "
-            f"over {n_folds} fold(s)"
+            f"{metrics[primary_key]:.4f} (std {metrics[f'{primary_key}_std']:.4f} "
+            f"across draws, sem {metrics[f'{primary_key}_sem']:.4f}) over "
+            f"{n_folds} fold(s)"
         )
 
-    return BalancedTrialResult(metrics=metrics, per_fold=per_fold)
+    return BalancedTrialResult(results=results, per_fold=per_fold)
 
 
 def _record_fold(

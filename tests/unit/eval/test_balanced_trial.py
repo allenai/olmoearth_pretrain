@@ -12,6 +12,7 @@ from olmoearth_pretrain.evals.balanced_trial import (
     draw_balanced_indices,
     fit_ridge_ovr,
     run_balanced_trials,
+    trial_task_name,
 )
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
 from olmoearth_pretrain.evals.task_types import TaskType
@@ -240,14 +241,14 @@ class TestRunBalancedTrials:
             device=torch.device("cpu"),
         )
 
-        metrics = result.metrics
-        assert metrics["bt_pool_size"] == 197.0  # 100 + 60 + 25 + 12
-        assert metrics["bt_least_class"] == 12.0
+        metrics = result.results["ridge"].metrics
+        assert metrics["pool_size"] == 197.0  # 100 + 60 + 25 + 12
+        assert metrics["least_class"] == 12.0
         # min(cap=300, least class) -- the cap does not bind here.
-        assert metrics["bt_n_per_class"] == 12.0
-        assert metrics["bt_train_size"] == 48.0
-        assert metrics["bt_eval_size"] == 197.0 - 48.0
-        assert metrics["bt_n_folds"] == 3.0
+        assert metrics["n_per_class"] == 12.0
+        assert metrics["train_size"] == 48.0
+        assert metrics["eval_size"] == 197.0 - 48.0
+        assert metrics["n_folds"] == 3.0
 
     def test_cap_binds_when_the_least_class_is_large(self) -> None:
         """The cap, not the least class, sets the draw when it is the smaller."""
@@ -259,8 +260,8 @@ class TestRunBalancedTrials:
             trial_config=BalancedTrialConfig(cap=5, n_folds=2, knn_ks=()),
             device=torch.device("cpu"),
         )
-        assert result.metrics["bt_n_per_class"] == 5.0
-        assert result.metrics["bt_train_size"] == 20.0
+        assert result.results["ridge"].metrics["n_per_class"] == 5.0
+        assert result.results["ridge"].metrics["train_size"] == 20.0
 
     def test_reports_every_predictor_and_metric(self) -> None:
         """Ridge and every requested kNN report the full metric set per fold."""
@@ -275,10 +276,10 @@ class TestRunBalancedTrials:
 
         for predictor in ("ridge", "knn5", "knn20"):
             for metric in ("balanced_accuracy", "accuracy", "macro_f1"):
-                assert f"bt_{predictor}_{metric}" in result.metrics
-                assert f"bt_{predictor}_{metric}_std" in result.metrics
+                assert metric in result.results[predictor].metrics
+                assert f"{metric}_std" in result.results[predictor].metrics
             # Separable classes, so a sane protocol scores well above chance.
-            assert result.metrics[f"bt_{predictor}_balanced_accuracy"] > 0.8
+            assert result.results[predictor].metrics["balanced_accuracy"] > 0.8
             assert len(result.per_fold[predictor]["balanced_accuracy"]) == 4
 
     def test_fold_count_defaults_to_the_aef_formula(self) -> None:
@@ -293,7 +294,7 @@ class TestRunBalancedTrials:
         )
         # The formula gives 1000 / (2 * log10(12)) = 463, capped to 5.
         assert aef_num_folds(12) == 463
-        assert result.metrics["bt_n_folds"] == 5.0
+        assert result.results["ridge"].metrics["n_folds"] == 5.0
 
     def test_single_fold_when_the_pool_is_already_balanced(self) -> None:
         """S4.3: k = 1 when the classes are already equal-sized.
@@ -313,8 +314,8 @@ class TestRunBalancedTrials:
             ),
             device=torch.device("cpu"),
         )
-        assert result.metrics["bt_n_folds"] == 1.0
-        assert result.metrics["bt_ridge_balanced_accuracy_std"] == 0.0
+        assert result.results["ridge"].metrics["n_folds"] == 1.0
+        assert result.results["ridge"].metrics["balanced_accuracy_std"] == 0.0
 
     def test_skips_when_the_draw_would_leave_no_remainder(self) -> None:
         """A draw that consumes the pool declines rather than scoring on train.
@@ -330,7 +331,7 @@ class TestRunBalancedTrials:
             trial_config=BalancedTrialConfig(draw_pool=("train",), knn_ks=()),
             device=torch.device("cpu"),
         )
-        assert result.metrics == {}
+        assert result.results == {}
 
     def test_missing_test_split_shrinks_the_pool_rather_than_failing(self) -> None:
         """run_on_test=False degrades the pool to the available splits, not a crash."""
@@ -344,8 +345,8 @@ class TestRunBalancedTrials:
             trial_config=BalancedTrialConfig(n_folds=2, knn_ks=()),
             device=torch.device("cpu"),
         )
-        assert result.metrics["bt_pool_size"] < 197.0
-        assert result.metrics["bt_least_class"] < 12.0
+        assert result.results["ridge"].metrics["pool_size"] < 197.0
+        assert result.results["ridge"].metrics["least_class"] < 12.0
 
     def test_fixed_eval_split_holds_the_eval_rows_constant(self) -> None:
         """A held-out eval split keeps the eval rows identical across folds."""
@@ -362,8 +363,10 @@ class TestRunBalancedTrials:
             ),
             device=torch.device("cpu"),
         )
-        assert result.metrics["bt_eval_size"] == float(labels["test"].numel())
-        assert result.metrics["bt_pool_size"] == float(
+        assert result.results["ridge"].metrics["eval_size"] == float(
+            labels["test"].numel()
+        )
+        assert result.results["ridge"].metrics["pool_size"] == float(
             labels["train"].numel() + labels["val"].numel()
         )
 
@@ -397,7 +400,7 @@ class TestRunBalancedTrials:
             ),
             device=torch.device("cpu"),
         )
-        assert result.metrics["bt_pool_size"] == 197.0
+        assert result.results["ridge"].metrics["pool_size"] == 197.0
 
     def test_is_reproducible_across_runs(self) -> None:
         """Two runs of the same config produce identical metrics."""
@@ -410,8 +413,8 @@ class TestRunBalancedTrials:
             trial_config=trial_config,
             device=torch.device("cpu"),
         )
-        first = run_balanced_trials(**kwargs).metrics
-        second = run_balanced_trials(**kwargs).metrics
+        first = run_balanced_trials(**kwargs).results["ridge"].metrics
+        second = run_balanced_trials(**kwargs).results["ridge"].metrics
 
         for key, value in first.items():
             assert second[key] == pytest.approx(value, nan_ok=True)
@@ -426,7 +429,7 @@ class TestRunBalancedTrials:
             trial_config=BalancedTrialConfig(draw_pool=("train",)),
             device=torch.device("cpu"),
         )
-        assert result.metrics == {}
+        assert result.results == {}
 
     def test_std_reflects_draw_to_draw_spread(self) -> None:
         """Std is the spread across draws; sem is that divided by sqrt(k)."""
@@ -444,12 +447,41 @@ class TestRunBalancedTrials:
         expected_std = math.sqrt(
             sum((v - mean) ** 2 for v in per_fold) / (len(per_fold) - 1)
         )
-        assert result.metrics["bt_ridge_balanced_accuracy"] == pytest.approx(mean)
-        assert result.metrics["bt_ridge_balanced_accuracy_std"] == pytest.approx(
-            expected_std
+        assert result.results["ridge"].metrics["balanced_accuracy"] == pytest.approx(
+            mean
         )
+        assert result.results["ridge"].metrics[
+            "balanced_accuracy_std"
+        ] == pytest.approx(expected_std)
         # The error bar on the mean of k draws -- what AEF's figures carry --
         # is the draw-to-draw spread divided by sqrt(k).
-        assert result.metrics["bt_ridge_balanced_accuracy_sem"] == pytest.approx(
-            expected_std / math.sqrt(8)
+        assert result.results["ridge"].metrics[
+            "balanced_accuracy_sem"
+        ] == pytest.approx(expected_std / math.sqrt(8))
+
+
+class TestTrialTaskName:
+    """The synthetic task name the trials report under."""
+
+    def test_drops_the_host_knn_suffix_and_names_the_predictor(self) -> None:
+        """A ridge result must not sit under a task name ending in _knn."""
+        name = trial_task_name(
+            "ethiopia_crops_year_aligned_ws16_ps1_sentinel2_knn", "ridge"
         )
+        assert name == "ethiopia_crops_year_aligned_ws16_ps1_sentinel2_aeftrial_ridge"
+        assert not name.endswith("_knn")
+
+    def test_trial_knn_is_distinguishable_from_the_host_knn(self) -> None:
+        """The whole point: the two kNN numbers cannot collide.
+
+        Both are kNN at k=20 over the same embeddings, but one trains on the
+        imbalanced train split and scores val while the other trains on a
+        balanced draw and scores the remainder -- ~25 points apart on ethiopia.
+        """
+        host = "ethiopia_crops_year_aligned_ws16_ps1_sentinel2_knn"
+        assert trial_task_name(host, "knn20") != host
+        assert trial_task_name(host, "knn20").endswith("_aeftrial_knn20")
+
+    def test_is_stable_for_a_host_without_a_knn_suffix(self) -> None:
+        """Removesuffix is a no-op when the host is not the KNN twin."""
+        assert trial_task_name("some_task", "ridge") == "some_task_aeftrial_ridge"

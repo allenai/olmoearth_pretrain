@@ -26,6 +26,7 @@ from olmoearth_pretrain.data.dataloader import _worker_ignore_sigterm
 from olmoearth_pretrain.evals.balanced_trial import (
     BalancedTrialConfig,
     run_balanced_trials,
+    trial_task_name,
 )
 from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
@@ -739,7 +740,12 @@ class DownstreamEvaluator:
                 trial_config=self.balanced_trial,
                 device=self.device or self.trainer.device,
             )
-            result.extra_metrics.update(trial_result.metrics)
+            result.extra_results.update(
+                {
+                    trial_task_name(self.evaluation_name, predictor): predictor_result
+                    for predictor, predictor_result in trial_result.results.items()
+                }
+            )
             logger.info(
                 f"Balanced trials for {self.dataset} took "
                 f"{time.time() - trial_start:.2f}s"
@@ -944,23 +950,22 @@ def eval_result_log_dict(
     return log_dict
 
 
-def extra_metrics_log_dict(
-    name: str, extra_metrics: dict[str, float]
-) -> dict[str, float]:
-    """Build the wandb log dict for a task's protocol-extra metrics.
+def extra_results_log_dict(extra_results: dict[str, EvalResult]) -> dict[str, float]:
+    """Build the wandb log dict for results produced by a different protocol.
 
-    These land in the same ``eval_other/{task}/{metric}`` namespace as the
-    non-primary metrics, which is what the CSV export normalizes into
-    ``eval/{task}/{metric}`` columns -- so balanced-trial metrics flow through
-    the existing analysis scripts without a special case. They are deliberately
-    NOT put under ``eval/test/``: a balanced trial's eval set is its own
-    remainder, not our test split.
+    Each lands under its own synthetic task name via the ordinary key layout --
+    ``eval/{trial_task}`` for the primary metric, ``eval_other/{trial_task}/*``
+    for the rest -- so the CSV export and the dashboards treat a balanced trial
+    as just another task, with no special case and no way to read it as the host
+    task's own number.
+
+    Deliberately NOT logged under ``eval/test/``: a balanced trial's eval set is
+    its own remainder, not our test split.
     """
-    other_prefix = _make_other_prefix("eval")
-    return {
-        f"{other_prefix}/{name}/{metric_name}": value
-        for metric_name, value in extra_metrics.items()
-    }
+    log_dict: dict[str, float] = {}
+    for name, result in extra_results.items():
+        log_dict.update(eval_result_log_dict("eval", name, result))
+    return log_dict
 
 
 def _log_eval_result_to_wandb(
@@ -1072,10 +1077,10 @@ class DownstreamEvaluatorCallback(Callback):
             logger.info(
                 f"Downstream evaluator {evaluator.evaluation_name} score: {val_result.primary} (metrics: {val_result.metrics})"
             )
-        if result.extra_metrics:
+        for name, extra_result in result.extra_results.items():
             logger.info(
-                f"Downstream evaluator {evaluator.evaluation_name} balanced-trial "
-                f"metrics: {result.extra_metrics}"
+                f"Downstream evaluator {name} score: {extra_result.primary} "
+                f"(metrics: {extra_result.metrics})"
             )
         if self.run_on_test and test_result is not None:
             logger.info(
@@ -1101,12 +1106,8 @@ class DownstreamEvaluatorCallback(Callback):
                 _log_eval_result_to_wandb(
                     wandb_callback, "eval", evaluator.evaluation_name, val_result
                 )
-            if result.extra_metrics:
-                wandb_callback.wandb.log(
-                    extra_metrics_log_dict(
-                        evaluator.evaluation_name, result.extra_metrics
-                    )
-                )
+            if result.extra_results:
+                wandb_callback.wandb.log(extra_results_log_dict(result.extra_results))
             wandb_callback.wandb.log(
                 {"eval_time/" + evaluator.evaluation_name: eval_time}
             )
