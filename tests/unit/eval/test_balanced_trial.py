@@ -244,12 +244,12 @@ class TestRunBalancedTrials:
         metrics = result.results["ridge"].metrics
         assert metrics["pool_size"] == 197.0  # 100 + 60 + 25 + 12
         assert metrics["least_class"] == 12.0
-        # min(cap=300, least class / 2) -- the cap does not bind, so the
-        # fraction sets the draw and half of the least class stays in the
-        # remainder rather than being consumed by the training draw.
-        assert metrics["n_per_class"] == 6.0
-        assert metrics["train_size"] == 24.0
-        assert metrics["eval_size"] == 197.0 - 24.0
+        # min(cap=300, 0.9 * least class) -- the cap does not bind here, so
+        # the safety-net fraction sets the draw and part of the least class
+        # stays in the remainder rather than being consumed by the draw.
+        assert metrics["n_per_class"] == 10.0
+        assert metrics["train_size"] == 40.0
+        assert metrics["eval_size"] == 197.0 - 40.0
         assert metrics["eval_classes"] == metrics["pool_classes"] == 4.0
         assert metrics["n_folds"] == 3.0
 
@@ -295,10 +295,10 @@ class TestRunBalancedTrials:
             trial_config=BalancedTrialConfig(max_folds=5, knn_ks=()),
             device=torch.device("cpu"),
         )
-        # The formula keys on the TRIAL SIZE, which is half the least class of
-        # 12: 1000 / (2 * log10(6)) = 643, then capped to 5.
-        assert aef_num_folds(6) == 643
-        assert result.results["ridge"].metrics["n_per_class"] == 6.0
+        # The formula keys on the TRIAL SIZE, which is 0.9 * the least class
+        # of 12: 1000 / (2 * log10(10)) = 500, then capped to 5.
+        assert aef_num_folds(10) == 500
+        assert result.results["ridge"].metrics["n_per_class"] == 10.0
         assert result.results["ridge"].metrics["n_folds"] == 5.0
 
     def test_single_fold_when_the_pool_is_already_balanced(self) -> None:
@@ -505,8 +505,8 @@ class TestLeastClassIsNotDrawnDry:
         )
         return _separable_embeddings(labels), labels
 
-    def test_draw_is_half_the_least_class_by_default(self) -> None:
-        """min(cap, least/2), not min(cap, least) -- see AEF's Table 1."""
+    def test_draw_leaves_part_of_the_least_class_by_default(self) -> None:
+        """The default never consumes a class whole, whatever the cap allows."""
         embeddings, labels = self._pool()
         result = run_balanced_trials(
             config=_config(),
@@ -519,7 +519,10 @@ class TestLeastClassIsNotDrawnDry:
         )
         metrics = result.results["ridge"].metrics
         assert metrics["least_class"] == 96.0
-        assert metrics["n_per_class"] == 48.0
+        # int(96 * 0.9); the real sweeps set a per-dataset cap from AEF's
+        # Table 1 that binds well below this.
+        assert metrics["n_per_class"] == 86.0
+        assert metrics["eval_classes"] == metrics["pool_classes"] == 4.0
 
     def test_every_class_survives_into_the_eval_set(self) -> None:
         """The failure this guards: a starved class silently shrinks the average.

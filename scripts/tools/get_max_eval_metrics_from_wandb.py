@@ -64,6 +64,14 @@ def get_run_group_name(run_name: str, keep_steps_separate: bool = False) -> str:
     Default: 'exp_step300000_dataset_lr0.001_ptmean' -> 'exp'
     keep_steps_separate: 'exp_step300000_dataset_lr0.001_ptmean' -> 'exp_step300000'
     """
+    # Bin-sharded sweeps split one arm's task list across N jobs whose names
+    # differ only by a _b{NN} index (embedding_eval_beaker_balanced_trials*.yaml
+    # packs 160 tasks into 48 bins per arm). The bins partition the task set, so
+    # every metric appears in exactly one of them and merging is a plain union
+    # -- drop the index here rather than leaving 48 single-bin groups to be
+    # stitched together at analysis time.
+    run_name = re.sub(r"_b\d+(?=_emb)", "", run_name)
+
     if keep_steps_separate:
         # Greedy match up to and including _step{N}: "exp_step300000_lr..." -> "exp_step300000"
         pattern = r"(.+_step\d+)"

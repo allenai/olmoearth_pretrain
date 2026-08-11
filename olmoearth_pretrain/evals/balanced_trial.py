@@ -112,22 +112,25 @@ class BalancedTrialConfig:
     # sizes (hundreds as opposed to thousands or millions of points)". 200 and
     # 150 are used for some of their tasks; 300 is the common value.
     cap: int = 300
-    # Largest share of the LEAST-populated class the draw may take. Drawing the
-    # whole of it -- which min(cap, least_class) does whenever the cap does not
-    # bind -- removes that class from the remainder entirely, and then balanced
-    # accuracy silently averages over K-1 classes, dropping the rarest and
-    # usually hardest one. On ethiopia (least class 96, cap 300) that turns a
-    # 4-class score into a 3-class score and inflates it.
+    # SAFETY NET, not the mechanism: the largest share of the LEAST-populated
+    # class the draw may take. Drawing the whole of it removes that class from
+    # the remainder entirely, and balanced accuracy then silently averages over
+    # K-1 classes -- dropping the rarest and usually hardest one, so the score
+    # goes up. `eval_classes` vs `pool_classes` on every result is the check.
     #
-    # 0.5 also reconciles our counts with AEF's Table 1. Their max-trial values
-    # for the datasets where the cap does not bind are almost exactly half the
-    # least class: ethiopia 49, canada fine 75, canada coarse 68 against least
-    # classes of ~97, ~150, ~136. Our ethiopia least class is 96, so half is 48
-    # against their 49 -- a one-window difference, which is exactly the gap
-    # between our 2,529-window pool and their 2,530. Their framing requires
-    # this: a random-chance line at 1/K is meaningless if the eval set only
-    # contains K-1 classes.
-    least_class_draw_fraction: float = 0.5
+    # What normally sets the draw is ``cap``, taken per dataset from AEF's
+    # Table 1 (see AEF_MAX_TRIAL_CAPS). Every one of our least classes exceeds
+    # its dataset's cap, so the cap binds first everywhere and this fraction
+    # never fires -- it exists for a future dataset whose rarest class falls
+    # below its cap.
+    #
+    # 0.9 rather than something smaller because the fraction is now pure
+    # insurance: lowering it would only shrink the draw below AEF's budget on
+    # datasets where the cap already protects the eval set. An earlier version
+    # used 0.5 on the theory that AEF's odd Table 1 values were half the least
+    # class; measured counts across all eight datasets contradicted that, and
+    # 0.5 forfeited budget parity everywhere the cap binds.
+    least_class_draw_fraction: float = 0.9
     # None -> the S4.3 formula (or 1 when the pool is already class-balanced).
     n_folds: int | None = None
     # Backstop on the formula's 200-500 folds. None keeps AEF's count; the

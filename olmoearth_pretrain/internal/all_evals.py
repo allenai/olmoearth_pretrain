@@ -1411,14 +1411,36 @@ def _embedding_eval_batch_scale(window_size: int) -> int:
     return (16 // window_size) ** 2
 
 
-# AEF's per-dataset "Max Trial Size (n)" cap (their Table 1, read per class).
-# Only the round values are caps -- Table 1's odd entries (canada fine 75,
-# coarse 68, ethiopia 49) are the least-populated class binding below the cap,
-# so those datasets need no entry here. Keyed by dataset-name prefix so the
-# _year_aligned re-exports inherit their parent's cap.
+# AEF's per-dataset "Max Trial Size (n)" column (their Table 1, read per class),
+# used directly as our per-class draw size. Keyed by dataset-name prefix so the
+# _year_aligned re-exports inherit their parent's value.
+#
+# Taking the whole column -- including the odd entries -- rather than only the
+# round ones is what gives exact training-budget parity with AEF on all eight
+# datasets. It also sidesteps a question we could not settle: whether 49/75/68
+# are caps they chose or their least-populated classes binding. It does not
+# matter, because every one of OUR least classes exceeds the corresponding
+# value (ethiopia 96>49, canada fine 87>75, coarse 106>68, africa 318>200,
+# descals 290>200, lcmap 588>300, glance 467>300, us_trees 393>300), so the
+# value binds first everywhere and the draw is theirs by construction.
+#
+# The earlier reading -- that only the round values were caps and the odd ones
+# were least classes -- implied AEF draws its rarest class in full on those
+# three datasets, leaving ZERO of it in the remainder they evaluate on, in every
+# fold. That would make their published ethiopia/canada figures K-1-class
+# balanced accuracies with a wrong 1/K chance line, which a paper about
+# rare-class performance under sparse labels is unlikely to be doing. Reading
+# the column as a budget avoids attributing that to them AND leaves 12-288
+# rarest-class rows in our eval set per dataset.
 AEF_MAX_TRIAL_CAPS = {
+    "ethiopia_crops": 49,
+    "canada_crops_fine": 75,
+    "canada_crops_coarse": 68,
     "africa_crop_mask": 200,
     "descals": 200,
+    "lcmap_lu": 300,
+    "glance": 300,
+    "us_trees": 300,
 }
 DEFAULT_AEF_MAX_TRIAL_CAP = 300
 
