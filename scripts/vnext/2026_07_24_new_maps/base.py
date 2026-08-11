@@ -131,6 +131,29 @@ BAND_DROPOUT_MODALITIES = [
     Modality.LANDSAT.name,
 ]
 
+# Grouped (structured) band dropout: instead of zeroing bands independently, drop one
+# whole *resolution group* at a time, mirroring a realistic missing sensor-resolution
+# group. Groups follow the native S2 10 m / 20 m / 60 m band sets; for Landsat only the
+# 15 m panchromatic B8 is droppable, i.e. every sample is seen "with or without B8".
+# Keeping within-group bands always co-present preserves the fine spectral contrast that
+# per-band dropout smears away (the suspected m-eurosat regression). Modalities absent
+# here fall back to per-band dropout.
+BAND_DROPOUT_GROUPS: dict[str, list[list[str]]] = {
+    Modality.SENTINEL2_L2A.name: [
+        ["B02", "B03", "B04", "B08"],  # 10 m
+        ["B05", "B06", "B07", "B8A", "B11", "B12"],  # 20 m
+        ["B01", "B09"],  # 60 m
+    ],
+    Modality.LANDSAT.name: [
+        ["B8"],  # 15 m panchromatic -> with / without B8
+    ],
+}
+# Probability that one group is dropped per sample in grouped mode. Chosen so the
+# expected fraction of zeroed S2 bands (~0.3 * mean_group_size/12 ≈ 0.1) roughly matches
+# the previous per-band random schedule (Uniform(0, 0.2), mean ~0.1), keeping the overall
+# regularization strength comparable while changing only its structure.
+GROUP_BAND_DROPOUT_RATE = 0.3
+
 
 def _tokenization_config() -> TokenizationConfig:
     return TokenizationConfig(

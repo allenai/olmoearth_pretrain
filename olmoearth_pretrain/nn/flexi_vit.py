@@ -223,8 +223,10 @@ class MultiModalPatchEmbeddings(nn.Module):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        band_dropout_groups: dict[str, list[list[str]]] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
+        patch_embed_linear_skip: bool = False,
     ):
         """Initialize the patch embeddings.
 
@@ -245,6 +247,16 @@ class MultiModalPatchEmbeddings(nn.Module):
                 and acts as stronger augmentation. Default: False (fixed rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            band_dropout_groups: Optional mapping modality name -> list of band-name
+                groups. When a modality has an entry here, band dropout for that
+                modality switches from per-band (zero each band independently) to
+                *grouped*: with probability ``band_dropout_rate``, exactly one group
+                (chosen uniformly at random per sample) is zeroed, leaving the other
+                groups intact. This mirrors realistic missing-sensor-group scenarios
+                (e.g. S2 10 m / 20 m / 60 m resolution groups, or Landsat with/without
+                the panchromatic B8) and preserves within-group spectral contrast.
+                Modalities absent from this mapping fall back to per-band dropout.
+                Default: None (all per-band).
             patch_embed_hidden_sizes: Optional list of hidden layer widths for a
                 per-pixel MLP applied BEFORE patchification in the spatial
                 FlexiPatchEmbed. If None or empty, the projection is a single nn.Linear
@@ -258,6 +270,9 @@ class MultiModalPatchEmbeddings(nn.Module):
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm. Only applies
                 to the spatial branch (FlexiPatchEmbed).
+            patch_embed_linear_skip: Passed through to FlexiPatchEmbed. If True, add a
+                per-pixel ReLU-free linear skip parallel to the patch-embed MLP
+                (pixel_features = MLP(x) + Linear(x)); requires patch_embed_hidden_sizes.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -268,8 +283,10 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
+        self.band_dropout_groups = band_dropout_groups
         self.patch_embed_hidden_sizes = patch_embed_hidden_sizes
         self.post_proj_hidden_sizes = post_proj_hidden_sizes
+        self.patch_embed_linear_skip = patch_embed_linear_skip
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -290,12 +307,56 @@ class MultiModalPatchEmbeddings(nn.Module):
                     buffer_name, banset_indices_tensor, persistent=False
                 )
 
+        # For grouped band dropout, precompute a [num_groups, num_bands_in_bandset]
+        # 0/1 mask per (modality, bandset) that marks which local band positions
+        # belong to each droppable group. Registered as (non-persistent) buffers so
+        # they follow the module's device/dtype without entering the checkpoint.
+        self._band_dropout_group_counts: dict[str, int] = {}
+        if self.band_dropout_groups:
+            for modality, groups in self.band_dropout_groups.items():
+                if modality not in self.supported_modality_names:
+                    continue
+                base_spec = Modality.get(modality)
+                name_to_global = {
+                    name: i for i, name in enumerate(base_spec.band_order)
+                }
+                bandset_index_lists = self.tokenization_config.get_bandset_indices(
+                    modality
+                )
+                for idx, bandset_indices in enumerate(bandset_index_lists):
+                    local_pos = {g: j for j, g in enumerate(bandset_indices)}
+                    group_mask = torch.zeros(
+                        (len(groups), len(bandset_indices)), dtype=torch.float32
+                    )
+                    for g_idx, group in enumerate(groups):
+                        for band_name in group:
+                            global_idx = name_to_global[band_name]
+                            if global_idx in local_pos:
+                                group_mask[g_idx, local_pos[global_idx]] = 1.0
+                    # Drop groups that don't touch this bandset (all-zero rows) so a
+                    # uniform group choice never becomes a no-op drop.
+                    nonempty = group_mask.sum(dim=1) > 0
+                    group_mask = group_mask[nonempty]
+                    self._band_dropout_group_counts[
+                        self._get_buffer_name(modality, idx)
+                    ] = int(group_mask.shape[0])
+                    self.register_buffer(
+                        self._get_group_mask_buffer_name(modality, idx),
+                        group_mask,
+                        persistent=False,
+                    )
+
         # Create a dictionary of per modality index tensors to do  index select with registered buffer
 
     @staticmethod
     def _get_buffer_name(modality: str, idx: int) -> str:
         """Get the buffer name."""
         return f"{modality}__{idx}_buffer"
+
+    @staticmethod
+    def _get_group_mask_buffer_name(modality: str, idx: int) -> str:
+        """Get the grouped-band-dropout mask buffer name."""
+        return f"{modality}__{idx}_group_mask_buffer"
 
     @staticmethod
     def _get_embedding_module_name(modality: str, idx: int) -> str:
@@ -335,6 +396,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                         use_linear_patch_embed=self.use_linear_patch_embed,
                         patch_embed_hidden_sizes=self.patch_embed_hidden_sizes,
                         post_proj_hidden_sizes=self.post_proj_hidden_sizes,
+                        patch_embed_linear_skip=self.patch_embed_linear_skip,
                     )
                     for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
@@ -383,14 +445,27 @@ class MultiModalPatchEmbeddings(nn.Module):
                 num_bands = inp_data.shape[-1]
                 # Only apply band dropout if there are more than 1 band
                 if num_bands > 1:
-                    if self.random_band_dropout:
-                        rate = (
-                            torch.rand(1, device=inp_data.device).item()
-                            * self.band_dropout_rate
+                    grouped = (
+                        self.band_dropout_groups is not None
+                        and modality in self.band_dropout_groups
+                        and self._band_dropout_group_counts.get(buffer_name, 0) > 0
+                    )
+                    if grouped:
+                        group_mask = getattr(
+                            self, self._get_group_mask_buffer_name(modality, idx)
+                        )
+                        inp_data = self._apply_group_band_dropout(
+                            inp_data, group_mask, self.band_dropout_rate
                         )
                     else:
-                        rate = self.band_dropout_rate
-                    inp_data = self._apply_band_dropout(inp_data, rate)
+                        if self.random_band_dropout:
+                            rate = (
+                                torch.rand(1, device=inp_data.device).item()
+                                * self.band_dropout_rate
+                            )
+                        else:
+                            rate = self.band_dropout_rate
+                        inp_data = self._apply_band_dropout(inp_data, rate)
 
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
@@ -424,6 +499,42 @@ class MultiModalPatchEmbeddings(nn.Module):
                 num_bands, (no_bands_kept.sum(),), device=keep_mask.device
             )
             keep_mask[no_bands_kept, rand_idx] = True
+        # Broadcast: [B, 1, 1, ..., num_bands]
+        view_shape = [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
+        return patchified_data * keep_mask.view(*view_shape).to(patchified_data.dtype)
+
+    @staticmethod
+    def _apply_group_band_dropout(
+        patchified_data: Tensor, group_mask: Tensor, rate: float
+    ) -> Tensor:
+        """Drop one whole band group at a time to mirror missing sensor groups.
+
+        For each sample independently, with probability ``rate`` exactly one group
+        (row of ``group_mask``) is selected uniformly at random and its bands are
+        zeroed; with probability ``1 - rate`` all bands are kept. The other groups are
+        always left intact, so within-group spectral contrast is preserved and at
+        least one group always survives (there are >= 2 groups by construction).
+
+        Args:
+            patchified_data: Input tensor with bands in the last dimension.
+            group_mask: [num_groups, num_bands] 0/1 mask; row g marks the bands of
+                group g within this bandset.
+            rate: Probability that a group is dropped for a given sample.
+
+        Returns:
+            Tensor with one randomly chosen group zeroed per selected sample.
+        """
+        num_bands = patchified_data.shape[-1]
+        batch_size = patchified_data.shape[0]
+        num_groups = group_mask.shape[0]
+        device = patchified_data.device
+        # Which group to drop per sample, and whether to drop at all this sample.
+        which = torch.randint(num_groups, (batch_size,), device=device)
+        do_drop = torch.rand(batch_size, device=device) < rate
+        # Gather the chosen group's band mask, gated by do_drop -> [B, num_bands].
+        chosen = group_mask.to(device).index_select(0, which)
+        drop_mask = chosen * do_drop.to(chosen.dtype).unsqueeze(-1)
+        keep_mask = 1.0 - drop_mask
         # Broadcast: [B, 1, 1, ..., num_bands]
         view_shape = [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
         return patchified_data * keep_mask.view(*view_shape).to(patchified_data.dtype)
@@ -2202,8 +2313,10 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        band_dropout_groups: dict[str, list[list[str]]] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
+        patch_embed_linear_skip: bool = False,
         position_encoding: str = "absolute",
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
@@ -2261,6 +2374,9 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            band_dropout_groups: Optional modality -> list of band-name groups. When a
+                modality is listed, its band dropout becomes grouped (one whole group
+                zeroed per sample w.p. band_dropout_rate) rather than per-band.
             patch_embed_hidden_sizes: Optional list of hidden layer widths for a
                 per-pixel MLP applied BEFORE patchification in the spatial patch
                 projection. If None or empty, the projection is a single nn.Linear
@@ -2272,6 +2388,9 @@ class Encoder(FlexiVitBase):
             post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm.
+            patch_embed_linear_skip: If True, add a per-pixel ReLU-free linear skip
+                parallel to the patch-embed MLP (pixel_features = MLP(x) + Linear(x)).
+                Requires patch_embed_hidden_sizes.
             position_encoding: Position encoding mode; one of the
                 ``PositionEncoding`` values.
             rope_base: Frequency base for axial RoPE.
@@ -2410,8 +2529,10 @@ class Encoder(FlexiVitBase):
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
+        self.band_dropout_groups = band_dropout_groups
         self.patch_embed_hidden_sizes = patch_embed_hidden_sizes
         self.post_proj_hidden_sizes = post_proj_hidden_sizes
+        self.patch_embed_linear_skip = patch_embed_linear_skip
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
@@ -2421,8 +2542,10 @@ class Encoder(FlexiVitBase):
             band_dropout_rate=0.0,
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
+            band_dropout_groups=self.band_dropout_groups,
             patch_embed_hidden_sizes=self.patch_embed_hidden_sizes,
             post_proj_hidden_sizes=self.post_proj_hidden_sizes,
+            patch_embed_linear_skip=self.patch_embed_linear_skip,
         )
         self.output_embedding_size = output_embedding_size
         # If output_embedding_size is set, project tokens to that size after attention
@@ -3779,8 +3902,16 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+    # Optional modality -> list of band-name groups. When set for a modality, band
+    # dropout for it becomes grouped (drop one whole group per sample w.p.
+    # band_dropout_rate) instead of per-band; modalities not listed fall back to
+    # per-band dropout. See MultiModalPatchEmbeddings for details.
+    band_dropout_groups: dict[str, list[list[str]]] | None = None
     patch_embed_hidden_sizes: list[int] | None = None
     post_proj_hidden_sizes: list[int] | None = None
+    # Add a per-pixel ReLU-free linear skip parallel to the patch-embed MLP
+    # (pixel_features = MLP(x) + Linear(x)). Requires patch_embed_hidden_sizes.
+    patch_embed_linear_skip: bool = False
     position_encoding: str = "absolute"
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
@@ -3887,6 +4018,26 @@ class EncoderConfig(Config):
                     f"band_dropout_modalities contains modalities not in "
                     f"supported_modality_names: {unknown}"
                 )
+        if self.band_dropout_groups is not None:
+            unknown = set(self.band_dropout_groups) - set(self.supported_modality_names)
+            if unknown:
+                raise ValueError(
+                    f"band_dropout_groups contains modalities not in "
+                    f"supported_modality_names: {unknown}"
+                )
+            for mod_name, groups in self.band_dropout_groups.items():
+                valid_bands = set(Modality.get(mod_name).band_order)
+                for group in groups:
+                    bad = set(group) - valid_bands
+                    if bad:
+                        raise ValueError(
+                            f"band_dropout_groups[{mod_name!r}] contains bands not in "
+                            f"the modality band order: {bad}"
+                        )
+        if self.patch_embed_linear_skip and not self.patch_embed_hidden_sizes:
+            raise ValueError(
+                "patch_embed_linear_skip requires patch_embed_hidden_sizes"
+            )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
         if self.position_encoding not in PositionEncoding.values():
