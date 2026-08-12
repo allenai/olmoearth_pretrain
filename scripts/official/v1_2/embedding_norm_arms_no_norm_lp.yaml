@@ -1,0 +1,180 @@
+version: v2
+budget: ai2/atec-olmoearth
+description: >-
+  No-BatchNorm linear-probe arms for the embedding-norm experiment
+  (20260812_embedding_norm_arms). Three 0-GPU submitter tasks -- the d128
+  psuniform candidate, AEF and Tessera -- each fanning out one LP job per swept
+  LR over the eight base AEF datasets. probe_input_norm=none scores the
+  center-pixel classification tasks exactly like the dense PASTIS probes, so
+  embedding geometry reaches the probe weights instead of being standardized
+  away by BatchNorm. Run for all three models because dropping the norm makes
+  raw feature scale load-bearing (AEF is unit-norm at source, ~0.125 per
+  coordinate, against ~0.5 for ours), so the arm is only comparable if every
+  model is scored under it.
+tasks:
+- name: cand_ndvi_d128_lp_no_norm
+  image:
+    beaker: petew/olmo-core-tch271cu128-2025-09-15
+  command:
+  - bash
+  - -c
+  - |
+    set -e
+    echo "$GCP_CREDENTIALS" > /etc/gcp_credentials.json
+    conda install gh --channel conda-forge -y
+    gh auth status
+    gh repo clone allenai/olmoearth_pretrain .
+    git checkout c7c7936b6
+    git submodule update --init --recursive
+    pip install uv
+    export PATH="/root/.local/bin:$PATH"
+    uv sync --locked --all-extras
+    venv_path=$(uv run python -c 'import sys; print(sys.executable)')
+    source "$(dirname "$venv_path")/activate"
+    uv pip install breizhcrops==0.0.4.1
+    python3 -m olmoearth_pretrain.internal.embedding_eval_sweep \
+      --cluster=ai2/saturn-cirrascale \
+      --priority=urgent \
+      --checkpoint_path=/weka/dfive-default/olmoearth_pretrain/checkpoints/gabrielt/regbtl_v1_2_gdyn_d128_wideread_regsup_ndvi_w0p1_tanchor_newsamp_psuniform/step667200 \
+      --module_path=scripts/official/v1_2/regbtl_v1_2_gdyn_d128_wideread_regsup_ndvi_w0p1_tanchor_newsampling_psuniform.py \
+      --model_name=cand_ndvi_d128 \
+      --project_name=20260812_embedding_norm_arms \
+      --task_names=africa_crop_mask_ws16_ps1,canada_crops_coarse_ws16_ps1,canada_crops_fine_ws16_ps1,descals_ws16_ps1,ethiopia_crops_ws16_ps1,glance_ws16_ps1,lcmap_lu_ws16_ps1,us_trees_ws16_ps1 \
+      --probe_input_norm=none \
+      --select_best_val
+  result:
+    path: /outputs
+  resources:
+    gpuCount: 0
+    sharedMemory: 256 GiB
+  context:
+    priority: urgent
+    preemptible: true
+  constraints:
+    cluster:
+    - ai2/jupiter
+  datasets:
+  - mountPath: /weka/dfive-default
+    source:
+      weka: dfive-default
+  envVars:
+  - name: GOOGLE_APPLICATION_CREDENTIALS
+    value: /etc/gcp_credentials.json
+  - name: WANDB_API_KEY
+    secret: gabrielt_WANDB_API_KEY
+  - name: BEAKER_TOKEN
+    secret: gabrielt_BEAKER_TOKEN
+  - name: GITHUB_TOKEN
+    secret: gabrielt_GITHUB_TOKEN
+  - name: GCP_CREDENTIALS
+    secret: HELIOS_GCP_CREDENTIALS
+- name: aef_lp_no_norm
+  image:
+    beaker: petew/olmo-core-tch271cu128-2025-09-15
+  command:
+  - bash
+  - -c
+  - |
+    set -e
+    echo "$GCP_CREDENTIALS" > /etc/gcp_credentials.json
+    conda install gh --channel conda-forge -y
+    gh auth status
+    gh repo clone allenai/olmoearth_pretrain .
+    git checkout c7c7936b6
+    git submodule update --init --recursive
+    pip install uv
+    export PATH="/root/.local/bin:$PATH"
+    uv sync --locked --all-extras
+    venv_path=$(uv run python -c 'import sys; print(sys.executable)')
+    source "$(dirname "$venv_path")/activate"
+    uv pip install breizhcrops==0.0.4.1
+    python3 -m olmoearth_pretrain.internal.embedding_eval_sweep \
+      --cluster=ai2/saturn-cirrascale \
+      --priority=urgent \
+      --model=aef \
+      --model_name=aef \
+      --project_name=20260812_embedding_norm_arms \
+      --task_names=africa_crop_mask_ws16_ps1,canada_crops_coarse_ws16_ps1,canada_crops_fine_ws16_ps1,descals_ws16_ps1,ethiopia_crops_ws16_ps1,glance_ws16_ps1,lcmap_lu_ws16_ps1,us_trees_ws16_ps1 \
+      --probe_input_norm=none \
+      --select_best_val
+  result:
+    path: /outputs
+  resources:
+    gpuCount: 0
+    sharedMemory: 256 GiB
+  context:
+    priority: urgent
+    preemptible: true
+  constraints:
+    cluster:
+    - ai2/jupiter
+  datasets:
+  - mountPath: /weka/dfive-default
+    source:
+      weka: dfive-default
+  envVars:
+  - name: GOOGLE_APPLICATION_CREDENTIALS
+    value: /etc/gcp_credentials.json
+  - name: WANDB_API_KEY
+    secret: gabrielt_WANDB_API_KEY
+  - name: BEAKER_TOKEN
+    secret: gabrielt_BEAKER_TOKEN
+  - name: GITHUB_TOKEN
+    secret: gabrielt_GITHUB_TOKEN
+  - name: GCP_CREDENTIALS
+    secret: HELIOS_GCP_CREDENTIALS
+- name: tessera_lp_no_norm
+  image:
+    beaker: petew/olmo-core-tch271cu128-2025-09-15
+  command:
+  - bash
+  - -c
+  - |
+    set -e
+    echo "$GCP_CREDENTIALS" > /etc/gcp_credentials.json
+    conda install gh --channel conda-forge -y
+    gh auth status
+    gh repo clone allenai/olmoearth_pretrain .
+    git checkout c7c7936b6
+    git submodule update --init --recursive
+    pip install uv
+    export PATH="/root/.local/bin:$PATH"
+    uv sync --locked --all-extras
+    venv_path=$(uv run python -c 'import sys; print(sys.executable)')
+    source "$(dirname "$venv_path")/activate"
+    uv pip install breizhcrops==0.0.4.1
+    python3 -m olmoearth_pretrain.internal.embedding_eval_sweep \
+      --cluster=ai2/saturn-cirrascale \
+      --priority=urgent \
+      --model=tessera_precomputed \
+      --model_name=tessera \
+      --project_name=20260812_embedding_norm_arms \
+      --task_names=africa_crop_mask_ws16_ps1,canada_crops_coarse_ws16_ps1,canada_crops_fine_ws16_ps1,descals_ws16_ps1,ethiopia_crops_ws16_ps1,glance_ws16_ps1,lcmap_lu_ws16_ps1,us_trees_ws16_ps1 \
+      --probe_input_norm=none \
+      --select_best_val
+  result:
+    path: /outputs
+  resources:
+    gpuCount: 0
+    sharedMemory: 256 GiB
+  context:
+    priority: urgent
+    preemptible: true
+  constraints:
+    cluster:
+    - ai2/jupiter
+  datasets:
+  - mountPath: /weka/dfive-default
+    source:
+      weka: dfive-default
+  envVars:
+  - name: GOOGLE_APPLICATION_CREDENTIALS
+    value: /etc/gcp_credentials.json
+  - name: WANDB_API_KEY
+    secret: gabrielt_WANDB_API_KEY
+  - name: BEAKER_TOKEN
+    secret: gabrielt_BEAKER_TOKEN
+  - name: GITHUB_TOKEN
+    secret: gabrielt_GITHUB_TOKEN
+  - name: GCP_CREDENTIALS
+    secret: HELIOS_GCP_CREDENTIALS
