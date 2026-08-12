@@ -179,8 +179,8 @@ def parse_dataset(
             continue
 
         if modality.is_multitemporal:
-            # We need to load the one-year and two-week data separately.
-            time_spans = [TimeSpan.YEAR]  # [TimeSpan.YEAR, TimeSpan.TWO_WEEK]
+            # Only the one-year (monthly) series is used.
+            time_spans = [TimeSpan.YEAR]
         else:
             # Just need to load the static data.
             time_spans = [TimeSpan.STATIC]
