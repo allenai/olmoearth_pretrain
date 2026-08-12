@@ -1566,6 +1566,8 @@ class SpatialRegisterBottleneck(nn.Module):
         temporal_anchor: str | None = None,
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
+        unit_norm: bool = False,
+        unit_norm_scale: float | None = None,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1685,6 +1687,19 @@ class SpatialRegisterBottleneck(nn.Module):
                 ``temporal_anchor``; matches the encoder's setting).
             rope_temporal_base: Optional separate frequency base for the temporal axis
                 of the read blocks' axial 3D RoPE. ``None`` reuses ``rope_base``.
+            unit_norm: If True, L2-normalize the output so every register cell is a
+                DIRECTION on a sphere (AlphaEarth's convention, where an embedding is
+                the mean direction of a von Mises-Fisher distribution). The constraint
+                binds on everything downstream -- the decoder reads the registers
+                through a bare Linear and the supervision heads read the grid directly,
+                so neither re-normalizes today -- and on the frozen evals, which probe
+                the same tensor. Magnitude stops being an available channel; pair with
+                a uniformity loss (``compute_register_uniformity_loss``) if the goal is
+                embeddings spread over the sphere rather than merely on it.
+            unit_norm_scale: Radius of that sphere. ``None`` uses
+                ``sqrt(register_dim)``, LayerNorm's own output norm, so the constraint
+                is scale-neutral at init instead of silently rescaling the decoder's
+                context input.
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1900,6 +1915,20 @@ class SpatialRegisterBottleneck(nn.Module):
         if learned_read_weighting:
             self.read_gates = nn.Parameter(torch.ones(num_read_blocks))
         self.norm = nn.LayerNorm(register_dim)
+        # Optional unit-sphere output (AlphaEarth's convention: every embedding is a
+        # direction). Placed here rather than at each consumer because forward()
+        # returns ONE tensor that the decoder, the supervision heads and the frozen
+        # evals all read -- so normalizing here constrains the served vector itself
+        # and no consumer can be missed.
+        self.unit_norm = unit_norm
+        # LayerNorm's output has norm exactly sqrt(register_dim) before its learned
+        # affine, so that is the scale at which this is a no-op at init; it also puts
+        # per-coordinate RMS at ~1, which keeps the register half of the
+        # time-conditioned supervision head's [cell ; phi(t)] concat commensurate with
+        # the bounded sinusoidal half. Override to hold a different operating point.
+        self.unit_norm_scale = (
+            unit_norm_scale if unit_norm_scale is not None else math.sqrt(register_dim)
+        )
 
     def build_register_positions(
         self, patch_positions: Tensor, register_grid: tuple[int, int]
@@ -2168,7 +2197,10 @@ class SpatialRegisterBottleneck(nn.Module):
                     rope_positions=register_positions,
                     window_spec=latent_window_spec,
                 )
-        return self.norm(registers), register_positions
+        out = self.norm(registers)
+        if self.unit_norm:
+            out = nn.functional.normalize(out, dim=-1) * self.unit_norm_scale
+        return out, register_positions
 
 
 class Encoder(FlexiVitBase):
@@ -2230,6 +2262,8 @@ class Encoder(FlexiVitBase):
         register_contrastive_source: str = "registers",
         register_projection_dims: list[int] | None = None,
         register_projection_type: str = "linear",
+        register_unit_norm: bool = False,
+        register_unit_norm_scale: float | None = None,
     ):
         """Initialize the encoder.
 
@@ -2397,6 +2431,13 @@ class Encoder(FlexiVitBase):
                 final-layer patch tokens -- the deployed narrow-bottleneck
                 architecture, trained by distillation instead of the pretext loss.
                 Defaults to ``"linear"``.
+            register_unit_norm: Put the register grid on a sphere, so the served
+                embedding is a direction (see
+                :class:`SpatialRegisterBottleneck`). Applied to the primary
+                bottleneck AND to the perceiver student, since either can be the
+                deployed embedding. Defaults to False.
+            register_unit_norm_scale: Radius of that sphere; ``None`` uses
+                ``sqrt(register_dim)`` so the change is scale-neutral at init.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2547,6 +2588,8 @@ class Encoder(FlexiVitBase):
                 temporal_anchor=register_temporal_anchor,
                 temporal_rope_dim_frac=temporal_rope_dim_frac,
                 rope_temporal_base=rope_temporal_base,
+                unit_norm=register_unit_norm,
+                unit_norm_scale=register_unit_norm_scale,
             )
             # Detached low-dim "student" readout (see the __init__ docstring). Both
             # variants consume DETACHED inputs, so the student is invisible to the
@@ -2601,6 +2644,10 @@ class Encoder(FlexiVitBase):
                         temporal_anchor=register_temporal_anchor,
                         temporal_rope_dim_frac=temporal_rope_dim_frac,
                         rope_temporal_base=rope_temporal_base,
+                        # The student IS the served embedding when it is deployed, so
+                        # it takes the same constraint as the primary.
+                        unit_norm=register_unit_norm,
+                        unit_norm_scale=register_unit_norm_scale,
                     )
                 # One back-projection per Matryoshka prefix: dim d reconstructs the
                 # teacher from student[..., :d], forcing the first d dims to be
@@ -4009,6 +4056,18 @@ class EncoderConfig(Config):
     # narrow-bottleneck architecture trained by distillation instead of the pretext
     # loss). Ignored without register_projection_dims.
     register_projection_type: str = "linear"
+    # Put the register grid on a sphere: L2-normalize the bottleneck's output so the
+    # served embedding is a DIRECTION (AlphaEarth's convention). Binds on every
+    # consumer at once -- decoder context, supervision heads, frozen evals -- because
+    # they all read the tensor the bottleneck returns. Magnitude stops being an
+    # available channel. On its own this constrains where embeddings live, NOT how
+    # they are distributed there; pair it with LatentMIMTrainModuleConfig's
+    # register_uniformity_weight for the spread.
+    register_unit_norm: bool = False
+    # Radius of that sphere. None -> sqrt(register_dim), which is LayerNorm's own
+    # output norm, so turning this on does not also rescale the decoder's context
+    # input (which would confound the constraint with a global rescale).
+    register_unit_norm_scale: float | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""

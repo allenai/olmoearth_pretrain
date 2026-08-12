@@ -221,7 +221,18 @@ class LatentMIM(nn.Module, DistributedMixins):
             else:
                 supervision_preds = self.supervision_head(decoded, x)
 
-        projection_outputs = None
+        # Surfaced whenever a register bottleneck ran, not only when a distillation
+        # student exists: losses that shape the register grid itself (e.g. the
+        # uniformity term) apply to non-distilled models too, and the grid is
+        # otherwise visible only inside decoder_kwargs.
+        registers = decoder_kwargs.get("registers")
+        projection_outputs: dict | None = None
+        if registers is not None:
+            projection_outputs = {
+                "registers": registers,
+                "projected_registers": None,
+                "supervision_preds": None,
+            }
         if projected_registers is not None:
             projection_supervision_preds = None
             if self.projection_supervision_heads is not None:
@@ -240,11 +251,11 @@ class LatentMIM(nn.Module, DistributedMixins):
                     )
                     for dim_str, head in self.projection_supervision_heads.items()
                 }
-            projection_outputs = {
-                "registers": decoder_kwargs.get("registers"),
-                "projected_registers": projected_registers,
-                "supervision_preds": projection_supervision_preds,
-            }
+            assert projection_outputs is not None, (
+                "a projection student cannot exist without a register bottleneck"
+            )
+            projection_outputs["projected_registers"] = projected_registers
+            projection_outputs["supervision_preds"] = projection_supervision_preds
 
         return (
             latent,
