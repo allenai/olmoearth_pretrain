@@ -43,12 +43,15 @@ from olmoearth_pretrain.evals.embedding_diagnostics import (
     compute_spatial_embedding_diagnostics,
 )
 from olmoearth_pretrain.evals.embedding_transforms import (
+    FITTED_NORMALIZATIONS,
+    EmbeddingNormalization,
+    EmbeddingNormalizer,
     dequantize_embeddings,
     dequantize_embeddings_percentile,
     load_quantile_config,
     reduce_embedding_dim,
 )
-from olmoearth_pretrain.evals.embeddings import get_embeddings
+from olmoearth_pretrain.evals.embeddings import get_embeddings, normalize_and_quantize
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
 from olmoearth_pretrain.evals.knn import run_knn
@@ -195,6 +198,22 @@ class DownstreamTaskConfig:
     quantize_bits: int | None = None
     # Path to HDF5 file with precomputed quantile boundaries for percentile quantization
     quantile_config_path: str | None = None
+    # Normalize the extracted embeddings before the int8 round-trip and the
+    # probe. Nothing in pretraining pins an embedding head's output geometry
+    # (see EmbeddingNormalization), and three consumers care: the int8 power
+    # scheme (assumes AEF's value range), KNN (uncentered cosine), and the
+    # segmentation probe (no BatchNorm in front). NONE = today's behavior.
+    embedding_normalization: EmbeddingNormalization = EmbeddingNormalization.NONE
+    # Where the fitted normalizations (center/center_l2/zscore) get their
+    # constants. None fits them on THIS task's train split -- the diagnostic
+    # form, which answers whether the geometry is the problem but is not
+    # deployable (a global run has no per-dataset train split). Point this at
+    # constants written by scripts/tools/fit_embedding_norm_stats.py to use one
+    # fixed set everywhere, which is what shipping the fix would look like.
+    embedding_norm_stats_path: str | None = None
+    # Log embedding geometry, int8 clipping, and round-trip-damage diagnostics
+    # alongside the task's score (bounded row subsample; no effect on scores).
+    embedding_pipeline_diagnostics: bool = True
     # Reduce embedding dimensionality via PCA (None = no reduction)
     embedding_dim: int | None = None
     # Use weighted dice loss instead of cross-entropy (only for specific tasks like wildfire)
@@ -362,6 +381,9 @@ class DownstreamEvaluator:
         if self.quantile_config_path is not None:
             logger.info(f"Loading quantile config from {self.quantile_config_path}")
             self.quantile_config = load_quantile_config(self.quantile_config_path)
+        self.embedding_normalization = task.embedding_normalization
+        self.embedding_norm_stats_path = task.embedding_norm_stats_path
+        self.embedding_pipeline_diagnostics = task.embedding_pipeline_diagnostics
         self.embedding_dim = task.embedding_dim
         self.use_dice_loss = task.use_dice_loss
         self.primary_metric = task.primary_metric
@@ -554,10 +576,44 @@ class DownstreamEvaluator:
             shuffle=False if is_iterable else shuffle,
         )
 
+    def _resolve_normalizer(self) -> tuple[EmbeddingNormalizer | None, bool]:
+        """Resolve the configured normalization to (normalizer, fit_on_train).
+
+        ``fit_on_train`` is True when the statistics still have to be taken from
+        this task's train split, which forces the train embeddings to be held in
+        float until the fit is done (see ``_val_embed_probe``). Stateless modes
+        (L2) and file-backed constants are ready immediately.
+        """
+        mode = self.embedding_normalization
+        if mode == EmbeddingNormalization.NONE:
+            return None, False
+        if mode in FITTED_NORMALIZATIONS:
+            if self.embedding_norm_stats_path is not None:
+                logger.info(
+                    f"Loading {mode} embedding norm stats from "
+                    f"{self.embedding_norm_stats_path}"
+                )
+                return (
+                    EmbeddingNormalizer.load(self.embedding_norm_stats_path, mode),
+                    False,
+                )
+            return None, True
+        return EmbeddingNormalizer(mode=mode), False
+
     def _get_embeddings(
-        self, data_loader: DataLoader, is_train: bool
+        self,
+        data_loader: DataLoader,
+        is_train: bool,
+        normalizer: EmbeddingNormalizer | None = None,
+        quantize: bool | None = None,
+        diagnostics_out: dict[str, float] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Get the embeddings for the given data loader."""
+        """Get the embeddings for the given data loader.
+
+        ``quantize=None`` defers to the task's ``quantize_embeddings``; pass
+        False to keep a split in float (needed while fitting a normalization on
+        it, since normalization has to precede the int8 round-trip).
+        """
         print(
             f"Getting embeddings for {self.dataset} with norm method {self.norm_method}"
         )
@@ -594,9 +650,11 @@ class DownstreamEvaluator:
             data_loader=data_loader,
             model=model,
             is_train=is_train,
-            quantize=self.quantize_embeddings,
+            quantize=(self.quantize_embeddings if quantize is None else quantize),
             quantize_bits=self.quantize_bits,
             quantile_config=self.quantile_config,
+            normalizer=normalizer,
+            diagnostics_out=diagnostics_out,
         )
 
     def _val_embed_probe(self) -> EvalTaskResult:
@@ -607,10 +665,23 @@ class DownstreamEvaluator:
         logger.info(f"Getting val loader for {self.dataset}...")
         val_loader = self._get_data_loader("valid", self.embedding_batch_size)
 
+        normalizer, fit_on_train = self._resolve_normalizer()
+        diagnostics: dict[str, float] | None = (
+            {} if self.embedding_pipeline_diagnostics else None
+        )
+
         start_time = time.time()
         logger.info(f"Getting train embeddings for {self.dataset}...")
+        # A train-fitted normalization has to see the raw floats first, so its
+        # normalize + quantize step is deferred until just below; every other
+        # mode transforms at extraction, keeping today's memory profile (the
+        # split is held as int8 rather than float32).
         train_embeddings, train_labels = self._get_embeddings(
-            train_loader, is_train=True
+            train_loader,
+            is_train=True,
+            normalizer=None if fit_on_train else normalizer,
+            quantize=False if fit_on_train else None,
+            diagnostics_out=None if fit_on_train else diagnostics,
         )
         logger.info(f"Train embeddings shape: {train_embeddings.shape}")
         logger.info(
@@ -633,8 +704,29 @@ class DownstreamEvaluator:
             train_embeddings = train_embeddings[indices]
             train_labels = train_labels[indices]
 
+        if fit_on_train:
+            # Fit after any subsample, so the constants describe exactly the
+            # rows the probe trains on.
+            normalizer = EmbeddingNormalizer.fit(
+                self.embedding_normalization, train_embeddings
+            )
+            logger.info(
+                f"Fitted {self.embedding_normalization} embedding normalization on "
+                f"{self.dataset}'s train split"
+            )
+            train_embeddings = normalize_and_quantize(
+                train_embeddings,
+                normalizer=normalizer,
+                quantize=self.quantize_embeddings,
+                quantize_bits=self.quantize_bits,
+                quantile_config=self.quantile_config,
+                diagnostics_out=diagnostics,
+            )
+
         logger.info(f"Getting val embeddings for {self.dataset}...")
-        val_embeddings, val_labels = self._get_embeddings(val_loader, is_train=False)
+        val_embeddings, val_labels = self._get_embeddings(
+            val_loader, is_train=False, normalizer=normalizer
+        )
         logger.info(f"Val embeddings shape: {val_embeddings.shape}")
         logger.info(f"Val label counts: {torch.unique(val_labels, return_counts=True)}")
         if self.run_on_test:
@@ -642,7 +734,7 @@ class DownstreamEvaluator:
             test_loader = self._get_data_loader("test", self.embedding_batch_size)
             logger.info(f"Getting test embeddings for {self.dataset}...")
             test_embeddings, test_labels = self._get_embeddings(
-                test_loader, is_train=False
+                test_loader, is_train=False, normalizer=normalizer
             )
             logger.info(f"Test embeddings shape: {test_embeddings.shape}")
             logger.info(
@@ -719,6 +811,16 @@ class DownstreamEvaluator:
             "bootstrap_seed": self.bootstrap_seed,
         }
         result = self.eval_function(**kwargs)  # type: ignore
+
+        if diagnostics:
+            # Measured on the train split's pipeline: raw_* is what the model
+            # emitted, norm_* what normalization made of it, roundtrip_* what
+            # the int8 round-trip cost. Logged next to the score so a
+            # geometry/quantization problem is visible on the same run.
+            logger.info(
+                f"Embedding pipeline diagnostics for {self.dataset}: {diagnostics}"
+            )
+            result.embedding_diagnostics = diagnostics
 
         if self.balanced_trial is not None:
             # Run here rather than inside the probe so the trials see exactly the
@@ -871,13 +973,34 @@ class DownstreamEvaluator:
         """Compute embedding diagnostics only (no downstream task)."""
         logger.info(f"Computing embedding diagnostics for {self.dataset}")
         data_loader = self._get_data_loader("train", self.embedding_batch_size)
-        embeddings, _ = self._get_embeddings(data_loader, is_train=False)
+        normalizer, fit_on_train = self._resolve_normalizer()
+        pipeline: dict[str, float] = {}
+        embeddings, _ = self._get_embeddings(
+            data_loader,
+            is_train=False,
+            normalizer=None if fit_on_train else normalizer,
+            quantize=False if fit_on_train else None,
+            diagnostics_out=None if fit_on_train else pipeline,
+        )
+        if fit_on_train:
+            normalizer = EmbeddingNormalizer.fit(
+                self.embedding_normalization, embeddings
+            )
+            embeddings = normalize_and_quantize(
+                embeddings,
+                normalizer=normalizer,
+                quantize=self.quantize_embeddings,
+                quantize_bits=self.quantize_bits,
+                quantile_config=self.quantile_config,
+                diagnostics_out=pipeline,
+            )
         logger.info(f"Embeddings shape for {self.dataset}: {embeddings.shape}")
 
         if embeddings.ndim >= 3:
             diagnostics = compute_spatial_embedding_diagnostics(embeddings)
         else:
             diagnostics = compute_embedding_diagnostics(embeddings)
+        diagnostics.update(pipeline)
         logger.info(f"Embedding diagnostics for {self.dataset}: {diagnostics}")
 
         result = EvalTaskResult(val_result=None, test_result=None)

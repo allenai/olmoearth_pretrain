@@ -1,9 +1,14 @@
 """Unit tests for embedding_transforms module."""
 
+from pathlib import Path
+
 import numpy as np
+import pytest
 import torch
 
 from olmoearth_pretrain.evals.embedding_transforms import (
+    EmbeddingNormalization,
+    EmbeddingNormalizer,
     dequantize_embeddings,
     dequantize_embeddings_percentile,
     quantize_embeddings,
@@ -233,3 +238,92 @@ class TestPercentileQuantization:
         assert mse_dim0 < 5  # reasonable for range 10 with 4 buckets
         assert mse_dim1 < 500  # reasonable for range 100 with 4 buckets
         assert mse_dim1 > mse_dim0 * 10  # dim 1 should have much larger MSE
+
+
+class TestEmbeddingNormalization:
+    """Tests for the pre-quantization embedding normalizations."""
+
+    def test_none_is_identity(self) -> None:
+        """NONE leaves the tensor (and its dtype) exactly as extracted."""
+        embeddings = torch.randn(64, 32, dtype=torch.bfloat16)
+        out = EmbeddingNormalizer(mode=EmbeddingNormalization.NONE)(embeddings)
+        assert out.dtype == torch.bfloat16
+        assert torch.equal(out, embeddings)
+
+    def test_l2_needs_no_fit(self) -> None:
+        """L2 is stateless: fit is a no-op and every row lands on the unit sphere."""
+        normalizer = EmbeddingNormalizer.fit(
+            EmbeddingNormalization.L2, torch.randn(8, 32)
+        )
+        assert normalizer.mean is None
+        out = normalizer(torch.randn(64, 32) * 100)
+        assert torch.allclose(out.norm(dim=-1), torch.ones(64), atol=1e-5)
+
+    def test_center_removes_train_mean(self) -> None:
+        """CENTER subtracts the fitted mean, not each split's own mean."""
+        train = torch.randn(512, 16) + 5.0
+        normalizer = EmbeddingNormalizer.fit(EmbeddingNormalization.CENTER, train)
+        assert torch.allclose(normalizer(train).mean(dim=0), torch.zeros(16), atol=1e-5)
+        # A shifted val split keeps its offset relative to train, as it should.
+        val = torch.randn(512, 16) + 7.0
+        assert normalizer(val).mean().item() > 1.0
+
+    def test_zscore_equalizes_dims(self) -> None:
+        """ZSCORE flattens per-dimension scale differences."""
+        train = torch.randn(4096, 16)
+        train[:, 0] *= 50
+        normalizer = EmbeddingNormalizer.fit(EmbeddingNormalization.ZSCORE, train)
+        out = normalizer(train)
+        assert torch.allclose(out.std(dim=0), torch.ones(16), atol=0.05)
+
+    def test_spatial_embeddings_normalize_on_last_dim(self) -> None:
+        """Stats pool over every leading dim; [N, H, W, D] shape is preserved."""
+        train = torch.randn(32, 4, 4, 16) + 3.0
+        normalizer = EmbeddingNormalizer.fit(EmbeddingNormalization.CENTER, train)
+        out = normalizer(train)
+        assert out.shape == train.shape
+        assert torch.allclose(
+            out.reshape(-1, 16).mean(dim=0), torch.zeros(16), atol=1e-5
+        )
+
+    def test_fitted_mode_without_stats_raises(self) -> None:
+        """An unfitted fitted-mode normalizer fails loudly rather than silently."""
+        with pytest.raises(ValueError, match="fitted mean"):
+            EmbeddingNormalizer(mode=EmbeddingNormalization.CENTER)(torch.randn(4, 8))
+
+    def test_save_load_roundtrip(self, tmp_path: Path) -> None:
+        """Constants survive a save/load so one fit can serve every dataset."""
+        train = torch.randn(256, 16) * 3 + 1
+        normalizer = EmbeddingNormalizer.fit(EmbeddingNormalization.ZSCORE, train)
+        path = str(tmp_path / "stats.pt")
+        normalizer.save(path)
+        loaded = EmbeddingNormalizer.load(path, EmbeddingNormalization.ZSCORE)
+        assert torch.allclose(loaded(train), normalizer(train))
+
+    def test_load_rejects_mode_mismatch(self, tmp_path: Path) -> None:
+        """Loading constants fitted for another mode is an error, not a silent swap."""
+        path = str(tmp_path / "stats.pt")
+        EmbeddingNormalizer.fit(
+            EmbeddingNormalization.CENTER, torch.randn(64, 16)
+        ).save(path)
+        with pytest.raises(ValueError, match="fitted for"):
+            EmbeddingNormalizer.load(path, EmbeddingNormalization.ZSCORE)
+
+    def test_l2_rescues_the_int8_round_trip(self) -> None:
+        """The point of the L2 arm: unit-norm embeddings survive quantization.
+
+        LayerNorm-scale embeddings saturate the power scheme (which assumes
+        AEF's value range), so their round trip loses far more.
+        """
+        raw = torch.randn(512, 64)
+        normalized = EmbeddingNormalizer(mode=EmbeddingNormalization.L2)(raw)
+        raw_cos = torch.nn.functional.cosine_similarity(
+            raw, dequantize_embeddings(quantize_embeddings(raw)), dim=-1
+        ).mean()
+        norm_cos = torch.nn.functional.cosine_similarity(
+            normalized,
+            dequantize_embeddings(quantize_embeddings(normalized)),
+            dim=-1,
+        ).mean()
+        assert norm_cos > raw_cos
+        assert norm_cos > 0.999

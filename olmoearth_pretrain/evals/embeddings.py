@@ -5,7 +5,15 @@ import logging
 import torch
 from torch.utils.data import DataLoader
 
+from olmoearth_pretrain.evals.embedding_diagnostics import (
+    compute_pipeline_diagnostics,
+    flatten_rows,
+    sample_row_indices,
+)
 from olmoearth_pretrain.evals.embedding_transforms import (
+    EmbeddingNormalizer,
+    dequantize_embeddings,
+    dequantize_embeddings_percentile,
     quantize_embeddings,
     quantize_embeddings_percentile,
 )
@@ -15,6 +23,94 @@ from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 logger = logging.getLogger(__name__)
 
 
+def normalize_and_quantize(
+    embeddings: torch.Tensor,
+    normalizer: EmbeddingNormalizer | None = None,
+    quantize: bool = False,
+    quantize_bits: int | None = None,
+    quantile_config: dict | None = None,
+    diagnostics_out: dict[str, float] | None = None,
+) -> torch.Tensor:
+    """Normalize then (optionally) quantize one split's embeddings.
+
+    Normalization runs BEFORE quantization: the int8 schemes assume a value
+    range (see ``QUANTIZE_CLIP_THRESHOLD``), so normalizing afterwards would
+    rescale damage that has already been done.
+
+    Args:
+        embeddings: Float embeddings ``[N, ..., D]``.
+        normalizer: Fitted (or stateless) normalization; None leaves the
+            embeddings exactly as the model emitted them.
+        quantize: If True, quantize to int8 for storage-efficiency parity with
+            the precomputed embedding products.
+        quantize_bits: If set (1, 2, 4, or 8), use percentile-based
+            quantization with ``quantile_config`` instead of the power scheme.
+        quantile_config: Precomputed quantile boundaries for the above.
+        diagnostics_out: If provided, filled with geometry diagnostics for each
+            stage of the pipeline (a bounded row subsample, so the cost does not
+            scale with the split size).
+
+    Returns:
+        The transformed embeddings; int8 if quantization ran, else float.
+    """
+    raw = embeddings if diagnostics_out is not None else None
+
+    if normalizer is not None:
+        embeddings = normalizer(embeddings)
+    normalized = embeddings if raw is not None and normalizer is not None else None
+
+    if quantize:
+        if quantize_bits is not None and quantile_config is not None:
+            key = f"{quantize_bits}bit"
+            if key not in quantile_config:
+                raise ValueError(
+                    f"Quantile config missing '{key}' key for {quantize_bits}-bit quantization"
+                )
+            logger.info(
+                f"Quantizing embeddings to {quantize_bits}-bit using percentile boundaries"
+            )
+            quantiles = quantile_config[key]["quantiles"]
+            embeddings = quantize_embeddings_percentile(
+                embeddings, quantiles, quantize_bits
+            )
+        else:
+            logger.info(f"Quantizing embeddings from {embeddings.dtype} to int8")
+            embeddings = quantize_embeddings(embeddings)
+
+    if diagnostics_out is None:
+        return embeddings
+
+    assert raw is not None
+    # Subsample once, here, and hand the diagnostics the small views: the
+    # round-trip view has to be dequantized, and dequantizing the whole split
+    # would duplicate the probe's tensor in float32 for no benefit.
+    raw_rows = flatten_rows(raw)
+    idx = sample_row_indices(raw_rows.shape[0])
+    if idx is not None:
+        raw_rows = raw_rows[idx]
+    norm_rows = None
+    if normalized is not None:
+        norm_rows = flatten_rows(normalized)
+        if idx is not None:
+            norm_rows = norm_rows[idx]
+    round_tripped = None
+    if quantize:
+        quantized_rows = embeddings.reshape(-1, embeddings.shape[-1])
+        if idx is not None:
+            quantized_rows = quantized_rows[idx]
+        if quantize_bits is not None and quantile_config is not None:
+            midpoints = quantile_config[f"{quantize_bits}bit"]["midpoints"]
+            round_tripped = dequantize_embeddings_percentile(quantized_rows, midpoints)
+        else:
+            round_tripped = dequantize_embeddings(quantized_rows)
+    diagnostics_out.update(
+        compute_pipeline_diagnostics(
+            raw=raw_rows, normalized=norm_rows, round_tripped=round_tripped
+        )
+    )
+    return embeddings
+
+
 def get_embeddings(
     data_loader: DataLoader,
     model: EvalWrapper,
@@ -22,6 +118,8 @@ def get_embeddings(
     quantize: bool = False,
     quantize_bits: int | None = None,
     quantile_config: dict | None = None,
+    normalizer: EmbeddingNormalizer | None = None,
+    diagnostics_out: dict[str, float] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Get embeddings from model for the data in data_loader.
 
@@ -35,6 +133,11 @@ def get_embeddings(
             with the specified number of bits. Requires quantile_config.
         quantile_config: Dictionary containing precomputed quantile boundaries
             for percentile-based quantization. Required if quantize_bits is set.
+        normalizer: Applied to the extracted embeddings before quantization.
+            Fitted modes must already be fitted (on the train split, or on
+            precomputed constants); None keeps the model's raw output.
+        diagnostics_out: If provided, filled with per-stage geometry diagnostics
+            for this split (see ``normalize_and_quantize``).
 
     Returns:
         Tuple of (embeddings, labels). If quantize=True, embeddings are int8.
@@ -71,25 +174,12 @@ def get_embeddings(
     embeddings = torch.cat(embeddings_list, dim=0)  # (N, dim)
     labels = torch.cat(labels_list, dim=0)  # (N)
 
-    # Apply quantization if requested
-    if quantize:
-        if quantize_bits is not None and quantile_config is not None:
-            # Percentile-based quantization
-            key = f"{quantize_bits}bit"
-            if key not in quantile_config:
-                raise ValueError(
-                    f"Quantile config missing '{key}' key for {quantize_bits}-bit quantization"
-                )
-            logger.info(
-                f"Quantizing embeddings to {quantize_bits}-bit using percentile boundaries"
-            )
-            quantiles = quantile_config[key]["quantiles"]
-            embeddings = quantize_embeddings_percentile(
-                embeddings, quantiles, quantize_bits
-            )
-        else:
-            # Legacy power-based int8 quantization
-            logger.info(f"Quantizing embeddings from {embeddings.dtype} to int8")
-            embeddings = quantize_embeddings(embeddings)
-
+    embeddings = normalize_and_quantize(
+        embeddings,
+        normalizer=normalizer,
+        quantize=quantize,
+        quantize_bits=quantize_bits,
+        quantile_config=quantile_config,
+        diagnostics_out=diagnostics_out,
+    )
     return embeddings, labels

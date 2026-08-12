@@ -34,6 +34,7 @@ import uuid
 from logging import getLogger
 
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config
+from olmoearth_pretrain.evals.embedding_transforms import EmbeddingNormalization
 from olmoearth_pretrain.evals.models import BaselineModelName, get_launch_script_path
 from olmoearth_pretrain.internal.all_evals import EMBEDDING_EVAL_TASKS
 from olmoearth_pretrain.internal.constants import EVAL_LAUNCH_PATH, EVAL_WANDB_PROJECT
@@ -169,6 +170,35 @@ def _model_args(model: BaselineModelName | None, task_names: list[str]) -> str:
     return " ".join(args)
 
 
+def _normalization_args(args: argparse.Namespace, task_names: list[str]) -> str:
+    """Per-task embedding-normalization overrides.
+
+    Applies to OlmoEarth checkpoints and the precomputed baselines alike: the
+    question "does this embedding space need normalizing before a probe reads
+    it" is as fair to ask of AEF/Tessera as of us, and holding the arm's
+    transform identical across models keeps the comparison honest.
+
+    Read through ``getattr`` like ``priority``/``window_size``: the cluster-side
+    submitters build this namespace by hand.
+    """
+    normalization = getattr(args, "embedding_normalization", None)
+    if not normalization or normalization == "none":
+        return ""
+    stats_path = getattr(args, "embedding_norm_stats_path", None)
+    overrides = []
+    for name in task_names:
+        overrides.append(
+            _task_arg(
+                name,
+                "embedding_normalization",
+                f"EmbeddingNormalization.{normalization.upper()}",
+            )
+        )
+        if stats_path is not None:
+            overrides.append(_task_arg(name, "embedding_norm_stats_path", stats_path))
+    return " " + " ".join(overrides)
+
+
 def _tasks_to_run_arg(task_names: list[str]) -> str:
     """Restrict the evaluator to the given tasks (compact JSON; see full sweep)."""
     return (
@@ -274,6 +304,12 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     window_size = getattr(args, "window_size", None)
     if window_size is not None:
         base_run_name += f"_ws{window_size}"
+    normalization = getattr(args, "embedding_normalization", None)
+    if normalization and normalization != "none":
+        # The arm belongs in the run name: every normalization arm evaluates
+        # the same checkpoint on the same tasks, so the W&B groups are only
+        # separable by name.
+        base_run_name += f"_norm{normalization.replace('_', '')}"
 
     env_prefix = f"TRAIN_SCRIPT_PATH={module_path} EMBEDDING_EVALS=1"
     common = (
@@ -290,6 +326,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             cmd = common.format(run_name=f"{base_run_name}_lr{lr}")
             cmd += lp_model_args
             cmd += _window_size_args(window_size, lp_tasks)
+            cmd += _normalization_args(args, lp_tasks)
             cmd += " " + " ".join(_task_arg(name, "probe_lr", lr) for name in lp_tasks)
             if args.select_best_val:
                 cmd += _select_best_val_args(lp_tasks)
@@ -299,6 +336,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         cmd = common.format(run_name=f"{base_run_name}_knn")
         cmd += _model_args(model, knn_tasks)
         cmd += _window_size_args(window_size, knn_tasks)
+        cmd += _normalization_args(args, knn_tasks)
         cmd += _balanced_trial_args(args, knn_tasks)
         cmd += _tasks_to_run_arg(knn_tasks)
         commands.append(cmd)
@@ -380,6 +418,31 @@ def main() -> None:
             "(EMBEDDING_EVAL_WINDOW_SIZES) — this override forces ALL "
             "selected tasks to one size, so combine it with --task_names to "
             "avoid running duplicates."
+        ),
+    )
+    parser.add_argument(
+        "--embedding_normalization",
+        type=str,
+        default=None,
+        choices=[m.value for m in EmbeddingNormalization],
+        help=(
+            "Normalize embeddings before the int8 round-trip and the probe: "
+            "none (default, as the model emits them), l2 (per-embedding, AEF's "
+            "convention), center, center_l2, zscore. The fitted modes (center*, "
+            "zscore) take their stats from each task's TRAIN split unless "
+            "--embedding_norm_stats_path is given -- per-dataset stats measure "
+            "whether geometry is the problem; fixed stats are what a global run "
+            "could actually deploy. Tags the run name with the arm."
+        ),
+    )
+    parser.add_argument(
+        "--embedding_norm_stats_path",
+        type=str,
+        default=None,
+        help=(
+            "Fixed normalization constants for the fitted modes, written by "
+            "scripts/tools/fit_embedding_norm_stats.py. Per-model, not "
+            "per-dataset: the same file is used for every task."
         ),
     )
     parser.add_argument(

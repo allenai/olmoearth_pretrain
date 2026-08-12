@@ -1,6 +1,8 @@
-"""Post-extraction transforms for embeddings (quantization, dim reduction)."""
+"""Post-extraction transforms for embeddings (normalization, quantization, dim reduction)."""
 
 import logging
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 import h5py
@@ -13,6 +15,13 @@ logger = logging.getLogger(__name__)
 # Constants matching AlphaEarth's scheme
 QUANTIZE_POWER = 2.0
 QUANTIZE_SCALE = 127.5
+
+# The power scheme saturates where |x|^(1/power) * scale exceeds the int8 range:
+# |x| > (127 / scale)^power. AEF's embeddings are 64-d unit-L2 vectors, so their
+# coordinates sit far below this; anything coming off a LayerNorm (per-coordinate
+# std ~ 1) clips a large fraction of its coordinates instead. Diagnostics report
+# the clipped fraction so the mismatch is visible rather than silent.
+QUANTIZE_CLIP_THRESHOLD = (127.0 / QUANTIZE_SCALE) ** QUANTIZE_POWER
 
 
 def quantize_embeddings(embeddings: torch.Tensor) -> torch.Tensor:
@@ -50,6 +59,143 @@ def dequantize_embeddings(quantized: torch.Tensor) -> torch.Tensor:
     # Apply square, preserve sign: x = |rescaled|^power * sign(rescaled)
     dequantized = rescaled.abs().pow(QUANTIZE_POWER) * rescaled.sign()
     return dequantized
+
+
+# === Normalization ===
+
+
+class EmbeddingNormalization(StrEnum):
+    """How to normalize extracted embeddings before the int8 round-trip / probe.
+
+    Nothing in pretraining pins the geometry of an embedding head's output: the
+    register bottleneck and its distilled student both end in a LayerNorm
+    (per-token scale), but the distillation losses are invariant to any
+    invertible linear map of the student space, so per-dimension scale, the
+    shared mean component, and the absolute magnitude are all free. Three
+    consumers care:
+
+    - ``quantize_embeddings`` assumes AEF's convention (coordinates well inside
+      [-1, 1]); a LayerNorm-scale embedding saturates instead (see
+      ``QUANTIZE_CLIP_THRESHOLD``).
+    - KNN scores cosine similarity without centering, so a large shared mean
+      component compresses every pair toward 1 (hubness).
+    - The segmentation linear probe has no BatchNorm in front (the
+      classification one does), so it sees raw per-dimension scale.
+
+    Fitted modes take their statistics from the TRAIN split only and apply them
+    to val/test.
+
+    Combining a variance-scaling mode (``ZSCORE``) with the legacy int8
+    round-trip is self-defeating -- it lands the coordinates at std 1, right
+    where the power scheme clips. Use ``L2``/``CENTER_L2`` on quantized tasks
+    and ``ZSCORE`` to isolate probe conditioning with quantization off.
+    """
+
+    # Current behavior: embeddings are consumed exactly as the model emits them.
+    NONE = "none"
+    # Per-embedding L2 normalization (AEF's convention; stateless).
+    L2 = "l2"
+    # Subtract the train-split mean embedding (kills the shared offset).
+    CENTER = "center"
+    # Center, then L2 normalize -- the pairing for quantized embedding tasks.
+    CENTER_L2 = "center_l2"
+    # Center and divide by the train-split per-dimension std (isotropic dims).
+    ZSCORE = "zscore"
+
+
+# Modes whose statistics must be fitted on the train split before use.
+FITTED_NORMALIZATIONS = frozenset(
+    {
+        EmbeddingNormalization.CENTER,
+        EmbeddingNormalization.CENTER_L2,
+        EmbeddingNormalization.ZSCORE,
+    }
+)
+
+# Floor on the per-dimension std, so a dead dimension cannot blow up under ZSCORE.
+_STD_EPS = 1e-6
+
+
+@dataclass
+class EmbeddingNormalizer:
+    """A fitted (or stateless) embedding normalization, applied on the last dim.
+
+    Accepts ``[N, D]`` and spatial ``[N, ..., D]`` embeddings alike; statistics
+    are pooled over every leading dimension.
+    """
+
+    mode: EmbeddingNormalization
+    mean: torch.Tensor | None = None
+    std: torch.Tensor | None = None
+
+    @classmethod
+    def fit(
+        cls, mode: EmbeddingNormalization, embeddings: torch.Tensor
+    ) -> "EmbeddingNormalizer":
+        """Fit on ``embeddings`` (one split); stateless modes ignore them.
+
+        Statistics fitted per eval dataset answer "is the geometry the problem?"
+        but are not themselves deployable -- a global embedding run has no
+        per-dataset train split to fit on. Fit once on a representative sample,
+        ``save`` the constants, and pass them back through ``load`` for the
+        deployable form (see ``scripts/tools/fit_embedding_norm_stats.py``).
+        """
+        if mode not in FITTED_NORMALIZATIONS:
+            return cls(mode=mode)
+        rows = embeddings.reshape(-1, embeddings.shape[-1]).float()
+        mean = rows.mean(dim=0)
+        std = None
+        if mode == EmbeddingNormalization.ZSCORE:
+            std = rows.std(dim=0).clamp_min(_STD_EPS)
+        return cls(mode=mode, mean=mean, std=std)
+
+    def __call__(self, embeddings: torch.Tensor) -> torch.Tensor:
+        """Apply the normalization, leaving NONE (and dtype) untouched."""
+        if self.mode == EmbeddingNormalization.NONE:
+            return embeddings
+        out = embeddings.float()
+        if self.mode in (
+            EmbeddingNormalization.CENTER,
+            EmbeddingNormalization.CENTER_L2,
+            EmbeddingNormalization.ZSCORE,
+        ):
+            if self.mean is None:
+                raise ValueError(
+                    f"{self.mode} requires a fitted mean; call fit() first"
+                )
+            out = out - self.mean.to(out.device)
+        if self.mode == EmbeddingNormalization.ZSCORE:
+            if self.std is None:
+                raise ValueError(f"{self.mode} requires a fitted std; call fit() first")
+            out = out / self.std.to(out.device)
+        if self.mode in (EmbeddingNormalization.L2, EmbeddingNormalization.CENTER_L2):
+            out = torch.nn.functional.normalize(out, dim=-1)
+        return out
+
+    def save(self, path: str) -> None:
+        """Persist the fitted constants so every dataset can share one set."""
+        torch.save(
+            {"mode": str(self.mode), "mean": self.mean, "std": self.std},
+            path,
+        )
+        logger.info(f"Wrote {self.mode} embedding norm stats to {path}")
+
+    @classmethod
+    def load(cls, path: str, mode: EmbeddingNormalization) -> "EmbeddingNormalizer":
+        """Load constants written by ``save``, checking they match ``mode``.
+
+        The stats are per-model, not per-dataset: a normalizer fitted for one
+        checkpoint's embedding space is meaningless for another's, so the
+        caller is responsible for pointing at the right file.
+        """
+        state = torch.load(path, map_location="cpu", weights_only=True)
+        saved_mode = EmbeddingNormalization(state["mode"])
+        if saved_mode != mode:
+            raise ValueError(
+                f"Embedding norm stats at {path} were fitted for {saved_mode}, "
+                f"but the task requests {mode}"
+            )
+        return cls(mode=mode, mean=state["mean"], std=state["std"])
 
 
 # === Percentile-based Quantization ===
