@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader, IterableDataset
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.dataloader import _worker_ignore_sigterm
 from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
     EvalDatasetConfig,
@@ -54,6 +55,7 @@ logger = logging.getLogger(__name__)
 
 def _seed_worker(worker_id: int, base_seed: int) -> None:
     """Seed DataLoader worker RNGs deterministically."""
+    _worker_ignore_sigterm(worker_id)
     worker_seed = base_seed + worker_id
     random.seed(worker_seed)
     np.random.seed(worker_seed)
@@ -310,7 +312,7 @@ class DownstreamEvaluator:
         )
 
         generator = None
-        worker_init_fn = None
+        worker_init_fn: Any = _worker_ignore_sigterm
         if seed is not None:
             split_offsets = {"train": 0, "valid": 1, "test": 2}
             split_seed = seed + split_offsets.get(split, 0)
