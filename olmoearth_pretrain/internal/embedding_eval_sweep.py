@@ -35,6 +35,7 @@ from logging import getLogger
 
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config
 from olmoearth_pretrain.evals.embedding_transforms import EmbeddingNormalization
+from olmoearth_pretrain.evals.linear_probe import ProbeInputNorm
 from olmoearth_pretrain.evals.models import BaselineModelName, get_launch_script_path
 from olmoearth_pretrain.internal.all_evals import EMBEDDING_EVAL_TASKS
 from olmoearth_pretrain.internal.constants import EVAL_LAUNCH_PATH, EVAL_WANDB_PROJECT
@@ -199,6 +200,24 @@ def _normalization_args(args: argparse.Namespace, task_names: list[str]) -> str:
     return " " + " ".join(overrides)
 
 
+def _probe_input_norm_args(args: argparse.Namespace, task_names: list[str]) -> str:
+    """Per-LP-task overrides for the probe's input norm.
+
+    LP only: KNN has no probe, and it L2-normalizes internally regardless, so a
+    KNN job would be an exact duplicate of the default arm under any setting
+    here.
+    """
+    probe_input_norm = getattr(args, "probe_input_norm", None)
+    if not probe_input_norm or probe_input_norm == "batchnorm":
+        return ""
+    return " " + " ".join(
+        _task_arg(
+            name, "probe_input_norm", f"ProbeInputNorm.{probe_input_norm.upper()}"
+        )
+        for name in task_names
+    )
+
+
 def _tasks_to_run_arg(task_names: list[str]) -> str:
     """Restrict the evaluator to the given tasks (compact JSON; see full sweep)."""
     return (
@@ -319,14 +338,22 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         f" {MAX_DURATION_OVERRIDE}"
     )
 
+    probe_input_norm = getattr(args, "probe_input_norm", None)
+    lp_run_name = base_run_name
+    if probe_input_norm and probe_input_norm != "batchnorm":
+        # LP-only suffix: the arm changes the probe, so it must not silently
+        # rename an otherwise-identical KNN run.
+        lp_run_name += f"_probe{probe_input_norm.replace('_', '')}"
+
     commands = []
     if lp_tasks:
         lp_model_args = _model_args(model, lp_tasks)
         for lr in LP_LRs:
-            cmd = common.format(run_name=f"{base_run_name}_lr{lr}")
+            cmd = common.format(run_name=f"{lp_run_name}_lr{lr}")
             cmd += lp_model_args
             cmd += _window_size_args(window_size, lp_tasks)
             cmd += _normalization_args(args, lp_tasks)
+            cmd += _probe_input_norm_args(args, lp_tasks)
             cmd += " " + " ".join(_task_arg(name, "probe_lr", lr) for name in lp_tasks)
             if args.select_best_val:
                 cmd += _select_best_val_args(lp_tasks)
@@ -433,6 +460,19 @@ def main() -> None:
             "--embedding_norm_stats_path is given -- per-dataset stats measure "
             "whether geometry is the problem; fixed stats are what a global run "
             "could actually deploy. Tags the run name with the arm."
+        ),
+    )
+    parser.add_argument(
+        "--probe_input_norm",
+        type=str,
+        default=None,
+        choices=[m.value for m in ProbeInputNorm],
+        help=(
+            "What sits in front of the linear probe: batchnorm (default, "
+            "BatchNorm1d on classification tasks and nothing on segmentation) "
+            "or none (classification scored exactly like the dense probes, so "
+            "embedding geometry reaches the weights and no batch statistics are "
+            "involved). LP jobs only; tags the LP run names with the arm."
         ),
     )
     parser.add_argument(

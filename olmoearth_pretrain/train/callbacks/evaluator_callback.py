@@ -55,7 +55,11 @@ from olmoearth_pretrain.evals.embeddings import get_embeddings, normalize_and_qu
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
 from olmoearth_pretrain.evals.knn import run_knn
-from olmoearth_pretrain.evals.linear_probe import ProbeType, train_and_eval_probe
+from olmoearth_pretrain.evals.linear_probe import (
+    ProbeInputNorm,
+    ProbeType,
+    train_and_eval_probe,
+)
 from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
@@ -214,6 +218,12 @@ class DownstreamTaskConfig:
     # Log embedding geometry, int8 clipping, and round-trip-damage diagnostics
     # alongside the task's score (bounded row subsample; no effect on scores).
     embedding_pipeline_diagnostics: bool = True
+    # What sits in front of the linear probe's weights. BATCHNORM (default) is
+    # the historical behavior: BatchNorm1d for classification tasks, nothing for
+    # segmentation. NONE scores classification exactly like the dense probes, so
+    # embedding geometry reaches the weights and no batch coupling is involved.
+    # Changing this moves every classification LP number, so run it as an arm.
+    probe_input_norm: ProbeInputNorm = ProbeInputNorm.BATCHNORM
     # Reduce embedding dimensionality via PCA (None = no reduction)
     embedding_dim: int | None = None
     # Use weighted dice loss instead of cross-entropy (only for specific tasks like wildfire)
@@ -384,6 +394,8 @@ class DownstreamEvaluator:
         self.embedding_normalization = task.embedding_normalization
         self.embedding_norm_stats_path = task.embedding_norm_stats_path
         self.embedding_pipeline_diagnostics = task.embedding_pipeline_diagnostics
+        self.probe_input_norm = task.probe_input_norm
+        self.probe_input_norm = task.probe_input_norm
         self.embedding_dim = task.embedding_dim
         self.use_dice_loss = task.use_dice_loss
         self.primary_metric = task.primary_metric
@@ -488,6 +500,7 @@ class DownstreamEvaluator:
                     use_dice_loss=self.use_dice_loss,
                     primary_metric=self.primary_metric,
                     primary_metric_class=self.primary_metric_class,
+                    probe_input_norm=self.probe_input_norm,
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
                 else None
