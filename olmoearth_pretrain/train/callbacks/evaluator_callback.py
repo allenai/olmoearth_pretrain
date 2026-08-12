@@ -53,6 +53,13 @@ from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 
 logger = logging.getLogger(__name__)
 
+# Beaker rejects experiment names longer than this many characters.
+_BEAKER_MAX_NAME_LEN = 128
+# common.build_launch_config forms the experiment name as
+# ``{run_name}-{cmd}-{8-char-uuid}``; for in-loop evals ``cmd`` is ``evaluate``,
+# so the suffix appended after the eval run name is ``-evaluate-`` + 8 chars.
+_BEAKER_LAUNCH_NAME_SUFFIX_LEN = len("-evaluate-") + 8
+
 
 def _seed_worker(worker_id: int, base_seed: int) -> None:
     """Seed DataLoader worker RNGs deterministically."""
@@ -1208,12 +1215,31 @@ class DownstreamEvaluatorCallback(Callback):
             else os.path.basename(save_folder.rstrip("/"))
         )
 
+        # Beaker rejects experiment names longer than 128 chars. The launcher
+        # (common.build_launch_config) turns ``run_name`` into the experiment name
+        # ``{run_name}-evaluate-{8-char-uuid}`` (18 chars of suffix), so cap the eval
+        # run name accordingly. The ``_eval_step{step}`` suffix is kept intact (each
+        # step must map to a distinct job); only the train-run-name prefix is
+        # truncated, and the trailing uuid still guarantees uniqueness.
+        step_suffix = f"_eval_step{step}"
+        max_run_name_len = _BEAKER_MAX_NAME_LEN - _BEAKER_LAUNCH_NAME_SUFFIX_LEN
+        max_prefix_len = max_run_name_len - len(step_suffix)
+        eval_run_name = f"{train_run_name[:max_prefix_len]}{step_suffix}"
+        if len(eval_run_name) < len(train_run_name) + len(step_suffix):
+            logger.warning(
+                "Truncated in-loop eval experiment name to fit Beaker's %d-char "
+                "limit (train run name %r is too long); using %r.",
+                _BEAKER_MAX_NAME_LEN,
+                train_run_name,
+                eval_run_name,
+            )
+
         launch_checkpoint_eval_job(
             module_path=module_path,
             checkpoint_dir=save_folder,
             step=step,
             cluster=clusters[0],
-            run_name=f"{train_run_name}_eval_step{step}",
+            run_name=eval_run_name,
             priority=priority,
             tasks_to_run=task_names,
             wandb_project=(
