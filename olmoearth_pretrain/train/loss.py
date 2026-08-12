@@ -761,6 +761,44 @@ class ModalityGramMatchingLossVec(Loss):
         return self.weight * total_loss
 
 
+@LOSS_REGISTRY.register("weighted_sum")
+class WeightedSumLoss(Loss):
+    """Sum of independently configured losses.
+
+    Each child is built from its own registry config and already carries its
+    own ``weight``; this wrapper just adds the results. The metric name joins
+    the child names (e.g. ``ModalityPatchDiscMaskedVec+ModalityGramMatchVec``),
+    so the train-loss key self-documents the composition.
+    """
+
+    name = "WeightedSum"  # replaced per instance with the joined child names
+
+    def __init__(self, losses: list[dict[str, Any]]) -> None:
+        """Build each child loss from its registry config.
+
+        Args:
+            losses: One registry-style config dict per child, each with a
+                ``type`` key plus that loss's init kwargs.
+        """
+        if not losses:
+            raise ValueError("weighted_sum requires at least one child loss")
+        built = []
+        for cfg in losses:
+            cfg = dict(cfg)  # don't mutate the caller's config
+            built.append(LOSS_REGISTRY.get_class(cfg.pop("type"))(**cfg))
+        self.losses = built
+        self.name = "+".join(loss.name for loss in built)
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Sum the child losses on the same predictions/targets."""
+        total = self.losses[0].compute(predictions, targets, **kwargs)
+        for loss in self.losses[1:]:
+            total = total + loss.compute(predictions, targets, **kwargs)
+        return total
+
+
 @LOSS_REGISTRY.register("modality_patch_discrimination_vec")
 class ModalityPatchDiscriminationLossVec(Loss):
     """Loss function for per-modality patch discrimination task.

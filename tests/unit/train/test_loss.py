@@ -1455,3 +1455,30 @@ def test_gram_matching_weight_scales_loss() -> None:
     base = ModalityGramMatchingLossVec(weight=1.0).compute(preds, targets)
     doubled = ModalityGramMatchingLossVec(weight=2.0).compute(preds, targets)
     assert torch.isclose(doubled, 2 * base, rtol=1e-5)
+
+
+def test_weighted_sum_equals_sum_of_parts_and_joins_names() -> None:
+    """The composite loss is exactly the sum of its children, with joined name."""
+    from olmoearth_pretrain.train.loss import (
+        LossConfig,
+        ModalityGramMatchingLossVec,
+        WeightedSumLoss,
+    )
+
+    preds, targets, _ = _gram_toy_batch()
+    disc_cfg = {
+        "type": "modality_patch_discrimination_masked_negatives_vec",
+        "tau": 0.1,
+    }
+    gram_cfg = {"type": "modality_gram_matching_vec", "weight": 30.0}
+    combo = WeightedSumLoss(losses=[dict(disc_cfg), dict(gram_cfg)])
+    disc = ModalityPatchDiscriminationMaskedNegativesVec(tau=0.1)
+    gram = ModalityGramMatchingLossVec(weight=30.0)
+    expected = disc.compute(preds, targets) + gram.compute(preds, targets)
+    assert torch.isclose(combo.compute(preds, targets), expected, rtol=1e-6)
+    assert combo.name == "ModalityPatchDiscMaskedVec+ModalityGramMatchVec"
+    # round-trips through LossConfig, and the caller's config is not mutated
+    cfgs = [dict(disc_cfg), dict(gram_cfg)]
+    built = LossConfig(loss_config={"type": "weighted_sum", "losses": cfgs}).build()
+    assert torch.isclose(built.compute(preds, targets), expected, rtol=1e-6)
+    assert all("type" in c for c in cfgs)
