@@ -1,0 +1,66 @@
+version: v2
+budget: ai2/atec-olmoearth
+description: >-
+  Tessera v2 no-BatchNorm LP arm for 20260812_embedding_norm_arms. Tessera v1
+  covers only one of the eight base AEF datasets (lcmap_lu), so it cannot
+  participate in that comparison; v2 was baked by our own inference run
+  (docs/TesseraV2Inference.md) for pastis/africa/ethiopia. No --task_names is
+  passed on purpose: the sweep's own capability filter keeps exactly the LP
+  tasks whose dataset carries the tessera_v2 modality, one per dataset, and
+  fails fast if that set is empty -- more robust than hardcoding names for an
+  export whose coverage is still growing.
+tasks:
+- name: tessera_v2_lp_no_norm
+  image:
+    beaker: petew/olmo-core-tch271cu128-2025-09-15
+  command:
+  - bash
+  - -c
+  - |
+    set -e
+    echo "$GCP_CREDENTIALS" > /etc/gcp_credentials.json
+    conda install gh --channel conda-forge -y
+    gh auth status
+    gh repo clone allenai/olmoearth_pretrain .
+    git checkout c7c7936b6
+    git submodule update --init --recursive
+    pip install uv
+    export PATH="/root/.local/bin:$PATH"
+    uv sync --locked --all-extras
+    venv_path=$(uv run python -c 'import sys; print(sys.executable)')
+    source "$(dirname "$venv_path")/activate"
+    uv pip install breizhcrops==0.0.4.1
+    python3 -m olmoearth_pretrain.internal.embedding_eval_sweep \
+      --cluster=ai2/saturn-cirrascale \
+      --priority=urgent \
+      --model=tessera_v2_precomputed \
+      --model_name=tessera_v2 \
+      --project_name=20260812_embedding_norm_arms \
+      --probe_input_norm=none \
+      --select_best_val
+  result:
+    path: /outputs
+  resources:
+    gpuCount: 0
+    sharedMemory: 256 GiB
+  context:
+    priority: urgent
+    preemptible: true
+  constraints:
+    cluster:
+    - ai2/jupiter
+  datasets:
+  - mountPath: /weka/dfive-default
+    source:
+      weka: dfive-default
+  envVars:
+  - name: GOOGLE_APPLICATION_CREDENTIALS
+    value: /etc/gcp_credentials.json
+  - name: WANDB_API_KEY
+    secret: gabrielt_WANDB_API_KEY
+  - name: BEAKER_TOKEN
+    secret: gabrielt_BEAKER_TOKEN
+  - name: GITHUB_TOKEN
+    secret: gabrielt_GITHUB_TOKEN
+  - name: GCP_CREDENTIALS
+    secret: HELIOS_GCP_CREDENTIALS
