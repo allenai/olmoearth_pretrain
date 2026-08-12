@@ -1,0 +1,187 @@
+version: v2
+budget: ai2/atec-olmoearth
+description: >-
+  Year-aligned arms for 20260812_embedding_norm_arms, at the
+  sentinel1_sentinel2_landsat_sclmask_l8pixmask variant. Three 0-GPU submitters:
+  the candidate and AEF on the no-BatchNorm LP (8 jobs each, one per swept LR),
+  and the candidate's three KNN normalization arms re-measured on this export.
+  The year-aligned windows are what tessera_v2 covers (africa / ethiopia /
+  pastis), so this is the set on which all three models are comparable; the
+  earlier arms ran the plain tasks, which use a different window convention.
+tasks:
+- name: cand_year_aligned_lp_no_norm
+  image:
+    beaker: petew/olmo-core-tch271cu128-2025-09-15
+  command:
+  - bash
+  - -c
+  - |
+    set -e
+    echo "$GCP_CREDENTIALS" > /etc/gcp_credentials.json
+    conda install gh --channel conda-forge -y
+    gh auth status
+    gh repo clone allenai/olmoearth_pretrain .
+    git checkout c7c7936b6
+    git submodule update --init --recursive
+    pip install uv
+    export PATH="/root/.local/bin:$PATH"
+    uv sync --locked --all-extras
+    venv_path=$(uv run python -c 'import sys; print(sys.executable)')
+    source "$(dirname "$venv_path")/activate"
+    uv pip install breizhcrops==0.0.4.1
+    V=_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_sclmask_l8pixmask
+    TASKS="africa_crop_mask$V,ethiopia_crops$V,canada_crops_coarse$V,canada_crops_fine$V,descals$V,glance$V,lcmap_lu$V,us_trees$V,pastis$V"
+    python3 -m olmoearth_pretrain.internal.embedding_eval_sweep \
+      --cluster=ai2/saturn-cirrascale \
+      --priority=urgent \
+      --checkpoint_path=/weka/dfive-default/olmoearth_pretrain/checkpoints/gabrielt/regbtl_v1_2_gdyn_d128_wideread_regsup_ndvi_w0p1_tanchor_newsamp_psuniform/step667200 \
+      --module_path=scripts/official/v1_2/regbtl_v1_2_gdyn_d128_wideread_regsup_ndvi_w0p1_tanchor_newsampling_psuniform.py \
+      --model_name=cand_ndvi_d128_ya \
+      --project_name=20260812_embedding_norm_arms \
+      --task_names="$TASKS" \
+      --probe_input_norm=none \
+      --select_best_val
+  result:
+    path: /outputs
+  resources:
+    gpuCount: 0
+    sharedMemory: 256 GiB
+  context:
+    priority: urgent
+    preemptible: true
+  constraints:
+    cluster:
+    - ai2/jupiter
+  datasets:
+  - mountPath: /weka/dfive-default
+    source:
+      weka: dfive-default
+  envVars:
+  - name: GOOGLE_APPLICATION_CREDENTIALS
+    value: /etc/gcp_credentials.json
+  - name: WANDB_API_KEY
+    secret: gabrielt_WANDB_API_KEY
+  - name: BEAKER_TOKEN
+    secret: gabrielt_BEAKER_TOKEN
+  - name: GITHUB_TOKEN
+    secret: gabrielt_GITHUB_TOKEN
+  - name: GCP_CREDENTIALS
+    secret: HELIOS_GCP_CREDENTIALS
+- name: aef_year_aligned_lp_no_norm
+  image:
+    beaker: petew/olmo-core-tch271cu128-2025-09-15
+  command:
+  - bash
+  - -c
+  - |
+    set -e
+    echo "$GCP_CREDENTIALS" > /etc/gcp_credentials.json
+    conda install gh --channel conda-forge -y
+    gh auth status
+    gh repo clone allenai/olmoearth_pretrain .
+    git checkout c7c7936b6
+    git submodule update --init --recursive
+    pip install uv
+    export PATH="/root/.local/bin:$PATH"
+    uv sync --locked --all-extras
+    venv_path=$(uv run python -c 'import sys; print(sys.executable)')
+    source "$(dirname "$venv_path")/activate"
+    uv pip install breizhcrops==0.0.4.1
+    V=_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_sclmask_l8pixmask
+    TASKS="africa_crop_mask$V,ethiopia_crops$V,canada_crops_coarse$V,canada_crops_fine$V,descals$V,glance$V,lcmap_lu$V,us_trees$V,pastis$V"
+    python3 -m olmoearth_pretrain.internal.embedding_eval_sweep \
+      --cluster=ai2/saturn-cirrascale \
+      --priority=urgent \
+      --model=aef \
+      --model_name=aef_ya \
+      --project_name=20260812_embedding_norm_arms \
+      --task_names="$TASKS" \
+      --probe_input_norm=none \
+      --select_best_val
+  result:
+    path: /outputs
+  resources:
+    gpuCount: 0
+    sharedMemory: 256 GiB
+  context:
+    priority: urgent
+    preemptible: true
+  constraints:
+    cluster:
+    - ai2/jupiter
+  datasets:
+  - mountPath: /weka/dfive-default
+    source:
+      weka: dfive-default
+  envVars:
+  - name: GOOGLE_APPLICATION_CREDENTIALS
+    value: /etc/gcp_credentials.json
+  - name: WANDB_API_KEY
+    secret: gabrielt_WANDB_API_KEY
+  - name: BEAKER_TOKEN
+    secret: gabrielt_BEAKER_TOKEN
+  - name: GITHUB_TOKEN
+    secret: gabrielt_GITHUB_TOKEN
+  - name: GCP_CREDENTIALS
+    secret: HELIOS_GCP_CREDENTIALS
+- name: cand_year_aligned_knn_norm_arms
+  image:
+    beaker: petew/olmo-core-tch271cu128-2025-09-15
+  command:
+  - bash
+  - -c
+  - |
+    set -e
+    echo "$GCP_CREDENTIALS" > /etc/gcp_credentials.json
+    conda install gh --channel conda-forge -y
+    gh auth status
+    gh repo clone allenai/olmoearth_pretrain .
+    git checkout c7c7936b6
+    git submodule update --init --recursive
+    pip install uv
+    export PATH="/root/.local/bin:$PATH"
+    uv sync --locked --all-extras
+    venv_path=$(uv run python -c 'import sys; print(sys.executable)')
+    source "$(dirname "$venv_path")/activate"
+    uv pip install breizhcrops==0.0.4.1
+    V=_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_sclmask_l8pixmask_knn
+    TASKS="africa_crop_mask$V,ethiopia_crops$V,canada_crops_coarse$V,canada_crops_fine$V,descals$V,glance$V,lcmap_lu$V,us_trees$V"
+    # Three arms, one KNN job each: the plain-task result said normalization is a
+    # null for cosine KNN; this re-measures it on the export the comparison uses.
+    for ARM in "" "--embedding_normalization=l2" "--embedding_normalization=center_l2"; do
+      python3 -m olmoearth_pretrain.internal.embedding_eval_sweep \
+        --cluster=ai2/saturn-cirrascale \
+        --priority=urgent \
+        --checkpoint_path=/weka/dfive-default/olmoearth_pretrain/checkpoints/gabrielt/regbtl_v1_2_gdyn_d128_wideread_regsup_ndvi_w0p1_tanchor_newsamp_psuniform/step667200 \
+        --module_path=scripts/official/v1_2/regbtl_v1_2_gdyn_d128_wideread_regsup_ndvi_w0p1_tanchor_newsampling_psuniform.py \
+        --model_name=cand_ndvi_d128_ya \
+        --project_name=20260812_embedding_norm_arms \
+        --task_names="$TASKS" \
+        $ARM
+    done
+  result:
+    path: /outputs
+  resources:
+    gpuCount: 0
+    sharedMemory: 256 GiB
+  context:
+    priority: urgent
+    preemptible: true
+  constraints:
+    cluster:
+    - ai2/jupiter
+  datasets:
+  - mountPath: /weka/dfive-default
+    source:
+      weka: dfive-default
+  envVars:
+  - name: GOOGLE_APPLICATION_CREDENTIALS
+    value: /etc/gcp_credentials.json
+  - name: WANDB_API_KEY
+    secret: gabrielt_WANDB_API_KEY
+  - name: BEAKER_TOKEN
+    secret: gabrielt_BEAKER_TOKEN
+  - name: GITHUB_TOKEN
+    secret: gabrielt_GITHUB_TOKEN
+  - name: GCP_CREDENTIALS
+    secret: HELIOS_GCP_CREDENTIALS
