@@ -666,6 +666,101 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         return self.weight * total_loss
 
 
+@LOSS_REGISTRY.register("modality_gram_matching_vec")
+class ModalityGramMatchingLossVec(Loss):
+    """Relational pretext loss: match the predictions' cosine Gram to the targets'.
+
+    Replaces the patch-discrimination InfoNCE with distillation-style relational
+    (RKD) matching: within each sample and modality, the pairwise cosine-similarity
+    matrix of the DECODER-masked predicted tokens must equal the same matrix
+    computed on their targets (with ``projection_only_target``, frozen random
+    projections of the raw patches). MSE over valid off-diagonal pairs, averaged
+    per sample, then over samples with at least one pair.
+
+    Where InfoNCE asks "pick your own target out of the sample's lineup", this
+    asks "reproduce the targets' relational geometry". There is no temperature
+    and no same-target negative masking: near-duplicate targets are simply
+    high-similarity entries the predictions should reproduce, not degenerate
+    negatives to exclude.
+    """
+
+    name = "ModalityGramMatchVec"
+
+    def __init__(
+        self,
+        weight: float = 1.0,
+        modality_weights: dict[str, float] | None = None,
+    ) -> None:
+        """Initialize the Gram-matching loss.
+
+        Args:
+            weight: Scalar applied to the summed per-modality losses.
+            modality_weights: Optional per-modality scalars applied before the sum.
+        """
+        self.weight = weight
+        self.modality_weights = modality_weights
+
+    def _compute_modality_loss(
+        self,
+        all_preds: Tensor,
+        all_masks: Tensor,
+        all_targets: Tensor,
+    ) -> Tensor:
+        batch_size, num_tokens, dim = all_preds.shape
+        decoder_mask = all_masks == MaskValue.DECODER.value
+        count = decoder_mask.sum(dim=-1)  # (batch,)
+
+        # Sort so decoder tokens come first per sample (same trick as the vec
+        # disc loss: keeps everything batched with no per-sample Python loops).
+        _, sort_indices = decoder_mask.long().sort(dim=1, descending=True, stable=True)
+        sort_expanded = sort_indices.unsqueeze(-1).expand(-1, -1, dim)
+        sorted_preds = all_preds.gather(1, sort_expanded).float()
+        sorted_targets = all_targets.gather(1, sort_expanded).float()
+
+        range_tensor = torch.arange(num_tokens, device=count.device)
+        valid_mask = range_tensor.unsqueeze(0) < count.unsqueeze(1)  # (batch, T)
+
+        sorted_preds = F.normalize(sorted_preds, p=2, dim=-1)
+        sorted_targets = F.normalize(sorted_targets, p=2, dim=-1)
+
+        gram_pred = torch.bmm(sorted_preds, sorted_preds.transpose(1, 2))
+        gram_target = torch.bmm(sorted_targets, sorted_targets.transpose(1, 2))
+
+        # Valid off-diagonal pairs only: the diagonal is identically 1 on both
+        # sides after normalization and would dilute the mean.
+        valid_2d = valid_mask.unsqueeze(1) & valid_mask.unsqueeze(2)
+        diag = torch.eye(num_tokens, dtype=torch.bool, device=count.device)
+        valid_2d = valid_2d & ~diag.unsqueeze(0)
+
+        sq_err = (gram_pred - gram_target) ** 2 * valid_2d.float()
+        pair_count = valid_2d.sum(dim=(1, 2)).float()  # (batch,)
+        loss_per_sample = sq_err.sum(dim=(1, 2)) / pair_count.clamp(min=1)
+
+        # Samples need >= 2 decoder tokens to have any pair.
+        contributes = (count > 1).float()
+        return (loss_per_sample * contributes).sum() / contributes.sum().clamp(min=1)
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute the within-sample cosine-Gram matching loss per modality."""
+        modality_preds, modality_masks = (
+            predictions.flatten_tokens_and_masks_per_modality()
+        )
+        modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
+
+        total_loss = 0
+        for all_preds, all_masks, all_targets, modality in zip(
+            modality_preds, modality_masks, modality_targets, targets.modalities
+        ):
+            loss = self._compute_modality_loss(all_preds, all_masks, all_targets)
+            if self.modality_weights is not None:
+                loss = loss * self.modality_weights.get(modality, 1.0)
+            total_loss += loss
+
+        return self.weight * total_loss
+
+
 @LOSS_REGISTRY.register("modality_patch_discrimination_vec")
 class ModalityPatchDiscriminationLossVec(Loss):
     """Loss function for per-modality patch discrimination task.

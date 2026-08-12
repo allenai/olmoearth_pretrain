@@ -1352,3 +1352,106 @@ def test_masked_neg_vec_large_batch() -> None:
     assert torch.isclose(loss_seq, loss_vec, rtol=RTOL, atol=ATOL), (
         f"large batch: seq={loss_seq.item()}, vec={loss_vec.item()}"
     )
+
+
+def _gram_toy_batch(
+    b: int = 2, n: int = 6, d: int = 8, seed: int = 0
+) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor]:
+    """A (b, n, 1, d)-shaped sentinel2 batch with all-DECODER masks."""
+    g = torch.Generator().manual_seed(seed)
+    target_vals = torch.randn(b, n, 1, 1, d, generator=g)
+    pred_vals = torch.randn(b, n, 1, 1, d, generator=g)
+    masks = torch.ones(b, n, 1, 1) * MaskValue.DECODER.value
+    preds = TokensAndMasks(sentinel2_l2a=pred_vals, sentinel2_l2a_mask=masks)
+    targets = TokensAndMasks(sentinel2_l2a=target_vals, sentinel2_l2a_mask=masks)
+    return preds, targets, target_vals
+
+
+def test_gram_matching_zero_when_predictions_equal_targets() -> None:
+    """Identical embeddings give identical Grams and zero loss."""
+    from olmoearth_pretrain.train.loss import ModalityGramMatchingLossVec
+
+    _, targets, target_vals = _gram_toy_batch()
+    preds = TokensAndMasks(
+        sentinel2_l2a=target_vals.clone(),
+        sentinel2_l2a_mask=torch.ones(target_vals.shape[:-1]) * MaskValue.DECODER.value,
+    )
+    loss = ModalityGramMatchingLossVec().compute(preds, targets)
+    assert torch.isclose(loss, torch.tensor(0.0), atol=1e-6)
+
+
+def test_gram_matching_invariant_to_rotation_and_scale() -> None:
+    """A rotated + scaled copy of the targets has the same cosine Gram: loss 0."""
+    from olmoearth_pretrain.train.loss import ModalityGramMatchingLossVec
+
+    _, targets, target_vals = _gram_toy_batch(d=8)
+    q, _ = torch.linalg.qr(
+        torch.randn(8, 8, generator=torch.Generator().manual_seed(1))
+    )
+    rotated = 3.7 * (target_vals @ q)
+    preds = TokensAndMasks(
+        sentinel2_l2a=rotated,
+        sentinel2_l2a_mask=torch.ones(rotated.shape[:-1]) * MaskValue.DECODER.value,
+    )
+    loss = ModalityGramMatchingLossVec().compute(preds, targets)
+    assert torch.isclose(loss, torch.tensor(0.0), atol=1e-5)
+
+
+def test_gram_matching_positive_for_mismatched_geometry() -> None:
+    """Random independent predictions have a different Gram: loss > 0."""
+    from olmoearth_pretrain.train.loss import ModalityGramMatchingLossVec
+
+    preds, targets, _ = _gram_toy_batch()
+    loss = ModalityGramMatchingLossVec().compute(preds, targets)
+    assert loss > 1e-3
+
+
+def test_gram_matching_ignores_non_decoder_tokens() -> None:
+    """Perturbing ONLINE_ENCODER tokens does not change the loss."""
+    from olmoearth_pretrain.train.loss import ModalityGramMatchingLossVec
+
+    b, n, d = 2, 6, 8
+    g = torch.Generator().manual_seed(2)
+    pred_vals = torch.randn(b, n, 1, 1, d, generator=g)
+    target_vals = torch.randn(b, n, 1, 1, d, generator=g)
+    masks = torch.ones(b, n, 1, 1) * MaskValue.DECODER.value
+    masks[:, : n // 2] = MaskValue.ONLINE_ENCODER.value
+
+    def make(p: torch.Tensor) -> tuple[TokensAndMasks, TokensAndMasks]:
+        return (
+            TokensAndMasks(sentinel2_l2a=p, sentinel2_l2a_mask=masks),
+            TokensAndMasks(sentinel2_l2a=target_vals, sentinel2_l2a_mask=masks),
+        )
+
+    loss_fn = ModalityGramMatchingLossVec()
+    base = loss_fn.compute(*make(pred_vals))
+    perturbed = pred_vals.clone()
+    perturbed[:, : n // 2] += 100.0
+    assert torch.isclose(loss_fn.compute(*make(perturbed)), base, atol=1e-6)
+
+
+def test_gram_matching_single_token_sample_contributes_zero() -> None:
+    """A sample with one decoder token has no pairs and neither NaNs nor crashes."""
+    from olmoearth_pretrain.train.loss import ModalityGramMatchingLossVec
+
+    b, n, d = 2, 4, 8
+    g = torch.Generator().manual_seed(3)
+    pred_vals = torch.randn(b, n, 1, 1, d, generator=g)
+    target_vals = torch.randn(b, n, 1, 1, d, generator=g)
+    masks = torch.ones(b, n, 1, 1) * MaskValue.ONLINE_ENCODER.value
+    masks[0, :] = MaskValue.DECODER.value  # sample 0: 4 decoder tokens
+    masks[1, 0] = MaskValue.DECODER.value  # sample 1: a single decoder token
+    preds = TokensAndMasks(sentinel2_l2a=pred_vals, sentinel2_l2a_mask=masks)
+    targets = TokensAndMasks(sentinel2_l2a=target_vals, sentinel2_l2a_mask=masks)
+    loss = ModalityGramMatchingLossVec().compute(preds, targets)
+    assert torch.isfinite(loss) and loss >= 0
+
+
+def test_gram_matching_weight_scales_loss() -> None:
+    """The weight parameter scales the result linearly."""
+    from olmoearth_pretrain.train.loss import ModalityGramMatchingLossVec
+
+    preds, targets, _ = _gram_toy_batch()
+    base = ModalityGramMatchingLossVec(weight=1.0).compute(preds, targets)
+    doubled = ModalityGramMatchingLossVec(weight=2.0).compute(preds, targets)
+    assert torch.isclose(doubled, 2 * base, rtol=1e-5)

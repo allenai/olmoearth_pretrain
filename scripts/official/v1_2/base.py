@@ -218,7 +218,13 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
         num_workers=16,
         global_batch_size=512,
         token_budget=2250,
-        prefetch_factor=4,
+        # Per-worker prefetch of FULL RANK BATCHES (iterable-dataset loader): with 16
+        # workers, factor 4 queued 64 rank-batches during warmup — a Weka I/O storm
+        # competing with the one batch step 1 actually needs, and worst on 1-GPU
+        # smoke runs where a rank batch is the whole 512-instance global batch.
+        # 2 is ample buffer at production BPS (~16s of consumption). Standing rule
+        # (joer): prefetch 2 max unless there's a reason to believe that's worse.
+        prefetch_factor=2,
         sampled_hw_p_list=list(range(1, 13)),
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
