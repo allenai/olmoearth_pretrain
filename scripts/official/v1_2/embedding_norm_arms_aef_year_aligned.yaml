@@ -1,0 +1,70 @@
+version: v2
+budget: ai2/atec-olmoearth
+description: >-
+  Relaunch of the AEF year-aligned no-BatchNorm LP arm. The first attempt exited
+  with "selected zero runnable tasks": _capable_tasks keeps ONE task per dataset
+  for a precomputed baseline (the first registered variant, which is
+  ..._year_aligned_ws16_ps1_sentinel2), and the earlier --task_names named the
+  l8pixmask variant instead, so the intersection was empty. A baseline cannot be
+  pointed at an imagery variant and does not need to be: _model_args overrides
+  input_modalities to [gse] and the SCL/Landsat masks only touch S2/Landsat
+  pixel-timesteps, so every variant of a dataset gives AEF identical windows and
+  identical embeddings. Names below verified against _model_task_names.
+tasks:
+- name: aef_year_aligned_lp_no_norm
+  image:
+    beaker: petew/olmo-core-tch271cu128-2025-09-15
+  command:
+  - bash
+  - -c
+  - |
+    set -e
+    echo "$GCP_CREDENTIALS" > /etc/gcp_credentials.json
+    conda install gh --channel conda-forge -y
+    gh auth status
+    gh repo clone allenai/olmoearth_pretrain .
+    git checkout c7c7936b6
+    git submodule update --init --recursive
+    pip install uv
+    export PATH="/root/.local/bin:$PATH"
+    uv sync --locked --all-extras
+    venv_path=$(uv run python -c 'import sys; print(sys.executable)')
+    source "$(dirname "$venv_path")/activate"
+    uv pip install breizhcrops==0.0.4.1
+    V=_year_aligned_ws16_ps1_sentinel2
+    TASKS="africa_crop_mask$V,ethiopia_crops$V,canada_crops_coarse$V,canada_crops_fine$V,descals$V,glance$V,lcmap_lu$V,us_trees$V,pastis$V"
+    python3 -m olmoearth_pretrain.internal.embedding_eval_sweep \
+      --cluster=ai2/saturn-cirrascale \
+      --priority=urgent \
+      --model=aef \
+      --model_name=aef_ya \
+      --project_name=20260812_embedding_norm_arms \
+      --task_names="$TASKS" \
+      --probe_input_norm=none \
+      --select_best_val
+  result:
+    path: /outputs
+  resources:
+    gpuCount: 0
+    sharedMemory: 256 GiB
+  context:
+    priority: urgent
+    preemptible: true
+  constraints:
+    cluster:
+    - ai2/jupiter
+  datasets:
+  - mountPath: /weka/dfive-default
+    source:
+      weka: dfive-default
+  envVars:
+  - name: GOOGLE_APPLICATION_CREDENTIALS
+    value: /etc/gcp_credentials.json
+  - name: WANDB_API_KEY
+    secret: gabrielt_WANDB_API_KEY
+  - name: BEAKER_TOKEN
+    secret: gabrielt_BEAKER_TOKEN
+  - name: GITHUB_TOKEN
+    secret: gabrielt_GITHUB_TOKEN
+  - name: GCP_CREDENTIALS
+    secret: HELIOS_GCP_CREDENTIALS
