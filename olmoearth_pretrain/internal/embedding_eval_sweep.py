@@ -202,7 +202,9 @@ def _model_args(
                 _task_arg(
                     task_name,
                     "quantization_scheme",
-                    QUANTIZE_SCHEME_BY_MODALITY[modality],
+                    # StrEnum interpolates to its VALUE ("tessera_per_vector"),
+                    # which OmegaConf rejects -- it parses enums by member NAME.
+                    f"QuantizationScheme.{QUANTIZE_SCHEME_BY_MODALITY[modality].name}",
                 )
             )
     return " ".join(args)

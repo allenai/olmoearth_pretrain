@@ -257,7 +257,7 @@ def _get_precomputed_embedding_args(modality_name: str) -> str:
         scheme = QUANTIZE_SCHEME_BY_MODALITY[modality_name]
         args += " " + " ".join(
             f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}"
-            f".quantization_scheme={scheme}"
+            f".quantization_scheme=QuantizationScheme.{scheme.name}"
             for task_name in capable_tasks
         )
     return args
