@@ -93,14 +93,29 @@ PERIOD_DAYS = 30
 # be a full 12-band S2 input rather than the 10 the Tessera export needed.
 B0109_BAND_SET = ["B01", "B09"]
 
-# Band order of the written composite: S2_BAND_SETS concatenated, then B01/B09.
-# _read_scenes concatenates in the order passed, and this order is exactly the
-# `bands:` list in the year-aligned model.yaml -- so nothing needs permuting
-# (contrast build_dpixel_inputs, which reorders via TESSERA_S2_INDICES).
-COMPOSITE_BANDS = [band for band_set in S2_BAND_SETS for band in band_set] + (
-    B0109_BAND_SET
-)
-READ_BAND_SETS = (*S2_BAND_SETS, B0109_BAND_SET)
+
+# Band order of the written composite: S2_BAND_SETS concatenated, then (when
+# requested) B01/B09. _read_scenes concatenates in the order passed, and the
+# 12-band order is exactly the `bands:` list in the year-aligned model.yaml -- so
+# nothing needs permuting (contrast build_dpixel_inputs, which reorders via
+# TESSERA_S2_INDICES).
+#
+# include_60m is OPT-IN because rslearn marks materialization complete per LAYER,
+# not per band set (dataset/manage.py: `if window.is_layer_completed(layer_name):
+# return skipped=True`). So a fetch group materialized before B01/B09 was added to
+# config_tessera_v2_fetch.json will NEVER backfill it -- the band set only lands on
+# groups fetched from scratch afterwards. On an existing group, run at 10 bands and
+# score the `mo` baseline at 10 bands too, so the band subset is a shared confound
+# and compositing is the only difference.
+def read_band_sets(include_60m: bool) -> tuple[list[str], ...]:
+    """Band sets to read, in the order the composite concatenates them."""
+    return (*S2_BAND_SETS, B0109_BAND_SET) if include_60m else S2_BAND_SETS
+
+
+def composite_bands(include_60m: bool) -> list[str]:
+    """Flat band list of the written composite, matching read_band_sets order."""
+    return [band for band_set in read_band_sets(include_60m) for band in band_set]
+
 
 S2_LAYERS = [f"sentinel2_l2a_mo{i:02d}" for i in range(1, MONTHS + 1)]
 SCL_LAYERS = [f"sentinel2_scl_mo{i:02d}" for i in range(1, MONTHS + 1)]
@@ -181,11 +196,15 @@ def select_best(severity: np.ndarray, doys: np.ndarray, period: int) -> np.ndarr
 
 def composite_window(
     fetch_window: Window,
+    include_60m: bool = False,
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], Counter]:
     """Build every period's composite for one fetch window.
 
     Args:
         fetch_window: window in the fetch group holding the year of scenes.
+        include_60m: read B01/B09 as well. Only possible on a fetch group
+            materialized after they entered the fetch config (see
+            read_band_sets).
 
     Returns:
         ``(imagery, scl, severity_hist)``. ``imagery`` maps layer name to an
@@ -199,7 +218,7 @@ def composite_window(
         NoS2ScenesError: if the window's S2 layer matched zero scenes.
         ValueError: if the imagery and SCL reads disagree on scene ordering.
     """
-    imagery, doys = _read_scenes(fetch_window, S2_LAYER, READ_BAND_SETS)
+    imagery, doys = _read_scenes(fetch_window, S2_LAYER, read_band_sets(include_60m))
     if imagery.shape[0] == 0:
         raise NoS2ScenesError(
             f"window {fetch_window.group}/{fetch_window.name} has zero "
@@ -267,6 +286,7 @@ def write_composite(
     window: Window,
     imagery: dict[str, np.ndarray],
     scl: dict[str, np.ndarray],
+    bands: list[str],
 ) -> None:
     """Write one window's composite layers and mark them completed.
 
@@ -279,19 +299,23 @@ def write_composite(
         window: the window in the output dataset.
         imagery: layer name to (H, W, C) uint16 array.
         scl: layer name to (H, W) uint8 array.
+        bands: band names of the imagery, naming its raster dir.
     """
     raster_format = GeotiffRasterFormat()
+    written: list[str] = []
     for period in range(MONTHS):
         s2_name = S2_LAYERS[period]
         if s2_name not in imagery:
             continue
         time_range = period_time_range(window, period)
-        for name, array, bands in (
-            (s2_name, imagery[s2_name].transpose(2, 0, 1), COMPOSITE_BANDS),
+        # Distinct loop names: binding `bands` here would shadow the parameter
+        # and leak the previous period's band list into the next one.
+        for name, array, layer_bands in (
+            (s2_name, imagery[s2_name].transpose(2, 0, 1), bands),
             (SCL_LAYERS[period], scl[SCL_LAYERS[period]][None], SCL_BAND_SET),
         ):
             raster_format.encode_raster(
-                window.get_raster_dir(name, bands),
+                window.get_raster_dir(name, layer_bands),
                 window.projection,
                 window.bounds,
                 RasterArray(
@@ -300,7 +324,13 @@ def write_composite(
                     metadata=RasterMetadata(),
                 ),
             )
-            window.mark_layer_completed(name)
+            written.append(name)
+    # Mark completed only once every raster is on disk. The resume guard tests
+    # period 0, so marking as we went would let an interrupted window be skipped
+    # forever with periods 1-11 missing. Interrupting before this point leaves
+    # unmarked rasters, which a re-run simply overwrites.
+    for name in written:
+        window.mark_layer_completed(name)
 
 
 def _bounded_map(
@@ -345,6 +375,7 @@ def composite(
     spec: DatasetSpec,
     workers: int = 8,
     overwrite: bool = False,
+    include_60m: bool = False,
 ) -> None:
     """Composite every eval window and write the layers into the output dataset.
 
@@ -354,9 +385,15 @@ def composite(
         spec: fetch-group / eval-group selection.
         workers: raster-read threads.
         overwrite: recompute windows whose first period is already written.
+        include_60m: include B01/B09 (see read_band_sets -- only possible on
+            a fetch group materialized after they entered the fetch config).
     """
     out_windows, fetch_windows, out_provider = _providers(ds_path, out_ds_path, spec)
-    logger.info(f"compositing {len(out_windows)} windows into {out_ds_path}")
+    bands = composite_bands(include_60m)
+    logger.info(
+        f"compositing {len(out_windows)} windows into {out_ds_path} "
+        f"({len(bands)} bands)"
+    )
 
     def read_one(
         out_window: Window,
@@ -364,7 +401,13 @@ def composite(
         if not overwrite and out_provider.is_layer_written(out_window, S2_LAYERS[0]):
             return out_window, None, "skipped"
         try:
-            return out_window, composite_window(fetch_windows[out_window.name]), "ok"
+            return (
+                out_window,
+                composite_window(
+                    fetch_windows[out_window.name], include_60m=include_60m
+                ),
+                "ok",
+            )
         except NoS2ScenesError as e:
             logger.warning(f"window {out_window.name}: coverage gap -- {e}")
             return out_window, None, "gap"
@@ -393,7 +436,7 @@ def composite(
             assert result is not None
             imagery, scl, hist = result
             try:
-                write_composite(out_window, imagery, scl)
+                write_composite(out_window, imagery, scl, bands)
             except Exception:
                 logger.exception(f"window {out_window.name}: writing failed")
                 failed.append(out_window.name)
@@ -411,6 +454,7 @@ def composite(
         {
             "product": "pixel_mosaic",
             "product_version": "select-least-contaminated-v1",
+            "bands": bands,
             "severity_tiers": [list(tier) for tier in SCL_SEVERITY_TIERS],
             # The experiment's own falsifier: if the chosen pixels are mostly
             # NOT tier 0, there was little to choose between and a flat eval
@@ -549,6 +593,13 @@ def main() -> None:
             )
             p.add_argument("--workers", type=int, default=8)
             p.add_argument("--overwrite", action="store_true")
+            p.add_argument(
+                "--include_60m",
+                action="store_true",
+                help="Also composite B01/B09. Only works on a fetch group "
+                "materialized AFTER they entered the fetch config -- rslearn "
+                "marks completion per layer, so existing groups never backfill.",
+            )
         else:
             p.add_argument("--sample", type=int, default=200)
 
@@ -565,6 +616,7 @@ def main() -> None:
             spec,
             workers=args.workers,
             overwrite=args.overwrite,
+            include_60m=args.include_60m,
         )
 
 
