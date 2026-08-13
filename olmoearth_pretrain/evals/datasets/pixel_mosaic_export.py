@@ -468,6 +468,11 @@ def probe(ds_path: str, spec: DatasetSpec, sample: int = 200) -> dict[str, Any]:
 
     clear_counts: Counter = Counter()
     obs_counts: Counter = Counter()
+    # Per period as well as pooled: whether the usable observations sit in the
+    # growing season decides whether a composite can move a crop-type score at
+    # all. Pooling hides that, and for ethiopia the Meher monsoon (roughly
+    # periods 6-9) is exactly where clear looks are expected to be scarcest.
+    per_period: dict[int, Counter] = {p: Counter() for p in range(MONTHS)}
     for i, window in enumerate(windows):
         try:
             scl, doys = _read_scenes(
@@ -485,21 +490,30 @@ def probe(ds_path: str, spec: DatasetSpec, sample: int = 200) -> dict[str, Any]:
             if not in_period.any():
                 continue
             obs_counts[int(in_period.sum())] += 1
-            clear_counts.update(clear[in_period].sum(axis=0).ravel().tolist())
+            counts = clear[in_period].sum(axis=0).ravel().tolist()
+            clear_counts.update(counts)
+            per_period[period].update(counts)
         if (i + 1) % 25 == 0:
             logger.info(f"probed {i + 1}/{len(windows)}")
 
-    total = sum(clear_counts.values())
+    def _fractions(counts: Counter) -> dict[str, Any]:
+        """Zero-clear / has-a-choice / mean-clear for one bucket of counts."""
+        total = sum(counts.values())
+        if not total:
+            return {"pixel_periods": 0}
+        return {
+            "pixel_periods": total,
+            "zero_clear": round(counts[0] / total, 4),
+            "has_choice": round(sum(c for n, c in counts.items() if n >= 2) / total, 4),
+            "mean_clear": round(sum(n * c for n, c in counts.items()) / total, 2),
+        }
+
     summary = {
         "windows_probed": len(windows),
         "acquisitions_per_period": dict(sorted(obs_counts.items())),
         "clear_obs_per_pixel_period": dict(sorted(clear_counts.items())),
-        "fraction_pixel_periods_with_zero_clear": (
-            clear_counts[0] / total if total else None
-        ),
-        "fraction_pixel_periods_with_choice": (
-            sum(c for n, c in clear_counts.items() if n >= 2) / total if total else None
-        ),
+        "pooled": _fractions(clear_counts),
+        "by_period": {str(p): _fractions(per_period[p]) for p in range(MONTHS)},
     }
     logger.info(json.dumps(summary, indent=2))
     return summary
