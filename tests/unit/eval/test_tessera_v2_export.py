@@ -79,10 +79,13 @@ def test_fetch_layers_match_the_pastis_config() -> None:
     file). If the two drift, a v2 export on another dataset stops mirroring
     what pastis was built from.
 
-    max_matches is the one deliberate difference: pastis was fetched at the
+    Two deliberate differences. max_matches: pastis was fetched at the
     original 150 for S2, which truncated 4.94% of ethiopia_crops windows (and
     from the END of the year, since the layer sorts datetime ascending), so
-    the shared config raises it. Everything else must stay identical.
+    the shared config raises it. And the B01/B09 band set, which only
+    pixel_mosaic_export needs (v2 inference reads the first two band sets via
+    TESSERA_S2_INDICES) and which pastis therefore does not carry. Everything
+    else must stay identical.
     """
     shared = json.loads(FETCH_LAYERS_CONFIG.read_text())["layers"]
     pastis = json.loads(
@@ -93,7 +96,14 @@ def test_fetch_layers_match_the_pastis_config() -> None:
         a, b = copy.deepcopy(shared[name]), copy.deepcopy(pastis[name])
         for layer in (a, b):
             layer["data_source"]["query_config"].pop("max_matches")
+            layer["band_sets"] = [
+                bs for bs in layer["band_sets"] if bs["bands"] != ["B01", "B09"]
+            ]
         assert a == b, name
+    assert [bs["bands"] for bs in shared["sentinel2_l2a_all"]["band_sets"]][-1] == [
+        "B01",
+        "B09",
+    ], "the 60 m set must stay last: it pins COMPOSITE_BANDS"
     assert (
         shared["sentinel2_l2a_all"]["data_source"]["query_config"]["max_matches"]
         > (pastis["sentinel2_l2a_all"]["data_source"]["query_config"]["max_matches"])

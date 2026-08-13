@@ -170,4 +170,5 @@ def get_eval_dataset(
             scl_cloud_mask=kwargs.get("scl_cloud_mask", False),
             scl_cloud_classes=kwargs.get("scl_cloud_classes"),
             landsat_cloud_cover_max=kwargs.get("landsat_cloud_cover_max"),
+            l8_pixel_cloud_mask=kwargs.get("l8_pixel_cloud_mask", False),
         )

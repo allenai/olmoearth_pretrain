@@ -824,7 +824,12 @@ class RslearnToOlmoEarthDataset(Dataset):
             self._apply_scl_cloud_mask(masked_sample, input_dict, crop_rows, crop_cols)
         if self.l8_pixel_cloud_mask and Modality.LANDSAT.name in self.input_modalities:
             self._apply_l8_pixel_cloud_mask(
-                masked_sample, input_dict, crop_rows, crop_cols
+                masked_sample,
+                input_dict,
+                crop_rows,
+                crop_cols,
+                stored_time_ranges.get(canonical),
+                canonical_t,
             )
 
         for modality in self.input_modalities:
@@ -1022,6 +1027,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         input_dict: dict[str, Any],
         crop_rows: slice | None,
         crop_cols: slice | None,
+        canonical_ranges: list[tuple[datetime, datetime]] | None,
+        canonical_t: int,
     ) -> None:
         """Set Landsat mask to MISSING where QA_PIXEL says cloud, in place.
 
@@ -1032,17 +1039,33 @@ class RslearnToOlmoEarthDataset(Dataset):
         _apply_scl_cloud_mask, including the conservative fallbacks: any
         window where the input is absent or misshapen is left unmasked with a
         once-per-run warning.
+
+        Unlike SCL (derived from the required, always-complete S2 monthlies),
+        QA inherits Landsat's ragged coverage, so it must be scattered onto the
+        canonical time axis by acquisition date before it can index a mask that
+        already lives on that axis -- consuming it positionally would mask the
+        wrong months whenever either side has a coverage gap. Slots QA does not
+        cover stay zero, which carries no cloud bits and so masks nothing (a
+        Landsat gap is already MISSING from the ragged pass).
         """
         qa_image = input_dict.get(L8QA_INPUT_NAME)
         if not isinstance(qa_image, RasterImage):
             self._warn_l8qa_once(f"no '{L8QA_INPUT_NAME}' input in sample")
             return
-        img = qa_image.image
-        if isinstance(img, torch.Tensor):
-            img = img.numpy()
-        qa = rearrange(img, "c t h w -> h w t c")[..., 0]
+        landsat_image = input_dict.get(Modality.LANDSAT.name)
+        if not isinstance(landsat_image, RasterImage):
+            # Landsat absent entirely: the ragged pass already marked every
+            # slot MISSING, so there is nothing left to mask.
+            self._warn_l8qa_once("Landsat imagery absent from sample")
+            return
+        stored = qa_image.image
+        qa_raw: np.ndarray = (
+            stored.numpy() if isinstance(stored, torch.Tensor) else np.asarray(stored)
+        )
+        # Keep the channel axis so the ragged scatter can be reused verbatim.
+        qa = rearrange(qa_raw, "c t h w -> h w t c")[..., :1]
 
-        landsat = input_dict[Modality.LANDSAT.name].image
+        landsat = landsat_image.image
         if qa.shape[:2] != tuple(landsat.shape[2:]):
             # QA is stored at 30 m (zoom_offset -1, like the multispectral
             # band set); repair an exact half-resolution read rather than
@@ -1058,6 +1081,16 @@ class RslearnToOlmoEarthDataset(Dataset):
         if crop_rows is not None and crop_cols is not None:
             qa = qa[crop_rows, crop_cols]
 
+        if qa.shape[2] != canonical_t:
+            qa, _ = self._align_to_canonical(
+                L8QA_INPUT_NAME,
+                qa,
+                list(qa_image.timestamps) if qa_image.timestamps is not None else None,
+                canonical_ranges,
+                canonical_t,
+            )
+        qa = qa[..., 0]
+
         mask_name = MaskedOlmoEarthSample.get_masked_modality_name(
             Modality.LANDSAT.name
         )
@@ -1070,10 +1103,13 @@ class RslearnToOlmoEarthDataset(Dataset):
             return
 
         cloudy = (qa.astype(np.uint16) & L8QA_CLOUD_BITS_MASK) != 0
-        # Never blank a pixel entirely: a pixel cloudy at every timestep keeps
-        # all of them (better a cloudy token than none; QA fill/zero-padding
-        # carries no cloud bits, so padded months behave exactly as unmasked).
-        cloudy[cloudy.all(axis=2)] = False
+        # Never blank a pixel entirely: if masking every cloudy timestep would
+        # leave a pixel with no visible Landsat timestep at all, leave that
+        # pixel unmasked (better a cloudy token than none). Slots already
+        # MISSING from a coverage gap count against the pixel's survivors, so
+        # this holds on ragged windows too.
+        visible = (mask[..., 0] != MaskValue.MISSING.value).numpy()
+        cloudy[~(visible & ~cloudy).any(axis=2)] = False
         mask[torch.from_numpy(cloudy)] = MaskValue.MISSING.value
 
     def _build_timestamps(
@@ -1248,6 +1284,7 @@ def from_registry_entry(
     scl_cloud_mask: bool = False,
     scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
     landsat_cloud_cover_max: float | None = None,
+    l8_pixel_cloud_mask: bool = False,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -1288,6 +1325,8 @@ def from_registry_entry(
             SCL_CLOUD_CLASSES).
         landsat_cloud_cover_max: Scene-level Landsat cloud threshold (see
             RslearnToOlmoEarthDataset).
+        l8_pixel_cloud_mask: Mask cloudy Landsat pixel-timesteps MISSING using
+            the optional "landsat_qa" input (see RslearnToOlmoEarthDataset).
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -1405,4 +1444,5 @@ def from_registry_entry(
         scl_cloud_mask=scl_cloud_mask,
         scl_cloud_classes=scl_cloud_classes,
         landsat_cloud_cover_max=landsat_cloud_cover_max,
+        l8_pixel_cloud_mask=l8_pixel_cloud_mask,
     )

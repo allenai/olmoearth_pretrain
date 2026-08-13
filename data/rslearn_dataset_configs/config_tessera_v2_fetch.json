@@ -17,6 +17,12 @@
     "accepted rather than raising again. Ceiling for any future raise: the v2",
     "student bins valid observations at 256 (tessera_v2_infer.BIN_EDGES), so",
     "scenes beyond roughly 500-600 cannot reach the model.",
+    "B01/B09 (60 m, stored at 40 m) are NOT used by TESSERA v2 inference, which",
+    "reads only the first two band sets via S2_BAND_SETS/TESSERA_S2_INDICES.",
+    "They are here for pixel_mosaic_export.py, whose composite has to be a full",
+    "12-band S2 input to stay comparable with the year-aligned mo layers. They",
+    "are deliberately absent from config_pastis_rslearn.json, so the drift test",
+    "exempts them.",
     "This is NOT a dataset config on its own. tessera_v2_export.py",
     "write_fetch_config merges these layers with a dataset's storage/tile_store",
     "blocks into a config passed via `rslearn dataset prepare --config`, so",
@@ -134,6 +140,14 @@
           ],
           "dtype": "uint8",
           "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
         }
       ],
       "data_source": {
