@@ -1788,6 +1788,12 @@ for _suffix in ("sentinel2_landsat", "sentinel1_sentinel2_landsat"):
 # pixel mask against the plain landsat pair; _sclmask_l8pixmask masks both
 # optical sensors -- the S1+S2+L8 + SCL interaction (the one masking config
 # that ever won) is the motivating comparison.
+#
+# _cloudless_l8pixmask is the same both-optical-sensors combination against the
+# NARROWER S2 policy (SCL 8/9 only). Added 2026-08-13: with the Landsat ladder
+# complete, cloudless overtook sclmask as the best S2-side cleaner on the full
+# stack (+1.40 vs +1.33 for cand_ndvi), so the both-masked cell has to be built
+# on cloudless too or the grid tests the pixel mask only against the runner-up.
 for _suffix in ("sentinel2_landsat", "sentinel1_sentinel2_landsat"):
     _modalities = _YEAR_ALIGNED_MODALITIES[_suffix]
     for _mode, _knn in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn")):
@@ -1811,6 +1817,20 @@ for _suffix in ("sentinel2_landsat", "sentinel1_sentinel2_landsat"):
                     window_size=16,
                     input_modalities=_modalities,
                     scl_cloud_mask=True,
+                    l8_pixel_cloud_mask=True,
+                )
+                for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+            }
+        )
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}_cloudless_l8pixmask{_knn}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                    scl_cloud_mask=True,
+                    scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
                     l8_pixel_cloud_mask=True,
                 )
                 for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
@@ -1966,6 +1986,32 @@ EMBEDDING_EVAL_TASKS.update(
             ),
             dataset="pastis_year_aligned",
             scl_cloud_mask=True,
+            l8_pixel_cloud_mask=True,
+        ),
+        # Both optical sensors masked, S2 side on the narrow cloudless policy
+        # (see the _cloudless_l8pixmask comment above).
+        "pastis_year_aligned_ws16_ps1_sentinel2_landsat_cloudless_l8pixmask": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+            l8_pixel_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_cloudless_l8pixmask": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
             l8_pixel_cloud_mask=True,
         ),
     }
