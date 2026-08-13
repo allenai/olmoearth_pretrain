@@ -80,7 +80,12 @@ The sweep scripts set `TRAIN_SCRIPT_PATH` automatically and select `torchrun` fo
   convention: 16×16 windows,
   `patch_size=1` (one embedding per 10 m pixel), and an int8 round-trip
   (`quantize_embeddings=True`) so forward-pass models are scored as int8
-  products too. The `pastis_ws16_ps1_*_pretrain_export` tasks tile each
+  products too. The downloaded products (AEF, tessera v1/v1.1) are *not*
+  re-quantized because their stored values already carry that loss, but
+  `tessera_v2` — which we bake ourselves in float32 — is; see
+  `QUANTIZE_AT_EVAL_MODALITIES` and the quantization section of
+  `docs/TesseraV2Inference.md`, which also covers why the fixed-scale power
+  quantizer clips LayerNorm-geometry embeddings (ours included). The `pastis_ws16_ps1_*_pretrain_export` tasks tile each
   128×128 PASTIS sample into 16×16 windows, reading the `pastis_rslearn`
   dataset — an rslearn export whose S1/S2 inputs mirror the pretraining
   dataset (see `olmoearth_pretrain/evals/datasets/pastis_rslearn_export.py`)

@@ -31,6 +31,62 @@ from olmoearth_pretrain.train.utils import split_masked_batch
 logger = getLogger(__name__)
 
 
+def compute_register_uniformity_loss(
+    registers: torch.Tensor,
+    weight: float,
+    num_rotations: int = 2,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Spread the register grid over the sphere (AlphaEarth's "batch uniformity").
+
+    AEF compare each embedding against batch-rotated copies by dot product and
+    minimize the absolute value, a necessary condition for uniformity in
+    ``S^{D-1}`` (their S2.2.4). Unit norm alone says only that embeddings live on
+    the sphere; this is what makes them cover it, which is the same thing as
+    information being spread across dimensions rather than concentrated on a few.
+
+    Pairs are strictly CROSS-SCENE. Rolling the batch axis pairs cell ``(b, n)``
+    with ``(b + r, n)`` -- the same grid position in a different sample -- so no
+    pair ever relates two cells of one scene. That asymmetry is deliberate and is
+    the opposite of the Gram terms above, which want both scales: cells within a
+    scene genuinely ARE similar (a homogeneous field is homogeneous), the dense
+    probes read exactly that spatial smoothness, and penalizing it would fight the
+    data. Holding the cell index fixed also controls for grid position, so the term
+    measures scene-to-scene spread rather than position effects.
+
+    Unlike the distillation terms, this is NOT detached: it shapes the encoder.
+
+    Args:
+        registers: ``[B, N, D]`` register grid (or student output) to spread. The
+            grid axis is kept, so cross-scene pairing stays well defined.
+        weight: Multiplier on the term. 0 disables it (checked by the caller).
+        num_rotations: How many distinct batch offsets to average over. Each costs
+            one ``O(B * N * D)`` pass; more offsets give a lower-variance estimate
+            of the same population quantity.
+
+    Returns:
+        total: The weighted term.
+        metrics: Detached value for logging.
+    """
+    if registers.shape[0] < 2:
+        # A single scene has no cross-scene pair; skip rather than silently
+        # falling back to within-scene pairs.
+        zero = torch.zeros([], device=registers.device, dtype=torch.float32)
+        return zero, {}
+    z = F.normalize(registers.float(), dim=-1)
+    batch_size = z.shape[0]
+    # Distinct, non-zero offsets only: shift 0 would pair every cell with itself
+    # (dot product 1) and the term would be minimized by nothing.
+    offsets = [r for r in range(1, num_rotations + 1) if r < batch_size]
+    if not offsets:
+        offsets = [1]
+    terms = [
+        (z * torch.roll(z, shifts=offset, dims=0)).sum(dim=-1).abs().mean()
+        for offset in offsets
+    ]
+    uniformity = torch.stack(terms).mean()
+    return weight * uniformity, {"register/uniformity": uniformity.detach()}
+
+
 def compute_projection_distill_loss(
     teacher: torch.Tensor,
     student: torch.Tensor,
@@ -175,6 +231,17 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     # ~1/B the flat term gives. 0.0 keeps the flat-only behaviour of earlier runs.
     projection_distill_gram_within_weight: float = 0.0
     projection_distill_gram_within_max_cells: int = 256
+    # Uniformity (AlphaEarth's "batch uniformity", S2.2.4): push the register grid
+    # to cover the sphere instead of crowding into a cap of it, using strictly
+    # cross-scene pairs. Only meaningful alongside EncoderConfig.register_unit_norm
+    # (on an unnormalized grid the term can be minimized by shrinking magnitudes
+    # rather than by spreading directions). 0.0 (default) leaves the loss exactly as
+    # every run so far has seen it. The second weight applies the same term to the
+    # distillation student, which is the served embedding when one is deployed.
+    register_uniformity_weight: float = 0.0
+    projection_uniformity_weight: float = 0.0
+    # Distinct batch offsets averaged over per step; each is one O(B*N*D) pass.
+    register_uniformity_rotations: int = 2
 
     def build(
         self,
@@ -249,6 +316,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         projection_distill_gram_max_tokens: int = 2048,
         projection_distill_gram_within_weight: float = 0.0,
         projection_distill_gram_within_max_cells: int = 256,
+        register_uniformity_weight: float = 0.0,
+        projection_uniformity_weight: float = 0.0,
+        register_uniformity_rotations: int = 2,
     ):
         """Initialize the training module.
 
@@ -284,6 +354,12 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 (block-diagonal) Gram term. 0.0 disables it.
             projection_distill_gram_within_max_cells: Register cells sampled per
                 scene for the within-scene Gram term.
+            register_uniformity_weight: Weight of the cross-scene uniformity term on
+                the register grid (AlphaEarth's batch uniformity). Shapes the
+                encoder. Expects EncoderConfig.register_unit_norm.
+            projection_uniformity_weight: The same term applied to the distillation
+                student's own output.
+            register_uniformity_rotations: Batch offsets averaged per step.
             scheduler_overrides: Optional per-param-group schedulers, keyed by the
                 group's "group_name" tag; groups without a match use `scheduler`.
         """
@@ -336,6 +412,25 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         self.projection_distill_gram_within_max_cells = (
             projection_distill_gram_within_max_cells
         )
+        self.register_uniformity_weight = register_uniformity_weight
+        self.projection_uniformity_weight = projection_uniformity_weight
+        self.register_uniformity_rotations = register_uniformity_rotations
+        if register_uniformity_weight > 0 or projection_uniformity_weight > 0:
+            if not getattr(self.model.encoder, "use_register_bottleneck", False):
+                raise ValueError(
+                    "uniformity weights require a register bottleneck (there is no "
+                    "register grid to spread otherwise)"
+                )
+            if not getattr(self.model.encoder, "register_unit_norm", False):
+                # Without the sphere the term has a degenerate solution: shrink the
+                # magnitudes and every dot product goes to zero without any
+                # directions moving.
+                logger.warning(
+                    "register uniformity is enabled without "
+                    "EncoderConfig.register_unit_norm; the term can be minimized by "
+                    "shrinking register magnitudes rather than spreading directions"
+                )
+            self.total_loss_name = f"{self.total_loss_name}+uniformity"
         if getattr(self.model.encoder, "register_projection_dims", None) is not None:
             self.total_loss_name = f"{self.total_loss_name}+projection"
 
@@ -491,7 +586,47 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                             extra_metrics = {}
                         extra_metrics[f"supervision/{mod_name}"] = mod_loss
 
-                if projection_outputs is not None:
+                if (
+                    projection_outputs is not None
+                    and self.register_uniformity_weight > 0
+                ):
+                    # Shapes the encoder (not detached, unlike everything below):
+                    # the registers here are the served embedding.
+                    uniformity_loss, uniformity_metrics = (
+                        compute_register_uniformity_loss(
+                            registers=projection_outputs["registers"],
+                            weight=self.register_uniformity_weight,
+                            num_rotations=self.register_uniformity_rotations,
+                        )
+                    )
+                    loss = loss + uniformity_loss
+                    if extra_metrics is None:
+                        extra_metrics = {}
+                    extra_metrics.update(uniformity_metrics)
+
+                if (
+                    projection_outputs is not None
+                    and projection_outputs["projected_registers"] is not None
+                ):
+                    if self.projection_uniformity_weight > 0:
+                        # The student is what gets served when it is deployed, so it
+                        # needs the spread in its own space, not just the teacher's.
+                        student_uniformity, student_metrics = (
+                            compute_register_uniformity_loss(
+                                registers=projection_outputs["projected_registers"],
+                                weight=self.projection_uniformity_weight,
+                                num_rotations=self.register_uniformity_rotations,
+                            )
+                        )
+                        loss = loss + student_uniformity
+                        if extra_metrics is None:
+                            extra_metrics = {}
+                        extra_metrics.update(
+                            {
+                                f"projection_{k.split('/')[-1]}": v
+                                for k, v in student_metrics.items()
+                            }
+                        )
                     # Detached-student losses: the teacher registers are detached and
                     # the student's inputs were detached inside the encoder, so none
                     # of this reaches the encoder or the primary bottleneck.
