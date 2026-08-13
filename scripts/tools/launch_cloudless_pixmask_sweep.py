@@ -133,6 +133,45 @@ def json_list(values: list[str]) -> str:
     return "[" + ",".join(f'"{v}"' for v in values) + "]"
 
 
+def require_pushed_head() -> str:
+    """Fail before submitting anything if HEAD is not on the remote.
+
+    Every job -- eval or submitter -- starts by cloning the repo and running
+    `git checkout $GIT_REF`, where GIT_REF is the SHA of whatever HEAD was at
+    launch time. An unpushed HEAD therefore produces jobs that queue, schedule,
+    spend four minutes on conda and pip, and only then die with
+    `fatal: reference is not a tree` -- all of them, silently, with the failure
+    visible nowhere except each job's logs. Checking costs one fetch.
+    """
+    sha = subprocess.run(  # nosec
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    subprocess.run(  # nosec
+        ["git", "fetch", "--quiet", "origin"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+    )
+    contains = subprocess.run(  # nosec
+        ["git", "branch", "--remotes", "--contains", sha],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    if not contains:
+        raise SystemExit(
+            f"HEAD ({sha[:9]}) is not on any remote branch, so every job would fail at\n"
+            f"`git checkout {sha}` after wasting its setup time. Push it first:\n"
+            f"    git push origin HEAD"
+        )
+    return sha
+
+
 def plan(arms: list[str], tags: list[str]) -> list[tuple[str, str]]:
     """Return (shard name, command) for every job the sweep would submit."""
     jobs: list[tuple[str, str]] = []
@@ -247,6 +286,7 @@ def main() -> None:
 
     if args.as_beaker_job:
         args.cluster = [c for c in args.cluster.split(",") if c]
+        print(f"launching at {require_pushed_head()[:9]}")
         launch_submitter(args)
         return
 
@@ -263,6 +303,7 @@ def main() -> None:
     if not args.go:
         print("\n(dry run; pass --go to submit, or --as_beaker_job to submit remotely)")
         return
+    print(f"submitting at {require_pushed_head()[:9]}")
     sys.exit(1 if submit(jobs) else 0)
 
 
