@@ -24,19 +24,31 @@ two ways the replacements could be confusing rather than useful:
    run-to-run drift. Every shard here therefore carries THE VARIANT AND ITS
    SIBLING TOGETHER, in one job, on one GPU, from one checkpoint load.
 
+THREE TASK FAMILIES, and the second is nearly free. "AEF sampling" is not a
+separate set of tasks: it is the same KNN tasks with `balanced_trial` left
+enabled, which reports each predictor under its own synthetic task name
+(`{host}_aeftrial_{ridge,knn5,knn20}`) and is, per evals/balanced_trial.py,
+"purely additive: the caller's own train -> val probe result is untouched". So
+ONE KNN job yields both our-sampling and AEF-sampling numbers, and the only
+thing required is to NOT pass --no_balanced_trials. Defaults match the w3 wave,
+so the new trial numbers are comparable to the existing ones. PASTIS is the
+exception: it has no KNN probe, so it can only be scored under the linear probe.
+
 Phases, cheapest first -- KNN replicate noise is 0.09 pts against LP's 0.88, so
 KNN resolves effects ten times smaller for a ninth of the jobs:
 
     sanity  1 job    one pair, two datasets, KNN. Passes only if variant and
                      sibling DIFFER. This is the check that would have caught
                      the original no-op before a hundred jobs were spent.
-    knn     12 jobs  every pair x both arms, KNN only. Answers "does the mask
-                     change anything at all".
-    lp      96 jobs  the same shards under the linear probe, for effect sizes.
+    knn     12 jobs  every pair x both arms over the 8 AEF datasets, KNN with
+                     balanced trials on -- covers `aef` AND `aef w aef sampling`.
+    pastis  16 jobs  PASTIS, LP-only (8 learning rates), all six pairs per arm.
+    lp      96 jobs  the AEF datasets under the linear probe, for effect sizes.
                      Only worth running if `knn` says there is an effect.
 
     python3 scripts/tools/launch_pixmask_sweep.py --phase sanity --as_beaker_job
     python3 scripts/tools/launch_pixmask_sweep.py --phase knn    --as_beaker_job
+    python3 scripts/tools/launch_pixmask_sweep.py --phase pastis --as_beaker_job
 """
 
 import argparse
@@ -182,8 +194,14 @@ def tasks_for(variant: str, sibling: str, datasets: list[str], knn: bool) -> lis
     return names
 
 
-def shard_commands(arm: str, tag: str, tasks: list[str]) -> list[str]:
-    """Build the Beaker commands for one shard."""
+def shard_commands(arm: str, tag: str, tasks: list[str], trials: bool) -> list[str]:
+    """Build the Beaker commands for one shard.
+
+    ``trials`` leaves the balanced-trial protocol enabled on the KNN tasks, which
+    is what produces the AEF-sampling numbers alongside our own. The other
+    balanced_trial_* fields stay None so the draw matches the w3 wave. On LP-only
+    shards the flag is inert -- LP tasks carry no balanced_trial config.
+    """
     cfg = ARMS[arm]
     args = argparse.Namespace(
         cluster=CLUSTERS[0],
@@ -197,7 +215,7 @@ def shard_commands(arm: str, tag: str, tasks: list[str]) -> list[str]:
         priority="urgent",
         window_size=None,
         dry_run=False,
-        no_balanced_trials=True,
+        no_balanced_trials=not trials,
         balanced_trial_max_folds=None,
         balanced_trial_draw_pool=None,
         balanced_trial_eval_split=None,
@@ -220,12 +238,31 @@ def plan(phase: str, arms: list[str]) -> list[tuple[str, str]]:
         tag, variant, sibling = next(p for p in PAIRS if p[0] == SANITY_PAIR)
         tasks = tasks_for(variant, sibling, SANITY_DATASETS, knn=True)
         shard = f"cand_ndvi_{tag}sanity"
-        return [(shard, c) for c in shard_commands("cand_ndvi", f"{tag}sanity", tasks)]
+        return [
+            (shard, c)
+            for c in shard_commands("cand_ndvi", f"{tag}sanity", tasks, trials=False)
+        ]
+    if phase == "pastis":
+        # PASTIS is LP-only and only two tasks per pair, so all six pairs ride
+        # one shard per arm rather than six shards of eight jobs each.
+        for arm in arms:
+            tasks = []
+            for _, variant, sibling in PAIRS:
+                tasks += tasks_for(variant, sibling, ["pastis"], knn=False)
+            shard = f"{arm}_pxfixpastis"
+            jobs += [
+                (shard, c)
+                for c in shard_commands(arm, "pxfixpastis", tasks, trials=False)
+            ]
+        return jobs
     for arm in arms:
         for tag, variant, sibling in PAIRS:
             tasks = tasks_for(variant, sibling, DATASETS, knn=(phase == "knn"))
             shard = f"{arm}_{tag}"
-            jobs += [(shard, c) for c in shard_commands(arm, tag, tasks)]
+            jobs += [
+                (shard, c)
+                for c in shard_commands(arm, tag, tasks, trials=(phase == "knn"))
+            ]
     return jobs
 
 
@@ -280,7 +317,9 @@ def launch_submitter(args: argparse.Namespace) -> None:
 def main() -> None:
     """Parse arguments and plan, submit, or hand off to Beaker."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--phase", choices=("sanity", "knn", "lp"), default="knn")
+    parser.add_argument(
+        "--phase", choices=("sanity", "knn", "pastis", "lp"), default="knn"
+    )
     parser.add_argument("--arms", default=",".join(ARMS))
     parser.add_argument("--go", action="store_true")
     parser.add_argument("--as_beaker_job", action="store_true")
