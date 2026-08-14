@@ -54,8 +54,12 @@ KNN resolves effects ten times smaller for a ninth of the jobs:
             16 jobs  the same for the narrow policy. Mostly a negative control:
                      the aggressive policy was already null on PASTIS, which has
                      no cloudy-season confound.
-    lp      96 jobs  the AEF datasets under the linear probe, for effect sizes.
-                     Only worth running if `knn` says there is an effect.
+    lp / lp_strict
+            48 jobs per arm, per policy. The AEF datasets under the linear probe.
+            SIBLINGS ARE NOT OPTIONAL HERE, unlike the KNN phases: LP replicate
+            noise is 0.88 pts (5.71 worst) against effects of ~0.5-2, so a
+            cross-wave sibling would swamp what is being measured. Each job
+            therefore carries variant + sibling on all 8 datasets.
 
     python3 scripts/tools/launch_pixmask_sweep.py --phase sanity --as_beaker_job
     python3 scripts/tools/launch_pixmask_sweep.py --phase knn    --as_beaker_job
@@ -364,7 +368,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--phase",
-        choices=("sanity", "knn", "knn_strict", "pastis", "pastis_strict", "lp"),
+        choices=(
+            "sanity",
+            "knn",
+            "knn_strict",
+            "pastis",
+            "pastis_strict",
+            "lp",
+            "lp_strict",
+        ),
         default="knn",
     )
     parser.add_argument("--arms", default=",".join(ARMS))
