@@ -34,8 +34,13 @@ vs DEFAULT_EVAL_ROOT, and ``infer --ds_path <stage> --eval_ds_path <eval>``)::
     # 1. clone from the INGESTED copy, dropping the imagery this script replaces.
     # Seeding from $SRC (not $STAGE) is what carries gse/tessera_v2 across, so
     # AEF and Tessera need no re-fetch -- the reanchor runbook's trick.
+    # model.yaml MUST be excluded: studio_ingest skips copying its own when one
+    # already exists in the dataset folder, so inheriting the parent's would
+    # register the clone against the parent's 12-band S2 input. (If you already
+    # copied it, pass --overwrite to ingest, which threads to _copy_model_yaml.)
     rsync -a --exclude='sentinel2_l2a_mo*' --exclude='sentinel2_scl_mo*' \
-        --exclude='*_tessera_v2' "$SRC/" "$DST/"
+        --exclude='ethiopia_crops_tessera_v2' --exclude='model.yaml' \
+        "$SRC/" "$DST/"
 
     # 2. composite: read the fetch group in $STAGE, write into $DST
     python -m olmoearth_pretrain.evals.datasets.pixel_mosaic_export composite \
