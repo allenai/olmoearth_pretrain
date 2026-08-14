@@ -118,17 +118,29 @@ B0109_BAND_SET = ["B01", "B09"]
 # not per band set (dataset/manage.py: `if window.is_layer_completed(layer_name):
 # return skipped=True`). So a fetch group materialized before B01/B09 was added to
 # config_tessera_v2_fetch.json will NEVER backfill it -- the band set only lands on
-# groups fetched from scratch afterwards. On an existing group, run at 10 bands and
-# score the `mo` baseline at 10 bands too, so the band subset is a shared confound
-# and compositing is the only difference.
+# groups fetched from scratch afterwards.
+#
+# The composite is written with all TWELVE channels regardless, zero-filling B01/B09
+# when they were not read. That is not cosmetic: the model tokenizes S2 as a single
+# 12-band group (S2_SINGLE_BANDSET) and `ModalityTokenization.compute_indices` maps
+# band names against `Modality.SENTINEL2_L2A.band_order`, so it indexes channels 10
+# and 11. A ten-channel raster would break that lookup rather than being read as a
+# ten-band input. Zeros are the right filler here because pretraining uses band
+# dropout, so the model has seen absent bands; note they normalize to a constant
+# (~0.36 for B01, ~0.19 for B09 under NORM_NO_CLIP_2_STD), not to zero.
 def read_band_sets(include_60m: bool) -> tuple[list[str], ...]:
-    """Band sets to read, in the order the composite concatenates them."""
+    """Band sets to READ from the fetch group, in concatenation order."""
     return (*S2_BAND_SETS, B0109_BAND_SET) if include_60m else S2_BAND_SETS
 
 
-def composite_bands(include_60m: bool) -> list[str]:
-    """Flat band list of the written composite, matching read_band_sets order."""
-    return [band for band_set in read_band_sets(include_60m) for band in band_set]
+def composite_bands(include_60m: bool = True) -> list[str]:
+    """Flat band list of the WRITTEN composite: always the full twelve.
+
+    ``include_60m`` is accepted for symmetry with ``read_band_sets`` but does not
+    change the written band list -- only whether B01/B09 hold real data or zeros.
+    """
+    del include_60m
+    return [band for band_set in (*S2_BAND_SETS, B0109_BAND_SET) for band in band_set]
 
 
 S2_LAYERS = [f"sentinel2_l2a_mo{i:02d}" for i in range(1, MONTHS + 1)]
@@ -160,6 +172,20 @@ for _tier, _classes in enumerate(SCL_SEVERITY_TIERS):
     for _cls in _classes:
         SCL_SEVERITY[_cls] = _tier
 CLEAR_SEVERITY = 0
+
+
+def _to_twelve_bands(picked: np.ndarray) -> np.ndarray:
+    """Round to uint16 and zero-fill B01/B09 if they were not read.
+
+    Args:
+        picked: (H, W, C) float32, C == 10 or 12 per read_band_sets.
+
+    Returns:
+        (H, W, 12) uint16, channels 10-11 zero when C was 10.
+    """
+    out = np.zeros((*picked.shape[:2], len(composite_bands())), dtype=np.uint16)
+    out[..., : picked.shape[-1]] = np.rint(picked).astype(np.uint16)
+    return out
 
 
 def period_index(doys: np.ndarray) -> np.ndarray:
@@ -267,7 +293,7 @@ def composite_window(
         chosen = select_best(severity[in_period], doys[in_period], period)
         take = chosen[None, :, :]
         picked = np.take_along_axis(imagery[in_period], take[..., None], axis=0)[0]
-        out_imagery[S2_LAYERS[period]] = np.rint(picked).astype(np.uint16)
+        out_imagery[S2_LAYERS[period]] = _to_twelve_bands(picked)
         out_scl[SCL_LAYERS[period]] = np.take_along_axis(
             scl_classes[in_period], take, axis=0
         )[0]

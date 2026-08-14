@@ -16,12 +16,13 @@ ingest:
   ``norm_stats_from_pretrained=False`` branch -- so cloning the parent's is honest
   and costs nothing.
 
-- ``ethiopia_crops_10band_year_aligned`` -- the CONTROL. Shares the parent's
-  ``weka_path`` (only its model.yaml's band list differs), i.e. exactly the
-  ``us_trees_tessera`` pattern, which registry.json already carries as a
-  hand-cloned entry rather than a second ingest.
+An earlier ten-band control entry was dropped: the model tokenizes S2 as one
+12-band group and indexes B01/B09 at channels 10/11, so a ten-channel input breaks
+that lookup rather than reading as a ten-band arm. The composite therefore writes
+twelve channels with B01/B09 zeroed (in-distribution under pretraining's band
+dropout), and the baseline is the untouched 12-band parent.
 
-Idempotent: re-running overwrites both entries in place.
+Idempotent: re-running overwrites the entry in place.
 
 Run from the repo root on a weka-mounted machine (it hashes the datasets'
 config.json), then commit the registry.json diff::
@@ -40,7 +41,6 @@ logger = logging.getLogger(__name__)
 
 PARENT = "ethiopia_crops_year_aligned"
 CCMOS = "ethiopia_crops_ccmos_year_aligned"
-CONTROL = "ethiopia_crops_10band_year_aligned"
 CONFIG_DIR = "data/rslearn_dataset_configs"
 
 
@@ -54,13 +54,13 @@ def sha256_of_file(path: str) -> str:
 
 
 def build_entries(registry: Registry) -> list:
-    """Clone the parent entry into the composite and control entries.
+    """Clone the parent entry into the composite entry.
 
     Args:
         registry: the loaded registry, which must already hold PARENT.
 
     Returns:
-        The two new entries, unsaved.
+        The new entry, unsaved (a list, for symmetry with the caller).
 
     Raises:
         SystemExit: if a dataset's config.json is missing on weka.
@@ -83,13 +83,7 @@ def build_entries(registry: Registry) -> list:
         )
     ccmos.config_json_sha256 = sha256_of_file(str(config_json))
 
-    control = parent.model_copy(deep=True)
-    control.name = CONTROL
-    control.config_repo_dir = f"{CONFIG_DIR}/{CONTROL}"
-    # weka_path/source_path/config_json_sha256 stay the PARENT's on purpose: the
-    # control reads the parent's own windows and mosaics, just at ten bands.
-
-    return [ccmos, control]
+    return [ccmos]
 
 
 def main() -> int:

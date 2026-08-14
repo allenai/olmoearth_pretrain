@@ -142,7 +142,7 @@ class TestCompositeWindow:
         is wholly clear and alone in period 1. Band values encode the scene, so
         the assertions read which acquisition each pixel came from.
         """
-        n_bands = len(pme.composite_bands(include_60m=False))
+        n_bands = len(pme.composite_bands())
         imagery = np.stack(
             [
                 np.full((2, 2, n_bands), (i + 1) * 100.0, dtype=np.float32)
@@ -202,7 +202,7 @@ class TestCompositeWindow:
         assert out_imagery[pme.S2_LAYERS[0]].shape == (
             2,
             2,
-            len(pme.composite_bands(include_60m=False)),
+            len(pme.composite_bands()),
         )
         assert out_scl[pme.SCL_LAYERS[0]].dtype == np.uint8
         assert out_scl[pme.SCL_LAYERS[0]].shape == (2, 2)
@@ -224,9 +224,7 @@ class TestCompositeWindow:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """No S2 at all is an archive gap, not a failure."""
-        empty = np.zeros(
-            (0, 2, 2, len(pme.composite_bands(include_60m=False))), dtype=np.float32
-        )
+        empty = np.zeros((0, 2, 2, len(pme.composite_bands())), dtype=np.float32)
         monkeypatch.setattr(
             pme,
             "_read_scenes",
@@ -272,7 +270,7 @@ class TestBandOrder:
         # form (used on fetch groups that predate B01/B09) is its prefix, so the
         # band subset is the only difference.
         assert pme.composite_bands(include_60m=True) == bands
-        assert bands[: len(pme.composite_bands(include_60m=False))] == (
+        assert bands[: len(pme.composite_bands())] == (
             pme.composite_bands(include_60m=False)
         )
 
@@ -303,7 +301,7 @@ class TestWriteComposite:
 
     def _payload(self, periods: range) -> tuple[dict, dict, dict, list[str]]:
         """Imagery/SCL/centre-DOY for the given periods, plus the band list."""
-        bands = pme.composite_bands(include_60m=False)
+        bands = pme.composite_bands()
         imagery = {
             pme.S2_LAYERS[p]: np.full((4, 4, len(bands)), 100 + p, dtype=np.uint16)
             for p in periods
@@ -427,7 +425,7 @@ class TestPatchConfig:
     ) -> None:
         """Without this rslearn looks for band-set dirs the composite never wrote."""
         ds_path = self._dataset(tmp_path)
-        changed = pme.patch_config(str(ds_path), include_60m=False)
+        changed = pme.patch_config(str(ds_path))
 
         assert set(changed) == set(pme.S2_LAYERS) | set(pme.SCL_LAYERS)
         config = json.loads((ds_path / "config.json").read_text())
@@ -447,21 +445,21 @@ class TestPatchConfig:
         """Re-running must not clobber the backup or report spurious changes."""
         ds_path = self._dataset(tmp_path)
         original = (ds_path / "config.json").read_text()
-        pme.patch_config(str(ds_path), include_60m=False)
+        pme.patch_config(str(ds_path))
         backup = (ds_path / pme.CONFIG_BACKUP_NAME).read_text()
         assert backup == original
 
-        assert pme.patch_config(str(ds_path), include_60m=False) == []
+        assert pme.patch_config(str(ds_path)) == []
         assert (ds_path / pme.CONFIG_BACKUP_NAME).read_text() == original
 
-    def test_include_60m_changes_the_band_list(self, tmp_path: Path) -> None:
-        """The 12-band composite must declare all twelve."""
+    def test_declares_all_twelve_bands(self, tmp_path: Path) -> None:
+        """The written composite is always twelve channels, so declare twelve."""
         ds_path = self._dataset(tmp_path)
-        pme.patch_config(str(ds_path), include_60m=True)
+        pme.patch_config(str(ds_path))
         config = json.loads((ds_path / "config.json").read_text())
-        assert config["layers"][pme.S2_LAYERS[0]]["band_sets"][0]["bands"] == (
-            pme.composite_bands(include_60m=True)
-        )
+        bands = config["layers"][pme.S2_LAYERS[0]]["band_sets"][0]["bands"]
+        assert bands == pme.composite_bands()
+        assert bands[-2:] == ["B01", "B09"]
 
     def test_refuses_a_dataset_without_monthly_layers(self, tmp_path: Path) -> None:
         """Guard against being pointed at the wrong dataset."""
@@ -471,3 +469,34 @@ class TestPatchConfig:
             json.dump({"layers": {"sentinel1_mo01": {}}}, f)
         with pytest.raises(SystemExit, match="declares no"):
             pme.patch_config(str(ds_path))
+
+
+class TestTwelveChannelOutput:
+    """The model indexes S2 channels 10/11, so the composite must supply them."""
+
+    def test_ten_read_bands_are_zero_filled_to_twelve(self) -> None:
+        """B01/B09 zero-filled: pretraining uses band dropout, so absent is seen."""
+        picked = np.full((3, 3, 10), 1234.6, dtype=np.float32)
+        out = pme._to_twelve_bands(picked)
+
+        assert out.shape == (3, 3, 12)
+        assert out.dtype == np.uint16
+        assert (out[..., :10] == 1235).all(), "rounded, not truncated"
+        assert (out[..., 10:] == 0).all()
+
+    def test_twelve_read_bands_pass_through(self) -> None:
+        """With B01/B09 materialized nothing is filled."""
+        picked = np.arange(12, dtype=np.float32).reshape(1, 1, 12)
+        out = pme._to_twelve_bands(picked)
+
+        np.testing.assert_array_equal(out[0, 0], np.arange(12, dtype=np.uint16))
+
+    def test_channel_positions_match_the_model_band_order(self) -> None:
+        """B01/B09 must land at 10/11, where compute_indices looks for them."""
+        bands = pme.composite_bands()
+        assert bands.index("B01") == 10
+        assert bands.index("B09") == 11
+        # And that order is the ModalitySpec's, which the tokenizer indexes against.
+        from olmoearth_pretrain.data.constants import Modality
+
+        assert bands == list(Modality.SENTINEL2_L2A.band_order)

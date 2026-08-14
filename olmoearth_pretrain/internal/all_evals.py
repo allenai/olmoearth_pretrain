@@ -1847,24 +1847,19 @@ for _suffix in ("sentinel2_landsat", "sentinel1_sentinel2_landsat"):
 # least-SCL-contaminated acquisition (pixel_mosaic_export.py); measured 93.3% of
 # chosen pixels clear, against the parent's scene-level `sort_by: eo:cloud_cover`.
 #
-# `10band` is its CONTROL and is not optional: the composite carries only ten bands
-# (the tessera_v2 fetch group it was built from has no B01/B09, and rslearn cannot
-# backfill a band set onto an already-materialized layer), so a ccmos-vs-parent
-# delta would confound cloud selection with dropping two bands. Compare
-# ccmos <-> 10band; the 12-band parent stays the untouched reference.
+# Its B01/B09 are ZEROS -- the fetch group it was built from carries only band sets
+# 1-2 and rslearn cannot backfill a band set onto a materialized layer -- so the
+# ccmos-vs-parent delta bundles cloud selection with zeroing those two 60 m
+# atmospheric bands. Accepted rather than controlled, because pretraining uses band
+# dropout so absent bands are in-distribution, and B01/B09 carry little vegetation
+# signal. An earlier ten-band control arm was dropped: the model tokenizes S2 as one
+# 12-band group and indexes B01/B09 at channels 10/11, so a ten-channel input breaks
+# that lookup rather than reading as a ten-band arm.
 #
 # Registered as an explicit block rather than by appending to
 # AEF_SUPPLEMENTAL_YEAR_ALIGNED: that tuple drives every other sweep's task
 # cross-product and is length-pinned by a test.
-#
-# 10band shares the parent's weka_path (only its band list differs) -- the
-# us_trees_tessera pattern -- so its registry entry is hand-cloned rather than
-# re-ingested, and it must stay out of AEF_SUPPLEMENTAL_DATASETS for the same
-# re-walking reason documented at MATCHED_SUBSET_DATASETS.
-PIXEL_MOSAIC_DATASETS = (
-    "ethiopia_crops_ccmos_year_aligned",
-    "ethiopia_crops_10band_year_aligned",
-)
+PIXEL_MOSAIC_DATASETS = ("ethiopia_crops_ccmos_year_aligned",)
 for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
     for _mode, _mode_suffix in (
         (EvalMode.LINEAR_PROBE, ""),

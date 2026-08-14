@@ -11,12 +11,14 @@
 # Measured 93.3% of chosen pixels clear, against the parent's scene-level
 # `sort_by: eo:cloud_cover` mosaic.
 #
-# TEN bands, not twelve: the tessera_v2 fetch group this was built from carries only
-# band sets 1-2 (B01/B09 are absent, and rslearn cannot backfill a band set onto an
-# already-materialized layer). That is also exactly Tessera's own input set
-# (tessera_v2_model.S2_BAND_ORDER), so this arm is band-matched to Tessera -- but to
-# attribute anything to compositing, compare against
-# ethiopia_crops_10band_year_aligned, not against the 12-band parent.
+# TWELVE bands, but B01/B09 are ZEROS: the tessera_v2 fetch group this was built
+# from carries only band sets 1-2, and rslearn cannot backfill a band set onto an
+# already-materialized layer. Twelve channels are still written because the model
+# tokenizes S2 as one 12-band group (S2_SINGLE_BANDSET) and indexes B01/B09 at
+# channels 10/11 via Modality.SENTINEL2_L2A.band_order; a ten-channel raster would
+# break that lookup. Zeros are in-distribution because pretraining uses band
+# dropout. Note the real ten are exactly Tessera's own input set
+# (tessera_v2_model.S2_BAND_ORDER), so this arm is band-matched to Tessera.
 #
 # The stored bands are one band set at window resolution, not the parent's
 # 10m/20m/40m trio: _read_scenes returns everything on the window grid, so the
@@ -54,6 +56,8 @@ data:
         - B8A
         - B11
         - B12
+        - B01
+        - B09
         passthrough: true
       sentinel1:
         data_type: raster
