@@ -56,8 +56,15 @@ from dataclasses import replace
 from olmo_core.train.common import Duration
 from regbtl_v1_2_common import LOOP_EVAL_CLUSTERS
 from regbtl_v1_2_gdyn_d128_wideread_regsup_ndvi_w0p1_tanchor_newsampling_psuniform import (
+    build_dataloader_config as _base_build_dataloader_config,
+)
+from regbtl_v1_2_gdyn_d128_wideread_regsup_ndvi_w0p1_tanchor_newsampling_psuniform import (
     build_model_config as _base_build_model_config,
 )
+from regbtl_v1_2_gdyn_d128_wideread_regsup_ndvi_w0p1_tanchor_newsampling_psuniform import (
+    build_train_module_config as _base_build_train_module_config,
+)
+from regbtl_v1_2_newsampling_common import TEMPORAL_BIAS, apply_shape_sweep
 
 from olmoearth_pretrain.internal.all_evals import (
     EMBEDDING_EVAL_TASKS as _EMBEDDING_EVAL_TASKS,
@@ -169,6 +176,53 @@ def build_earlyread_model_config(
         "geometry; the base is expected to set register_temporal_anchor"
     )
 
+    return config
+
+
+def build_budget_dataloader_config(common: CommonComponents, token_budget: int):
+    """The base's newsampling/psuniform dataloader at a different token budget.
+
+    Wraps the base script's own ``build_dataloader_config`` (ndvi extra-decode +
+    ``apply_new_sampling`` + ``apply_uniform_patch_sizes``) and then applies
+    ``apply_shape_sweep``, which is documented to run last and to overwrite only
+    ``token_budget`` and ``temporal_bias``. ``temporal_bias`` is held at the recipe's
+    ``TEMPORAL_BIAS`` so the budget is the single axis that moves.
+
+    WHAT A HIGHER BUDGET BUYS: ``max_sequence_length=12`` caps t, and at budget 3072 that
+    cap is already saturated for hw<=9 (3*81*12 = 2916). So the budget does not lift the
+    ceiling -- it raises the grid size at which a full-year sequence is still reachable
+    (hw<=9 at 3072, hw<=13 at 6144), which is where most of the sampled grid distribution
+    currently sits truncated (at 3072: hw=12 -> t<=7, hw=16 -> t<=4, hw>=24 -> t=1).
+
+    NOT scaled with the budget: ``MIN_TOKENS_PER_INSTANCE`` (228) is an absolute floor on
+    the low end. Raising the budget therefore widens the spread of per-instance cost
+    rather than doubling its mean, so measured MACs at the LARGEST shape a budget allows
+    are an upper bound on the average step, not the expected value.
+
+    Duration is untouched by design (see ``apply_shape_sweep``): ``epochs(300)`` is a
+    fixed number of instances, so every arm runs the same 662,700 steps on the same LR
+    schedule and differs only in tokens per step.
+    """
+    return apply_shape_sweep(
+        _base_build_dataloader_config(common),
+        token_budget=token_budget,
+        temporal_bias=TEMPORAL_BIAS,
+    )
+
+
+def build_budget_train_module_config(
+    common: CommonComponents, rank_microbatch_size: int
+):
+    """The base's train module with the rank microbatch size overridden.
+
+    ``rank_microbatch_size`` affects ONLY memory -- not tokens/step, not the loss, not the
+    LR schedule -- so lowering it for a larger token budget costs nothing but a little
+    throughput. The recipe's own note records that micro 32 @ budget 6144 OOM'd *before*
+    the broadcastable key-mask fix, so 32 is the conservative setting to pair with 6144
+    even though the early-read arms carry less activation memory than the base.
+    """
+    config = _base_build_train_module_config(common)
+    config.rank_microbatch_size = rank_microbatch_size
     return config
 
 
