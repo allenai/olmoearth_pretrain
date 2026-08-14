@@ -45,7 +45,10 @@ KNN resolves effects ten times smaller for a ninth of the jobs:
     knn_strict
             12 jobs  the same, for the NARROW policy (`_l8pixstrict`, cloud bit
                      only) against the same unmasked siblings, so the two
-                     policies' deltas can be read against each other.
+                     policies' deltas can be read against each other. NOTE that
+                     `_l8pixstrict` masks LESS than `_l8pixmask`: "strict" is
+                     the criterion for calling a pixel cloudy, so the ladder is
+                     unmasked < _l8pixstrict < _l8pixmask.
     pastis  16 jobs  PASTIS, LP-only (8 learning rates), all six pairs per arm.
     lp      96 jobs  the AEF datasets under the linear probe, for effect sizes.
                      Only worth running if `knn` says there is an effect.

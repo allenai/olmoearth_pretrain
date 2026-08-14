@@ -92,7 +92,13 @@ L8QA_INPUT_NAME = "landsat_qa"
 L8QA_CLOUD_BITS_MASK = 0b0000000000011110
 
 # The narrow "strict" policy: the cloud bit alone, leaving dilated cloud, cirrus
-# and cloud shadow in place. The Landsat analogue of SCL_CLOUDLESS_CLASSES, and
+# and cloud shadow in place.
+#
+# NAME WARNING: the task variant this drives, `_l8pixstrict`, is LESS aggressive
+# than `_l8pixmask`. "Strict" qualifies the CRITERION for calling a pixel cloudy
+# -- only unambiguous cloud counts -- so FEWER pixels get masked. The ladder is
+# unmasked < _l8pixstrict < _l8pixmask, mirroring the S2 side's
+# unmasked < _cloudless < _sclmask. The Landsat analogue of SCL_CLOUDLESS_CLASSES, and
 # registered for the same reason: on the S2 side the aggressive policy LOST to
 # the narrow one (descals cloudless +1.4 vs sclmask +0.6 -- masking
 # shadow/cirrus/nodata nets negative), and the default above is the aggressive

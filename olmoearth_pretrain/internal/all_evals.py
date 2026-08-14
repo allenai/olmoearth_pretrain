@@ -1901,6 +1901,10 @@ for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
 
 # The NARROW Landsat pixel policy: `_l8pixstrict` masks on the cloud bit alone,
 # where `_l8pixmask` above also masks dilated cloud, cirrus and cloud shadow.
+# So `_l8pixstrict` MASKS LESS, despite the name: "strict" qualifies the
+# criterion for calling a pixel cloudy, not the amount of masking. Aggressiveness
+# runs unmasked < _l8pixstrict < _l8pixmask, as S2's runs
+# unmasked < _cloudless < _sclmask.
 # Registered 2026-08-14 because the aggressive policy measurably HURTS: with the
 # flag finally reaching the data, cand_ndvi lost 1.8 pts on descals and 2.8 on
 # ethiopia (KNN, matched pairs), worst on the S2-only stacks and rescued by S1.
