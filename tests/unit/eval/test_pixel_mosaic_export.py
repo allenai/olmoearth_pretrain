@@ -471,3 +471,40 @@ class TestPatchConfig:
             json.dump({"layers": {"sentinel1_mo01": {}}}, f)
         with pytest.raises(SystemExit, match="declares no"):
             pme.patch_config(str(ds_path))
+
+
+class TestCli:
+    """The three subcommands must parse without touching the filesystem."""
+
+    def test_each_subcommand_accepts_its_own_flags(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: patch_config read args.include_60m without declaring it."""
+        calls: dict[str, Any] = {}
+        monkeypatch.setattr(
+            pme, "patch_config", lambda *a, **k: calls.setdefault("patch", (a, k))
+        )
+        monkeypatch.setattr(
+            pme, "probe", lambda *a, **k: calls.setdefault("probe", (a, k))
+        )
+        monkeypatch.setattr(
+            pme, "composite", lambda *a, **k: calls.setdefault("composite", (a, k))
+        )
+        argv = {
+            "patch": ["prog", "patch_config", "--out_ds_path", "/tmp/x"],
+            "probe": ["prog", "probe", "--ds_path", "/tmp/x", "--fetch_group", "g"],
+            "composite": [
+                "prog",
+                "composite",
+                "--ds_path",
+                "/tmp/x",
+                "--fetch_group",
+                "g",
+                "--out_ds_path",
+                "/tmp/y",
+            ],
+        }
+        for key, args in argv.items():
+            monkeypatch.setattr("sys.argv", args)
+            pme.main()
+            assert key in calls, key

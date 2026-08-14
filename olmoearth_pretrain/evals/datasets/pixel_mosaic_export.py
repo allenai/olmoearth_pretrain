@@ -681,6 +681,11 @@ def main() -> None:
         help="Point the clone's config.json at the composite band sets",
     )
     p_patch.add_argument("--out_ds_path", required=True, help="The composited dataset.")
+    p_patch.add_argument(
+        "--include_60m",
+        action="store_true",
+        help="Declare B01/B09 too, for a composite built with --include_60m.",
+    )
 
     for name, help_text in (
         ("probe", "Report clear-observation counts; writes nothing"),
