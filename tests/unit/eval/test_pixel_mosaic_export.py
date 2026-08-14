@@ -167,7 +167,7 @@ class TestCompositeWindow:
 
         first = out_imagery[pme.S2_LAYERS[0]]
         # (1,1) is the only pixel where scene 0 was the least contaminated.
-        np.testing.assert_array_equal(first[..., 0], np.array([[200, 200], [200, 100]]))
+        np.testing.assert_allclose(first[..., 0], np.array([[200, 200], [200, 100]]))
         np.testing.assert_array_equal(
             out_scl[pme.SCL_LAYERS[0]], np.array([[4, 8], [8, 4]])
         )
@@ -185,7 +185,7 @@ class TestCompositeWindow:
         out_imagery, out_scl, _, _ = pme.composite_window(SimpleNamespace())
 
         second = out_imagery[pme.S2_LAYERS[1]]
-        assert (second == 300).all()
+        assert (second[..., :10] == 300).all()
         assert (out_scl[pme.SCL_LAYERS[1]] == 4).all()
 
     def test_dtypes_and_shapes(
@@ -193,12 +193,12 @@ class TestCompositeWindow:
         monkeypatch: pytest.MonkeyPatch,
         scenes: tuple[np.ndarray, np.ndarray, np.ndarray],
     ) -> None:
-        """Imagery stays uint16 and SCL uint8, at the window grid."""
+        """Imagery is float32 (it carries negative fill) and SCL uint8."""
         imagery, scl, doys = scenes
         monkeypatch.setattr(pme, "_read_scenes", _fake_reader(imagery, scl, doys))
         out_imagery, out_scl, _, _ = pme.composite_window(SimpleNamespace())
 
-        assert out_imagery[pme.S2_LAYERS[0]].dtype == np.uint16
+        assert out_imagery[pme.S2_LAYERS[0]].dtype == np.float32
         assert out_imagery[pme.S2_LAYERS[0]].shape == (
             2,
             2,
@@ -303,7 +303,7 @@ class TestWriteComposite:
         """Imagery/SCL/centre-DOY for the given periods, plus the band list."""
         bands = pme.composite_bands()
         imagery = {
-            pme.S2_LAYERS[p]: np.full((4, 4, len(bands)), 100 + p, dtype=np.uint16)
+            pme.S2_LAYERS[p]: np.full((4, 4, len(bands)), 100 + p, dtype=np.float32)
             for p in periods
         }
         scl = {pme.SCL_LAYERS[p]: np.full((4, 4), 4, dtype=np.uint8) for p in periods}
@@ -430,9 +430,7 @@ class TestPatchConfig:
         assert set(changed) == set(pme.S2_LAYERS) | set(pme.SCL_LAYERS)
         config = json.loads((ds_path / "config.json").read_text())
         s2 = config["layers"][pme.S2_LAYERS[0]]["band_sets"]
-        assert s2 == [
-            {"bands": pme.composite_bands(include_60m=False), "dtype": "uint16"}
-        ]
+        assert s2 == [{"bands": pme.composite_bands(), "dtype": "float32"}]
         # zoom_offset must be gone: everything is on the window grid now.
         assert all("zoom_offset" not in bs for bs in s2)
         scl = config["layers"][pme.SCL_LAYERS[0]]["band_sets"]
@@ -460,6 +458,7 @@ class TestPatchConfig:
         bands = config["layers"][pme.S2_LAYERS[0]]["band_sets"][0]["bands"]
         assert bands == pme.composite_bands()
         assert bands[-2:] == ["B01", "B09"]
+        assert config["layers"][pme.S2_LAYERS[0]]["band_sets"][0]["dtype"] == "float32"
 
     def test_refuses_a_dataset_without_monthly_layers(self, tmp_path: Path) -> None:
         """Guard against being pointed at the wrong dataset."""
@@ -474,22 +473,41 @@ class TestPatchConfig:
 class TestTwelveChannelOutput:
     """The model indexes S2 channels 10/11, so the composite must supply them."""
 
-    def test_ten_read_bands_are_zero_filled_to_twelve(self) -> None:
-        """B01/B09 zero-filled: pretraining uses band dropout, so absent is seen."""
+    def test_unread_bands_get_their_normalized_zero_value(self) -> None:
+        """Band dropout zeroes AFTER normalization, so raw 0 would be wrong."""
         picked = np.full((3, 3, 10), 1234.6, dtype=np.float32)
         out = pme._to_twelve_bands(picked)
 
         assert out.shape == (3, 3, 12)
-        assert out.dtype == np.uint16
-        assert (out[..., :10] == 1235).all(), "rounded, not truncated"
-        assert (out[..., 10:] == 0).all()
+        assert out.dtype == np.float32
+        np.testing.assert_allclose(out[..., :10], 1234.6, rtol=1e-6)
+        # Negative, which is why the composite is float32 and not the parent's uint16.
+        assert out[..., 10].min() < 0 and out[..., 11].min() < 0
+        np.testing.assert_allclose(out[0, 0, 10], pme.normalized_zero_value("B01"))
+        np.testing.assert_allclose(out[0, 0, 11], pme.normalized_zero_value("B09"))
+
+    def test_fill_survives_the_evals_own_normalizer(self) -> None:
+        """The load-bearing assertion: the filler must normalize to exactly 0.
+
+        Runs the real Normalizer the eval uses (Strategy.COMPUTED over the
+        pretraining config), not a reimplementation of its formula.
+        """
+        from olmoearth_pretrain.data.constants import Modality
+        from olmoearth_pretrain.data.normalize import Normalizer, Strategy
+
+        out = pme._to_twelve_bands(np.zeros((1, 1, 10), dtype=np.float32))
+        normalized = Normalizer(Strategy.COMPUTED).normalize(
+            Modality.SENTINEL2_L2A, out
+        )
+        np.testing.assert_allclose(normalized[0, 0, 10], 0.0, atol=1e-6)
+        np.testing.assert_allclose(normalized[0, 0, 11], 0.0, atol=1e-6)
 
     def test_twelve_read_bands_pass_through(self) -> None:
         """With B01/B09 materialized nothing is filled."""
         picked = np.arange(12, dtype=np.float32).reshape(1, 1, 12)
         out = pme._to_twelve_bands(picked)
 
-        np.testing.assert_array_equal(out[0, 0], np.arange(12, dtype=np.uint16))
+        np.testing.assert_allclose(out[0, 0], np.arange(12, dtype=np.float32))
 
     def test_channel_positions_match_the_model_band_order(self) -> None:
         """B01/B09 must land at 10/11, where compute_indices looks for them."""

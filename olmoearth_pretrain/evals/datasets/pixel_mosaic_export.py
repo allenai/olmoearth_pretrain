@@ -82,6 +82,8 @@ from rslearn.utils.raster_array import RasterArray, RasterMetadata
 from rslearn.utils.raster_format import GeotiffRasterFormat
 from upath import UPath
 
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.normalize import load_computed_config
 from olmoearth_pretrain.evals.datasets.tessera_v2_export import (
     S2_BAND_SETS,
     S2_LAYER,
@@ -120,14 +122,20 @@ B0109_BAND_SET = ["B01", "B09"]
 # config_tessera_v2_fetch.json will NEVER backfill it -- the band set only lands on
 # groups fetched from scratch afterwards.
 #
-# The composite is written with all TWELVE channels regardless, zero-filling B01/B09
-# when they were not read. That is not cosmetic: the model tokenizes S2 as a single
+# The composite is written with all TWELVE channels regardless, filling B01/B09 when
+# they were not read. That is not cosmetic: the model tokenizes S2 as a single
 # 12-band group (S2_SINGLE_BANDSET) and `ModalityTokenization.compute_indices` maps
 # band names against `Modality.SENTINEL2_L2A.band_order`, so it indexes channels 10
 # and 11. A ten-channel raster would break that lookup rather than being read as a
-# ten-band input. Zeros are the right filler here because pretraining uses band
-# dropout, so the model has seen absent bands; note they normalize to a constant
-# (~0.36 for B01, ~0.19 for B09 under NORM_NO_CLIP_2_STD), not to zero.
+# ten-band input.
+#
+# Pretraining's band dropout zeroes bands AFTER normalization, so the filler must be
+# the raw value that normalizes to exactly 0 -- not raw 0, which lands at ~0.36
+# (B01) / ~0.19 (B09). The eval normalizes with `Normalizer(Strategy.COMPUTED)`,
+# i.e. `(x - (mean - 2*std)) / (4*std)` over the PRETRAINING config, so the zero
+# point is `mean - 2*std`. For B01/B09 that is negative (-2795.5 / -2032.4), which
+# is why the composite is stored float32 rather than the parent's uint16 -- and a
+# happy side effect is that the bilinear-upsampled values are no longer rounded.
 def read_band_sets(include_60m: bool) -> tuple[list[str], ...]:
     """Band sets to READ from the fetch group, in concatenation order."""
     return (*S2_BAND_SETS, B0109_BAND_SET) if include_60m else S2_BAND_SETS
@@ -174,17 +182,44 @@ for _tier, _classes in enumerate(SCL_SEVERITY_TIERS):
 CLEAR_SEVERITY = 0
 
 
+# Multiplier the eval's normalizer uses; Normalizer(Strategy.COMPUTED) defaults to 2
+# and rslearn_dataset constructs it without an override.
+NORM_STD_MULTIPLIER = 2.0
+COMPOSITE_DTYPE = np.float32
+
+
+def normalized_zero_value(band: str) -> float:
+    """Raw value for ``band`` that the eval's normalizer maps to exactly 0.
+
+    Read from the pretraining norm config rather than hardcoded, so it cannot
+    drift from what the loader actually applies.
+
+    Args:
+        band: Sentinel-2 band name.
+
+    Returns:
+        ``mean - NORM_STD_MULTIPLIER * std`` for that band.
+    """
+    stats = load_computed_config()[Modality.SENTINEL2_L2A.name][band]
+    return float(stats["mean"] - NORM_STD_MULTIPLIER * stats["std"])
+
+
 def _to_twelve_bands(picked: np.ndarray) -> np.ndarray:
-    """Round to uint16 and zero-fill B01/B09 if they were not read.
+    """Pad to twelve channels, filling unread bands with their zero point.
 
     Args:
         picked: (H, W, C) float32, C == 10 or 12 per read_band_sets.
 
     Returns:
-        (H, W, 12) uint16, channels 10-11 zero when C was 10.
+        (H, W, 12) float32. Channels the fetch group did not carry hold the raw
+        value that normalizes to 0, matching pretraining's post-normalization
+        band dropout.
     """
-    out = np.zeros((*picked.shape[:2], len(composite_bands())), dtype=np.uint16)
-    out[..., : picked.shape[-1]] = np.rint(picked).astype(np.uint16)
+    bands = composite_bands()
+    out = np.empty((*picked.shape[:2], len(bands)), dtype=COMPOSITE_DTYPE)
+    out[..., : picked.shape[-1]] = picked
+    for index in range(picked.shape[-1], len(bands)):
+        out[..., index] = normalized_zero_value(bands[index])
     return out
 
 
@@ -417,7 +452,7 @@ def _bounded_map(
 CONFIG_BACKUP_NAME = "config.json.pre_pixel_mosaic"
 
 
-def patch_config(out_ds_path: str, include_60m: bool = False) -> list[str]:
+def patch_config(out_ds_path: str) -> list[str]:
     """Rewrite the output dataset's S2/SCL band sets to match what we wrote.
 
     The clone inherits the parent's ``config.json``, whose ``sentinel2_l2a_moNN``
@@ -431,7 +466,6 @@ def patch_config(out_ds_path: str, include_60m: bool = False) -> list[str]:
 
     Args:
         out_ds_path: the composited dataset.
-        include_60m: whether the composite carries B01/B09.
 
     Returns:
         The layer names that were rewritten.
@@ -450,7 +484,7 @@ def patch_config(out_ds_path: str, include_60m: bool = False) -> list[str]:
 
     wanted = {
         **{
-            name: [{"bands": composite_bands(include_60m), "dtype": "uint16"}]
+            name: [{"bands": composite_bands(), "dtype": "float32"}]
             for name in S2_LAYERS
         },
         **{name: [{"bands": SCL_BAND_SET, "dtype": "uint8"}] for name in SCL_LAYERS},
@@ -700,7 +734,6 @@ def main() -> None:
         help="Point the clone's config.json at the composite band sets",
     )
     p_patch.add_argument("--out_ds_path", required=True, help="The composited dataset.")
-    p_patch.add_argument("--include_60m", action="store_true")
 
     for name, help_text in (
         ("probe", "Report clear-observation counts; writes nothing"),
@@ -738,7 +771,7 @@ def main() -> None:
 
     args = parser.parse_args()
     if args.command == "patch_config":
-        patch_config(args.out_ds_path, include_60m=args.include_60m)
+        patch_config(args.out_ds_path)
         return
     spec = resolve_spec(args.dataset, args.fetch_group, args.year)
     if args.eval_groups:
