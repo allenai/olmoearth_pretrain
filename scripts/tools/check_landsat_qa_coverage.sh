@@ -64,8 +64,16 @@ for ds in $DATASETS; do
   if [ "${l8:-0}" -gt 0 ]; then pct=$(( 100 * qa / l8 )); else pct=0; fi
   note=""
   [ "$pct" -lt 100 ] && note="DILUTED: $(( l8 - qa )) landsat windows UNMASKED"
-  [ "${part:-0}" -gt 0 ] && note="$note; $part windows have <12 QA months"
+  if [ "${part:-0}" -gt 0 ]; then
+    [ -n "$note" ] && note="$note; "
+    # Expected rather than alarming: Landsat is ragged, so a window can hold
+    # fewer than 12 QA months legitimately. Only a large tail here would dilute.
+    note="${note}${part} window(s) with <12 QA months"
+  fi
   printf '%-24s %12d %10d %7d%%  %s\n' "$ds" "$l8" "$qa" "$pct" "$note"
 done
 
-[ "$FULL" = 1 ] || echo $'\nSampled '"$SAMPLE"' windows/dataset. 100% here means any shortfall is under ~1%;\nre-run with --full for exact counts.'
+if [ "$FULL" != 1 ]; then
+  printf '\nSampled %s windows/dataset. 100%% here means any shortfall is under ~1%%;\n' "$SAMPLE"
+  printf 're-run with --full for exact counts.\n'
+fi
