@@ -367,3 +367,88 @@ class TestWriteComposite:
             pme.write_composite(window, imagery, scl, bands)
 
         assert list(window.list_completed_layers()) == []
+
+
+class TestPatchConfig:
+    """The clone inherits the parent's band sets; they must be rewritten."""
+
+    @staticmethod
+    def _dataset(tmp_path: Path) -> UPath:
+        """A dataset whose config carries the PARENT's three-band-set layers."""
+        ds_path = UPath(tmp_path) / "dataset"
+        ds_path.mkdir(parents=True)
+        parent_s2 = {
+            "type": "raster",
+            "band_sets": [
+                {"bands": ["B02", "B03", "B04", "B08"], "dtype": "uint16"},
+                {
+                    "bands": ["B05", "B06", "B07", "B8A", "B11", "B12"],
+                    "dtype": "uint16",
+                    "zoom_offset": -1,
+                },
+                {"bands": ["B01", "B09"], "dtype": "uint16", "zoom_offset": -2},
+            ],
+            "data_source": {"name": "parent"},
+        }
+        parent_scl = {
+            "type": "raster",
+            "band_sets": [
+                {"bands": ["SCL"], "dtype": "uint8", "zoom_offset": -1},
+            ],
+        }
+        layers: dict[str, Any] = {name: dict(parent_s2) for name in pme.S2_LAYERS}
+        layers.update({name: dict(parent_scl) for name in pme.SCL_LAYERS})
+        layers["sentinel1_mo01"] = {"type": "raster", "band_sets": []}
+        with (ds_path / "config.json").open("w") as f:
+            json.dump({"layers": layers}, f)
+        return ds_path
+
+    def test_rewrites_to_one_band_set_at_window_resolution(
+        self, tmp_path: Path
+    ) -> None:
+        """Without this rslearn looks for band-set dirs the composite never wrote."""
+        ds_path = self._dataset(tmp_path)
+        changed = pme.patch_config(str(ds_path), include_60m=False)
+
+        assert set(changed) == set(pme.S2_LAYERS) | set(pme.SCL_LAYERS)
+        config = json.loads((ds_path / "config.json").read_text())
+        s2 = config["layers"][pme.S2_LAYERS[0]]["band_sets"]
+        assert s2 == [
+            {"bands": pme.composite_bands(include_60m=False), "dtype": "uint16"}
+        ]
+        # zoom_offset must be gone: everything is on the window grid now.
+        assert all("zoom_offset" not in bs for bs in s2)
+        scl = config["layers"][pme.SCL_LAYERS[0]]["band_sets"]
+        assert scl == [{"bands": ["SCL"], "dtype": "uint8"}]
+        # Untouched layers stay untouched, and provenance survives.
+        assert config["layers"]["sentinel1_mo01"]["band_sets"] == []
+        assert config["layers"][pme.S2_LAYERS[0]]["data_source"] == {"name": "parent"}
+
+    def test_backs_up_once_and_is_idempotent(self, tmp_path: Path) -> None:
+        """Re-running must not clobber the backup or report spurious changes."""
+        ds_path = self._dataset(tmp_path)
+        original = (ds_path / "config.json").read_text()
+        pme.patch_config(str(ds_path), include_60m=False)
+        backup = (ds_path / pme.CONFIG_BACKUP_NAME).read_text()
+        assert backup == original
+
+        assert pme.patch_config(str(ds_path), include_60m=False) == []
+        assert (ds_path / pme.CONFIG_BACKUP_NAME).read_text() == original
+
+    def test_include_60m_changes_the_band_list(self, tmp_path: Path) -> None:
+        """The 12-band composite must declare all twelve."""
+        ds_path = self._dataset(tmp_path)
+        pme.patch_config(str(ds_path), include_60m=True)
+        config = json.loads((ds_path / "config.json").read_text())
+        assert config["layers"][pme.S2_LAYERS[0]]["band_sets"][0]["bands"] == (
+            pme.composite_bands(include_60m=True)
+        )
+
+    def test_refuses_a_dataset_without_monthly_layers(self, tmp_path: Path) -> None:
+        """Guard against being pointed at the wrong dataset."""
+        ds_path = UPath(tmp_path) / "other"
+        ds_path.mkdir(parents=True)
+        with (ds_path / "config.json").open("w") as f:
+            json.dump({"layers": {"sentinel1_mo01": {}}}, f)
+        with pytest.raises(SystemExit, match="declares no"):
+            pme.patch_config(str(ds_path))

@@ -351,6 +351,67 @@ def _bounded_map(
             pending.append(pool.submit(fn, window))
 
 
+CONFIG_BACKUP_NAME = "config.json.pre_pixel_mosaic"
+
+
+def patch_config(out_ds_path: str, include_60m: bool = False) -> list[str]:
+    """Rewrite the output dataset's S2/SCL band sets to match what we wrote.
+
+    The clone inherits the parent's ``config.json``, whose ``sentinel2_l2a_moNN``
+    layers declare THREE band sets at 10 m / 20 m / 40 m and whose SCL layers
+    declare ``zoom_offset: -1``. ``_read_scenes`` returns every band already on
+    the window grid, so the compositor writes ONE band set at window resolution
+    instead -- and ``get_raster_dir`` names the directory after the band list, so
+    without this rslearn would look for band-set dirs that do not exist.
+
+    Idempotent, and keeps a one-time backup at ``CONFIG_BACKUP_NAME``.
+
+    Args:
+        out_ds_path: the composited dataset.
+        include_60m: whether the composite carries B01/B09.
+
+    Returns:
+        The layer names that were rewritten.
+
+    Raises:
+        SystemExit: if the config has no monthly S2 layers to rewrite.
+    """
+    config_path = UPath(out_ds_path) / "config.json"
+    config = json.loads(config_path.read_text())
+    layers = config.get("layers", {})
+    if not any(name in layers for name in S2_LAYERS):
+        raise SystemExit(
+            f"{config_path} declares no {S2_LAYERS[0]}-style layers; is this the "
+            "composited dataset?"
+        )
+
+    wanted = {
+        **{
+            name: [{"bands": composite_bands(include_60m), "dtype": "uint16"}]
+            for name in S2_LAYERS
+        },
+        **{name: [{"bands": SCL_BAND_SET, "dtype": "uint8"}] for name in SCL_LAYERS},
+    }
+    changed = [
+        name
+        for name, band_sets in wanted.items()
+        if name in layers and layers[name].get("band_sets") != band_sets
+    ]
+    if not changed:
+        logger.info("config.json already matches the composite; nothing to do")
+        return []
+
+    backup = UPath(out_ds_path) / CONFIG_BACKUP_NAME
+    if not backup.exists():
+        backup.write_text(config_path.read_text())
+        logger.info(f"backed up the inherited config to {backup}")
+    for name in changed:
+        layers[name]["band_sets"] = wanted[name]
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    logger.info(f"rewrote band_sets on {len(changed)} layers in {config_path}")
+    return changed
+
+
 def _providers(
     ds_path: str, out_ds_path: str, spec: DatasetSpec
 ) -> tuple[list[Window], dict[str, Window], RslearnWindowProvider]:
@@ -569,6 +630,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    # patch_config touches only the output dataset, so it takes none of the
+    # fetch-group selection flags.
+    p_patch = sub.add_parser(
+        "patch_config",
+        help="Point the clone's config.json at the composite band sets",
+    )
+    p_patch.add_argument("--out_ds_path", required=True, help="The composited dataset.")
+    p_patch.add_argument("--include_60m", action="store_true")
+
     for name, help_text in (
         ("probe", "Report clear-observation counts; writes nothing"),
         ("composite", "Build and write the composite layers"),
@@ -604,6 +674,9 @@ def main() -> None:
             p.add_argument("--sample", type=int, default=200)
 
     args = parser.parse_args()
+    if args.command == "patch_config":
+        patch_config(args.out_ds_path, include_60m=args.include_60m)
+        return
     spec = resolve_spec(args.dataset, args.fetch_group, args.year)
     if args.eval_groups:
         spec.eval_groups = args.eval_groups.split(",")
