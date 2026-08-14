@@ -2118,6 +2118,41 @@ EMBEDDING_EVAL_TASKS.update(
     }
 )
 
+# PASTIS siblings of the narrow policy (see the _l8pixstrict block above).
+# LP-only like the rest of pastis. Registered mainly as a NEGATIVE CONTROL: the
+# aggressive policy came out null here (-0.03 / -0.15 over six pairs, every
+# delta inside LP's ~0.9pt replicate noise), which is what a task with no
+# cloudy-season confound should do. If the narrow policy rescues descals and
+# ethiopia under KNN, a matching null here is what confines the effect to the
+# cloudy datasets rather than to masking in general.
+_PASTIS_STACKS: tuple[tuple[str, list[str]], ...] = (
+    ("sentinel2_landsat", [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name]),
+    (
+        "sentinel1_sentinel2_landsat",
+        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+    ),
+)
+_PASTIS_S2_POLICIES: tuple[tuple[str, dict[str, Any]], ...] = (
+    ("", {}),
+    ("_sclmask", {"scl_cloud_mask": True}),
+    (
+        "_cloudless",
+        {"scl_cloud_mask": True, "scl_cloud_classes": SCL_CLOUDLESS_CLASSES},
+    ),
+)
+for _pstack, _pmods in _PASTIS_STACKS:
+    for _ptag, _pkwargs in _PASTIS_S2_POLICIES:
+        EMBEDDING_EVAL_TASKS[
+            f"pastis_year_aligned_ws16_ps1_{_pstack}{_ptag}_l8pixstrict"
+        ] = replace(
+            _pastis_ps1_task(_pmods, window_size=16),
+            dataset="pastis_year_aligned",
+            l8_pixel_cloud_mask=True,
+            l8_pixel_cloud_bits=L8QA_CLOUD_ONLY_BITS_MASK,
+            **_pkwargs,
+        )
+
+
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
         dataset="pretrain_subset",

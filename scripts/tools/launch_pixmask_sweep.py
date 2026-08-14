@@ -50,6 +50,10 @@ KNN resolves effects ten times smaller for a ninth of the jobs:
                      the criterion for calling a pixel cloudy, so the ladder is
                      unmasked < _l8pixstrict < _l8pixmask.
     pastis  16 jobs  PASTIS, LP-only (8 learning rates), all six pairs per arm.
+    pastis_strict
+            16 jobs  the same for the narrow policy. Mostly a negative control:
+                     the aggressive policy was already null on PASTIS, which has
+                     no cloudy-season confound.
     lp      96 jobs  the AEF datasets under the linear probe, for effect sizes.
                      Only worth running if `knn` says there is an effect.
 
@@ -271,17 +275,20 @@ def plan(phase: str, arms: list[str], siblings: bool = True) -> list[tuple[str, 
             (shard, c)
             for c in shard_commands("cand_ndvi", f"{tag}sanity", tasks, trials=False)
         ]
-    if phase == "pastis":
+    if phase.startswith("pastis"):
         # PASTIS is LP-only and only two tasks per pair, so all six pairs ride
         # one shard per arm rather than six shards of eight jobs each.
+        pastis_pairs = STRICT_PAIRS if phase.endswith("_strict") else PAIRS
         for arm in arms:
             tasks = []
-            for _, variant, sibling in PAIRS:
-                tasks += tasks_for(variant, sibling, ["pastis"], knn=False)
-            shard = f"{arm}_pxfixpastis"
+            for _, variant, sibling in pastis_pairs:
+                tasks += tasks_for(
+                    variant, sibling, ["pastis"], knn=False, siblings=siblings
+                )
+            shard = f"{arm}_px{'strict' if phase.endswith('_strict') else 'fix'}pastis"
             jobs += [
                 (shard, c)
-                for c in shard_commands(arm, "pxfixpastis", tasks, trials=False)
+                for c in shard_commands(arm, shard[len(arm) + 1 :], tasks, trials=False)
             ]
         return jobs
     pairs = STRICT_PAIRS if phase.endswith("_strict") else PAIRS
@@ -297,7 +304,7 @@ def plan(phase: str, arms: list[str], siblings: bool = True) -> list[tuple[str, 
             shard = f"{arm}_{tag}"
             jobs += [
                 (shard, c)
-                for c in shard_commands(arm, tag, tasks, trials=(phase == "knn"))
+                for c in shard_commands(arm, tag, tasks, trials=phase.startswith("knn"))
             ]
     return jobs
 
@@ -357,7 +364,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--phase",
-        choices=("sanity", "knn", "knn_strict", "pastis", "lp"),
+        choices=("sanity", "knn", "knn_strict", "pastis", "pastis_strict", "lp"),
         default="knn",
     )
     parser.add_argument("--arms", default=",".join(ARMS))
