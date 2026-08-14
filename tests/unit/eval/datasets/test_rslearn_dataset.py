@@ -784,3 +784,67 @@ class TestL8PixelCloudMask:
         masked_sample, _ = ds._transform_sample(input_dict, target)
         mask = getattr(masked_sample, self.LANDSAT_MASK)
         assert (mask == MaskValue.ONLINE_ENCODER.value).all()
+
+
+class TestSubsetBands:
+    """A dataset may store fewer than its modality's canonical bands."""
+
+    @staticmethod
+    def _dataset(declared: dict[str, list[str]]) -> Any:
+        """A bare instance carrying only what band_scatter needs."""
+        obj = object.__new__(RslearnToOlmoEarthDataset)
+        obj.input_modalities = [Modality.SENTINEL2_L2A.name]
+        RslearnToOlmoEarthDataset._init_band_scatter(obj, declared)
+        return obj
+
+    def test_full_band_list_is_a_no_op(self) -> None:
+        """Every existing dataset declares all bands and must be untouched."""
+        canonical = list(Modality.SENTINEL2_L2A.band_order)
+        ds = self._dataset({Modality.SENTINEL2_L2A.name: canonical})
+        assert ds.band_scatter == {}
+        assert ds.absent_bands == {}
+
+    def test_subset_records_positions_and_gaps(self) -> None:
+        """The ten-band composite must map onto canonical positions 0-9."""
+        canonical = list(Modality.SENTINEL2_L2A.band_order)
+        ten = [b for b in canonical if b not in ("B01", "B09")]
+        ds = self._dataset({Modality.SENTINEL2_L2A.name: ten})
+
+        assert ds.band_scatter[Modality.SENTINEL2_L2A.name] == [
+            canonical.index(b) for b in ten
+        ]
+        assert ds.absent_bands[Modality.SENTINEL2_L2A.name] == [
+            canonical.index("B01"),
+            canonical.index("B09"),
+        ]
+
+    def test_scatter_puts_read_channels_at_canonical_positions(self) -> None:
+        """Channel k of the raster must land at its band's canonical index."""
+        canonical = list(Modality.SENTINEL2_L2A.band_order)
+        ten = [b for b in canonical if b not in ("B01", "B09")]
+        ds = self._dataset({Modality.SENTINEL2_L2A.name: ten})
+
+        arr = np.arange(10, dtype=np.float32).reshape(1, 1, 1, 10)
+        out = ds._scatter_bands(Modality.SENTINEL2_L2A.name, arr)
+
+        assert out.shape == (1, 1, 1, len(canonical))
+        for read_index, band in enumerate(ten):
+            assert out[0, 0, 0, canonical.index(band)] == read_index
+        assert out[0, 0, 0, canonical.index("B01")] == 0
+        assert out[0, 0, 0, canonical.index("B09")] == 0
+
+    def test_channel_count_mismatch_is_loud(self) -> None:
+        """Config and rasters disagreeing must fail, not silently misalign."""
+        canonical = list(Modality.SENTINEL2_L2A.band_order)
+        ten = [b for b in canonical if b not in ("B01", "B09")]
+        ds = self._dataset({Modality.SENTINEL2_L2A.name: ten})
+
+        with pytest.raises(ValueError, match="config and data disagree"):
+            ds._scatter_bands(
+                Modality.SENTINEL2_L2A.name, np.zeros((1, 1, 1, 12), dtype=np.float32)
+            )
+
+    def test_unknown_band_is_rejected(self) -> None:
+        """A typo in model.yaml must not be silently ignored."""
+        with pytest.raises(ValueError, match="not in its canonical band order"):
+            self._dataset({Modality.SENTINEL2_L2A.name: ["B02", "NOPE"]})

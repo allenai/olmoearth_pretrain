@@ -225,6 +225,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         label_at_center_pixel: bool = False,
         tile_samples: bool = False,
         sample_size: int | None = None,
+        declared_bands: dict[str, list[str]] | None = None,
         scl_cloud_mask: bool = False,
         scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
         landsat_cloud_cover_max: float | None = None,
@@ -273,6 +274,10 @@ class RslearnToOlmoEarthDataset(Dataset):
                 label_at_center_pixel.
             sample_size: Stored sample height/width in pixels (required with
                 tile_samples; must be divisible by window_size).
+            declared_bands: modality -> the band list model.yaml declares. When a
+                modality stores fewer than its canonical bands, read channels are
+                scattered to their canonical positions and the rest zeroed after
+                normalization (see _init_band_scatter). None assumes full bands.
             scl_cloud_mask: If set, the optional "scl" input (Sentinel-2
                 scene classification, one layer per S2 monthly layer) is read
                 and every pixel-timestep whose SCL class is in
@@ -397,6 +402,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         # DataLoader worker holds its own copy post-fork. Reuse is safe because
         # _transform_sample doesn't mutate its inputs.
         self._cached_base: tuple[int, Any] | None = None
+
+        self._init_band_scatter(declared_bands)
 
         if self.norm_stats_from_pretrained:
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
@@ -543,9 +550,23 @@ class RslearnToOlmoEarthDataset(Dataset):
                     "masking disabled for this dataset"
                 )
 
+        # Per-input band lists as declared in model.yaml. A dataset may store a
+        # subset of a modality's canonical bands; see band_scatter.
+        declared_bands = {
+            name: list(cfg["bands"])
+            for name, cfg in (
+                model_config.get("data", {})
+                .get("init_args", {})
+                .get("inputs", {})
+                .items()
+            )
+            if not cfg.get("is_target") and cfg.get("bands")
+        }
+
         return wrap_rslearn_dataset(
             model_dataset=model_dataset,
             input_modalities=input_modalities,
+            declared_bands=declared_bands,
             target_task_name=task_info["task_name"],
             target_task_type=task_info["task_type"],
             norm_stats_from_pretrained=norm_stats_from_pretrained,
@@ -757,6 +778,8 @@ class RslearnToOlmoEarthDataset(Dataset):
 
             if modality == Modality.SENTINEL1.name:
                 arr = convert_to_db(arr)
+            if modality in self.band_scatter:
+                arr = self._scatter_bands(modality, arr)
             raw[modality] = arr
 
         if not raw:
@@ -827,6 +850,11 @@ class RslearnToOlmoEarthDataset(Dataset):
                     maxs=modality_stats["maxs"],
                     method=self.norm_method,
                 )
+            # Post-normalization, so the value the model sees is exactly 0 --
+            # raw 0 would normalize to (0 - (mean - 2*std)) / (4*std) instead.
+            for band_index in self.absent_bands.get(modality, []):
+                x[..., band_index] = 0.0
+
             sample_dict[modality] = torch.as_tensor(x, dtype=torch.float32)
 
         sample_timesteps = sample_timesteps or self.max_timesteps
@@ -1198,6 +1226,78 @@ class RslearnToOlmoEarthDataset(Dataset):
         return torch.stack(
             get_timestamps(self.start_time, self.end_time, num_timesteps=num_timesteps)
         )
+
+    def _init_band_scatter(self, declared_bands: dict[str, list[str]] | None) -> None:
+        """Record which canonical bands this dataset actually stores.
+
+        A dataset may declare a SUBSET of a modality's bands -- e.g. an export
+        built from a fetch that never pulled S2's 60 m band set. The model still
+        tokenizes the full band_order (S2_SINGLE_BANDSET indexes B01/B09 at
+        channels 10/11) and normalization carries one stat per canonical band, so
+        read channels are scattered into full width and the rest are zeroed AFTER
+        normalization -- which is what pretraining's band dropout produces.
+        Full-band datasets get no entry and are untouched.
+
+        Args:
+            declared_bands: modality -> the band list model.yaml declares.
+
+        Raises:
+            ValueError: if a declared band is not in the modality's band order.
+        """
+        self.band_scatter: dict[str, list[int]] = {}
+        self.absent_bands: dict[str, list[int]] = {}
+        for modality, bands in (declared_bands or {}).items():
+            if modality not in self.input_modalities:
+                continue
+            canonical = list(Modality.get(modality).band_order)
+            unknown = [band for band in bands if band not in canonical]
+            if unknown:
+                raise ValueError(
+                    f"modality '{modality}' declares bands {unknown} that are not "
+                    f"in its canonical band order {canonical}"
+                )
+            indices = [canonical.index(band) for band in bands]
+            if indices == list(range(len(canonical))):
+                continue
+            self.band_scatter[modality] = indices
+            self.absent_bands[modality] = sorted(
+                set(range(len(canonical))) - set(indices)
+            )
+            logger.info(
+                f"'{modality}' stores {len(indices)}/{len(canonical)} bands; "
+                f"missing {[canonical[i] for i in self.absent_bands[modality]]} "
+                "will be zero after normalization"
+            )
+
+    def _scatter_bands(self, modality: str, arr: np.ndarray) -> np.ndarray:
+        """Widen a subset-band array to the modality's canonical band count.
+
+        Read channels land at their canonical positions; the rest stay 0 here and
+        are re-zeroed after normalization (which is the value that matters).
+
+        Args:
+            modality: modality name.
+            arr: (H, W, T, n_declared) array as read.
+
+        Returns:
+            (H, W, T, n_canonical) array.
+
+        Raises:
+            ValueError: if the array's channel count does not match the number of
+                declared bands, which means the config and the rasters disagree.
+        """
+        indices = self.band_scatter[modality]
+        if arr.shape[-1] != len(indices):
+            raise ValueError(
+                f"modality '{modality}' declares {len(indices)} bands but its "
+                f"rasters carry {arr.shape[-1]}; config and data disagree"
+            )
+        widened = np.zeros(
+            (*arr.shape[:-1], len(Modality.get(modality).band_order)),
+            dtype=arr.dtype,
+        )
+        widened[..., indices] = arr
+        return widened
 
     def _parse_label(self, target: dict) -> torch.Tensor:
         """Parse the raw rslearn target dict into a label tensor."""
