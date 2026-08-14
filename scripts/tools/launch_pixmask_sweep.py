@@ -190,17 +190,32 @@ def require_pushed_head() -> str:
     return sha
 
 
-def tasks_for(variant: str, sibling: str, datasets: list[str], knn: bool) -> list[str]:
+def tasks_for(
+    variant: str,
+    sibling: str,
+    datasets: list[str],
+    knn: bool,
+    siblings: bool = True,
+) -> list[str]:
     """Task names for one matched pair, variant and sibling interleaved.
 
     Both configs land in one job so they share a checkpoint load and a GPU; the
     interleaving is only cosmetic, but it makes the shard's log readable as
     pairs.
+
+    ``siblings=False`` drops the sibling half. Worth it once the sibling is
+    ALREADY measured: it is half the compute, and because the evaluator runs
+    tasks in registration order -- every sibling before every variant -- it is
+    also the half that runs FIRST, so carrying it doubles the time to the first
+    number you actually wanted. The cost is that the delta is then read against
+    a sibling from another wave, which the replicate study prices at ~0.06 pts
+    under KNN -- an order of magnitude below the effects here.
     """
     suffix = "_knn" if knn else ""
+    specs = (variant, sibling) if siblings else (variant,)
     names = []
     for dataset in datasets:
-        for spec in (variant, sibling):
+        for spec in specs:
             names.append(f"{dataset}_year_aligned_ws16_ps1_{spec}{suffix}")
     unknown = [n for n in names if n not in EMBEDDING_EVAL_TASKS]
     if unknown:
@@ -245,7 +260,7 @@ def shard_commands(arm: str, tag: str, tasks: list[str], trials: bool) -> list[s
     return build_commands(args, extra)
 
 
-def plan(phase: str, arms: list[str]) -> list[tuple[str, str]]:
+def plan(phase: str, arms: list[str], siblings: bool = True) -> list[tuple[str, str]]:
     """Return (shard name, command) for every job in the given phase."""
     jobs: list[tuple[str, str]] = []
     if phase == "sanity":
@@ -272,7 +287,13 @@ def plan(phase: str, arms: list[str]) -> list[tuple[str, str]]:
     pairs = STRICT_PAIRS if phase.endswith("_strict") else PAIRS
     for arm in arms:
         for tag, variant, sibling in pairs:
-            tasks = tasks_for(variant, sibling, DATASETS, knn=phase.startswith("knn"))
+            tasks = tasks_for(
+                variant,
+                sibling,
+                DATASETS,
+                knn=phase.startswith("knn"),
+                siblings=siblings,
+            )
             shard = f"{arm}_{tag}"
             jobs += [
                 (shard, c)
@@ -315,8 +336,10 @@ def launch_submitter(args: argparse.Namespace) -> None:
         f"--phase={args.phase}",
         f"--arms={','.join(args.arms)}",
     ]
+    if args.no_siblings:
+        inner.append("--no_siblings")
     config = build_launch_config(
-        name=f"pixmask-{args.phase}-submit",
+        name=f"pixmask-{args.phase}{'-solo' if args.no_siblings else ''}-submit",
         cmd=inner,
         clusters=args.cluster,
         task_name="submit",
@@ -339,6 +362,11 @@ def main() -> None:
     )
     parser.add_argument("--arms", default=",".join(ARMS))
     parser.add_argument("--go", action="store_true")
+    parser.add_argument(
+        "--no_siblings",
+        action="store_true",
+        help="omit the sibling half (use when it is already measured; halves the job)",
+    )
     parser.add_argument("--as_beaker_job", action="store_true")
     parser.add_argument("--cluster", default=",".join(CLUSTERS))
     args = parser.parse_args()
@@ -353,7 +381,7 @@ def main() -> None:
         launch_submitter(args)
         return
 
-    jobs = plan(args.phase, args.arms)
+    jobs = plan(args.phase, args.arms, siblings=not args.no_siblings)
     shards = sorted({s for s, _ in jobs})
     print(f"phase={args.phase}  project={PROJECT}")
     print(f"{len(jobs)} jobs across {len(shards)} shards")
