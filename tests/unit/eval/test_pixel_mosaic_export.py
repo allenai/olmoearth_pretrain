@@ -13,6 +13,7 @@ import yaml
 from rasterio.crs import CRS
 from rslearn.dataset import Dataset, Window
 from rslearn.utils.geometry import Projection
+from rslearn.utils.raster_format import GeotiffRasterFormat
 from upath import UPath
 
 from olmoearth_pretrain.evals.datasets import pixel_mosaic_export as pme
@@ -162,7 +163,7 @@ class TestCompositeWindow:
         """The whole point: one period, different source scenes per pixel."""
         imagery, scl, doys = scenes
         monkeypatch.setattr(pme, "_read_scenes", _fake_reader(imagery, scl, doys))
-        out_imagery, out_scl, hist = pme.composite_window(SimpleNamespace())
+        out_imagery, out_scl, centre_doy, hist = pme.composite_window(SimpleNamespace())
 
         first = out_imagery[pme.S2_LAYERS[0]]
         # (1,1) is the only pixel where scene 0 was the least contaminated.
@@ -181,7 +182,7 @@ class TestCompositeWindow:
         """A period with one acquisition must be that acquisition, untouched."""
         imagery, scl, doys = scenes
         monkeypatch.setattr(pme, "_read_scenes", _fake_reader(imagery, scl, doys))
-        out_imagery, out_scl, _ = pme.composite_window(SimpleNamespace())
+        out_imagery, out_scl, _, _ = pme.composite_window(SimpleNamespace())
 
         second = out_imagery[pme.S2_LAYERS[1]]
         assert (second == 300).all()
@@ -195,7 +196,7 @@ class TestCompositeWindow:
         """Imagery stays uint16 and SCL uint8, at the window grid."""
         imagery, scl, doys = scenes
         monkeypatch.setattr(pme, "_read_scenes", _fake_reader(imagery, scl, doys))
-        out_imagery, out_scl, _ = pme.composite_window(SimpleNamespace())
+        out_imagery, out_scl, _, _ = pme.composite_window(SimpleNamespace())
 
         assert out_imagery[pme.S2_LAYERS[0]].dtype == np.uint16
         assert out_imagery[pme.S2_LAYERS[0]].shape == (
@@ -214,7 +215,7 @@ class TestCompositeWindow:
         """Rslearn never materializes an empty month; nor do we."""
         imagery, scl, doys = scenes
         monkeypatch.setattr(pme, "_read_scenes", _fake_reader(imagery, scl, doys))
-        out_imagery, out_scl, _ = pme.composite_window(SimpleNamespace())
+        out_imagery, out_scl, _, _ = pme.composite_window(SimpleNamespace())
 
         assert set(out_imagery) == {pme.S2_LAYERS[0], pme.S2_LAYERS[1]}
         assert set(out_scl) == {pme.SCL_LAYERS[0], pme.SCL_LAYERS[1]}
@@ -300,21 +301,23 @@ class TestWriteComposite:
         window.save()
         return window
 
-    def _payload(self, periods: range) -> tuple[dict, dict, list[str]]:
-        """Imagery/SCL for the given periods, plus the band list."""
+    def _payload(self, periods: range) -> tuple[dict, dict, dict, list[str]]:
+        """Imagery/SCL/centre-DOY for the given periods, plus the band list."""
         bands = pme.composite_bands(include_60m=False)
         imagery = {
             pme.S2_LAYERS[p]: np.full((4, 4, len(bands)), 100 + p, dtype=np.uint16)
             for p in periods
         }
         scl = {pme.SCL_LAYERS[p]: np.full((4, 4), 4, dtype=np.uint8) for p in periods}
-        return imagery, scl, bands
+        # A plausible selected acquisition: mid-period.
+        centre_doy = {pme.S2_LAYERS[p]: pme.PERIOD_DAYS * p + 15 for p in periods}
+        return imagery, scl, centre_doy, bands
 
     def test_every_period_lands_under_its_own_bands(self, tmp_path: Path) -> None:
         """Regression: a shadowed loop variable put periods 1-11 under ["SCL"]."""
         window = self._window(tmp_path)
-        imagery, scl, bands = self._payload(range(pme.MONTHS))
-        pme.write_composite(window, imagery, scl, bands)
+        imagery, scl, centre_doy, bands = self._payload(range(pme.MONTHS))
+        pme.write_composite(window, imagery, scl, centre_doy, bands)
 
         completed = {name for name, _ in window.list_completed_layers()}
         assert completed == set(pme.S2_LAYERS) | set(pme.SCL_LAYERS)
@@ -325,20 +328,36 @@ class TestWriteComposite:
             wrong = window.get_raster_dir(pme.S2_LAYERS[period], pme.SCL_BAND_SET)
             assert not wrong.exists(), pme.S2_LAYERS[period]
 
-    def test_period_time_ranges_tile_the_year(self, tmp_path: Path) -> None:
-        """Each layer is stamped with its own 30-day slice, not the whole year."""
+    def test_stamps_the_selected_acquisition_not_the_period(
+        self, tmp_path: Path
+    ) -> None:
+        """The parent stamps the chosen scene's instant; we must match it.
+
+        Verified against the parent 2026-08-14: its mo layers carry
+        (acquisition, acquisition) zero-length ranges. Stamping the period start
+        instead would shift this arm ~15 days early and give every window an
+        identical time signal.
+        """
         window = self._window(tmp_path)
-        first = pme.period_time_range(window, 0)
-        last = pme.period_time_range(window, 11)
-        assert first[0] == window.time_range[0]
-        assert (first[1] - first[0]).days == pme.PERIOD_DAYS
-        assert (last[0] - first[0]).days == pme.PERIOD_DAYS * 11
+        stamp = pme.acquisition_time_range(window, doy=17)
+        assert stamp[0] == stamp[1], "must be a zero-length range like the parent"
+        assert (stamp[0] - window.time_range[0]).days == 16  # doy 17 == Jan 17
+
+        imagery, scl, centre_doy, bands = self._payload(range(2))
+        pme.write_composite(window, imagery, scl, centre_doy, bands)
+        r = GeotiffRasterFormat().decode_raster(
+            window.get_raster_dir(pme.S2_LAYERS[1], bands),
+            window.projection,
+            window.bounds,
+        )
+        expected = pme.acquisition_time_range(window, centre_doy[pme.S2_LAYERS[1]])
+        assert r.timestamps == [expected]
 
     def test_missing_periods_are_not_marked(self, tmp_path: Path) -> None:
         """A window with only some periods must not claim the rest."""
         window = self._window(tmp_path)
-        imagery, scl, bands = self._payload(range(3))
-        pme.write_composite(window, imagery, scl, bands)
+        imagery, scl, centre_doy, bands = self._payload(range(3))
+        pme.write_composite(window, imagery, scl, centre_doy, bands)
 
         completed = {name for name, _ in window.list_completed_layers()}
         assert completed == set(pme.S2_LAYERS[:3]) | set(pme.SCL_LAYERS[:3])
@@ -352,7 +371,7 @@ class TestWriteComposite:
         1-11.
         """
         window = self._window(tmp_path)
-        imagery, scl, bands = self._payload(range(pme.MONTHS))
+        imagery, scl, centre_doy, bands = self._payload(range(pme.MONTHS))
         calls: list[str] = []
         real = pme.GeotiffRasterFormat.encode_raster
 
@@ -364,7 +383,7 @@ class TestWriteComposite:
 
         monkeypatch.setattr(pme.GeotiffRasterFormat, "encode_raster", encode)
         with pytest.raises(RuntimeError, match="interrupted"):
-            pme.write_composite(window, imagery, scl, bands)
+            pme.write_composite(window, imagery, scl, centre_doy, bands)
 
         assert list(window.list_completed_layers()) == []
 

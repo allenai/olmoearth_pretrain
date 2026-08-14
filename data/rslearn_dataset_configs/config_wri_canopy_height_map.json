@@ -27,5 +27,8 @@
     "init_args": {
       "convert_rasters_to_cogs": false
     }
+  },
+  "window_data_storage": {
+    "class_path": "rslearn.dataset.window_data_storage.per_layer.PerLayerStorageFactory"
   }
 }

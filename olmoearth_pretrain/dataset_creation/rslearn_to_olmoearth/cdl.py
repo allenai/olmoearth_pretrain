@@ -16,6 +16,7 @@ from olmoearth_pretrain.dataset.utils import get_modality_fname
 
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
+from .cli import add_common_arguments
 
 # Layer name in the input rslearn dataset.
 LAYER_NAME = "cdl"
@@ -36,7 +37,7 @@ def convert_cdl(window: Window, olmoearth_path: UPath) -> None:
 
     # Get start and end of the CDL item.
     item_groups = layer_datas[LAYER_NAME].serialized_item_groups
-    if len(item_groups) == 0:
+    if len(item_groups) == 0 or len(item_groups[0]) == 0:
         return
     item = Item.deserialize(item_groups[0][0])
     start_time = item.geometry.time_range[0]
@@ -44,9 +45,8 @@ def convert_cdl(window: Window, olmoearth_path: UPath) -> None:
 
     assert len(Modality.CDL.band_sets) == 1
     band_set = Modality.CDL.band_sets[0]
-    raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
-    image = GEOTIFF_RASTER_FORMAT.decode_raster(
-        raster_dir, window.projection, window.bounds
+    image = window.data.read_raster(
+        LAYER_NAME, band_set.bands, GEOTIFF_RASTER_FORMAT
     ).get_chw_array()
 
     # Skip if there are any background/nodata.
@@ -94,24 +94,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Post-process OlmoEarth Pretrain data",
     )
-    parser.add_argument(
-        "--ds_path",
-        type=str,
-        help="Source rslearn dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--olmoearth_path",
-        type=str,
-        help="Destination OlmoEarth Pretrain dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        help="Number of workers to use",
-        default=32,
-    )
+    add_common_arguments(parser)
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))

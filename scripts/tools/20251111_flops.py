@@ -1,4 +1,25 @@
-"""Averaged FLOPs per task."""
+"""Averaged MACs per task, as plotted on the x-axis of Figure 1.
+
+Counted with ``true_macs`` below rather than ``thop``. thop hooks nn.Module instances and
+only knows Linear/Conv, so attention's QK^T and AV matmuls were never counted; the undercount
+factor is 1 + N/(6d) for tokens N and width d, which grows with sequence length and shrinks
+with width, so it does not divide out of a comparison between models. Switching the counter
+changed every number in Figure 1 by between 1.02x and 21.7x and moved 19 of 21 models'
+positions along the x-axis, so the OlmoEarth v1.2 report's figure and its "2.9x fewer MACs"
+claim (really 5.3x) were both computed on undercounts.
+
+Two implementations lose more than that formula suggests: nn.TransformerEncoderLayer takes a
+fused fast path under eval()+no_grad that has no flop formula at all, so whole layers report
+zero; and torchvision's Swin (Satlas) implements qkv, both matmuls and the output projection
+functionally, so its entire attention block is invisible rather than just the matmuls.
+
+Dropping thop also removes a silent corruption in the other direction. On models that alias
+a submodule at two points in the tree (upstream AnySat exposes ``spatial_encoder`` as both
+its own attribute and its inner model's), ``model.apply()`` registers thop's hooks twice
+while its cleanup dict is keyed by module, so hooks leak and MACs accumulate across
+successive profile() calls. AnySat's published value was ~11x too HIGH for this reason --
+the only model in the figure whose number was too large.
+"""
 
 import os
 import sys
@@ -6,7 +27,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import torch
-from thop import clever_format, profile
+from thop import clever_format
+from torch.utils.flop_counter import FlopCounterMode, sdpa_flop_count
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.models import (
@@ -57,6 +79,31 @@ SINGLE_BANDSET_CONFIG = TokenizationConfig(
         "landsat": LANDSAT_SINGLE_BANDSET,
     }
 )
+
+
+def _sdpa_cpu_flop(q_shape, k_shape, v_shape, *args, out_shape=None, **kwargs):
+    """The formula torch is missing for the CPU flash-attention op."""
+    return sdpa_flop_count(q_shape, k_shape, v_shape)
+
+
+# FlopCounterMode ships formulas for the CUDA SDPA variants but not for the CPU one, which is
+# what F.scaled_dot_product_attention dispatches to here -- without this, attention silently
+# counts as zero and we are back to thop's answer.
+_SDPA_CPU_MAPPING = {
+    torch.ops.aten._scaled_dot_product_flash_attention_for_cpu: _sdpa_cpu_flop,
+}
+
+
+def true_macs(fn) -> float:
+    """MACs for one forward pass, attention included.
+
+    Grad is left ENABLED deliberately: under eval() + no_grad, nn.TransformerEncoderLayer
+    takes a fused fast-path op that has no flop formula, so whole layers would count as zero.
+    """
+    counter = FlopCounterMode(display=False, custom_mapping=_SDPA_CPU_MAPPING)
+    with counter:
+        fn()
+    return counter.get_total_flops() / 2
 
 
 def count_params(model: torch.nn.Module, trainable_only: bool = True):
@@ -119,7 +166,7 @@ def construct_eval_samples() -> list[tuple[MaskedOlmoEarthSample, int, bool]]:
 
 
 def flops_per_model(model, samples: list[MaskedOlmoEarthSample, int, bool]) -> float:
-    """flops_per_model."""
+    """Averaged MACs over the 13 task slots."""
     total_macs = []
     for i, multiplier, spatial_pool in samples:
         if isinstance(model, Encoder):
@@ -130,7 +177,7 @@ def flops_per_model(model, samples: list[MaskedOlmoEarthSample, int, bool]) -> f
         else:
             inputs = (i,)
         with suppress_stdout():
-            macs, _ = profile(model, inputs=inputs)
+            macs = true_macs(lambda: model(*inputs))
         for _ in range(multiplier):
             total_macs.append(macs)
     return sum(total_macs) / len(total_macs)

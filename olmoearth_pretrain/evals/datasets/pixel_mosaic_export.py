@@ -47,6 +47,15 @@ vs DEFAULT_EVAL_ROOT, and ``infer --ds_path <stage> --eval_ds_path <eval>``)::
         --ds_path $STAGE --dataset ethiopia_crops_year_aligned \
         --out_ds_path $DST --workers 8
 
+TIMESTAMPS: each composited layer is stamped with the acquisition instant of the
+observation selected AT THE LABELED CENTRE PIXEL -- the only pixel these tasks
+score (label_at_center_pixel + use_center_token). Verified 2026-08-14 that this
+matches the parent, whose mo layers carry the chosen scene's datetime as a
+zero-length range. Stamping the 30-day period instead (the first cut of this
+script did) shifts the arm ~15 days early and makes the time signal identical for
+every window, since timestamps_from_time_ranges feeds each range's start to the
+model as [day, month0, year].
+
 STORED-RESOLUTION DEVIATION, read before comparing numbers: the parent stores S2
 as three band sets at 10 m / 20 m / 40 m and lets the eval loader upsample to the
 window grid. ``_read_scenes`` hands us every band already on the window grid, so
@@ -202,7 +211,7 @@ def select_best(severity: np.ndarray, doys: np.ndarray, period: int) -> np.ndarr
 def composite_window(
     fetch_window: Window,
     include_60m: bool = False,
-) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], Counter]:
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], dict[str, int], Counter]:
     """Build every period's composite for one fetch window.
 
     Args:
@@ -212,12 +221,19 @@ def composite_window(
             read_band_sets).
 
     Returns:
-        ``(imagery, scl, severity_hist)``. ``imagery`` maps layer name to an
+        ``(imagery, scl, centre_doy, severity_hist)``. ``imagery`` maps layer
+        name to an
         (H, W, C) uint16 array and ``scl`` maps layer name to an (H, W) uint8
         array of the *chosen* observation's SCL class, both keyed by
         ``S2_LAYERS`` / ``SCL_LAYERS``. Periods with no acquisition are absent
         from both, mirroring rslearn, which never materializes an empty month.
-        ``severity_hist`` counts chosen tiers over all pixels and periods.
+        ``centre_doy`` maps each imagery layer name to the day-of-year of the
+        acquisition selected AT THE LABELED CENTRE PIXEL, which is what the
+        layer's timestamp is stamped from: these tasks score only that pixel's
+        token (label_at_center_pixel + use_center_token), so its real
+        acquisition date is the honest one for a raster assembled from many
+        dates. ``severity_hist`` counts chosen tiers over all pixels and
+        periods.
 
     Raises:
         NoS2ScenesError: if the window's S2 layer matched zero scenes.
@@ -242,6 +258,7 @@ def composite_window(
 
     out_imagery: dict[str, np.ndarray] = {}
     out_scl: dict[str, np.ndarray] = {}
+    centre_doy: dict[str, int] = {}
     hist: Counter = Counter()
     for period in range(MONTHS):
         in_period = periods == period
@@ -254,25 +271,35 @@ def composite_window(
         out_scl[SCL_LAYERS[period]] = np.take_along_axis(
             scl_classes[in_period], take, axis=0
         )[0]
+        height, width = chosen.shape
+        centre_doy[S2_LAYERS[period]] = int(
+            doys[in_period][chosen[height // 2, width // 2]]
+        )
         hist.update(
             np.take_along_axis(severity[in_period], take, axis=0)[0].ravel().tolist()
         )
-    return out_imagery, out_scl, hist
+    return out_imagery, out_scl, centre_doy, hist
 
 
-def period_time_range(window: Window, period: int) -> tuple[datetime, datetime]:
-    """The 30-day range a period covers, from the window's calendar year.
+def acquisition_time_range(window: Window, doy: int) -> tuple[datetime, datetime]:
+    """The stamp for a composited layer: the selected acquisition's instant.
 
-    Mirrors the ``mo`` layers' 30d duration at offsets 0d..330d. Worth
-    confirming against a parent ``sentinel2_l2a_moNN`` raster before trusting
-    the stamped dates: the eval's time encodings are per-timestep.
+    VERIFIED against the parent 2026-08-14: rslearn stamps its
+    ``sentinel2_l2a_moNN`` mosaics with the chosen scene's acquisition datetime as
+    a zero-length range (start == end, e.g. 2020-01-17 07:52:41), NOT the 30-day
+    period. Since ``timestamps_from_time_ranges`` feeds each range's *start* to the
+    model as [day, month0, year], stamping the period start instead would shift the
+    composite arm ~15 days early on average AND make its time signal identical for
+    every window -- a difference between arms owing nothing to clouds.
+
+    Day resolution is all the model reads, so the time of day is dropped.
 
     Args:
-        window: the output window, whose time_range anchors the periods.
-        period: period index in [0, 12).
+        window: the output window, whose time_range anchors day-of-year.
+        doy: day-of-year of the selected acquisition, 1-366.
 
     Returns:
-        The period's (start, end).
+        ``(instant, instant)``, matching the parent's convention.
 
     Raises:
         ValueError: if the window has no time range, which would otherwise
@@ -281,16 +308,18 @@ def period_time_range(window: Window, period: int) -> tuple[datetime, datetime]:
     if window.time_range is None:
         raise ValueError(
             f"window {window.group}/{window.name} has no time_range, so its "
-            "period dates cannot be derived"
+            "acquisition dates cannot be derived"
         )
-    start = window.time_range[0] + timedelta(days=PERIOD_DAYS * period)
-    return start, start + timedelta(days=PERIOD_DAYS)
+    year_start = window.time_range[0]
+    instant = year_start + timedelta(days=doy - 1)
+    return instant, instant
 
 
 def write_composite(
     window: Window,
     imagery: dict[str, np.ndarray],
     scl: dict[str, np.ndarray],
+    centre_doy: dict[str, int],
     bands: list[str],
 ) -> None:
     """Write one window's composite layers and mark them completed.
@@ -304,6 +333,9 @@ def write_composite(
         window: the window in the output dataset.
         imagery: layer name to (H, W, C) uint16 array.
         scl: layer name to (H, W) uint8 array.
+        centre_doy: imagery layer name to the selected acquisition's day-of-year
+            at the labeled centre pixel, which the layer's timestamp is stamped
+            from (see acquisition_time_range).
         bands: band names of the imagery, naming its raster dir.
     """
     raster_format = GeotiffRasterFormat()
@@ -312,7 +344,7 @@ def write_composite(
         s2_name = S2_LAYERS[period]
         if s2_name not in imagery:
             continue
-        time_range = period_time_range(window, period)
+        time_range = acquisition_time_range(window, centre_doy[s2_name])
         # Distinct loop names: binding `bands` here would shadow the parameter
         # and leak the previous period's band list into the next one.
         for name, array, layer_bands in (
@@ -463,7 +495,7 @@ def composite(
 
     def read_one(
         out_window: Window,
-    ) -> tuple[Window, tuple[dict, dict, Counter] | None, str]:
+    ) -> tuple[Window, tuple[dict, dict, dict, Counter] | None, str]:
         if not overwrite and out_provider.is_layer_written(out_window, S2_LAYERS[0]):
             return out_window, None, "skipped"
         try:
@@ -500,9 +532,9 @@ def composite(
                 skipped += 1
                 continue
             assert result is not None
-            imagery, scl, hist = result
+            imagery, scl, centre_doy, hist = result
             try:
-                write_composite(out_window, imagery, scl, bands)
+                write_composite(out_window, imagery, scl, centre_doy, bands)
             except Exception:
                 logger.exception(f"window {out_window.name}: writing failed")
                 failed.append(out_window.name)
