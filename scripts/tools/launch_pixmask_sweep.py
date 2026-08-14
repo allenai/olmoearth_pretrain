@@ -42,6 +42,10 @@ KNN resolves effects ten times smaller for a ninth of the jobs:
                      the original no-op before a hundred jobs were spent.
     knn     12 jobs  every pair x both arms over the 8 AEF datasets, KNN with
                      balanced trials on -- covers `aef` AND `aef w aef sampling`.
+    knn_strict
+            12 jobs  the same, for the NARROW policy (`_l8pixstrict`, cloud bit
+                     only) against the same unmasked siblings, so the two
+                     policies' deltas can be read against each other.
     pastis  16 jobs  PASTIS, LP-only (8 learning rates), all six pairs per arm.
     lp      96 jobs  the AEF datasets under the linear probe, for effect sizes.
                      Only worth running if `knn` says there is an effect.
@@ -106,6 +110,13 @@ PAIRS = [
 # descals is the cloudiest dataset in the suite (27.1% cloudy centre pixels) and
 # ethiopia the one where masking has historically hurt -- between them, a mask
 # that is actually applied cannot fail to move at least one number.
+# The narrow policy (`_l8pixstrict`, cloud bit only) against the same unmasked
+# siblings, so its delta is directly comparable with the aggressive variant's.
+STRICT_PAIRS = [
+    (tag.replace("pxfix", "pxstrict"), var.replace("_l8pixmask", "_l8pixstrict"), sib)
+    for tag, var, sib in PAIRS
+]
+
 SANITY_PAIR = "pxfix5"
 SANITY_DATASETS = ["descals", "ethiopia_crops"]
 
@@ -255,9 +266,10 @@ def plan(phase: str, arms: list[str]) -> list[tuple[str, str]]:
                 for c in shard_commands(arm, "pxfixpastis", tasks, trials=False)
             ]
         return jobs
+    pairs = STRICT_PAIRS if phase.endswith("_strict") else PAIRS
     for arm in arms:
-        for tag, variant, sibling in PAIRS:
-            tasks = tasks_for(variant, sibling, DATASETS, knn=(phase == "knn"))
+        for tag, variant, sibling in pairs:
+            tasks = tasks_for(variant, sibling, DATASETS, knn=phase.startswith("knn"))
             shard = f"{arm}_{tag}"
             jobs += [
                 (shard, c)
@@ -318,7 +330,9 @@ def main() -> None:
     """Parse arguments and plan, submit, or hand off to Beaker."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--phase", choices=("sanity", "knn", "pastis", "lp"), default="knn"
+        "--phase",
+        choices=("sanity", "knn", "knn_strict", "pastis", "lp"),
+        default="knn",
     )
     parser.add_argument("--arms", default=",".join(ARMS))
     parser.add_argument("--go", action="store_true")

@@ -23,7 +23,10 @@ from upath import UPath
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.balanced_trial import BalancedTrialConfig
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
-from olmoearth_pretrain.evals.datasets.rslearn_dataset import SCL_CLOUDLESS_CLASSES
+from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
+    L8QA_CLOUD_ONLY_BITS_MASK,
+    SCL_CLOUDLESS_CLASSES,
+)
 from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
 from olmoearth_pretrain.internal.experiment import (
@@ -1462,6 +1465,7 @@ def _aef_ps1_task(
     scl_cloud_classes: tuple[int, ...] | None = None,
     landsat_cloud_cover_max: float | None = None,
     l8_pixel_cloud_mask: bool = False,
+    l8_pixel_cloud_bits: int | None = None,
 ) -> DownstreamTaskConfig:
     """AEF supplemental task under the per-pixel embedding-product convention.
 
@@ -1507,6 +1511,7 @@ def _aef_ps1_task(
         scl_cloud_classes=scl_cloud_classes,
         landsat_cloud_cover_max=landsat_cloud_cover_max,
         l8_pixel_cloud_mask=l8_pixel_cloud_mask,
+        l8_pixel_cloud_bits=l8_pixel_cloud_bits,
         balanced_trial=(
             BalancedTrialConfig(cap=_aef_max_trial_cap(name))
             if eval_mode == EvalMode.KNN
@@ -1836,6 +1841,103 @@ for _suffix in ("sentinel2_landsat", "sentinel1_sentinel2_landsat"):
                 for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
             }
         )
+
+# Per-pixel cloud-mosaic pilot on ethiopia, the dataset where we lose hardest to
+# Tessera. `ccmos` replaces each 30-day S2 mosaic with a per-pixel selection of the
+# least-SCL-contaminated acquisition (pixel_mosaic_export.py); measured 93.3% of
+# chosen pixels clear, against the parent's scene-level `sort_by: eo:cloud_cover`.
+#
+# `10band` is its CONTROL and is not optional: the composite carries only ten bands
+# (the tessera_v2 fetch group it was built from has no B01/B09, and rslearn cannot
+# backfill a band set onto an already-materialized layer), so a ccmos-vs-parent
+# delta would confound cloud selection with dropping two bands. Compare
+# ccmos <-> 10band; the 12-band parent stays the untouched reference.
+#
+# Registered as an explicit block rather than by appending to
+# AEF_SUPPLEMENTAL_YEAR_ALIGNED: that tuple drives every other sweep's task
+# cross-product and is length-pinned by a test.
+#
+# 10band shares the parent's weka_path (only its band list differs) -- the
+# us_trees_tessera pattern -- so its registry entry is hand-cloned rather than
+# re-ingested, and it must stay out of AEF_SUPPLEMENTAL_DATASETS for the same
+# re-walking reason documented at MATCHED_SUBSET_DATASETS.
+PIXEL_MOSAIC_DATASETS = (
+    "ethiopia_crops_ccmos_year_aligned",
+    "ethiopia_crops_10band_year_aligned",
+)
+for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
+    for _mode, _mode_suffix in (
+        (EvalMode.LINEAR_PROBE, ""),
+        (EvalMode.KNN, "_knn"),
+    ):
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}{_mode_suffix}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                )
+                for name in PIXEL_MOSAIC_DATASETS
+            }
+        )
+        # SCL-masked siblings. On the 10band control this is the old pipeline's
+        # only cloud defence -- subtractive masking over an already-chosen
+        # mosaic. On ccmos the SCL layers describe the pixels the composite
+        # actually selected, so plain-ccmos vs sclmask-ccmos asks whether any
+        # masking is still worth doing once selection has happened.
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}_sclmask{_mode_suffix}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                    scl_cloud_mask=True,
+                )
+                for name in PIXEL_MOSAIC_DATASETS
+            }
+        )
+
+# The NARROW Landsat pixel policy: `_l8pixstrict` masks on the cloud bit alone,
+# where `_l8pixmask` above also masks dilated cloud, cirrus and cloud shadow.
+# Registered 2026-08-14 because the aggressive policy measurably HURTS: with the
+# flag finally reaching the data, cand_ndvi lost 1.8 pts on descals and 2.8 on
+# ethiopia (KNN, matched pairs), worst on the S2-only stacks and rescued by S1.
+# The S2 ladder had already found the same shape -- the narrow `_cloudless`
+# policy beat the aggressive `_sclmask` one -- so this tests whether the Landsat
+# result is a policy-calibration problem or an argument against masking Landsat
+# at all. Same three S2-side pairings as the aggressive variants, so each strict
+# task has both an aggressive and an unmasked sibling to be read against.
+for _suffix in ("sentinel2_landsat", "sentinel1_sentinel2_landsat"):
+    _modalities = _YEAR_ALIGNED_MODALITIES[_suffix]
+    for _mode, _knn in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn")):
+        _s2_policies: tuple[tuple[str, dict[str, Any]], ...] = (
+            ("", {}),
+            ("_sclmask", {"scl_cloud_mask": True}),
+            (
+                "_cloudless",
+                {
+                    "scl_cloud_mask": True,
+                    "scl_cloud_classes": SCL_CLOUDLESS_CLASSES,
+                },
+            ),
+        )
+        for _s2_tag, _s2_kwargs in _s2_policies:
+            EMBEDDING_EVAL_TASKS.update(
+                {
+                    f"{name}_ws16_ps1_{_suffix}{_s2_tag}_l8pixstrict{_knn}": _aef_ps1_task(
+                        name,
+                        _mode,
+                        window_size=16,
+                        input_modalities=_modalities,
+                        l8_pixel_cloud_mask=True,
+                        l8_pixel_cloud_bits=L8QA_CLOUD_ONLY_BITS_MASK,
+                        **_s2_kwargs,
+                    )
+                    for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+                }
+            )
 
 # pastis_year_aligned keeps the pastis conventions (128x128 stored samples,
 # tile_samples, mIoU) rather than the AEF center-pixel ones, so it reuses the

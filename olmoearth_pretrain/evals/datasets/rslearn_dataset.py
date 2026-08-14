@@ -91,6 +91,15 @@ LANDSAT_CLOUD_COVER_SIDECAR = "landsat_cloud_cover.json"
 L8QA_INPUT_NAME = "landsat_qa"
 L8QA_CLOUD_BITS_MASK = 0b0000000000011110
 
+# The narrow "strict" policy: the cloud bit alone, leaving dilated cloud, cirrus
+# and cloud shadow in place. The Landsat analogue of SCL_CLOUDLESS_CLASSES, and
+# registered for the same reason: on the S2 side the aggressive policy LOST to
+# the narrow one (descals cloudless +1.4 vs sclmask +0.6 -- masking
+# shadow/cirrus/nodata nets negative), and the default above is the aggressive
+# analogue. Dilated cloud is a buffer that discards clean pixels by
+# construction; cirrus is often benign for surface reflectance.
+L8QA_CLOUD_ONLY_BITS_MASK = 0b0000000000001000
+
 
 def get_timestamps(
     start_time: str,
@@ -215,6 +224,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         landsat_cloud_cover_max: float | None = None,
         landsat_cloud_cover_table: dict[str, dict[str, float]] | None = None,
         l8_pixel_cloud_mask: bool = False,
+        l8_pixel_cloud_bits: int | None = None,
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
@@ -274,6 +284,9 @@ class RslearnToOlmoEarthDataset(Dataset):
                 (-1) is never masked.
             landsat_cloud_cover_table: The parsed sidecar ("group/window" ->
                 {"moNN": cover}); required for the threshold to do anything.
+            l8_pixel_cloud_bits: QA_PIXEL bit mask counting as cloud. None
+                keeps L8QA_CLOUD_BITS_MASK (dilated|cirrus|cloud|shadow); the
+                narrow policy is L8QA_CLOUD_ONLY_BITS_MASK (cloud alone).
             l8_pixel_cloud_mask: If set, the optional "landsat_qa" input
                 (QA_PIXEL of the same scenes as the Landsat imagery, one
                 layer per Landsat monthly layer) is read and every
@@ -324,6 +337,11 @@ class RslearnToOlmoEarthDataset(Dataset):
         self._warned_l8_mask = False
 
         self.l8_pixel_cloud_mask = l8_pixel_cloud_mask
+        # None keeps the aggressive default, so every existing _l8pixmask task
+        # scores exactly as before.
+        self.l8_pixel_cloud_bits = (
+            L8QA_CLOUD_BITS_MASK if l8_pixel_cloud_bits is None else l8_pixel_cloud_bits
+        )
         self._warned_l8qa_mask = False
 
         # Target parsing config - derived from Task structure
@@ -410,6 +428,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
         landsat_cloud_cover_max: float | None = None,
         l8_pixel_cloud_mask: bool = False,
+        l8_pixel_cloud_bits: int | None = None,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -452,6 +471,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             landsat_cloud_cover_max: Scene-level Landsat cloud threshold; the
                 sidecar is read from source_path (see
                 RslearnToOlmoEarthDataset).
+            l8_pixel_cloud_bits: QA_PIXEL bit mask counting as cloud; None
+                keeps the aggressive default.
             l8_pixel_cloud_mask: Mask cloudy Landsat pixel-timesteps MISSING
                 using the optional "landsat_qa" input (see
                 RslearnToOlmoEarthDataset).
@@ -537,6 +558,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             landsat_cloud_cover_max=landsat_cloud_cover_max,
             landsat_cloud_cover_table=landsat_cloud_cover_table,
             l8_pixel_cloud_mask=l8_pixel_cloud_mask,
+            l8_pixel_cloud_bits=l8_pixel_cloud_bits,
         )
 
     @staticmethod
@@ -1102,7 +1124,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             )
             return
 
-        cloudy = (qa.astype(np.uint16) & L8QA_CLOUD_BITS_MASK) != 0
+        cloudy = (qa.astype(np.uint16) & self.l8_pixel_cloud_bits) != 0
         # Never blank a pixel entirely: if masking every cloudy timestep would
         # leave a pixel with no visible Landsat timestep at all, leave that
         # pixel unmasked (better a cloudy token than none). Slots already
@@ -1285,6 +1307,7 @@ def from_registry_entry(
     scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
     landsat_cloud_cover_max: float | None = None,
     l8_pixel_cloud_mask: bool = False,
+    l8_pixel_cloud_bits: int | None = None,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -1325,6 +1348,8 @@ def from_registry_entry(
             SCL_CLOUD_CLASSES).
         landsat_cloud_cover_max: Scene-level Landsat cloud threshold (see
             RslearnToOlmoEarthDataset).
+        l8_pixel_cloud_bits: QA_PIXEL bit mask counting as cloud; None keeps
+            the aggressive default.
         l8_pixel_cloud_mask: Mask cloudy Landsat pixel-timesteps MISSING using
             the optional "landsat_qa" input (see RslearnToOlmoEarthDataset).
 
@@ -1445,4 +1470,5 @@ def from_registry_entry(
         scl_cloud_classes=scl_cloud_classes,
         landsat_cloud_cover_max=landsat_cloud_cover_max,
         l8_pixel_cloud_mask=l8_pixel_cloud_mask,
+        l8_pixel_cloud_bits=l8_pixel_cloud_bits,
     )

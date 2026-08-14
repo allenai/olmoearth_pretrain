@@ -185,6 +185,9 @@ class DownstreamTaskConfig:
     # load time -- the Landsat analogue of scl_cloud_mask. Windows without
     # the input are left unmasked.
     l8_pixel_cloud_mask: bool = False
+    # Which QA_PIXEL bits count as cloud. None keeps the loader's aggressive
+    # default (dilated|cirrus|cloud|shadow); the narrow policy is cloud alone.
+    l8_pixel_cloud_bits: int | None = None
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: NormMethod = field(
@@ -308,6 +311,7 @@ class DownstreamEvaluator:
         self.scl_cloud_classes = task.scl_cloud_classes
         self.landsat_cloud_cover_max = task.landsat_cloud_cover_max
         self.l8_pixel_cloud_mask = task.l8_pixel_cloud_mask
+        self.l8_pixel_cloud_bits = task.l8_pixel_cloud_bits
         self.tile_samples = task.tile_samples
         if self.tile_samples:
             if not self._is_registry_dataset:
@@ -562,6 +566,8 @@ class DownstreamEvaluator:
                 extra_kwargs["landsat_cloud_cover_max"] = self.landsat_cloud_cover_max
             if self.l8_pixel_cloud_mask:
                 extra_kwargs["l8_pixel_cloud_mask"] = True
+                if self.l8_pixel_cloud_bits is not None:
+                    extra_kwargs["l8_pixel_cloud_bits"] = self.l8_pixel_cloud_bits
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities
