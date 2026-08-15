@@ -133,6 +133,7 @@ def build_earlyread_model_config(
     shared_read_kv: bool = False,
     register_dim: int | None = None,
     output_dim: int | None = None,
+    latent_every_n: int = 1,
 ) -> LatentMIMConfig:
     """The d128 NDVI tanchor base, with the encoder/bottleneck depth split reallocated.
 
@@ -161,6 +162,11 @@ def build_earlyread_model_config(
             ``register_dim=768, output_dim=128`` to keep the shipped embedding at 128.
             In the gradient path, unlike the detached ``register_projection_dims``
             student.
+        latent_every_n: Latent self-attention blocks per read -- 1 is the 1:1 default,
+            2 runs one LSA per two reads (plus one after the last). LSA blocks are half
+            the bottleneck's sequential depth and depth is what drives wall-clock, so
+            thinning them is a direct saving; the lsa/nolsa ablation says the FIRST block
+            is worth +8.4 pts on the noic arm, which this preserves.
         shared_read_kv: Project the patch tokens into keys/values once and share them
             across every read, instead of each read re-projecting the full token array.
             Lifts the read-depth ceiling (unshared, 16 reads fit at micro 64 and 24 do
@@ -195,6 +201,7 @@ def build_earlyread_model_config(
                 f"register_dim ({config.decoder_config.register_dim}) must equal "
                 f"output_dim ({output_dim})"
             )
+    encoder_config.register_latent_every_n = latent_every_n
     encoder_config.register_shared_read_kv = shared_read_kv
     if shared_read_kv:
         encoder_config.register_per_depth_read_proj = False

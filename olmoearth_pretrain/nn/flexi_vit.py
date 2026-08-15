@@ -1570,6 +1570,7 @@ class SpatialRegisterBottleneck(nn.Module):
         unit_norm_scale: float | None = None,
         shared_read_kv: bool = False,
         output_dim: int | None = None,
+        latent_every_n: int = 1,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1702,6 +1703,15 @@ class SpatialRegisterBottleneck(nn.Module):
                 ``sqrt(register_dim)``, LayerNorm's own output norm, so the constraint
                 is scale-neutral at init instead of silently rescaling the decoder's
                 context input.
+            latent_every_n: Run a latent self-attention block after every ``n``-th read
+                instead of after every read (1 = the 1:1 default). A final block always
+                fires after the last read, so the grid that ships has been spatially
+                mixed. LSA blocks are half the bottleneck's sequential depth, and depth
+                -- not FLOPs -- is what drives wall-clock here, so 1:2 removes ~20% of
+                the blocks. Zero LSA is NOT the same trade: the lsa/nolsa ablation on the
+                noic arm is worth +8.4 pts over 76 tasks, so the first block earns its
+                place; this bets only that the eighth does not. Requires ``interleave``
+                and ``latent_self_attn``.
             output_dim: If set, apply a single ``Linear(register_dim, output_dim)`` to
                 the bottleneck's output, so the grid the decoder, supervision heads and
                 evals consume is ``output_dim`` wide while the read/latent stack runs at
@@ -1845,6 +1855,31 @@ class SpatialRegisterBottleneck(nn.Module):
         self.latent_self_attn = latent_self_attn
         if not latent_self_attn:
             num_latent_blocks = 0
+        # Which read is followed by which latent block. ``None`` means "no LSA after this
+        # read". Only meaningful for the interleaved schedule; the legacy schedule runs
+        # all reads and then all latents, where a ratio has nothing to interleave with.
+        if latent_every_n < 1:
+            raise ValueError(f"latent_every_n must be >= 1, got {latent_every_n}")
+        self.latent_every_n = latent_every_n
+        self.latent_schedule: list[int | None] | None = None
+        if self.interleave and latent_self_attn:
+            schedule: list[int | None] = []
+            built = 0
+            for i in range(num_read_blocks):
+                # Fire every n-th read, and always after the last one so the shipped grid
+                # is mixed rather than left as whatever the final read wrote.
+                if (i + 1) % latent_every_n == 0 or i == num_read_blocks - 1:
+                    schedule.append(built)
+                    built += 1
+                else:
+                    schedule.append(None)
+            self.latent_schedule = schedule
+            num_latent_blocks = built
+        elif latent_every_n > 1:
+            raise ValueError(
+                "latent_every_n > 1 requires the interleaved schedule with latent "
+                "self-attention enabled (interleave=True, latent_self_attn=True)"
+            )
         # Per-depth read front-end: give every read block its own input norm + K/V
         # down-projection instead of a single shared pair. Only meaningful with >1 read
         # block. Multi-depth: each block draws from a different encoder depth (distinct
@@ -2253,10 +2288,16 @@ class SpatialRegisterBottleneck(nn.Module):
             # re-queries the same (final-layer) source.
             for i, (read_blk, kv) in enumerate(zip(self.read_blocks, kv_per_read)):
                 registers = read(registers, i, read_blk, kv)
-                # latent_blocks is empty when latent self-attention is disabled; otherwise
-                # it has one block per read (built above), so index by the read position.
-                if self.latent_blocks:
-                    registers = self.latent_blocks[i](
+                # latent_blocks is empty when latent self-attention is disabled;
+                # otherwise latent_schedule says which (if any) block follows this read --
+                # every read at the 1:1 default, every n-th plus the last when thinned.
+                latent_idx = (
+                    self.latent_schedule[i]
+                    if self.latent_schedule is not None
+                    else None
+                )
+                if self.latent_blocks and latent_idx is not None:
+                    registers = self.latent_blocks[latent_idx](
                         x=registers,
                         rope_positions=register_positions,
                         window_spec=latent_window_spec,
@@ -2335,6 +2376,7 @@ class Encoder(FlexiVitBase):
         register_temporal_anchor: str | None = None,
         register_shared_read_kv: bool = False,
         register_output_dim: int | None = None,
+        register_latent_every_n: int = 1,
         register_contrastive_source: str = "registers",
         register_projection_dims: list[int] | None = None,
         register_projection_type: str = "linear",
@@ -2460,6 +2502,9 @@ class Encoder(FlexiVitBase):
                 self-attention blocks entirely (cross-attention reads only, no
                 register-to-register mixing); the read count is unchanged. Defaults to True
                 (keep the latent transformer, backwards compatible).
+            register_latent_every_n: Run a latent self-attention block after every
+                n-th read instead of after every read (see
+                ``SpatialRegisterBottleneck.latent_every_n``).
             register_output_dim: If set, one ``Linear(register_dim, output_dim)`` on the
                 bottleneck's output, so the read/latent stack runs at ``register_dim``
                 while the decoder, supervision heads and evals consume this width. In the
@@ -2671,6 +2716,7 @@ class Encoder(FlexiVitBase):
                 temporal_anchor=register_temporal_anchor,
                 shared_read_kv=register_shared_read_kv,
                 output_dim=register_output_dim,
+                latent_every_n=register_latent_every_n,
                 temporal_rope_dim_frac=temporal_rope_dim_frac,
                 rope_temporal_base=rope_temporal_base,
                 unit_norm=register_unit_norm,
@@ -4139,6 +4185,10 @@ class EncoderConfig(Config):
     # evals all consume this width. In the gradient path, unlike the detached
     # register_projection_dims student. None keeps the grid at register_dim.
     register_output_dim: int | None = None
+    # Latent self-attention blocks per read: 1 = the 1:1 default, 2 = one LSA per
+    # two reads (see SpatialRegisterBottleneck.latent_every_n). LSA blocks are half
+    # the bottleneck's sequential depth, which is what drives wall-clock.
+    register_latent_every_n: int = 1
     # If set, add a DETACHED low-dim "student" readout of the register grid, exported
     # as ``projected_registers`` (at width max(dims)) alongside the registers. The
     # student's inputs are detached, so its training signal (distillation to the
