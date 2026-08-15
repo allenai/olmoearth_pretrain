@@ -1568,6 +1568,7 @@ class SpatialRegisterBottleneck(nn.Module):
         rope_temporal_base: float | None = None,
         unit_norm: bool = False,
         unit_norm_scale: float | None = None,
+        shared_read_kv: bool = False,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1700,6 +1701,15 @@ class SpatialRegisterBottleneck(nn.Module):
                 ``sqrt(register_dim)``, LayerNorm's own output norm, so the constraint
                 is scale-neutral at init instead of silently rescaling the decoder's
                 context input.
+            shared_read_kv: If True, project the patch tokens into keys/values ONCE and
+                let every read block attend over that single copy. Read blocks are cheap
+                in FLOPs but expensive in memory -- each otherwise stores its own
+                input-norm output, k, rotated k and v over the full token array for
+                backward -- so this is what makes a deep read stack trainable, and it
+                also removes ~73% of a read block's FLOPs. The reads then SHARE key/value
+                weights and differ only in their queries, which is a model change rather
+                than a pure optimization. Requires a single K/V source: incompatible with
+                ``read_layers`` and with ``per_depth_read_proj``.
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1729,6 +1739,32 @@ class SpatialRegisterBottleneck(nn.Module):
                 )
         self.fused_read = fused_read
         self.attn_dim = attn_dim
+        # Shared-K/V: project the patch tokens into keys/values ONCE and let every
+        # read block attend over that one copy, instead of each block re-projecting
+        # the full token array. The saving is mostly MEMORY: a read block otherwise
+        # stores its own input-norm output, k, rotated k and v -- four token-array-
+        # sized tensors -- for backward, which is what caps the usable read depth
+        # (measured: 16 reads fit at micro 64, 24 do not). It also removes ~73% of a
+        # read block's FLOPs, since the K/V projection dominates them.
+        #
+        # THE TRADE: all read blocks now SHARE key/value weights, so successive reads
+        # can no longer look at the source through different lenses -- only their
+        # queries differ (which, under ``interleave``, is where the depth diversity
+        # lives anyway: read N queries registers refined N-1 times). This is a model
+        # change, not a pure optimization; arms with and without it are not directly
+        # comparable.
+        if shared_read_kv:
+            if multi_depth_sources := (read_layers is not None):
+                raise ValueError(
+                    "shared_read_kv reads one source; it cannot be combined with "
+                    f"register_read_layers (multi_depth={multi_depth_sources})"
+                )
+            if per_depth_read_proj:
+                raise ValueError(
+                    "shared_read_kv replaces the per-depth read projections: there "
+                    "is one shared K/V source, so per-block norms cannot apply"
+                )
+        self.shared_read_kv = shared_read_kv
         if temporal_anchor is not None:
             if temporal_anchor not in ("year_start", "first_timestep"):
                 raise ValueError(
@@ -1883,8 +1919,12 @@ class SpatialRegisterBottleneck(nn.Module):
                     kv_in_dim=(
                         encoder_embedding_size if attn_dim is not None else None
                     ),
+                    # Shared-K/V: only block 0 owns key/value projections; the rest
+                    # consume its output via ``kv_cached`` and never build their own
+                    # (so they cannot contribute unused parameters to DDP's allreduce).
+                    kv_external=(shared_read_kv and i > 0),
                 )
-                for _ in range(num_read_blocks)
+                for i in range(num_read_blocks)
             ]
         )
         self.latent_blocks = nn.ModuleList(
@@ -2158,10 +2198,21 @@ class SpatialRegisterBottleneck(nn.Module):
                 dim=-1,
             )
 
+        # Shared-K/V: project the one source into keys/values HERE, once, rather than
+        # inside every read block. Block 0 owns the weights (the rest were built
+        # ``kv_external``), so the whole stack reads through a single projection and a
+        # single stored copy of the context.
+        shared_kv: tuple[Tensor, Tensor] | None = None
+        if self.shared_read_kv:
+            shared_kv = self.read_blocks[0].attn.compute_kv(
+                kv_per_read[0], patch_positions
+            )
+
         def read(registers: Tensor, i: int, blk: nn.Module, kv: Tensor) -> Tensor:
             out = blk(
                 x=registers,
-                y=kv,
+                y=None if shared_kv is not None else kv,
+                kv_cached=shared_kv,
                 attn_mask=read_attn_mask,
                 rope_positions=read_register_positions,
                 rope_positions_y=patch_positions,
@@ -2259,6 +2310,7 @@ class Encoder(FlexiVitBase):
         register_latent_self_attn: bool = True,
         register_attn_dim: int | None = None,
         register_temporal_anchor: str | None = None,
+        register_shared_read_kv: bool = False,
         register_contrastive_source: str = "registers",
         register_projection_dims: list[int] | None = None,
         register_projection_type: str = "linear",
@@ -2384,6 +2436,9 @@ class Encoder(FlexiVitBase):
                 self-attention blocks entirely (cross-attention reads only, no
                 register-to-register mixing); the read count is unchanged. Defaults to True
                 (keep the latent transformer, backwards compatible).
+            register_shared_read_kv: If set, the register bottleneck projects the patch
+                tokens into keys/values once and shares them across all read blocks (see
+                ``SpatialRegisterBottleneck.shared_read_kv``).
             register_temporal_anchor: If set, make the register READ temporally aware
                 while keeping the registers a time-free 2D grid: the bottleneck's read
                 blocks run axial 3D RoPE with each register anchored at a per-sample
@@ -2586,6 +2641,7 @@ class Encoder(FlexiVitBase):
                 latent_self_attn=register_latent_self_attn,
                 attn_dim=register_attn_dim,
                 temporal_anchor=register_temporal_anchor,
+                shared_read_kv=register_shared_read_kv,
                 temporal_rope_dim_frac=temporal_rope_dim_frac,
                 rope_temporal_base=rope_temporal_base,
                 unit_norm=register_unit_norm,
@@ -2642,6 +2698,7 @@ class Encoder(FlexiVitBase):
                         latent_self_attn=register_latent_self_attn,
                         attn_dim=embedding_size,
                         temporal_anchor=register_temporal_anchor,
+                        shared_read_kv=register_shared_read_kv,
                         temporal_rope_dim_frac=temporal_rope_dim_frac,
                         rope_temporal_base=rope_temporal_base,
                         # The student IS the served embedding when it is deployed, so
@@ -4040,6 +4097,11 @@ class EncoderConfig(Config):
     # position_encoding. None (default) keeps the purely spatial read (backwards
     # compatible).
     register_temporal_anchor: str | None = None
+    # Share ONE key/value projection across all register read blocks (see
+    # SpatialRegisterBottleneck.shared_read_kv). Caps read-side activation memory at a
+    # single stored copy of the context instead of one per read, which is what makes
+    # deep read stacks trainable; in exchange the reads lose independent K/V lenses.
+    register_shared_read_kv: bool = False
     # If set, add a DETACHED low-dim "student" readout of the register grid, exported
     # as ``projected_registers`` (at width max(dims)) alongside the registers. The
     # student's inputs are detached, so its training signal (distillation to the

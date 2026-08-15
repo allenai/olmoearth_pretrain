@@ -130,6 +130,7 @@ def build_earlyread_model_config(
     *,
     trunk_depth: int,
     latent_depth: int,
+    shared_read_kv: bool = False,
 ) -> LatentMIMConfig:
     """The d128 NDVI tanchor base, with the encoder/bottleneck depth split reallocated.
 
@@ -145,6 +146,11 @@ def build_earlyread_model_config(
         latent_depth: ``[read -> latent self-attend]`` blocks over the register grid.
             Under ``register_interleave`` this is BOTH the read count and the
             latent-block count.
+        shared_read_kv: Project the patch tokens into keys/values once and share them
+            across every read, instead of each read re-projecting the full token array.
+            Lifts the read-depth ceiling (unshared, 16 reads fit at micro 64 and 24 do
+            not) and removes ~73% of a read block's FLOPs, at the cost of the reads
+            sharing K/V weights. Replaces ``register_per_depth_read_proj``.
 
     Returns:
         The base model config with ``depth`` and ``register_latent_depth`` overridden.
@@ -154,6 +160,17 @@ def build_earlyread_model_config(
 
     encoder_config.depth = trunk_depth
     encoder_config.register_latent_depth = latent_depth
+
+    # Shared-K/V: one key/value projection of the patch tokens, reused by every read.
+    # This is what lifts the read-depth ceiling -- without it a read block stores its own
+    # input-norm output, k, rotated k and v (four token-array-sized tensors) for backward,
+    # and 24+ reads exceed 80 GB at micro 64 while 16 fit. It also removes ~73% of a read
+    # block's FLOPs. It REPLACES per-depth read projections (there is one source, so
+    # per-block norms have nothing to differentiate), and it is a model change rather than
+    # a pure optimization: the reads share K/V weights and differ only in their queries.
+    encoder_config.register_shared_read_kv = shared_read_kv
+    if shared_read_kv:
+        encoder_config.register_per_depth_read_proj = False
 
     # Single-source re-reads: every read re-queries the trunk's final layer through its
     # own norm (per_depth_read_proj), rather than one read per encoder depth. Asserted
@@ -168,8 +185,9 @@ def build_earlyread_model_config(
     assert encoder_config.register_interleave, (
         "early-read arms need the interleaved [read -> self] schedule"
     )
-    assert encoder_config.register_per_depth_read_proj, (
-        "early-read arms give each read its own lens on the shared source"
+    assert shared_read_kv or encoder_config.register_per_depth_read_proj, (
+        "early-read arms give each read its own lens on the shared source, unless "
+        "shared_read_kv replaces the per-depth projections with one shared K/V"
     )
     assert encoder_config.register_temporal_anchor is not None, (
         "a shallow trunk leaves the anchored read as the only path for temporal "
