@@ -112,8 +112,8 @@ def test_from_olmoearthsample_ignores_cloud_fields() -> None:
         assert not [f for f in masked._fields if f.endswith("_cloud")]
 
 
-def test_collate_includes_cloud_only_when_every_sample_has_it() -> None:
-    """A partially-cached batch trains normally (no cloud) instead of erroring."""
+def test_collate_stacks_cloud_when_every_sample_has_it() -> None:
+    """The all-present case: cloud is stacked and handed to the masking strategy."""
     cloud = np.zeros((8, 8, 2, 1), dtype=np.uint8)
     with_cloud = [(4, _sample(cloud_s2=cloud)) for _ in range(3)]
     _, stacked = collate_olmoearth_pretrain(with_cloud)
@@ -123,10 +123,58 @@ def test_collate_includes_cloud_only_when_every_sample_has_it() -> None:
     assert payload is not None
     assert sorted(payload) == ["sentinel2_l2a_cloud"]
 
-    mixed = with_cloud[:2] + [(4, _sample())]
-    _, stacked_mixed = collate_olmoearth_pretrain(mixed)
-    assert stacked_mixed.sentinel2_l2a_cloud is None
-    assert extract_cloud_payload(stacked_mixed) is None
+
+def test_collate_fills_missing_cloud_with_nodata_instead_of_dropping_the_batch() -> (
+    None
+):
+    """One sample without a cloud map must not disable masking for the whole batch.
+
+    ~2% of the OSM-sampling set has no Landsat, so under the old all-or-nothing rule
+    (drop the field unless EVERY sample has it) Landsat masking was active in only
+    ~0.98**64 = 27% of batches at 64 samples per rank -- silently.
+    """
+    cloud = np.full((8, 8, 2, 1), THICK_CLOUD, dtype=np.uint8)
+    mixed = [(4, _sample(cloud_s2=cloud)) for _ in range(2)] + [(4, _sample())]
+    _, stacked = collate_olmoearth_pretrain(mixed)
+
+    assert stacked.sentinel2_l2a_cloud is not None, "batch lost cloud to one bad sample"
+    assert stacked.sentinel2_l2a_cloud.shape == (3, 8, 8, 2, 1)
+    # The two real maps survive verbatim; the absent one becomes NODATA.
+    assert (stacked.sentinel2_l2a_cloud[:2] == THICK_CLOUD).all()
+    assert (stacked.sentinel2_l2a_cloud[2] == NODATA).all()
+
+    payload = extract_cloud_payload(stacked)
+    assert payload is not None and sorted(payload) == ["sentinel2_l2a_cloud"]
+
+
+def test_nodata_filled_sample_loses_no_decoder_tokens() -> None:
+    """The NODATA fill must be inert: that sample is masked exactly as if no cloud."""
+    patch_size = 4
+    h = w = 16
+    cloud = np.full((h, w, 2, 1), THICK_CLOUD, dtype=np.uint8)
+    mixed = [(patch_size, _sample(h=h, w=w, t=2, cloud_s2=cloud))] + [
+        (patch_size, _sample(h=h, w=w, t=2))
+    ]
+    _, stacked = collate_olmoearth_pretrain(mixed)
+    payload = extract_cloud_payload(stacked)
+    assert payload is not None
+
+    strategy = RandomTimeWithDecodeMaskingStrategy(
+        only_decode_modalities=[Modality.WORLDCOVER.name]
+    )
+    torch.manual_seed(0)
+    np.random.seed(0)
+    baseline = strategy.apply_mask(stacked, patch_size)
+    torch.manual_seed(0)
+    np.random.seed(0)
+    skipped = strategy.apply_mask(stacked, patch_size, cloud=payload)
+
+    base, skip = baseline.sentinel2_l2a_mask, skipped.sentinel2_l2a_mask
+    assert base is not None and skip is not None
+    # Sample 0 (all thick cloud) loses its decode targets ...
+    assert (base[0] != skip[0]).any()
+    # ... and sample 1 (NODATA-filled) is untouched.
+    assert torch.equal(base[1], skip[1])
 
 
 def test_transform_moves_cloud_in_lockstep_with_its_modality() -> None:

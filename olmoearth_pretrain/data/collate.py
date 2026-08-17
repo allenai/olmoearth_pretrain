@@ -4,12 +4,49 @@ from __future__ import annotations
 
 import torch
 
+from olmoearth_pretrain.data.cloud_mask_cache import NODATA
 from olmoearth_pretrain.data.transform import Transform
 from olmoearth_pretrain.datatypes import (
     MaskedOlmoEarthSample,
     OlmoEarthSample,
 )
 from olmoearth_pretrain.train.masking import MaskingStrategy
+
+CLOUD_FIELDS = ("sentinel2_l2a_cloud", "landsat_cloud")
+
+
+def _stack_cloud_field(
+    batch: list[tuple[int, OlmoEarthSample]], name: str
+) -> torch.Tensor | None:
+    """Stack one ``*_cloud`` field, filling samples that lack it with NODATA.
+
+    A sample is missing a cloud map when its h5 holds no such modality at all -- about
+    2% of the OSM-sampling set has no Landsat -- so there is nothing to skip for it
+    anyway: its modality mask is already all-MISSING. Filling with NODATA, which
+    ``_apply_cloud_skip`` counts as NOT cloud, makes that sample a no-op while every
+    other sample in the batch keeps its masking.
+
+    This replaces an all-or-nothing rule that dropped the field for the WHOLE batch if
+    any single sample lacked it. At ~98% per-sample Landsat coverage and 64 samples per
+    rank that left Landsat masking active in only ~27% of batches, and silently.
+
+    Returns None only when NO sample in the batch has the field (cloud genuinely
+    disabled, e.g. an uncached run), which is the one case that should be a no-op.
+    """
+    arrays = [getattr(sample, name, None) for _, sample in batch]
+    present = [a for a in arrays if a is not None]
+    if not present:
+        return None
+    reference = torch.from_numpy(present[0])
+    return torch.stack(
+        [
+            torch.from_numpy(a)
+            if a is not None
+            else torch.full(reference.shape, NODATA, dtype=reference.dtype)
+            for a in arrays
+        ],
+        dim=0,
+    )
 
 
 def collate_olmoearth_pretrain(
@@ -29,23 +66,21 @@ def collate_olmoearth_pretrain(
         return stacked_tensor
 
     patch_size, batch_zero = batch[0]
+    collated_dict: dict[str, torch.Tensor | None] = {
+        field: stack_or_none(field) for field in batch_zero.modalities_with_timestamps
+    }
     # modalities_with_timestamps excludes the `*_cloud` side-payloads (see
     # datatypes._modalities). We add them back here so they get stacked and,
-    # crucially, transformed in lockstep with their modality (flip/rotate) --
-    # then they are pulled off by extract_cloud_payload before masking and never
-    # reach the model. Included only if EVERY sample has them (mixed / partial-
-    # cache batches skip cloud and train normally).
-    sample_fields = list(batch_zero.modalities_with_timestamps)
+    # crucially, transformed in lockstep with their modality (flip/rotate) -- then
+    # they are pulled off by extract_cloud_payload before masking and never reach the
+    # model. Stacked per-field with a NODATA fill for samples that lack one, so a
+    # single Landsat-less sample no longer disables Landsat masking for the whole
+    # batch (see _stack_cloud_field).
     for name in CLOUD_FIELDS:
-        if all(getattr(sample, name, None) is not None for _, sample in batch):
-            sample_fields.append(name)
-
-    # Create a dictionary of stacked tensors for each field
-    collated_dict = {field: stack_or_none(field) for field in sample_fields}
+        stacked = _stack_cloud_field(batch, name)
+        if stacked is not None:
+            collated_dict[name] = stacked
     return patch_size, OlmoEarthSample(**collated_dict)
-
-
-CLOUD_FIELDS = ("sentinel2_l2a_cloud", "landsat_cloud")
 
 
 def extract_cloud_payload(
