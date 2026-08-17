@@ -125,6 +125,41 @@ EARLYREAD_LOOP_EVAL_TASKS = {
 }
 
 
+# The year-aligned AEF pair ONLY -- ethiopia and descals, linear probe and kNN. Used by
+# the checkpoint-sweep shims that score already-trained runs (cand_ndvi, sphere_unif0p1)
+# as baselines for this sweep. Deliberately narrower than EARLYREAD_LOOP_EVAL_TASKS: a
+# standalone checkpoint sweep otherwise runs the whole shared catalog (eurosat, mados,
+# fifty_cities, ...), which costs hours per checkpoint to answer nothing being asked.
+#
+# The two _knn entries carry AEF's balanced-trial protocol automatically (_aef_ps1_task
+# attaches it whenever eval_mode is KNN), which is where the aeftrial_* metrics come from.
+_YEAR_ALIGNED_ONLY_NAMES = (
+    "ethiopia_crops_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat",
+    "ethiopia_crops_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_knn",
+    "descals_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat",
+    "descals_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_knn",
+)
+YEAR_ALIGNED_ONLY_LOOP_EVAL_TASKS = {
+    name: replace(_EMBEDDING_EVAL_TASKS[name], eval_interval=_LOOP_EVAL_INTERVAL)
+    for name in _YEAR_ALIGNED_ONLY_NAMES
+}
+
+
+def set_year_aligned_only_loop_evals(trainer_config, module_path: str):
+    """REPLACE the eval set with the year-aligned ethiopia + descals probes only.
+
+    For the checkpoint-sweep baselines. ``checkpoint_sweep_evals`` only reads a module's
+    own tasks when ``OE_LOOP_EVAL_FROM_TRAIN_CONFIG`` is set in the environment -- without
+    it a standalone sweep silently uses the shared catalog regardless of what this returns.
+    Set that env var when launching, or this has no effect.
+    """
+    evaluator = trainer_config.callbacks["downstream_evaluator"]
+    evaluator.tasks = dict(YEAR_ALIGNED_ONLY_LOOP_EVAL_TASKS)
+    evaluator.run_as_beaker_job = False
+    trainer_config.callbacks["downstream_evaluator"] = evaluator
+    return trainer_config
+
+
 def build_earlyread_model_config(
     common: CommonComponents,
     *,

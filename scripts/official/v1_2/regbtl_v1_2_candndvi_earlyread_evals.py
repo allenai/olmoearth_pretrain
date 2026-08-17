@@ -23,7 +23,7 @@ evaluator's ``tasks``.
 import logging
 
 from base import build_trainer_config as _base_build_trainer_config
-from regbtl_v1_2_earlyread_common import set_earlyread_loop_evals
+from regbtl_v1_2_earlyread_common import set_year_aligned_only_loop_evals
 from regbtl_v1_2_gdyn_d128_wideread_regsup_ndvi_w0p1_tanchor_newsampling_psuniform import (  # noqa: F401
     build_dataloader_config,
     build_dataset_config,
@@ -43,5 +43,7 @@ MODULE_PATH = "scripts/official/v1_2/regbtl_v1_2_candndvi_earlyread_evals.py"
 
 
 def build_trainer_config(common: CommonComponents):
-    """The run's trainer config with ONLY the six early-read embedding evals."""
-    return set_earlyread_loop_evals(_base_build_trainer_config(common), MODULE_PATH)
+    """The run's trainer config with ONLY the year-aligned ethiopia + descals evals."""
+    return set_year_aligned_only_loop_evals(
+        _base_build_trainer_config(common), MODULE_PATH
+    )
