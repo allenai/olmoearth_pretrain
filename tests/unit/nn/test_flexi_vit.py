@@ -7,6 +7,12 @@ import torch
 from einops import repeat
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.nn.attention import (
+    Attention,
+    Mlp,
+    ModalityRouting,
+    PerModalityLinear,
+)
 from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
     timestamps_to_days,
@@ -1195,6 +1201,286 @@ class TestProjectionAndAggregation:
         x_tensor = torch.ones((b, h * w * t, d))
         out_tensor = layer(x_tensor)
         assert out_tensor.shape == (b, h * w * t, out_d)
+
+
+class TestPerModalityLayers:
+    """Unit tests for per-modality transformer layers."""
+
+    @staticmethod
+    def _reference_per_modality_linear(
+        layer: PerModalityLinear, x: torch.Tensor, modality_ids: torch.Tensor
+    ) -> torch.Tensor:
+        out: torch.Tensor | None = None
+        for route_id, route_layer in enumerate(layer.layers):
+            route_mask = modality_ids == route_id
+            if not route_mask.any():
+                continue
+            route_out = route_layer(x[route_mask])
+            if out is None:
+                out = route_out.new_empty((*x.shape[:-1], route_out.shape[-1]))
+            out[route_mask] = route_out
+        assert out is not None
+        return out
+
+    def test_per_modality_linear_dispatch_grad_and_shared_equivalence(self) -> None:
+        """Test routed linear dispatch and equivalence when route weights match."""
+        torch.manual_seed(0)
+        x = torch.randn(2, 3, 4, requires_grad=True)
+        modality_ids = torch.tensor([[0, 1, 0], [1, 0, 1]])
+        routed = PerModalityLinear(4, 5, num_routes=2)
+        shared = torch.nn.Linear(4, 5)
+
+        for layer in routed.layers:
+            layer.weight.data.copy_(shared.weight.data)
+            assert shared.bias is not None
+            assert layer.bias is not None
+            layer.bias.data.copy_(shared.bias.data)
+
+        out = routed(x, modality_ids)
+        assert out.shape == (2, 3, 5)
+        assert torch.allclose(out, shared(x))
+
+        out.sum().backward()
+        assert x.grad is not None
+        for layer in routed.layers:
+            assert layer.weight.grad is not None
+            assert layer.bias is not None
+            assert layer.bias.grad is not None
+
+    def test_per_modality_linear_routing_and_single_route(self) -> None:
+        """Test optimized routing and direct route dispatch match reference behavior."""
+        torch.manual_seed(0)
+        x = torch.randn(2, 4, 3, requires_grad=True)
+        modality_ids = torch.tensor([[0, 2, 0, 2], [2, 0, 2, 0]])
+        routed = PerModalityLinear(3, 5, num_routes=3)
+        routing = ModalityRouting.from_modality_ids(modality_ids, num_routes=3)
+
+        out = routed(x, routing=routing)
+        ref = self._reference_per_modality_linear(routed, x, modality_ids)
+        assert torch.allclose(out, ref)
+
+        route_x = torch.randn(2, 3, requires_grad=True)
+        route_out = routed.forward_route(route_x, route_id=2)
+        assert torch.allclose(route_out, routed.layers[2](route_x))
+
+        out.sum().backward()
+        # Empty routes are still executed, so all route params receive a (zero)
+        # gradient. This keeps the autograd graph identical across ranks for FSDP.
+        assert routed.layers[0].weight.grad is not None
+        assert routed.layers[1].weight.grad is not None
+        assert torch.count_nonzero(routed.layers[1].weight.grad) == 0
+        assert routed.layers[2].weight.grad is not None
+
+    def test_per_modality_linear_autocast_dtype(self) -> None:
+        """Test routed output dtype follows autocast linear output dtype."""
+        x = torch.randn(2, 3, 4)
+        modality_ids = torch.tensor([[0, 1, 0], [1, 0, 1]])
+        routed = PerModalityLinear(4, 5, num_routes=2)
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            out = routed(x, modality_ids)
+        assert out.dtype == torch.bfloat16
+
+    def test_modality_routing_covers_all_routes(self) -> None:
+        """Test routing always emits one entry per route, including empty ones."""
+        modality_ids = torch.tensor([[0, 2, 0, 2], [2, 0, 2, 0]])
+        routing = ModalityRouting.from_modality_ids(modality_ids, num_routes=3)
+        assert len(routing.route_indices) == 3
+        route_ids = [route_id for route_id, _ in routing.route_indices]
+        assert route_ids == [0, 1, 2]
+        # Route 1 is absent from modality_ids, so it carries an empty index tensor.
+        empty_indices = dict(routing.route_indices)[1]
+        assert empty_indices.numel() == 0
+        total = sum(indices.numel() for _, indices in routing.route_indices)
+        assert total == modality_ids.numel()
+
+    def test_per_modality_attention_matches_shared_when_weights_tied(self) -> None:
+        """Test routed self-attention equals shared attention with tied weights."""
+        torch.manual_seed(0)
+        dim, num_heads, num_routes = 8, 2, 3
+        shared = Attention(dim=dim, num_heads=num_heads, qkv_bias=True)
+        routed = Attention(
+            dim=dim,
+            num_heads=num_heads,
+            qkv_bias=True,
+            per_modality_layers=True,
+            num_modality_routes=num_routes,
+        )
+        shared.eval()
+        routed.eval()
+        assert routed.qkv is not None
+        assert isinstance(routed.proj, PerModalityLinear)
+        assert shared.q is not None
+        assert shared.k is not None
+        assert shared.v is not None
+        fused_weight = torch.cat(
+            [shared.q.weight.data, shared.k.weight.data, shared.v.weight.data], dim=0
+        )
+        fused_bias = torch.cat(
+            [shared.q.bias.data, shared.k.bias.data, shared.v.bias.data], dim=0
+        )
+        for route_id in range(num_routes):
+            qkv_layer = routed.qkv.layers[route_id]
+            qkv_layer.weight.data.copy_(fused_weight)
+            assert qkv_layer.bias is not None
+            qkv_layer.bias.data.copy_(fused_bias)
+            proj_layer = routed.proj.layers[route_id]
+            proj_layer.weight.data.copy_(shared.proj.weight.data)
+            assert proj_layer.bias is not None
+            proj_layer.bias.data.copy_(shared.proj.bias.data)
+
+        x = torch.randn(2, 5, dim)
+        modality_ids = torch.tensor([[0, 2, 0, 1, 2], [2, 1, 0, 0, 2]])
+        routing = ModalityRouting.from_modality_ids(modality_ids, num_routes)
+        out = routed(x, modality_routing=routing)
+        ref = shared(x)
+        assert torch.allclose(out, ref, atol=1e-6)
+
+    def test_per_modality_attention_rejects_unsupported_modes(self) -> None:
+        """Test per-modality attention fails fast on unsupported configurations."""
+        with pytest.raises(ValueError, match="num_modality_routes"):
+            Attention(dim=4, num_heads=2, per_modality_layers=True)
+        with pytest.raises(ValueError, match="self-attention"):
+            Attention(
+                dim=4,
+                num_heads=2,
+                cross_attn=True,
+                per_modality_layers=True,
+                num_modality_routes=2,
+            )
+        with pytest.raises(ValueError, match="kv_external"):
+            Attention(
+                dim=4,
+                num_heads=2,
+                kv_external=True,
+                per_modality_layers=True,
+                num_modality_routes=2,
+            )
+        with pytest.raises(ValueError, match="SDPA"):
+            Attention(
+                dim=4,
+                num_heads=2,
+                use_flash_attn=True,
+                per_modality_layers=True,
+                num_modality_routes=2,
+            )
+
+    def test_routed_mlp_matches_separate_routed_linears_eval(self) -> None:
+        """Test optimized routed MLP matches separate routed linears in eval mode."""
+        torch.manual_seed(0)
+        x = torch.randn(2, 4, 3, requires_grad=True)
+        modality_ids = torch.tensor([[0, 2, 0, 2], [2, 0, 2, 0]])
+        routing = ModalityRouting.from_modality_ids(modality_ids, num_routes=3)
+        mlp = Mlp(
+            in_features=3,
+            hidden_features=7,
+            out_features=5,
+            drop=0.0,
+            per_modality_layers=True,
+            num_modality_routes=3,
+        )
+        mlp.eval()
+        assert isinstance(mlp.fc1, PerModalityLinear)
+        assert isinstance(mlp.fc2, PerModalityLinear)
+
+        ref = mlp.fc1(x, routing=routing)
+        ref = mlp.act(ref)
+        ref = mlp.drop1(ref)
+        ref = mlp.fc2(ref, routing=routing)
+        ref = mlp.drop2(ref)
+        out = mlp(x, modality_routing=routing)
+        assert torch.allclose(out, ref)
+
+        out.sum().backward()
+        # Empty routes are still executed, so all route params receive a (zero)
+        # gradient. This keeps the autograd graph identical across ranks for FSDP.
+        assert mlp.fc1.layers[0].weight.grad is not None
+        assert mlp.fc1.layers[1].weight.grad is not None
+        assert torch.count_nonzero(mlp.fc1.layers[1].weight.grad) == 0
+        assert mlp.fc1.layers[2].weight.grad is not None
+
+    def test_encoder_modality_ids_follow_remove(self) -> None:
+        """Test encoder modality IDs stay aligned through collapse/remove."""
+        encoder = Encoder(
+            embedding_size=8,
+            max_patch_size=8,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=2.0,
+            depth=1,
+            drop_path=0.0,
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
+            max_sequence_length=12,
+            per_modality_layers=True,
+        )
+        x = {
+            "sentinel2_l2a": torch.randn(2, 2, 1, 1, 1, 8),
+            "sentinel2_l2a_mask": torch.tensor(
+                [
+                    [
+                        [[[MaskValue.ONLINE_ENCODER.value]]],
+                        [[[MaskValue.DECODER.value]]],
+                    ],
+                    [
+                        [[[MaskValue.DECODER.value]]],
+                        [[[MaskValue.ONLINE_ENCODER.value]]],
+                    ],
+                ]
+            ),
+            "latlon": torch.randn(2, 1, 8),
+            "latlon_mask": torch.full(
+                (2, 1), MaskValue.ONLINE_ENCODER.value, dtype=torch.long
+            ),
+        }
+
+        tokens, mask, modality_ids = encoder.collapse_and_combine_hwtc(
+            x, return_modality_ids=True
+        )
+        s2_id = encoder.modality_to_id["sentinel2_l2a"]
+        latlon_id = encoder.modality_to_id["latlon"]
+        assert tokens.shape == (2, 3, 8)
+        assert torch.equal((modality_ids == s2_id).sum(dim=1), torch.tensor([2, 2]))
+        assert torch.equal((modality_ids == latlon_id).sum(dim=1), torch.tensor([1, 1]))
+
+        # Reduce the modality IDs exactly as apply_attn does (same stable sort).
+        kept = mask == MaskValue.ONLINE_ENCODER.value
+        tokens, _, new_mask, _, _ = encoder.remove_masked_tokens(tokens, kept)
+        reduced_ids, _, _, _, _ = encoder.remove_masked_tokens(
+            modality_ids[..., None].float(), kept
+        )
+        modality_ids = reduced_ids.squeeze(-1).round().long()
+        assert torch.equal(new_mask, torch.ones_like(new_mask).bool())
+        assert modality_ids.shape == tokens.shape[:-1]
+        # Each sample keeps one visible S2 token and its latlon token.
+        assert torch.equal((modality_ids == s2_id).sum(dim=1), torch.tensor([1, 1]))
+        assert torch.equal((modality_ids == latlon_id).sum(dim=1), torch.tensor([1, 1]))
+
+    def test_per_modality_layers_reject_register_tokens(self) -> None:
+        """Test routed layers fail fast when register tokens are configured."""
+        with pytest.raises(ValueError, match="register tokens"):
+            Encoder(
+                embedding_size=4,
+                max_patch_size=8,
+                min_patch_size=1,
+                num_heads=2,
+                mlp_ratio=2.0,
+                depth=1,
+                drop_path=0.0,
+                supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
+                max_sequence_length=12,
+                num_register_tokens=1,
+                per_modality_layers=True,
+            )
+
+        config = EncoderConfig(
+            supported_modality_names=[
+                Modality.SENTINEL2_L2A.name,
+                Modality.LATLON.name,
+            ],
+            num_register_tokens=1,
+            per_modality_layers=True,
+        )
+        with pytest.raises(ValueError, match="register tokens"):
+            config.validate()
 
 
 class TestBandDropout:

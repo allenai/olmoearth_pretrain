@@ -1,8 +1,10 @@
 """Test masking."""
 
 import logging
+import math
 import random
 
+import numpy as np
 import torch
 
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
@@ -12,6 +14,7 @@ from olmoearth_pretrain.train.masking import (
     MaskValue,
     ModalityCrossRandomMaskingStrategy,
     ModalityCrossSpaceMaskingStrategy,
+    RandomCountTimeWithDecodeMaskingStrategy,
     RandomMaskingStrategy,
     RandomRangeMaskingStrategy,
     RandomWithDecodeMaskingStrategy,
@@ -1694,3 +1697,227 @@ def test_random_decode_masking_with_missing_modality_mask_in_instance() -> None:
             assert total_encoded_bandsets >= 1, (
                 f"Instance {idx} has no encoded bandsets across all modalities"
             )
+
+
+def _make_timestamps(b: int, t: int) -> torch.Tensor:
+    days = torch.randint(1, 31, (b, t, 1), dtype=torch.long)
+    months = torch.randint(1, 13, (b, t, 1), dtype=torch.long)
+    years = torch.randint(2018, 2020, (b, t, 1), dtype=torch.long)
+    return torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
+
+
+def test_random_count_masking_bandset_split_and_roles() -> None:
+    """Test RandomCountTimeWithDecodeMaskingStrategy's random-masking branch.
+
+    - The encode-bandset count is uniform over [1, N] (not ceil(N * encode_ratio)).
+    - Encode-side bandsets have their masked portion set to DECODER.
+    - only_decode_modalities are all DECODER.
+    """
+    np.random.seed(0)
+    torch.manual_seed(0)
+    b, h, w, t = 64, 8, 8, 4
+    patch_size = 2
+
+    batch = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((b, h, w, t, Modality.SENTINEL2_L2A.num_bands)),
+        sentinel1=torch.ones((b, h, w, t, Modality.SENTINEL1.num_bands)),
+        timestamps=_make_timestamps(b, t),
+        worldcover=torch.ones((b, h, w, Modality.WORLDCOVER.num_bands)),
+    )
+
+    encode_ratio, decode_ratio = 0.25, 0.5
+    strategy = RandomCountTimeWithDecodeMaskingStrategy(
+        encode_ratio=encode_ratio,
+        decode_ratio=decode_ratio,
+        random_ratio=1.0,  # force the random-masking branch
+        only_decode_modalities=["worldcover"],
+    )
+    masked_sample = strategy.apply_mask(batch, patch_size=patch_size)
+
+    assert isinstance(masked_sample.worldcover_mask, torch.Tensor)
+    assert (masked_sample.worldcover_mask == MaskValue.DECODER.value).all()
+
+    total_bandsets = (
+        Modality.SENTINEL2_L2A.num_band_sets + Modality.SENTINEL1.num_band_sets
+    )
+    encode_counts = []
+    for idx in range(b):
+        num_encoded_bandsets = 0
+        for modality_name in ["sentinel2_l2a", "sentinel1"]:
+            mask = getattr(masked_sample, f"{modality_name}_mask")[idx]
+            tokens = mask[0::patch_size, 0::patch_size]  # (hp, wp, t, bandsets)
+            for bandset_idx in range(tokens.shape[-1]):
+                bandset_mask = tokens[..., bandset_idx]
+                num_tokens = bandset_mask.numel()
+                num_encoded = (
+                    (bandset_mask == MaskValue.ONLINE_ENCODER.value).sum().item()
+                )
+                num_decoded = (bandset_mask == MaskValue.DECODER.value).sum().item()
+                if num_encoded > 0:
+                    # Encode-side: encode_ratio encoded AND decode_ratio decoded
+                    # (the masked portion is a prediction target, not target-only).
+                    assert num_encoded / num_tokens == encode_ratio
+                    assert num_decoded / num_tokens == decode_ratio
+                    num_encoded_bandsets += 1
+                else:
+                    # Decode-side: decode_ratio decoded, no encoded tokens.
+                    assert num_decoded / num_tokens == decode_ratio
+        assert 1 <= num_encoded_bandsets <= total_bandsets
+        encode_counts.append(num_encoded_bandsets)
+
+    # Uniform over [1, N]: over 64 instances we should see both extremes, and in
+    # particular counts above ceil(N * encode_ratio) (impossible for the parent
+    # strategy's fixed split).
+    assert min(encode_counts) == 1
+    assert max(encode_counts) == total_bandsets
+    assert max(encode_counts) > math.ceil(total_bandsets * encode_ratio)
+
+
+def test_random_count_time_masking_contiguous_and_retained() -> None:
+    """Test the contiguous-timestep time masking with a retained image modality.
+
+    With random_ratio=0 and two image modalities, every instance time-masks one
+    modality's bandsets (contiguous decode timestep block) and randomly masks the
+    other (retained) modality.
+    """
+    np.random.seed(0)
+    torch.manual_seed(0)
+    b, h, w, t = 16, 8, 8, 8
+    patch_size = 2
+
+    batch = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((b, h, w, t, Modality.SENTINEL2_L2A.num_bands)),
+        sentinel1=torch.ones((b, h, w, t, Modality.SENTINEL1.num_bands)),
+        timestamps=_make_timestamps(b, t),
+        worldcover=torch.ones((b, h, w, Modality.WORLDCOVER.num_bands)),
+    )
+
+    encode_ratio = 0.5
+    strategy = RandomCountTimeWithDecodeMaskingStrategy(
+        encode_ratio=encode_ratio,
+        decode_ratio=0.5,
+        random_ratio=0.0,  # force the time-masking branch
+        only_decode_modalities=["worldcover"],
+    )
+    masked_sample = strategy.apply_mask(batch, patch_size=patch_size)
+
+    expected_num_decode_t = t - math.ceil(t * encode_ratio)
+    for idx in range(b):
+        random_masked_modalities = set()
+        decode_blocks = set()
+        for modality_name in ["sentinel2_l2a", "sentinel1"]:
+            mask = getattr(masked_sample, f"{modality_name}_mask")[idx]
+            tokens = mask[0::patch_size, 0::patch_size]  # (hp, wp, t, bandsets)
+            for bandset_idx in range(tokens.shape[-1]):
+                bandset_mask = tokens[..., bandset_idx]
+                uniform_per_timestep = all(
+                    (bandset_mask[:, :, ti] == bandset_mask[0, 0, ti]).all()
+                    for ti in range(t)
+                )
+                if not uniform_per_timestep:
+                    # The retained modality is randomly masked.
+                    random_masked_modalities.add(modality_name)
+                    continue
+                # Time-masked bandset: decode timesteps are a contiguous block.
+                timestep_values = bandset_mask[0, 0, :]
+                decode_ts = [
+                    ti
+                    for ti in range(t)
+                    if timestep_values[ti] == MaskValue.DECODER.value
+                ]
+                assert len(decode_ts) == expected_num_decode_t
+                assert decode_ts == list(
+                    range(decode_ts[0], decode_ts[0] + len(decode_ts))
+                ), f"decode timesteps {decode_ts} are not contiguous"
+                decode_blocks.add(tuple(decode_ts))
+                # The non-decode timesteps are all ONLINE_ENCODER (encode-side
+                # bandset) or all TARGET_ENCODER_ONLY (decode-side bandset).
+                other_values = {
+                    timestep_values[ti].item() for ti in range(t) if ti not in decode_ts
+                }
+                assert other_values in (
+                    {MaskValue.ONLINE_ENCODER.value},
+                    {MaskValue.TARGET_ENCODER_ONLY.value},
+                )
+        # Exactly one image modality is retained (randomly masked) per instance,
+        # and all time-masked bandsets share one contiguous decode block.
+        assert len(random_masked_modalities) == 1
+        assert len(decode_blocks) == 1
+
+
+def test_random_count_time_masking_single_image_modality_falls_back() -> None:
+    """With a single image modality, the time branch falls back to random masking."""
+    np.random.seed(0)
+    torch.manual_seed(0)
+    b, h, w, t = 8, 8, 8, 8
+    patch_size = 2
+
+    batch = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((b, h, w, t, Modality.SENTINEL2_L2A.num_bands)),
+        timestamps=_make_timestamps(b, t),
+        worldcover=torch.ones((b, h, w, Modality.WORLDCOVER.num_bands)),
+    )
+
+    encode_ratio, decode_ratio = 0.25, 0.5
+    strategy = RandomCountTimeWithDecodeMaskingStrategy(
+        encode_ratio=encode_ratio,
+        decode_ratio=decode_ratio,
+        random_ratio=0.0,  # would force time masking if it were possible
+        only_decode_modalities=["worldcover"],
+    )
+    masked_sample = strategy.apply_mask(batch, patch_size=patch_size)
+
+    # Every bandset must carry the exact random-masking ratios; the time branch
+    # (encode timesteps = ceil(8 * 0.25) = 2 of 8) would produce different
+    # fractions and per-timestep-uniform masks.
+    assert isinstance(masked_sample.sentinel2_l2a_mask, torch.Tensor)
+    for idx in range(b):
+        tokens = masked_sample.sentinel2_l2a_mask[idx][0::patch_size, 0::patch_size]
+        for bandset_idx in range(tokens.shape[-1]):
+            bandset_mask = tokens[..., bandset_idx]
+            num_tokens = bandset_mask.numel()
+            num_encoded = (bandset_mask == MaskValue.ONLINE_ENCODER.value).sum().item()
+            num_decoded = (bandset_mask == MaskValue.DECODER.value).sum().item()
+            assert num_decoded / num_tokens == decode_ratio
+            assert num_encoded / num_tokens in (encode_ratio, 0)
+
+
+def test_random_count_masking_preserves_missing() -> None:
+    """Missing values stay MISSING through the new strategy."""
+    np.random.seed(0)
+    torch.manual_seed(0)
+    b, h, w, t = 8, 8, 8, 8
+    patch_size = 2
+
+    # Half the batch is missing S1 entirely; the other half is missing the second
+    # half of its timesteps.
+    sentinel1 = torch.ones((b, h, w, t, Modality.SENTINEL1.num_bands))
+    sentinel1[b // 2 :] = MISSING_VALUE
+    sentinel1[: b // 2, :, :, t // 2 :] = MISSING_VALUE
+
+    batch = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((b, h, w, t, Modality.SENTINEL2_L2A.num_bands)),
+        sentinel1=sentinel1,
+        timestamps=_make_timestamps(b, t),
+        worldcover=torch.ones((b, h, w, Modality.WORLDCOVER.num_bands)),
+    )
+
+    strategy = RandomCountTimeWithDecodeMaskingStrategy(
+        encode_ratio=0.5,
+        decode_ratio=0.5,
+        random_ratio=0.5,
+        only_decode_modalities=["worldcover"],
+    )
+    masked_sample = strategy.apply_mask(batch, patch_size=patch_size)
+
+    assert isinstance(masked_sample.sentinel1_mask, torch.Tensor)
+    assert (masked_sample.sentinel1_mask[b // 2 :] == MaskValue.MISSING.value).all()
+    assert (
+        masked_sample.sentinel1_mask[: b // 2, :, :, t // 2 :]
+        == MaskValue.MISSING.value
+    ).all()
+    # The non-missing portion still gets encoded and decoded tokens somewhere.
+    first_half = masked_sample.sentinel1_mask[: b // 2, :, :, : t // 2]
+    assert (first_half == MaskValue.ONLINE_ENCODER.value).any() or (
+        first_half == MaskValue.DECODER.value
+    ).any()

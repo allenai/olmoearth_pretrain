@@ -2145,6 +2145,279 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         return mask
 
 
+@MASKING_STRATEGY_REGISTRY.register("random_count_time_with_decode")
+class RandomCountTimeWithDecodeMaskingStrategy(RandomTimeWithDecodeMaskingStrategy):
+    """RandomTimeWithDecode variant: random encode count, contiguous time drop, retained modality.
+
+    Differences from ``RandomTimeWithDecodeMaskingStrategy``:
+
+    1. The encode/decode bandset split draws ``num_encode ~ Uniform{1..N}`` over the N
+       present encode-decode bandsets, instead of ``ceil(N * encode_ratio)``.
+    2. The masked (non-encoded) portion of encode-side bandsets becomes DECODER instead
+       of TARGET_ENCODER_ONLY, so encoded sensors are partially predicted too. With all
+       N bandsets on the encode side, prediction targets still come from these masked
+       portions (plus the only_decode modalities).
+    3. Time masking selects a CONTIGUOUS block of decode timesteps within the sorted
+       present timesteps (e.g. of timesteps 1-12, drop 6-12 or 4-8) instead of a random
+       subset.
+    4. Time masking keeps ONE image (spacetime-varying) modality out of the timestep
+       drop: a retained modality is picked uniformly among the present image modalities
+       and is randomly masked (per its encode/decode side) instead. Time masking
+       therefore requires at least TWO present image modalities; with fewer, the
+       instance falls back to random masking.
+
+    ``encode_ratio``/``decode_ratio`` keep their token-level meaning (the within-bandset
+    random-masking ratios and the encode share of the timestep split); they no longer
+    control the bandset split.
+    """
+
+    def apply_mask(
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
+        """Apply masking to the input data."""
+        if patch_size is None:
+            raise ValueError("patch_size must be provided for random masking")
+        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
+        none_modalites: list[str] = []
+        for modality_name in batch.modalities:
+            instance = getattr(batch, modality_name)
+            if instance is None:
+                none_modalites.append(modality_name)
+                output_dict[modality_name] = None
+                output_dict[
+                    MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+                ] = None
+            elif modality_name == "timestamps":
+                continue
+            else:
+                if isinstance(instance, torch.Tensor):
+                    device: torch.device | None = instance.device
+                else:
+                    device = None
+                modality = Modality.get(modality_name)
+
+                mask_shape = instance.shape[:-1] + (
+                    self._get_num_bandsets(modality_name),
+                )
+                mask = torch.full(
+                    mask_shape, fill_value=MaskValue.DECODER.value, device=device
+                )
+                mask = self.fill_mask_with_missing_values(instance, mask, modality)
+                output_dict[modality_name] = instance
+                output_dict[
+                    MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+                ] = mask
+
+        encode_decode_modalities = [
+            m
+            for m in batch.modalities
+            if m not in self.only_decode_modalities + ["timestamps"] + none_modalites
+        ]
+
+        has_decode_only_modalities = (
+            len(
+                [
+                    m
+                    for m in batch.modalities
+                    if m in self.only_decode_modalities and m not in none_modalites
+                ]
+            )
+            > 0
+        )
+
+        for i in range(batch.batch_size):
+            encode_decode_bandsets: list[tuple[str, int]] = []
+            present_image_modalities: set[str] = set()
+            missing_per_time: torch.Tensor | None = None
+
+            for modality_name in encode_decode_modalities:
+                not_missing = (
+                    output_dict[
+                        MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+                    ][i]  # type: ignore
+                    != MaskValue.MISSING.value
+                )
+                for bandset_idx in range(not_missing.shape[-1]):
+                    if not_missing[..., bandset_idx].sum() >= 1:
+                        encode_decode_bandsets.append((modality_name, bandset_idx))
+
+                        if Modality.get(modality_name).is_spacetime_varying:
+                            present_image_modalities.add(modality_name)
+                            # H, W, T
+                            not_missing_t = not_missing[:, :, :, bandset_idx].sum(
+                                dim=[0, 1]
+                            )
+                            if missing_per_time is None:
+                                missing_per_time = not_missing_t
+                            else:
+                                missing_per_time += not_missing_t
+                            missing_per_time = torch.clamp(missing_per_time, max=1)
+
+            # Time masking needs >= 2 present timesteps AND >= 2 image modalities
+            # (one of them is retained out of the timestep drop, so with a single
+            # image modality there would be nothing left to time-mask).
+            encode_timestamps: torch.Tensor | None = None
+            decode_timestamps: torch.Tensor | None = None
+            retained_modality: str | None = None
+            if (
+                missing_per_time is None
+                or sum(missing_per_time) <= 1
+                or len(present_image_modalities) < 2
+            ):
+                use_random_masking = True
+            elif np.random.random() < self.random_ratio:
+                use_random_masking = True
+            else:
+                use_random_masking = False
+                # argwhere returns ascending indices, so this is already sorted.
+                not_missing_t = torch.argwhere(missing_per_time)[:, 0]
+                num_encode_t = math.ceil(len(not_missing_t) * self.encode_ratio)
+                num_decode_t = len(not_missing_t) - num_encode_t
+                if num_decode_t < 1:
+                    use_random_masking = True
+                else:
+                    # A contiguous block of decode timesteps at a random offset;
+                    # the encode timesteps are the (possibly split) complement.
+                    start = np.random.randint(0, len(not_missing_t) - num_decode_t + 1)
+                    decode_timestamps = not_missing_t[start : start + num_decode_t]
+                    encode_timestamps = torch.cat(
+                        [not_missing_t[:start], not_missing_t[start + num_decode_t :]]
+                    )
+                    retained_modality = str(
+                        np.random.choice(sorted(present_image_modalities))
+                    )
+
+            if len(encode_decode_bandsets) == 1 and not has_decode_only_modalities:
+                # this branch should barely ever trigger
+                modality_name, bandset_idx = encode_decode_bandsets[0]
+                masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                    modality_name
+                )  # type: ignore
+                output_dict[masked_modality_name][
+                    i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                ] = self._random_fill_unmasked(
+                    output_dict[masked_modality_name][
+                        i : i + 1, ..., bandset_idx : bandset_idx + 1
+                    ],  # type: ignore
+                    Modality.get(modality_name),
+                    patch_size,
+                    self.encode_ratio,
+                    self.decode_ratio,
+                )
+            else:
+                np.random.shuffle(encode_decode_bandsets)
+                num_encode = np.random.randint(1, len(encode_decode_bandsets) + 1)
+                encode_bandsets = encode_decode_bandsets[:num_encode]
+                decode_bandsets = encode_decode_bandsets[num_encode:]
+
+                for modality_name, bandset_idx in encode_bandsets:
+                    randomly_mask_bandset = (
+                        use_random_masking
+                        or not Modality.get(modality_name).is_spacetime_varying
+                        or modality_name == retained_modality
+                    )
+                    if not randomly_mask_bandset:
+                        assert encode_timestamps is not None
+                        if not self._bandset_has_data_at_timestamps(
+                            output_dict,
+                            modality_name,
+                            bandset_idx,
+                            i,
+                            encode_timestamps,
+                        ):
+                            randomly_mask_bandset = True
+                    masked_modality_name = (
+                        MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+                    )
+                    if randomly_mask_bandset:
+                        # Unlike the parent, the masked portion is DECODER (a
+                        # prediction target) rather than TARGET_ENCODER_ONLY.
+                        output_dict[masked_modality_name][
+                            i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                        ] = self._random_fill_unmasked(
+                            output_dict[masked_modality_name][
+                                i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                            ],
+                            Modality.get(modality_name),
+                            patch_size,
+                            self.encode_ratio,
+                            self.decode_ratio,
+                        )
+                    else:
+                        assert decode_timestamps is not None
+                        output_dict[masked_modality_name][
+                            i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                        ] = self.time_masking_encode_and_decode(
+                            output_dict[masked_modality_name][
+                                i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                            ],
+                            encode_timestamps,
+                            decode_timestamps,
+                        )
+                for modality_name, bandset_idx in decode_bandsets:
+                    randomly_mask_bandset = (
+                        use_random_masking
+                        or not Modality.get(modality_name).is_spacetime_varying
+                        or modality_name == retained_modality
+                    )
+                    if not randomly_mask_bandset:
+                        assert decode_timestamps is not None
+                        if not self._bandset_has_data_at_timestamps(
+                            output_dict,
+                            modality_name,
+                            bandset_idx,
+                            i,
+                            decode_timestamps,
+                        ):
+                            randomly_mask_bandset = True
+                    masked_modality_name = (
+                        MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+                    )
+                    if randomly_mask_bandset:
+                        output_dict[masked_modality_name][
+                            i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                        ] = self._random_fill_unmasked(
+                            output_dict[masked_modality_name][
+                                i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                            ],
+                            Modality.get(modality_name),
+                            patch_size,
+                            0,
+                            self.decode_ratio,
+                        )
+                    else:
+                        output_dict[masked_modality_name][
+                            i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                        ] = self.time_masking_with_missing(
+                            output_dict[masked_modality_name][
+                                i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                            ],
+                            decode_timestamps,
+                            MaskValue.DECODER.value,
+                        )
+
+        cloud = kwargs.get("cloud")
+        if cloud is not None and patch_size is not None:
+            self._apply_cloud_skip(output_dict, cloud, patch_size)
+
+        return MaskedOlmoEarthSample(**output_dict)
+
+    @staticmethod
+    def time_masking_encode_and_decode(
+        mask: torch.Tensor,
+        encode_timestamps: torch.Tensor,
+        decode_timestamps: torch.Tensor,
+    ) -> torch.Tensor:
+        """Time masking that encodes one timestep group and decodes the other."""
+        assert len(mask.shape) == 5  # BHWTC
+        missing_mask = mask == MaskValue.MISSING.value
+        mask[:] = MaskValue.TARGET_ENCODER_ONLY.value
+        mask[:, :, :, encode_timestamps] = MaskValue.ONLINE_ENCODER.value
+        mask[:, :, :, decode_timestamps] = MaskValue.DECODER.value
+        mask[missing_mask] = MaskValue.MISSING.value
+        return mask
+
+
 def propagate_tokenization_config(
     masking_strategy: MaskingStrategy,
     tokenization_config: "TokenizationConfig",

@@ -1,5 +1,6 @@
 """Attention Components for OlmoEarth Pretrain."""
 
+from dataclasses import dataclass
 from logging import getLogger
 from typing import Any
 
@@ -102,6 +103,107 @@ def dispatch_flash_attn(
         )
 
 
+@dataclass
+class ModalityRouting:
+    """Precomputed flat token indices for each modality route."""
+
+    shape: torch.Size
+    num_routes: int
+    route_indices: tuple[tuple[int, torch.Tensor], ...]
+
+    @classmethod
+    def from_modality_ids(
+        cls, modality_ids: torch.Tensor, num_routes: int
+    ) -> "ModalityRouting":
+        """Build reusable routing indices from per-token modality IDs.
+
+        Emit an entry for every route, including empty ones, so that all route
+        layers are exercised on every forward. This keeps the autograd graph and
+        FSDP collective schedule identical across ranks regardless of which
+        modalities happen to be present in a given microbatch.
+        """
+        flat_ids = modality_ids.reshape(-1)
+        route_indices: list[tuple[int, torch.Tensor]] = []
+        routed_count = 0
+        for route_id in range(num_routes):
+            indices = torch.nonzero(flat_ids == route_id, as_tuple=False).flatten()
+            routed_count += indices.numel()
+            route_indices.append((route_id, indices))
+        if routed_count != flat_ids.numel():
+            raise ValueError("modality_ids contain values outside configured routes")
+        return cls(
+            shape=torch.Size(modality_ids.shape),
+            num_routes=num_routes,
+            route_indices=tuple(route_indices),
+        )
+
+
+class PerModalityLinear(nn.Module):
+    """Apply a separate linear layer to tokens from each modality route."""
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        num_routes: int,
+        bias: bool = True,
+    ) -> None:
+        """Initialize the per-route linear layers."""
+        super().__init__()
+        self.num_routes = num_routes
+        self.layers = nn.ModuleList(
+            [nn.Linear(in_features, out_features, bias=bias) for _ in range(num_routes)]
+        )
+
+    def forward_route(self, x: torch.Tensor, route_id: int) -> torch.Tensor:
+        """Apply one route directly when all tokens share a known modality."""
+        if route_id < 0 or route_id >= self.num_routes:
+            raise ValueError(f"route_id {route_id} is outside configured routes")
+        return self.layers[route_id](x)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        modality_ids: torch.Tensor | None = None,
+        routing: ModalityRouting | None = None,
+    ) -> torch.Tensor:
+        """Apply the route-specific linear layer to each token."""
+        if routing is None:
+            if modality_ids is None:
+                raise ValueError("modality_ids are required for PerModalityLinear")
+            if modality_ids.shape != x.shape[:-1]:
+                raise ValueError(
+                    f"Expected modality_ids shape {x.shape[:-1]}, "
+                    f"got {modality_ids.shape}"
+                )
+            routing = ModalityRouting.from_modality_ids(modality_ids, self.num_routes)
+        elif routing.shape != x.shape[:-1]:
+            raise ValueError(
+                f"Expected routing shape {x.shape[:-1]}, got {routing.shape}"
+            )
+
+        if routing.num_routes != self.num_routes:
+            raise ValueError(
+                f"Expected {self.num_routes} routing routes, got {routing.num_routes}"
+            )
+
+        out_features = self.layers[0].out_features
+        out_shape = (*x.shape[:-1], out_features)
+        flat_x = x.reshape(-1, x.shape[-1])
+
+        # Always run every route (empty routes included) so all route params stay
+        # in the autograd graph on every rank, keeping FSDP collectives in sync.
+        out: torch.Tensor | None = None
+        for route_id, indices in routing.route_indices:
+            route_x = flat_x.index_select(0, indices)
+            route_out = self.forward_route(route_x, route_id)
+            if out is None:
+                out = route_out.new_empty((flat_x.shape[0], out_features))
+            out.index_copy_(0, indices, route_out)
+        assert out is not None
+        return out.reshape(out_shape)
+
+
 class Attention(nn.Module):
     """Multi-head attention module with optional cross-attention support.
 
@@ -138,6 +240,8 @@ class Attention(nn.Module):
         attn_dim: int | None = None,
         kv_in_dim: int | None = None,
         kv_external: bool = False,
+        per_modality_layers: bool = False,
+        num_modality_routes: int | None = None,
     ) -> None:
         """Initialize the attention module.
 
@@ -176,6 +280,10 @@ class Attention(nn.Module):
                 cross-attention modules share one projection over a large context. The
                 Linears are omitted rather than left unused so they cannot become
                 gradient-less parameters, which would stall a DDP allreduce.
+            per_modality_layers: Use a separate fused QKV and output projection per
+                modality route (self-attention SDPA path only).
+            num_modality_routes: Number of modality routes; required when
+                ``per_modality_layers=True``.
         """
         super().__init__()
         position_encoding = resolve_position_encoding(
@@ -228,28 +336,62 @@ class Attention(nn.Module):
                 )
             )
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
-        self.q = nn.Linear(dim, attn_dim, bias=qkv_bias)
-        # ``kv_external``: this module never projects its own keys/values -- a caller
-        # supplies them precomputed via ``forward(kv_cached=...)``. The k/v Linears are
-        # NOT created, so they cannot become unused parameters (which would stall DDP's
-        # gradient allreduce). Used by the register bottleneck's shared-K/V mode, where
-        # one projection is computed once and reused by every read block.
-        self.kv_external = kv_external
-        self.k: nn.Module = (
-            nn.Identity()
-            if kv_external
-            else nn.Linear(kv_in_dim, attn_dim, bias=qkv_bias)
-        )
-        self.v: nn.Module = (
-            nn.Identity()
-            if kv_external
-            else nn.Linear(kv_in_dim, attn_dim, bias=qkv_bias)
-        )
+        self.per_modality_layers = per_modality_layers
+        self.qkv: PerModalityLinear | None = None
+        self.q: nn.Linear | None = None
+        self.k: nn.Module | None = None
+        self.v: nn.Module | None = None
+        if per_modality_layers:
+            if num_modality_routes is None:
+                raise ValueError(
+                    "num_modality_routes must be set when per_modality_layers=True"
+                )
+            if cross_attn:
+                raise ValueError(
+                    "per_modality_layers only supports self-attention (cross-attention "
+                    "contexts like the register grid have no per-token modality)"
+                )
+            if kv_external:
+                raise ValueError("per_modality_layers is incompatible with kv_external")
+            if use_flash_attn:
+                raise ValueError(
+                    "per_modality_layers only supports the SDPA path; set "
+                    "use_flash_attn=False"
+                )
+            # Self-attention only, so the q and k/v sources coincide and one fused
+            # per-route projection covers all three (one gather/scatter per route).
+            self.qkv = PerModalityLinear(
+                dim, attn_dim * 3, num_modality_routes, bias=qkv_bias
+            )
+            self.kv_external = False
+        else:
+            self.q = nn.Linear(dim, attn_dim, bias=qkv_bias)
+            # ``kv_external``: this module never projects its own keys/values -- a caller
+            # supplies them precomputed via ``forward(kv_cached=...)``. The k/v Linears are
+            # NOT created, so they cannot become unused parameters (which would stall DDP's
+            # gradient allreduce). Used by the register bottleneck's shared-K/V mode, where
+            # one projection is computed once and reused by every read block.
+            self.kv_external = kv_external
+            self.k = (
+                nn.Identity()
+                if kv_external
+                else nn.Linear(kv_in_dim, attn_dim, bias=qkv_bias)
+            )
+            self.v = (
+                nn.Identity()
+                if kv_external
+                else nn.Linear(kv_in_dim, attn_dim, bias=qkv_bias)
+            )
 
         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(attn_dim, dim)
+        self.proj: nn.Linear | PerModalityLinear
+        if per_modality_layers:
+            assert num_modality_routes is not None
+            self.proj = PerModalityLinear(attn_dim, dim, num_modality_routes)
+        else:
+            self.proj = nn.Linear(attn_dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
     def _apply_rope(
@@ -295,10 +437,15 @@ class Attention(nn.Module):
                 "compute_kv called on a kv_external attention module, which has no "
                 "key/value projections of its own"
             )
+        if self.per_modality_layers:
+            raise NotImplementedError(
+                "compute_kv is not supported with per_modality_layers"
+            )
         if self.use_flash_attn:
             raise NotImplementedError(
                 "compute_kv targets the SDPA path; flash attention packs k/v differently"
             )
+        assert self.k is not None and self.v is not None
         k = rearrange(self.k(y), "b n (h d) -> b h n d", h=self.num_heads)
         v = rearrange(self.v(y), "b n (h d) -> b h n d", h=self.num_heads)
         k = self.k_norm(k)
@@ -453,6 +600,8 @@ class Attention(nn.Module):
         rope_positions_y: torch.Tensor | None = None,
         window_spec: WindowSpec | None = None,
         kv_cached: tuple[torch.Tensor, torch.Tensor] | None = None,
+        modality_ids: torch.Tensor | None = None,
+        modality_routing: "ModalityRouting | None" = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -477,12 +626,48 @@ class Attention(nn.Module):
                 is not recomputed here -- which is what lets many blocks read one
                 context while storing only a single copy of it for backward. Mutually
                 exclusive with ``y``; cross-attention and the SDPA path only.
+            modality_ids: Optional per-token modality route IDs for
+                ``per_modality_layers`` (self-attention only).
+            modality_routing: Optional precomputed routing for the input tokens,
+                reused across blocks to avoid rebuilding the route indices.
 
         Returns:
             Output tensor of shape (B, N, C) or (B* N , C) if packed
         """
         original_shape = x.shape
 
+        if self.per_modality_layers:
+            if y is not None or kv_cached is not None:
+                raise ValueError(
+                    "per_modality_layers only supports self-attention inputs"
+                )
+            assert self.qkv is not None
+            qkv = self.qkv(x, modality_ids=modality_ids, routing=modality_routing)
+            q, k, v = qkv.chunk(3, dim=-1)
+            q = rearrange(q, "b n (h d) -> b h n d", h=self.num_heads)
+            k = rearrange(k, "b n (h d) -> b h n d", h=self.num_heads)
+            v = rearrange(v, "b n (h d) -> b h n d", h=self.num_heads)
+            q, k = self.q_norm(q), self.k_norm(k)
+            q = self._apply_rope(q, rope_positions)
+            k = self._apply_rope(k, rope_positions)
+            return self._finish_attention(
+                q,
+                k,
+                v,
+                original_shape,
+                cu_seqlens=cu_seqlens,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_k,
+                max_seqlen=max_seqlen,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                attn_mask=attn_mask,
+                window_spec=window_spec,
+                modality_routing=modality_routing,
+                modality_ids=modality_ids,
+            )
+
+        assert self.q is not None
         q = self.q(x)
 
         if kv_cached is not None:
@@ -514,6 +699,7 @@ class Attention(nn.Module):
                 window_spec=window_spec,
             )
 
+        assert self.k is not None and self.v is not None
         if y is None:
             assert not self.cross_attn
             k = self.k(x)
@@ -596,6 +782,8 @@ class Attention(nn.Module):
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
         window_spec: WindowSpec | None = None,
+        modality_routing: "ModalityRouting | None" = None,
+        modality_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """SDPA over prepared q/k/v, then reshape and output-project."""
         x = self.sdpa(
@@ -619,7 +807,11 @@ class Attention(nn.Module):
         x = x.transpose(1, 2).reshape(
             *original_shape[:-1], self.num_heads * self.head_dim
         )
-        x = self.proj(x)
+        if self.per_modality_layers:
+            assert isinstance(self.proj, PerModalityLinear)
+            x = self.proj(x, modality_ids=modality_ids, routing=modality_routing)
+        else:
+            x = self.proj(x)
         x = self.proj_drop(x)
         return x
 
@@ -644,6 +836,8 @@ class Mlp(nn.Module):
         act_layer: nn.Module = nn.GELU,
         bias: bool = True,
         drop: float = 0.0,
+        per_modality_layers: bool = False,
+        num_modality_routes: int | None = None,
     ) -> None:
         """Initialize the MLP module.
 
@@ -654,26 +848,100 @@ class Mlp(nn.Module):
             act_layer: Activation layer. Defaults to nn.GELU.
             bias: Enable bias in linear layers. Defaults to True.
             drop: Dropout rate. Defaults to 0.0.
+            per_modality_layers: Whether to use per-modality MLP projections.
+            num_modality_routes: Number of modality routes.
         """
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
 
-        self.fc1 = nn.Linear(in_features, hidden_features, bias=bias)
+        self.per_modality_layers = per_modality_layers
+        self.fc1: nn.Linear | PerModalityLinear
+        self.fc2: nn.Linear | PerModalityLinear
+        if per_modality_layers:
+            if num_modality_routes is None:
+                raise ValueError(
+                    "num_modality_routes must be set when per_modality_layers=True"
+                )
+            self.fc1 = PerModalityLinear(
+                in_features, hidden_features, num_modality_routes, bias=bias
+            )
+            self.fc2 = PerModalityLinear(
+                hidden_features, out_features, num_modality_routes, bias=bias
+            )
+        else:
+            self.fc1 = nn.Linear(in_features, hidden_features, bias=bias)
+            self.fc2 = nn.Linear(hidden_features, out_features, bias=bias)
         self.act = act_layer()
         self.drop1 = nn.Dropout(drop)
-        self.fc2 = nn.Linear(hidden_features, out_features, bias=bias)
         self.drop2 = nn.Dropout(drop)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def _forward_routed(
+        self,
+        x: torch.Tensor,
+        modality_ids: torch.Tensor | None,
+        modality_routing: ModalityRouting | None,
+    ) -> torch.Tensor:
+        """Apply the full MLP route-wise with one gather/scatter per route."""
+        assert isinstance(self.fc1, PerModalityLinear)
+        assert isinstance(self.fc2, PerModalityLinear)
+        if modality_routing is None:
+            if modality_ids is None:
+                raise ValueError("modality_ids are required for per-modality MLP")
+            if modality_ids.shape != x.shape[:-1]:
+                raise ValueError(
+                    f"Expected modality_ids shape {x.shape[:-1]}, "
+                    f"got {modality_ids.shape}"
+                )
+            modality_routing = ModalityRouting.from_modality_ids(
+                modality_ids, self.fc1.num_routes
+            )
+        elif modality_routing.shape != x.shape[:-1]:
+            raise ValueError(
+                f"Expected routing shape {x.shape[:-1]}, got {modality_routing.shape}"
+            )
+
+        flat_x = x.reshape(-1, x.shape[-1])
+        out_features = self.fc2.layers[0].out_features
+        out_shape = (*x.shape[:-1], out_features)
+
+        # Run every route (empty routes included) so all route params stay in the
+        # autograd graph on every rank, keeping FSDP collectives in sync.
+        out: torch.Tensor | None = None
+        for route_id, indices in modality_routing.route_indices:
+            route_x = flat_x.index_select(0, indices)
+            route_x = self.fc1.forward_route(route_x, route_id)
+            route_x = self.act(route_x)
+            route_x = self.drop1(route_x)
+            route_x = self.fc2.forward_route(route_x, route_id)
+            route_x = self.drop2(route_x)
+            if out is None:
+                out = route_x.new_empty((flat_x.shape[0], route_x.shape[-1]))
+            out.index_copy_(0, indices, route_x)
+        assert out is not None
+        return out.reshape(out_shape)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        modality_ids: torch.Tensor | None = None,
+        modality_routing: ModalityRouting | None = None,
+    ) -> torch.Tensor:
         """Forward pass.
 
         Args:
             x: Input tensor
+            modality_ids: Optional route IDs for per-modality projections.
+            modality_routing: Optional precomputed routing for per-modality projections.
 
         Returns:
             Output tensor
         """
+        if self.per_modality_layers:
+            return self._forward_routed(x, modality_ids, modality_routing)
+
+        assert isinstance(self.fc1, nn.Linear)
+        assert isinstance(self.fc2, nn.Linear)
         x = self.fc1(x)
         x = self.act(x)
         x = self.drop1(x)
@@ -800,6 +1068,8 @@ class Block(nn.Module):
         attn_dim: int | None = None,
         kv_in_dim: int | None = None,
         kv_external: bool = False,
+        per_modality_layers: bool = False,
+        num_modality_routes: int | None = None,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -835,6 +1105,10 @@ class Block(nn.Module):
                 the context ``y`` is wider than ``dim`` (see :class:`Attention`).
             kv_external: Build the attention without its own key/value projections; keys
                 and values must then be passed to ``forward`` as ``kv_cached``.
+            per_modality_layers: Use per-modality QKV/output/MLP projections routed by
+                per-token modality IDs (self-attention SDPA path only).
+            num_modality_routes: Number of modality routes; required when
+                ``per_modality_layers=True``.
         """
         super().__init__()
         position_encoding = resolve_position_encoding(
@@ -859,6 +1133,8 @@ class Block(nn.Module):
             attn_dim=attn_dim,
             kv_in_dim=kv_in_dim,
             kv_external=kv_external,
+            per_modality_layers=per_modality_layers,
+            num_modality_routes=num_modality_routes,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -871,6 +1147,8 @@ class Block(nn.Module):
             hidden_features=int(dim * mlp_ratio),
             act_layer=act_layer,
             drop=drop,
+            per_modality_layers=per_modality_layers,
+            num_modality_routes=num_modality_routes,
         )
         self.ls2 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -891,6 +1169,8 @@ class Block(nn.Module):
         rope_positions_y: torch.Tensor | None = None,
         window_spec: WindowSpec | None = None,
         kv_cached: tuple[torch.Tensor, torch.Tensor] | None = None,
+        modality_ids: torch.Tensor | None = None,
+        modality_routing: ModalityRouting | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -915,6 +1195,10 @@ class Block(nn.Module):
                 is not recomputed here -- which is what lets many blocks read one
                 context while storing only a single copy of it for backward. Mutually
                 exclusive with ``y``; cross-attention and the SDPA path only.
+            modality_ids: Optional per-token modality route IDs for
+                ``per_modality_layers``.
+            modality_routing: Optional precomputed routing for the input tokens,
+                shared across the attention and MLP of this block (and across blocks).
 
         Returns:
             Output tensor of shape (B, N, C)
@@ -935,11 +1219,21 @@ class Block(nn.Module):
                     rope_positions_y=rope_positions_y,
                     window_spec=window_spec,
                     kv_cached=kv_cached,
+                    modality_ids=modality_ids,
+                    modality_routing=modality_routing,
                 )
             )
         )
 
-        x = x + self.drop_path(self.ls2(self.mlp(self.norm2(x))))
+        x = x + self.drop_path(
+            self.ls2(
+                self.mlp(
+                    self.norm2(x),
+                    modality_ids=modality_ids,
+                    modality_routing=modality_routing,
+                )
+            )
+        )
         return x
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:

@@ -248,6 +248,114 @@ def test_latentmim_register_bottleneck_3d_encoder_2d_decoder(
     assert model.encoder.blocks[0].attn.q.weight.grad is not None
 
 
+def test_latentmim_register_bottleneck_per_modality_layers(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    masked_sample_dict: dict[str, torch.Tensor],
+) -> None:
+    """Per-modality encoder trunk layers under the register-bottleneck LatentMIM.
+
+    Same architecture as the 3D-encoder / 2D-decoder bottleneck test (the cand_ndvi
+    frontier shape), but with ``per_modality_layers=True`` on the encoder: every trunk
+    block routes QKV/output/MLP projections by token modality. The register bottleneck
+    and the decoder keep shared parameters. Verifies the forward runs end to end, the
+    parameter count grows, and gradients reach every modality route (including routes
+    for modalities absent from the batch, which must still join the autograd graph so
+    FSDP collectives stay in sync).
+    """
+    supported_modalities = [
+        Modality.SENTINEL2_L2A,
+        Modality.LATLON,
+        Modality.WORLDCOVER,
+    ]
+    B, H, W, T, _ = masked_sample_dict["sentinel2_l2a"].shape
+    x = MaskedOlmoEarthSample(**masked_sample_dict)
+
+    patch_size = 4
+    register_dim = 8
+
+    def build_model(per_modality_layers: bool) -> LatentMIM:
+        encoder_config = EncoderConfig(
+            supported_modality_names=[m.name for m in supported_modalities],
+            embedding_size=16,
+            num_heads=2,
+            depth=2,
+            mlp_ratio=4.0,
+            max_patch_size=8,
+            min_patch_size=1,
+            max_sequence_length=12,
+            drop_path=0.1,
+            position_encoding="rope_3d_mixed",
+            use_register_bottleneck=True,
+            register_grid_size=0,  # dynamic single-latent grid (gdyn)
+            register_dim=register_dim,
+            register_interleave=True,
+            register_per_depth_read_proj=True,
+            per_modality_layers=per_modality_layers,
+        )
+        decoder_config = PredictorConfig(
+            supported_modality_names=[m.name for m in supported_modalities],
+            encoder_embedding_size=16,
+            decoder_embedding_size=16,
+            num_heads=2,
+            depth=2,
+            mlp_ratio=4.0,
+            max_sequence_length=12,
+            drop_path=0.1,
+            position_encoding="rope",
+            use_register_bottleneck=True,
+            register_dim=register_dim,
+        )
+        return LatentMIMConfig(
+            encoder_config=encoder_config, decoder_config=decoder_config
+        ).build()
+
+    baseline = build_model(per_modality_layers=False)
+    model = build_model(per_modality_layers=True)
+    baseline_params = sum(p.numel() for p in baseline.parameters())
+    per_modality_params = sum(p.numel() for p in model.parameters())
+    assert per_modality_params > baseline_params
+
+    _, decoded, _, _, _, _, _ = model.forward(x, patch_size)
+    assert decoded.sentinel2_l2a is not None
+    patched_H, patched_W = H // patch_size, W // patch_size
+    assert decoded.sentinel2_l2a.shape == (
+        B,
+        patched_H,
+        patched_W,
+        T,
+        modality_band_set_len_and_total_bands["sentinel2_l2a"][0],
+        model.decoder.output_embedding_size,
+    )
+
+    loss_fn = PatchDiscriminationLoss()
+    with torch.no_grad():
+        output_dict = model.target_encoder.forward(
+            x.unmask(),
+            patch_size=patch_size,
+            token_exit_cfg={
+                modality: 0 for modality in model.encoder.supported_modality_names
+            },
+        )
+        target_output, _, _ = unpack_encoder_output(output_dict)
+    loss_fn.compute(decoded, target_output).backward()
+
+    # Gradients reach every modality route of the trunk's routed layers. The fixture
+    # only feeds visible S2 tokens to the trunk (latlon/worldcover are decode-masked),
+    # so the other routes must still receive (zero) gradients via the always-run empty
+    # routes -- that is what keeps FSDP collectives in sync across ranks.
+    block = model.encoder.blocks[0]
+    for route_id in range(len(supported_modalities)):
+        assert block.attn.qkv.layers[route_id].weight.grad is not None
+        assert block.attn.proj.layers[route_id].weight.grad is not None
+        assert block.mlp.fc1.layers[route_id].weight.grad is not None
+    # The (shared-parameter) register bottleneck and decoder still train.
+    assert model.encoder.register_bottleneck.register.grad is not None
+    assert (
+        model.encoder.register_bottleneck.read_blocks[0].attn.q.weight.grad is not None
+    )
+    assert model.decoder.register_to_decoder_embed.weight.grad is not None
+
+
 def test_eval_wrapper_probes_register_grid(
     masked_sample_dict: dict[str, torch.Tensor],
 ) -> None:

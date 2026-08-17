@@ -4,7 +4,7 @@ import logging
 import math
 import warnings
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, overload
 
 import torch
 from einops import rearrange, reduce, repeat
@@ -23,7 +23,7 @@ from olmoearth_pretrain.datatypes import (
     MaskValue,
     TokensAndMasks,
 )
-from olmoearth_pretrain.nn.attention import Block
+from olmoearth_pretrain.nn.attention import Block, ModalityRouting
 from olmoearth_pretrain.nn.encodings import (
     PositionEncoding,
     WindowSpec,
@@ -961,6 +961,7 @@ class FlexiVitBase(nn.Module):
         rope_temporal_base: float | None = None,
         rope_temporal_coordinate_scale: float = 1.0,
         spatial_pos_encoding: str | None = None,
+        per_modality_layers: bool = False,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -998,6 +999,11 @@ class FlexiVitBase(nn.Module):
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [x.name for x in supported_modalities]
         logger.info(f"modalities being used by model: {self.supported_modality_names}")
+        self.per_modality_layers = per_modality_layers
+        self.modality_to_id = {
+            modality: idx for idx, modality in enumerate(self.supported_modality_names)
+        }
+        self.num_modality_routes = len(self.supported_modality_names)
 
         self.max_sequence_length = max_sequence_length
         self._base_tokenization_config = tokenization_config or TokenizationConfig()
@@ -1029,6 +1035,8 @@ class FlexiVitBase(nn.Module):
                     rope_mixed_base=self.rope_mixed_base,
                     temporal_rope_dim_frac=self.temporal_rope_dim_frac,
                     rope_temporal_base=self.rope_temporal_base,
+                    per_modality_layers=self.per_modality_layers,
+                    num_modality_routes=self.num_modality_routes,
                 )
                 for _ in range(depth)
             ]
@@ -1072,9 +1080,27 @@ class FlexiVitBase(nn.Module):
         return modality_data.shape[1:-2] if modality_data.ndim > 3 else ()
 
     # is naming here confusing if one of these channels can be missing?
-    def collapse_and_combine_hwtc(self, x: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
-        """Collapse the tokens and masks, respectively, into two tensors."""
+    @overload
+    def collapse_and_combine_hwtc(
+        self, x: dict[str, Tensor], return_modality_ids: Literal[False] = False
+    ) -> tuple[Tensor, Tensor]: ...
+
+    @overload
+    def collapse_and_combine_hwtc(
+        self, x: dict[str, Tensor], return_modality_ids: Literal[True]
+    ) -> tuple[Tensor, Tensor, Tensor]: ...
+
+    def collapse_and_combine_hwtc(
+        self, x: dict[str, Tensor], return_modality_ids: bool = False
+    ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
+        """Collapse the tokens and masks, respectively, into two tensors.
+
+        If ``return_modality_ids`` is True, additionally return a ``[B, N]`` long
+        tensor giving each collapsed token's modality route ID (its index in
+        ``supported_modality_names``), for per-modality parameter routing.
+        """
         tokens, masks = [], []
+        modality_ids: list[Tensor] = []
         available_modalities = return_modalities_from_dict(x)
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
@@ -1087,9 +1113,20 @@ class FlexiVitBase(nn.Module):
             x_modality_mask = x[masked_modality_name]
             tokens.append(rearrange(x_modality, "b ... d -> b (...) d"))
             masks.append(rearrange(x_modality_mask, "b ... -> b (...)"))
+            if return_modality_ids:
+                modality_ids.append(
+                    torch.full(
+                        tokens[-1].shape[:-1],
+                        self.modality_to_id[modality],
+                        dtype=torch.long,
+                        device=tokens[-1].device,
+                    )
+                )
         tokens = torch.cat(tokens, dim=1)
         masks = torch.cat(masks, dim=1)
 
+        if return_modality_ids:
+            return tokens, masks, torch.cat(modality_ids, dim=1)
         return tokens, masks
 
     def build_rope_positions(
@@ -2382,6 +2419,7 @@ class Encoder(FlexiVitBase):
         register_projection_type: str = "linear",
         register_unit_norm: bool = False,
         register_unit_norm_scale: float | None = None,
+        per_modality_layers: bool = False,
     ):
         """Initialize the encoder.
 
@@ -2566,7 +2604,27 @@ class Encoder(FlexiVitBase):
                 deployed embedding. Defaults to False.
             register_unit_norm_scale: Radius of that sphere; ``None`` uses
                 ``sqrt(register_dim)`` so the change is scale-neutral at init.
+            per_modality_layers: If True, every encoder trunk block uses per-modality
+                QKV/output/MLP projections routed by each token's modality. The
+                register bottleneck (whose latents have no modality) and the decoder
+                are unaffected. Incompatible with ``num_register_tokens > 0``,
+                ``use_flash_attn`` and ``attn_window_size``.
         """
+        if per_modality_layers:
+            if num_register_tokens > 0:
+                raise ValueError(
+                    "per_modality_layers=True does not support register tokens; "
+                    "set num_register_tokens=0."
+                )
+            if use_flash_attn:
+                raise ValueError(
+                    "per_modality_layers=True only supports the SDPA path; set "
+                    "use_flash_attn=False."
+                )
+            if attn_window_size is not None:
+                raise ValueError(
+                    "per_modality_layers=True does not support attn_window_size."
+                )
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
             embedding_size=embedding_size,
@@ -2589,6 +2647,7 @@ class Encoder(FlexiVitBase):
             temporal_rope_dim_frac=temporal_rope_dim_frac,
             rope_temporal_base=rope_temporal_base,
             rope_temporal_coordinate_scale=rope_temporal_coordinate_scale,
+            per_modality_layers=per_modality_layers,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -3206,11 +3265,25 @@ class Encoder(FlexiVitBase):
 
         tokens_dict.update(original_masks_dict)
 
-        tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+        modality_ids: Tensor | None = None
+        if self.per_modality_layers:
+            tokens, mask, modality_ids = self.collapse_and_combine_hwtc(
+                tokens_dict, return_modality_ids=True
+            )
+        else:
+            tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
         tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
             self._maybe_remove_masked_tokens(tokens, mask, fast_pass)
         )
+        if modality_ids is not None and bool_mask is not None:
+            # Reduce the modality IDs with the same stable sort as the tokens. Padded
+            # slots come out as route 0, which is harmless: they are excluded from
+            # attention by the mask and their outputs are discarded.
+            reduced_ids, _, _, _, _ = self.remove_masked_tokens(
+                modality_ids[..., None].float(), bool_mask
+            )
+            modality_ids = reduced_ids.squeeze(-1).round().long()
         if positions is not None and bool_mask is not None:
             positions, _, _, _, _ = self.remove_masked_tokens(positions, bool_mask)
             if encoder_spatial_flag is not None:
@@ -3297,6 +3370,19 @@ class Encoder(FlexiVitBase):
             multi_depth_read_layers = set(self.register_bottleneck.read_layers)
         cached_read_tokens: dict[int, Tensor] = {}
 
+        # Precompute the per-modality route indices once and share them across every
+        # block (the token order does not change inside the block loop).
+        modality_routing: ModalityRouting | None = None
+        if self.per_modality_layers:
+            assert modality_ids is not None
+            assert modality_ids.shape == tokens.shape[:-1], (
+                f"modality_ids shape {modality_ids.shape} does not match tokens "
+                f"shape {tokens.shape[:-1]}"
+            )
+            modality_routing = ModalityRouting.from_modality_ids(
+                modality_ids, num_routes=self.num_modality_routes
+            )
+
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
@@ -3323,6 +3409,7 @@ class Encoder(FlexiVitBase):
                 attn_mask=attn_mask,
                 rope_positions=positions,
                 window_spec=window_spec,
+                modality_routing=modality_routing,
             )
             # Stash this depth's output for the multi-depth register read (1-indexed).
             if (i_blk + 1) in multi_depth_read_layers:
@@ -4217,6 +4304,12 @@ class EncoderConfig(Config):
     # output norm, so turning this on does not also rescale the decoder's context
     # input (which would confound the constraint with a global rescale).
     register_unit_norm_scale: float | None = None
+    # Give every encoder trunk block per-modality QKV/output/MLP projections routed
+    # by each token's modality (one parameter set per supported modality). The
+    # register bottleneck and decoder are unaffected. Incompatible with
+    # num_register_tokens > 0 (registers have no modality), use_flash_attn (routing
+    # targets the SDPA path) and attn_window_size.
+    per_modality_layers: bool = False
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -4246,6 +4339,21 @@ class EncoderConfig(Config):
                 )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
+        if self.per_modality_layers:
+            if self.num_register_tokens > 0:
+                raise ValueError(
+                    "per_modality_layers=True does not support register tokens; "
+                    "set num_register_tokens=0."
+                )
+            if self.use_flash_attn:
+                raise ValueError(
+                    "per_modality_layers=True only supports the SDPA path; set "
+                    "use_flash_attn=False."
+                )
+            if self.attn_window_size is not None:
+                raise ValueError(
+                    "per_modality_layers=True does not support attn_window_size."
+                )
         if self.position_encoding not in PositionEncoding.values():
             raise ValueError(
                 f"position_encoding must be one of {PositionEncoding.values()}, "
