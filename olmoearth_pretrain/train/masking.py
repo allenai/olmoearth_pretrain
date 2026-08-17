@@ -1767,6 +1767,18 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
         return MaskedOlmoEarthSample(**output_dict)
 
 
+# (modality, cloud-payload key) pairs the cloud skip applies to. Only two cloud maps
+# exist -- S2 and Landsat -- but `ndvi` is a *derived* decode target computed from S2
+# B04/B08 on S2's exact grid, so it is covered by the S2 map. Any future modality
+# derived from S2/Landsat belongs here too; anything on a different grid does not
+# (_apply_cloud_skip shape-checks and warns).
+CLOUD_SKIP_MODALITIES: tuple[tuple[str, str], ...] = (
+    ("sentinel2_l2a", "sentinel2_l2a_cloud"),
+    ("landsat", "landsat_cloud"),
+    ("ndvi", "sentinel2_l2a_cloud"),
+)
+
+
 @MASKING_STRATEGY_REGISTRY.register("random_time_with_decode")
 class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
     """Random + time masking strategy that separates band sets into encode-only and decode-only roles.
@@ -1800,7 +1812,9 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         cloud_skip_threshold: when a per-sample cloud payload is supplied to
                       apply_mask(cloud=...), DECODER tokens whose fraction of
                       cloud/shadow pixels exceeds this are reassigned to MISSING
-                      (dropped from the patch-discrimination loss).
+                      (dropped from the patch-discrimination loss). Applies to
+                      every entry in CLOUD_SKIP_MODALITIES -- S2, Landsat, and
+                      the S2-derived ndvi decode target.
         """
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
@@ -2062,23 +2076,39 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         cloud: dict[str, torch.Tensor],
         patch_size: int,
     ) -> None:
-        """Reassign mostly-cloud DECODER pixels to MISSING for S2/Landsat, in place.
+        """Reassign mostly-cloud DECODER pixels to MISSING, in place.
 
         cloud[f"{mod}_cloud"]: (B,H,W,T,1) uint8 OCM classes (1/2/3 = cloud/shadow).
-        Both cloud maps live on the same 128 grid as the modality
+        The cloud maps live on the same 128 grid as their modality
         (image_tile_size_factor == 1), so a token patch is patch_size pixels.
+
+        ``ndvi`` is covered by the *Sentinel-2* cloud map: it is derived from S2 B04/B08
+        after subsetting (see ``OlmoEarthDataset._compute_ndvi``), so it shares S2's
+        exact cropped (H,W,T) grid and the same cloud map applies unchanged. Without
+        this the NDVI supervision head would still be asked to predict a vegetation
+        index through cloud.
         """
-        for modality_name in ("sentinel2_l2a", "landsat"):
+        for modality_name, cloud_key in CLOUD_SKIP_MODALITIES:
             masked_name = MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
             mask = output_dict.get(masked_name)
-            c = cloud.get(f"{modality_name}_cloud")
+            c = cloud.get(cloud_key)
             if mask is None or c is None or not isinstance(mask, torch.Tensor):
                 # The cloud skip is torch-only (it is applied to an already-collated
                 # batch); a numpy mask means some other code path, so leave it alone.
                 continue
             c = c.to(mask.device)
             b, h, w, t = c.shape[0], c.shape[1], c.shape[2], c.shape[3]
-            p = patch_size  # image_tile_size_factor == 1 for S2/Landsat
+            if mask.shape[1] != h or mask.shape[2] != w or mask.shape[3] != t:
+                # Defensive: a derived modality on a different grid than the cloud map
+                # it is paired with would silently drop the wrong tokens.
+                logger.warning(
+                    "cloud skip: %s mask %s does not match cloud %s; skipping",
+                    modality_name,
+                    tuple(mask.shape[:4]),
+                    (b, h, w, t),
+                )
+                continue
+            p = patch_size  # image_tile_size_factor == 1 for all three
             ph, pw = h // p, w // p
             if ph == 0 or pw == 0:
                 continue

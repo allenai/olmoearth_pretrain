@@ -170,6 +170,75 @@ def _cloudy_batch(
     return stacked, payload
 
 
+def _cloudy_ndvi_batch(
+    b: int = 2, h: int = 16, w: int = 16, t: int = 2, patch_size: int = 4
+) -> tuple[OlmoEarthSample, dict[str, torch.Tensor]]:
+    """Like _cloudy_batch, but the sample also carries the derived ndvi decode target.
+
+    Mirrors cand_ndvi: ndvi is a decode-only modality on S2's exact grid, and there is
+    no ``ndvi_cloud`` payload -- it must be covered by the S2 cloud map.
+    """
+    cloud = np.full((h, w, t, 1), CLEAR, dtype=np.uint8)
+    cloud[:, : w // 2] = THICK_CLOUD
+    batch = []
+    for _ in range(b):
+        sample = _sample(h=h, w=w, t=t, cloud_s2=cloud)
+        sample = sample._replace(
+            ndvi=np.ones((h, w, t, Modality.NDVI.num_bands), dtype=np.float32)
+        )
+        batch.append((patch_size, sample))
+    _, stacked = collate_olmoearth_pretrain(batch)
+    payload = extract_cloud_payload(stacked)
+    assert payload is not None
+    assert "ndvi_cloud" not in payload, "ndvi must borrow the S2 cloud map, not its own"
+    return stacked, payload
+
+
+def test_cloud_skip_covers_the_s2_derived_ndvi_decode_target() -> None:
+    """Ndvi DECODER tokens over cloud become MISSING, driven by the S2 cloud map.
+
+    Without this the NDVI supervision head is asked to predict a vegetation index
+    through cloud, which is exactly what the cloud skip exists to prevent.
+    """
+    patch_size = 4
+    stacked, cloud = _cloudy_ndvi_batch(patch_size=patch_size)
+    strategy = RandomTimeWithDecodeMaskingStrategy(
+        only_decode_modalities=[Modality.WORLDCOVER.name, Modality.NDVI.name]
+    )
+
+    torch.manual_seed(0)
+    np.random.seed(0)
+    baseline = strategy.apply_mask(stacked, patch_size)
+    torch.manual_seed(0)
+    np.random.seed(0)
+    skipped = strategy.apply_mask(stacked, patch_size, cloud=cloud)
+
+    base_mask, skip_mask = baseline.ndvi_mask, skipped.ndvi_mask
+    assert base_mask is not None and skip_mask is not None
+
+    changed = base_mask != skip_mask
+    assert changed.any(), "no ndvi token was dropped, so the test proves nothing"
+
+    # Only DECODER -> MISSING, and only over the cloudy half.
+    assert torch.equal(
+        changed,
+        (base_mask == MaskValue.DECODER.value) & (skip_mask == MaskValue.MISSING.value),
+    )
+    w = base_mask.shape[2]
+    assert not changed[:, :, w // 2 :].any(), "clear half must be untouched"
+
+    # Every cloudy-half ndvi DECODER token is gone.
+    assert not (skip_mask[:, :, : w // 2] == MaskValue.DECODER.value).any(), (
+        "ndvi still has decode targets over cloud"
+    )
+
+    # Patch-uniform, so the stride reduction in tokenization sees the drop.
+    blocks = skip_mask.unfold(1, patch_size, patch_size).unfold(
+        2, patch_size, patch_size
+    )
+    assert bool((blocks.amin(dim=(-1, -2)) == blocks.amax(dim=(-1, -2))).all())
+
+
 def test_cloud_skip_drops_exactly_the_cloudy_decoder_tokens() -> None:
     """DECODER -> MISSING on mostly-cloud tokens only; nothing else changes."""
     patch_size = 4
