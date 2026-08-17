@@ -99,12 +99,14 @@ class FlipAndRotateSpace(Transform):
             if attribute == "timestamps":
                 new_data_dict[attribute] = modality_data
             else:
-                modality_spec = Modality.get(attribute)
-                # Apply the transformation to the space varying data
-                if (
-                    modality_spec.is_spacetime_varying
-                    or modality_spec.is_space_only_varying
-                ):
+                # `*_cloud` side-payloads (B,H,W,T,1) share the S2/Landsat spatial
+                # grid and must be flipped/rotated identically to their modality so
+                # the downstream cloud-token skip stays aligned.
+                is_spatial = attribute.endswith("_cloud") or (
+                    (spec := Modality.get(attribute)).is_spacetime_varying
+                    or spec.is_space_only_varying
+                )
+                if is_spatial:
                     modality_data = rearrange(modality_data, "b h w t c -> b t c h w")
                     modality_data = transformation(modality_data)
                     modality_data = rearrange(modality_data, "b t c h w -> b h w t c")
