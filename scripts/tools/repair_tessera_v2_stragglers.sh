@@ -29,7 +29,13 @@
 set -uo pipefail
 
 ROOT_BASE=/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals
-DATASETS=(canada_crops_coarse canada_crops_fine descals lcmap_lu glance)
+# Override the dataset list per run: REPAIR_DATASETS="us_trees" bash <this script>
+# (space-separated base names). The default walks everything.
+if [ -n "${REPAIR_DATASETS:-}" ]; then
+  read -r -a DATASETS <<< "$REPAIR_DATASETS"
+else
+  DATASETS=(canada_crops_coarse canada_crops_fine descals lcmap_lu glance us_trees)
+fi
 
 for BASE in "${DATASETS[@]}"; do
   DS=${BASE}_year_aligned
