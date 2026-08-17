@@ -6,9 +6,11 @@ import pytest
 import torch
 from einops import repeat
 
-from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality, ModalitySpec
 from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
+    get_simple_temporal_encoding,
+    latlon_to_unit_xyz,
     timestamps_to_days,
 )
 from olmoearth_pretrain.nn.flexi_vit import (
@@ -173,6 +175,219 @@ class TestCompositeEncodings:
         expected_time = get_1d_sincos_pos_encoding(torch.arange(T), n)
         actual_time = result[0, 0, 0, :, 0, n : 2 * n]
         assert torch.allclose(actual_time, expected_time, atol=1e-5)
+
+
+class TestGPSEncoding:
+    """Unit tests for the GPS encoding slot of CompositeEncodings."""
+
+    embedding_size = 16
+    n = embedding_size // 4  # embedding_dim_per_embedding_type
+
+    def _encodings(self, gps_dropout_rate: float = 0.5) -> CompositeEncodings:
+        return CompositeEncodings(
+            embedding_size=self.embedding_size,
+            supported_modalities=[Modality.SENTINEL2_L2A],
+            random_channel_embeddings=True,
+            position_encoding="rope_3d_mixed",
+            use_gps_encoding=True,
+            gps_dropout_rate=gps_dropout_rate,
+        )
+
+    @staticmethod
+    def _batch(batch_size: int) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        H, W, T, C = 2, 2, 3, 3
+        tokens = {"sentinel2_l2a": torch.zeros(batch_size, H, W, T, C, 16)}
+        timestamps = torch.tensor(
+            [[15, 7, 2023], [15, 8, 2023], [15, 9, 2023]], dtype=torch.long
+        )
+        return tokens, repeat(timestamps, "... -> b ...", b=batch_size)
+
+    def _gps_slot(
+        self, ce: CompositeEncodings, latlon: torch.Tensor | None, batch_size: int = 4
+    ) -> torch.Tensor:
+        tokens, timestamps = self._batch(batch_size)
+        out = ce.forward(tokens, timestamps, patch_size=4, input_res=10, latlon=latlon)
+        return out["sentinel2_l2a"][..., 3 * self.n :]
+
+    def test_gps_changes_only_the_spatial_slot(self) -> None:
+        """Different latlon moves the [3n:4n] slot and nothing else."""
+        ce = self._encodings().eval()
+        tokens, timestamps = self._batch(4)
+        out_a = ce.forward(tokens, timestamps, 4, 10, latlon=torch.full((4, 2), 0.25))[
+            "sentinel2_l2a"
+        ]
+        out_b = ce.forward(tokens, timestamps, 4, 10, latlon=torch.full((4, 2), 0.75))[
+            "sentinel2_l2a"
+        ]
+        assert torch.equal(out_a[..., : 3 * self.n], out_b[..., : 3 * self.n])
+        assert not torch.equal(out_a[..., 3 * self.n :], out_b[..., 3 * self.n :])
+
+    def test_gps_slot_matches_mlp_of_unit_xyz(self) -> None:
+        """The slot is exactly the 2-layer MLP of the unit-sphere xyz, broadcast."""
+        ce = self._encodings().eval()
+        latlon = torch.rand(4, 2)
+        slot = self._gps_slot(ce, latlon)
+        expected = ce.gps_encoder(latlon_to_unit_xyz(latlon))
+        assert torch.allclose(slot[:, 0, 0, 0, 0, :], expected, atol=1e-6)
+        # broadcast: identical across all token axes of a sample
+        assert torch.allclose(slot[:, 1, 1, 2, 1, :], expected, atol=1e-6)
+
+    def test_missing_and_absent_latlon_share_the_zero_path(self) -> None:
+        """latlon=None and MISSING_VALUE samples both encode MLP((0, 0, 0))."""
+        ce = self._encodings().eval()
+        slot_none = self._gps_slot(ce, None)
+        slot_missing = self._gps_slot(ce, torch.full((4, 2), float(MISSING_VALUE)))
+        assert torch.equal(slot_none, slot_missing)
+        expected = ce.gps_encoder(torch.zeros(4, 3))
+        assert torch.allclose(slot_none[:, 0, 0, 0, 0, :], expected, atol=1e-6)
+
+    def test_dropout_one_always_takes_the_zero_path(self) -> None:
+        """rate=1.0 in train mode zeroes xyz for every sample."""
+        ce = self._encodings(gps_dropout_rate=1.0).train()
+        slot = self._gps_slot(ce, torch.rand(4, 2))
+        assert torch.equal(slot, self._gps_slot(ce, None))
+
+    def test_dropout_is_per_sample(self) -> None:
+        """At rate=0.5 some samples are zeroed and some keep their GPS."""
+        torch.manual_seed(0)
+        ce = self._encodings(gps_dropout_rate=0.5).train()
+        B = 64
+        latlon = torch.rand(B, 2)
+        slot = self._gps_slot(ce, latlon, batch_size=B)[:, 0, 0, 0, 0, :]
+        zero_path = ce.gps_encoder(torch.zeros(B, 3))
+        gps_path = ce.gps_encoder(latlon_to_unit_xyz(latlon))
+        is_zeroed = torch.isclose(slot, zero_path, atol=1e-6).all(dim=-1)
+        is_kept = torch.isclose(slot, gps_path, atol=1e-6).all(dim=-1)
+        assert (is_zeroed | is_kept).all()
+        assert is_zeroed.any() and is_kept.any()
+
+    def test_eval_mode_applies_no_dropout(self) -> None:
+        """In eval mode the full-GPS path is deterministic at any rate < 1."""
+        ce = self._encodings(gps_dropout_rate=0.5).eval()
+        latlon = torch.rand(4, 2)
+        assert torch.equal(self._gps_slot(ce, latlon), self._gps_slot(ce, latlon))
+        assert not torch.equal(self._gps_slot(ce, latlon), self._gps_slot(ce, None))
+
+    def test_gps_requires_non_absolute_position_encoding(self) -> None:
+        """The absolute spatial encoding occupies the slot GPS writes."""
+        with pytest.raises(ValueError, match="use_gps_encoding"):
+            CompositeEncodings(
+                embedding_size=16,
+                supported_modalities=[Modality.SENTINEL2_L2A],
+                position_encoding="absolute",
+                use_gps_encoding=True,
+            )
+
+
+class TestSimpleTemporalEncoding:
+    """Unit tests for the simple-temporal (month-slot replacement) encoding."""
+
+    embedding_size = 16
+    n = embedding_size // 4  # embedding_dim_per_embedding_type
+
+    def _encodings(self, temporal_year_dropout_rate: float = 0.5) -> CompositeEncodings:
+        return CompositeEncodings(
+            embedding_size=self.embedding_size,
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.WORLDCOVER],
+            random_channel_embeddings=True,
+            position_encoding="rope_3d_mixed",
+            use_simple_temporal_encoding=True,
+            temporal_year_dropout_rate=temporal_year_dropout_rate,
+        )
+
+    @staticmethod
+    def _batch(
+        batch_size: int, years: list[int] | None = None
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        H, W, T, C = 2, 2, 3, 3
+        tokens = {"sentinel2_l2a": torch.zeros(batch_size, H, W, T, C, 16)}
+        base = torch.tensor(
+            [[15, 3, 2022], [15, 7, 2022], [15, 11, 2022]], dtype=torch.long
+        )
+        timestamps = repeat(base, "... -> b ...", b=batch_size).clone()
+        if years is not None:
+            for i, y in enumerate(years):
+                timestamps[i, :, 2] = y
+        return tokens, timestamps
+
+    def _slot(
+        self,
+        ce: CompositeEncodings,
+        batch_size: int = 4,
+        years: list[int] | None = None,
+    ) -> torch.Tensor:
+        tokens, timestamps = self._batch(batch_size, years)
+        out = ce.forward(tokens, timestamps, patch_size=4, input_res=10)
+        return out["sentinel2_l2a"][..., 2 * self.n : 3 * self.n]
+
+    def test_slot_matches_mlp_of_four_numbers(self) -> None:
+        """The month slot carries exactly the MLP of the 4-number encoding."""
+        ce = self._encodings().eval()
+        tokens, timestamps = self._batch(4)
+        slot = self._slot(ce)
+        expected = ce.temporal_encoder(get_simple_temporal_encoding(timestamps))
+        # per (sample, timestep), broadcast over space/bandsets
+        assert torch.allclose(slot[:, 0, 0, :, 0, :], expected, atol=1e-6)
+        assert torch.allclose(slot[:, 1, 1, :, 2, :], expected, atol=1e-6)
+
+    def test_month_table_is_not_applied(self) -> None:
+        """The frozen month table no longer contributes to the slot."""
+        ce_on = self._encodings().eval()
+        ce_off = CompositeEncodings(
+            embedding_size=self.embedding_size,
+            supported_modalities=[Modality.SENTINEL2_L2A],
+            random_channel_embeddings=True,
+            position_encoding="rope_3d_mixed",
+        ).eval()
+        tokens, timestamps = self._batch(4)
+        slot_off = ce_off.forward(tokens, timestamps, 4, 10)["sentinel2_l2a"][
+            ..., 2 * self.n : 3 * self.n
+        ]
+        months = timestamps[:, :, 1]
+        month_embed = ce_off.month_embed(months)
+        assert torch.allclose(slot_off[:, 0, 0, :, 0, :], month_embed, atol=1e-6)
+        assert not torch.allclose(
+            self._slot(ce_on)[:, 0, 0, :, 0, :], month_embed, atol=1e-3
+        )
+
+    def test_year_dropout_equals_year_zero_sentinel(self) -> None:
+        """rate=1.0 in train mode reproduces the year==0 'unknown' encoding."""
+        ce = self._encodings(temporal_year_dropout_rate=1.0)
+        ce.train()
+        dropped = self._slot(ce, years=[2020, 2021, 2022, 2023])
+        ce.eval()
+        sentinel = self._slot(ce, years=[0, 0, 0, 0])
+        assert torch.allclose(dropped, sentinel, atol=1e-6)
+
+    def test_dropout_is_per_sample_and_keeps_phase(self) -> None:
+        """At rate=0.5 samples are either full or year-dropped, never phase-dropped."""
+        torch.manual_seed(0)
+        ce = self._encodings(temporal_year_dropout_rate=0.5).train()
+        B = 64
+        tokens, timestamps = self._batch(B)
+        slot = ce.forward(tokens, timestamps, 4, 10)["sentinel2_l2a"][
+            :, 0, 0, :, 0, 2 * self.n : 3 * self.n
+        ]
+        feats = get_simple_temporal_encoding(timestamps)
+        full = ce.temporal_encoder(feats)
+        year_dropped = ce.temporal_encoder(feats * torch.tensor([0.0, 1.0, 1.0, 0.0]))
+        is_full = torch.isclose(slot, full, atol=1e-6).all(dim=(-2, -1))
+        is_dropped = torch.isclose(slot, year_dropped, atol=1e-6).all(dim=(-2, -1))
+        assert (is_full | is_dropped).all()
+        assert is_full.any() and is_dropped.any()
+
+    def test_eval_mode_is_deterministic(self) -> None:
+        """No dropout in eval mode at any rate < 1."""
+        ce = self._encodings(temporal_year_dropout_rate=0.5).eval()
+        assert torch.equal(self._slot(ce), self._slot(ce))
+
+    def test_static_modalities_get_no_temporal_slot(self) -> None:
+        """Non-multitemporal modalities keep an empty temporal slot."""
+        ce = self._encodings().eval()
+        tokens, timestamps = self._batch(4)
+        wc = {"worldcover": torch.zeros(4, 2, 2, 1, 16)}
+        out = ce.forward(wc, timestamps, 4, 10)["worldcover"]
+        assert (out[..., 2 * self.n : 3 * self.n] == 0).all()
 
 
 # TODO: Add tests for when the inputs are completely masked or different dims or something
@@ -562,6 +777,60 @@ class TestEncoder:
             position_encoding="rope_mixed",
         )
         with pytest.raises(ValueError, match="head_dim divisible by 4"):
+            config.build()
+
+    def test_encoder_config_gps(self, supported_modalities: list[ModalitySpec]) -> None:
+        """GPS encoding builds under RoPE and creates the 2-layer MLP."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=16,
+            num_heads=2,
+            position_encoding="rope",
+            use_gps_encoding=True,
+        )
+        encoder = config.build()
+        assert encoder.composite_encodings.use_gps_encoding
+        assert encoder.composite_encodings.gps_dropout_rate == 0.5
+        assert isinstance(encoder.composite_encodings.gps_encoder[0], torch.nn.Linear)
+
+    def test_encoder_config_gps_requires_rope(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """GPS encoding is rejected under absolute position encoding."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            use_gps_encoding=True,
+        )
+        with pytest.raises(ValueError, match="use_gps_encoding"):
+            config.build()
+
+    def test_encoder_config_simple_temporal(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """The simple temporal encoding builds and creates the 2-layer MLP."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names,
+            embedding_size=16,
+            num_heads=2,
+            use_simple_temporal_encoding=True,
+        )
+        encoder = config.build()
+        assert encoder.composite_encodings.use_simple_temporal_encoding
+        assert encoder.composite_encodings.temporal_year_dropout_rate == 0.5
+        assert isinstance(
+            encoder.composite_encodings.temporal_encoder[0], torch.nn.Linear
+        )
+
+    def test_encoder_config_temporal_dropout_rate_validated(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Out-of-range dropout rates are rejected."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(supported_modality_names, temporal_year_dropout_rate=1.5)
+        with pytest.raises(ValueError, match="temporal_year_dropout_rate"):
             config.build()
 
     def test_position_encoding_deprecated_alias(
@@ -1296,3 +1565,43 @@ class TestBandDropout:
         )
         encoder.enable_band_dropout()
         assert encoder.patch_embeddings.band_dropout_rate == 0.5
+
+
+class TestCombinedGPSAndSimpleTemporal:
+    """Both learned encodings enabled together (the combined arm)."""
+
+    embedding_size = 16
+    n = embedding_size // 4
+
+    def test_slots_are_independent(self) -> None:
+        """GPS fills [3n:4n], simple temporal fills [2n:3n], both exactly."""
+        from olmoearth_pretrain.nn.encodings import latlon_to_unit_xyz
+
+        ce = CompositeEncodings(
+            embedding_size=self.embedding_size,
+            supported_modalities=[Modality.SENTINEL2_L2A],
+            random_channel_embeddings=True,
+            position_encoding="rope_3d_mixed",
+            use_gps_encoding=True,
+            use_simple_temporal_encoding=True,
+        ).eval()
+        B, H, W, T, C = 4, 2, 2, 3, 3
+        tokens = {"sentinel2_l2a": torch.zeros(B, H, W, T, C, self.embedding_size)}
+        timestamps = repeat(
+            torch.tensor(
+                [[15, 3, 2022], [15, 7, 2022], [15, 11, 2022]], dtype=torch.long
+            ),
+            "... -> b ...",
+            b=B,
+        )
+        latlon = torch.rand(B, 2)
+        out = ce.forward(tokens, timestamps, 4, 10, latlon=latlon)["sentinel2_l2a"]
+        n = self.n
+        expected_temporal = ce.temporal_encoder(
+            get_simple_temporal_encoding(timestamps)
+        )
+        expected_gps = ce.gps_encoder(latlon_to_unit_xyz(latlon))
+        assert torch.allclose(
+            out[:, 0, 0, :, 0, 2 * n : 3 * n], expected_temporal, atol=1e-6
+        )
+        assert torch.allclose(out[:, 0, 0, 0, 0, 3 * n :], expected_gps, atol=1e-6)

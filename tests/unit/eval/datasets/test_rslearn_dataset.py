@@ -539,6 +539,22 @@ class TestRaggedModalities:
             ds._transform_sample(input_dict, target)
 
 
+def sidecar_metadata(group: str, name: str) -> SimpleNamespace:
+    """Metadata carrying only the window identity the Landsat sidecar keys on.
+
+    No projection or bounds: these tests exercise the sidecar lookup, and the
+    latlon derivation degrades to None on its own for metadata it cannot
+    reproject.
+    """
+    return SimpleNamespace(
+        window_group=group,
+        window_name=name,
+        crop_bounds=None,
+        window_bounds=None,
+        projection=None,
+    )
+
+
 class TestLandsatCloudMask:
     """Scene-level Landsat cloud masking via the sidecar table."""
 
@@ -557,7 +573,9 @@ class TestLandsatCloudMask:
         table = {"g/w1": {"mo01": 80.0, "mo02": 49.9, "mo03": -1, "mo04": 50.0}}
         ds = self.dataset_with_table(table)
         input_dict, target = TestRaggedModalities.sample_with_landsat(list(range(12)))
-        masked_sample, _ = ds._transform_sample(input_dict, target, window_key="g/w1")
+        masked_sample, _ = ds._transform_sample(
+            input_dict, target, metadata=sidecar_metadata("g", "w1")
+        )
         mask = getattr(masked_sample, self.LANDSAT_MASK)
         assert (mask[:, :, 0] == MaskValue.MISSING.value).all()  # mo01: 80
         assert (mask[:, :, 1] == MaskValue.ONLINE_ENCODER.value).all()  # 49.9
@@ -572,7 +590,9 @@ class TestLandsatCloudMask:
         # landsat missing month index 6 entirely (coverage gap)
         months = [m for m in range(12) if m != 6]
         input_dict, target = TestRaggedModalities.sample_with_landsat(months)
-        masked_sample, _ = ds._transform_sample(input_dict, target, window_key="g/w1")
+        masked_sample, _ = ds._transform_sample(
+            input_dict, target, metadata=sidecar_metadata("g", "w1")
+        )
         mask = getattr(masked_sample, self.LANDSAT_MASK)
         for slot in range(12):
             expected = (
@@ -590,7 +610,7 @@ class TestLandsatCloudMask:
                 list(range(12))
             )
             masked_sample, _ = ds._transform_sample(
-                input_dict, target, window_key="g/w1"
+                input_dict, target, metadata=sidecar_metadata("g", "w1")
             )
             mask = getattr(masked_sample, self.LANDSAT_MASK)
             assert (mask == MaskValue.ONLINE_ENCODER.value).all()
@@ -848,3 +868,75 @@ class TestSubsetBands:
         """A typo in model.yaml must not be silently ignored."""
         with pytest.raises(ValueError, match="not in its canonical band order"):
             self._dataset({Modality.SENTINEL2_L2A.name: ["B02", "NOPE"]})
+
+
+class TestEvalLatlon:
+    """Tests for the window-center latlon attached to eval samples."""
+
+    @staticmethod
+    def _metadata(projection: object, bounds: tuple[int, int, int, int]) -> object:
+        from rslearn.train.model_context import SampleMetadata
+
+        return SampleMetadata(
+            window_group="g",
+            window_name="w",
+            window_bounds=bounds,
+            crop_bounds=bounds,
+            crop_idx=0,
+            num_crops_in_window=1,
+            time_range=None,
+            projection=projection,
+            dataset_source=None,
+        )
+
+    def test_center_latlon_matches_pyproj(self) -> None:
+        """The normalized latlon round-trips to the pyproj-transformed center."""
+        import pyproj
+        from rasterio.crs import CRS
+        from rslearn.utils.geometry import Projection
+
+        from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
+            _normalized_center_latlon,
+        )
+
+        # UTM 33N at 10 m: a 128x128-pixel window near (lat ~42, lon ~15).
+        proj = Projection(CRS.from_epsg(32633), 10.0, -10.0)
+        bounds = (49936, -464564, 50064, -464436)
+        out = _normalized_center_latlon(self._metadata(proj, bounds))
+        assert out is not None and out.shape == (2,)
+        lat = float(out[0]) * 180.0 - 90.0
+        lon = float(out[1]) * 360.0 - 180.0
+        # Center in CRS units: pixel * resolution.
+        cx = (bounds[0] + bounds[2]) / 2 * 10.0
+        cy = (bounds[1] + bounds[3]) / 2 * -10.0
+        tf = pyproj.Transformer.from_crs("EPSG:32633", "EPSG:4326", always_xy=True)
+        exp_lon, exp_lat = tf.transform(cx, cy)
+        assert abs(lat - exp_lat) < 0.01
+        assert abs(lon - exp_lon) < 0.01
+
+    def test_missing_or_bad_metadata_returns_none(self) -> None:
+        """No metadata, or metadata that cannot be reprojected, yields None."""
+        from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
+            _normalized_center_latlon,
+        )
+
+        assert _normalized_center_latlon(None) is None
+        assert _normalized_center_latlon(self._metadata(None, (0, 0, 1, 1))) is None
+
+    def test_transform_sample_attaches_latlon(self) -> None:
+        """With metadata the sample carries normalized latlon; without it, None."""
+        from rasterio.crs import CRS
+        from rslearn.utils.geometry import Projection
+
+        ds = build_dataset()
+        input_dict, target = make_sample(32, {(16, 16): 1})
+        proj = Projection(CRS.from_epsg(32633), 10.0, -10.0)
+        meta = self._metadata(proj, (49936, -464564, 50064, -464436))
+
+        with_meta, _ = ds._transform_sample(input_dict, target, metadata=meta)
+        assert with_meta.latlon is not None
+        assert with_meta.latlon.shape == (2,)
+        assert ((with_meta.latlon >= 0) & (with_meta.latlon <= 1)).all()
+
+        without_meta, _ = ds._transform_sample(input_dict, target)
+        assert without_meta.latlon is None

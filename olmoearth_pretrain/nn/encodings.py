@@ -9,6 +9,7 @@ They cover the following:
 - Month encoding (for temporal data)
 """
 
+import math
 import warnings
 from enum import StrEnum
 from typing import NamedTuple
@@ -91,6 +92,75 @@ _DAYS_BEFORE_MONTH = torch.tensor(
     [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334],
     dtype=torch.float32,
 )
+
+SIMPLE_TEMPORAL_DIM = 4
+TEMPORAL_EPOCH_YEAR = 2020.0
+
+
+def get_simple_temporal_encoding(timestamps: torch.Tensor) -> torch.Tensor:
+    """Minimal 4-number temporal encoding: [frac_year, sin, cos, year_valid].
+
+    Ported verbatim from the trope_simple_temporal line of work. Returns four
+    channels per timestamp:
+      * ``[0]`` ``year + day_of_year/365.25 - 2020`` -- direct fractional
+        years since 2020 (Jan 1 2021 ~ 1.0, July 2022 ~ 2.5, negative before
+        2020). Zero when the year is unknown.
+      * ``[1]`` ``sin(2*pi*day_of_year/365.25)`` -- the annual phase. Computed
+        from day-of-year directly, which equals ``sin(2*pi*frac_year)``
+        (integer years vanish under sin/cos) but stays numerically stable for
+        the year-0 sentinel.
+      * ``[2]`` the orthogonal ``cos`` annual-phase channel.
+      * ``[3]`` ``year_valid`` -- 1.0 when the absolute year is known, 0.0
+        when it is not.
+
+    ``year == 0`` is the in-band "year unknown" sentinel: eval tasks with
+    fabricated dates can use it, and zero-padded timestamps from variable-time
+    eval collation hit it instead of producing a ``frac_year = -2020``
+    outlier. The explicit indicator channel exists because a zeroed year
+    channel alone would be indistinguishable from a real date near Jan 2020
+    (the epoch). Train-time year dropout is applied downstream on channels
+    [0] and [3] only, keeping the annual phase (see CompositeEncodings).
+
+    No learnable parameters; deterministic; output dtype float32.
+
+    Args:
+        timestamps: Tensor of shape ``(..., 3)`` where index 0 is day-of-month
+            (1-31), index 1 is month (0-indexed, 0-11), index 2 is year.
+
+    Returns:
+        Tensor of shape ``(..., 4)``.
+    """
+    day = timestamps[..., 0].float()
+    month = timestamps[..., 1].float()
+    year = timestamps[..., 2].float()
+    day_of_year = month * 30.4375 + day
+
+    year_valid = (year > 0).float()
+    frac_year = year_valid * (year + day_of_year / 365.25 - TEMPORAL_EPOCH_YEAR)
+
+    phase = 2.0 * math.pi * day_of_year / 365.25
+    return torch.stack(
+        [frac_year, torch.sin(phase), torch.cos(phase), year_valid], dim=-1
+    )
+
+
+def latlon_to_unit_xyz(latlon: torch.Tensor) -> torch.Tensor:
+    """Convert normalized (lat, lon) ``[..., 2]`` to unit-sphere xyz ``[..., 3]``.
+
+    The dataloader normalizes latlon with the predefined min/max config
+    (norm_configs/predefined.json: lat [-90, 90] -> [0, 1], lon [-180, 180] ->
+    [0, 1]); undo that, then map to cartesian coordinates on the unit sphere.
+    xyz is bounded in [-1, 1] and, unlike raw lat/lon, has no +-180 dateline
+    discontinuity or pole degeneracy. Same convention as the latlon supervision
+    target (``supervision_head._latlon_unit_xyz_target``).
+    """
+    lat = torch.deg2rad(latlon[..., 0].float() * 180.0 - 90.0)
+    lon = torch.deg2rad(latlon[..., 1].float() * 360.0 - 180.0)
+    cos_lat = torch.cos(lat)
+    return torch.stack(
+        (cos_lat * torch.cos(lon), cos_lat * torch.sin(lon), torch.sin(lat)),
+        dim=-1,
+    )
 
 
 def timestamps_to_days(
