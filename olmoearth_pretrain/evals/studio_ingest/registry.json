@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-08-14T11:47:57.814809",
+  "updated_at": "2026-08-17T07:12:05.038384",
   "datasets": {
     "africa_crop_mask": {
       "name": "africa_crop_mask",
@@ -629,9 +629,10 @@
       },
       "modalities": [
         "gse",
-        "sentinel2_l2a",
+        "landsat",
         "sentinel1",
-        "landsat"
+        "sentinel2_l2a",
+        "tessera_v2"
       ],
       "imputes": [],
       "window_size": 32,
@@ -731,7 +732,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/canada_crops_coarse_year_aligned",
-      "config_json_sha256": "693502802e0202f981e47d9dc47c71fd8b7a93977c6ae58ad2460e07afe55c8e"
+      "config_json_sha256": "ef4cadc0197cb9a462bd2bb7f1647568874a1f27fb5f5af6e83c93082092a587"
     },
     "canada_crops_fine": {
       "name": "canada_crops_fine",
@@ -915,9 +916,10 @@
       },
       "modalities": [
         "gse",
-        "sentinel2_l2a",
+        "landsat",
         "sentinel1",
-        "landsat"
+        "sentinel2_l2a",
+        "tessera_v2"
       ],
       "imputes": [],
       "window_size": 32,
@@ -1017,7 +1019,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/canada_crops_fine_year_aligned",
-      "config_json_sha256": "693502802e0202f981e47d9dc47c71fd8b7a93977c6ae58ad2460e07afe55c8e"
+      "config_json_sha256": "ef4cadc0197cb9a462bd2bb7f1647568874a1f27fb5f5af6e83c93082092a587"
     },
     "canada_wildfire_sat_eval_split": {
       "name": "canada_wildfire_sat_eval_split",
@@ -1274,9 +1276,10 @@
       },
       "modalities": [
         "gse",
-        "sentinel2_l2a",
+        "landsat",
         "sentinel1",
-        "landsat"
+        "sentinel2_l2a",
+        "tessera_v2"
       ],
       "imputes": [],
       "window_size": 32,
@@ -1376,7 +1379,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/descals_year_aligned",
-      "config_json_sha256": "693502802e0202f981e47d9dc47c71fd8b7a93977c6ae58ad2460e07afe55c8e"
+      "config_json_sha256": "ef4cadc0197cb9a462bd2bb7f1647568874a1f27fb5f5af6e83c93082092a587"
     },
     "ethiopia_crops": {
       "name": "ethiopia_crops",
@@ -2124,9 +2127,10 @@
       },
       "modalities": [
         "gse",
-        "sentinel2_l2a",
+        "landsat",
         "sentinel1",
-        "landsat"
+        "sentinel2_l2a",
+        "tessera_v2"
       ],
       "imputes": [],
       "window_size": 32,
@@ -2226,7 +2230,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/glance_year_aligned",
-      "config_json_sha256": "693502802e0202f981e47d9dc47c71fd8b7a93977c6ae58ad2460e07afe55c8e"
+      "config_json_sha256": "ef4cadc0197cb9a462bd2bb7f1647568874a1f27fb5f5af6e83c93082092a587"
     },
     "kenya_intercropping": {
       "name": "kenya_intercropping",
@@ -2488,10 +2492,11 @@
       },
       "modalities": [
         "gse",
-        "tessera",
-        "sentinel2_l2a",
+        "landsat",
         "sentinel1",
-        "landsat"
+        "sentinel2_l2a",
+        "tessera",
+        "tessera_v2"
       ],
       "imputes": [],
       "window_size": 32,
@@ -2591,7 +2596,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/lcmap_lu_year_aligned",
-      "config_json_sha256": "9aa3cf3ac95ada74c8d8a84dec6789dbb0c7f0d5c4638a3a65f5cfe0ca2ca66d"
+      "config_json_sha256": "cd766b3dfa7167208aa44a59c47d8f70ae99d1e91f94bf9dfebabdebf527ad61"
     },
     "lfmc_woody_3k": {
       "name": "lfmc_woody_3k",
