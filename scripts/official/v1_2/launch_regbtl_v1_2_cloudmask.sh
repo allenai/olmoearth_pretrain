@@ -12,7 +12,12 @@
 # anchor, NDVI arm, token budget, LR schedule, epochs(300) and loss set, so the comparison
 # is single-variable. (cand_ndvi uses LatentMIMTrainModuleConfig, which has no instance-
 # contrastive term at all, so there was never an InfoNCE knob to set here.)
-# Same wandb project as cand_ndvi so the curves overlay directly.
+# Same wandb project as cand_ndvi so the curves overlay directly. In-loop evals are the
+# early-read set (set_earlyread_loop_evals): the 6 S1+S2+Landsat probes the current runs
+# are judged on, REPLACING the shared catalog. NOTE this shares only ONE task with
+# cand_ndvi's own in-loop set (the pastis ws16 ps1 S1+S2 export), so for the real
+# comparison sweep cand_ndvi's saved checkpoints under this task set rather than reading
+# the other five off curves the partner never emitted.
 #
 # WHY: the pretext task currently asks the model to predict the latent content of cloudy
 # pixels -- the target there is weather, not ground, and is unpredictable by construction.

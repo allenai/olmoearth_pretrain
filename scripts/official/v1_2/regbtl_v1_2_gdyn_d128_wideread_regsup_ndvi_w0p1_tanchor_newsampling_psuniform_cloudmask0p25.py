@@ -36,7 +36,7 @@ import logging
 
 from base import build_trainer_config as _base_build_trainer_config
 from regbtl_v1_2_cloudmask_common import apply_cloud_cache, apply_cloud_skip_threshold
-from regbtl_v1_2_common import add_loop_eval_beaker_job
+from regbtl_v1_2_earlyread_common import set_earlyread_loop_evals
 from regbtl_v1_2_faster_common import build_wideread_regbtl_model_config
 from regbtl_v1_2_gdyn_d768_il_pdproj_noic_lsa_1fwd import (
     build_common_components,
@@ -117,8 +117,16 @@ def build_train_module_config(common: CommonComponents):
 
 
 def build_trainer_config(common: CommonComponents):
-    """Base trainer config + fifty_cities evals routed through a Beaker job."""
-    return add_loop_eval_beaker_job(_base_build_trainer_config(common), MODULE_PATH)
+    """Early-read eval set (the 6 S1+S2+Landsat probes), routed through a Beaker job.
+
+    REPLACES the shared catalog rather than merging into it, matching the eval set the
+    current runs are judged on. Set here rather than via a
+    ``downstream_evaluator.tasks_to_run`` CLI override because that flag only FILTERS the
+    existing task dict -- the five year-aligned names are not in the catalog
+    ``add_loop_eval_beaker_job`` builds, so overriding there would silently run just the
+    one pastis bridge task.
+    """
+    return set_earlyread_loop_evals(_base_build_trainer_config(common), MODULE_PATH)
 
 
 def run() -> None:
