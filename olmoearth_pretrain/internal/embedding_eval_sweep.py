@@ -375,6 +375,12 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         base_run_name += f"_norm{normalization.replace('_', '')}"
 
     env_prefix = f"TRAIN_SCRIPT_PATH={module_path} EMBEDDING_EVALS=1"
+    if getattr(args, "landsat_reflectance", False):
+        # The radiometry is a property of the arm, not of the checkpoint path,
+        # so name it: running the DN checkpoint under this flag (deliberately
+        # or by mistake) must not collide with its own baseline run.
+        base_run_name += "_l8refl"
+        env_prefix += " LANDSAT_REFLECTANCE=1"
     common = (
         f"{env_prefix} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {{run_name}} {args.cluster} {launch_overrides} "
@@ -477,6 +483,19 @@ def main() -> None:
         type=str,
         default=None,
         help="Beaker job priority (default high), e.g. urgent",
+    )
+    parser.add_argument(
+        "--landsat_reflectance",
+        action="store_true",
+        help=(
+            "For checkpoints pretrained on the Landsat-reflectance h5: convert "
+            "eval Landsat DN to TOA reflectance at load time and use the "
+            "reflectance-scale norm stats. Applies to Landsat-bearing tasks "
+            "only, leaving the S2/S1+S2 tasks as a shared control. Requires a "
+            "landsat_calibration.json in each dataset root "
+            "(build_landsat_calibration_sidecar.py); the loader refuses to run "
+            "without it rather than feeding DN to reflectance-scale stats."
+        ),
     )
     parser.add_argument(
         "--window_size",
@@ -590,6 +609,11 @@ def main() -> None:
     args, extra_cli = parser.parse_known_args()
 
     commands_to_run = build_commands(args, extra_cli)
+    if args.dry_run:
+        logger.info(f"--dry_run: would run {len(commands_to_run)} commands")
+        for cmd in commands_to_run:
+            logger.info(cmd)
+        return
     logger.info(f"Running {len(commands_to_run)} commands")
     for cmd in commands_to_run:
         logger.info(cmd)

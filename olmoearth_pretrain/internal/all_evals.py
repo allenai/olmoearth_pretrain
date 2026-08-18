@@ -2246,6 +2246,32 @@ for _pstack, _pmods in _PASTIS_STACKS:
         )
 
 
+# Landsat norm stats on the reflectance scale, the twin of the pretraining
+# config used by the *_landsat_refl runs.
+LANDSAT_REFLECTANCE_NORM_CONFIG = "computed_landsat_reflectance.json"
+
+# A checkpoint pretrained on the reflectance h5 has to read Landsat as TOA
+# reflectance, so LANDSAT_REFLECTANCE=1 converts it at load time and swaps in
+# the matching stats (embedding_eval_sweep.py --landsat_reflectance).
+#
+# Applied as an override here rather than as `_refl` sibling tasks so the task
+# NAMES stay identical across the two arms: a DN run and a reflectance run then
+# land on the same wandb keys and diff one-to-one, instead of forcing a
+# name-mapping at analysis time.
+#
+# Only Landsat-bearing tasks are touched. The S2 and S1+S2 tasks keep DN-scale
+# stats under both arms, which is exactly what makes them the control for
+# "did retraining on reflectance move the non-Landsat representations too".
+if os.environ.get("LANDSAT_REFLECTANCE"):
+    for _name, _task in list(EMBEDDING_EVAL_TASKS.items()):
+        if Modality.LANDSAT.name in (_task.input_modalities or []):
+            EMBEDDING_EVAL_TASKS[_name] = replace(
+                _task,
+                landsat_reflectance=True,
+                computed_norm_config=LANDSAT_REFLECTANCE_NORM_CONFIG,
+            )
+
+
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
         dataset="pretrain_subset",

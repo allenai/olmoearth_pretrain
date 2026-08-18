@@ -21,6 +21,14 @@ scale.
 Scenes are shared across windows, so unique blob paths are fetched once and
 reused -- the S3 pass is over scenes, not window-months.
 
+``--sun_elevation_cache_dir`` extends that reuse ACROSS runs, in the same
+``<scene_id>.txt`` format ``acquire_landsat_sun_elevation.py`` writes while
+building the pretraining h5. Point the datasets at one shared directory and
+each scene is fetched once for all of them -- and scenes the pretraining pass
+already resolved are never fetched at all::
+
+    --sun_elevation_cache_dir /weka/dfive-default/yawenz/landsat_refl_work/mtl_sun_elevation_cache
+
 Requires AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY: ``s3://usgs-landsat`` is
 requester-pays.
 
@@ -36,10 +44,12 @@ REGISTERED dataset root. Point --ds_path at the tree that has the items and
 
 import argparse
 import json
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.landsat_calibration import (
+    _scene_id_from_blob_path,
     fetch_sun_elevation,
     platform_from_scene_id,
 )
@@ -48,6 +58,44 @@ LAYER_PREFIX = "landsat_mo"
 MONTHS = 12
 OUTPUT_NAME = "landsat_calibration.json"
 FETCH_GROUP_SUFFIX = "_tessera_v2"
+
+# Set once from --sun_elevation_cache_dir before the fetch pool starts; the
+# worker threads only read it.
+_SUN_CACHE_DIR: Path | None = None
+_CACHE_HITS = 0
+_CACHE_HITS_LOCK = threading.Lock()
+
+
+def cached_sun_elevation(blob_path: str) -> float | None:
+    """Sun elevation for a scene, backed by the shared on-disk cache.
+
+    Same ``<scene_id>.txt`` layout as ``acquire_landsat_sun_elevation.py``:
+    the file holds ``repr(float)``, or is empty to record a scene whose MTL
+    could not be read (so a known-bad scene is not re-fetched every run).
+    """
+    if _SUN_CACHE_DIR is None:
+        return fetch_sun_elevation(blob_path)
+
+    cache_file = _SUN_CACHE_DIR / f"{_scene_id_from_blob_path(blob_path)}.txt"
+    try:
+        text = cache_file.read_text().strip()
+    except (OSError, ValueError):
+        pass
+    else:
+        global _CACHE_HITS
+        with _CACHE_HITS_LOCK:
+            _CACHE_HITS += 1
+        try:
+            return float(text) if text else None
+        except ValueError:
+            pass
+
+    sun_elevation = fetch_sun_elevation(blob_path)
+    try:
+        cache_file.write_text("" if sun_elevation is None else repr(sun_elevation))
+    except OSError:
+        pass
+    return sun_elevation
 
 
 def read_window_scenes(window_dir: Path) -> dict[str, dict[str, str]] | None:
@@ -100,7 +148,21 @@ def main() -> int:
         help="Dataset root to write the sidecar to (default ds_path).",
     )
     parser.add_argument("--workers", type=int, default=32)
+    parser.add_argument(
+        "--sun_elevation_cache_dir",
+        default=None,
+        help=(
+            "Shared per-scene sun-elevation cache, same format as "
+            "acquire_landsat_sun_elevation.py. Reuses fetches across datasets "
+            "and across the pretraining run."
+        ),
+    )
     args = parser.parse_args()
+
+    global _SUN_CACHE_DIR
+    if args.sun_elevation_cache_dir:
+        _SUN_CACHE_DIR = Path(args.sun_elevation_cache_dir)
+        _SUN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     root = Path(args.ds_path)
     window_dirs = [
@@ -129,8 +191,11 @@ def main() -> int:
     )
     print(f"fetching SUN_ELEVATION for {len(blob_paths)} unique scenes")
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        elevations = list(pool.map(fetch_sun_elevation, blob_paths))
+        elevations = list(pool.map(cached_sun_elevation, blob_paths))
     sun_by_blob = dict(zip(blob_paths, elevations))
+    if _SUN_CACHE_DIR is not None:
+        share = _CACHE_HITS / max(len(blob_paths), 1)
+        print(f"  cache hits: {_CACHE_HITS}/{len(blob_paths)} ({share:.1%})")
     failed = sum(1 for e in elevations if e is None)
     if failed:
         print(f"WARNING: {failed}/{len(blob_paths)} scenes had no readable MTL")
