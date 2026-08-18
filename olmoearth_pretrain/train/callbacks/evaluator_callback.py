@@ -200,6 +200,14 @@ class DownstreamTaskConfig:
     # Which QA_PIXEL bits count as cloud. None keeps the loader's aggressive
     # default (dilated|cirrus|cloud|shadow); the narrow policy is cloud alone.
     l8_pixel_cloud_bits: int | None = None
+    # Convert eval Landsat DN to TOA reflectance / brightness temperature at
+    # load time, for checkpoints pretrained on the reflectance h5. Reads the
+    # per-window sun-elevation sidecar; pair with the reflectance-scale
+    # computed_norm_config below (the two must always be set together).
+    landsat_reflectance: bool = False
+    # Which computed-config resource backs the pretrain normalizer. Must match
+    # the checkpoint's training-time computed_norm_config.
+    computed_norm_config: str = "computed.json"
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: NormMethod = field(
@@ -345,6 +353,8 @@ class DownstreamEvaluator:
         self.landsat_cloud_cover_max = task.landsat_cloud_cover_max
         self.l8_pixel_cloud_mask = task.l8_pixel_cloud_mask
         self.l8_pixel_cloud_bits = task.l8_pixel_cloud_bits
+        self.landsat_reflectance = task.landsat_reflectance
+        self.computed_norm_config = task.computed_norm_config
         self.tile_samples = task.tile_samples
         if self.tile_samples:
             if not self._is_registry_dataset:
@@ -625,6 +635,10 @@ class DownstreamEvaluator:
                 extra_kwargs["l8_pixel_cloud_mask"] = True
                 if self.l8_pixel_cloud_bits is not None:
                     extra_kwargs["l8_pixel_cloud_bits"] = self.l8_pixel_cloud_bits
+            if self.landsat_reflectance:
+                extra_kwargs["landsat_reflectance"] = True
+            if self.computed_norm_config != "computed.json":
+                extra_kwargs["computed_norm_config"] = self.computed_norm_config
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities

@@ -56,6 +56,8 @@ SENTINELS: dict[str, Any] = {
     "landsat_cloud_cover_max": 42.0,
     "l8_pixel_cloud_mask": True,
     "l8_pixel_cloud_bits": 0b01000,
+    "landsat_reflectance": True,
+    "computed_norm_config": "computed_landsat_reflectance.json",
     "input_modalities": [Modality.LANDSAT.name.lower()],
     "norm_method": NormMethod.NORM_YES_CLIP_3_STD,
     "norm_stats_from_pretrained": True,
