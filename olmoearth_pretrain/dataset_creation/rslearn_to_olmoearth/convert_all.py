@@ -14,7 +14,7 @@ Usage:
 
 import argparse
 import multiprocessing
-from typing import Callable
+from collections.abc import Callable
 
 import tqdm
 from rslearn.dataset import Dataset, Window
@@ -22,6 +22,7 @@ from rslearn.utils.mp import star_imap_unordered
 from upath import UPath
 
 from .cdl import convert_cdl
+from .landsat import convert_landsat
 from .openstreetmap import convert_openstreetmap
 from .sentinel1 import convert_sentinel1
 from .sentinel2_l2a import convert_sentinel2_l2a
@@ -33,6 +34,7 @@ from .wri_canopy_height_map import convert_chm
 # Per-window converter functions. Each takes (window, olmoearth_path, **kwargs).
 CONVERTERS: dict[str, Callable] = {
     "cdl": convert_cdl,
+    "landsat": convert_landsat,
     "openstreetmap": convert_openstreetmap,
     "sentinel1": convert_sentinel1,
     "sentinel2_l2a": convert_sentinel2_l2a,
@@ -45,6 +47,9 @@ CONVERTERS: dict[str, Callable] = {
 # Modalities that accept use_temporal_stack kwarg.
 TEMPORAL_MODALITIES = {"sentinel1", "sentinel2_l2a"}
 
+# Modalities that accept use_allcap kwarg (every-capture layers).
+ALLCAP_MODALITIES = {"landsat", "sentinel1", "sentinel2_l2a"}
+
 ALL_MODALITIES = list(CONVERTERS.keys())
 
 
@@ -53,12 +58,15 @@ def _convert_window(
     olmoearth_path: UPath,
     modalities: list[str],
     use_temporal_stack: bool,
+    use_allcap: bool = False,
 ) -> None:
     for mod in modalities:
         converter = CONVERTERS[mod]
         try:
             kwargs: dict = dict(window=window, olmoearth_path=olmoearth_path)
-            if mod in TEMPORAL_MODALITIES:
+            if mod in ALLCAP_MODALITIES and use_allcap:
+                kwargs["use_allcap"] = True
+            elif mod in TEMPORAL_MODALITIES:
                 kwargs["use_temporal_stack"] = use_temporal_stack
             converter(**kwargs)
         except Exception as e:
@@ -72,28 +80,45 @@ if __name__ == "__main__":
         description="Convert rslearn dataset to OlmoEarth Pretrain format",
     )
     parser.add_argument(
-        "--ds_path", type=str, required=True,
+        "--ds_path",
+        type=str,
+        required=True,
         help="Source rslearn dataset path",
     )
     parser.add_argument(
-        "--olmoearth_path", type=str, required=True,
+        "--olmoearth_path",
+        type=str,
+        required=True,
         help="Destination OlmoEarth Pretrain dataset path",
     )
     parser.add_argument(
-        "--workers", type=int, default=32,
+        "--workers",
+        type=int,
+        default=32,
         help="Number of workers to use",
     )
     parser.add_argument(
-        "--modalities", type=str, default=None,
+        "--modalities",
+        type=str,
+        default=None,
         help=f"Comma-separated list of modalities to convert. Default: all. "
-             f"Available: {','.join(ALL_MODALITIES)}",
+        f"Available: {','.join(ALL_MODALITIES)}",
     )
     parser.add_argument(
-        "--legacy-monthly", action="store_true",
+        "--legacy-monthly",
+        action="store_true",
         help="Use legacy 12 separate _moNN layers for S1/S2 instead of temporal stack",
     )
     parser.add_argument(
-        "--groups", type=str, default="res_10.0",
+        "--allcap",
+        action="store_true",
+        help="Layers store every individual capture (one item per group); convert "
+        "S1/S2/Landsat via the allcap path",
+    )
+    parser.add_argument(
+        "--groups",
+        type=str,
+        default="res_10.0",
         help="Comma-separated window groups to load (default: res_10.0)",
     )
     args = parser.parse_args()
@@ -116,14 +141,19 @@ if __name__ == "__main__":
 
     jobs = []
     for window in dataset.load_windows(
-        workers=args.workers, show_progress=True, groups=groups,
+        workers=args.workers,
+        show_progress=True,
+        groups=groups,
     ):
-        jobs.append(dict(
-            window=window,
-            olmoearth_path=olmoearth_path,
-            modalities=modalities,
-            use_temporal_stack=use_temporal_stack,
-        ))
+        jobs.append(
+            dict(
+                window=window,
+                olmoearth_path=olmoearth_path,
+                modalities=modalities,
+                use_temporal_stack=use_temporal_stack,
+                use_allcap=args.allcap,
+            )
+        )
 
     print(f"Processing {len(jobs)} windows with {args.workers} workers...")
 

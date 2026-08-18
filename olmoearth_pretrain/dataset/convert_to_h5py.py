@@ -18,6 +18,7 @@ from upath import UPath
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
     IMAGE_TILE_SIZE,
+    SCL_CLOUDY_CLASSES,
     SENTINEL1_NODATA,
     YEAR_NUM_TIMESTEPS,
     Modality,
@@ -384,24 +385,32 @@ class ConvertToH5py:
         sample_dict["latlon"] = sample.get_latlon().astype(np.float32)
         multi_temporal_timestamps_dict = sample.get_timestamps()
 
-        # Compute longest timestamps from only spacetime varying modalities
-        # This is used to deal with the case that when ERA5 is available, it always has full 12 months
-        # But other spacetime varying modalities may have way less months
-        spacetime_varying_modalities = {
-            modality: timestamps
-            for modality, timestamps in multi_temporal_timestamps_dict.items()
-            if modality.is_spacetime_varying
-        }
-        # Note that with the longest timestamps array, we cut all modalities to this range
-        # Anything outside of this range is considered missing
-        longest_timestamps_array = self._find_longest_timestamps_array(
-            spacetime_varying_modalities
-        )
-        missing_timesteps_masks_data = self._create_missing_timesteps_masks(
-            spacetime_varying_modalities, longest_timestamps_array
-        )
+        if sample.time_span == TimeSpan.ALL:
+            # Every-capture samples: each modality has its own irregular timeline, so
+            # we store one timestamps array per multitemporal modality instead of a
+            # shared grid plus missing-timesteps masks.
+            missing_timesteps_masks_data: dict[str, np.ndarray] = {}
+            for mod_spec, mod_timestamps in multi_temporal_timestamps_dict.items():
+                sample_dict[f"timestamps_{mod_spec.name}"] = mod_timestamps
+        else:
+            # Compute longest timestamps from only spacetime varying modalities
+            # This is used to deal with the case that when ERA5 is available, it always has full 12 months
+            # But other spacetime varying modalities may have way less months
+            spacetime_varying_modalities = {
+                modality: timestamps
+                for modality, timestamps in multi_temporal_timestamps_dict.items()
+                if modality.is_spacetime_varying
+            }
+            # Note that with the longest timestamps array, we cut all modalities to this range
+            # Anything outside of this range is considered missing
+            longest_timestamps_array = self._find_longest_timestamps_array(
+                spacetime_varying_modalities
+            )
+            missing_timesteps_masks_data = self._create_missing_timesteps_masks(
+                spacetime_varying_modalities, longest_timestamps_array
+            )
 
-        sample_dict["timestamps"] = longest_timestamps_array
+            sample_dict["timestamps"] = longest_timestamps_array
 
         # Load image data for all modalities in the sample
         for modality in sample.modalities:
@@ -433,6 +442,16 @@ class ConvertToH5py:
                 logger.info(f"Image shape after slicing: {image.shape}")
 
             sample_dict[modality.name] = image
+
+        # For every-capture samples with the SCL modality, store the per-capture
+        # cloudy-pixel fraction of this subtile (aligned with timestamps_sentinel2_scl).
+        scl_name = Modality.SENTINEL2_SCL.name
+        if sample.time_span == TimeSpan.ALL and scl_name in sample_dict:
+            scl_image = sample_dict[scl_name]  # (h, w, t, 1)
+            cloudy = np.isin(scl_image[..., 0], SCL_CLOUDY_CLASSES)
+            sample_dict[f"{scl_name}_cloud_fraction"] = cloudy.mean(axis=(0, 1)).astype(
+                np.float32
+            )
 
         # w+b as sometimes metadata needs to be read as well for different chunking/compression settings
         with h5_file_path.open("w+b") as f:
@@ -625,7 +644,7 @@ class ConvertToH5py:
                 )
                 continue
 
-            if sample.time_span != TimeSpan.YEAR:
+            if sample.time_span not in (TimeSpan.YEAR, TimeSpan.ALL):
                 logger.debug(
                     "Skipping sample because it is not the yearly frequency data"
                 )
@@ -647,10 +666,15 @@ class ConvertToH5py:
             # To align with ERA5, which either missing (for ocean) or has 12 timesteps
             # We require at least one spacetime varying modality to have 12 timesteps
             # e.g., for Presto dataset, only 43 samples not meeting this requirement
+            # Every-capture (ALL) samples have variable timestep counts, so this
+            # requirement only applies to YEAR samples.
             longest_timestamps_array = self._find_longest_timestamps_array(
                 spacetime_varying_modalities
             )
-            if len(longest_timestamps_array) < YEAR_NUM_TIMESTEPS:
+            if (
+                sample.time_span == TimeSpan.YEAR
+                and len(longest_timestamps_array) < YEAR_NUM_TIMESTEPS
+            ):
                 logger.info(
                     "Skipping sample because it does not have at least 12 timesteps"
                 )

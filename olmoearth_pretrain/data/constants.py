@@ -31,6 +31,10 @@ SENTINEL1_NODATA = -32768
 # Number of timesteps for YEAR data.
 YEAR_NUM_TIMESTEPS = 12
 
+# Sentinel-2 SCL classes counted as cloudy: cloud shadow (3), cloud medium
+# probability (8), cloud high probability (9), thin cirrus (10).
+SCL_CLOUDY_CLASSES = (3, 8, 9, 10)
+
 
 def get_resolution(resolution_factor: int) -> float | int:
     """Compute the resolution.
@@ -96,6 +100,9 @@ class TimeSpan(str, Enum):
     # Every data point in a two-week period.
     TWO_WEEK = "two_week"
 
+    # Every individual capture over one year (variable number of timesteps).
+    ALL = "all"
+
     def get_suffix(self) -> str:
         """Returns the suffix used for this timespan in raw OlmoEarth Pretrain dataset."""
         if self == TimeSpan.STATIC:
@@ -104,6 +111,8 @@ class TimeSpan(str, Enum):
             return "_monthly"
         if self == TimeSpan.TWO_WEEK:
             return "_freq"
+        if self == TimeSpan.ALL:
+            return "_allcap"
         raise ValueError("invalid TimeSpan")
 
 
@@ -261,6 +270,20 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # Sentinel-2 L2A scene classification layer (SCL), stored as its own modality so
+    # that the reflectance bands of SENTINEL2_L2A stay unchanged. It shares the same
+    # rslearn layer (and therefore the same capture timestamps) as SENTINEL2_L2A.
+    SENTINEL2_SCL = ModalitySpec(
+        name="sentinel2_scl",
+        tile_resolution_factor=16,
+        band_sets=[
+            # 20 m/pixel band.
+            BandSet(["SCL"], 32),
+        ],
+        is_multitemporal=True,
+        ignore_when_parsing=False,
+    )
+
     LANDSAT = ModalitySpec(
         name="landsat",
         tile_resolution_factor=16,
@@ -269,6 +292,20 @@ class Modality:
             BandSet(["B8"], 16),
             # 30 m/pixel bands that we store at 20 m/pixel.
             BandSet(["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"], 32),
+        ],
+        is_multitemporal=True,
+        ignore_when_parsing=False,
+    )
+
+    # Landsat Collection 2 Level-2 (surface reflectance + surface temperature) from the
+    # Planetary Computer landsat-c2-l2 collection. Level-2 has no panchromatic (B8),
+    # cirrus (B9), or second thermal (B11) band.
+    LANDSAT_L2 = ModalitySpec(
+        name="landsat_l2",
+        tile_resolution_factor=16,
+        band_sets=[
+            # 30 m/pixel bands that we store at 20 m/pixel.
+            BandSet(["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B10"], 32),
         ],
         is_multitemporal=True,
         ignore_when_parsing=False,

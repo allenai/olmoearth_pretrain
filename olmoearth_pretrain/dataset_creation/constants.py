@@ -29,6 +29,8 @@ METADATA_COLUMNS = [
     "image_idx",
     "start_time",
     "end_time",
+    # Source scene/product identifier (populated by allcap conversion only).
+    "scene_id",
 ]
 
 GEOTIFF_BLOCK_SIZE = 32

@@ -10,7 +10,7 @@ from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 
-from .multitemporal_raster import convert_freq, convert_monthly
+from .multitemporal_raster import convert_allcap, convert_freq, convert_monthly
 
 # rslearn layer for frequent data.
 LAYER_FREQ = "landsat_freq"
@@ -19,13 +19,37 @@ LAYER_FREQ = "landsat_freq"
 LAYER_MONTHLY = "landsat"
 
 
-def convert_landsat(window: Window, olmoearth_path: UPath) -> None:
+def convert_landsat(
+    window: Window,
+    olmoearth_path: UPath,
+    use_allcap: bool = False,
+) -> None:
     """Add Landsat data for this window to the OlmoEarth Pretrain dataset.
 
     Args:
         window: the rslearn window to read data from.
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
+        use_allcap: if True, the "landsat" layer stores every individual capture
+            (one item per group) of Landsat C2 L2 data; convert it as the landsat_l2
+            modality and skip the freq/monthly paths.
     """
+    if use_allcap:
+        try:
+            convert_allcap(
+                window,
+                olmoearth_path,
+                LAYER_MONTHLY,
+                Modality.LANDSAT_L2,
+                missing_okay=True,
+                unprepared_okay=True,
+            )
+        except Exception as e:
+            print(
+                f"warning: got error {e} while converting allcap landsat "
+                f"data for window {window.name}"
+            )
+        return
+
     convert_freq(
         window,
         olmoearth_path,

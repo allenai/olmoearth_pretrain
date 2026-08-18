@@ -54,6 +54,7 @@ def _encode_chw(
         fname=fname,
     )
 
+
 PIXELS_PER_TILE = 256
 EPSILON = 1e-6
 
@@ -515,3 +516,147 @@ def convert_temporal_stack(
             for image_idx, (start_time, end_time) in enumerate(time_ranges)
         ],
     )
+
+
+def convert_allcap(
+    window: Window,
+    olmoearth_path: UPath,
+    layer_name: str,
+    modality: ModalitySpec,
+    missing_okay: bool = False,
+    unprepared_okay: bool = False,
+    skip_nodata_value: float | None = None,
+) -> None:
+    """Add every-capture (TimeSpan.ALL) data from this window to the dataset.
+
+    This handles a single rslearn layer configured to store every individual capture
+    as its own item group (space_mode=CONTAINS/INTERSECTS with a large max_matches),
+    i.e. every group has exactly one item. Unlike convert_temporal_stack, timestamps
+    are taken from each item's actual sensing time rather than the group's request
+    time range (which under this layout spans the whole layer duration). Captures are
+    sorted chronologically before stacking, so image_idx in the CSV matches the order
+    in the stacked GeoTIFF regardless of group order on disk.
+
+    Args:
+        window: the rslearn window to read data from.
+        olmoearth_path: OlmoEarth Pretrain dataset path to write to.
+        layer_name: the rslearn layer name (e.g. "sentinel1", "sentinel2_l2a").
+        modality: the modality.
+        missing_okay: skip groups whose rasters are missing on disk.
+        unprepared_okay: ignore the case where the window hasn't been prepared.
+        skip_nodata_value: if set, skip captures where any pixel in any band set
+            equals this value (e.g. partial-coverage Sentinel-1 captures).
+    """
+    window_metadata = get_window_metadata(window)
+    layer_datas = window.load_layer_datas()
+
+    if abs(window_metadata.resolution - modality.get_tile_resolution()) > EPSILON:
+        raise ValueError(
+            f"window ({window_metadata.resolution}) must have same "
+            f"resolution as modality ({modality.get_tile_resolution()})"
+        )
+
+    if layer_name not in layer_datas:
+        if unprepared_okay:
+            return
+        raise ValueError(
+            f"layer {layer_name} missing from layer datas for window {window.name}"
+        )
+
+    # Collect per-capture (timestamp, scene_id, images) so we can sort by time.
+    captures: list[tuple[str, str, str, dict[BandSet, npt.NDArray]]] = []
+    for group_idx, group in enumerate(layer_datas[layer_name].serialized_item_groups):
+        if len(group) != 1:
+            raise ValueError(
+                f"expected allcap groups to have length 1 but got {len(group)} "
+                f"for layer {layer_name} in window {window.name}"
+            )
+
+        item = Item.deserialize(group[0])
+        start_time, end_time = item.geometry.time_range
+        cur_images: dict[BandSet, npt.NDArray] = {}
+
+        for band_set in modality.band_sets:
+            adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
+                modality, band_set, window.projection, window.bounds
+            )
+
+            is_completed = window.is_layer_completed(layer_name, group_idx)
+            if not is_completed and missing_okay:
+                continue
+
+            raster_dir = window.get_raster_dir(layer_name, band_set.bands, group_idx)
+            image = _to_ndarray(
+                GEOTIFF_RASTER_FORMAT.decode_raster(
+                    raster_dir, adjusted_projection, adjusted_bounds
+                )
+            )
+            expected_image_size = band_set.get_expected_image_size(
+                window_metadata.get_resolution_factor(),
+                window_metadata.get_tile_size(),
+            )
+            if (
+                image.shape[1] != expected_image_size
+                or image.shape[2] != expected_image_size
+            ):
+                raise ValueError(
+                    f"expected image size {expected_image_size} but got {image.shape}"
+                )
+
+            cur_images[band_set] = image
+
+        if len(cur_images) < len(modality.band_sets):
+            continue
+
+        all_images_blank = all(image.max() == 0 for image in cur_images.values())
+        if all_images_blank:
+            continue
+
+        if skip_nodata_value is not None and any(
+            np.any(image == skip_nodata_value) for image in cur_images.values()
+        ):
+            continue
+
+        captures.append(
+            (start_time.isoformat(), end_time.isoformat(), item.name, cur_images)
+        )
+
+    if not captures:
+        return
+
+    captures.sort(key=lambda capture: capture[0])
+
+    for band_set in modality.band_sets:
+        adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
+            modality, band_set, window.projection, window.bounds
+        )
+
+        stacked_image = np.concatenate(
+            [capture[3][band_set] for capture in captures], axis=0
+        )
+        dst_fname = get_modality_fname(
+            olmoearth_path,
+            modality,
+            TimeSpan.ALL,
+            window_metadata,
+            band_set.get_resolution(),
+            "tif",
+        )
+        _encode_chw(
+            GEOTIFF_RASTER_FORMAT,
+            path=dst_fname.parent,
+            projection=adjusted_projection,
+            bounds=adjusted_bounds,
+            array=stacked_image,
+            fname=dst_fname.name,
+        )
+
+    metadata_fname = get_modality_temp_meta_fname(
+        olmoearth_path, modality, TimeSpan.ALL, window.name
+    )
+    rows = []
+    for image_idx, (start_time, end_time, scene_id, _) in enumerate(captures):
+        row = get_metadata_row(window_metadata, image_idx, start_time, end_time)
+        row["scene_id"] = scene_id
+        rows.append(row)
+    write_metadata_rows(metadata_fname, rows)

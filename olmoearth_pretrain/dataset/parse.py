@@ -322,8 +322,19 @@ def parse_dataset(
             continue
 
         if modality.is_multitemporal:
-            # We need to load the one-year and two-week data separately.
-            time_spans = [TimeSpan.YEAR]  # [TimeSpan.YEAR, TimeSpan.TWO_WEEK]
+            # Multitemporal data may be stored as monthly mosaics (YEAR) and/or as
+            # every-capture stacks (ALL); load whichever CSVs are present. If neither
+            # CSV exists, fall through with YEAR to preserve the original error.
+            time_spans = [
+                candidate
+                for candidate in (TimeSpan.YEAR, TimeSpan.ALL)
+                if (
+                    path
+                    / f"{modality.get_tile_resolution()}_{modality.name}{candidate.get_suffix()}.csv"
+                ).exists()
+            ]
+            if not time_spans:
+                time_spans = [TimeSpan.YEAR]
         else:
             # Just need to load the static data.
             time_spans = [TimeSpan.STATIC]

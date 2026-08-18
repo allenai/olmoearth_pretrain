@@ -88,6 +88,13 @@ def image_tiles_to_samples(
     # Convert from (modality -> time_span -> tile list) to
     # (modality, grid_tile, time_span) -> tile).
     image_tile_index: dict[tuple[ModalitySpec, GridTile, TimeSpan], ModalityTile] = {}
+    # Secondary index keyed on grid identity only (crs/resolution_factor/col/row). The
+    # full GridTile now carries derived bounds/x_resolution that the grid-reference
+    # lookup does not reconstruct, so keying the lookup on the object itself never
+    # matches; this normalized index is what that lookup path uses.
+    grid_ref_index: dict[
+        tuple[ModalitySpec, str, int, int, int, TimeSpan], ModalityTile
+    ] = {}
     sample_id_index: dict[tuple[ModalitySpec, str, TimeSpan], list[ModalityTile]] = {}
     geometry_index: dict[tuple[ModalitySpec, TimeSpan, str], list[ModalityTile]] = {}
     for modality, modality_tiles in image_tiles.items():
@@ -95,6 +102,18 @@ def image_tiles_to_samples(
             for tile in time_span_tiles:
                 index_key = (modality, tile.grid_tile, time_span)
                 image_tile_index[index_key] = tile
+                gt = tile.grid_tile
+                if gt.use_grid_reference and gt.col is not None and gt.row is not None:
+                    grid_ref_index[
+                        (
+                            modality,
+                            gt.crs,
+                            gt.resolution_factor,
+                            gt.col,
+                            gt.row,
+                            time_span,
+                        )
+                    ] = tile
                 if tile.grid_tile.sample_id:
                     sample_id_key = (modality, tile.grid_tile.sample_id, time_span)
                     sample_id_index.setdefault(sample_id_key, []).append(tile)
@@ -175,14 +194,22 @@ def image_tiles_to_samples(
                     col=grid_tile.col // downscale_factor,
                     row=grid_tile.row // downscale_factor,
                 )
-                index_key = (modality, modality_grid_tile, lookup_time_span)
-                image_tile = image_tile_index.get(index_key)
+                grid_ref_key = (
+                    modality,
+                    modality_grid_tile.crs,
+                    modality_grid_tile.resolution_factor,
+                    grid_tile.col // downscale_factor,
+                    grid_tile.row // downscale_factor,
+                    lookup_time_span,
+                )
+                image_tile = grid_ref_index.get(grid_ref_key)
                 if image_tile is None:
                     logger.debug(
-                        "ignoring modality %s because no tile found for index_key=%s",
+                        "ignoring modality %s because no tile found for grid_ref_key=%s",
                         modality.name,
-                        index_key,
+                        grid_ref_key,
                     )
+                    continue
             else:
                 if grid_tile.sample_id:
                     sample_id_key = (modality, grid_tile.sample_id, lookup_time_span)

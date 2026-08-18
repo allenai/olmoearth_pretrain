@@ -19,11 +19,10 @@ Usage:
 
 import argparse
 import multiprocessing
-import sys
 
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import Modality, TimeSpan
+from olmoearth_pretrain.data.constants import Modality, ModalitySpec, TimeSpan
 
 STEPS = ["convert", "metadata", "rasterize_osm", "h5"]
 
@@ -37,7 +36,7 @@ MODALITIES_FOR_H5 = [
     "wri_canopy_height_map",
 ]
 
-MODALITY_TIME_SPANS: list[tuple[Modality, TimeSpan]] = [
+MODALITY_TIME_SPANS: list[tuple[ModalitySpec, TimeSpan]] = [
     (Modality.SENTINEL2_L2A, TimeSpan.YEAR),
     (Modality.SENTINEL1, TimeSpan.YEAR),
     (Modality.WORLDCOVER, TimeSpan.STATIC),
@@ -47,14 +46,47 @@ MODALITY_TIME_SPANS: list[tuple[Modality, TimeSpan]] = [
     (Modality.WRI_CANOPY_HEIGHT_MAP, TimeSpan.STATIC),
 ]
 
+# Every-capture (allcap) corpora: S1/S2/Landsat store every individual capture, the
+# SCL band rides along as its own modality, and CDL joins the static map layers.
+MODALITIES_FOR_H5_ALLCAP = [
+    "sentinel2_l2a",
+    "sentinel2_scl",
+    "sentinel1",
+    "landsat_l2",
+    "worldcover",
+    "openstreetmap_raster",
+    "worldcereal",
+    "srtm",
+    "wri_canopy_height_map",
+    "cdl",
+]
 
-def step_convert(ds_path: str, olmoearth_path: str, workers: int, groups: str) -> None:
+MODALITY_TIME_SPANS_ALLCAP: list[tuple[ModalitySpec, TimeSpan]] = [
+    (Modality.SENTINEL2_L2A, TimeSpan.ALL),
+    (Modality.SENTINEL2_SCL, TimeSpan.ALL),
+    (Modality.SENTINEL1, TimeSpan.ALL),
+    (Modality.LANDSAT_L2, TimeSpan.ALL),
+    (Modality.WORLDCOVER, TimeSpan.STATIC),
+    (Modality.OPENSTREETMAP, TimeSpan.STATIC),
+    (Modality.WORLDCEREAL, TimeSpan.STATIC),
+    (Modality.SRTM, TimeSpan.STATIC),
+    (Modality.WRI_CANOPY_HEIGHT_MAP, TimeSpan.STATIC),
+    (Modality.CDL, TimeSpan.STATIC),
+]
+
+
+def step_convert(
+    ds_path: str, olmoearth_path: str, workers: int, groups: str, allcap: bool = False
+) -> None:
     """Step 1: Convert rslearn windows to olmoearth tiffs + per-window metadata."""
+    import tqdm
     from rslearn.dataset import Dataset
     from rslearn.utils.mp import star_imap_unordered
-    import tqdm
 
-    from olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.convert_all import ALL_MODALITIES, CONVERTERS, TEMPORAL_MODALITIES, _convert_window
+    from olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.convert_all import (
+        ALL_MODALITIES,
+        _convert_window,
+    )
 
     group_list = [g.strip() for g in groups.split(",")]
     print(f"[convert] Converting modalities: {ALL_MODALITIES}")
@@ -64,13 +96,18 @@ def step_convert(ds_path: str, olmoearth_path: str, workers: int, groups: str) -
     olmo_path = UPath(olmoearth_path)
 
     jobs = []
-    for window in dataset.load_windows(workers=workers, show_progress=True, groups=group_list):
-        jobs.append(dict(
-            window=window,
-            olmoearth_path=olmo_path,
-            modalities=ALL_MODALITIES,
-            use_temporal_stack=True,
-        ))
+    for window in dataset.load_windows(
+        workers=workers, show_progress=True, groups=group_list
+    ):
+        jobs.append(
+            dict(
+                window=window,
+                olmoearth_path=olmo_path,
+                modalities=ALL_MODALITIES,
+                use_temporal_stack=True,
+                use_allcap=allcap,
+            )
+        )
 
     print(f"[convert] Processing {len(jobs)} windows with {workers} workers...")
     p = multiprocessing.Pool(workers)
@@ -81,12 +118,13 @@ def step_convert(ds_path: str, olmoearth_path: str, workers: int, groups: str) -
     print("[convert] Done.")
 
 
-def step_metadata(olmoearth_path: str) -> None:
+def step_metadata(olmoearth_path: str, allcap: bool = False) -> None:
     """Step 2: Consolidate per-window temp metadata CSVs into one CSV per modality."""
     from olmoearth_pretrain.dataset_creation.make_meta_summary import make_meta_summary
 
     olmo_path = UPath(olmoearth_path)
-    for modality, time_span in MODALITY_TIME_SPANS:
+    modality_time_spans = MODALITY_TIME_SPANS_ALLCAP if allcap else MODALITY_TIME_SPANS
+    for modality, time_span in modality_time_spans:
         print(f"[metadata] Consolidating {modality.name} ({time_span.value})...")
         try:
             make_meta_summary(olmo_path, modality, time_span)
@@ -99,11 +137,12 @@ def step_rasterize_osm(olmoearth_path: str, workers: int) -> None:
     """Step 3: Rasterize OSM GeoJSON vectors into tiff rasters."""
     import csv
 
+    import tqdm
+    from rasterio.crs import CRS
     from rslearn.utils.geometry import Projection
     from rslearn.utils.mp import star_imap_unordered
-    from rasterio.crs import CRS
-    import tqdm
 
+    from olmoearth_pretrain.dataset.utils import get_modality_fname
     from olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.rasterize_openstreetmap import (
         FACTOR,
         OUTPUT_RESOLUTION,
@@ -112,10 +151,11 @@ def step_rasterize_osm(olmoearth_path: str, workers: int) -> None:
         rasterize_openstreetmap,
     )
     from olmoearth_pretrain.dataset_creation.util import get_modality_dir
-    from olmoearth_pretrain.dataset.utils import get_modality_fname
 
     olmo_path = UPath(olmoearth_path)
-    src_modality_dir = get_modality_dir(olmo_path, Modality.OPENSTREETMAP, TimeSpan.STATIC)
+    src_modality_dir = get_modality_dir(
+        olmo_path, Modality.OPENSTREETMAP, TimeSpan.STATIC
+    )
     src_metadata_fname = olmo_path / f"{src_modality_dir.name}.csv"
 
     if not src_metadata_fname.exists():
@@ -136,26 +176,39 @@ def step_rasterize_osm(olmoearth_path: str, workers: int) -> None:
         bounds = window_metadata.bounds
         if bounds is None:
             raise ValueError("window metadata must include bounds")
-        rasterize_jobs.append(dict(
-            job=OpenStreetMapRasterJob(
-                in_fname=get_modality_fname(
-                    olmo_path, Modality.OPENSTREETMAP, TimeSpan.STATIC,
-                    window_metadata, 10, "geojson",
-                ),
-                out_fname=get_modality_fname(
-                    olmo_path, Modality.OPENSTREETMAP_RASTER, TimeSpan.STATIC,
-                    window_metadata, OUTPUT_RESOLUTION, "tif",
-                ),
-                projection=Projection(
-                    CRS.from_string(window_metadata.crs),
-                    OUTPUT_RESOLUTION, -OUTPUT_RESOLUTION,
-                ),
-                bounds=(
-                    bounds[0] * FACTOR, bounds[1] * FACTOR,
-                    bounds[2] * FACTOR, bounds[3] * FACTOR,
-                ),
+        rasterize_jobs.append(
+            dict(
+                job=OpenStreetMapRasterJob(
+                    in_fname=get_modality_fname(
+                        olmo_path,
+                        Modality.OPENSTREETMAP,
+                        TimeSpan.STATIC,
+                        window_metadata,
+                        10,
+                        "geojson",
+                    ),
+                    out_fname=get_modality_fname(
+                        olmo_path,
+                        Modality.OPENSTREETMAP_RASTER,
+                        TimeSpan.STATIC,
+                        window_metadata,
+                        OUTPUT_RESOLUTION,
+                        "tif",
+                    ),
+                    projection=Projection(
+                        CRS.from_string(window_metadata.crs),
+                        OUTPUT_RESOLUTION,
+                        -OUTPUT_RESOLUTION,
+                    ),
+                    bounds=(
+                        bounds[0] * FACTOR,
+                        bounds[1] * FACTOR,
+                        bounds[2] * FACTOR,
+                        bounds[3] * FACTOR,
+                    ),
+                )
             )
-        ))
+        )
 
     p = multiprocessing.Pool(workers)
     outputs = star_imap_unordered(p, rasterize_openstreetmap, rasterize_jobs)
@@ -163,7 +216,9 @@ def step_rasterize_osm(olmoearth_path: str, workers: int) -> None:
         pass
     p.close()
 
-    dst_modality_dir = get_modality_dir(olmo_path, Modality.OPENSTREETMAP_RASTER, TimeSpan.STATIC)
+    dst_modality_dir = get_modality_dir(
+        olmo_path, Modality.OPENSTREETMAP_RASTER, TimeSpan.STATIC
+    )
     dst_metadata_fname = olmo_path / f"{dst_modality_dir.name}.csv"
     for csv_row in csv_rows:
         if csv_row["image_idx"] == "N/A":
@@ -176,14 +231,16 @@ def step_rasterize_osm(olmoearth_path: str, workers: int) -> None:
     print("[rasterize_osm] Done.")
 
 
-def step_h5(olmoearth_path: str) -> None:
+def step_h5(olmoearth_path: str, allcap: bool = False) -> None:
     """Step 4: Convert olmoearth tiffs → h5py training dataset."""
     from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5pyConfig
 
-    print(f"[h5] Converting to h5py...")
+    print("[h5] Converting to h5py...")
     config = ConvertToH5pyConfig(
         tile_path=olmoearth_path,
-        supported_modality_names=MODALITIES_FOR_H5,
+        supported_modality_names=(
+            MODALITIES_FOR_H5_ALLCAP if allcap else MODALITIES_FOR_H5
+        ),
         multiprocessed_h5_creation=True,
         compression="zstd",
         compression_opts=3,
@@ -194,15 +251,34 @@ def step_h5(olmoearth_path: str) -> None:
 
 
 def main() -> None:
+    """Run the requested pipeline steps."""
     multiprocessing.set_start_method("forkserver", force=True)
 
-    parser = argparse.ArgumentParser(description="Full rslearn → olmoearth → h5py pipeline")
-    parser.add_argument("--ds_path", type=str, required=True, help="Source rslearn dataset path")
-    parser.add_argument("--olmoearth_path", type=str, required=True, help="Destination OlmoEarth path")
+    parser = argparse.ArgumentParser(
+        description="Full rslearn → olmoearth → h5py pipeline"
+    )
+    parser.add_argument(
+        "--ds_path", type=str, required=True, help="Source rslearn dataset path"
+    )
+    parser.add_argument(
+        "--olmoearth_path", type=str, required=True, help="Destination OlmoEarth path"
+    )
     parser.add_argument("--workers", type=int, default=8, help="Number of workers")
-    parser.add_argument("--groups", type=str, default="res_10.0", help="rslearn window groups")
-    parser.add_argument("--skip", type=str, default=None, help=f"Comma-separated steps to skip: {STEPS}")
-    parser.add_argument("--only", type=str, default=None, help=f"Only run this step: {STEPS}")
+    parser.add_argument(
+        "--groups", type=str, default="res_10.0", help="rslearn window groups"
+    )
+    parser.add_argument(
+        "--skip", type=str, default=None, help=f"Comma-separated steps to skip: {STEPS}"
+    )
+    parser.add_argument(
+        "--only", type=str, default=None, help=f"Only run this step: {STEPS}"
+    )
+    parser.add_argument(
+        "--allcap",
+        action="store_true",
+        help="Every-capture corpus: convert S1/S2/Landsat via the allcap path and "
+        "use the allcap modality lists for metadata/h5",
+    )
     args = parser.parse_args()
 
     if args.only:
@@ -214,16 +290,18 @@ def main() -> None:
     print(f"Pipeline steps: {steps_to_run}")
 
     if "convert" in steps_to_run:
-        step_convert(args.ds_path, args.olmoearth_path, args.workers, args.groups)
+        step_convert(
+            args.ds_path, args.olmoearth_path, args.workers, args.groups, args.allcap
+        )
 
     if "metadata" in steps_to_run:
-        step_metadata(args.olmoearth_path)
+        step_metadata(args.olmoearth_path, args.allcap)
 
     if "rasterize_osm" in steps_to_run:
         step_rasterize_osm(args.olmoearth_path, args.workers)
 
     if "h5" in steps_to_run:
-        step_h5(args.olmoearth_path)
+        step_h5(args.olmoearth_path, args.allcap)
 
     print("Pipeline complete.")
 
