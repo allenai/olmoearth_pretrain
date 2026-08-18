@@ -501,7 +501,12 @@ def set_proj_earlyread_loop_evals(
         for name, task in base_tasks.items()
     }
     evaluator = trainer_config.callbacks["downstream_evaluator"]
-    evaluator.tasks = {**base_tasks, **proj_tasks}
+    # Student tasks FIRST: eval jobs at urgent can be preempted mid-run and the
+    # tail tasks are the ones that lose their metrics -- the shipped d128 head
+    # is the primary readout, so a clipped job should cost teacher cells, not
+    # student cells (lesson from the 2026-08-18 baseline sweep, which ran
+    # teacher-first and made the deliverable wait).
+    evaluator.tasks = {**proj_tasks, **base_tasks}
     evaluator.run_as_beaker_job = True
     evaluator.beaker_eval_module_path = module_path
     evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
