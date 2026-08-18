@@ -84,15 +84,6 @@ conflicts = [[
 ]]
 
 [[package]]
-name = "absl-py"
-version = "2.4.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/64/c7/8de93764ad66968d19329a7e0c147a2bb3c7054c554d4a119111b8f9440f/absl_py-2.4.0.tar.gz", hash = "sha256:8c6af82722b35cf71e0f4d1d47dcaebfff286e27110a99fc359349b247dfb5d4", size = 116543, upload-time = "2026-01-28T10:17:05.322Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/18/a6/907a406bb7d359e6a63f99c313846d9eec4f7e6f7437809e03aa00fa3074/absl_py-2.4.0-py3-none-any.whl", hash = "sha256:88476fd881ca8aab94ffa78b7b6c632a782ab3ba1cd19c9bd423abc4fb4cd28d", size = 135750, upload-time = "2026-01-28T10:17:04.19Z" },
-]
-
-[[package]]
 name = "aenum"
 version = "3.1.16"
 source = { registry = "https://pypi.org/simple" }
@@ -405,8 +396,8 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", marker = "sys_platform != 'darwin'" },
     { name = "packaging", marker = "sys_platform != 'darwin'" },
-    { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f8/a1/c66a0d02091a9ef6704a153e09f541e70fc48db02df94fbbf1632b321aca/bitsandbytes-0.48.1-py3-none-manylinux_2_24_aarch64.whl", hash = "sha256:b7f440aee5ec8cb1d028b0d3b2d71e97c302766dc605232293f4a0f7e48b5c75", size = 34033906, upload-time = "2025-10-02T17:40:25.159Z" },
@@ -2347,9 +2338,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "kornia-rs" },
     { name = "packaging" },
-    { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d7/49/3c3aa9c68262b87551d50cdeefff027394316abfe11937a729371a39f50a/kornia-0.8.1.tar.gz", hash = "sha256:9ce5a54a11df661794934a293f89f8b8d49e83dd09b0b9419f6082ab07afe433", size = 652542, upload-time = "2025-05-08T11:13:25.485Z" }
 wheels = [
@@ -2444,9 +2435,9 @@ dependencies = [
     { name = "pytorch-lightning" },
     { name = "requests" },
     { name = "six" },
-    { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
     { name = "torchvision" },
     { name = "tqdm" },
     { name = "urllib3" },
@@ -2495,7 +2486,7 @@ wheels = [
 pytorch-extra = [
     { name = "bitsandbytes", marker = "sys_platform != 'darwin'" },
     { name = "hydra-core" },
-    { name = "jsonargparse", extra = ["signatures"], marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-dataset-creation' or extra == 'extra-18-olmoearth-pretrain-eval'" },
+    { name = "jsonargparse", extra = ["signatures"], marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
     { name = "matplotlib" },
     { name = "omegaconf" },
     { name = "rich" },
@@ -2615,15 +2606,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/9e/38/bd5b78a920a64d708fe6bc8e0a2c075e1389d53bef8413725c63ba041535/mako-1.3.10.tar.gz", hash = "sha256:99579a6f39583fa7e5630a28c3c1f440e4e97a414b80372649c0ce338da2ea28", size = 392474, upload-time = "2025-04-10T12:44:31.16Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/87/fb/99f81ac72ae23375f22b7afdb7642aba97c00a713c217124420147681a2f/mako-1.3.10-py3-none-any.whl", hash = "sha256:baef24a52fc4fc514a0887ac600f9f1cff3d82c61d4d700a1fa84d597b88db59", size = 78509, upload-time = "2025-04-10T12:50:53.297Z" },
-]
-
-[[package]]
-name = "markdown"
-version = "3.10.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2b/f4/69fa6ed85ae003c2378ffa8f6d2e3234662abd02c10d216c0ba96081a238/markdown-3.10.2.tar.gz", hash = "sha256:994d51325d25ad8aa7ce4ebaec003febcce822c3f8c911e3b17c52f7f589f950", size = 368805, upload-time = "2026-02-09T14:57:26.942Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/1f/77fa3081e4f66ca3576c896ae5d31c3002ac6607f9747d2e3aa49227e464/markdown-3.10.2-py3-none-any.whl", hash = "sha256:e91464b71ae3ee7afd3017d9f358ef0baf158fd9a298db92f1d4761133824c36", size = 108180, upload-time = "2026-02-09T14:57:25.787Z" },
 ]
 
 [[package]]
@@ -3347,7 +3329,7 @@ all-no-flash = [
     { name = "satlaspretrain-models" },
     { name = "scikit-learn" },
     { name = "shapely" },
-    { name = "terratorch", version = "1.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "terratorch" },
     { name = "timm" },
     { name = "torchmetrics" },
     { name = "torchvision" },
@@ -3408,7 +3390,7 @@ eval = [
     { name = "rslearn" },
     { name = "satlaspretrain-models" },
     { name = "scikit-learn" },
-    { name = "terratorch", version = "1.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "terratorch" },
     { name = "timm" },
     { name = "torchmetrics" },
     { name = "tqdm" },
@@ -3512,17 +3494,20 @@ provides-extras = ["training", "beaker", "dataset-creation", "dev", "eval", "fla
 
 [[package]]
 name = "olmoearth-pretrain-minimal"
-version = "0.0.2"
+version = "0.0.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "einops", version = "0.8.2", source = { registry = "https://pypi.org/simple" } },
     { name = "huggingface-hub" },
     { name = "numpy" },
+    { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
     { name = "universal-pathlib" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/76/0e/6a9318dae9269c453787f000ee4bcfcad94e4bc517bcf173668cdf03f564/olmoearth_pretrain_minimal-0.0.2.tar.gz", hash = "sha256:832fad5311e9827ebc74093335d774ba03cd0b9b8fba17d6bec5168b14b6c7a7", size = 60641, upload-time = "2026-02-04T17:45:13.376Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4b/74/46d2c0f78b27c2ba760fe795b88cba2f1fcf3dc67aa85ef23b7638f33505/olmoearth_pretrain_minimal-0.0.7.tar.gz", hash = "sha256:c200a11dcb504eaf3a8777510c237ed86c97c52887f782e92d07c74761f93241", size = 81239, upload-time = "2026-08-17T23:22:26.419Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c4/5e/4b5f88029eabf50029b3ad6608ecb3c2d7ada04671fb521f7ecd1d85c9fe/olmoearth_pretrain_minimal-0.0.2-py3-none-any.whl", hash = "sha256:165693ecd1e22dc39956a8620cbf9d498f5df151ef60c7f60128f89b1e68f6fe", size = 65784, upload-time = "2026-02-04T17:45:12.036Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/cc/1eb2da483688c4295fd4d2f37d4f9c9146ed4ee63792d9641585bdca86a9/olmoearth_pretrain_minimal-0.0.7-py3-none-any.whl", hash = "sha256:e1d9daa4d4aeaba3356679c913cb89d3346ca6df00e88964c0fe530678d8320e", size = 81892, upload-time = "2026-08-17T23:22:24.796Z" },
 ]
 
 [[package]]
@@ -4009,12 +3994,12 @@ name = "pretrainedmodels"
 version = "0.7.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "munch", marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
+    { name = "munch" },
     { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
     { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
     { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "torchvision", marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
-    { name = "tqdm", marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
+    { name = "torchvision" },
+    { name = "tqdm" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/84/0e/be6a0e58447ac16c938799d49bfb5fb7a80ac35e137547fc6cee2c08c4cf/pretrainedmodels-0.7.4.tar.gz", hash = "sha256:7e77ead4619a3e11ab3c41982c8ad5b86edffe37c87fd2a37ec3c2cc6470b98a", size = 58821, upload-time = "2018-10-29T08:18:45.373Z" }
 
@@ -5033,14 +5018,14 @@ wheels = [
 
 [[package]]
 name = "rslearn"
-version = "0.1.4"
+version = "0.1.11"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
     { name = "fiona" },
     { name = "flask" },
     { name = "fsspec" },
-    { name = "jsonargparse" },
+    { name = "jsonargparse", extra = ["signatures"], marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-dataset-creation' or extra == 'extra-18-olmoearth-pretrain-eval'" },
     { name = "lightning" },
     { name = "pillow" },
     { name = "pydantic" },
@@ -5053,13 +5038,14 @@ dependencies = [
     { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
     { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
     { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "torchmetrics", extra = ["detection"], marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-dataset-creation' or extra == 'extra-18-olmoearth-pretrain-eval'" },
     { name = "torchvision" },
     { name = "tqdm" },
     { name = "universal-pathlib" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ca/33/2ca458c95478b4e3731018cfd8f2176f5258834f78ad373741b4cc145980/rslearn-0.1.4.tar.gz", hash = "sha256:ad769b82481e3ecb5aa8e50d5092a2605679ac452c8336d0b76f36e7fc55a994", size = 423177, upload-time = "2026-04-17T21:24:03.622Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/98/488509cbaf9014fd9273334445199f1529df6cbb3f73860068d81d59505e/rslearn-0.1.11.tar.gz", hash = "sha256:ec86925b1bf069386b40c5352d04addd2c21cfa09117cd92351a63f00053beb3", size = 459982, upload-time = "2026-06-26T14:26:26.511Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1f/37/90ea2aa15a48ae186cd29d272880b734b958e9cce9bbb67a40a4689b3259/rslearn-0.1.4-py3-none-any.whl", hash = "sha256:f715380a4de89431472cd015af3add4369b20d9292fb7cdffc08e69902065a13", size = 532476, upload-time = "2026-04-17T21:24:01.415Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/55/963eb58b15ab9db775aaf32580be176bf35d861cb27cf24874d7f96909bc/rslearn-0.1.11-py3-none-any.whl", hash = "sha256:87a0450ed9dee13d1ac95f439092f1539eb39604f9a849907d45714c316ef8c0", size = 576615, upload-time = "2026-06-26T14:26:24.483Z" },
 ]
 
 [package.optional-dependencies]
@@ -5088,7 +5074,6 @@ extra = [
     { name = "satlaspretrain-models" },
     { name = "scipy" },
     { name = "termcolor" },
-    { name = "terratorch", version = "1.1.1", source = { registry = "https://pypi.org/simple" } },
     { name = "timm" },
     { name = "transformers" },
     { name = "wandb" },
@@ -5357,18 +5342,18 @@ resolution-markers = [
     "python_full_version < '3.12' and platform_machine != 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "efficientnet-pytorch", marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
-    { name = "huggingface-hub", marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
-    { name = "numpy", marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
-    { name = "pillow", marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
-    { name = "pretrainedmodels", marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
-    { name = "six", marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
-    { name = "timm", marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
+    { name = "efficientnet-pytorch" },
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "pretrainedmodels" },
+    { name = "six" },
+    { name = "timm" },
     { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
     { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
     { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "torchvision", marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
-    { name = "tqdm", marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
+    { name = "torchvision" },
+    { name = "tqdm" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ef/5e/4fad09f0a0975014d895f2fe2225c547ea7d2f5c7b920288e21750fbf38f/segmentation_models_pytorch-0.4.0.tar.gz", hash = "sha256:8833e63f0846090667be6fce05a2bbebbd1537776d3dea72916aa3db9e22e55b", size = 78515, upload-time = "2025-01-08T15:34:43.196Z" }
 wheels = [
@@ -5397,16 +5382,16 @@ resolution-markers = [
     "python_full_version < '3.12' and platform_machine != 'aarch64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "huggingface-hub", marker = "extra == 'extra-18-olmoearth-pretrain-dataset-creation'" },
-    { name = "numpy", marker = "extra == 'extra-18-olmoearth-pretrain-dataset-creation'" },
-    { name = "pillow", marker = "extra == 'extra-18-olmoearth-pretrain-dataset-creation'" },
-    { name = "safetensors", marker = "extra == 'extra-18-olmoearth-pretrain-dataset-creation'" },
-    { name = "timm", marker = "extra == 'extra-18-olmoearth-pretrain-dataset-creation'" },
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "safetensors" },
+    { name = "timm" },
     { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
     { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
     { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "torchvision", marker = "extra == 'extra-18-olmoearth-pretrain-dataset-creation'" },
-    { name = "tqdm", marker = "extra == 'extra-18-olmoearth-pretrain-dataset-creation'" },
+    { name = "torchvision" },
+    { name = "tqdm" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/15/fa/d5a29d49240fb10bdead608b4d0c6805684a8f63b1f65863502be65b1ca4/segmentation_models_pytorch-0.5.0.tar.gz", hash = "sha256:cabba8aced6ef7bdcd6288dd9e1dc2840848aa819d539c455bd07aeceb2fdf96", size = 105150, upload-time = "2025-04-17T10:43:45.755Z" }
 wheels = [
@@ -5646,36 +5631,6 @@ wheels = [
 ]
 
 [[package]]
-name = "tensorboard"
-version = "2.20.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "absl-py" },
-    { name = "grpcio" },
-    { name = "markdown" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "pillow" },
-    { name = "protobuf" },
-    { name = "setuptools" },
-    { name = "tensorboard-data-server" },
-    { name = "werkzeug" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9c/d9/a5db55f88f258ac669a92858b70a714bbbd5acd993820b41ec4a96a4d77f/tensorboard-2.20.0-py3-none-any.whl", hash = "sha256:9dc9f978cb84c0723acf9a345d96c184f0293d18f166bb8d59ee098e6cfaaba6", size = 5525680, upload-time = "2025-07-17T19:20:49.638Z" },
-]
-
-[[package]]
-name = "tensorboard-data-server"
-version = "0.7.2"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7a/13/e503968fefabd4c6b2650af21e110aa8466fe21432cd7c43a84577a89438/tensorboard_data_server-0.7.2-py3-none-any.whl", hash = "sha256:7e0610d205889588983836ec05dc098e80f97b7e7bbff7e994ebb78f578d0ddb", size = 2356, upload-time = "2023-10-23T21:23:32.16Z" },
-    { url = "https://files.pythonhosted.org/packages/b7/85/dabeaf902892922777492e1d253bb7e1264cadce3cea932f7ff599e53fea/tensorboard_data_server-0.7.2-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:9fe5d24221b29625dbc7328b0436ca7fc1c23de4acf4d272f1180856e32f9f60", size = 4823598, upload-time = "2023-10-23T21:23:33.714Z" },
-    { url = "https://files.pythonhosted.org/packages/73/c6/825dab04195756cf8ff2e12698f22513b3db2f64925bdd41671bfb33aaa5/tensorboard_data_server-0.7.2-py3-none-manylinux_2_31_x86_64.whl", hash = "sha256:ef687163c24185ae9754ed5650eb5bc4d84ff257aabdc33f0cc6f74d8ba54530", size = 6590363, upload-time = "2023-10-23T21:23:35.583Z" },
-]
-
-[[package]]
 name = "tensorboardx"
 version = "2.6.4"
 source = { registry = "https://pypi.org/simple" }
@@ -5702,23 +5657,6 @@ wheels = [
 name = "terratorch"
 version = "1.1"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and platform_machine == 'ARM64' and sys_platform == 'win32'",
-    "(python_full_version >= '3.13' and platform_machine != 'ARM64' and sys_platform == 'win32') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "python_full_version == '3.12.*' and platform_machine == 'ARM64' and sys_platform == 'win32'",
-    "(python_full_version == '3.12.*' and platform_machine != 'ARM64' and sys_platform == 'win32') or (python_full_version == '3.12.*' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "python_full_version < '3.12' and platform_machine == 'ARM64' and sys_platform == 'win32'",
-    "(python_full_version < '3.12' and platform_machine != 'ARM64' and sys_platform == 'win32') or (python_full_version < '3.12' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "python_full_version >= '3.13' and sys_platform == 'darwin'",
-    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
-    "python_full_version < '3.12' and sys_platform == 'darwin'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version >= '3.13' and platform_machine != 'aarch64' and sys_platform == 'linux'",
-    "python_full_version == '3.12.*' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version == '3.12.*' and platform_machine != 'aarch64' and sys_platform == 'linux'",
-    "python_full_version < '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version < '3.12' and platform_machine != 'aarch64' and sys_platform == 'linux'",
-]
 dependencies = [
     { name = "albucore" },
     { name = "albumentations" },
@@ -5754,59 +5692,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/40/f3/6a8298c5382b91e8d08c580e0d69449c1284a9b13277b81535ff119608a0/terratorch-1.1.tar.gz", hash = "sha256:0aaf58103c6eea7401befe167d730a2659d8fe7f54e357b651cf4bae9724e0fb", size = 399332, upload-time = "2025-09-24T21:43:52.736Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8e/72/a7d277c42b5bd1605efd009205ab412b6e25b713781909d4a51e9b3e1349/terratorch-1.1-py3-none-any.whl", hash = "sha256:828e6d257ccb52790ae692d9bc6b537e26bc2dac5e0cb6baf3d342a5e6928a27", size = 537553, upload-time = "2025-09-24T21:43:51.115Z" },
-]
-
-[[package]]
-name = "terratorch"
-version = "1.1.1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and platform_machine == 'ARM64' and sys_platform == 'win32'",
-    "(python_full_version >= '3.13' and platform_machine != 'ARM64' and sys_platform == 'win32') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "python_full_version == '3.12.*' and platform_machine == 'ARM64' and sys_platform == 'win32'",
-    "(python_full_version == '3.12.*' and platform_machine != 'ARM64' and sys_platform == 'win32') or (python_full_version == '3.12.*' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "python_full_version < '3.12' and platform_machine == 'ARM64' and sys_platform == 'win32'",
-    "(python_full_version < '3.12' and platform_machine != 'ARM64' and sys_platform == 'win32') or (python_full_version < '3.12' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
-    "python_full_version >= '3.13' and sys_platform == 'darwin'",
-    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
-    "python_full_version < '3.12' and sys_platform == 'darwin'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version >= '3.13' and platform_machine != 'aarch64' and sys_platform == 'linux'",
-    "python_full_version == '3.12.*' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version == '3.12.*' and platform_machine != 'aarch64' and sys_platform == 'linux'",
-    "python_full_version < '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version < '3.12' and platform_machine != 'aarch64' and sys_platform == 'linux'",
-]
-dependencies = [
-    { name = "albucore" },
-    { name = "albumentations" },
-    { name = "einops", version = "0.8.2", source = { registry = "https://pypi.org/simple" } },
-    { name = "geopandas" },
-    { name = "h5py" },
-    { name = "huggingface-hub" },
-    { name = "jsonargparse" },
-    { name = "lightly" },
-    { name = "lightning" },
-    { name = "pycocotools" },
-    { name = "python-box" },
-    { name = "rasterio" },
-    { name = "rioxarray" },
-    { name = "segmentation-models-pytorch", version = "0.5.0", source = { registry = "https://pypi.org/simple" } },
-    { name = "tensorboard" },
-    { name = "tifffile" },
-    { name = "timm" },
-    { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "torchgeo" },
-    { name = "torchmetrics" },
-    { name = "torchvision" },
-    { name = "tqdm" },
-    { name = "wandb" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/37/d9/360afa6906900daef0338dd60ee38c4989bade4cebf4b0781ff535cda3a6/terratorch-1.1.1.tar.gz", hash = "sha256:5419ec9886226a540d11f427294bdd9a572bfbb940a9c7e358a911f13f6eb7e4", size = 425571, upload-time = "2025-11-14T16:57:56.422Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/14/54/c8b734a21246575fbd8e963ee9fabc376181f3431234e0b04a7b6d6afd4f/terratorch-1.1.1-py3-none-any.whl", hash = "sha256:ebb59d0560edad01f4113147aebd6f1f39ba0cc59f147b795a3e1480857c5ada", size = 560319, upload-time = "2025-11-14T16:57:54.785Z" },
 ]
 
 [[package]]
@@ -6022,12 +5907,11 @@ name = "torchgeo"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "einops", version = "0.7.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
-    { name = "einops", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-18-olmoearth-pretrain-dataset-creation'" },
+    { name = "einops", version = "0.7.0", source = { registry = "https://pypi.org/simple" } },
     { name = "fiona" },
     { name = "kornia" },
     { name = "lightly" },
-    { name = "lightning", extra = ["pytorch-extra"], marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-dataset-creation' or extra == 'extra-18-olmoearth-pretrain-eval'" },
+    { name = "lightning", extra = ["pytorch-extra"], marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pandas" },
@@ -6035,13 +5919,12 @@ dependencies = [
     { name = "pyproj" },
     { name = "rasterio" },
     { name = "rtree" },
-    { name = "segmentation-models-pytorch", version = "0.4.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-18-olmoearth-pretrain-all-no-flash' or extra == 'extra-18-olmoearth-pretrain-eval'" },
-    { name = "segmentation-models-pytorch", version = "0.5.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-18-olmoearth-pretrain-dataset-creation'" },
+    { name = "segmentation-models-pytorch", version = "0.4.0", source = { registry = "https://pypi.org/simple" } },
     { name = "shapely" },
     { name = "timm" },
-    { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
-    { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'darwin' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
+    { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-all-no-flash') or (sys_platform == 'linux' and extra == 'extra-18-olmoearth-pretrain-eval') or (extra == 'extra-18-olmoearth-pretrain-all-no-flash' and extra == 'extra-18-olmoearth-pretrain-dataset-creation') or (extra == 'extra-18-olmoearth-pretrain-dataset-creation' and extra == 'extra-18-olmoearth-pretrain-eval')" },
     { name = "torchmetrics" },
     { name = "torchvision" },
     { name = "typing-extensions" },
@@ -6066,6 +5949,12 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/28/c4/2d921ccf7433ee6d8d6edeaca238674cbbc74528120631c662014795c645/torchmetrics-1.7.1.tar.gz", hash = "sha256:0ac1a0e90d2375866ceb5d3868720c6df7d7d0c5729b7ad36e92c897c6af70c2", size = 565045, upload-time = "2025-04-07T19:39:52.577Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/ee/4d0a7213a6f412afb3483031009a3b970dd7bed3be24de95ab04fba1c05a/torchmetrics-1.7.1-py3-none-any.whl", hash = "sha256:9a4c45edbd0a1844cc1540c9e71bfbe0ee783a2ed997344d947fefecac90dbb9", size = 961489, upload-time = "2025-04-07T19:39:50.455Z" },
+]
+
+[package.optional-dependencies]
+detection = [
+    { name = "pycocotools" },
+    { name = "torchvision" },
 ]
 
 [[package]]
