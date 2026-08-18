@@ -57,6 +57,9 @@ from regbtl_v1_2_common import (
 from regbtl_v1_2_faster_common import build_wideread_regbtl_model_config
 from regbtl_v1_2_regsup_common import add_register_supervision
 
+from olmoearth_pretrain.internal.all_evals import (
+    EMBEDDING_EVAL_TASKS as _EMBEDDING_EVAL_TASKS,
+)
 from olmoearth_pretrain.internal.experiment import CommonComponents
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModuleConfig
@@ -434,6 +437,71 @@ def add_proj_loop_eval_beaker_job(
         **embedding_tasks,
         **evaluator.tasks,
     }
+    evaluator.run_as_beaker_job = True
+    evaluator.beaker_eval_module_path = module_path
+    evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
+    return trainer_config
+
+
+# --- year-aligned AEF-trial in-loop evals, both heads -----------------------------
+# The six early-read probes (see regbtl_v1_2_earlyread_common for the rationale):
+# the PASTIS S1+S2 bridge task shared with the older runs' in-loop sets, plus the
+# year-aligned S1+S2+Landsat PASTIS / ethiopia / descals probes. The two _knn tasks
+# carry AEF's balanced-trial protocol automatically (_aef_ps1_task attaches a
+# BalancedTrialConfig whenever eval_mode is KNN), which is where the aeftrial_*
+# metrics come from. Names are looked up in the canonical registry so a typo raises
+# KeyError at import instead of silently dropping a task. Duplicated here rather
+# than imported from regbtl_v1_2_earlyread_common, whose import chain drags in the
+# d128 tanchor model builders these runs do not use.
+_PROJ_EARLYREAD_LOOP_EVAL_NAMES = (
+    "pastis_ws16_ps1_sentinel1_sentinel2_pretrain_export",
+    "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat",
+    "ethiopia_crops_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat",
+    "ethiopia_crops_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_knn",
+    "descals_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat",
+    "descals_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_knn",
+)
+
+
+def set_proj_earlyread_loop_evals(
+    trainer_config,
+    module_path: str,
+    *,
+    interval_steps: int = 40000,
+    projection_dim: int = 128,
+):
+    """REPLACE the eval set with the early-read probes on BOTH heads, via Beaker.
+
+    The six tasks above probe the d768 teacher registers; their ``_proj{d}``
+    duplicates probe the detached student (``eval_on_projected_registers``), so the
+    shipped d128 embedding gets the same year-aligned LP/KNN/aeftrial readout
+    in-loop. Like ``set_earlyread_loop_evals`` this DISCARDS the shared catalog --
+    these runs are judged on the embedding product, and the catalog evals would
+    inflate the eval job's runtime measuring axes the experiment does not turn on.
+
+    ``interval_steps`` defaults to 40k, not the earlyread 20k: with the projected
+    duplicates this is a 12-task job, and the proj runs' 14-task jobs are the ones
+    that overflowed a 20k window and silently dropped their tail metrics (see
+    ``add_proj_loop_eval_beaker_job``). Must be a multiple of the checkpointer
+    save_interval (5000).
+    """
+    base_tasks = {
+        name: replace(
+            _EMBEDDING_EVAL_TASKS[name],
+            eval_interval=Duration.steps(interval_steps),
+        )
+        for name in _PROJ_EARLYREAD_LOOP_EVAL_NAMES
+    }
+    proj_tasks = {
+        f"{name}_proj{projection_dim}": replace(
+            task,
+            eval_on_projected_registers=True,
+            eval_projection_dim=projection_dim,
+        )
+        for name, task in base_tasks.items()
+    }
+    evaluator = trainer_config.callbacks["downstream_evaluator"]
+    evaluator.tasks = {**base_tasks, **proj_tasks}
     evaluator.run_as_beaker_job = True
     evaluator.beaker_eval_module_path = module_path
     evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
