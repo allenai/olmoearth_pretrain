@@ -123,11 +123,12 @@ def attach_dataset_config(
     ds_root.mkdir(parents=True, exist_ok=True)
 
     if dst.exists() or dst.is_symlink():
+        # If dst already points at src, there is nothing to do. This must be checked
+        # even with force=True: unlinking dst would otherwise destroy src itself when
+        # the caller passes the dataset's own config.json as the source.
+        if dst.resolve() == src:
+            return dst
         if not force:
-            if dst.is_symlink() and dst.resolve() == src:
-                return dst
-            if dst.exists() and not dst.is_symlink() and dst.resolve() == src:
-                return dst
             raise FileExistsError(
                 f'{dst} already exists; use force=True to replace it'
             )
