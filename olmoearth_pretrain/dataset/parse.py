@@ -348,6 +348,16 @@ def parse_dataset(
             csv_fname = (
                 path / f"{tile_resolution}_{modality.name}{time_span.get_suffix()}.csv"  # type: ignore
             )
+            if not csv_fname.exists():
+                # A supported modality can have zero coverage in the dataset (e.g. CDL
+                # for a subset with no CONUS windows), in which case no CSV was ever
+                # written. Treat it as empty rather than failing the whole parse.
+                logger.warning(
+                    f"no CSV for modality {modality.name} {time_span} at {csv_fname}; "
+                    "treating as empty"
+                )
+                tiles[modality][time_span] = []  # type: ignore
+                continue
             logger.debug(f"Parsing {modality.name} {time_span} {csv_fname}")
             tiles[modality][time_span] = parse_modality_csv(  # type: ignore
                 path,

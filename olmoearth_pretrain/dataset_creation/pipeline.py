@@ -231,8 +231,11 @@ def step_rasterize_osm(olmoearth_path: str, workers: int) -> None:
     print("[rasterize_osm] Done.")
 
 
-def step_h5(olmoearth_path: str, allcap: bool = False) -> None:
+def step_h5(
+    olmoearth_path: str, allcap: bool = False, tile_size: int | None = None
+) -> None:
     """Step 4: Convert olmoearth tiffs → h5py training dataset."""
+    from olmoearth_pretrain.data.constants import IMAGE_TILE_SIZE
     from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5pyConfig
 
     print("[h5] Converting to h5py...")
@@ -244,6 +247,7 @@ def step_h5(olmoearth_path: str, allcap: bool = False) -> None:
         multiprocessed_h5_creation=True,
         compression="zstd",
         compression_opts=3,
+        tile_size=tile_size or IMAGE_TILE_SIZE,
     )
     converter = config.build()
     converter.run()
@@ -279,6 +283,13 @@ def main() -> None:
         help="Every-capture corpus: convert S1/S2/Landsat via the allcap path and "
         "use the allcap modality lists for metadata/h5",
     )
+    parser.add_argument(
+        "--h5-tile-size",
+        type=int,
+        default=None,
+        help="h5 subtile size in pixels (default IMAGE_TILE_SIZE; the v1-style "
+        "production corpora use 128, i.e. 4 subtiles per 256px window)",
+    )
     args = parser.parse_args()
 
     if args.only:
@@ -301,7 +312,7 @@ def main() -> None:
         step_rasterize_osm(args.olmoearth_path, args.workers)
 
     if "h5" in steps_to_run:
-        step_h5(args.olmoearth_path, args.allcap)
+        step_h5(args.olmoearth_path, args.allcap, args.h5_tile_size)
 
     print("Pipeline complete.")
 

@@ -20,6 +20,7 @@ import random
 from collections import defaultdict
 
 import h5py
+import hdf5plugin  # noqa: F401  (registers the zstd filter with h5py)
 import numpy as np
 from upath import UPath
 
