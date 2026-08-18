@@ -190,6 +190,28 @@ def test_zero_s2_scenes_raises_the_typed_coverage_gap_error(
     assert issubclass(tessera_v2_export.NoS2ScenesError, ValueError)
 
 
+def test_shard_hash_partitions_windows_completely_and_disjointly() -> None:
+    """The crc32 shard rule is a stable partition: every window in exactly one shard.
+
+    Stability across processes is why it is crc32 and not hash() -- python
+    salts str hashes per process, which would make concurrent shard jobs
+    overlap and miss windows.
+    """
+    import zlib
+
+    names = [f"sample_{i}" for i in range(1000)]
+    for num_shards in (2, 4, 7):
+        shards = [
+            {n for n in names if zlib.crc32(n.encode()) % num_shards == i}
+            for i in range(num_shards)
+        ]
+        assert set().union(*shards) == set(names)
+        assert sum(len(s) for s in shards) == len(names)
+        # Roughly balanced: no shard more than 40% off the ideal share.
+        ideal = len(names) / num_shards
+        assert all(abs(len(s) - ideal) < 0.4 * ideal for s in shards)
+
+
 def test_every_year_aligned_dataset_has_a_per_window_year_preset() -> None:
     """All eight supplemental datasets resolve with per-window years.
 

@@ -75,6 +75,7 @@ import argparse
 import itertools
 import json
 import logging
+import zlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -601,6 +602,8 @@ def infer(
     overwrite: bool = False,
     read_workers: int = 8,
     allow_unmaterialized_s1: bool = False,
+    num_shards: int = 1,
+    shard_index: int = 0,
 ) -> None:
     """Run v2 student inference per window and write the tessera_v2 layer.
 
@@ -622,9 +625,18 @@ def infer(
             persistent 404 on Planetary Computer, say) — otherwise it masks an
             incomplete materialize. The affected windows are listed in the
             manifest. S2 stays strict either way.
+        num_shards: split the eval windows into this many disjoint shards (by
+            a stable hash of the window name) so N GPU jobs can run the same
+            dataset concurrently. Shard runs do NOT write the manifest — its
+            counters would only cover the shard, and the wiring gate reads
+            them as dataset totals. After every shard finishes, run one final
+            unsharded pass: it skips all written windows and writes a correct
+            combined manifest.
+        shard_index: which shard this run processes (0-based).
 
     Raises:
-        SystemExit: if an eval window has no matching fetch window.
+        SystemExit: if an eval window has no matching fetch window, or the
+            shard arguments are inconsistent.
     """
     from olmoearth_pretrain.evals.models.tessera.tessera_v2_infer import encode_tile
     from olmoearth_pretrain.evals.models.tessera.tessera_v2_model import load_model
@@ -634,10 +646,23 @@ def infer(
     )
     model = load_model(checkpoint_path, device=torch_device)
 
+    if not 0 <= shard_index < num_shards:
+        raise SystemExit(f"--shard_index {shard_index} not in [0, {num_shards})")
     out_ds_path = eval_ds_path or ds_path
     provider = RslearnWindowProvider(UPath(out_ds_path), groups=spec.eval_groups)
     eval_windows = eval_windows_of(provider, spec)
     check_names_unique(eval_windows)
+    if num_shards > 1:
+        # crc32, not hash(): python's str hash is salted per process, and the
+        # shards must partition identically across independent jobs.
+        eval_windows = [
+            w
+            for w in eval_windows
+            if zlib.crc32(w.name.encode()) % num_shards == shard_index
+        ]
+        logger.info(
+            f"shard {shard_index}/{num_shards}: {len(eval_windows)} eval windows"
+        )
     fetch_provider = RslearnWindowProvider(UPath(ds_path), groups=[spec.fetch_group])
     fetch_windows = {w.name: w for w in fetch_provider.load_windows()}
     missing = [w.name for w in eval_windows if w.name not in fetch_windows]
@@ -720,6 +745,16 @@ def infer(
             if written % 50 == 0:
                 logger.info(f"{written}/{len(eval_windows)} windows written")
 
+    if num_shards > 1:
+        # A shard's counters cover only its slice; writing them as THE
+        # manifest would feed the wiring gate shard totals as dataset totals.
+        logger.info(
+            f"Shard {shard_index}/{num_shards} done: {written} written, "
+            f"{skipped} skipped, {len(coverage_gaps)} gaps, {len(failed)} "
+            "failed. NO manifest written -- after all shards finish, run one "
+            "final unsharded pass to write the combined manifest."
+        )
+        return
     # Same key names the embedding materializer writes, so the coverage gate in
     # wire_embedding_modalities.py reads this manifest unchanged. Coverage
     # gaps are windows whose S2 layer was prepared but matched zero scenes
@@ -829,6 +864,17 @@ def main() -> None:
     p_infer.add_argument("--overwrite", action="store_true")
     p_infer.add_argument("--read_workers", type=int, default=8)
     p_infer.add_argument(
+        "--num_shards",
+        type=int,
+        default=1,
+        help="Partition the eval windows into N disjoint shards (stable hash "
+        "of the window name) so N GPU jobs run concurrently. Shard runs skip "
+        "the manifest; finish with one unsharded pass to write it.",
+    )
+    p_infer.add_argument(
+        "--shard_index", type=int, default=0, help="Which shard to process."
+    )
+    p_infer.add_argument(
         "--allow_unmaterialized_s1",
         action="store_true",
         help="Embed windows whose S1 layer failed to materialize entirely, "
@@ -858,6 +904,8 @@ def main() -> None:
             overwrite=args.overwrite,
             read_workers=args.read_workers,
             allow_unmaterialized_s1=args.allow_unmaterialized_s1,
+            num_shards=args.num_shards,
+            shard_index=args.shard_index,
         )
 
 
