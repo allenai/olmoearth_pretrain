@@ -99,10 +99,20 @@ def audit_dataset(
     """Stream one dataset's splits into per-(modality, band) stats."""
     stats: dict[tuple[str, str], BandStats] = {}
     entry = get_dataset_entry(name)
+    # Imagery only: the entries also carry precomputed embedding products
+    # (gse / tessera*), which are exempt from imagery normalization and are the
+    # largest arrays in each window -- loading them costs most of the wall
+    # clock while auditing nothing.
+    imagery = [
+        m
+        for m in entry.modalities
+        if m.lower() in ("sentinel2_l2a", "sentinel2", "sentinel1", "landsat")
+    ]
     for split in splits:
         ds = from_registry_entry(
             entry,
             split=split,
+            input_modalities_override=imagery,
             window_size=16,
             label_at_center_pixel=True,
         )
