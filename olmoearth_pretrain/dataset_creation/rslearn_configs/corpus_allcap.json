@@ -40,7 +40,7 @@
           "sort_by": "datetime"
         },
         "query_config": {
-          "max_matches": 100,
+          "max_matches": 150,
           "space_mode": "CONTAINS"
         },
         "time_offset": "-180d"
@@ -387,7 +387,7 @@
           "sort_by": "datetime"
         },
         "query_config": {
-          "max_matches": 150,
+          "max_matches": 200,
           "space_mode": "CONTAINS"
         },
         "time_offset": "-180d"
@@ -446,7 +446,7 @@
           "sort_by": "datetime"
         },
         "query_config": {
-          "max_matches": 200,
+          "max_matches": 400,
           "space_mode": "CONTAINS"
         },
         "time_offset": "-180d"

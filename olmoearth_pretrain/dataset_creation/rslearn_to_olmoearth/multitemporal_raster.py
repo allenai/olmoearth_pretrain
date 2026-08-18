@@ -1,7 +1,7 @@
 """Helper functions to convert multitemporal rasters into OlmoEarth Pretrain dataset."""
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import numpy as np
 import numpy.typing as npt
@@ -625,6 +625,22 @@ def convert_allcap(
         return
 
     captures.sort(key=lambda capture: capture[0])
+
+    # Backstop dedup: the same pass can appear as multiple STAC items (S2 tile
+    # overlap, Landsat adjacent-row scenes ~24s apart); dedup_allcap_items removes
+    # these before materialization, but skip any that slipped through.
+    deduped_captures = []
+    last_kept_time = None
+    for capture in captures:
+        capture_time = datetime.fromisoformat(capture[0])
+        if (
+            last_kept_time is not None
+            and (capture_time - last_kept_time).total_seconds() < 120
+        ):
+            continue
+        deduped_captures.append(capture)
+        last_kept_time = capture_time
+    captures = deduped_captures
 
     for band_set in modality.band_sets:
         adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
