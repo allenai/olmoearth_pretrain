@@ -139,17 +139,18 @@ def verify_months_alignment(
 
 
 def build_embedding_fetcher(product_name: str) -> EmbeddingFetcher:
-    """Build the embedding fetcher for a product name ("aef" or "tessera")."""
+    """Build the embedding fetcher for a product name (aef/tessera/tessera_v11)."""
     if product_name == "aef":
         from olmoearth_pretrain.evals.embedding_materializer.fetchers import AEFFetcher
 
         return AEFFetcher()
-    if product_name == "tessera":
-        from olmoearth_pretrain.evals.embedding_materializer.fetchers import (
-            TesseraFetcher,
-        )
+    from olmoearth_pretrain.evals.embedding_materializer.fetchers import (
+        TESSERA_PRODUCTS,
+        TesseraFetcher,
+    )
 
-        return TesseraFetcher()
+    if product_name in TESSERA_PRODUCTS:
+        return TesseraFetcher(product_name=product_name)
     raise ValueError(f"Unknown embedding product '{product_name}'")
 
 
@@ -240,8 +241,9 @@ class PASTISRProcessor:
             resize_to_64: Whether or not to resize the pastis dataset into 64x64 tiles
                 from 128x128 tiles
             embedding_products: Optional precomputed embedding products ("aef",
-                "tessera") to fetch per patch and store alongside the imagery,
-                as <modality>_images (e.g. gse_images, tessera_images).
+                "tessera", "tessera_v11") to fetch per patch and store
+                alongside the imagery, as <modality>_images (e.g. gse_images,
+                tessera_images, tessera_v11_images).
             embedding_year: Annual embedding-product layer to fetch. Defaults to
                 2019, the PASTIS label year (French LPIS 2019 declarations).
         """
@@ -650,7 +652,8 @@ def main() -> None:
         default=None,
         help=(
             "Comma-separated precomputed embedding products to fetch per patch "
-            "(aef, tessera), stored as <modality>_images alongside s2/s1. "
+            "(aef, tessera, tessera_v11), stored as <modality>_images "
+            "alongside s2/s1. "
             "Processing is deterministic, so re-running into an existing "
             "output_dir keeps sample indices aligned with prior splits."
         ),

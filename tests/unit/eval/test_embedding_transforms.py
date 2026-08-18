@@ -1,14 +1,22 @@
 """Unit tests for embedding_transforms module."""
 
+from pathlib import Path
+
 import numpy as np
+import pytest
 import torch
 
 from olmoearth_pretrain.evals.embedding_transforms import (
+    EmbeddingNormalization,
+    EmbeddingNormalizer,
     dequantize_embeddings,
     dequantize_embeddings_percentile,
+    dequantize_embeddings_tessera,
     quantize_embeddings,
     quantize_embeddings_percentile,
+    quantize_embeddings_tessera,
     reduce_embedding_dim,
+    roundtrip_embeddings_tessera,
 )
 
 
@@ -24,6 +32,57 @@ class TestQuantization:
         assert quantized.dtype == torch.int8
         assert recovered.dtype == torch.float32
         assert recovered.shape == embeddings.shape
+
+
+class TestTesseraQuantization:
+    """Tests for Tessera's int8 scheme (linear, per-vector scale)."""
+
+    def test_matches_geotessera_decoder(self) -> None:
+        """Our dequantize must be bit-identical to the shipped client's.
+
+        The whole point of the scheme is that tessera_v2 is scored under
+        Tessera's quantization and not AlphaEarth's, so if their decoder ever
+        diverges from ours the comparison silently stops being like-for-like.
+        Skips when the optional geotessera dependency is absent.
+        """
+        store = pytest.importorskip("geotessera.store")
+
+        embeddings = torch.nn.functional.layer_norm(torch.randn(256, 128), (128,))
+        quantized, scales = quantize_embeddings_tessera(embeddings)
+        ours = dequantize_embeddings_tessera(quantized, scales).numpy()
+        # Their decoder takes (B, H, W) int8 plus (H, W) scales.
+        theirs = store.TesseraAccessor.dequantise(
+            quantized.numpy().T.reshape(128, 256, 1), scales.numpy().reshape(256, 1)
+        ).reshape(256, 128)
+
+        np.testing.assert_array_equal(ours, theirs)
+
+    def test_is_clip_free_unlike_the_power_scheme(self) -> None:
+        """Per-vector scaling puts the largest coordinate exactly on the rail.
+
+        LayerNorm-geometry embeddings saturate the AEF power scheme; this one
+        cannot clip, which is why each product is quantized under its own.
+        """
+        embeddings = torch.nn.functional.layer_norm(torch.randn(256, 128), (128,))
+        quantized, _ = quantize_embeddings_tessera(embeddings)
+
+        assert quantized.dtype == torch.int8
+        assert int(quantized.abs().max()) == 127
+        tessera_cos = torch.nn.functional.cosine_similarity(
+            roundtrip_embeddings_tessera(embeddings), embeddings, dim=-1
+        ).mean()
+        power_cos = torch.nn.functional.cosine_similarity(
+            dequantize_embeddings(quantize_embeddings(embeddings)), embeddings, dim=-1
+        ).mean()
+        assert tessera_cos > 0.999
+        assert tessera_cos > power_cos
+
+    def test_zero_vector_survives(self) -> None:
+        """An all-zero embedding has no scale; it must not produce NaN."""
+        roundtripped = roundtrip_embeddings_tessera(torch.zeros(4, 16))
+
+        assert torch.isfinite(roundtripped).all()
+        assert float(roundtripped.abs().max()) == 0.0
 
 
 class TestDimReduction:
@@ -233,3 +292,92 @@ class TestPercentileQuantization:
         assert mse_dim0 < 5  # reasonable for range 10 with 4 buckets
         assert mse_dim1 < 500  # reasonable for range 100 with 4 buckets
         assert mse_dim1 > mse_dim0 * 10  # dim 1 should have much larger MSE
+
+
+class TestEmbeddingNormalization:
+    """Tests for the pre-quantization embedding normalizations."""
+
+    def test_none_is_identity(self) -> None:
+        """NONE leaves the tensor (and its dtype) exactly as extracted."""
+        embeddings = torch.randn(64, 32, dtype=torch.bfloat16)
+        out = EmbeddingNormalizer(mode=EmbeddingNormalization.NONE)(embeddings)
+        assert out.dtype == torch.bfloat16
+        assert torch.equal(out, embeddings)
+
+    def test_l2_needs_no_fit(self) -> None:
+        """L2 is stateless: fit is a no-op and every row lands on the unit sphere."""
+        normalizer = EmbeddingNormalizer.fit(
+            EmbeddingNormalization.L2, torch.randn(8, 32)
+        )
+        assert normalizer.mean is None
+        out = normalizer(torch.randn(64, 32) * 100)
+        assert torch.allclose(out.norm(dim=-1), torch.ones(64), atol=1e-5)
+
+    def test_center_removes_train_mean(self) -> None:
+        """CENTER subtracts the fitted mean, not each split's own mean."""
+        train = torch.randn(512, 16) + 5.0
+        normalizer = EmbeddingNormalizer.fit(EmbeddingNormalization.CENTER, train)
+        assert torch.allclose(normalizer(train).mean(dim=0), torch.zeros(16), atol=1e-5)
+        # A shifted val split keeps its offset relative to train, as it should.
+        val = torch.randn(512, 16) + 7.0
+        assert normalizer(val).mean().item() > 1.0
+
+    def test_zscore_equalizes_dims(self) -> None:
+        """ZSCORE flattens per-dimension scale differences."""
+        train = torch.randn(4096, 16)
+        train[:, 0] *= 50
+        normalizer = EmbeddingNormalizer.fit(EmbeddingNormalization.ZSCORE, train)
+        out = normalizer(train)
+        assert torch.allclose(out.std(dim=0), torch.ones(16), atol=0.05)
+
+    def test_spatial_embeddings_normalize_on_last_dim(self) -> None:
+        """Stats pool over every leading dim; [N, H, W, D] shape is preserved."""
+        train = torch.randn(32, 4, 4, 16) + 3.0
+        normalizer = EmbeddingNormalizer.fit(EmbeddingNormalization.CENTER, train)
+        out = normalizer(train)
+        assert out.shape == train.shape
+        assert torch.allclose(
+            out.reshape(-1, 16).mean(dim=0), torch.zeros(16), atol=1e-5
+        )
+
+    def test_fitted_mode_without_stats_raises(self) -> None:
+        """An unfitted fitted-mode normalizer fails loudly rather than silently."""
+        with pytest.raises(ValueError, match="fitted mean"):
+            EmbeddingNormalizer(mode=EmbeddingNormalization.CENTER)(torch.randn(4, 8))
+
+    def test_save_load_roundtrip(self, tmp_path: Path) -> None:
+        """Constants survive a save/load so one fit can serve every dataset."""
+        train = torch.randn(256, 16) * 3 + 1
+        normalizer = EmbeddingNormalizer.fit(EmbeddingNormalization.ZSCORE, train)
+        path = str(tmp_path / "stats.pt")
+        normalizer.save(path)
+        loaded = EmbeddingNormalizer.load(path, EmbeddingNormalization.ZSCORE)
+        assert torch.allclose(loaded(train), normalizer(train))
+
+    def test_load_rejects_mode_mismatch(self, tmp_path: Path) -> None:
+        """Loading constants fitted for another mode is an error, not a silent swap."""
+        path = str(tmp_path / "stats.pt")
+        EmbeddingNormalizer.fit(
+            EmbeddingNormalization.CENTER, torch.randn(64, 16)
+        ).save(path)
+        with pytest.raises(ValueError, match="fitted for"):
+            EmbeddingNormalizer.load(path, EmbeddingNormalization.ZSCORE)
+
+    def test_l2_rescues_the_int8_round_trip(self) -> None:
+        """The point of the L2 arm: unit-norm embeddings survive quantization.
+
+        LayerNorm-scale embeddings saturate the power scheme (which assumes
+        AEF's value range), so their round trip loses far more.
+        """
+        raw = torch.randn(512, 64)
+        normalized = EmbeddingNormalizer(mode=EmbeddingNormalization.L2)(raw)
+        raw_cos = torch.nn.functional.cosine_similarity(
+            raw, dequantize_embeddings(quantize_embeddings(raw)), dim=-1
+        ).mean()
+        norm_cos = torch.nn.functional.cosine_similarity(
+            normalized,
+            dequantize_embeddings(quantize_embeddings(normalized)),
+            dim=-1,
+        ).mean()
+        assert norm_cos > raw_cos
+        assert norm_cos > 0.999

@@ -4,6 +4,7 @@ import functools
 import logging
 import math
 import multiprocessing as mp
+import signal
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +45,19 @@ from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskingConfig, MaskingStrategy
 
 logger = logging.getLogger(__name__)
+
+
+def _worker_ignore_sigterm(worker_id: int) -> None:
+    """Make dataloader workers ignore SIGTERM.
+
+    On preemption, torchrun delivers SIGTERM to each rank's whole process group,
+    including dataloader workers. If the workers die, PyTorch's SIGCHLD watchdog
+    raises a RuntimeError in the middle of the training step, which crashes ranks
+    asymmetrically mid-NCCL-collective and prevents olmo-core's graceful cancel
+    from running (stuck ranks then get SIGKILLed, which can leave GPUs in a bad
+    state). Workers must instead stay alive until the parent shuts them down.
+    """
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
 
 class OlmoEarthDataLoader(DataLoaderBase):
@@ -352,6 +366,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
             multiprocessing_context=(
                 self.multiprocessing_context if self.num_workers > 0 else None
             ),
+            worker_init_fn=_worker_ignore_sigterm if self.num_workers > 0 else None,
             timeout=0,
         )
 
@@ -503,6 +518,18 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 dtype=np.float32,
             )
             output_dict[Modality.TESSERA.name] = mock_tessera
+        if Modality.TESSERA_V11.name in self.dataset.training_modalities:
+            mock_tessera_v11 = rng.random(
+                (standard_hw, standard_hw, 1, Modality.TESSERA_V11.num_bands),
+                dtype=np.float32,
+            )
+            output_dict[Modality.TESSERA_V11.name] = mock_tessera_v11
+        if Modality.TESSERA_V2.name in self.dataset.training_modalities:
+            mock_tessera_v2 = rng.random(
+                (standard_hw, standard_hw, 1, Modality.TESSERA_V2.num_bands),
+                dtype=np.float32,
+            )
+            output_dict[Modality.TESSERA_V2.name] = mock_tessera_v2
         if Modality.CDL.name in self.dataset.training_modalities:
             mock_cdl = rng.random(
                 (standard_hw, standard_hw, 1, Modality.CDL.num_bands), dtype=np.float32

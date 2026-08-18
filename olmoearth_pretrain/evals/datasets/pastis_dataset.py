@@ -69,8 +69,13 @@ class PASTISRDataset(Dataset):
         # processed with pastis_processor.py --embedding_products.
         Modality.GSE.name,
         Modality.TESSERA.name,
+        Modality.TESSERA_V11.name,
     ]
-    embedding_modalities = [Modality.GSE.name, Modality.TESSERA.name]
+    embedding_modalities = [
+        Modality.GSE.name,
+        Modality.TESSERA.name,
+        Modality.TESSERA_V11.name,
+    ]
 
     def __init__(
         self,

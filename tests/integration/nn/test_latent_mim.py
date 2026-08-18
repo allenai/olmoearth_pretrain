@@ -111,7 +111,7 @@ def test_latentmim_register_bottleneck(
         supervision_head_config=supervision_config,
     ).build()
 
-    _, decoded, _, _, _, supervision_preds = model.forward(x, patch_size)
+    _, decoded, _, _, _, supervision_preds, _ = model.forward(x, patch_size)
     assert supervision_preds is not None
     assert model.supervision_head is not None
     patched_H, patched_W = H // patch_size, W // patch_size
@@ -214,7 +214,7 @@ def test_latentmim_register_bottleneck_3d_encoder_2d_decoder(
         decoder_config=decoder_config,
     ).build()
 
-    _, decoded, _, _, _, _ = model.forward(x, patch_size)
+    _, decoded, _, _, _, _, _ = model.forward(x, patch_size)
     assert decoded.sentinel2_l2a is not None
     patched_H, patched_W = H // patch_size, W // patch_size
     assert decoded.sentinel2_l2a.shape == (
@@ -352,7 +352,7 @@ def test_latentmim_with_loss(
     )
     latentmim = LatentMIM(encoder, predictor)
 
-    _, output, _, _, _, _ = latentmim.forward(x, patch_size)
+    _, output, _, _, _, _, _ = latentmim.forward(x, patch_size)
     output = predictor.forward(output, x.timestamps, patch_size, input_res=1)
     patched_H = H // patch_size
     patched_W = W // patch_size

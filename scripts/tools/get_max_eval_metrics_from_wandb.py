@@ -10,12 +10,19 @@ import numpy as np
 import pandas as pd
 import wandb
 
+from olmoearth_pretrain.evals.balanced_trial import (
+    TASK_SUFFIX as BALANCED_TRIAL_TASK_SUFFIX,
+)
 from olmoearth_pretrain.evals.datasets.configs import TaskType, dataset_to_config
 from olmoearth_pretrain.evals.models import (
     MODELS_WITH_MULTIPLE_SIZES,
     BaselineModelName,
 )
-from olmoearth_pretrain.internal.all_evals import EVAL_TASKS, FT_EVAL_TASKS
+from olmoearth_pretrain.internal.all_evals import (
+    EMBEDDING_EVAL_TASKS,
+    EVAL_TASKS,
+    FT_EVAL_TASKS,
+)
 from olmoearth_pretrain.train.callbacks.evaluator_callback import EvalMode
 
 WANDB_ENTITY = "eai-ai2"
@@ -57,6 +64,14 @@ def get_run_group_name(run_name: str, keep_steps_separate: bool = False) -> str:
     Default: 'exp_step300000_dataset_lr0.001_ptmean' -> 'exp'
     keep_steps_separate: 'exp_step300000_dataset_lr0.001_ptmean' -> 'exp_step300000'
     """
+    # Bin-sharded sweeps split one arm's task list across N jobs whose names
+    # differ only by a _b{NN} index (embedding_eval_beaker_balanced_trials*.yaml
+    # packs 160 tasks into 48 bins per arm). The bins partition the task set, so
+    # every metric appears in exactly one of them and merging is a plain union
+    # -- drop the index here rather than leaving 48 single-bin groups to be
+    # stitched together at analysis time.
+    run_name = re.sub(r"_b\d+(?=_emb)", "", run_name)
+
     if keep_steps_separate:
         # Greedy match up to and including _step{N}: "exp_step300000_lr..." -> "exp_step300000"
         pattern = r"(.+_step\d+)"
@@ -66,12 +81,32 @@ def get_run_group_name(run_name: str, keep_steps_separate: bool = False) -> str:
     match = re.match(pattern, run_name)
     if match:
         return match.group(1)
-    # Runs without _step: strip from the norm mode + lr suffix onwards
-    # e.g. "model_dataset_lr0.001_ptmean" -> "model"
-    match = re.match(r"(.+?)_(dataset|pre_trained|df)_lr", run_name)
+    # Runs without _step (full_eval_sweep.py): strip from the norm mode +
+    # lr/knn suffix onwards, e.g. "model_dataset_lr0.001_ptmean" -> "model",
+    # "aef_9ac5_fixed_lr0.0001_ptdf" -> "aef_9ac5", "aef_9ac5_fixed_knn_ptdf"
+    # -> "aef_9ac5". Norm modes come from _get_norm_mode_str ("mixed" is the
+    # multi-setting marker in the best-settings path); the middle token is the
+    # lr_str, which is "knn" for KNN-only runs.
+    match = re.match(
+        r"(.+?)_(dataset|pre_trained|df|fixed|mixed)_(lr[\d.eE+-]+|knn|mixed)",
+        run_name,
+    )
     if match:
         return match.group(1)
-    raise ValueError(f"unexpected run name {run_name}")
+    # Precomputed-embedding sweep runs (embedding_eval_sweep.py) have no norm
+    # token, just a terminal lr or knn suffix:
+    # "aef_9ac5_emb_lr0.0001" -> "aef_9ac5_emb",
+    # "aef_9ac5_emb_ws8_knn" -> "aef_9ac5_emb_ws8"
+    match = re.match(r"(.+)_lr[\d.eE+-]+$", run_name)
+    if match:
+        return match.group(1)
+    if run_name.endswith("_knn"):
+        return run_name[: -len("_knn")]
+    print(
+        f"WARNING: could not parse a group from run name {run_name}; "
+        "using the full run name as its own group"
+    )
+    return run_name
 
 
 def get_run_groups(
@@ -378,6 +413,19 @@ def get_max_metrics_grouped(
                         primary_metric_name = _infer_default_primary_metric(dataset)
                     if primary_metric_name is not None:
                         additional_key = f"{normalized_key}/{primary_metric_name}"
+
+                # AEF balanced trials report under synthetic task names
+                # ("{host}_aeftrial_{predictor}", see evals/balanced_trial.py).
+                # They are not registered tasks and have no test split of their
+                # own -- their eval set is the remainder of the balanced draw --
+                # so both the has-test gate and the task-config lookup below
+                # would reject them (the latter with a KeyError).
+                if f"_{BALANCED_TRIAL_TASK_SUFFIX}_" in task_name:
+                    prev_max_val = metrics.get(normalized_key, float("-inf"))
+                    metrics[normalized_key] = max(prev_max_val, value)
+                    if value > prev_max_val:
+                        max_runs_per_metric[normalized_key] = run
+                    continue
 
                 # Ensure the run has test metrics (check both namespaces).
                 # For post-PR#504 runs, the primary test metric is at eval/test/{task}
@@ -694,6 +742,7 @@ if __name__ == "__main__":
     all_metrics = (
         list(FT_EVAL_TASKS.keys()) if args.finetune else list(EVAL_TASKS.keys())
     )
+    all_metrics.extend(EMBEDDING_EVAL_TASKS.keys())
     all_metrics.extend(EXTRA_EVAL_TASKS)
 
     if args.per_partition:
@@ -783,13 +832,13 @@ if __name__ == "__main__":
                     metric_name = k.split("/")[-1]
                     print(f"  {task_name}/{metric_name}: {sub_metrics[k]}")
             else:
-                # Fall back to eval/{task} (pre-PR#504 runs without sub-metrics)
+                # Fall back to eval/{task} (pre-PR#504 runs without sub-metrics).
+                # Tasks with no result for this group are skipped silently.
                 for name in (task_name, task_name_alt):
                     k = f"{prefix}/{name}"
                     if k in metrics:
                         print(f"  {name}: {metrics[k]}")
                         return
-                print(f"  {task_name}: not found")
 
         print("\nFinal Results:")
         for group_name, metrics in group_metrics.items():

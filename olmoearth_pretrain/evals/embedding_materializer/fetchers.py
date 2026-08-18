@@ -272,6 +272,29 @@ class AEFFetcher(EmbeddingFetcher):
         return mosaic
 
 
+@dataclass(frozen=True)
+class TesseraProduct:
+    """A published Tessera dataset version consumable as an eval modality.
+
+    Each version is its own modality so that different versions can be baked
+    into the same eval dataset and compared side by side.
+    """
+
+    dataset_version: str
+    dataset_variant: str
+    modality: ModalitySpec
+
+
+# Product name (as used by --products / --embedding_products CLI flags and as
+# the written layer name) -> the geotessera dataset it is fetched from.
+# "tessera" is pinned to v1/vultr — the geotessera defaults in effect when the
+# existing layers were fetched — so re-running it reproduces those layers.
+TESSERA_PRODUCTS: dict[str, TesseraProduct] = {
+    "tessera": TesseraProduct("v1", "vultr", Modality.TESSERA),
+    "tessera_v11": TesseraProduct("v1.1", "cambridge", Modality.TESSERA_V11),
+}
+
+
 class TesseraFetcher(EmbeddingFetcher):
     """Fetches Tessera embeddings via the geotessera client.
 
@@ -279,24 +302,36 @@ class TesseraFetcher(EmbeddingFetcher):
     geotessera``. Tiles covering the requested bounds are fetched for the
     given year (already dequantized to float32 by geotessera), then warped
     and mosaicked onto the requested grid with rasterio.
+
+    ``product_name`` selects the Tessera dataset version (see
+    TESSERA_PRODUCTS) and thereby the modality/layer the embeddings are
+    stored under and the version recorded in provenance manifests.
     """
 
     def __init__(
         self,
+        product_name: str = "tessera_v11",
         client: Any | None = None,
         client_kwargs: dict[str, Any] | None = None,
-        product_version: str = "v1.1",
     ) -> None:
         """Initialize a TesseraFetcher.
 
         Args:
+            product_name: which Tessera product to fetch (TESSERA_PRODUCTS
+                key); pins the geotessera dataset_version/dataset_variant and
+                the target modality.
             client: an existing geotessera.GeoTessera client to use. If None,
                 one is constructed (requires geotessera to be installed).
             client_kwargs: keyword arguments forwarded to the GeoTessera
-                constructor (e.g. dataset version/variant selection) when
-                ``client`` is None.
-            product_version: version string recorded in provenance manifests.
+                constructor when ``client`` is None, overriding the
+                product's pinned dataset_version/dataset_variant.
         """
+        if product_name not in TESSERA_PRODUCTS:
+            raise ValueError(
+                f"Unknown Tessera product '{product_name}'; expected one of "
+                f"{sorted(TESSERA_PRODUCTS)}"
+            )
+        self._product = TESSERA_PRODUCTS[product_name]
         if client is None:
             try:
                 from geotessera import GeoTessera
@@ -304,19 +339,24 @@ class TesseraFetcher(EmbeddingFetcher):
                 raise ImportError(
                     "geotessera is required for TesseraFetcher: pip install geotessera"
                 ) from e
-            client = GeoTessera(**(client_kwargs or {}))
+            client = GeoTessera(
+                **{
+                    "dataset_version": self._product.dataset_version,
+                    "dataset_variant": self._product.dataset_variant,
+                    **(client_kwargs or {}),
+                }
+            )
         self._client = client
-        self._product_version = product_version
 
     @property
     def modality(self) -> ModalitySpec:
-        """The Tessera modality (128 bands T000..T127)."""
-        return Modality.TESSERA
+        """The product's modality (128 bands T000..T127)."""
+        return self._product.modality
 
     @property
     def product_version(self) -> str:
         """Tessera dataset version recorded in provenance manifests."""
-        return self._product_version
+        return self._product.dataset_version
 
     def fetch(
         self, bounds: PixelBounds, projection: Projection, year: int

@@ -1,53 +1,5 @@
 {
   "layers": {
-    "sentinel2_l2a_freq": {
-      "alias": "sentinel2_l2a",
-      "band_sets": [
-        {
-          "bands": [
-            "B02",
-            "B03",
-            "B04",
-            "B08"
-          ],
-          "dtype": "uint16"
-        },
-        {
-          "bands": [
-            "B05",
-            "B06",
-            "B07",
-            "B8A",
-            "B11",
-            "B12"
-          ],
-          "dtype": "uint16",
-          "zoom_offset": -1
-        },
-        {
-          "bands": [
-            "B01",
-            "B09"
-          ],
-          "dtype": "uint16",
-          "zoom_offset": -2
-        }
-      ],
-      "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
-        "ingest": false,
-        "init_args": {
-          "cache_dir": "cache/planetary_computer",
-          "harmonize": true,
-          "sort_by": "eo:cloud_cover"
-        },
-        "query_config": {
-          "max_matches": 8,
-          "space_mode": "INTERSECTS"
-        }
-      },
-      "type": "raster"
-    },
     "sentinel2_l2a_mo01": {
       "alias": "sentinel2_l2a",
       "band_sets": [
@@ -82,13 +34,17 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel2_l2a.Sentinel2L2A",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
+          "cache_dir": "cache/olmoearth_datasets",
           "harmonize": true,
-          "sort_by": "eo:cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-180d"
       },
@@ -128,13 +84,17 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel2_l2a.Sentinel2L2A",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
+          "cache_dir": "cache/olmoearth_datasets",
           "harmonize": true,
-          "sort_by": "eo:cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-150d"
       },
@@ -174,13 +134,17 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel2_l2a.Sentinel2L2A",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
+          "cache_dir": "cache/olmoearth_datasets",
           "harmonize": true,
-          "sort_by": "eo:cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-120d"
       },
@@ -220,13 +184,17 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel2_l2a.Sentinel2L2A",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
+          "cache_dir": "cache/olmoearth_datasets",
           "harmonize": true,
-          "sort_by": "eo:cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-90d"
       },
@@ -266,13 +234,17 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel2_l2a.Sentinel2L2A",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
+          "cache_dir": "cache/olmoearth_datasets",
           "harmonize": true,
-          "sort_by": "eo:cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-60d"
       },
@@ -312,13 +284,17 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel2_l2a.Sentinel2L2A",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
+          "cache_dir": "cache/olmoearth_datasets",
           "harmonize": true,
-          "sort_by": "eo:cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-30d"
       },
@@ -358,13 +334,17 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel2_l2a.Sentinel2L2A",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
+          "cache_dir": "cache/olmoearth_datasets",
           "harmonize": true,
-          "sort_by": "eo:cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "0d"
       },
@@ -404,13 +384,17 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel2_l2a.Sentinel2L2A",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
+          "cache_dir": "cache/olmoearth_datasets",
           "harmonize": true,
-          "sort_by": "eo:cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "30d"
       },
@@ -450,13 +434,17 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel2_l2a.Sentinel2L2A",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
+          "cache_dir": "cache/olmoearth_datasets",
           "harmonize": true,
-          "sort_by": "eo:cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "60d"
       },
@@ -496,13 +484,17 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel2_l2a.Sentinel2L2A",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
+          "cache_dir": "cache/olmoearth_datasets",
           "harmonize": true,
-          "sort_by": "eo:cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "90d"
       },
@@ -542,13 +534,17 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel2_l2a.Sentinel2L2A",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
+          "cache_dir": "cache/olmoearth_datasets",
           "harmonize": true,
-          "sort_by": "eo:cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "120d"
       },
@@ -588,17 +584,24 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel2_l2a.Sentinel2L2A",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
+          "cache_dir": "cache/olmoearth_datasets",
           "harmonize": true,
-          "sort_by": "eo:cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "150d"
       },
       "type": "raster"
     }
+  },
+  "window_data_storage": {
+    "class_path": "rslearn.dataset.window_data_storage.per_layer.PerLayerStorageFactory"
   }
 }

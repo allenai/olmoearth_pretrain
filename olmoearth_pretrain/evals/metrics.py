@@ -77,6 +77,14 @@ class EvalTaskResult:
     bootstrap_stats: dict[str, Any] = field(default_factory=dict)
     eval_time: float | None = None
     embedding_diagnostics: dict[str, float] = field(default_factory=dict)
+    # Results produced by a DIFFERENT protocol than val_result/test_result --
+    # currently the AEF balanced trials (olmoearth_pretrain/evals/balanced_trial.py).
+    # Keyed by a synthetic task name (e.g. "<task>_aeftrial_ridge") and logged
+    # as their own tasks rather than as extra metrics on the host task: they
+    # train on a different set (a class-balanced draw), score on a different
+    # set (the remainder), and may use a different predictor, so filing them
+    # under the host task would put two very different numbers behind one name.
+    extra_results: dict[str, EvalResult] = field(default_factory=dict)
 
 
 @dataclass

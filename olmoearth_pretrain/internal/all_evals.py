@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import sys
+from dataclasses import replace
 from logging import getLogger
 from typing import Any
 
@@ -20,12 +21,17 @@ from olmo_core.train.config import TrainerConfig
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.evals.balanced_trial import BalancedTrialConfig
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.datasets.pretrain_subset import (
     GLO30_BAND_ELEVATION,
     GLO30_BAND_SLOPE,
     GLO30_LABEL_ASPECT_COS,
     GLO30_LABEL_ASPECT_SIN,
+)
+from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
+    L8QA_CLOUD_ONLY_BITS_MASK,
+    SCL_CLOUDLESS_CLASSES,
 )
 from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
@@ -1426,46 +1432,199 @@ AEF_SUPPLEMENTAL_DATASETS = (
     "us_trees",
 )
 
+# Year-aligned re-exports (2026-08-04): the same labels and windows, but the
+# imagery is twelve ASCENDING 30-day Sentinel-1 + Sentinel-2 layers spanning the
+# calendar year of the label, matching what AEF and Tessera are built over. The
+# parents feed OlmoEarth a trailing year from the observation date (canada,
+# ethiopia, us_trees) or a fixed Sep-Aug year (pastis), so the published
+# comparisons were not input-matched. See
+# scripts/tools/reanchor_year_aligned_dataset.py.
+#
+# Registered at ws16 only, like MATCHED_SUBSET_DATASETS below and for the same
+# reason: the point is the three-way comparison against the precomputed
+# products, which are ws16-only. Add the smaller context sizes if the
+# spatial-context ablation is wanted here too.
+#
+# All eight AEF supplemental datasets are now re-exported and registered.
+#
+# lcmap_lu and us_trees additionally carry tessera as a *required* input, so on
+# those two the resolved window set is intersected with Tessera's coverage
+# (lcmap 26 409/26 513, us_trees 44 886/45 382) rather than being the
+# S1+S2+gse intersection the other six use. That keeps AEF / Tessera /
+# OlmoEarth on one identical window set per dataset -- which is the point --
+# but it does mean their window counts are not comparable to the other six.
+AEF_SUPPLEMENTAL_YEAR_ALIGNED = (
+    # Ordered by window count, smallest first. Task registration order is
+    # execution order inside every eval job (the evaluator walks the registry
+    # dict), so this makes each job report its cheap datasets within minutes
+    # instead of queueing them behind us_trees's ~75-minute tasks.
+    "ethiopia_crops_year_aligned",  # 2 530 windows
+    "africa_crop_mask_year_aligned",  # 2 556
+    "canada_crops_fine_year_aligned",  # 14 566
+    "canada_crops_coarse_year_aligned",  # 16 079
+    "descals_year_aligned",  # 17 477
+    "lcmap_lu_year_aligned",  # 26 513
+    "glance_year_aligned",  # 34 885
+    "us_trees_year_aligned",  # 45 382
+)
 
-def _aef_ws16_ps1_task(name: str, eval_mode: EvalMode) -> DownstreamTaskConfig:
+# Matched-subset siblings: the same windows as their parent dataset, but with
+# every embedding product marked required, so rslearn resolves ONE window set
+# and OlmoEarth / AEF / Tessera are scored on exactly those windows.
+#
+# These exist for datasets where a product's coverage sits below the
+# --min_coverage gate in wire_embedding_modalities.py. Enabling the product on
+# the parent entry would drop its coverage-gap windows from every eval on that
+# dataset — silently re-baselining numbers already recorded — so the stricter
+# input set gets its own entry instead. us_trees_tessera: Tessera covers
+# 44 894/45 382 (98.92%) vs the 99% gate; see docs/PrecomputedEmbeddingCoverage.md.
+#
+# Deliberately NOT part of AEF_SUPPLEMENTAL_DATASETS: that tuple is also the
+# default --datasets for materialize_aef_supplemental_embeddings.py, and these
+# names share their parent's weka_path, so including them would re-walk the same
+# 45k windows under a second name. Registered at ws16 only — the point is the
+# three-way comparison, and the precomputed baselines are ws16-only.
+MATCHED_SUBSET_DATASETS = ("us_trees_tessera",)
+
+
+# Window sizes the embedding evals run at by default for OlmoEarth
+# checkpoints: the ws16 embedding-product convention plus smaller spatial
+# contexts (8, 4, 1) to measure how much surrounding context the per-pixel
+# embeddings rely on (and what a cheaper eval would cost in accuracy). ws16
+# is registered first so the precomputed baselines — which keep one task per
+# dataset — stay on the ws16 convention.
+EMBEDDING_EVAL_WINDOW_SIZES = (16, 8, 4, 1)
+
+
+def _embedding_eval_batch_scale(window_size: int) -> int:
+    """Batch-size multiplier keeping tokens per batch constant across ws.
+
+    Each window carries (window_size/patch_size)^2 spatial tokens, so halving
+    the window quarters the tokens per window; scaling the batch by
+    (16/ws)^2 keeps the token throughput (and for PASTIS the
+    one-stored-sample-per-batch tiling property) identical to ws16.
+    """
+    return (16 // window_size) ** 2
+
+
+# AEF's per-dataset "Max Trial Size (n)" column (their Table 1, read per class),
+# used directly as our per-class draw size. Keyed by dataset-name prefix so the
+# _year_aligned re-exports inherit their parent's value.
+#
+# Taking the whole column -- including the odd entries -- rather than only the
+# round ones is what gives exact training-budget parity with AEF on all eight
+# datasets. It also sidesteps a question we could not settle: whether 49/75/68
+# are caps they chose or their least-populated classes binding. It does not
+# matter, because every one of OUR least classes exceeds the corresponding
+# value (ethiopia 96>49, canada fine 87>75, coarse 106>68, africa 318>200,
+# descals 290>200, lcmap 588>300, glance 467>300, us_trees 393>300), so the
+# value binds first everywhere and the draw is theirs by construction.
+#
+# The earlier reading -- that only the round values were caps and the odd ones
+# were least classes -- implied AEF draws its rarest class in full on those
+# three datasets, leaving ZERO of it in the remainder they evaluate on, in every
+# fold. That would make their published ethiopia/canada figures K-1-class
+# balanced accuracies with a wrong 1/K chance line, which a paper about
+# rare-class performance under sparse labels is unlikely to be doing. Reading
+# the column as a budget avoids attributing that to them AND leaves 12-288
+# rarest-class rows in our eval set per dataset.
+AEF_MAX_TRIAL_CAPS = {
+    "ethiopia_crops": 49,
+    "canada_crops_fine": 75,
+    "canada_crops_coarse": 68,
+    "africa_crop_mask": 200,
+    "descals": 200,
+    "lcmap_lu": 300,
+    "glance": 300,
+    "us_trees": 300,
+}
+DEFAULT_AEF_MAX_TRIAL_CAP = 300
+
+
+def _aef_max_trial_cap(dataset: str) -> int:
+    """AEF's per-class draw cap for a dataset (300 unless Table 1 says otherwise)."""
+    for prefix, cap in AEF_MAX_TRIAL_CAPS.items():
+        if dataset.startswith(prefix):
+            return cap
+    return DEFAULT_AEF_MAX_TRIAL_CAP
+
+
+def _aef_ps1_task(
+    name: str,
+    eval_mode: EvalMode,
+    window_size: int = 16,
+    input_modalities: list[str] | None = None,
+    scl_cloud_mask: bool = False,
+    scl_cloud_classes: tuple[int, ...] | None = None,
+    landsat_cloud_cover_max: float | None = None,
+    l8_pixel_cloud_mask: bool = False,
+    l8_pixel_cloud_bits: int | None = None,
+) -> DownstreamTaskConfig:
     """AEF supplemental task under the per-pixel embedding-product convention.
 
-    Each sample is center-cropped to a 16x16 window around its labeled pixel,
-    OlmoEarth emits per-pixel (patch_size=1) embeddings int8 round-tripped like
-    an embedding product, and only the labeled pixel's token is kept — the task
-    runs as center-pixel classification (label_at_center_pixel +
-    use_center_token). Balanced accuracy is the AEF paper's protocol metric.
+    Each sample is center-cropped to a window_size x window_size window around
+    its labeled pixel, OlmoEarth emits per-pixel (patch_size=1) embeddings
+    int8 round-tripped like an embedding product, and only the labeled pixel's
+    token is kept — the task runs as center-pixel classification
+    (label_at_center_pixel + use_center_token). Balanced accuracy is the AEF
+    paper's protocol metric.
+
+    The KNN twin additionally runs AEF's balanced-trial protocol (their S4) on
+    the embeddings it already materializes: a class-balanced draw from the
+    pooled splits, scored on the remainder, repeated over AEF's k draws. It is
+    hosted here rather than on the LP tasks because the KNN twin is the only
+    single-instance job (embedding_eval_sweep.py emits one KNN job but eight LP
+    jobs, one per swept LR), so the trials compute once instead of eight
+    redundant times, and a neighbor lookup is the cheapest job to hang
+    millisecond-scale closed-form fits off. The precomputed baselines (AEF,
+    Tessera) run these same task objects, so they inherit the trials and stay
+    directly comparable.
     """
+    scale = _embedding_eval_batch_scale(window_size)
     return DownstreamTaskConfig(
         dataset=name,
-        embedding_batch_size=32,
-        probe_batch_size=8,
+        embedding_batch_size=32 * scale,
+        probe_batch_size=8 * scale,
         num_workers=8,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.01,
         eval_interval=Duration.epochs(10),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
+        input_modalities=input_modalities or [Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=eval_mode,
         primary_metric=EvalMetric.BALANCED_ACCURACY,
-        window_size=16,
+        window_size=window_size,
         patch_size=1,
         quantize_embeddings=True,
         use_center_token=True,
         label_at_center_pixel=True,
+        scl_cloud_mask=scl_cloud_mask,
+        scl_cloud_classes=scl_cloud_classes,
+        landsat_cloud_cover_max=landsat_cloud_cover_max,
+        l8_pixel_cloud_mask=l8_pixel_cloud_mask,
+        l8_pixel_cloud_bits=l8_pixel_cloud_bits,
+        balanced_trial=(
+            BalancedTrialConfig(cap=_aef_max_trial_cap(name))
+            if eval_mode == EvalMode.KNN
+            else None
+        ),
     )
 
 
 # Embedding-product evals: OlmoEarth scored under the same conventions as the
 # precomputed embedding products (AEF/Tessera) — per-pixel (patch_size=1)
-# embeddings from fixed 16x16 windows, int8 round-tripped. Kept separate from
-# EVAL_TASKS and swept by embedding_eval_sweep.py (EMBEDDING_EVALS=1), which
-# holds normalization fixed to pretraining stats and sweeps only the probe LR
-# for olmoearth / aef / tessera_precomputed. The precomputed baselines run
-# these same tasks with input_modalities overridden to the embedding modality
-# and quantize_embeddings=False (they are already int8 at source).
+# embeddings from fixed windows, int8 round-tripped. OlmoEarth checkpoints
+# run every window size in EMBEDDING_EVAL_WINDOW_SIZES by default (ws16 is
+# the product-parity convention; ws8/ws4/ws1 ablate the spatial context the
+# embeddings are computed from). Kept separate from EVAL_TASKS and swept by
+# embedding_eval_sweep.py (EMBEDDING_EVALS=1), which holds normalization
+# fixed to pretraining stats and sweeps only the probe LR for olmoearth /
+# aef / tessera_precomputed. The precomputed baselines run these same tasks
+# with input_modalities overridden to the embedding modality and
+# quantize_embeddings=False (they are already int8 at source); they keep one
+# task per dataset, so they stay ws16-only.
 #
 # The AEF supplemental tasks are effectively pixel-wise classification, so each
 # gets a KNN twin (`_knn`). The PASTIS tasks stay LP-only: their dense labels
@@ -1482,16 +1641,21 @@ def _aef_ws16_ps1_task(name: str, eval_mode: EvalMode) -> DownstreamTaskConfig:
 # embeddings previously fetched by pastis_processor.py --embedding_products.
 
 
-def _pastis_ws16_ps1_task(input_modalities: list[str]) -> DownstreamTaskConfig:
+def _pastis_ps1_task(
+    input_modalities: list[str], window_size: int = 16
+) -> DownstreamTaskConfig:
     """PASTIS (rslearn export) under the per-pixel embedding-product convention."""
+    scale = _embedding_eval_batch_scale(window_size)
     return DownstreamTaskConfig(
         dataset="pastis_rslearn",
-        # 64 = one full 128x128 stored sample (8x8 tiles of 16x16) per batch,
-        # so each DataLoader worker's batch maps to exactly one base-sample
-        # load with the tiled-__getitem__ cache. Peak GPU memory at batch 32
-        # was ~7.6GB, so 64 stays far from OOM.
-        embedding_batch_size=64,
-        probe_batch_size=8,
+        # At ws16, 64 = one full 128x128 stored sample (8x8 tiles of 16x16)
+        # per batch, so each DataLoader worker's batch maps to exactly one
+        # base-sample load with the tiled-__getitem__ cache; the (16/ws)^2
+        # scaling preserves both that mapping and the tokens per batch at
+        # smaller window sizes. Peak GPU memory at ws16 batch 32 was ~7.6GB,
+        # so 64 stays far from OOM.
+        embedding_batch_size=64 * scale,
+        probe_batch_size=8 * scale,
         num_workers=2,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -1501,32 +1665,586 @@ def _pastis_ws16_ps1_task(input_modalities: list[str]) -> DownstreamTaskConfig:
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
-        window_size=16,
+        window_size=window_size,
         patch_size=1,
         tile_samples=True,
         quantize_embeddings=True,
     )
 
 
-EMBEDDING_EVAL_TASKS = {
-    # The _pretrain_export suffix marks that these read the pastis_rslearn
-    # pretraining-mirror export, distinguishing their metrics from earlier
-    # pastis_ws16_ps1_* runs on the benchmark-shipped imagery.
-    "pastis_ws16_ps1_sentinel2_pretrain_export": _pastis_ws16_ps1_task(
-        [Modality.SENTINEL2_L2A.name]
-    ),
-    "pastis_ws16_ps1_sentinel1_sentinel2_pretrain_export": _pastis_ws16_ps1_task(
-        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name]
-    ),
-    **{
-        f"{name}_ws16_ps1": _aef_ws16_ps1_task(name, EvalMode.LINEAR_PROBE)
-        for name in AEF_SUPPLEMENTAL_DATASETS
-    },
-    **{
-        f"{name}_ws16_ps1_knn": _aef_ws16_ps1_task(name, EvalMode.KNN)
-        for name in AEF_SUPPLEMENTAL_DATASETS
-    },
+# The _pretrain_export suffix marks that the PASTIS tasks read the
+# pastis_rslearn pretraining-mirror export, distinguishing their metrics from
+# earlier pastis_ws16_ps1_* runs on the benchmark-shipped imagery. One task
+# set per window size in EMBEDDING_EVAL_WINDOW_SIZES, ws16 first.
+EMBEDDING_EVAL_TASKS = {}
+for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"pastis_ws{_ws}_ps1_sentinel2_pretrain_export": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name], window_size=_ws
+            ),
+            f"pastis_ws{_ws}_ps1_sentinel1_sentinel2_pretrain_export": (
+                _pastis_ps1_task(
+                    [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                    window_size=_ws,
+                )
+            ),
+            **{
+                f"{name}_ws{_ws}_ps1": _aef_ps1_task(
+                    name, EvalMode.LINEAR_PROBE, window_size=_ws
+                )
+                for name in AEF_SUPPLEMENTAL_DATASETS
+            },
+            **{
+                f"{name}_ws{_ws}_ps1_knn": _aef_ps1_task(
+                    name, EvalMode.KNN, window_size=_ws
+                )
+                for name in AEF_SUPPLEMENTAL_DATASETS
+            },
+            # Matched-subset siblings at ws16 only (see MATCHED_SUBSET_DATASETS).
+            **(
+                {
+                    f"{name}_ws16_ps1": _aef_ps1_task(
+                        name, EvalMode.LINEAR_PROBE, window_size=16
+                    )
+                    for name in MATCHED_SUBSET_DATASETS
+                }
+                if _ws == 16
+                else {}
+            ),
+            **(
+                {
+                    f"{name}_ws16_ps1_knn": _aef_ps1_task(
+                        name, EvalMode.KNN, window_size=16
+                    )
+                    for name in MATCHED_SUBSET_DATASETS
+                }
+                if _ws == 16
+                else {}
+            ),
+        }
+    )
+
+# Year-aligned tasks, ws16 only. Both a Sentinel-2-only and a Sentinel-1 +
+# Sentinel-2 variant: the S1+S2 pair is the point of the re-export, while the
+# S2-only pair isolates the year/ordering/cloud-filter change from the effect of
+# adding a sensor -- without it, a delta against the parent task confounds the
+# two. Same naming convention as the pastis embedding tasks.
+#
+# Each gets a linear-probe and a kNN variant, like its parent task above: the
+# AEF paper scores every dataset as best-of-{kNN-1, kNN-3, linear}, so dropping
+# kNN here would compare our linear-probe number against their best-of-three.
+_YEAR_ALIGNED_MODALITIES = {
+    "sentinel2": [Modality.SENTINEL2_L2A.name],
+    "sentinel1_sentinel2": [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+    # The Landsat pairs. Both require the landsat_moNN layers on weka
+    # (setup_extra_layers.py, layer set `landsat`); the input is optional in
+    # every model.yaml, so windows the Landsat prepare/materialize has not
+    # reached run without it rather than failing.
+    #
+    # sentinel2_landsat isolates Landsat's optical-only contribution (vs the
+    # sentinel2 pair); sentinel1_sentinel2_landsat is the everything-config
+    # and the sensor-fair match to AEF, which fuses Landsat internally.
+    # Together with the S1 pairs this completes the sensor half-lattice —
+    # every single-sensor addition to S2 is measurable in isolation and in
+    # combination.
+    "sentinel2_landsat": [
+        Modality.SENTINEL2_L2A.name,
+        Modality.LANDSAT.name,
+    ],
+    "sentinel1_sentinel2_landsat": [
+        Modality.SENTINEL1.name,
+        Modality.SENTINEL2_L2A.name,
+        Modality.LANDSAT.name,
+    ],
 }
+for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}": _aef_ps1_task(
+                name,
+                EvalMode.LINEAR_PROBE,
+                window_size=16,
+                input_modalities=_modalities,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_knn": _aef_ps1_task(
+                name,
+                EvalMode.KNN,
+                window_size=16,
+                input_modalities=_modalities,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+    # SCL cloud-masked siblings: identical except cloud-contaminated S2
+    # pixel-timesteps are masked MISSING at load time (scl_cloud_mask), which
+    # reproduces the pre-year-aligned exports' eo:cloud_cover scene filter at
+    # pixel granularity. Requires the SCL layers on weka
+    # (setup_extra_layers.py); without them the tasks run unmasked and
+    # match the plain variants. The window set is unchanged, so plain vs
+    # _sclmask deltas isolate the cloud effect (descals is the motivation).
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_sclmask": _aef_ps1_task(
+                name,
+                EvalMode.LINEAR_PROBE,
+                window_size=16,
+                input_modalities=_modalities,
+                scl_cloud_mask=True,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_sclmask_knn": _aef_ps1_task(
+                name,
+                EvalMode.KNN,
+                window_size=16,
+                input_modalities=_modalities,
+                scl_cloud_mask=True,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+    # "Cloudless" siblings: same mechanism, narrower policy -- only
+    # unambiguous cloud (SCL 8 medium / 9 high probability) is masked, leaving
+    # shadow/cirrus/nodata in place. With the plain and _sclmask variants this
+    # gives a three-point masking-aggressiveness ladder per task.
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_cloudless": _aef_ps1_task(
+                name,
+                EvalMode.LINEAR_PROBE,
+                window_size=16,
+                input_modalities=_modalities,
+                scl_cloud_mask=True,
+                scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_cloudless_knn": _aef_ps1_task(
+                name,
+                EvalMode.KNN,
+                window_size=16,
+                input_modalities=_modalities,
+                scl_cloud_mask=True,
+                scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+# Scene-level Landsat cloud-mask siblings of the landsat tasks: months whose
+# chosen Landsat scene reports cloud_cover >= this are masked MISSING (the
+# same threshold convention as the original exports' S2 scene filter).
+# Requires the landsat_cloud_cover.json sidecar at each dataset root
+# (build_landsat_cloud_cover_sidecar.py); without it the tasks run unmasked
+# with a warning, like _sclmask without SCL layers.
+L8MASK_CLOUD_COVER_MAX = 50.0
+for _suffix in ("sentinel2_landsat", "sentinel1_sentinel2_landsat"):
+    _modalities = _YEAR_ALIGNED_MODALITIES[_suffix]
+    for _mode, _knn in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn")):
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}_l8mask{_knn}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                    landsat_cloud_cover_max=L8MASK_CLOUD_COVER_MAX,
+                )
+                for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+            }
+        )
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}_sclmask_l8mask{_knn}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                    scl_cloud_mask=True,
+                    landsat_cloud_cover_max=L8MASK_CLOUD_COVER_MAX,
+                )
+                for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+            }
+        )
+
+# Per-pixel Landsat cloud-mask siblings (QA_PIXEL / CFMask): the Landsat
+# analogue of _sclmask. Cloud/shadow/cirrus/dilated pixel-timesteps are
+# masked MISSING via the optional landsat_qa input (setup_extra_layers.py,
+# layer set `landsat_qa`); without the layers the tasks run unmasked with a
+# warning, like _sclmask without SCL. _l8pixmask isolates the Landsat-side
+# pixel mask against the plain landsat pair; _sclmask_l8pixmask masks both
+# optical sensors -- the S1+S2+L8 + SCL interaction (the one masking config
+# that ever won) is the motivating comparison.
+#
+# _cloudless_l8pixmask is the same both-optical-sensors combination against the
+# NARROWER S2 policy (SCL 8/9 only). Added 2026-08-13: with the Landsat ladder
+# complete, cloudless overtook sclmask as the best S2-side cleaner on the full
+# stack (+1.40 vs +1.33 for cand_ndvi), so the both-masked cell has to be built
+# on cloudless too or the grid tests the pixel mask only against the runner-up.
+for _suffix in ("sentinel2_landsat", "sentinel1_sentinel2_landsat"):
+    _modalities = _YEAR_ALIGNED_MODALITIES[_suffix]
+    for _mode, _knn in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn")):
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}_l8pixmask{_knn}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                    l8_pixel_cloud_mask=True,
+                )
+                for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+            }
+        )
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}_sclmask_l8pixmask{_knn}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                    scl_cloud_mask=True,
+                    l8_pixel_cloud_mask=True,
+                )
+                for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+            }
+        )
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}_cloudless_l8pixmask{_knn}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                    scl_cloud_mask=True,
+                    scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+                    l8_pixel_cloud_mask=True,
+                )
+                for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+            }
+        )
+
+# Per-pixel cloud-mosaic pilot on ethiopia, the dataset where we lose hardest to
+# Tessera. `ccmos` replaces each 30-day S2 mosaic with a per-pixel selection of the
+# least-SCL-contaminated acquisition (pixel_mosaic_export.py); measured 93.3% of
+# chosen pixels clear, against the parent's scene-level `sort_by: eo:cloud_cover`.
+#
+# Its B01/B09 are ZEROS -- the fetch group it was built from carries only band sets
+# 1-2 and rslearn cannot backfill a band set onto a materialized layer -- so the
+# ccmos-vs-parent delta bundles cloud selection with zeroing those two 60 m
+# atmospheric bands. Accepted rather than controlled, because pretraining uses band
+# dropout so absent bands are in-distribution, and B01/B09 carry little vegetation
+# signal. An earlier ten-band control arm was dropped: the model tokenizes S2 as one
+# 12-band group and indexes B01/B09 at channels 10/11, so a ten-channel input breaks
+# that lookup rather than reading as a ten-band arm.
+#
+# Registered as an explicit block rather than by appending to
+# AEF_SUPPLEMENTAL_YEAR_ALIGNED: that tuple drives every other sweep's task
+# cross-product and is length-pinned by a test.
+PIXEL_MOSAIC_DATASETS = ("ethiopia_crops_ccmos_year_aligned",)
+for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
+    for _mode, _mode_suffix in (
+        (EvalMode.LINEAR_PROBE, ""),
+        (EvalMode.KNN, "_knn"),
+    ):
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}{_mode_suffix}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                )
+                for name in PIXEL_MOSAIC_DATASETS
+            }
+        )
+        # SCL-masked siblings. On the 10band control this is the old pipeline's
+        # only cloud defence -- subtractive masking over an already-chosen
+        # mosaic. On ccmos the SCL layers describe the pixels the composite
+        # actually selected, so plain-ccmos vs sclmask-ccmos asks whether any
+        # masking is still worth doing once selection has happened.
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}_sclmask{_mode_suffix}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                    scl_cloud_mask=True,
+                )
+                for name in PIXEL_MOSAIC_DATASETS
+            }
+        )
+
+# The NARROW Landsat pixel policy: `_l8pixstrict` masks on the cloud bit alone,
+# where `_l8pixmask` above also masks dilated cloud, cirrus and cloud shadow.
+# So `_l8pixstrict` MASKS LESS, despite the name: "strict" qualifies the
+# criterion for calling a pixel cloudy, not the amount of masking. Aggressiveness
+# runs unmasked < _l8pixstrict < _l8pixmask, as S2's runs
+# unmasked < _cloudless < _sclmask.
+# Registered 2026-08-14 because the aggressive policy measurably HURTS: with the
+# flag finally reaching the data, cand_ndvi lost 1.8 pts on descals and 2.8 on
+# ethiopia (KNN, matched pairs), worst on the S2-only stacks and rescued by S1.
+# The S2 ladder had already found the same shape -- the narrow `_cloudless`
+# policy beat the aggressive `_sclmask` one -- so this tests whether the Landsat
+# result is a policy-calibration problem or an argument against masking Landsat
+# at all. Same three S2-side pairings as the aggressive variants, so each strict
+# task has both an aggressive and an unmasked sibling to be read against.
+for _suffix in ("sentinel2_landsat", "sentinel1_sentinel2_landsat"):
+    _modalities = _YEAR_ALIGNED_MODALITIES[_suffix]
+    for _mode, _knn in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn")):
+        _s2_policies: tuple[tuple[str, dict[str, Any]], ...] = (
+            ("", {}),
+            ("_sclmask", {"scl_cloud_mask": True}),
+            (
+                "_cloudless",
+                {
+                    "scl_cloud_mask": True,
+                    "scl_cloud_classes": SCL_CLOUDLESS_CLASSES,
+                },
+            ),
+        )
+        for _s2_tag, _s2_kwargs in _s2_policies:
+            EMBEDDING_EVAL_TASKS.update(
+                {
+                    f"{name}_ws16_ps1_{_suffix}{_s2_tag}_l8pixstrict{_knn}": _aef_ps1_task(
+                        name,
+                        _mode,
+                        window_size=16,
+                        input_modalities=_modalities,
+                        l8_pixel_cloud_mask=True,
+                        l8_pixel_cloud_bits=L8QA_CLOUD_ONLY_BITS_MASK,
+                        **_s2_kwargs,
+                    )
+                    for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+                }
+            )
+
+# pastis_year_aligned keeps the pastis conventions (128x128 stored samples,
+# tile_samples, mIoU) rather than the AEF center-pixel ones, so it reuses the
+# pastis helper with its dataset name overridden.
+EMBEDDING_EVAL_TASKS.update(
+    {
+        "pastis_year_aligned_ws16_ps1_sentinel2": replace(
+            _pastis_ps1_task([Modality.SENTINEL2_L2A.name], window_size=16),
+            dataset="pastis_year_aligned",
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+        ),
+        # SCL cloud-masked siblings (see the _sclmask comment above).
+        "pastis_year_aligned_ws16_ps1_sentinel2_sclmask": replace(
+            _pastis_ps1_task([Modality.SENTINEL2_L2A.name], window_size=16),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_sclmask": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+        ),
+        # "Cloudless" siblings (see the _cloudless comment above).
+        "pastis_year_aligned_ws16_ps1_sentinel2_cloudless": replace(
+            _pastis_ps1_task([Modality.SENTINEL2_L2A.name], window_size=16),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_cloudless": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+        ),
+        # Landsat siblings (see the _YEAR_ALIGNED_MODALITIES comment above).
+        "pastis_year_aligned_ws16_ps1_sentinel2_landsat": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel2_landsat_sclmask": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel2_landsat_cloudless": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_sclmask": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_cloudless": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+        ),
+        # QA_PIXEL (per-pixel Landsat cloud) siblings, with and without the
+        # S2-side SCL mask. LP-only like the rest of pastis.
+        "pastis_year_aligned_ws16_ps1_sentinel2_landsat_l8pixmask": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            l8_pixel_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel2_landsat_sclmask_l8pixmask": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            l8_pixel_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_l8pixmask": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            l8_pixel_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_sclmask_l8pixmask": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            l8_pixel_cloud_mask=True,
+        ),
+        # Both optical sensors masked, S2 side on the narrow cloudless policy
+        # (see the _cloudless_l8pixmask comment above).
+        "pastis_year_aligned_ws16_ps1_sentinel2_landsat_cloudless_l8pixmask": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+            l8_pixel_cloud_mask=True,
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_cloudless_l8pixmask": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+            scl_cloud_mask=True,
+            scl_cloud_classes=SCL_CLOUDLESS_CLASSES,
+            l8_pixel_cloud_mask=True,
+        ),
+    }
+)
+
+# PASTIS siblings of the narrow policy (see the _l8pixstrict block above).
+# LP-only like the rest of pastis. Registered mainly as a NEGATIVE CONTROL: the
+# aggressive policy came out null here (-0.03 / -0.15 over six pairs, every
+# delta inside LP's ~0.9pt replicate noise), which is what a task with no
+# cloudy-season confound should do. If the narrow policy rescues descals and
+# ethiopia under KNN, a matching null here is what confines the effect to the
+# cloudy datasets rather than to masking in general.
+_PASTIS_STACKS: tuple[tuple[str, list[str]], ...] = (
+    ("sentinel2_landsat", [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name]),
+    (
+        "sentinel1_sentinel2_landsat",
+        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+    ),
+)
+_PASTIS_S2_POLICIES: tuple[tuple[str, dict[str, Any]], ...] = (
+    ("", {}),
+    ("_sclmask", {"scl_cloud_mask": True}),
+    (
+        "_cloudless",
+        {"scl_cloud_mask": True, "scl_cloud_classes": SCL_CLOUDLESS_CLASSES},
+    ),
+)
+for _pstack, _pmods in _PASTIS_STACKS:
+    for _ptag, _pkwargs in _PASTIS_S2_POLICIES:
+        EMBEDDING_EVAL_TASKS[
+            f"pastis_year_aligned_ws16_ps1_{_pstack}{_ptag}_l8pixstrict"
+        ] = replace(
+            _pastis_ps1_task(_pmods, window_size=16),
+            dataset="pastis_year_aligned",
+            l8_pixel_cloud_mask=True,
+            l8_pixel_cloud_bits=L8QA_CLOUD_ONLY_BITS_MASK,
+            **_pkwargs,
+        )
+
 
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(

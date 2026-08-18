@@ -36,7 +36,8 @@ the rebuilt eval-job model must match the trained checkpoint exactly.
 import logging
 from dataclasses import replace
 
-from base import build_model_config as _base_build_model_config
+from base import PATCH_EMBED_HIDDEN_SIZES
+from base import build_size_model_config as _base_build_size_model_config
 from olmo_core.train.common import Duration
 
 from olmoearth_pretrain.internal.all_evals import (
@@ -44,6 +45,9 @@ from olmoearth_pretrain.internal.all_evals import (
 )
 from olmoearth_pretrain.internal.all_evals import (
     EMBEDDING_EVAL_TASKS as _EMBEDDING_EVAL_TASKS,
+)
+from olmoearth_pretrain.internal.all_evals import (
+    EMBEDDING_EVAL_WINDOW_SIZES as _EMBEDDING_EVAL_WINDOW_SIZES,
 )
 from olmoearth_pretrain.internal.all_evals import EVAL_TASKS as _ALL_EVAL_TASKS
 from olmoearth_pretrain.internal.experiment import CommonComponents
@@ -54,6 +58,11 @@ logger = logging.getLogger(__name__)
 
 # The register bottleneck width (the gdyn_d768 frontier).
 REGISTER_DIM = 768
+# Encoder/decoder size preset. The whole regbtl program runs on the v1.2 BASE encoder;
+# the ``small`` arms pass ``small_shallow_decoder`` explicitly. Passing the preset name
+# (rather than calling ``base.build_model_config``) is what lets a run swap the backbone
+# without touching anything else -- the default is byte-identical to the old behaviour.
+ENCODER_SIZE_NAME = "base_shallow_decoder"
 # Latent-transformer depth over the register grid. With interleave this is also the number
 # of cross-attention reads, giving the ``[read -> self] x4`` schedule (nolsa keeps the 4
 # reads and drops only the self-attention blocks).
@@ -117,21 +126,43 @@ PS1_ONLY_LOOP_EVAL_TASKS = {
     **AEF_EMBEDDING_LOOP_EVAL_TASKS,
 }
 
+# The PASTIS exports at EVERY embedding-eval window size (16/8/4/1), not just the ws16
+# deployment shape. The smaller windows probe how much spatial context the frozen ps=1
+# embeddings need.
+_PASTIS_ALL_WS_EMBEDDING_LOOP_EVAL_NAMES = tuple(
+    f"pastis_ws{ws}_ps1_{mods}_pretrain_export"
+    for ws in _EMBEDDING_EVAL_WINDOW_SIZES
+    for mods in ("sentinel2", "sentinel1_sentinel2")
+)
+PASTIS_ALL_WS_EMBEDDING_LOOP_EVAL_TASKS = {
+    name: replace(_EMBEDDING_EVAL_TASKS[name], eval_interval=Duration.steps(20000))
+    for name in _PASTIS_ALL_WS_EMBEDDING_LOOP_EVAL_NAMES
+}
+
+# The complete embedding-product eval set: PASTIS at all window sizes + the AEF
+# supplemental probes (LP + kNN, ws16 -- the convention the AEF/Tessera comparisons use).
+ALL_EMBEDDING_LOOP_EVAL_TASKS = {
+    **PASTIS_ALL_WS_EMBEDDING_LOOP_EVAL_TASKS,
+    **AEF_EMBEDDING_LOOP_EVAL_TASKS,
+}
+
 
 def build_regbtl_model_config(
     common: CommonComponents,
     *,
     latent_self_attn: bool,
     register_dim: int = REGISTER_DIM,
+    size_name: str = ENCODER_SIZE_NAME,
 ) -> LatentMIMConfig:
     """v1.2 base + spatial register bottleneck: ``gdyn`` + ``il`` + ``pdproj``.
 
     The encoder keeps v1.2's 3D mixed RoPE; the bottleneck reads spatially (2D). The
     decoder is switched to 2D RoPE so its mask tokens cross-attend the register grid.
     ``latent_self_attn`` toggles the bottleneck's latent self-attention (lsa / nolsa);
-    ``register_dim`` sets the bottleneck width (d768 is the original frontier).
+    ``register_dim`` sets the bottleneck width (d768 is the original frontier);
+    ``size_name`` picks the encoder/decoder size preset (``MODEL_SIZE_ARGS``).
     """
-    config = _base_build_model_config(common)
+    config = _base_build_size_model_config(common, size_name, PATCH_EMBED_HIDDEN_SIZES)
     encoder_config = config.encoder_config
     decoder_config = config.decoder_config
 
@@ -166,6 +197,25 @@ def add_loop_eval_beaker_job(trainer_config, module_path: str):
         **evaluator.tasks,
         **FIFTY_CITIES_LOOP_EVAL_TASKS,
         **PASTIS_EMBEDDING_LOOP_EVAL_TASKS,
+    }
+    evaluator.run_as_beaker_job = True
+    evaluator.beaker_eval_module_path = module_path
+    evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
+    return trainer_config
+
+
+def add_all_embedding_loop_evals(trainer_config, module_path: str):
+    """Like :func:`add_loop_eval_beaker_job`, but with the FULL embedding eval set.
+
+    Merges fifty_cities + PASTIS at every window size (16/8/4/1) + the AEF supplemental
+    LP/kNN probes into the shared catalog, instead of only the ws16 PASTIS exports. The
+    extra tasks run in the separate eval Beaker job, so they cost no training time.
+    """
+    evaluator = trainer_config.callbacks["downstream_evaluator"]
+    evaluator.tasks = {
+        **evaluator.tasks,
+        **FIFTY_CITIES_LOOP_EVAL_TASKS,
+        **ALL_EMBEDDING_LOOP_EVAL_TASKS,
     }
     evaluator.run_as_beaker_job = True
     evaluator.beaker_eval_module_path = module_path

@@ -168,4 +168,9 @@ def get_eval_dataset(
             window_size=kwargs.get("window_size"),
             label_at_center_pixel=kwargs.get("label_at_center_pixel", False),
             tile_samples=kwargs.get("tile_samples", False),
+            scl_cloud_mask=kwargs.get("scl_cloud_mask", False),
+            scl_cloud_classes=kwargs.get("scl_cloud_classes"),
+            landsat_cloud_cover_max=kwargs.get("landsat_cloud_cover_max"),
+            l8_pixel_cloud_mask=kwargs.get("l8_pixel_cloud_mask", False),
+            l8_pixel_cloud_bits=kwargs.get("l8_pixel_cloud_bits"),
         )

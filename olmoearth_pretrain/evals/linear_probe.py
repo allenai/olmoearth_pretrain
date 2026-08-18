@@ -7,6 +7,7 @@ import functools
 import math
 from enum import StrEnum
 from logging import getLogger
+from typing import Any
 
 import numpy as np
 import torch
@@ -282,10 +283,34 @@ class BilinearConvProbe(nn.Module):
         return {"logits": x}
 
 
+class ProbeInputNorm(StrEnum):
+    """What sits between the embedding and the linear probe's weights.
+
+    Classification probes have always applied ``BatchNorm1d``; segmentation
+    probes never have. That asymmetry standardizes per-dimension scale and
+    offset for the center-pixel classification tasks (the AEF supplemental
+    sets, which ``label_at_center_pixel`` converts from segmentation) while
+    leaving the dense tasks (PASTIS) to read raw features -- so the same
+    embedding product is scored through two different front-ends, and the
+    classification half is blind to embedding geometry by construction.
+
+    BatchNorm also couples samples within a batch: statistics come from the
+    training batch (8 samples for the embedding tasks) and from running
+    averages at eval, neither of which corresponds to producing a map
+    pixel-by-pixel over a tile.
+    """
+
+    # Current behavior: BatchNorm1d for classification, nothing for segmentation.
+    BATCHNORM = "batchnorm"
+    # No normalization for either -- classification is scored exactly like the
+    # dense segmentation probes, and embedding geometry reaches the weights.
+    NONE = "none"
+
+
 class LinearProbe(nn.Module):
     """Linear Probe for classification and segmentation tasks.
 
-    For classification: applies BatchNorm1d then Linear(D, num_classes).
+    For classification: applies the configured input norm then Linear(D, num_classes).
     For segmentation: applies Linear(D, num_classes * ps^2) then rearranges to (B, C, H, W).
     """
 
@@ -295,6 +320,7 @@ class LinearProbe(nn.Module):
         num_classes: int,
         task_type: TaskType,
         num_output_pixels_per_side_of_patch: int | None = None,
+        input_norm: ProbeInputNorm = ProbeInputNorm.BATCHNORM,
     ) -> None:
         """Initialize the linear probe."""
         super().__init__()
@@ -306,10 +332,15 @@ class LinearProbe(nn.Module):
                 "num_output_pixels_per_side_of_patch is required for segmentation"
             )
             out_dim = num_classes * num_output_pixels_per_side_of_patch**2
+            # Dense probes have never had an input norm, whatever is configured.
             self.batchnorm: nn.Module = nn.Identity()
         else:
             out_dim = num_classes
-            self.batchnorm = nn.BatchNorm1d(in_dim)
+            self.batchnorm = (
+                nn.BatchNorm1d(in_dim)
+                if input_norm == ProbeInputNorm.BATCHNORM
+                else nn.Identity()
+            )
         self.linear = nn.Linear(in_dim, out_dim)
 
     def forward(self, x: torch.Tensor) -> dict:
@@ -357,6 +388,7 @@ def train_and_eval_probe(
     use_dice_loss: bool = False,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    probe_input_norm: ProbeInputNorm = ProbeInputNorm.BATCHNORM,
 ) -> EvalTaskResult:
     """Run a linear probe on the OlmoEarth Pretrain model.
 
@@ -428,12 +460,23 @@ def train_and_eval_probe(
         raise ValueError("Attention pooling is not supported for regression.")
 
     probe_cls = PROBE_TYPE_TO_CLASS[probe_type]
-    probe = probe_cls(
-        in_dim=in_features,
-        num_classes=config.num_classes,
-        task_type=config.task_type,
-        num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
-    ).to(device)
+    probe_kwargs: dict[str, Any] = {
+        "in_dim": in_features,
+        "num_classes": config.num_classes,
+        "task_type": config.task_type,
+        "num_output_pixels_per_side_of_patch": output_pixels_per_side_of_patch,
+    }
+    if probe_cls is LinearProbe:
+        probe_kwargs["input_norm"] = probe_input_norm
+    elif probe_input_norm != ProbeInputNorm.BATCHNORM:
+        # The other probe heads have their own front-ends (attention pooling,
+        # interpolation, convolutions); silently ignoring the override would
+        # report an arm that never ran.
+        raise ValueError(
+            f"probe_input_norm={probe_input_norm} is only supported for "
+            f"ProbeType.LINEAR, got {probe_type}"
+        )
+    probe = probe_cls(**probe_kwargs).to(device)
 
     num_times_to_run_eval = math.ceil(epochs / eval_interval)
     val_results: list[EvalResult] = []

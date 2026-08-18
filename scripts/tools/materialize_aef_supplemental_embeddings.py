@@ -12,10 +12,13 @@ datasets will record coverage gaps for other label years — gaps are logged and
 listed in each dataset's embedding_materializer_manifest_<product>.json, and
 the corresponding windows simply lack the layer.
 
-After materializing, to make the datasets AEF/Tessera-evaluable you still need
-to (a) add the gse/tessera raster layer entry to each dataset's model.yaml and
-(b) list the modality in the dataset's registry modalities; see
-docs/PrecomputedEmbeddingEvals.md.
+Materializing alone does not make a dataset evaluable: the layer also has to
+be declared in the dataset's config.json, wired as a model.yaml input, and
+listed in the registry entry's modalities. Run
+scripts/tools/wire_embedding_modalities.py afterwards to do all three (it
+gates on the manifests this script writes, so it only turns on datasets whose
+bake finished cleanly), then backfill_eval_registry_provenance.py to re-stamp
+config_json_sha256.
 
 Example:
     python scripts/tools/materialize_aef_supplemental_embeddings.py
@@ -27,6 +30,7 @@ import argparse
 import logging
 
 from olmoearth_pretrain.evals.embedding_materializer.fetchers import (
+    TESSERA_PRODUCTS,
     AEFFetcher,
     EmbeddingFetcher,
     TesseraFetcher,
@@ -42,11 +46,11 @@ logger = logging.getLogger(__name__)
 
 
 def build_fetcher(product_name: str) -> EmbeddingFetcher:
-    """Build the fetcher for a product name ("aef" or "tessera")."""
+    """Build the fetcher for a product name (aef/tessera/tessera_v11)."""
     if product_name == "aef":
         return AEFFetcher()
-    if product_name == "tessera":
-        return TesseraFetcher()
+    if product_name in TESSERA_PRODUCTS:
+        return TesseraFetcher(product_name=product_name)
     raise ValueError(f"Unknown embedding product '{product_name}'")
 
 
@@ -119,7 +123,8 @@ def main() -> None:
             f"{dataset_name} / {product_name}: "
             f"written={manifest.get('num_windows_written')} "
             f"skipped_existing={manifest.get('num_windows_skipped_existing')} "
-            f"coverage_gaps={manifest.get('num_coverage_gaps')}"
+            f"coverage_gaps={manifest.get('num_coverage_gaps')} "
+            f"failed={manifest.get('num_windows_failed')}"
         )
 
 

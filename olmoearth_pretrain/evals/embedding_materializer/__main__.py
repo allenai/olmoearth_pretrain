@@ -13,6 +13,7 @@ import sys
 from upath import UPath
 
 from olmoearth_pretrain.evals.embedding_materializer.fetchers import (
+    TESSERA_PRODUCTS,
     AEFFetcher,
     EmbeddingFetcher,
     TesseraFetcher,
@@ -24,7 +25,7 @@ from olmoearth_pretrain.evals.embedding_materializer.materialize import (
 
 logger = logging.getLogger(__name__)
 
-PRODUCT_NAMES = ["aef", "tessera"]
+PRODUCT_NAMES = ["aef", *TESSERA_PRODUCTS]
 
 
 def build_fetcher(product_name: str, args: argparse.Namespace) -> EmbeddingFetcher:
@@ -42,8 +43,8 @@ def build_fetcher(product_name: str, args: argparse.Namespace) -> EmbeddingFetch
     """
     if product_name == "aef":
         return AEFFetcher(metadata_cache_dir=args.aef_cache_dir)
-    if product_name == "tessera":
-        return TesseraFetcher()
+    if product_name in TESSERA_PRODUCTS:
+        return TesseraFetcher(product_name=product_name)
     raise ValueError(
         f"Unknown product '{product_name}'; expected one of {PRODUCT_NAMES}"
     )

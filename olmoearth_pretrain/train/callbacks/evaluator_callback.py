@@ -22,6 +22,12 @@ from torch.utils.data import DataLoader, IterableDataset, Subset
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.dataloader import _worker_ignore_sigterm
+from olmoearth_pretrain.evals.balanced_trial import (
+    BalancedTrialConfig,
+    run_balanced_trials,
+    trial_task_name,
+)
 from olmoearth_pretrain.evals.band_sensitivity import (
     embedding_drift,
     occlude_band,
@@ -42,16 +48,24 @@ from olmoearth_pretrain.evals.embedding_diagnostics import (
     compute_spatial_embedding_diagnostics,
 )
 from olmoearth_pretrain.evals.embedding_transforms import (
+    FITTED_NORMALIZATIONS,
+    EmbeddingNormalization,
+    EmbeddingNormalizer,
+    QuantizationScheme,
     dequantize_embeddings,
     dequantize_embeddings_percentile,
     load_quantile_config,
     reduce_embedding_dim,
 )
-from olmoearth_pretrain.evals.embeddings import get_embeddings
+from olmoearth_pretrain.evals.embeddings import get_embeddings, normalize_and_quantize
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
 from olmoearth_pretrain.evals.knn import run_knn
-from olmoearth_pretrain.evals.linear_probe import ProbeType, train_and_eval_probe
+from olmoearth_pretrain.evals.linear_probe import (
+    ProbeInputNorm,
+    ProbeType,
+    train_and_eval_probe,
+)
 from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
@@ -68,6 +82,7 @@ _BEAKER_LAUNCH_NAME_SUFFIX_LEN = len("-evaluate-") + 8
 
 def _seed_worker(worker_id: int, base_seed: int) -> None:
     """Seed DataLoader worker RNGs deterministically."""
+    _worker_ignore_sigterm(worker_id)
     worker_seed = base_seed + worker_id
     random.seed(worker_seed)
     np.random.seed(worker_seed)
@@ -120,6 +135,14 @@ class DownstreamTaskConfig:
     # If the model has a register bottleneck, probe the pooled encoder patch tokens
     # instead of the register latents. No effect without a register bottleneck.
     eval_on_encoder_tokens: bool = False
+    # If the model has a detached register projection (register_projection_dims),
+    # probe the low-dim projected_registers instead of the register grid -- the same
+    # checkpoint can then be evaluated at both widths by registering the task twice.
+    # Mutually exclusive with eval_on_encoder_tokens.
+    eval_on_projected_registers: bool = False
+    # With eval_on_projected_registers: probe only the first N dims of the student (a
+    # Matryoshka prefix, e.g. 64 of a [128, 64] student). None = full student width.
+    eval_projection_dim: int | None = None
     # For geobench segmentation tasks: split each native image into
     # (height_width // tile_size)**2 non-overlapping tile_size x tile_size windows
     # (keeps every pixel, shrinks the token grid the model/register-read sees).
@@ -153,6 +176,30 @@ class DownstreamTaskConfig:
     # labeled pixel; pair with use_center_token=True (and patch_size=1) so the
     # probe reads exactly that token.
     label_at_center_pixel: bool = False
+    # For registry (rslearn) datasets carrying the optional "scl" input
+    # (setup_extra_layers.py): mask cloud-contaminated S2 pixel-timesteps
+    # MISSING at load time, reproducing the pre-year-aligned exports'
+    # eo:cloud_cover scene filter at pixel granularity. Never changes the
+    # window set; windows without SCL are just left unmasked.
+    scl_cloud_mask: bool = False
+    # SCL classes to mask when scl_cloud_mask is set. None = the full default
+    # set (nodata/saturated/shadow/cloud-med/cloud-high/cirrus); the
+    # "cloudless" variants pass (8, 9) for unambiguous cloud only.
+    scl_cloud_classes: tuple[int, ...] | None = None
+    # Scene-level Landsat cloud threshold: months whose chosen scene's
+    # cloud_cover meets/exceeds this are masked MISSING, using the
+    # landsat_cloud_cover.json sidecar at the dataset root
+    # (build_landsat_cloud_cover_sidecar.py). None = no Landsat masking.
+    landsat_cloud_cover_max: float | None = None
+    # Per-pixel Landsat cloud mask: LANDSAT pixel-timesteps whose QA_PIXEL
+    # (the optional "landsat_qa" input, setup_extra_layers.py layer set
+    # `landsat_qa`) flags dilated/cirrus/cloud/shadow are masked MISSING at
+    # load time -- the Landsat analogue of scl_cloud_mask. Windows without
+    # the input are left unmasked.
+    l8_pixel_cloud_mask: bool = False
+    # Which QA_PIXEL bits count as cloud. None keeps the loader's aggressive
+    # default (dilated|cirrus|cloud|shadow); the narrow policy is cloud alone.
+    l8_pixel_cloud_bits: int | None = None
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: NormMethod = field(
@@ -171,10 +218,47 @@ class DownstreamTaskConfig:
     quantize_bits: int | None = None
     # Path to HDF5 file with precomputed quantile boundaries for percentile quantization
     quantile_config_path: str | None = None
+    # Which int8 scheme quantize_embeddings applies. AEF_POWER (the default) is
+    # AlphaEarth's published scheme; TESSERA_PER_VECTOR is Tessera's, and is set
+    # for the tessera_v2 arm so each product is scored under its own
+    # quantization rather than under a competitor's (see QuantizationScheme).
+    quantization_scheme: QuantizationScheme = QuantizationScheme.AEF_POWER
+    # Normalize the extracted embeddings before the int8 round-trip and the
+    # probe. Nothing in pretraining pins an embedding head's output geometry
+    # (see EmbeddingNormalization), and three consumers care: the int8 power
+    # scheme (assumes AEF's value range), KNN (uncentered cosine), and the
+    # segmentation probe (no BatchNorm in front). NONE = today's behavior.
+    embedding_normalization: EmbeddingNormalization = EmbeddingNormalization.NONE
+    # Where the fitted normalizations (center/center_l2/zscore) get their
+    # constants. None fits them on THIS task's train split -- the diagnostic
+    # form, which answers whether the geometry is the problem but is not
+    # deployable (a global run has no per-dataset train split). Point this at
+    # constants written by scripts/tools/fit_embedding_norm_stats.py to use one
+    # fixed set everywhere, which is what shipping the fix would look like.
+    embedding_norm_stats_path: str | None = None
+    # Log embedding geometry, int8 clipping, and round-trip-damage diagnostics
+    # alongside the task's score (bounded row subsample; no effect on scores).
+    embedding_pipeline_diagnostics: bool = True
+    # What sits in front of the linear probe's weights. BATCHNORM (default) is
+    # the historical behavior: BatchNorm1d for classification tasks, nothing for
+    # segmentation. NONE scores classification exactly like the dense probes, so
+    # embedding geometry reaches the weights and no batch coupling is involved.
+    # Changing this moves every classification LP number, so run it as an arm.
+    probe_input_norm: ProbeInputNorm = ProbeInputNorm.BATCHNORM
     # Reduce embedding dimensionality via PCA (None = no reduction)
     embedding_dim: int | None = None
     # Use weighted dice loss instead of cross-entropy (only for specific tasks like wildfire)
     use_dice_loss: bool = False
+    # Additionally run the AlphaEarth Foundations balanced-trial protocol on the
+    # embeddings this task materializes: a class-balanced draw of
+    # min(cap, least class) points per class from the pooled splits, a
+    # closed-form ridge (and kNN) fit on the draw, and metrics on the remainder,
+    # repeated over AEF's k draws. Purely additive -- the task's own train -> val
+    # result is unchanged and the trial metrics are logged beside it as ``bt_*``.
+    # Only supported for single-label classification tasks in an embedding-based
+    # eval mode (KNN / LINEAR_PROBE); it is hosted on the KNN twin so the trials
+    # compute once instead of once per swept probe LR. None = don't run.
+    balanced_trial: BalancedTrialConfig | None = None
     # Override the default primary metric (e.g. EvalMetric.F1 instead of ACCURACY).
     # None = use the default for the task type (accuracy for classification, miou for segmentation).
     primary_metric: EvalMetric | None = None
@@ -256,6 +340,11 @@ class DownstreamEvaluator:
         self._is_registry_dataset = task.dataset not in DATASET_TO_CONFIG
         self.window_size = task.window_size
         self.label_at_center_pixel = task.label_at_center_pixel
+        self.scl_cloud_mask = task.scl_cloud_mask
+        self.scl_cloud_classes = task.scl_cloud_classes
+        self.landsat_cloud_cover_max = task.landsat_cloud_cover_max
+        self.l8_pixel_cloud_mask = task.l8_pixel_cloud_mask
+        self.l8_pixel_cloud_bits = task.l8_pixel_cloud_bits
         self.tile_samples = task.tile_samples
         if self.tile_samples:
             if not self._is_registry_dataset:
@@ -298,6 +387,13 @@ class DownstreamEvaluator:
             self.config = dataclasses.replace(
                 self.config, task_type=TaskType.CLASSIFICATION, height_width=None
             )
+        if (
+            self.scl_cloud_mask or self.l8_pixel_cloud_mask
+        ) and not self._is_registry_dataset:
+            raise ValueError(
+                f"scl_cloud_mask/l8_pixel_cloud_mask are only supported for registry datasets, "
+                f"got dataset '{task.dataset}'"
+            )
         self.trainer = trainer
         self.device = device
         # Add all task attributes to self
@@ -326,20 +422,29 @@ class DownstreamEvaluator:
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
         self.eval_on_encoder_tokens = task.eval_on_encoder_tokens
+        self.eval_on_projected_registers = task.eval_on_projected_registers
+        self.eval_projection_dim = task.eval_projection_dim
         self.use_center_token = task.use_center_token
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
         self.quantize_bits = task.quantize_bits
+        self.quantization_scheme = task.quantization_scheme
         self.quantile_config_path = task.quantile_config_path
         # Load quantile config if path is provided
         self.quantile_config: dict | None = None
         if self.quantile_config_path is not None:
             logger.info(f"Loading quantile config from {self.quantile_config_path}")
             self.quantile_config = load_quantile_config(self.quantile_config_path)
+        self.embedding_normalization = task.embedding_normalization
+        self.embedding_norm_stats_path = task.embedding_norm_stats_path
+        self.embedding_pipeline_diagnostics = task.embedding_pipeline_diagnostics
+        self.probe_input_norm = task.probe_input_norm
+        self.probe_input_norm = task.probe_input_norm
         self.embedding_dim = task.embedding_dim
         self.use_dice_loss = task.use_dice_loss
         self.primary_metric = task.primary_metric
         self.primary_metric_class = task.primary_metric_class
+        self.balanced_trial = task.balanced_trial
         self.h5py_dir = task.h5py_dir
         self.pretrain_max_samples = task.pretrain_max_samples
         self.pretrain_target_modality = task.pretrain_target_modality
@@ -381,6 +486,31 @@ class DownstreamEvaluator:
             self.eval_mode = EvalMode(self.eval_mode)
 
         assert self.eval_mode in EvalMode, f"Unexpected eval mode {self.eval_mode}"
+
+        if self.balanced_trial is not None:
+            # The trials reuse the embeddings an embedding-based eval already
+            # materializes; there is nothing to hook onto in the other modes.
+            if self.eval_mode not in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
+                raise ValueError(
+                    f"balanced_trial requires an embedding-based eval mode "
+                    f"(knn/linear_probe), got '{self.eval_mode}'"
+                )
+            # One-vs-rest squared error is the wrong objective for a dense
+            # segmentation task's mIoU, and IoU is precision-aware anyway, so
+            # the balanced-accuracy pathology the trials exist to measure does
+            # not arise there. See docs/EvalMetricsAndBalancedTrials.md.
+            if self.config.task_type != TaskType.CLASSIFICATION:
+                raise ValueError(
+                    f"balanced_trial only supports classification tasks, got "
+                    f"task type '{self.config.task_type.value}' for "
+                    f"'{task.dataset}'"
+                )
+            if self.config.is_multilabel:
+                raise ValueError(
+                    f"balanced_trial does not support multilabel tasks "
+                    f"('{task.dataset}'): a balanced draw is not well defined "
+                    f"when a sample carries several classes"
+                )
 
         if self.eval_mode == EvalMode.LINEAR_PROBE:
             if self.probe_lr is None:
@@ -432,6 +562,7 @@ class DownstreamEvaluator:
                     use_dice_loss=self.use_dice_loss,
                     primary_metric=self.primary_metric,
                     primary_metric_class=self.primary_metric_class,
+                    probe_input_norm=self.probe_input_norm,
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
                 else None
@@ -464,7 +595,7 @@ class DownstreamEvaluator:
         )
 
         generator = None
-        worker_init_fn = None
+        worker_init_fn: Any = _worker_ignore_sigterm
         if seed is not None:
             split_offsets = {"train": 0, "valid": 1, "test": 2}
             split_seed = seed + split_offsets.get(split, 0)
@@ -484,6 +615,16 @@ class DownstreamEvaluator:
                 extra_kwargs["label_at_center_pixel"] = True
             if self.tile_samples:
                 extra_kwargs["tile_samples"] = True
+            if self.scl_cloud_mask:
+                extra_kwargs["scl_cloud_mask"] = True
+                if self.scl_cloud_classes is not None:
+                    extra_kwargs["scl_cloud_classes"] = self.scl_cloud_classes
+            if self.landsat_cloud_cover_max is not None:
+                extra_kwargs["landsat_cloud_cover_max"] = self.landsat_cloud_cover_max
+            if self.l8_pixel_cloud_mask:
+                extra_kwargs["l8_pixel_cloud_mask"] = True
+                if self.l8_pixel_cloud_bits is not None:
+                    extra_kwargs["l8_pixel_cloud_bits"] = self.l8_pixel_cloud_bits
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities
@@ -526,13 +667,45 @@ class DownstreamEvaluator:
             shuffle=False if is_iterable else shuffle,
         )
 
+    def _resolve_normalizer(self) -> tuple[EmbeddingNormalizer | None, bool]:
+        """Resolve the configured normalization to (normalizer, fit_on_train).
+
+        ``fit_on_train`` is True when the statistics still have to be taken from
+        this task's train split, which forces the train embeddings to be held in
+        float until the fit is done (see ``_val_embed_probe``). Stateless modes
+        (L2) and file-backed constants are ready immediately.
+        """
+        mode = self.embedding_normalization
+        if mode == EmbeddingNormalization.NONE:
+            return None, False
+        if mode in FITTED_NORMALIZATIONS:
+            if self.embedding_norm_stats_path is not None:
+                logger.info(
+                    f"Loading {mode} embedding norm stats from "
+                    f"{self.embedding_norm_stats_path}"
+                )
+                return (
+                    EmbeddingNormalizer.load(self.embedding_norm_stats_path, mode),
+                    False,
+                )
+            return None, True
+        return EmbeddingNormalizer(mode=mode), False
+
     def _get_embeddings(
         self,
         data_loader: DataLoader,
         is_train: bool,
         sample_transform: Any | None = None,
+        normalizer: EmbeddingNormalizer | None = None,
+        quantize: bool | None = None,
+        diagnostics_out: dict[str, float] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Get the embeddings for the given data loader."""
+        """Get the embeddings for the given data loader.
+
+        ``quantize=None`` defers to the task's ``quantize_embeddings``; pass
+        False to keep a split in float (needed while fitting a normalization on
+        it, since normalization has to precede the int8 round-trip).
+        """
         print(
             f"Getting embeddings for {self.dataset} with norm method {self.norm_method}"
         )
@@ -560,6 +733,8 @@ class DownstreamEvaluator:
             "concat_features": (self.probe_type == "attn_pool"),
             "use_pooled_tokens": self.use_pooled_tokens,
             "eval_on_encoder_tokens": self.eval_on_encoder_tokens,
+            "eval_on_projected_registers": self.eval_on_projected_registers,
+            "eval_projection_dim": self.eval_projection_dim,
             "use_center_token": self.use_center_token,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
@@ -567,10 +742,13 @@ class DownstreamEvaluator:
             data_loader=data_loader,
             model=model,
             is_train=is_train,
-            quantize=self.quantize_embeddings,
+            quantize=(self.quantize_embeddings if quantize is None else quantize),
             quantize_bits=self.quantize_bits,
             quantile_config=self.quantile_config,
             sample_transform=sample_transform,
+            quantization_scheme=self.quantization_scheme,
+            normalizer=normalizer,
+            diagnostics_out=diagnostics_out,
         )
 
     def _knn_accuracy(
@@ -689,10 +867,23 @@ class DownstreamEvaluator:
         logger.info(f"Getting val loader for {self.dataset}...")
         val_loader = self._get_data_loader("valid", self.embedding_batch_size)
 
+        normalizer, fit_on_train = self._resolve_normalizer()
+        diagnostics: dict[str, float] | None = (
+            {} if self.embedding_pipeline_diagnostics else None
+        )
+
         start_time = time.time()
         logger.info(f"Getting train embeddings for {self.dataset}...")
+        # A train-fitted normalization has to see the raw floats first, so its
+        # normalize + quantize step is deferred until just below; every other
+        # mode transforms at extraction, keeping today's memory profile (the
+        # split is held as int8 rather than float32).
         train_embeddings, train_labels = self._get_embeddings(
-            train_loader, is_train=True
+            train_loader,
+            is_train=True,
+            normalizer=None if fit_on_train else normalizer,
+            quantize=False if fit_on_train else None,
+            diagnostics_out=None if fit_on_train else diagnostics,
         )
         logger.info(f"Train embeddings shape: {train_embeddings.shape}")
         logger.info(
@@ -715,8 +906,30 @@ class DownstreamEvaluator:
             train_embeddings = train_embeddings[indices]
             train_labels = train_labels[indices]
 
+        if fit_on_train:
+            # Fit after any subsample, so the constants describe exactly the
+            # rows the probe trains on.
+            normalizer = EmbeddingNormalizer.fit(
+                self.embedding_normalization, train_embeddings
+            )
+            logger.info(
+                f"Fitted {self.embedding_normalization} embedding normalization on "
+                f"{self.dataset}'s train split"
+            )
+            train_embeddings = normalize_and_quantize(
+                train_embeddings,
+                normalizer=normalizer,
+                quantize=self.quantize_embeddings,
+                quantize_bits=self.quantize_bits,
+                quantile_config=self.quantile_config,
+                quantization_scheme=self.quantization_scheme,
+                diagnostics_out=diagnostics,
+            )
+
         logger.info(f"Getting val embeddings for {self.dataset}...")
-        val_embeddings, val_labels = self._get_embeddings(val_loader, is_train=False)
+        val_embeddings, val_labels = self._get_embeddings(
+            val_loader, is_train=False, normalizer=normalizer
+        )
         logger.info(f"Val embeddings shape: {val_embeddings.shape}")
         logger.info(f"Val label counts: {torch.unique(val_labels, return_counts=True)}")
         if self.run_on_test:
@@ -724,7 +937,7 @@ class DownstreamEvaluator:
             test_loader = self._get_data_loader("test", self.embedding_batch_size)
             logger.info(f"Getting test embeddings for {self.dataset}...")
             test_embeddings, test_labels = self._get_embeddings(
-                test_loader, is_train=False
+                test_loader, is_train=False, normalizer=normalizer
             )
             logger.info(f"Test embeddings shape: {test_embeddings.shape}")
             logger.info(
@@ -749,7 +962,10 @@ class DownstreamEvaluator:
         if test_labels is not None:
             logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
 
-        if self.quantize_embeddings:
+        if (
+            self.quantize_embeddings
+            and self.quantization_scheme != QuantizationScheme.TESSERA_PER_VECTOR
+        ):
             logger.info(f"Dequantizing embeddings for {self.dataset}")
             if self.quantize_bits is not None and self.quantile_config is not None:
                 # Percentile-based dequantization
@@ -802,7 +1018,49 @@ class DownstreamEvaluator:
         }
         result = self.eval_function(**kwargs)  # type: ignore
 
+        if diagnostics:
+            # Measured on the train split's pipeline: raw_* is what the model
+            # emitted, norm_* what normalization made of it, roundtrip_* what
+            # the int8 round-trip cost. Logged next to the score so a
+            # geometry/quantization problem is visible on the same run.
+            logger.info(
+                f"Embedding pipeline diagnostics for {self.dataset}: {diagnostics}"
+            )
+            result.embedding_diagnostics = diagnostics
+
+        # After the assignment above, which would otherwise drop these.
         result.embedding_diagnostics.update(self._geometry_diagnostics(val_embeddings))
+
+        if self.balanced_trial is not None:
+            # Run here rather than inside the probe so the trials see exactly the
+            # embeddings the probe saw -- past the int8 round-trip and any PCA --
+            # and so no second forward pass is needed.
+            trial_start = time.time()
+            trial_result = run_balanced_trials(
+                config=self.config,
+                embeddings_by_split={
+                    "train": train_embeddings,
+                    "val": val_embeddings,
+                    "test": test_embeddings,
+                },
+                labels_by_split={
+                    "train": train_labels,
+                    "val": val_labels,
+                    "test": test_labels,
+                },
+                trial_config=self.balanced_trial,
+                device=self.device or self.trainer.device,
+            )
+            result.extra_results.update(
+                {
+                    trial_task_name(self.evaluation_name, predictor): predictor_result
+                    for predictor, predictor_result in trial_result.results.items()
+                }
+            )
+            logger.info(
+                f"Balanced trials for {self.dataset} took "
+                f"{time.time() - trial_start:.2f}s"
+            )
 
         # Free memory aggressively between evals
         del train_embeddings, train_labels, test_embeddings, test_labels
@@ -959,13 +1217,35 @@ class DownstreamEvaluator:
         """Compute embedding diagnostics only (no downstream task)."""
         logger.info(f"Computing embedding diagnostics for {self.dataset}")
         data_loader = self._get_data_loader("train", self.embedding_batch_size)
-        embeddings, _ = self._get_embeddings(data_loader, is_train=False)
+        normalizer, fit_on_train = self._resolve_normalizer()
+        pipeline: dict[str, float] = {}
+        embeddings, _ = self._get_embeddings(
+            data_loader,
+            is_train=False,
+            normalizer=None if fit_on_train else normalizer,
+            quantize=False if fit_on_train else None,
+            diagnostics_out=None if fit_on_train else pipeline,
+        )
+        if fit_on_train:
+            normalizer = EmbeddingNormalizer.fit(
+                self.embedding_normalization, embeddings
+            )
+            embeddings = normalize_and_quantize(
+                embeddings,
+                normalizer=normalizer,
+                quantize=self.quantize_embeddings,
+                quantize_bits=self.quantize_bits,
+                quantile_config=self.quantile_config,
+                quantization_scheme=self.quantization_scheme,
+                diagnostics_out=pipeline,
+            )
         logger.info(f"Embeddings shape for {self.dataset}: {embeddings.shape}")
 
         if embeddings.ndim >= 3:
             diagnostics = compute_spatial_embedding_diagnostics(embeddings)
         else:
             diagnostics = compute_embedding_diagnostics(embeddings)
+        diagnostics.update(pipeline)
         logger.info(f"Embedding diagnostics for {self.dataset}: {diagnostics}")
 
         result = EvalTaskResult(val_result=None, test_result=None)
@@ -1035,6 +1315,24 @@ def eval_result_log_dict(
         if metric_name == result.primary_metric_key:
             continue
         log_dict[f"{other_prefix}/{name}/{metric_name}"] = metric_value
+    return log_dict
+
+
+def extra_results_log_dict(extra_results: dict[str, EvalResult]) -> dict[str, float]:
+    """Build the wandb log dict for results produced by a different protocol.
+
+    Each lands under its own synthetic task name via the ordinary key layout --
+    ``eval/{trial_task}`` for the primary metric, ``eval_other/{trial_task}/*``
+    for the rest -- so the CSV export and the dashboards treat a balanced trial
+    as just another task, with no special case and no way to read it as the host
+    task's own number.
+
+    Deliberately NOT logged under ``eval/test/``: a balanced trial's eval set is
+    its own remainder, not our test split.
+    """
+    log_dict: dict[str, float] = {}
+    for name, result in extra_results.items():
+        log_dict.update(eval_result_log_dict("eval", name, result))
     return log_dict
 
 
@@ -1147,6 +1445,11 @@ class DownstreamEvaluatorCallback(Callback):
             logger.info(
                 f"Downstream evaluator {evaluator.evaluation_name} score: {val_result.primary} (metrics: {val_result.metrics})"
             )
+        for name, extra_result in result.extra_results.items():
+            logger.info(
+                f"Downstream evaluator {name} score: {extra_result.primary} "
+                f"(metrics: {extra_result.metrics})"
+            )
         if self.run_on_test and test_result is not None:
             logger.info(
                 f"Downstream evaluator {evaluator.evaluation_name} test score: {test_result.primary} (metrics: {test_result.metrics})"
@@ -1171,6 +1474,8 @@ class DownstreamEvaluatorCallback(Callback):
                 _log_eval_result_to_wandb(
                     wandb_callback, "eval", evaluator.evaluation_name, val_result
                 )
+            if result.extra_results:
+                wandb_callback.wandb.log(extra_results_log_dict(result.extra_results))
             wandb_callback.wandb.log(
                 {"eval_time/" + evaluator.evaluation_name: eval_time}
             )

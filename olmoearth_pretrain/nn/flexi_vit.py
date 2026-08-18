@@ -1677,6 +1677,11 @@ class SpatialRegisterBottleneck(nn.Module):
         temporal_anchor: str | None = None,
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
+        unit_norm: bool = False,
+        unit_norm_scale: float | None = None,
+        shared_read_kv: bool = False,
+        output_dim: int | None = None,
+        latent_every_n: int = 1,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1796,6 +1801,45 @@ class SpatialRegisterBottleneck(nn.Module):
                 ``temporal_anchor``; matches the encoder's setting).
             rope_temporal_base: Optional separate frequency base for the temporal axis
                 of the read blocks' axial 3D RoPE. ``None`` reuses ``rope_base``.
+            unit_norm: If True, L2-normalize the output so every register cell is a
+                DIRECTION on a sphere (AlphaEarth's convention, where an embedding is
+                the mean direction of a von Mises-Fisher distribution). The constraint
+                binds on everything downstream -- the decoder reads the registers
+                through a bare Linear and the supervision heads read the grid directly,
+                so neither re-normalizes today -- and on the frozen evals, which probe
+                the same tensor. Magnitude stops being an available channel; pair with
+                a uniformity loss (``compute_register_uniformity_loss``) if the goal is
+                embeddings spread over the sphere rather than merely on it.
+            unit_norm_scale: Radius of that sphere. ``None`` uses
+                ``sqrt(register_dim)``, LayerNorm's own output norm, so the constraint
+                is scale-neutral at init instead of silently rescaling the decoder's
+                context input.
+            latent_every_n: Run a latent self-attention block after every ``n``-th read
+                instead of after every read (1 = the 1:1 default). A final block always
+                fires after the last read, so the grid that ships has been spatially
+                mixed. LSA blocks are half the bottleneck's sequential depth, and depth
+                -- not FLOPs -- is what drives wall-clock here, so 1:2 removes ~20% of
+                the blocks. Zero LSA is NOT the same trade: the lsa/nolsa ablation on the
+                noic arm is worth +8.4 pts over 76 tasks, so the first block earns its
+                place; this bets only that the eighth does not. Requires ``interleave``
+                and ``latent_self_attn``.
+            output_dim: If set, apply a single ``Linear(register_dim, output_dim)`` to
+                the bottleneck's output, so the grid the decoder, supervision heads and
+                evals consume is ``output_dim`` wide while the read/latent stack runs at
+                ``register_dim``. Lets the internal width be chosen for the hardware
+                (square, tensor-core-friendly GEMMs at 768) independently of the width
+                the product must ship at (128). Unlike ``register_projection_dims``,
+                this projection is IN the gradient path -- it is the model's output, not
+                a detached distillation student.
+            shared_read_kv: If True, project the patch tokens into keys/values ONCE and
+                let every read block attend over that single copy. Read blocks are cheap
+                in FLOPs but expensive in memory -- each otherwise stores its own
+                input-norm output, k, rotated k and v over the full token array for
+                backward -- so this is what makes a deep read stack trainable, and it
+                also removes ~73% of a read block's FLOPs. The reads then SHARE key/value
+                weights and differ only in their queries, which is a model change rather
+                than a pure optimization. Requires a single K/V source: incompatible with
+                ``read_layers`` and with ``per_depth_read_proj``.
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1825,6 +1869,42 @@ class SpatialRegisterBottleneck(nn.Module):
                 )
         self.fused_read = fused_read
         self.attn_dim = attn_dim
+        # Shared-K/V: project the patch tokens into keys/values ONCE and let every
+        # read block attend over that one copy, instead of each block re-projecting
+        # the full token array. The saving is mostly MEMORY: a read block otherwise
+        # stores its own input-norm output, k, rotated k and v -- four token-array-
+        # sized tensors -- for backward, which is what caps the usable read depth
+        # (measured: 16 reads fit at micro 64, 24 do not). It also removes ~73% of a
+        # read block's FLOPs, since the K/V projection dominates them.
+        #
+        # THE TRADE: all read blocks now SHARE key/value weights, so successive reads
+        # can no longer look at the source through different lenses -- only their
+        # queries differ (which, under ``interleave``, is where the depth diversity
+        # lives anyway: read N queries registers refined N-1 times). This is a model
+        # change, not a pure optimization; arms with and without it are not directly
+        # comparable.
+        if shared_read_kv:
+            if multi_depth_sources := (read_layers is not None):
+                raise ValueError(
+                    "shared_read_kv reads one source; it cannot be combined with "
+                    f"register_read_layers (multi_depth={multi_depth_sources})"
+                )
+            if per_depth_read_proj:
+                raise ValueError(
+                    "shared_read_kv replaces the per-depth read projections: there "
+                    "is one shared K/V source, so per-block norms cannot apply"
+                )
+        self.shared_read_kv = shared_read_kv
+        # Single linear map from the internal register width to the shipped width.
+        # Applied after the output norm and before any unit-norm, so the norm still
+        # standardizes the stack's own residual stream and the sphere constraint (when
+        # enabled) applies to what actually leaves the module.
+        self.output_dim = output_dim
+        self.output_proj: nn.Module = (
+            nn.Linear(register_dim, output_dim)
+            if output_dim is not None
+            else nn.Identity()
+        )
         if temporal_anchor is not None:
             if temporal_anchor not in ("year_start", "first_timestep"):
                 raise ValueError(
@@ -1886,6 +1966,31 @@ class SpatialRegisterBottleneck(nn.Module):
         self.latent_self_attn = latent_self_attn
         if not latent_self_attn:
             num_latent_blocks = 0
+        # Which read is followed by which latent block. ``None`` means "no LSA after this
+        # read". Only meaningful for the interleaved schedule; the legacy schedule runs
+        # all reads and then all latents, where a ratio has nothing to interleave with.
+        if latent_every_n < 1:
+            raise ValueError(f"latent_every_n must be >= 1, got {latent_every_n}")
+        self.latent_every_n = latent_every_n
+        self.latent_schedule: list[int | None] | None = None
+        if self.interleave and latent_self_attn:
+            schedule: list[int | None] = []
+            built = 0
+            for i in range(num_read_blocks):
+                # Fire every n-th read, and always after the last one so the shipped grid
+                # is mixed rather than left as whatever the final read wrote.
+                if (i + 1) % latent_every_n == 0 or i == num_read_blocks - 1:
+                    schedule.append(built)
+                    built += 1
+                else:
+                    schedule.append(None)
+            self.latent_schedule = schedule
+            num_latent_blocks = built
+        elif latent_every_n > 1:
+            raise ValueError(
+                "latent_every_n > 1 requires the interleaved schedule with latent "
+                "self-attention enabled (interleave=True, latent_self_attn=True)"
+            )
         # Per-depth read front-end: give every read block its own input norm + K/V
         # down-projection instead of a single shared pair. Only meaningful with >1 read
         # block. Multi-depth: each block draws from a different encoder depth (distinct
@@ -1979,8 +2084,12 @@ class SpatialRegisterBottleneck(nn.Module):
                     kv_in_dim=(
                         encoder_embedding_size if attn_dim is not None else None
                     ),
+                    # Shared-K/V: only block 0 owns key/value projections; the rest
+                    # consume its output via ``kv_cached`` and never build their own
+                    # (so they cannot contribute unused parameters to DDP's allreduce).
+                    kv_external=(shared_read_kv and i > 0),
                 )
-                for _ in range(num_read_blocks)
+                for i in range(num_read_blocks)
             ]
         )
         self.latent_blocks = nn.ModuleList(
@@ -2011,6 +2120,24 @@ class SpatialRegisterBottleneck(nn.Module):
         if learned_read_weighting:
             self.read_gates = nn.Parameter(torch.ones(num_read_blocks))
         self.norm = nn.LayerNorm(register_dim)
+        # Optional unit-sphere output (AlphaEarth's convention: every embedding is a
+        # direction). Placed here rather than at each consumer because forward()
+        # returns ONE tensor that the decoder, the supervision heads and the frozen
+        # evals all read -- so normalizing here constrains the served vector itself
+        # and no consumer can be missed.
+        self.unit_norm = unit_norm
+        # LayerNorm's output has norm exactly sqrt(register_dim) before its learned
+        # affine, so that is the scale at which this is a no-op at init; it also puts
+        # per-coordinate RMS at ~1, which keeps the register half of the
+        # time-conditioned supervision head's [cell ; phi(t)] concat commensurate with
+        # the bounded sinusoidal half. Override to hold a different operating point.
+        # Follows the SHIPPED width: with an output projection the sphere constraint
+        # applies to the projected grid, so its scale-neutral default is that width.
+        self.unit_norm_scale = (
+            unit_norm_scale
+            if unit_norm_scale is not None
+            else math.sqrt(output_dim if output_dim is not None else register_dim)
+        )
 
     def build_register_positions(
         self, patch_positions: Tensor, register_grid: tuple[int, int]
@@ -2240,10 +2367,21 @@ class SpatialRegisterBottleneck(nn.Module):
                 dim=-1,
             )
 
+        # Shared-K/V: project the one source into keys/values HERE, once, rather than
+        # inside every read block. Block 0 owns the weights (the rest were built
+        # ``kv_external``), so the whole stack reads through a single projection and a
+        # single stored copy of the context.
+        shared_kv: tuple[Tensor, Tensor] | None = None
+        if self.shared_read_kv:
+            shared_kv = self.read_blocks[0].attn.compute_kv(
+                kv_per_read[0], patch_positions
+            )
+
         def read(registers: Tensor, i: int, blk: nn.Module, kv: Tensor) -> Tensor:
             out = blk(
                 x=registers,
-                y=kv,
+                y=None if shared_kv is not None else kv,
+                kv_cached=shared_kv,
                 attn_mask=read_attn_mask,
                 rope_positions=read_register_positions,
                 rope_positions_y=patch_positions,
@@ -2261,10 +2399,16 @@ class SpatialRegisterBottleneck(nn.Module):
             # re-queries the same (final-layer) source.
             for i, (read_blk, kv) in enumerate(zip(self.read_blocks, kv_per_read)):
                 registers = read(registers, i, read_blk, kv)
-                # latent_blocks is empty when latent self-attention is disabled; otherwise
-                # it has one block per read (built above), so index by the read position.
-                if self.latent_blocks:
-                    registers = self.latent_blocks[i](
+                # latent_blocks is empty when latent self-attention is disabled;
+                # otherwise latent_schedule says which (if any) block follows this read --
+                # every read at the 1:1 default, every n-th plus the last when thinned.
+                latent_idx = (
+                    self.latent_schedule[i]
+                    if self.latent_schedule is not None
+                    else None
+                )
+                if self.latent_blocks and latent_idx is not None:
+                    registers = self.latent_blocks[latent_idx](
                         x=registers,
                         rope_positions=register_positions,
                         window_spec=latent_window_spec,
@@ -2279,7 +2423,10 @@ class SpatialRegisterBottleneck(nn.Module):
                     rope_positions=register_positions,
                     window_spec=latent_window_spec,
                 )
-        return self.norm(registers), register_positions
+        out = self.output_proj(self.norm(registers))
+        if self.unit_norm:
+            out = nn.functional.normalize(out, dim=-1) * self.unit_norm_scale
+        return out, register_positions
 
 
 class Encoder(FlexiVitBase):
@@ -2340,7 +2487,14 @@ class Encoder(FlexiVitBase):
         register_latent_self_attn: bool = True,
         register_attn_dim: int | None = None,
         register_temporal_anchor: str | None = None,
+        register_shared_read_kv: bool = False,
+        register_output_dim: int | None = None,
+        register_latent_every_n: int = 1,
         register_contrastive_source: str = "registers",
+        register_projection_dims: list[int] | None = None,
+        register_projection_type: str = "linear",
+        register_unit_norm: bool = False,
+        register_unit_norm_scale: float | None = None,
     ):
         """Initialize the encoder.
 
@@ -2467,6 +2621,16 @@ class Encoder(FlexiVitBase):
                 self-attention blocks entirely (cross-attention reads only, no
                 register-to-register mixing); the read count is unchanged. Defaults to True
                 (keep the latent transformer, backwards compatible).
+            register_latent_every_n: Run a latent self-attention block after every
+                n-th read instead of after every read (see
+                ``SpatialRegisterBottleneck.latent_every_n``).
+            register_output_dim: If set, one ``Linear(register_dim, output_dim)`` on the
+                bottleneck's output, so the read/latent stack runs at ``register_dim``
+                while the decoder, supervision heads and evals consume this width. In the
+                gradient path, unlike the detached ``register_projection_dims`` student.
+            register_shared_read_kv: If set, the register bottleneck projects the patch
+                tokens into keys/values once and shares them across all read blocks (see
+                ``SpatialRegisterBottleneck.shared_read_kv``).
             register_temporal_anchor: If set, make the register READ temporally aware
                 while keeping the registers a time-free 2D grid: the bottleneck's read
                 blocks run axial 3D RoPE with each register anchored at a per-sample
@@ -2487,6 +2651,40 @@ class Encoder(FlexiVitBase):
                 ``"encoder_tokens"`` (project from the encoder's patch-token output at the
                 final embedding size, as before the bottleneck existed). Ignored when the
                 bottleneck is off (always reads encoder tokens).
+            register_projection_dims: If set, add a DETACHED low-dim "student" readout
+                of the register grid, exported alongside the registers as
+                ``projected_registers`` at width ``max(register_projection_dims)``.
+                The student's input is detached, so its gradients (distillation /
+                supervision, computed by the train module) never reach the encoder or
+                the primary bottleneck -- the encoder trains exactly as it would
+                without the student, and the student is trained online against the
+                improving teacher (post-hoc distillation amortized into the
+                pretraining run). Additional (smaller) entries are trained as
+                MATRYOSHKA PREFIXES of the student output (Tessera-v2 style): each
+                dim ``d`` gets its own back-projection (cosine distillation of
+                ``student[..., :d]`` onto the teacher), its own Gram term, and -- when
+                projection supervision is enabled -- its own supervision head, so the
+                first ``d`` dims form a self-sufficient embedding and deployment can
+                truncate for free. Requires ``use_register_bottleneck``. Defaults to
+                None (no student).
+            register_projection_type: Architecture of the student readout.
+                ``"linear"`` projects each register cell independently
+                (``Linear(register_dim, max(register_projection_dims))`` on the
+                detached registers) -- tests whether the teacher's information is
+                linearly readable per cell at the low width. ``"perceiver"``
+                instantiates a second :class:`SpatialRegisterBottleneck` at the
+                student width (wideread: ``attn_dim=embedding_size``, encoder-shaped
+                heads, mirroring the primary's schedule) that re-reads the DETACHED
+                final-layer patch tokens -- the deployed narrow-bottleneck
+                architecture, trained by distillation instead of the pretext loss.
+                Defaults to ``"linear"``.
+            register_unit_norm: Put the register grid on a sphere, so the served
+                embedding is a direction (see
+                :class:`SpatialRegisterBottleneck`). Applied to the primary
+                bottleneck AND to the perceiver student, since either can be the
+                deployed embedding. Defaults to False.
+            register_unit_norm_scale: Radius of that sphere; ``None`` uses
+                ``sqrt(register_dim)`` so the change is scale-neutral at init.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2564,6 +2762,18 @@ class Encoder(FlexiVitBase):
 
         self.use_register_bottleneck = use_register_bottleneck
         self.register_bottleneck: SpatialRegisterBottleneck | None = None
+        # Detached low-dim student readout of the register grid (see docstring).
+        # Dims are stored descending; the student runs at dims[0] and the smaller
+        # entries are Matryoshka prefixes of its output.
+        self.register_projection_dims = (
+            sorted(set(register_projection_dims), reverse=True)
+            if register_projection_dims
+            else None
+        )
+        self.register_projection_type = register_projection_type
+        self.register_projection: nn.Linear | None = None
+        self.register_projection_student: SpatialRegisterBottleneck | None = None
+        self.register_back_projections: nn.ModuleDict | None = None
         self.register_temporal_anchor = register_temporal_anchor
         if register_temporal_anchor is not None:
             if not use_register_bottleneck:
@@ -2627,8 +2837,85 @@ class Encoder(FlexiVitBase):
                 latent_self_attn=register_latent_self_attn,
                 attn_dim=register_attn_dim,
                 temporal_anchor=register_temporal_anchor,
+                shared_read_kv=register_shared_read_kv,
+                output_dim=register_output_dim,
+                latent_every_n=register_latent_every_n,
                 temporal_rope_dim_frac=temporal_rope_dim_frac,
                 rope_temporal_base=rope_temporal_base,
+                unit_norm=register_unit_norm,
+                unit_norm_scale=register_unit_norm_scale,
+            )
+            # Detached low-dim "student" readout (see the __init__ docstring). Both
+            # variants consume DETACHED inputs, so the student is invisible to the
+            # encoder's training; the per-prefix back-projections fund the cosine
+            # distillation terms (student prefix -> teacher width) in the train module.
+            if self.register_projection_dims is not None:
+                if register_projection_type not in ("linear", "perceiver"):
+                    raise ValueError(
+                        "register_projection_type must be 'linear' or 'perceiver', "
+                        f"got {register_projection_type!r}"
+                    )
+                if any(d <= 0 for d in self.register_projection_dims):
+                    raise ValueError(
+                        "register_projection_dims must be positive, got "
+                        f"{register_projection_dims}"
+                    )
+                student_dim = self.register_projection_dims[0]
+                if register_projection_type == "linear":
+                    # Per-cell linear map on the detached register grid.
+                    self.register_projection = nn.Linear(
+                        resolved_register_dim, student_dim
+                    )
+                else:
+                    # A second bottleneck at the projection width, re-reading the
+                    # DETACHED final-layer patch tokens. Always wideread
+                    # (attn_dim=embedding_size, encoder-shaped heads): narrow widths
+                    # cannot fund both head count and head dim (see register_attn_dim).
+                    # Mirrors the primary's grid mode and schedule; always reads the
+                    # final layer (no multi-depth), whatever the primary does.
+                    self.register_projection_student = SpatialRegisterBottleneck(
+                        encoder_embedding_size=embedding_size,
+                        register_dim=student_dim,
+                        register_grid=(
+                            None
+                            if register_grid_size is None or register_grid_size <= 0
+                            else (register_grid_size, register_grid_size)
+                        ),
+                        num_heads=num_heads,
+                        mlp_ratio=mlp_ratio,
+                        read_depth=register_read_depth,
+                        latent_transformer_depth=register_latent_depth,
+                        use_2d_rope=PositionEncoding.is_rope(self.position_encoding),
+                        rope_base=rope_base,
+                        qk_norm=qk_norm,
+                        interleave=register_interleave,
+                        read_layers=None,
+                        per_depth_read_proj=register_per_depth_read_proj,
+                        learned_read_weighting=False,
+                        fused_read=None,
+                        latent_self_attn=register_latent_self_attn,
+                        attn_dim=embedding_size,
+                        temporal_anchor=register_temporal_anchor,
+                        shared_read_kv=register_shared_read_kv,
+                        temporal_rope_dim_frac=temporal_rope_dim_frac,
+                        rope_temporal_base=rope_temporal_base,
+                        # The student IS the served embedding when it is deployed, so
+                        # it takes the same constraint as the primary.
+                        unit_norm=register_unit_norm,
+                        unit_norm_scale=register_unit_norm_scale,
+                    )
+                # One back-projection per Matryoshka prefix: dim d reconstructs the
+                # teacher from student[..., :d], forcing the first d dims to be
+                # self-sufficient (Tessera-v2 per-prefix heads).
+                self.register_back_projections = nn.ModuleDict(
+                    {
+                        str(d): nn.Linear(d, resolved_register_dim)
+                        for d in self.register_projection_dims
+                    }
+                )
+        elif register_projection_dims is not None:
+            raise ValueError(
+                "register_projection_dims requires use_register_bottleneck=True"
             )
 
         if register_contrastive_source not in ("registers", "encoder_tokens"):
@@ -2642,10 +2929,13 @@ class Encoder(FlexiVitBase):
             self.register_bottleneck is not None
             and register_contrastive_source == "registers"
         )
-        # When projecting from the register tokens the head operates at the bottleneck's
-        # register_dim; otherwise it reads the encoder's final-embedding-size patch tokens.
+        # When projecting from the register tokens the head operates at the width the
+        # bottleneck SHIPS -- register_output_dim when it projects its output down,
+        # otherwise its internal register_dim; the head reads the returned grid, not the
+        # stack's residual stream. Otherwise it reads the encoder's final-embedding-size
+        # patch tokens.
         project_aggregate_embedding_size = (
-            self.register_dim
+            (register_output_dim or self.register_dim)
             if self.contrastive_from_registers
             else final_embedding_size
         )
@@ -3248,6 +3538,27 @@ class Encoder(FlexiVitBase):
                 "registers": registers,
                 "register_positions": register_positions,
             }
+            # Detached student readout: reuses this pass's encodings (no second
+            # encoder forward) -- the linear variant re-projects the registers just
+            # computed; the perceiver variant re-reads the same final-layer tokens.
+            # Both consume DETACHED tensors, so no student gradient reaches the
+            # encoder or the primary bottleneck.
+            if self.register_projection is not None:
+                register_output["projected_registers"] = self.register_projection(
+                    registers.detach()
+                )
+            elif self.register_projection_student is not None:
+                projected, _ = self.register_projection_student(
+                    patch_tokens=tokens.detach(),
+                    patch_positions=register_kv_positions,
+                    visible_mask=bool_mask,
+                    spatial_grid=spatial_grid,
+                    window_half_extent=window_half_extent,
+                    patch_is_global=(
+                        ~patch_spatial_flag if patch_spatial_flag is not None else None
+                    ),
+                )
+                register_output["projected_registers"] = projected
 
         tokens_per_modality_dict = self.split_and_expand_per_modality(
             tokens, modalities_to_dims_dict
@@ -3313,6 +3624,10 @@ class Encoder(FlexiVitBase):
         if register_output is not None:
             output_dict["registers"] = register_output["registers"]
             output_dict["register_positions"] = register_output["register_positions"]
+            if "projected_registers" in register_output:
+                output_dict["projected_registers"] = register_output[
+                    "projected_registers"
+                ]
 
         if not fast_pass:
             if self.contrastive_from_registers:
@@ -3991,6 +4306,48 @@ class EncoderConfig(Config):
     # position_encoding. None (default) keeps the purely spatial read (backwards
     # compatible).
     register_temporal_anchor: str | None = None
+    # Share ONE key/value projection across all register read blocks (see
+    # SpatialRegisterBottleneck.shared_read_kv). Caps read-side activation memory at a
+    # single stored copy of the context instead of one per read, which is what makes
+    # deep read stacks trainable; in exchange the reads lose independent K/V lenses.
+    register_shared_read_kv: bool = False
+    # Width the register grid is projected to on output. The read/latent stack runs
+    # at register_dim (chosen for GEMM efficiency); the decoder, supervision heads and
+    # evals all consume this width. In the gradient path, unlike the detached
+    # register_projection_dims student. None keeps the grid at register_dim.
+    register_output_dim: int | None = None
+    # Latent self-attention blocks per read: 1 = the 1:1 default, 2 = one LSA per
+    # two reads (see SpatialRegisterBottleneck.latent_every_n). LSA blocks are half
+    # the bottleneck's sequential depth, which is what drives wall-clock.
+    register_latent_every_n: int = 1
+    # If set, add a DETACHED low-dim "student" readout of the register grid, exported
+    # as ``projected_registers`` (at width max(dims)) alongside the registers. The
+    # student's inputs are detached, so its training signal (distillation to the
+    # registers + optional supervision, wired in the train module) never reaches the
+    # encoder: the encoder trains exactly as it would without the student. Smaller
+    # entries are trained as MATRYOSHKA PREFIXES of the student output (each dim gets
+    # its own back-projection / Gram term / supervision head), so e.g. [128, 64]
+    # yields one 128d artifact whose first 64 dims are a self-sufficient 64d
+    # embedding. Requires use_register_bottleneck. None (default) -> no student.
+    register_projection_dims: list[int] | None = None
+    # Student architecture: "linear" (per-cell Linear(register_dim, max(dims)) on
+    # the detached registers) or "perceiver" (a second wideread bottleneck at the
+    # student width re-reading the detached final-layer tokens -- the deployed
+    # narrow-bottleneck architecture trained by distillation instead of the pretext
+    # loss). Ignored without register_projection_dims.
+    register_projection_type: str = "linear"
+    # Put the register grid on a sphere: L2-normalize the bottleneck's output so the
+    # served embedding is a DIRECTION (AlphaEarth's convention). Binds on every
+    # consumer at once -- decoder context, supervision heads, frozen evals -- because
+    # they all read the tensor the bottleneck returns. Magnitude stops being an
+    # available channel. On its own this constrains where embeddings live, NOT how
+    # they are distributed there; pair it with LatentMIMTrainModuleConfig's
+    # register_uniformity_weight for the spread.
+    register_unit_norm: bool = False
+    # Radius of that sphere. None -> sqrt(register_dim), which is LayerNorm's own
+    # output norm, so turning this on does not also rescale the decoder's context
+    # input (which would confound the constraint with a global rescale).
+    register_unit_norm_scale: float | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -4147,6 +4504,19 @@ class EncoderConfig(Config):
                         "register_per_depth_read_proj (the fusion replaces the per-depth "
                         "read projections)"
                     )
+            if self.register_projection_dims is not None:
+                if len(self.register_projection_dims) == 0 or any(
+                    d <= 0 for d in self.register_projection_dims
+                ):
+                    raise ValueError(
+                        "register_projection_dims must be a non-empty list of "
+                        f"positive ints, got {self.register_projection_dims}"
+                    )
+                if self.register_projection_type not in ("linear", "perceiver"):
+                    raise ValueError(
+                        "register_projection_type must be 'linear' or 'perceiver', "
+                        f"got {self.register_projection_type!r}"
+                    )
         elif self.register_read_layers is not None:
             raise ValueError(
                 "register_read_layers requires use_register_bottleneck=True"
@@ -4154,6 +4524,10 @@ class EncoderConfig(Config):
         elif self.register_fused_read is not None:
             raise ValueError(
                 "register_fused_read requires use_register_bottleneck=True"
+            )
+        elif self.register_projection_dims is not None:
+            raise ValueError(
+                "register_projection_dims requires use_register_bottleneck=True"
             )
         if self.register_contrastive_source not in ("registers", "encoder_tokens"):
             raise ValueError(

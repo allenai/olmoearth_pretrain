@@ -99,6 +99,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         autocast_precision: torch.dtype | None = None,
         max_grad_norm: float | None = None,
         scheduler: Scheduler | None = None,
+        scheduler_overrides: dict[str, Scheduler] | None = None,
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
@@ -125,6 +126,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             autocast_precision: Enable AMP with this data type.
             max_grad_norm: Clip gradient norms to this value.
             scheduler: Optional learning rate scheduler.
+            scheduler_overrides: Optional per-param-group schedulers, keyed
+                by the group's "group_name" tag.
             device: The device to train on.
             state_dict_save_opts: Override state dict options for saving.
             state_dict_load_opts: Override state dict options for loading.
@@ -146,6 +149,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             autocast_precision=autocast_precision,
             max_grad_norm=max_grad_norm,
             scheduler=scheduler,
+            scheduler_overrides=scheduler_overrides,
             device=device,
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
@@ -333,7 +337,17 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 reconstructed,
                 extra_metrics,
                 supervision_preds,
+                projection_outputs,
             ) = self.model(batch, patch_size)
+            if projection_outputs is not None:
+                # The detached register projection is trained by the distillation /
+                # projection-supervision losses in LatentMIMTrainModule; this
+                # (two-view contrastive) module does not implement them, so refuse
+                # rather than silently leaving the student untrained.
+                raise NotImplementedError(
+                    "register_projection_dims is not supported by "
+                    "ContrastiveLatentMIMTrainModule; use LatentMIMTrainModule"
+                )
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
                 output_dict = self.model.target_encoder.forward(
