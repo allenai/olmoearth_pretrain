@@ -146,6 +146,24 @@ def _resolve_disabled_layers(args: argparse.Namespace) -> list[str]:
 
 ALL_RSLEARN_STEPS = ["prepare", "ingest", "materialize"]
 
+# For allcap (every-capture) corpora, pass --steps prepare dedup ingest materialize
+# so same-pass duplicate item groups are dropped before materialization.
+RSLEARN_STEP_CHOICES = ["prepare", "dedup", "ingest", "materialize"]
+
+
+def _load_window_manifest(path: str) -> list[str]:
+    """Load window names from a selected_windows.json manifest.
+
+    The manifest is written by create_windows.from_existing_windows and carries the
+    seeded window subset ({"names": [...], ...}).
+    """
+    with UPath(path).open() as f:
+        manifest = json.load(f)
+    names = manifest["names"]
+    if not names:
+        raise ValueError(f"window manifest {path} contains no names")
+    return names
+
 
 def _run_rslearn_steps(
     *,
@@ -155,8 +173,9 @@ def _run_rslearn_steps(
     disabled_layers: list[str],
     workers: int,
     shard_id: int,
+    group: str = "res_10.0",
 ) -> None:
-    """Run rslearn prepare/ingest/materialize in-process.
+    """Run rslearn prepare/dedup/ingest/materialize in-process.
 
     We call rslearn's Python API directly rather than shelling out to the CLI because
     with large shards (300K+ windows), passing window names as CLI args exceeds
@@ -183,6 +202,20 @@ def _run_rslearn_steps(
             f"{step} ({i + 1}/{len(steps)})",
         )
         logger.info(f"Running: rslearn dataset {step}")
+
+        if step == "dedup":
+            from olmoearth_pretrain.dataset_creation.dedup_allcap_items import (
+                DEFAULT_LAYERS,
+                dedup_window,
+            )
+
+            windows = dataset.load_windows(
+                groups=[group], names=window_names, workers=workers
+            )
+            for window in windows:
+                dedup_window(window, DEFAULT_LAYERS)
+            logger.info(f"Completed: dedup on {len(windows)} windows")
+            continue
 
         if step == "prepare":
             handler = PrepareHandler(
@@ -221,15 +254,31 @@ def cmd_rslearn_worker(args: argparse.Namespace) -> None:
     )
     from olmoearth_pretrain.dataset_creation.distributed import get_shard, load_corpus
 
-    entries = load_corpus(args.corpus)
-    if args.max_samples:
-        entries = entries[: args.max_samples]
-    shard = get_shard(entries, args.shard_id, args.num_shards)
     rslearn_dir = args.rslearn_dir
-    logger.info(
-        f"rslearn-worker shard {args.shard_id}/{args.num_shards}: "
-        f"{len(shard.entries)} samples"
-    )
+
+    if getattr(args, "window_manifest", None):
+        # Pre-created windows (create_windows.from_existing_windows): shard over the
+        # manifest's window names; no window creation here.
+        names = _load_window_manifest(args.window_manifest)
+        if args.max_samples:
+            names = names[: args.max_samples]
+        window_names = names[args.shard_id :: args.num_shards]
+        logger.info(
+            f"rslearn-worker shard {args.shard_id}/{args.num_shards}: "
+            f"{len(window_names)} windows from manifest"
+        )
+    else:
+        if not args.corpus:
+            raise ValueError("one of --corpus or --window-manifest is required")
+        entries = load_corpus(args.corpus)
+        if args.max_samples:
+            entries = entries[: args.max_samples]
+        shard = get_shard(entries, args.shard_id, args.num_shards)
+        window_names = shard.window_names
+        logger.info(
+            f"rslearn-worker shard {args.shard_id}/{args.num_shards}: "
+            f"{len(shard.entries)} samples"
+        )
 
     # Ensure config.json exists in rslearn dir
     if args.rslearn_config:
@@ -238,23 +287,25 @@ def cmd_rslearn_worker(args: argparse.Namespace) -> None:
     # Symlink source_data/ (OSM pbf, worldcover, etc.) if not already present
     _ensure_source_data(rslearn_dir)
 
-    _write_progress(
-        rslearn_dir, "rslearn", args.shard_id, "running", "creating windows"
-    )
+    if not getattr(args, "window_manifest", None):
+        _write_progress(
+            rslearn_dir, "rslearn", args.shard_id, "running", "creating windows"
+        )
 
-    # Create windows for this shard (idempotent -- skips existing)
-    create_corpus_windows(UPath(rslearn_dir), shard.entries, workers=args.workers)
+        # Create windows for this shard (idempotent -- skips existing)
+        create_corpus_windows(UPath(rslearn_dir), shard.entries, workers=args.workers)
 
     steps = getattr(args, "steps", None) or ALL_RSLEARN_STEPS
     disabled = _resolve_disabled_layers(args)
 
     _run_rslearn_steps(
         rslearn_dir=rslearn_dir,
-        window_names=shard.window_names,
+        window_names=window_names,
         steps=steps,
         disabled_layers=disabled,
         workers=args.workers,
         shard_id=args.shard_id,
+        group=args.group,
     )
 
     _write_progress(rslearn_dir, "rslearn", args.shard_id, "done")
@@ -284,14 +335,20 @@ def cmd_convert_worker(args: argparse.Namespace) -> None:
 
     args.olmoearth_dir = args.olmoearth_dir or _derive_olmoearth_dir(args.rslearn_dir)
 
-    entries = load_corpus(args.corpus)
-    if args.max_samples:
-        entries = entries[: args.max_samples]
-    shard = get_shard(entries, args.shard_id, args.num_shards)
-    shard_names = set(shard.window_names)
+    if getattr(args, "window_manifest", None):
+        names = _load_window_manifest(args.window_manifest)
+        if args.max_samples:
+            names = names[: args.max_samples]
+        shard_names = set(names[args.shard_id :: args.num_shards])
+    else:
+        entries = load_corpus(args.corpus)
+        if args.max_samples:
+            entries = entries[: args.max_samples]
+        shard = get_shard(entries, args.shard_id, args.num_shards)
+        shard_names = set(shard.window_names)
     logger.info(
         f"convert-worker shard {args.shard_id}/{args.num_shards}: "
-        f"{len(shard.entries)} samples"
+        f"{len(shard_names)} windows"
     )
 
     _write_progress(
@@ -303,7 +360,7 @@ def cmd_convert_worker(args: argparse.Namespace) -> None:
     olmo_path = UPath(args.olmoearth_dir)
     jobs = []
     for window in dataset.load_windows(
-        workers=args.workers, show_progress=True, groups=["res_10.0"]
+        workers=args.workers, show_progress=True, groups=[args.group]
     ):
         if window.name not in shard_names:
             continue
@@ -313,6 +370,7 @@ def cmd_convert_worker(args: argparse.Namespace) -> None:
                 olmoearth_path=olmo_path,
                 modalities=ALL_MODALITIES,
                 use_temporal_stack=True,
+                use_allcap=args.allcap,
             )
         )
 
@@ -333,7 +391,7 @@ def cmd_convert_worker(args: argparse.Namespace) -> None:
     _write_progress(
         args.olmoearth_dir, "convert", args.shard_id, "running", "metadata + osm"
     )
-    step_metadata(args.olmoearth_dir)
+    step_metadata(args.olmoearth_dir, args.allcap)
     step_rasterize_osm(args.olmoearth_dir, args.workers)
 
     _write_progress(args.olmoearth_dir, "convert", args.shard_id, "done")
@@ -487,16 +545,20 @@ def cmd_launch_rslearn(args: argparse.Namespace) -> None:
         load_corpus,
     )
 
-    entries = load_corpus(args.corpus)
-    if args.max_samples:
-        entries = entries[: args.max_samples]
-    logger.info(f"Corpus: {len(entries)} samples, {args.num_shards} shards")
+    if getattr(args, "window_manifest", None):
+        names = _load_window_manifest(args.window_manifest)
+        logger.info(f"Manifest: {len(names)} windows, {args.num_shards} shards")
+    else:
+        if not args.corpus:
+            raise ValueError("one of --corpus or --window-manifest is required")
+        entries = load_corpus(args.corpus)
+        if args.max_samples:
+            entries = entries[: args.max_samples]
+        logger.info(f"Corpus: {len(entries)} samples, {args.num_shards} shards")
 
     cmd_template = [
         "scripts/data/corpus_pipeline.py",
         "rslearn-worker",
-        "--corpus",
-        args.corpus,
         "--rslearn-dir",
         args.rslearn_dir,
         "--rslearn-config",
@@ -507,7 +569,13 @@ def cmd_launch_rslearn(args: argparse.Namespace) -> None:
         str(args.num_shards),
         "--workers",
         str(args.workers),
+        "--group",
+        args.group,
     ]
+    if getattr(args, "window_manifest", None):
+        cmd_template.extend(["--window-manifest", args.window_manifest])
+    else:
+        cmd_template.extend(["--corpus", args.corpus])
     disabled = _resolve_disabled_layers(args)
     if disabled:
         cmd_template.extend(["--disabled-layers", *disabled])
@@ -540,8 +608,6 @@ def cmd_launch_convert(args: argparse.Namespace) -> None:
     cmd_template = [
         "scripts/data/corpus_pipeline.py",
         "convert-worker",
-        "--corpus",
-        args.corpus,
         "--rslearn-dir",
         args.rslearn_dir,
         "--olmoearth-dir",
@@ -552,7 +618,17 @@ def cmd_launch_convert(args: argparse.Namespace) -> None:
         str(args.num_shards),
         "--workers",
         str(args.workers),
+        "--group",
+        args.group,
     ]
+    if getattr(args, "window_manifest", None):
+        cmd_template.extend(["--window-manifest", args.window_manifest])
+    else:
+        if not args.corpus:
+            raise ValueError("one of --corpus or --window-manifest is required")
+        cmd_template.extend(["--corpus", args.corpus])
+    if args.allcap:
+        cmd_template.append("--allcap")
     if args.disabled_layers:
         cmd_template.extend(["--disabled-layers", ",".join(args.disabled_layers)])
     if args.max_samples:
@@ -865,7 +941,14 @@ def main() -> None:
 
     # -- launch-rslearn --
     p = subparsers.add_parser("launch-rslearn", help="Launch rslearn ingest on Beaker")
-    p.add_argument("--corpus", required=True, help="Corpus CSV or JSON path")
+    p.add_argument("--corpus", default=None, help="Corpus CSV or JSON path")
+    p.add_argument(
+        "--window-manifest",
+        default=None,
+        help="selected_windows.json manifest of pre-created windows (alternative "
+        "to --corpus; windows must already exist in the dataset)",
+    )
+    p.add_argument("--group", default="res_10.0", help="rslearn window group")
     p.add_argument("--rslearn-dir", required=True, help="Shared rslearn dataset dir")
     p.add_argument("--rslearn-config", required=True, help="rslearn config.json path")
     p.add_argument("--num-shards", type=int, required=True)
@@ -889,8 +972,9 @@ def main() -> None:
         "--steps",
         nargs="*",
         default=None,
-        choices=["prepare", "ingest", "materialize"],
-        help="Only run these rslearn steps (default: all three)",
+        choices=RSLEARN_STEP_CHOICES,
+        help="Only run these rslearn steps (default: prepare/ingest/materialize; "
+        "allcap corpora should pass: prepare dedup ingest materialize)",
     )
     p.add_argument(
         "--max-samples", type=int, default=None, help="Limit corpus to first N samples"
@@ -906,7 +990,9 @@ def main() -> None:
 
     # -- rslearn-worker --
     p = subparsers.add_parser("rslearn-worker", help="Run rslearn for one shard")
-    p.add_argument("--corpus", required=True)
+    p.add_argument("--corpus", default=None)
+    p.add_argument("--window-manifest", default=None)
+    p.add_argument("--group", default="res_10.0")
     p.add_argument("--rslearn-dir", required=True)
     p.add_argument("--rslearn-config", default=None)
     p.add_argument("--shard-id", type=int, required=True)
@@ -914,15 +1000,16 @@ def main() -> None:
     p.add_argument("--workers", type=int, default=16)
     p.add_argument("--disabled-layers", nargs="*", default=[])
     p.add_argument("--only-layers", nargs="*", default=None)
-    p.add_argument(
-        "--steps", nargs="*", default=None, choices=["prepare", "ingest", "materialize"]
-    )
+    p.add_argument("--steps", nargs="*", default=None, choices=RSLEARN_STEP_CHOICES)
     p.add_argument("--max-samples", type=int, default=None)
     p.set_defaults(func=cmd_rslearn_worker)
 
     # -- launch-convert --
     p = subparsers.add_parser("launch-convert", help="Launch convert on Beaker")
-    p.add_argument("--corpus", required=True)
+    p.add_argument("--corpus", default=None)
+    p.add_argument("--window-manifest", default=None)
+    p.add_argument("--group", default="res_10.0")
+    p.add_argument("--allcap", action="store_true")
     p.add_argument("--rslearn-dir", required=True)
     p.add_argument(
         "--olmoearth-dir",
@@ -940,7 +1027,10 @@ def main() -> None:
 
     # -- convert-worker --
     p = subparsers.add_parser("convert-worker", help="Run convert for one shard")
-    p.add_argument("--corpus", required=True)
+    p.add_argument("--corpus", default=None)
+    p.add_argument("--window-manifest", default=None)
+    p.add_argument("--group", default="res_10.0")
+    p.add_argument("--allcap", action="store_true")
     p.add_argument("--rslearn-dir", required=True)
     p.add_argument("--olmoearth-dir", default=None)
     p.add_argument("--shard-id", type=int, required=True)
