@@ -18,10 +18,15 @@ from olmo_core.train.callbacks.callback import Callback, CallbackConfig
 from olmo_core.train.callbacks.checkpointer import CheckpointerCallback
 from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
-from torch.utils.data import DataLoader, IterableDataset
+from torch.utils.data import DataLoader, IterableDataset, Subset
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.evals.band_sensitivity import (
+    embedding_drift,
+    occlude_band,
+    reliance_profile,
+)
 from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
     DATASET_TO_CONFIG,
@@ -195,6 +200,22 @@ class DownstreamTaskConfig:
     # latlon-bin holdouts so train/val/test are spatially disjoint.
     pretrain_split_strategy: str = "random"
     pretrain_geographic_bin_size_deg: float = 5.0
+    # Per-band occlusion sensitivity (KNN / linear-probe tasks only). Set to a
+    # modality name to re-embed the task once per band of that modality with the
+    # band zeroed, reporting how far the embedding moves and how much a KNN probe
+    # loses. Answers which bands the encoder still reads, which the accuracy
+    # curve alone cannot. Costs one extra embedding pass per band, so it is off
+    # by default; see evals.band_sensitivity. None = disabled.
+    band_sensitivity_modality: str | None = None
+    # Cap on samples per split for the band sweep, bounding both its runtime and
+    # the batch cache it holds in memory. The subset is drawn with
+    # max_train_samples_seed so the same samples are used at every checkpoint and
+    # the profile is comparable over training. The default covers m-eurosat's
+    # splits (2000 train / 1000 valid) whole, which keeps the sweep's unoccluded
+    # reference accuracy directly comparable to the task's headline number;
+    # per-band accuracy drops are only a few points, so a smaller subset leaves
+    # them buried in probe noise and only the embedding drift stays readable.
+    band_sensitivity_max_samples: int = 2048
 
 
 class DownstreamEvaluator:
@@ -329,6 +350,23 @@ class DownstreamEvaluator:
         self.pretrain_test_samples = task.pretrain_test_samples
         self.pretrain_split_strategy = task.pretrain_split_strategy
         self.pretrain_geographic_bin_size_deg = task.pretrain_geographic_bin_size_deg
+        self.band_sensitivity_modality = task.band_sensitivity_modality
+        self.band_sensitivity_max_samples = task.band_sensitivity_max_samples
+        if self.band_sensitivity_modality is not None:
+            if self.config.task_type != TaskType.CLASSIFICATION:
+                raise ValueError(
+                    "band_sensitivity_modality scores each occlusion with a KNN "
+                    f"probe, so it needs a classification task, got "
+                    f"'{self.config.task_type.value}' for {task.dataset}"
+                )
+            if (
+                self.input_modalities
+                and self.band_sensitivity_modality not in self.input_modalities
+            ):
+                raise ValueError(
+                    f"band_sensitivity_modality '{self.band_sensitivity_modality}' "
+                    f"is not among the task's input_modalities {self.input_modalities}"
+                )
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -406,6 +444,7 @@ class DownstreamEvaluator:
         batch_size: int,
         seed: int | None = None,
         shuffle: bool = False,
+        max_samples: int | None = None,
     ) -> DataLoader:
         """Get the data loader for the given split.
 
@@ -414,6 +453,11 @@ class DownstreamEvaluator:
         irrelevant downstream (the probe re-shuffles its own DataLoader every
         epoch), and sequential access lets tiled datasets reuse the loaded
         base sample across its windows instead of re-reading it per tile.
+
+        max_samples restricts the loader to a fixed random subset, for
+        diagnostics that re-embed a split many times. The subset is drawn with
+        max_train_samples_seed and kept in dataset order, so it is identical at
+        every checkpoint and still reads sequentially.
         """
         logger.info(
             f"Getting data loader for {self.dataset} with norm method {self.norm_method} and norm stats from pretrained {self.norm_stats_from_pretrained}"
@@ -465,6 +509,13 @@ class DownstreamEvaluator:
             **extra_kwargs,
         )
         is_iterable = isinstance(eval_ds, IterableDataset)
+        if max_samples is not None and not is_iterable and len(eval_ds) > max_samples:
+            generator_for_subset = torch.Generator()
+            generator_for_subset.manual_seed(self.max_train_samples_seed)
+            indices = torch.randperm(len(eval_ds), generator=generator_for_subset)[
+                :max_samples
+            ]
+            eval_ds = Subset(eval_ds, sorted(indices.tolist()))
         return DataLoader(
             eval_ds,
             collate_fn=eval_collate_fn_variable_time,
@@ -476,7 +527,10 @@ class DownstreamEvaluator:
         )
 
     def _get_embeddings(
-        self, data_loader: DataLoader, is_train: bool
+        self,
+        data_loader: DataLoader,
+        is_train: bool,
+        sample_transform: Any | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Get the embeddings for the given data loader."""
         print(
@@ -516,7 +570,116 @@ class DownstreamEvaluator:
             quantize=self.quantize_embeddings,
             quantize_bits=self.quantize_bits,
             quantile_config=self.quantile_config,
+            sample_transform=sample_transform,
         )
+
+    def _knn_accuracy(
+        self,
+        train_embeddings: torch.Tensor,
+        train_labels: torch.Tensor,
+        val_embeddings: torch.Tensor,
+        val_labels: torch.Tensor,
+    ) -> float:
+        """Score a pair of embedding sets with a cosine KNN, returning accuracy."""
+        result = run_knn(
+            config=self.config,
+            train_embeddings=train_embeddings,
+            train_labels=train_labels,
+            val_embeddings=val_embeddings,
+            val_labels=val_labels,
+            test_embeddings=None,
+            test_labels=None,
+            device=self.device,
+            primary_metric=EvalMetric.ACCURACY,
+        )
+        assert result.val_result is not None
+        return result.val_result.primary
+
+    def _band_sensitivity_diagnostics(self) -> dict[str, float]:
+        """Measure which bands of one modality the frozen encoder still reads.
+
+        Every occlusion is scored with a KNN probe regardless of the task's own
+        eval mode: the quantity of interest is the ranking across bands, and a
+        linear probe would multiply the cost by its epoch count. Train and val
+        embeddings are occluded together, so a drop means the class information
+        is genuinely gone rather than merely displaced relative to a clean
+        reference set.
+
+        Both splits are read and normalized once into memory and then replayed
+        for every occlusion. The sweep re-embeds each split ``num_bands + 1``
+        times, and for these small classification sets loading dominates the
+        forward pass, so caching is what keeps the cost proportional to GPU work
+        instead of to disk. ``band_sensitivity_max_samples`` bounds the cache.
+        """
+        modality = self.band_sensitivity_modality
+        assert modality is not None
+        band_names = Modality.get(modality).band_order
+        max_samples = self.band_sensitivity_max_samples
+        logger.info(
+            "Running band sensitivity for %s over %d %s bands (<=%d samples/split)",
+            self.dataset,
+            len(band_names),
+            modality,
+            max_samples,
+        )
+
+        train_batches = list(
+            self._get_data_loader(
+                "train", self.embedding_batch_size, max_samples=max_samples
+            )
+        )
+        val_batches = list(
+            self._get_data_loader(
+                "valid", self.embedding_batch_size, max_samples=max_samples
+            )
+        )
+        reference_train, train_labels = self._get_embeddings(
+            train_batches, is_train=True
+        )
+        reference_val, val_labels = self._get_embeddings(val_batches, is_train=False)
+        reference_accuracy = self._knn_accuracy(
+            reference_train, train_labels, reference_val, val_labels
+        )
+
+        metrics: dict[str, float] = {
+            "band_sens/reference_knn_acc": reference_accuracy,
+            "band_sens/num_samples": float(reference_val.shape[0]),
+        }
+        drift_by_band: dict[str, float] = {}
+        accuracy_drop_by_band: dict[str, float] = {}
+        for band_index, band_name in enumerate(band_names):
+            transform = partial(occlude_band, modality=modality, band_index=band_index)
+            occluded_train, _ = self._get_embeddings(
+                train_batches, is_train=True, sample_transform=transform
+            )
+            occluded_val, _ = self._get_embeddings(
+                val_batches, is_train=False, sample_transform=transform
+            )
+            drift = embedding_drift(reference_val, occluded_val)
+            accuracy = self._knn_accuracy(
+                occluded_train, train_labels, occluded_val, val_labels
+            )
+            drift_by_band[band_name] = drift["emb_rel_l2"]
+            accuracy_drop_by_band[band_name] = reference_accuracy - accuracy
+            metrics[f"band_sens/{band_name}/emb_cos"] = drift["emb_cos"]
+            metrics[f"band_sens/{band_name}/emb_rel_l2"] = drift["emb_rel_l2"]
+            metrics[f"band_sens/{band_name}/knn_acc"] = accuracy
+            metrics[f"band_sens/{band_name}/acc_drop"] = reference_accuracy - accuracy
+
+        # The reliance profile is summarized from drift only. Drift is bounded
+        # below by zero and large enough per band to carry signal, whereas single
+        # band occlusions move accuracy by well under a point on a 1000-sample
+        # split -- an entropy over those drops would describe probe noise. The
+        # accuracy side is reported as plain extremes instead, which stay
+        # readable however small they are.
+        for key, value in reliance_profile(drift_by_band).items():
+            metrics[f"band_sens/drift_{key}"] = value
+        accuracy_drops = list(accuracy_drop_by_band.values())
+        metrics["band_sens/max_acc_drop"] = max(accuracy_drops)
+        metrics["band_sens/max_acc_gain"] = -min(accuracy_drops)
+        del train_batches, val_batches
+        logger.info("Band sensitivity for %s: %s", self.dataset, metrics)
+        return metrics
 
     def _val_embed_probe(self) -> EvalTaskResult:
         """Validate the model using embeddings and probe (knn or linear probe)."""
@@ -639,13 +802,50 @@ class DownstreamEvaluator:
         }
         result = self.eval_function(**kwargs)  # type: ignore
 
+        result.embedding_diagnostics.update(self._geometry_diagnostics(val_embeddings))
+
         # Free memory aggressively between evals
         del train_embeddings, train_labels, test_embeddings, test_labels
         del val_embeddings, val_labels
         torch.cuda.empty_cache()
         gc.collect()
 
+        if self.band_sensitivity_modality is not None:
+            result.embedding_diagnostics.update(self._band_sensitivity_diagnostics())
+            torch.cuda.empty_cache()
+            gc.collect()
+
         return result
+
+    def _geometry_diagnostics(self, val_embeddings: torch.Tensor) -> dict[str, float]:
+        """Geometry of the embeddings the probe just scored, as ``geom_*`` metrics.
+
+        Logged alongside every KNN / linear-probe task so an accuracy trend can be
+        read against the shape of the space that produced it: a task can regress
+        either because the encoder lost information or because the surviving
+        information moved into a direction the probe cannot use, and only the
+        second shows up as rising ``geom_common_mode_frac`` / falling
+        ``geom_centered_effective_rank``.
+
+        Spatial tasks are mean-pooled to one vector per sample first, matching how
+        image-level probes consume them. Diagnostics never fail an eval.
+        """
+        try:
+            embeddings = val_embeddings.detach()
+            if embeddings.ndim > 2:
+                embeddings = embeddings.reshape(
+                    embeddings.shape[0], -1, embeddings.shape[-1]
+                ).mean(dim=1)
+            return {
+                f"geom_{k}": v
+                for k, v in compute_embedding_diagnostics(embeddings).items()
+            }
+        except Exception:
+            logger.warning(
+                f"Embedding geometry diagnostics failed for {self.dataset}",
+                exc_info=True,
+            )
+            return {}
 
     def _get_best_checkpoint_path(self) -> str:
         """Get the best checkpoint path."""

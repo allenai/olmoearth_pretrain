@@ -1,9 +1,9 @@
 """Embeddings from models."""
 
 import logging
+from collections.abc import Callable, Iterable
 
 import torch
-from torch.utils.data import DataLoader
 
 from olmoearth_pretrain.evals.embedding_transforms import (
     quantize_embeddings,
@@ -16,17 +16,21 @@ logger = logging.getLogger(__name__)
 
 
 def get_embeddings(
-    data_loader: DataLoader,
+    data_loader: Iterable[tuple[MaskedOlmoEarthSample, torch.Tensor]],
     model: EvalWrapper,
     is_train: bool = True,
     quantize: bool = False,
     quantize_bits: int | None = None,
     quantile_config: dict | None = None,
+    sample_transform: Callable[[MaskedOlmoEarthSample], MaskedOlmoEarthSample]
+    | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Get embeddings from model for the data in data_loader.
 
     Args:
-        data_loader: DataLoader for the evaluation dataset.
+        data_loader: Anything yielding (sample, label) batches for the evaluation
+            dataset -- normally a DataLoader, but a materialized list of batches
+            when the same split is embedded repeatedly (see band_sensitivity).
         model: EvalWrapper-wrapped model to get embeddings from.
         is_train: Whether this is training data (affects some model behaviors).
         quantize: If True, quantize embeddings to int8 for storage efficiency testing.
@@ -35,6 +39,10 @@ def get_embeddings(
             with the specified number of bits. Requires quantile_config.
         quantile_config: Dictionary containing precomputed quantile boundaries
             for percentile-based quantization. Required if quantize_bits is set.
+        sample_transform: Optional perturbation applied to each batch after it is
+            moved to the device and before the model sees it, for ablation
+            diagnostics such as per-band occlusion. Applied on-device so a sweep
+            over perturbations reuses one pass of data loading and normalization.
 
     Returns:
         Tuple of (embeddings, labels). If quantize=True, embeddings are int8.
@@ -57,6 +65,8 @@ def get_embeddings(
             masked_olmoearth_sample = MaskedOlmoEarthSample.from_dict(
                 masked_olmoearth_sample_dict
             )
+            if sample_transform is not None:
+                masked_olmoearth_sample = sample_transform(masked_olmoearth_sample)
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 batch_embeddings, label = model(
                     masked_olmoearth_sample=masked_olmoearth_sample,

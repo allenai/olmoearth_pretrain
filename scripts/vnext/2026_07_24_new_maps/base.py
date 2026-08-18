@@ -290,6 +290,38 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_mode=EvalMode.KNN,
             primary_metric=EvalMetric.ACCURACY,
             eval_interval=Duration.steps(20000),
+            # m-eurosat is the only eval here that is essentially pure spectral
+            # classification (S2 only, one timestep, pooled, cosine KNN), and it
+            # is the one that regresses late while the rest keep improving. All
+            # twelve S2 bands enter through a single bandset, so the whole
+            # spectral signal passes one small projection that the pretext
+            # objective does not require to stay full-rank -- red-edge and SWIR
+            # are redundant enough to collapse away without the loss noticing.
+            # The per-band sweep makes that collapse observable directly instead
+            # of inferring it from accuracy tens of thousands of steps later,
+            # and gives the band-dropout A/B a mechanism to point at.
+            band_sensitivity_modality=Modality.SENTINEL2_L2A.name,
+        ),
+        # Linear-probe twin of the m-eurosat KNN task above, identical in every
+        # other respect. KNN reads the pooled embedding through a fixed cosine
+        # metric and cannot reweight directions, so a KNN-only regression is
+        # ambiguous: the spectral information may still be present but no longer
+        # aligned with the dominant variance directions. Comparing the two
+        # separates that geometry effect from genuine information loss.
+        "m-eurosat_lp": DownstreamTaskConfig(
+            dataset="m-eurosat",
+            embedding_batch_size=128,
+            probe_batch_size=32,
+            num_workers=0,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+            probe_lr=0.01,
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            primary_metric=EvalMetric.ACCURACY,
+            eval_interval=Duration.steps(20000),
         ),
         "m_so2sat": DownstreamTaskConfig(
             dataset="m-so2sat",
