@@ -9,6 +9,7 @@ import torch.distributed.checkpoint.state_dict as dist_cp_sd
 import torch.nn.functional as F
 from olmo_core.distributed.parallel import DataParallelConfig
 from olmo_core.distributed.utils import get_local_rank, get_local_tensor
+from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
@@ -213,6 +214,12 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
         default_factory=lambda: {modality: 0 for modality in Modality.names()}
     )
     ema_decay: tuple[float, float] = (0.996, 1.0)
+    # (start, end) decay for the EVAL-ONLY encoder EMA (LatentMIMConfig.
+    # keep_encoder_ema), applied after each real optimizer step. Independent of
+    # ``ema_decay``, which drives the pretext TARGET encoder. None disables it;
+    # required (and only valid) when the model keeps an ``ema_encoder``. Use a
+    # constant like (0.9999, 0.9999) unless you want the linear ramp.
+    encoder_ema_decay: tuple[float, float] | None = None
     max_grad_norm: float = 1.0
     # Distillation losses for the encoder's detached register projection (the low-dim
     # "student"; see EncoderConfig.register_projection_dim). Only used when the model
@@ -309,6 +316,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
         ema_decay: tuple[float, float] = (0.996, 1.0),
+        encoder_ema_decay: tuple[float, float] | None = None,
         regularizer_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         projection_distill_cosine_weight: float = 1.0,
@@ -340,6 +348,10 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             state_dict_save_opts: Override state dict options for saving.
             state_dict_load_opts: Override state dict options for loading.
             ema_decay: EMA decay rate for target encoder, as a tuple of (start_ema_decay, end_ema_decay)
+            encoder_ema_decay: Decay for the eval-only encoder EMA
+                (``model.ema_encoder``), as a (start, end) tuple applied after
+                each real optimizer step. None disables it; required exactly
+                when the model was built with keep_encoder_ema=True.
             token_exit_cfg: The token exit configuration for the model.
             mae_loss_config: Optional loss config for masked auto-encoding.
             regularizer_config: An optional regularizer configuration for the model.
@@ -381,6 +393,24 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             find_unused_parameters=find_unused_parameters,
         )
         self.start_ema, self.end_ema = ema_decay
+        # A decay of (1.0, 1.0) never moves the average, so it counts as "no EMA".
+        # CLI overrides may deliver the pair as a list, hence the tuple() coercion.
+        if encoder_ema_decay is not None:
+            encoder_ema_decay = tuple(encoder_ema_decay)  # type: ignore[assignment]
+        has_real_decay = encoder_ema_decay is not None and encoder_ema_decay != (
+            1.0,
+            1.0,
+        )
+        has_ema_encoder = getattr(self.model, "ema_encoder", None) is not None
+        if has_real_decay != has_ema_encoder:
+            raise OLMoConfigurationError(
+                "encoder_ema_decay and the model's keep_encoder_ema must be set "
+                "together: a decay without an ema_encoder has nothing to update, "
+                "and an ema_encoder without a decay is frozen dead weight "
+                f"(encoder_ema_decay={encoder_ema_decay}, "
+                f"keep_encoder_ema={has_ema_encoder})."
+            )
+        self.encoder_ema_decay = encoder_ema_decay if has_real_decay else None
         self.token_exit_cfg = token_exit_cfg
         self.base_loss = loss_config.build()
         self.masking_strategy = masking_config.build()

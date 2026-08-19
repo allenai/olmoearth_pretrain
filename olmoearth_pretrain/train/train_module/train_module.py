@@ -190,6 +190,11 @@ class OlmoEarthTrainModule(TrainModule):
         state_dict_load_opts: Override state dict options for loading.
     """
 
+    # (start, end) decay schedule for the eval-only encoder EMA (``ema_encoder``).
+    # None disables the update. Set by subclasses that accept an
+    # ``encoder_ema_decay`` config (see LatentMIMTrainModule).
+    encoder_ema_decay: tuple[float, float] | None = None
+
     def __init__(
         self,
         model: Any,
@@ -563,10 +568,17 @@ class OlmoEarthTrainModule(TrainModule):
 
         # Step optimizer.
         self.optimizer.step()
+        step_skipped = False
         if isinstance(self.optimizer, SkipStepOptimizer):
             self.trainer.record_metric(
                 "step skipped", self.optimizer.step_skipped, namespace="optim"
             )
+            step_skipped = bool(get_local_tensor(self.optimizer.step_skipped).item())
+        # Fold the just-updated weights into the eval-only encoder EMA. Skipped
+        # steps leave the weights unchanged, so folding them in would only decay
+        # the average toward itself for no reason.
+        if not step_skipped:
+            self.update_encoder_ema()
 
     def _broadcast_params(self) -> None:
         """Broadcast params and buffers from rank 0 so replicas start identical."""
@@ -699,6 +711,35 @@ class OlmoEarthTrainModule(TrainModule):
         )
         return total_norm
 
+    def _current_ema_decay(self, start: float, end: float) -> float:
+        """Linear decay schedule from ``start`` to ``end`` over the full run."""
+        return start + self.trainer.global_step * (end - start) / self.trainer.max_steps
+
+    @staticmethod
+    def _ema_update_module(src: nn.Module, dst: nn.Module, decay: float) -> None:
+        """In-place EMA: ``dst = decay * dst + (1 - decay) * src``, DTensor-aware.
+
+        Parameters are EMA-averaged; buffers are copied outright (they are
+        bookkeeping like step counters, not learned state, so averaging them
+        is meaningless and can be ill-typed).
+        """
+        with torch.no_grad():
+            for p, tp in zip(src.parameters(), dst.parameters()):
+                if isinstance(p.data, DTensor):
+                    # get the local shard, update it in place
+                    p_local = p.data.to_local()
+                    tp_local = tp.data.to_local()
+                    tp_local.mul_(decay).add_(p_local, alpha=(1 - decay))
+                else:
+                    # fallback for any plain Tensor
+                    tp.data.mul_(decay).add_(p.data, alpha=(1 - decay))
+            for b, tb in zip(src.buffers(), dst.buffers()):
+                b_local, tb_local = b, tb
+                if isinstance(b, DTensor):
+                    b_local = b.to_local()
+                    tb_local = tb.to_local()
+                tb_local.copy_(b_local)
+
     def update_target_encoder(self) -> None:
         """Update the target encoder."""
         # Update target encoder with EMA this should be a callback
@@ -713,31 +754,36 @@ class OlmoEarthTrainModule(TrainModule):
                 "projection_only_target=True only supports ema_decay=(1.0, 1.0)."
             )
 
-        cur_ema_value = (
-            self.start_ema
-            + self.trainer.global_step
-            * (self.end_ema - self.start_ema)
-            / self.trainer.max_steps
+        cur_ema_value = self._current_ema_decay(self.start_ema, self.end_ema)
+        self.trainer.record_metric(
+            "train/ema_decay",
+            cur_ema_value,
+            ReduceType.mean,
         )
-        with torch.no_grad():
-            self.trainer.record_metric(
-                "train/ema_decay",
-                cur_ema_value,
-                ReduceType.mean,
-            )
-            for p, tp in zip(
-                self.model.encoder.parameters(), self.model.target_encoder.parameters()
-            ):
-                if isinstance(p.data, DTensor):
-                    # get the local shard, update it in place
-                    p_local = p.data.to_local()
-                    tp_local = tp.data.to_local()
-                    tp_local.mul_(cur_ema_value).add_(
-                        p_local, alpha=(1 - cur_ema_value)
-                    )
-                else:
-                    # fallback for any plain Tensor
-                    tp.data.mul_(cur_ema_value).add_(p.data, alpha=(1 - cur_ema_value))
+        self._ema_update_module(
+            self.model.encoder, self.model.target_encoder, cur_ema_value
+        )
+
+    def update_encoder_ema(self) -> None:
+        """Update the eval-only EMA copy of the online encoder (``ema_encoder``).
+
+        A no-op unless the subclass set ``encoder_ema_decay`` (see
+        LatentMIMTrainModule). Called from ``optim_step`` AFTER the optimizer
+        step, so the average tracks post-update weights -- unlike the target
+        encoder, which updates at the start of ``train_batch``.
+        """
+        if self.encoder_ema_decay is None:
+            return
+        start, end = self.encoder_ema_decay
+        cur_ema_value = self._current_ema_decay(start, end)
+        self.trainer.record_metric(
+            "train/encoder_ema_decay",
+            cur_ema_value,
+            ReduceType.mean,
+        )
+        self._ema_update_module(
+            self.model.encoder, self.model.ema_encoder, cur_ema_value
+        )
 
     def eval_batch(
         self, batch: dict[str, Any], labels: torch.Tensor | None = None

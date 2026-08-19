@@ -143,3 +143,32 @@ def test_projection_only_target_build(
         model.target_encoder.patch_embeddings.state_dict(),
         model.encoder.patch_embeddings.state_dict(),
     )
+
+
+def test_keep_encoder_ema_build(
+    supported_modality_names: list[str], set_random_seeds: None
+) -> None:
+    """keep_encoder_ema=True builds a frozen full copy that evals read."""
+    config = _latent_mim_config(supported_modality_names, True)
+    config.keep_encoder_ema = True
+    model = config.build()
+    assert model.ema_encoder is not None
+    assert all(not p.requires_grad for p in model.ema_encoder.parameters())
+    # The copy matches the online encoder exactly at init.
+    torch.testing.assert_close(
+        model.ema_encoder.state_dict(), model.encoder.state_dict()
+    )
+    # It is a separate module from both the encoder and the target encoder.
+    assert model.ema_encoder is not model.encoder
+    assert model.ema_encoder is not model.target_encoder
+    # Downstream evals read the EMA copy.
+    assert model.eval_encoder is model.ema_encoder
+
+
+def test_no_encoder_ema_by_default(
+    supported_modality_names: list[str], set_random_seeds: None
+) -> None:
+    """Without keep_encoder_ema there is no copy and evals read the encoder."""
+    model = _latent_mim_config(supported_modality_names, False).build()
+    assert model.ema_encoder is None
+    assert model.eval_encoder is model.encoder

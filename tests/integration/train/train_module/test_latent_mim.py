@@ -1,11 +1,13 @@
 """Integration tests for the latent MIM Training Module."""
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.optim.adamw import AdamWConfig
 from olmo_core.train.config import TrainerConfig
 
@@ -257,3 +259,88 @@ def test_band_dropout_enabled_by_train_module(
     # point) remains off so it always sees full spectral info.
     assert model.encoder.patch_embeddings.band_dropout_rate == 0.5
     assert model.target_encoder.patch_embeddings.band_dropout_rate == 0.0
+
+
+def _small_latent_mim(
+    supported_modality_names: list[str], keep_encoder_ema: bool
+) -> LatentMIM:
+    """A small LatentMIM, optionally with the eval-only encoder EMA copy."""
+    encoder_config = EncoderConfig(
+        supported_modality_names=supported_modality_names,
+        embedding_size=16,
+        max_patch_size=8,
+        num_heads=2,
+        mlp_ratio=1.0,
+        depth=2,
+        drop_path=0.1,
+        max_sequence_length=12,
+    )
+    predictor_config = PredictorConfig(
+        supported_modality_names=supported_modality_names,
+        encoder_embedding_size=16,
+        decoder_embedding_size=16,
+        depth=2,
+        mlp_ratio=1.0,
+        num_heads=2,
+        max_sequence_length=12,
+        drop_path=0.0,
+        output_embedding_size=None,
+    )
+    model = LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=predictor_config,
+        keep_encoder_ema=keep_encoder_ema,
+    ).build()
+    model.to(device="cpu")
+    return model
+
+
+def test_update_encoder_ema(
+    supported_modality_names: list[str],
+    train_module_config: LatentMIMTrainModuleConfig,
+    set_random_seeds: None,
+) -> None:
+    """update_encoder_ema folds the encoder into the EMA copy and nothing else."""
+    model = _small_latent_mim(supported_modality_names, keep_encoder_ema=True)
+    config = replace(train_module_config, encoder_ema_decay=(0.5, 0.5))
+    train_module = config.build(model, device="cpu")
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        mock_trainer = MockTrainer()
+        train_module.on_attach = MagicMock(return_value=None)  # type: ignore
+        train_module._attach_trainer(mock_trainer)
+
+        # Diverge the online encoder from the copies (as an optimizer step would).
+        with torch.no_grad():
+            for p in model.encoder.parameters():
+                p.add_(1.0)
+
+        target_before = {
+            k: v.clone() for k, v in model.target_encoder.state_dict().items()
+        }
+        train_module.update_encoder_ema()
+
+    # With decay 0.5 the copy lands exactly halfway between its old value
+    # (encoder - 1) and the new encoder: encoder - 0.5.
+    assert model.ema_encoder is not None
+    for p, ep in zip(model.encoder.parameters(), model.ema_encoder.parameters()):
+        torch.testing.assert_close(ep.data, p.data - 0.5)
+    # The target encoder is a different average and must not move.
+    for k, v in model.target_encoder.state_dict().items():
+        torch.testing.assert_close(v, target_before[k])
+    assert mock_trainer._metrics["train/encoder_ema_decay"] == 0.5
+
+
+def test_encoder_ema_decay_requires_ema_encoder(
+    supported_modality_names: list[str],
+    train_module_config: LatentMIMTrainModuleConfig,
+    set_random_seeds: None,
+) -> None:
+    """A decay without a model-side EMA copy (and vice versa) must raise."""
+    plain_model = _small_latent_mim(supported_modality_names, keep_encoder_ema=False)
+    with_decay = replace(train_module_config, encoder_ema_decay=(0.999, 0.999))
+    with pytest.raises(OLMoConfigurationError, match="keep_encoder_ema"):
+        with_decay.build(plain_model, device="cpu")
+
+    ema_model = _small_latent_mim(supported_modality_names, keep_encoder_ema=True)
+    with pytest.raises(OLMoConfigurationError, match="keep_encoder_ema"):
+        train_module_config.build(ema_model, device="cpu")

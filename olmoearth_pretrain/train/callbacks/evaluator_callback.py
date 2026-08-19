@@ -77,6 +77,20 @@ def _seed_worker(worker_id: int, base_seed: int) -> None:
     torch.manual_seed(worker_seed)
 
 
+def _feature_extraction_model(model: Any) -> Any:
+    """The module downstream feature extraction runs on.
+
+    ``eval_encoder`` when the model exposes one (LatentMIM: the frozen EMA copy
+    if keep_encoder_ema=True, else the online encoder), falling back to
+    ``encoder`` and then the model itself for non-encoder/decoder models.
+    """
+    if hasattr(model, "eval_encoder"):
+        return model.eval_encoder
+    if hasattr(model, "encoder"):
+        return model.encoder
+    return model
+
+
 class EvalMode(StrEnum):
     """Eval mode."""
 
@@ -643,10 +657,7 @@ class DownstreamEvaluator:
         print(
             f"Getting embeddings for {self.dataset} with norm method {self.norm_method}"
         )
-        if hasattr(self.trainer.train_module.model, "encoder"):
-            model = self.trainer.train_module.model.encoder
-        else:
-            model = self.trainer.train_module.model
+        model = _feature_extraction_model(self.trainer.train_module.model)
 
         if hasattr(model, "patch_size"):
             # For non-helios models we override the task patch size with the model patch size
@@ -926,11 +937,8 @@ class DownstreamEvaluator:
         else:
             test_loader = None
 
-        # Use encoder if present
-        if hasattr(self.trainer.train_module.model, "encoder"):
-            model = self.trainer.train_module.model.encoder
-        else:
-            model = self.trainer.train_module.model
+        # Use the eval encoder (EMA copy when kept) if present
+        model = _feature_extraction_model(self.trainer.train_module.model)
 
         original_state = {
             k: v.detach().cpu().clone() for k, v in model.state_dict().items()

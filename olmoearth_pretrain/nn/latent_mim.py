@@ -85,6 +85,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         supervision_head: SupervisionHead | None = None,
         projection_supervision_heads: dict[int, SupervisionHead] | None = None,
         projection_only_target: bool = False,
+        keep_encoder_ema: bool = False,
     ):
         """Initialize the Latent MIM Style.
 
@@ -106,6 +107,12 @@ class LatentMIM(nn.Module, DistributedMixins):
                 instead of a full copy of the encoder. Only valid when all token
                 exit depths are 0 and the target is never EMA-updated
                 (ema_decay=(1.0, 1.0)).
+            keep_encoder_ema: If True, keep a frozen EMA copy of the online encoder
+                (``ema_encoder``) that downstream evals read instead of the online
+                weights. This is SEPARATE from the target encoder (which may stay
+                at its random init to provide pretext targets); the EMA copy plays
+                no role in the pretext loss. Updated by the train module's
+                ``encoder_ema_decay`` after each optimizer step.
         """
         super().__init__()
         self.encoder = encoder
@@ -126,6 +133,21 @@ class LatentMIM(nn.Module, DistributedMixins):
             self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
+        self.ema_encoder: nn.Module | None = None
+        if keep_encoder_ema:
+            self.ema_encoder = deepcopy(self.encoder)
+            for p in self.ema_encoder.parameters():
+                p.requires_grad = False
+
+    @property
+    def eval_encoder(self) -> nn.Module:
+        """The encoder downstream evals should read.
+
+        The EMA copy when one is kept, else the online encoder.
+        """
+        if self.ema_encoder is not None:
+            return self.ema_encoder
+        return self.encoder
 
     def forward(
         self, x: MaskedOlmoEarthSample, patch_size: int
@@ -288,6 +310,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             fully_shard(self.target_encoder, **fsdp_config)
         else:
             self.target_encoder.apply_fsdp(**fsdp_config)
+        if self.ema_encoder is not None:
+            self.ema_encoder.apply_fsdp(**fsdp_config)
         if self.reconstructor:
             self.reconstructor.apply_fsdp(**fsdp_config)
         if self.supervision_head is not None:
@@ -298,6 +322,8 @@ class LatentMIM(nn.Module, DistributedMixins):
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
+        if self.ema_encoder is not None:
+            register_fsdp_forward_method(self.ema_encoder, "forward")
 
     def apply_compile(self) -> None:
         """Apply torch.compile to the model."""
@@ -309,6 +335,9 @@ class LatentMIM(nn.Module, DistributedMixins):
         if hasattr(self.target_encoder, "apply_compile"):
             self.target_encoder.apply_compile()
             logger.info("Applied torch.compile to the target encoder")
+        if self.ema_encoder is not None:
+            self.ema_encoder.apply_compile()
+            logger.info("Applied torch.compile to the EMA encoder")
         if self.supervision_head is not None:
             self.supervision_head = torch.compile(self.supervision_head)
             logger.info("Applied torch.compile to the supervision head")
@@ -342,6 +371,11 @@ class LatentMIMConfig(Config):
     # register head (the previous behaviour).
     projection_supervision_weight_scale: float | None = None
     projection_only_target: bool = False
+    # Keep a frozen EMA copy of the online encoder (``ema_encoder``) for downstream
+    # evals to read instead of the online weights. Separate from the target encoder,
+    # which may stay at its (frozen, random) init to supply pretext targets. The
+    # train module's ``encoder_ema_decay`` drives the update after each optim step.
+    keep_encoder_ema: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -513,4 +547,5 @@ class LatentMIMConfig(Config):
             supervision_head=supervision_head,
             projection_supervision_heads=projection_supervision_heads,
             projection_only_target=self.projection_only_target,
+            keep_encoder_ema=self.keep_encoder_ema,
         )
