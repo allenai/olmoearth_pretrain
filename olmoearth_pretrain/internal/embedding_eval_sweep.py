@@ -451,7 +451,13 @@ def _check_run_names_fit_beaker(commands: list[str]) -> None:
     too_long = []
     for cmd in commands:
         # "<subcmd> <run_name> <cluster>" -- the run name follows the subcommand.
-        parts = cmd.split(" all_evals.py ", 1)[-1].split()
+        # Split on the launch path as it actually appears in the command
+        # (".../internal/all_evals.py"); matching a bare " all_evals.py " never
+        # fires, which silently turns this whole check into a no-op.
+        _, sep, tail = cmd.partition(f"{EVAL_LAUNCH_PATH} ")
+        if not sep:
+            continue
+        parts = tail.split()
         if len(parts) < 2:
             continue
         run_name = parts[1]
