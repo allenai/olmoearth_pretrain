@@ -104,6 +104,7 @@ def compute_eval_metrics(
     patch_size: int,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    dump_tag: str | None = None,
 ) -> EvalTaskResult:
     """Evaluate a finetuned model on val and test sets."""
     ft.eval()
@@ -162,6 +163,7 @@ def compute_eval_metrics(
                 patch_size,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
+                dump_tag=dump_tag,
             )
 
     return EvalTaskResult(val_result=val_result, test_result=test_result)
@@ -236,6 +238,7 @@ def run_finetune_eval(
             patch_size,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
+            dump_tag=task_name,
         )
 
     # Freeze the backbone for the first portion of epochs
@@ -314,6 +317,7 @@ def run_finetune_eval(
                 patch_size,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
+                dump_tag=task_name,
             )
 
     ft.train()
@@ -462,4 +466,5 @@ def run_finetune_eval(
         patch_size,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
+        dump_tag=task_name,
     )
