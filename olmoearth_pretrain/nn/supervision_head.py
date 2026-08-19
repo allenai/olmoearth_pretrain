@@ -173,6 +173,13 @@ class SupervisionHeadConfig(Config):
     # instead of the per-modality decoder tokens, providing a spatial-salience signal to
     # the registers. embedding_dim is then the register dim (resolved by LatentMIMConfig).
     register_supervision: bool = False
+    # Override for the spatial heads' sub-cell unfold factor (the max_patch_size^2
+    # grid each feature cell predicts; see the TODO in SupervisionHead.__init__).
+    # With PIXEL-resolution register grids the feature cells already sit at the
+    # target resolution, so the default max_patch_size unfold would over-produce
+    # (H*mps x W*mps predictions immediately downsampled back to H x W) -- set 1
+    # there. None (default) keeps the max_patch_size unfold (backwards compatible).
+    spatial_unfold: int | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts in modality_configs to SupervisionModalityConfig instances."""
@@ -180,6 +187,8 @@ class SupervisionHeadConfig(Config):
             name: SupervisionModalityConfig(**cfg) if isinstance(cfg, dict) else cfg
             for name, cfg in self.modality_configs.items()
         }
+        if self.spatial_unfold is not None and self.spatial_unfold < 1:
+            raise ValueError(f"spatial_unfold must be >= 1, got {self.spatial_unfold}")
 
     def build(self, embedding_dim: int, max_patch_size: int) -> SupervisionHead:
         """Build the supervision head.
@@ -188,12 +197,17 @@ class SupervisionHeadConfig(Config):
             embedding_dim: Dimension of the feature source (decoder embeddings, or the
                 register dim when register_supervision is True).
             max_patch_size: Maximum patch size; each token predicts a
-                max_patch_size x max_patch_size sub-patch grid.
+                max_patch_size x max_patch_size sub-patch grid (overridden by
+                ``spatial_unfold`` when set).
         """
         return SupervisionHead(
             modality_configs=self.modality_configs,
             embedding_dim=embedding_dim,
-            max_patch_size=max_patch_size,
+            max_patch_size=(
+                self.spatial_unfold
+                if self.spatial_unfold is not None
+                else max_patch_size
+            ),
             register_supervision=self.register_supervision,
         )
 

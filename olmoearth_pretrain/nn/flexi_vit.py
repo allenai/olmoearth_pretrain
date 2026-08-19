@@ -1,12 +1,19 @@
 """Model code for the OlmoEarth Pretrain model."""
 
+import functools
 import logging
 import math
 import warnings
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # Runtime import stays local to Encoder.__init__: pixel_branch imports helpers
+    # from this module.
+    from olmoearth_pretrain.nn.pixel_branch import PixelRegisterBranch
 
 import torch
+import torch.utils.checkpoint
 from einops import rearrange, reduce, repeat
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
@@ -1571,6 +1578,10 @@ class SpatialRegisterBottleneck(nn.Module):
         shared_read_kv: bool = False,
         output_dim: int | None = None,
         latent_every_n: int = 1,
+        pixel_grid: bool = False,
+        latent_attn_dim: int | None = None,
+        latent_num_heads: int | None = None,
+        norm_affine: bool = True,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1729,6 +1740,33 @@ class SpatialRegisterBottleneck(nn.Module):
                 weights and differ only in their queries, which is a model change rather
                 than a pure optimization. Requires a single K/V source: incompatible with
                 ``read_layers`` and with ``per_depth_read_proj``.
+            pixel_grid: If True (dynamic mode only), the register grid is laid at PIXEL
+                resolution instead of matching the patch grid: the single latent is
+                cloned onto ``(n_h * patch_size, n_w * patch_size)`` cells whose RoPE
+                coordinates are the pixel centers within the patch frame (so at
+                ``patch_size=1`` this is identical to the patch-matched grid). The
+                caller must pass ``patch_size`` and ``patch_coordinate_scale`` to
+                ``forward``. The reads still consume the patch tokens at the configured
+                patch size -- only the query grid is finer.
+            latent_attn_dim: If set, decouple the LATENT self-attention width from the
+                read width: the latent blocks run attention internally at this width
+                while the reads keep ``attn_dim``. Motivated by pixel-resolution grids,
+                where latent self-attention is quadratic in the (large) register count
+                and cannot afford the wideread ``attn_dim=encoder`` width. Passing the
+                ``register_dim`` itself yields the classic tied-width latent blocks.
+                None (default) keeps the latent blocks at ``attn_dim`` (backwards
+                compatible).
+            latent_num_heads: Head count for the latent self-attention blocks when
+                their width is decoupled via ``latent_attn_dim`` (e.g. 2 x 64-dim heads
+                at width 128, following the width-sweep convention of fixing head_dim
+                at 64). None (default) keeps ``num_heads``.
+            norm_affine: If False, the read/latent blocks' LayerNorms drop their
+                learned affine (gamma/beta). At pixel-resolution register counts the
+                affine gradient reduction over all register rows is a measured
+                bottleneck, and the affine is redundant before the blocks' own linear
+                projections (the DiT convention). The K/V ``input_norm``(s) and the
+                final output norm keep their affine. True (default) keeps the standard
+                affine norms (backwards compatible).
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1810,6 +1848,13 @@ class SpatialRegisterBottleneck(nn.Module):
         self.last_read_source_norms: Tensor | None = None
         self.interleave = interleave or (self.multi_depth and fused_read is None)
         self.dynamic_grid = register_grid is None
+        if pixel_grid and register_grid is not None:
+            raise ValueError(
+                "pixel_grid requires the dynamic (single-latent) mode "
+                "(register_grid=None): the pixel grid is resolved from the patch "
+                "grid and patch size at forward time"
+            )
+        self.pixel_grid = pixel_grid
         if register_grid is None:
             if not use_2d_rope:
                 # With a single cloned latent the cells are identical at init and stay
@@ -1953,6 +1998,29 @@ class SpatialRegisterBottleneck(nn.Module):
             )
         else:
             read_position_encoding = PositionEncoding.ABSOLUTE
+        # Optionally drop the learned LayerNorm affine inside the read/latent blocks:
+        # at pixel-resolution register counts the gamma/beta gradient reduction over
+        # every register row is a measured bottleneck (see the dual-res pixel-branch
+        # program), and the affine is redundant immediately before the blocks' own
+        # linear projections. The K/V input_norm(s) and the final output norm are
+        # unaffected.
+        block_norm_layer: Any = (
+            nn.LayerNorm
+            if norm_affine
+            else functools.partial(nn.LayerNorm, elementwise_affine=False)
+        )
+        # Latent self-attention width/heads, decoupled from the reads when requested.
+        # Passing latent_attn_dim == register_dim means "tied width": build the classic
+        # Block (attn_dim=None) instead of a redundantly-projected decoupled one.
+        if latent_attn_dim is not None:
+            resolved_latent_attn_dim = (
+                None if latent_attn_dim == register_dim else latent_attn_dim
+            )
+        else:
+            resolved_latent_attn_dim = attn_dim
+        resolved_latent_num_heads = (
+            latent_num_heads if latent_num_heads is not None else num_heads
+        )
         self.read_blocks = nn.ModuleList(
             [
                 Block(
@@ -1961,6 +2029,7 @@ class SpatialRegisterBottleneck(nn.Module):
                     mlp_ratio,
                     qkv_bias=True,
                     qk_norm=qk_norm,
+                    norm_layer=block_norm_layer,
                     cross_attn=True,
                     use_flash_attn=False,
                     position_encoding=read_position_encoding,
@@ -1985,10 +2054,11 @@ class SpatialRegisterBottleneck(nn.Module):
             [
                 Block(
                     register_dim,
-                    num_heads,
+                    resolved_latent_num_heads,
                     mlp_ratio,
                     qkv_bias=True,
                     qk_norm=qk_norm,
+                    norm_layer=block_norm_layer,
                     cross_attn=False,
                     use_flash_attn=False,
                     position_encoding=(
@@ -1997,7 +2067,7 @@ class SpatialRegisterBottleneck(nn.Module):
                         else PositionEncoding.ABSOLUTE
                     ),
                     rope_base=rope_base,
-                    attn_dim=attn_dim,
+                    attn_dim=resolved_latent_attn_dim,
                 )
                 for _ in range(num_latent_blocks)
             ]
@@ -2053,6 +2123,45 @@ class SpatialRegisterBottleneck(nn.Module):
         )  # [n_reg, 2] in [0, 1]
         return grid.unsqueeze(0) * max_pos.unsqueeze(1)  # [B, n_reg, 2]
 
+    def build_pixel_register_positions(
+        self,
+        batch_size: int,
+        register_grid: tuple[int, int],
+        patch_size: int,
+        patch_coordinate_scale: float,
+        device: torch.device,
+    ) -> Tensor:
+        """Pixel-center register coordinates in the patch RoPE frame.
+
+        Patch ``i`` sits at ``i * patch_coordinate_scale`` (see
+        ``_spatial_grid``), so pixel ``p`` of the flattened pixel axis -- the
+        ``(p % patch_size)``-th pixel of patch ``p // patch_size`` -- has its
+        center at ``((p + 0.5) / patch_size - 0.5) * patch_coordinate_scale``.
+        At ``patch_size=1`` this reduces to the patch coordinates exactly, so a
+        pixel-grid model at ps=1 sees the same register frame as the
+        patch-matched grid.
+
+        Args:
+            batch_size: Batch size to expand the shared grid to.
+            register_grid: ``(n_h, n_w)`` PIXEL grid (patch grid * patch_size).
+            patch_size: Patch size of this forward pass.
+            patch_coordinate_scale: Spacing of the patch RoPE coordinates (the
+                GSD ratio times the encoder's rope_coordinate_scale).
+            device: Device to build the coordinates on.
+
+        Returns:
+            ``[B, n_h * n_w, 2]`` pixel-center register coordinates.
+        """
+        n_h, n_w = register_grid
+
+        def _axis(n: int) -> Tensor:
+            pix = torch.arange(n, device=device, dtype=torch.float32)
+            return ((pix + 0.5) / patch_size - 0.5) * patch_coordinate_scale
+
+        grid_h, grid_w = torch.meshgrid(_axis(n_h), _axis(n_w), indexing="ij")
+        grid = torch.stack([grid_h, grid_w], dim=-1).reshape(-1, 2)
+        return grid.unsqueeze(0).expand(batch_size, -1, -1)
+
     def _fuse_read_sources(
         self, patch_tokens: list[Tensor], visible_mask: Tensor | None
     ) -> Tensor:
@@ -2101,6 +2210,9 @@ class SpatialRegisterBottleneck(nn.Module):
         spatial_grid: tuple[int, int] | None = None,
         window_half_extent: float | None = None,
         patch_is_global: Tensor | None = None,
+        patch_size: int | None = None,
+        patch_coordinate_scale: float | None = None,
+        register_init: Tensor | None = None,
     ) -> tuple[Tensor, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -2123,6 +2235,15 @@ class SpatialRegisterBottleneck(nn.Module):
             patch_is_global: Optional ``[B, N]`` bool, True where a patch key is non-spatial
                 and should be readable from every register regardless of the window. Used
                 only when ``window_half_extent`` is set.
+            patch_size: Patch size of this forward pass; required in pixel-grid mode
+                (the register grid is ``spatial_grid * patch_size``), ignored otherwise.
+            patch_coordinate_scale: Spacing of the patch RoPE coordinates (GSD ratio x
+                rope_coordinate_scale); required in pixel-grid mode to place the
+                pixel-center register coordinates, ignored otherwise.
+            register_init: Optional ``[B, num_registers, register_dim]`` additive
+                initialization for the register grid (e.g. a pixel branch's per-pixel
+                features through a zero-init projection), added to the (cloned)
+                learned latent before the first read. Dynamic mode only.
 
         Returns:
             registers: ``[B, num_registers, register_dim]``
@@ -2180,7 +2301,20 @@ class SpatialRegisterBottleneck(nn.Module):
                 raise ValueError(
                     "dynamic register bottleneck requires a spatial_grid (the patch grid)"
                 )
-            register_grid = spatial_grid
+            if self.pixel_grid:
+                if patch_size is None or patch_coordinate_scale is None:
+                    raise ValueError(
+                        "pixel-grid register bottleneck requires patch_size and "
+                        "patch_coordinate_scale at forward time"
+                    )
+                # Registers at PIXEL resolution: one cell per pixel of the (finest)
+                # spatial modality, whatever the patch size the reads run at.
+                register_grid = (
+                    spatial_grid[0] * patch_size,
+                    spatial_grid[1] * patch_size,
+                )
+            else:
+                register_grid = spatial_grid
             # Expose the grid actually used so eval/supervision can reshape the registers.
             self.register_grid = register_grid
             num_registers = register_grid[0] * register_grid[1]
@@ -2197,6 +2331,15 @@ class SpatialRegisterBottleneck(nn.Module):
             registers = (
                 self.registers.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
             )
+        if register_init is not None:
+            if not self.dynamic_grid:
+                raise ValueError("register_init is only supported in dynamic mode")
+            if register_init.shape != registers.shape:
+                raise ValueError(
+                    f"register_init shape {tuple(register_init.shape)} does not match "
+                    f"the register grid {tuple(registers.shape)}"
+                )
+            registers = registers + register_init.to(registers.dtype)
         # With a temporal anchor the K/V positions arrive as anchor-relative
         # (t, row, col). Everything spatial -- register placement, windowing, the
         # latent blocks' 2D RoPE, the returned positions -- uses the (row, col)
@@ -2215,9 +2358,19 @@ class SpatialRegisterBottleneck(nn.Module):
                 raise ValueError(
                     "patch_positions are required for the RoPE register bottleneck"
                 )
-            register_positions = self.build_register_positions(
-                spatial_patch_positions, register_grid
-            )
+            if self.pixel_grid:
+                assert patch_size is not None and patch_coordinate_scale is not None
+                register_positions = self.build_pixel_register_positions(
+                    batch_size,
+                    register_grid,
+                    patch_size,
+                    patch_coordinate_scale,
+                    device=reference_tokens.device,
+                )
+            else:
+                register_positions = self.build_register_positions(
+                    spatial_patch_positions, register_grid
+                )
         # Read mask: by default just the [B, N] key-visibility mask. With windowing the
         # read instead restricts each register to a spatial window of the patch tokens
         # (non-spatial patches stay globally readable), AND-ed with visibility; the latent
@@ -2382,6 +2535,17 @@ class Encoder(FlexiVitBase):
         register_projection_type: str = "linear",
         register_unit_norm: bool = False,
         register_unit_norm_scale: float | None = None,
+        register_pixel_grid: bool = False,
+        register_latent_attn_dim: int | None = None,
+        register_latent_num_heads: int | None = None,
+        register_norm_affine: bool = True,
+        pixel_branch_type: str | None = None,
+        pixel_embedding_size: int = 128,
+        pixel_every_k_blocks: int = 4,
+        pixel_conv_kernel: int = 3,
+        pixel_mlp_ratio: float = 4.0,
+        pixel_thin_depth: int = 4,
+        pixel_grad_checkpointing: bool = True,
     ):
         """Initialize the encoder.
 
@@ -2566,6 +2730,45 @@ class Encoder(FlexiVitBase):
                 deployed embedding. Defaults to False.
             register_unit_norm_scale: Radius of that sphere; ``None`` uses
                 ``sqrt(register_dim)`` so the change is scale-neutral at init.
+            register_pixel_grid: If True, lay the dynamic register grid at PIXEL
+                resolution (``patch grid * patch_size``) instead of matching the
+                patch grid: one register per pixel regardless of the trunk's patch
+                size, placed at pixel-center RoPE coordinates in the patch frame.
+                Requires the dynamic grid (``register_grid_size=0``). Latent
+                self-attention is quadratic in the pixel count -- pair with
+                ``register_latent_attn_dim`` to keep it affordable.
+            register_latent_attn_dim: If set, the latent self-attention blocks run
+                at this width while the READ blocks keep ``register_attn_dim`` --
+                decouples the (pixel-count-quadratic) LSA cost from the wideread
+                read shape. ``None`` keeps both at ``register_attn_dim``.
+            register_latent_num_heads: Head count for the latent self-attention
+                blocks when ``register_latent_attn_dim`` is set. ``None`` inherits
+                ``register_num_heads``.
+            register_norm_affine: If False, the bottleneck's per-block LayerNorms
+                are affine-free (``elementwise_affine=False``); at pixel-resolution
+                register counts the gamma/beta gradient reduction is a measured
+                cost and the affine is redundant with the blocks' projections.
+                The input and final output norms keep their affine.
+            pixel_branch_type: If set, attach the convolutional pixel branch whose
+                final ONLINE-pooled per-pixel features initialize the pixel
+                register grid through a zero-init projection (see
+                ``nn/pixel_branch.py``). ``"conv"`` interleaves FiLM-fused steps
+                with the coarse blocks; ``"thinconv"`` runs a standalone
+                unconditioned stack with no coarse interaction. Requires
+                ``register_pixel_grid``; incompatible with ``use_flash_attn`` and
+                encoder register tokens. None (default) -> no branch.
+            pixel_embedding_size: Per-pixel embedding dimension (Dp) of the pixel
+                branch.
+            pixel_every_k_blocks: ``"conv"`` only: run one pixel step after every
+                k-th coarse block (``depth`` must be divisible by k).
+            pixel_conv_kernel: Depthwise convolution kernel size of the pixel
+                steps (odd).
+            pixel_mlp_ratio: Pointwise MLP hidden-dim ratio of the pixel steps.
+            pixel_thin_depth: ``"thinconv"`` only: number of unconditioned conv
+                steps in the standalone stack.
+            pixel_grad_checkpointing: Recompute the pixel steps in backward
+                instead of storing their pixel-resolution activations (the steps
+                have no dropout, so recomputation is deterministic).
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2721,6 +2924,10 @@ class Encoder(FlexiVitBase):
                 rope_temporal_base=rope_temporal_base,
                 unit_norm=register_unit_norm,
                 unit_norm_scale=register_unit_norm_scale,
+                pixel_grid=register_pixel_grid,
+                latent_attn_dim=register_latent_attn_dim,
+                latent_num_heads=register_latent_num_heads,
+                norm_affine=register_norm_affine,
             )
             # Detached low-dim "student" readout (see the __init__ docstring). Both
             # variants consume DETACHED inputs, so the student is invisible to the
@@ -2777,9 +2984,12 @@ class Encoder(FlexiVitBase):
                         temporal_rope_dim_frac=temporal_rope_dim_frac,
                         rope_temporal_base=rope_temporal_base,
                         # The student IS the served embedding when it is deployed, so
-                        # it takes the same constraint as the primary.
+                        # it takes the same constraint as the primary (and mirrors its
+                        # grid resolution / norm convention).
                         unit_norm=register_unit_norm,
                         unit_norm_scale=register_unit_norm_scale,
+                        pixel_grid=register_pixel_grid,
+                        norm_affine=register_norm_affine,
                     )
                 # One back-projection per Matryoshka prefix: dim d reconstructs the
                 # teacher from student[..., :d], forcing the first d dims to be
@@ -2822,6 +3032,49 @@ class Encoder(FlexiVitBase):
             aggregate_then_project=aggregate_then_project,
         )
 
+        # Convolutional pixel branch whose final per-pixel features initialize the
+        # pixel-resolution register grid (see nn/pixel_branch.py, ported from the
+        # dual-res encoder program). "conv" interleaves FiLM-fused steps with the
+        # coarse blocks; "thinconv" runs a standalone unconditioned stack.
+        self.pixel_branch = None
+        self.pixel_every_k_blocks = pixel_every_k_blocks
+        if pixel_branch_type is not None:
+            if self.register_bottleneck is None or not register_pixel_grid:
+                raise ValueError(
+                    "pixel_branch_type requires the pixel-resolution register "
+                    "bottleneck (use_register_bottleneck + register_pixel_grid): "
+                    "the branch's only consumer is the register initialization"
+                )
+            if use_flash_attn or self.has_register_tokens:
+                raise NotImplementedError(
+                    "the pixel branch does not support use_flash_attn or encoder "
+                    "register tokens (the conv fusion regathers the dense layout)"
+                )
+            if pixel_branch_type == "conv":
+                if depth % pixel_every_k_blocks != 0:
+                    raise ValueError(
+                        f"encoder depth ({depth}) must be divisible by "
+                        f"pixel_every_k_blocks ({pixel_every_k_blocks})"
+                    )
+                num_steps = depth // pixel_every_k_blocks
+            else:
+                num_steps = pixel_thin_depth
+            # Local import: pixel_branch imports helpers from this module.
+            from olmoearth_pretrain.nn.pixel_branch import PixelRegisterBranch
+
+            self.pixel_branch = PixelRegisterBranch(
+                supported_modality_names=self.supported_modality_names,
+                coarse_dim=embedding_size,
+                register_dim=self.register_dim,
+                pixel_dim=pixel_embedding_size,
+                branch_type=pixel_branch_type,
+                num_steps=num_steps,
+                kernel_size=pixel_conv_kernel,
+                mlp_ratio=pixel_mlp_ratio,
+                tokenization_config=self.tokenization_config,
+                grad_checkpointing=pixel_grad_checkpointing,
+            )
+
         self.apply(self._init_weights)
 
         if frozen_patch_embeddings:
@@ -2829,6 +3082,10 @@ class Encoder(FlexiVitBase):
                 p.requires_grad = False
         if self.has_register_tokens:
             self._init_register_tokens()
+        if self.pixel_branch is not None:
+            # After the blanket init: every fusion path starts at zero, so the model
+            # is exactly the branch-free model at step 0 (init equivalence).
+            self.pixel_branch.zero_init()
 
     def enable_band_dropout(self) -> None:
         """Enable band dropout using the configured rate.
@@ -3121,6 +3378,56 @@ class Encoder(FlexiVitBase):
         t_rel = torch.where(temporal_flag, t - anchor[:, None], torch.zeros_like(t))
         return torch.cat([t_rel[..., None], positions[..., 1:]], dim=-1)
 
+    def _run_conv_pixel_step(
+        self,
+        step_idx: int,
+        tokens: Tensor,
+        frames: Tensor,
+        ctx: Any,
+        indices: Tensor | None,
+        new_mask: Tensor | None,
+        max_seqlen: Tensor | None,
+    ) -> tuple[Tensor, Tensor]:
+        """Run one interleaved conv pixel step against the current coarse tokens.
+
+        The trunk holds the coarse tokens PACKED (masked removed); the conv fusion
+        works on whole per-modality slabs of the dense collapsed layout, so this
+        unpacks (masked positions become zeros -- their FiLM / pooled outputs land on
+        positions that are never read), runs the step, and regathers. Under
+        ``fast_pass`` (``indices is None``) the tokens already are the dense layout.
+        Optionally gradient-checkpointed: the step's pixel-resolution activations are
+        recomputed in backward instead of stored (the branch has no dropout, so the
+        recomputation is deterministic).
+        """
+        assert self.pixel_branch is not None
+        # Non-Optional local: the narrowing above does not survive into the closure.
+        pixel_branch: PixelRegisterBranch = self.pixel_branch
+
+        def run(tokens_in: Tensor, frames_in: Tensor) -> tuple[Tensor, Tensor]:
+            if indices is None:
+                dense = tokens_in
+            else:
+                assert new_mask is not None
+                dense, _ = self.add_removed_tokens(tokens_in, indices, new_mask)
+            dense, frames_out = pixel_branch.run_conv_step(
+                step_idx, frames_in, dense, ctx
+            )
+            if indices is None:
+                return dense, frames_out
+            assert new_mask is not None
+            # Regather the packed ONLINE layout (same gather remove_masked_tokens
+            # produced; indices/new_mask/max_seqlen are fixed for the whole forward).
+            d = dense.shape[-1]
+            packed = dense.gather(1, indices[:, :, None].expand(-1, -1, d))
+            packed = packed[:, :max_seqlen] * new_mask.unsqueeze(-1)
+            return packed, frames_out
+
+        if pixel_branch.grad_checkpointing and torch.is_grad_enabled():
+            return torch.utils.checkpoint.checkpoint(
+                run, tokens, frames, use_reentrant=False
+            )
+        return run(tokens, frames)
+
     def apply_attn(
         self,
         x: dict[str, Tensor],
@@ -3129,6 +3436,7 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        input_sample: MaskedOlmoEarthSample | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -3297,6 +3605,25 @@ class Encoder(FlexiVitBase):
             multi_depth_read_layers = set(self.register_bottleneck.read_layers)
         cached_read_tokens: dict[int, Tensor] = {}
 
+        # Pixel branch: embed the raw sample's pixels into dense frames (non-ONLINE
+        # pixels zeroed -- the leakage guard). "thinconv" runs its whole stack here,
+        # independent of the trunk; "conv" interleaves with the blocks below. The
+        # final frames initialize the pixel-resolution register grid.
+        pixel_frames: Tensor | None = None
+        pixel_ctx = None
+        if self.pixel_branch is not None and input_sample is not None:
+            pixel_frames, pixel_ctx = self.pixel_branch.build_frames(
+                input_sample, patch_size
+            )
+            if pixel_ctx is not None:
+                from olmoearth_pretrain.nn.pixel_branch import compute_coarse_offsets
+
+                pixel_ctx.coarse_offsets = compute_coarse_offsets(
+                    modalities_to_dims_dict
+                )
+                if self.pixel_branch.branch_type == "thinconv":
+                    pixel_frames = self.pixel_branch.run_thin_steps(pixel_frames)
+
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
@@ -3324,6 +3651,24 @@ class Encoder(FlexiVitBase):
                 rope_positions=positions,
                 window_spec=window_spec,
             )
+            # Interleaved "conv" pixel step: refine the dense pixel frames (FiLM from
+            # the current coarse tokens) and fuse the pooled pixel update back into
+            # the coarse stream, after every k-th block.
+            if (
+                pixel_frames is not None
+                and self.pixel_branch is not None
+                and self.pixel_branch.branch_type == "conv"
+                and (i_blk + 1) % self.pixel_every_k_blocks == 0
+            ):
+                tokens, pixel_frames = self._run_conv_pixel_step(
+                    step_idx=(i_blk + 1) // self.pixel_every_k_blocks - 1,
+                    tokens=tokens,
+                    frames=pixel_frames,
+                    ctx=pixel_ctx,
+                    indices=indices,
+                    new_mask=new_mask,
+                    max_seqlen=max_seqlen,
+                )
             # Stash this depth's output for the multi-depth register read (1-indexed).
             if (i_blk + 1) in multi_depth_read_layers:
                 cached_read_tokens[i_blk + 1] = tokens
@@ -3399,6 +3744,20 @@ class Encoder(FlexiVitBase):
                 ]
             else:
                 patch_tokens_arg = tokens
+            # In pixel-grid mode the bottleneck needs the patch size (to size the
+            # pixel grid) and the patch coordinate spacing (to place pixel-center
+            # RoPE coordinates in the same frame the patch positions use).
+            register_patch_coordinate_scale = (
+                CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
+                * self.rope_coordinate_scale
+            )
+            # Pixel-branch handoff: the branch's final per-pixel features (pooled
+            # ONLINE-only over timesteps/band sets, zero-init projected) additively
+            # initialize the cloned register latent.
+            register_init: Tensor | None = None
+            if pixel_frames is not None and pixel_ctx is not None:
+                assert self.pixel_branch is not None
+                register_init = self.pixel_branch.register_init(pixel_frames, pixel_ctx)
             registers, register_positions = self.register_bottleneck(
                 patch_tokens=patch_tokens_arg,
                 patch_positions=register_kv_positions,
@@ -3410,6 +3769,9 @@ class Encoder(FlexiVitBase):
                 patch_is_global=(
                     ~patch_spatial_flag if patch_spatial_flag is not None else None
                 ),
+                patch_size=patch_size,
+                patch_coordinate_scale=register_patch_coordinate_scale,
+                register_init=register_init,
             )
             register_output = {
                 "registers": registers,
@@ -3434,6 +3796,8 @@ class Encoder(FlexiVitBase):
                     patch_is_global=(
                         ~patch_spatial_flag if patch_spatial_flag is not None else None
                     ),
+                    patch_size=patch_size,
+                    patch_coordinate_scale=register_patch_coordinate_scale,
                 )
                 register_output["projected_registers"] = projected
 
@@ -3482,6 +3846,9 @@ class Encoder(FlexiVitBase):
                     input_res=input_res,
                     token_exit_cfg=token_exit_cfg,
                     fast_pass=fast_pass,
+                    # The pixel branch embeds the RAW sample (pixel-level values and
+                    # masks), which the patchified dict no longer carries.
+                    input_sample=x if self.pixel_branch is not None else None,
                 )
             )
         else:
@@ -4217,6 +4584,52 @@ class EncoderConfig(Config):
     # output norm, so turning this on does not also rescale the decoder's context
     # input (which would confound the constraint with a global rescale).
     register_unit_norm_scale: float | None = None
+    # Registers at PIXEL resolution: the dynamic single latent is cloned onto
+    # (patch_grid * patch_size) cells at pixel-center RoPE coordinates, whatever patch
+    # size the encoder/reads run at (at ps=1 this is identical to the patch-matched
+    # grid). Requires register_grid_size=0 (dynamic mode). The decoder and supervision
+    # heads consume the finer grid unchanged; latent self-attention over the pixel grid
+    # is quadratic in the pixel count -- pair with register_latent_attn_dim (and see
+    # SupervisionHeadConfig.spatial_unfold) to keep it affordable.
+    register_pixel_grid: bool = False
+    # If set, decouple the LATENT self-attention width from the read width: latent
+    # blocks run attention at this width while reads keep register_attn_dim. Set to
+    # register_dim for classic tied-width latent blocks under a wideread config --
+    # needed at pixel-resolution register counts, where wideread LSA is ~6x the FLOPs.
+    # None (default) keeps latent blocks at register_attn_dim (backwards compatible).
+    register_latent_attn_dim: int | None = None
+    # Head count for the decoupled latent self-attention (e.g. 2 x 64-dim heads at
+    # width 128, the width-sweep convention of fixing head_dim at 64). None -> the
+    # bottleneck head count (register_num_heads / num_heads).
+    register_latent_num_heads: int | None = None
+    # If False, the bottleneck read/latent blocks use affine-free LayerNorms: at
+    # pixel-resolution register counts the gamma/beta gradient reduction over every
+    # register row is a measured bottleneck, and the affine is redundant before the
+    # blocks' own linear projections. The K/V input norms and the final output norm
+    # keep their affine. True (default) keeps standard norms (backwards compatible).
+    register_norm_affine: bool = True
+    # Convolutional pixel branch whose final per-pixel features initialize the
+    # pixel-resolution register grid through a zero-init projection (ported from the
+    # dual-res encoder program; see nn/pixel_branch.py). "conv": FiLM-modulated
+    # ConvNeXt steps on the dense pixel grid interleaved with the coarse trunk
+    # (zero-init fusion both ways -- the old program's top pick); "thinconv": a
+    # standalone unconditioned conv stack with NO coarse interaction (isolates the
+    # value of an independent high-res register init). Requires register_pixel_grid.
+    # None (default) -> no pixel branch.
+    pixel_branch_type: str | None = None
+    # Per-pixel embedding dimension (Dp) of the pixel branch.
+    pixel_embedding_size: int = 128
+    # "conv" only: run a pixel step after every k-th coarse block (depth % k == 0).
+    pixel_every_k_blocks: int = 4
+    # Depthwise convolution kernel size (odd).
+    pixel_conv_kernel: int = 3
+    # Pointwise MLP hidden-dim ratio of the conv steps.
+    pixel_mlp_ratio: float = 4.0
+    # "thinconv" only: depth of the standalone conv stack.
+    pixel_thin_depth: int = 4
+    # Recompute each pixel step in backward instead of storing its pixel-resolution
+    # activations (the branch has no dropout, so recomputation is deterministic).
+    pixel_grad_checkpointing: bool = True
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -4321,6 +4734,38 @@ class EncoderConfig(Config):
                     "2D RoPE requires register head_dim divisible by 4, got "
                     f"{attn_width // register_heads}"
                 )
+            if self.register_pixel_grid and self.register_grid_size != 0:
+                raise ValueError(
+                    "register_pixel_grid requires register_grid_size=0 (the dynamic "
+                    "single-latent grid): the pixel grid is resolved from the patch "
+                    f"grid at forward time, got register_grid_size="
+                    f"{self.register_grid_size}"
+                )
+            # The (possibly decoupled) latent self-attention width must fund its own
+            # head shape, exactly like the read width above.
+            latent_attn_width = (
+                self.register_latent_attn_dim
+                if self.register_latent_attn_dim is not None
+                else attn_width
+            )
+            latent_heads = (
+                self.register_latent_num_heads
+                if self.register_latent_num_heads is not None
+                else register_heads
+            )
+            if latent_attn_width % latent_heads != 0:
+                raise ValueError(
+                    f"register latent attention width ({latent_attn_width}) must be "
+                    f"divisible by its head count ({latent_heads})"
+                )
+            if (
+                PositionEncoding.is_rope(self.position_encoding)
+                and (latent_attn_width // latent_heads) % 4 != 0
+            ):
+                raise ValueError(
+                    "2D RoPE requires register latent head_dim divisible by 4, got "
+                    f"{latent_attn_width // latent_heads}"
+                )
             if self.register_read_layers is not None:
                 if sorted(set(self.register_read_layers)) != list(
                     self.register_read_layers
@@ -4378,6 +4823,36 @@ class EncoderConfig(Config):
             raise ValueError(
                 "register_projection_dims requires use_register_bottleneck=True"
             )
+        elif self.register_pixel_grid:
+            raise ValueError(
+                "register_pixel_grid requires use_register_bottleneck=True"
+            )
+        if self.pixel_branch_type is not None:
+            if self.pixel_branch_type not in ("conv", "thinconv"):
+                raise ValueError(
+                    "pixel_branch_type must be 'conv' or 'thinconv', got "
+                    f"{self.pixel_branch_type!r}"
+                )
+            if not (self.use_register_bottleneck and self.register_pixel_grid):
+                raise ValueError(
+                    "pixel_branch_type requires use_register_bottleneck=True and "
+                    "register_pixel_grid=True (the branch initializes the "
+                    "pixel-resolution register grid)"
+                )
+            if self.use_flash_attn or self.num_register_tokens > 0:
+                raise ValueError(
+                    "pixel_branch_type is incompatible with use_flash_attn and with "
+                    "encoder register tokens (the conv fusion regathers the dense "
+                    "token layout)"
+                )
+            if (
+                self.pixel_branch_type == "conv"
+                and self.depth % self.pixel_every_k_blocks != 0
+            ):
+                raise ValueError(
+                    f"encoder depth ({self.depth}) must be divisible by "
+                    f"pixel_every_k_blocks ({self.pixel_every_k_blocks})"
+                )
         if self.register_contrastive_source not in ("registers", "encoder_tokens"):
             raise ValueError(
                 "register_contrastive_source must be 'registers' or 'encoder_tokens', "
