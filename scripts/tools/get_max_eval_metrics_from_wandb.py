@@ -4,7 +4,12 @@ import argparse
 import csv
 import json
 import re
+import time
 from collections import defaultdict
+from collections.abc import Iterator
+from datetime import datetime
+from queue import Queue
+from threading import Thread
 
 import numpy as np
 import pandas as pd
@@ -26,6 +31,331 @@ from olmoearth_pretrain.internal.all_evals import (
 from olmoearth_pretrain.train.callbacks.evaluator_callback import EvalMode
 
 WANDB_ENTITY = "eai-ai2"
+
+# W&B's default public-API timeout is 19s, which large eval projects blow through
+# while paginating (each page carries every run's full config + summary blob).
+DEFAULT_WANDB_TIMEOUT = 120
+# Runs per GraphQL page. Bigger pages = fewer round trips, but a heavier response
+# per request; on a timeout we halve this down to MIN_RUNS_PER_PAGE and retry.
+DEFAULT_RUNS_PER_PAGE = 200
+MIN_RUNS_PER_PAGE = 10
+DEFAULT_MAX_PAGE_RETRIES = 8
+# Parallel createdAt shards to paginate with. Cursor pagination is sequential per
+# query, so sharding is the only way to overlap requests; the server throttles, so
+# throughput scales sub-linearly (~1.8x at 4 workers).
+DEFAULT_FETCH_WORKERS = 4
+# Fields in W&B's run fragment that we never read but that dominate the response
+# size for eval runs (historyKeys lists a spec for every logged metric, and eval
+# runs log hundreds).
+UNUSED_RUN_FRAGMENT_FIELDS = ("systemMetrics", "historyKeys")
+
+
+def make_api(timeout: int = DEFAULT_WANDB_TIMEOUT) -> wandb.Api:
+    """Build a W&B public API client with a timeout that survives large projects."""
+    _memoize_server_capability_probes()
+    return wandb.Api(timeout=timeout)
+
+
+def _memoize_server_capability_probes() -> None:
+    """Stop wandb re-probing the server's schema once per Run object.
+
+    `wandb.apis.public.runs` runs a GraphQL introspection query to decide whether
+    the server exposes `projectId`/`internalId`, and (despite the "only performed
+    once" comment on it) calls it from `Run.__init__` for every single run -- an
+    extra round trip per run, which dominates the wall clock when listing a large
+    project. The answer only depends on the server, so cache it per client.
+    """
+    from wandb.apis.public import runs as wandb_runs
+
+    for name in (
+        "_server_provides_project_id_for_run",
+        "_server_provides_internal_id_for_project",
+    ):
+        probe = getattr(wandb_runs, name, None)
+        if probe is None or getattr(probe, "_memoized_by_helios", False):
+            continue
+
+        def memoized(client, _probe=probe, _cache={}):  # noqa: B006
+            # Keep the client alive in the cache so its id() can't be recycled
+            # onto a different client.
+            key = id(client)
+            if key not in _cache:
+                _cache[key] = (client, _probe(client))
+            return _cache[key][1]
+
+        memoized._memoized_by_helios = True
+        setattr(wandb_runs, name, memoized)
+
+
+def _lean_runs_query():
+    """Build the paged runs query with the heavy unused fields stripped out.
+
+    Mirrors wandb.apis.public.runs._create_runs_query but drops `systemMetrics`
+    and `historyKeys` from the run fragment (and the optional internalId/projectId
+    fields, which we don't read either). Returns None if the vendored fragment no
+    longer looks the way we expect, in which case callers keep W&B's own query.
+    """
+    try:
+        from wandb.apis.public.runs import RUN_FRAGMENT, RUN_FRAGMENT_NAME
+        from wandb_gql import gql
+
+        fragment = RUN_FRAGMENT
+        for field in UNUSED_RUN_FRAGMENT_FIELDS:
+            fragment, n_subs = re.subn(
+                rf"^\s*{field}\s*$\n", "", fragment, flags=re.MULTILINE
+            )
+            if n_subs == 0:
+                # Fragment changed upstream; don't risk a hand-rolled query.
+                return None
+        return gql(
+            f"""#graphql
+            query Runs($project: String!, $entity: String!, $cursor: String, $perPage: Int = 50, $order: String, $filters: JSONString) {{
+                project(name: $project, entityName: $entity) {{
+                    runCount(filters: $filters)
+                    readOnly
+                    runs(filters: $filters, after: $cursor, first: $perPage, order: $order) {{
+                        edges {{
+                            node {{
+                                ...{RUN_FRAGMENT_NAME}
+                            }}
+                            cursor
+                        }}
+                        pageInfo {{
+                            endCursor
+                            hasNextPage
+                        }}
+                    }}
+                }}
+            }}
+            {fragment}
+            """
+        )
+    except Exception as e:  # pragma: no cover - depends on the installed wandb
+        print(f"WARNING: falling back to the default W&B runs query ({e})")
+        return None
+
+
+def _run_prefix_filters(run_prefix: str | None) -> dict:
+    """Server-side filter for a run-name prefix (empty dict when unfiltered)."""
+    if not run_prefix:
+        return {}
+    return {"displayName": {"$regex": f"^{re.escape(run_prefix)}"}}
+
+
+def _count_runs(wandb_path: str, filters: dict, timeout: int) -> int:
+    """Number of runs matching `filters`, via a cheap metadata-only query."""
+    # A dedicated Api: wandb caches Runs objects by (path, filters, order) and
+    # ignores `lazy`, so a lazy count query on a shared Api would be handed back
+    # for the real fetch and then "upgraded" one run at a time.
+    api = make_api(timeout)
+    return len(api.runs(wandb_path, filters=filters, per_page=1, lazy=True))
+
+
+def _shard_filters_by_created_at(
+    wandb_path: str, filters: dict, n_shards: int, timeout: int
+) -> list[dict] | None:
+    """Split `filters` into `n_shards` disjoint createdAt buckets of equal size.
+
+    Pagination is cursor-based and therefore sequential, but disjoint filters can
+    be paginated concurrently. Bucket edges are createdAt quantiles rather than
+    equal time slices: eval runs are launched in bursts, so equal time slices come
+    out badly lopsided (and often empty). Reading the timestamps costs one extra
+    metadata-only pass, which is cheap next to the config+summary payload.
+
+    Returns None (meaning: fetch sequentially) if the project is too small to be
+    worth sharding, or if the buckets don't add up to the same run count as the
+    unsharded query -- a mismatch would silently drop runs, which is far worse
+    than being slow.
+    """
+    api = make_api(timeout)
+    try:
+        # lazy=True: the lightweight fragment carries createdAt but none of the
+        # heavy fields, so this pass is a small fraction of the real fetch.
+        listing = api.runs(
+            wandb_path, filters=filters, order="+created_at", per_page=1000, lazy=True
+        )
+        total = len(listing)
+        if total < 2 * DEFAULT_RUNS_PER_PAGE:
+            return None
+        created_at = [
+            datetime.fromisoformat(run.created_at).isoformat() for run in listing
+        ]
+    except Exception as e:
+        print(f"WARNING: could not plan parallel shards ({e}); fetching sequentially")
+        return None
+
+    # Quantile edges, deduplicated: runs launched in the same second must not be
+    # split across shards, and identical edges would make empty buckets.
+    edges = sorted({created_at[i * total // n_shards] for i in range(n_shards)})
+    if len(edges) < 2:
+        return None
+
+    shards = []
+    for i, lower in enumerate(edges):
+        bucket: dict = {"$gte": lower}
+        # Half-open buckets, except the last one, which closes inclusively on the
+        # newest run so nothing falls off the end.
+        if i + 1 < len(edges):
+            bucket["$lt"] = edges[i + 1]
+        else:
+            bucket["$lte"] = created_at[-1]
+        shards.append({**filters, "createdAt": bucket})
+
+    counts = [_count_runs(wandb_path, shard, timeout) for shard in shards]
+    if sum(counts) != total:
+        print(
+            f"WARNING: createdAt shards cover {sum(counts)} of {total} runs; "
+            "fetching sequentially instead"
+        )
+        return None
+    print(f"Fetching {total} runs in {len(shards)} parallel shards: {counts}")
+    return shards
+
+
+def _iter_runs_matching(
+    api: wandb.Api,
+    wandb_path: str,
+    filters: dict,
+    per_page: int,
+    max_retries: int,
+    label: str = "",
+) -> Iterator[wandb.Run]:
+    """Paginate one filtered run query, retrying a failed page rather than dying."""
+    runs = api.runs(
+        wandb_path,
+        filters=filters or None,
+        per_page=per_page,
+        include_sweeps=False,
+        lazy=False,
+    )
+    lean_query = _lean_runs_query()
+    if lean_query is not None:
+        runs.QUERY = lean_query
+
+    index = 0
+    while True:
+        # Index into the paginator rather than calling next(): __getitem__ only
+        # mutates state after a page lands, so a failed fetch leaves the cursor
+        # untouched and the same index can simply be re-requested -- no page is
+        # re-downloaded and no run is skipped.
+        for attempt in range(max_retries + 1):
+            try:
+                run = runs[index]
+                break
+            except IndexError:
+                return
+            except Exception as e:
+                if attempt == max_retries:
+                    raise
+                delay = min(2**attempt, 30)
+                if runs.per_page > MIN_RUNS_PER_PAGE:
+                    runs.per_page = max(MIN_RUNS_PER_PAGE, runs.per_page // 2)
+                print(
+                    f"WARNING: {label}W&B page fetch failed after {index} runs "
+                    f"({type(e).__name__}: {e}); retrying in {delay}s with "
+                    f"per_page={runs.per_page} (attempt {attempt + 1}/{max_retries})"
+                )
+                time.sleep(delay)
+        yield run
+        index += 1
+
+
+def iter_runs(
+    api: wandb.Api,
+    wandb_path: str,
+    run_prefix: str | None = None,
+    per_page: int = DEFAULT_RUNS_PER_PAGE,
+    max_retries: int = DEFAULT_MAX_PAGE_RETRIES,
+    workers: int = DEFAULT_FETCH_WORKERS,
+    timeout: int = DEFAULT_WANDB_TIMEOUT,
+) -> Iterator[wandb.Run]:
+    """Iterate over a project's runs, resuming rather than dying on a timeout.
+
+    Faster and sturdier than `api.runs(path, lazy=False)`:
+      * `run_prefix` is pushed to the server as a displayName regex, so a prefixed
+        query never downloads the rest of the project;
+      * sweep lookups (one extra request per distinct sweep) are turned off;
+      * unused heavy fields are stripped from the query (see `_lean_runs_query`);
+      * a failed page is retried with backoff and a smaller page size;
+      * large projects are split into disjoint createdAt shards fetched in
+        parallel (runs are then yielded in arbitrary order).
+
+    Args:
+        api: the W&B API object, used when fetching sequentially.
+        wandb_path: "{entity}/{project}".
+        run_prefix: optional run-name prefix; filtered server-side when given.
+        per_page: initial page size.
+        max_retries: retries per page before giving up.
+        workers: parallel fetch shards; 1 disables sharding.
+        workers: parallel shards to fetch with; 1 disables sharding.
+        timeout: W&B API timeout for the per-shard clients, in seconds.
+
+    Yields:
+        wandb.Run objects, with config and summary already populated.
+    """
+    filters = _run_prefix_filters(run_prefix)
+    shards = (
+        _shard_filters_by_created_at(wandb_path, filters, workers, timeout)
+        if workers > 1
+        else None
+    )
+
+    if shards is None:
+        runs_iter = _iter_runs_matching(api, wandb_path, filters, per_page, max_retries)
+    else:
+        runs_iter = _iter_runs_sharded(
+            wandb_path, shards, per_page, max_retries, timeout
+        )
+
+    for run in runs_iter:
+        # Belt and braces: the server-side regex should already have done this.
+        if run_prefix and not run.name.startswith(run_prefix):
+            continue
+        yield run
+
+
+def _iter_runs_sharded(
+    wandb_path: str,
+    shards: list[dict],
+    per_page: int,
+    max_retries: int,
+    timeout: int,
+) -> Iterator[wandb.Run]:
+    """Paginate several disjoint run queries concurrently, yielding as they land."""
+    queue: Queue = Queue(maxsize=4 * per_page)
+    done = object()
+
+    def worker(index: int, filters: dict) -> None:
+        try:
+            # One client per thread: wandb's Api wraps a requests.Session, which
+            # is not safe to share across threads.
+            for run in _iter_runs_matching(
+                make_api(timeout),
+                wandb_path,
+                filters,
+                per_page,
+                max_retries,
+                label=f"[shard {index}] ",
+            ):
+                queue.put(run)
+        except BaseException as e:  # surfaced on the consumer thread
+            queue.put(e)
+        finally:
+            queue.put(done)
+
+    for i, shard in enumerate(shards):
+        Thread(target=worker, args=(i, shard), daemon=True).start()
+
+    remaining = len(shards)
+    while remaining:
+        item = queue.get()
+        if item is done:
+            remaining -= 1
+        elif isinstance(item, BaseException):
+            raise item
+        else:
+            yield item
+
 
 # Extra eval task names defined in ../olmoearth_plus_cropharvest (CROPHARVEST_EVAL_TASKS,
 # BREIZHCROPS_EVAL_TASKS, and OLD_NANDI_AWF_EVAL_TASKS in olmoearth_plus_cropharvest/run_evals.py).
@@ -114,6 +444,10 @@ def get_run_groups(
     run_prefix: str | None = None,
     group_baseline_model_and_size: bool = False,
     keep_steps_separate: bool = False,
+    timeout: int = DEFAULT_WANDB_TIMEOUT,
+    per_page: int = DEFAULT_RUNS_PER_PAGE,
+    max_retries: int = DEFAULT_MAX_PAGE_RETRIES,
+    workers: int = DEFAULT_FETCH_WORKERS,
 ) -> dict[str, dict[str, float]]:
     """Get the maximum value for each metric grouped by run prefix before '_step'.
 
@@ -123,19 +457,32 @@ def get_run_groups(
         group_baseline_model_and_size: if True, group by baseline model name and model size key instead of run prefix before '_step'.
         keep_steps_separate: if True, keep runs with different steps as separate groups
             instead of collapsing them by prefix.
+        timeout: W&B API timeout, in seconds.
+        per_page: runs fetched per W&B request.
+        max_retries: retries per page before giving up.
+        workers: parallel fetch shards; 1 disables sharding.
 
     Returns:
         a dictionary mapping from group name to a dict of metric name to max value.
     """
-    api = wandb.Api()
+    api = make_api(timeout)
     wandb_path = f"{WANDB_ENTITY}/{project_name}"
 
     if not group_baseline_model_and_size:
         grouped_runs = group_runs_by_run_prefix_and_step(
-            api, wandb_path, run_prefix, keep_steps_separate
+            api,
+            wandb_path,
+            run_prefix,
+            keep_steps_separate,
+            per_page,
+            max_retries,
+            workers,
+            timeout,
         )
     else:
-        grouped_runs = group_runs_by_baseline_model_and_size(api, wandb_path)
+        grouped_runs = group_runs_by_baseline_model_and_size(
+            api, wandb_path, per_page, max_retries, workers, timeout
+        )
 
     print(f"\nFound {len(grouped_runs)} groups")
 
@@ -149,6 +496,10 @@ def group_runs_by_run_prefix_and_step(
     wandb_path: str,
     run_prefix: str | None = None,
     keep_steps_separate: bool = False,
+    per_page: int = DEFAULT_RUNS_PER_PAGE,
+    max_retries: int = DEFAULT_MAX_PAGE_RETRIES,
+    workers: int = DEFAULT_FETCH_WORKERS,
+    timeout: int = DEFAULT_WANDB_TIMEOUT,
 ) -> dict[str, list[wandb.Run]]:
     """Group runs by their prefix before "_step".
 
@@ -158,22 +509,34 @@ def group_runs_by_run_prefix_and_step(
         run_prefix: optional prefix to filter runs. If None, processes all runs.
         keep_steps_separate: if True, use the full run name as the group key
             instead of stripping the step suffix.
+        per_page: runs fetched per W&B request.
+        max_retries: retries per page before giving up.
+        workers: parallel fetch shards; 1 disables sharding.
+        timeout: W&B API timeout for the per-shard clients, in seconds.
 
     Returns:
         a dictionary mapping from group name to a list of wandb.Run objects.
     """
     grouped_runs = defaultdict(list)
-    for run in api.runs(wandb_path, lazy=False):
-        if run_prefix and not run.name.startswith(run_prefix):
-            continue
+    for n_runs, run in enumerate(
+        iter_runs(api, wandb_path, run_prefix, per_page, max_retries, workers, timeout),
+        start=1,
+    ):
         group_name = get_run_group_name(run.name, keep_steps_separate)
         grouped_runs[group_name].append(run)
         print(f"Found run {run.name} ({run.id}) -> group: {group_name}")
+        if n_runs % 500 == 0:
+            print(f"... fetched {n_runs} runs so far")
     return grouped_runs
 
 
 def group_runs_by_baseline_model_and_size(
-    api: wandb.Api, wandb_path: str
+    api: wandb.Api,
+    wandb_path: str,
+    per_page: int = DEFAULT_RUNS_PER_PAGE,
+    max_retries: int = DEFAULT_MAX_PAGE_RETRIES,
+    workers: int = DEFAULT_FETCH_WORKERS,
+    timeout: int = DEFAULT_WANDB_TIMEOUT,
 ) -> dict[str, list[wandb.Run]]:
     """Group runs by their baseline model name and model size key."""
 
@@ -193,7 +556,9 @@ def group_runs_by_baseline_model_and_size(
         return f"{model_name.value}_{size}"
 
     grouped_runs = defaultdict(list)
-    for run in api.runs(wandb_path, lazy=False):
+    for run in iter_runs(
+        api, wandb_path, None, per_page, max_retries, workers, timeout
+    ):
         print(f"Processing run {run.name} ({run.id})")
         model_name, size = _find_model_name_and_size(run)
         if model_name in MODELS_WITH_MULTIPLE_SIZES and size is None:
@@ -518,7 +883,12 @@ def get_max_metrics_grouped(
 
 
 def get_max_metrics_per_partition(
-    project_name: str, run_prefix: str
+    project_name: str,
+    run_prefix: str,
+    timeout: int = DEFAULT_WANDB_TIMEOUT,
+    per_page: int = DEFAULT_RUNS_PER_PAGE,
+    max_retries: int = DEFAULT_MAX_PAGE_RETRIES,
+    workers: int = DEFAULT_FETCH_WORKERS,
 ) -> dict[str, dict[str, float]]:
     """Get the maximum value for each metric per dataset partition (excluding default).
 
@@ -529,42 +899,51 @@ def get_max_metrics_per_partition(
         project_name: the W&B project for the run.
         run_prefix: the prefix to search for. We will compute the maximum for each
             metric across all runs sharing this prefix within each partition.
+        timeout: W&B API timeout, in seconds.
+        per_page: runs fetched per W&B request.
+        max_retries: retries per page before giving up.
+        workers: parallel fetch shards; 1 disables sharding.
 
     Returns:
         a dictionary mapping from partition to a dict of metric name to max value.
     """
-    api = wandb.Api(timeout=10000)
+    api = make_api(timeout)
+
+    # List the project once and bucket the matching runs by partition, rather
+    # than re-paginating the whole project for every partition.
+    runs_per_partition: dict[str, list[wandb.Run]] = defaultdict(list)
+    for run in iter_runs(
+        api,
+        f"{WANDB_ENTITY}/{project_name}",
+        run_prefix,
+        per_page,
+        max_retries,
+        workers,
+        timeout,
+    ):
+        for partition in PARTITIONS:
+            if partition in run.name:
+                print(f"Found run {run.name} ({run.id}) for partition {partition}")
+                runs_per_partition[partition].append(run)
 
     # Dictionary to store max metrics for each partition
     partition_metrics = {}
 
-    # For each partition, find runs and get max metrics
     for partition in PARTITIONS:
         print(f"\nProcessing partition: {partition}")
-
-        # List all the runs in the project and find the subset matching the prefix and partition
-        run_ids: list[str] = []
-        for run in api.runs(f"{WANDB_ENTITY}/{project_name}", lazy=False):
-            if not run.name.startswith(run_prefix):
-                continue
-            # Check if run name contains the partition
-            if partition not in run.name:
-                continue
-            print(f"Found run {run.name} ({run.id}) for partition {partition}")
-            run_ids.append(run.id)
-
-        if not run_ids:
+        runs = runs_per_partition.get(partition, [])
+        if not runs:
             print(f"No runs found for partition {partition}")
             continue
 
         print(
-            f"Found {len(run_ids)} runs with prefix {run_prefix} and partition {partition}"
+            f"Found {len(runs)} runs with prefix {run_prefix} and partition {partition}"
         )
 
-        # Get the metrics for each run in this partition, and save max across runs
+        # Get the metrics for each run in this partition, and save max across runs.
+        # The summaries are already populated by iter_runs, so no refetch is needed.
         partition_max_metrics = {}
-        for run_id in run_ids:
-            run = api.run(f"{WANDB_ENTITY}/{project_name}/{run_id}")
+        for run in runs:
             for key, value in run.summary.items():
                 if not (key.startswith("eval/") or key.startswith("eval_other/")):
                     continue
@@ -578,7 +957,14 @@ def get_max_metrics_per_partition(
     return partition_metrics
 
 
-def get_max_metrics(project_name: str, run_prefix: str) -> dict[str, float]:
+def get_max_metrics(
+    project_name: str,
+    run_prefix: str,
+    timeout: int = DEFAULT_WANDB_TIMEOUT,
+    per_page: int = DEFAULT_RUNS_PER_PAGE,
+    max_retries: int = DEFAULT_MAX_PAGE_RETRIES,
+    workers: int = DEFAULT_FETCH_WORKERS,
+) -> dict[str, float]:
     """Get the maximum value for each metric across runs sharing the prefix.
 
     This assumes you have run a sweep like scripts/2025_06_23_naip/eval_sweep.py and now
@@ -588,25 +974,35 @@ def get_max_metrics(project_name: str, run_prefix: str) -> dict[str, float]:
         project_name: the W&B project for the run.
         run_prefix: the prefix to search for. We will compute the maximum for each
             metric across all runs sharing this prefix.
+        timeout: W&B API timeout, in seconds.
+        per_page: runs fetched per W&B request.
+        max_retries: retries per page before giving up.
+        workers: parallel fetch shards; 1 disables sharding.
 
     Returns:
         a dictionary mapping from the metric name to the max value.
     """
-    api = wandb.Api()
+    api = make_api(timeout)
 
     # List all the runs in the project and find the subset matching the prefix.
-    run_ids: list[str] = []
-    for run in api.runs(f"{WANDB_ENTITY}/{project_name}", lazy=False):
-        if not run.name.startswith(run_prefix):
-            continue
+    runs: list[wandb.Run] = []
+    for run in iter_runs(
+        api,
+        f"{WANDB_ENTITY}/{project_name}",
+        run_prefix,
+        per_page,
+        max_retries,
+        workers,
+        timeout,
+    ):
         print(f"Found run {run.name} ({run.id})")
-        run_ids.append(run.id)
-    print(f"Found {len(run_ids)} runs with prefix {run_prefix}")
+        runs.append(run)
+    print(f"Found {len(runs)} runs with prefix {run_prefix}")
 
-    # Get the metrics for each run, and save max across runs.
+    # Get the metrics for each run, and save max across runs. Summaries come
+    # back with the listing, so there is no per-run refetch here.
     metrics = {}
-    for run_id in run_ids:
-        run = api.run(f"{WANDB_ENTITY}/{project_name}/{run_id}")
+    for run in runs:
         for key, value in run.summary.items():
             if not (key.startswith("eval/") or key.startswith("eval_other/")):
                 continue
@@ -732,6 +1128,33 @@ if __name__ == "__main__":
         "runs without a matching seed segment are dropped. Mutually exclusive with --average-seeds.",
     )
     parser.add_argument(
+        "--wandb-timeout",
+        type=int,
+        default=DEFAULT_WANDB_TIMEOUT,
+        help=f"Timeout (seconds) for W&B API requests (default: {DEFAULT_WANDB_TIMEOUT}). "
+        "Raise it if pages still time out on very large projects.",
+    )
+    parser.add_argument(
+        "--per-page",
+        type=int,
+        default=DEFAULT_RUNS_PER_PAGE,
+        help=f"Runs fetched per W&B request (default: {DEFAULT_RUNS_PER_PAGE}). "
+        "Lower it to trade speed for smaller, more reliable responses.",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=DEFAULT_MAX_PAGE_RETRIES,
+        help=f"Retries per failed page before giving up (default: {DEFAULT_MAX_PAGE_RETRIES}).",
+    )
+    parser.add_argument(
+        "--fetch-workers",
+        type=int,
+        default=DEFAULT_FETCH_WORKERS,
+        help=f"Parallel shards to fetch runs with (default: {DEFAULT_FETCH_WORKERS}); "
+        "pass 1 to fetch sequentially.",
+    )
+    parser.add_argument(
         "--json_filename",
         type=str,
         default=None,
@@ -750,7 +1173,12 @@ if __name__ == "__main__":
             parser.error("--per-partition requires run_prefix to be specified")
         print("Getting max metrics per dataset partition (excluding default)...")
         partition_metrics = get_max_metrics_per_partition(
-            args.project_name, args.run_prefix
+            args.project_name,
+            args.run_prefix,
+            args.wandb_timeout,
+            args.per_page,
+            args.max_retries,
+            args.fetch_workers,
         )
 
         print("\nResults per partition:")
@@ -798,6 +1226,10 @@ if __name__ == "__main__":
             args.run_prefix,
             args.group_baseline_model_and_size,
             args.keep_steps_separate,
+            args.wandb_timeout,
+            args.per_page,
+            args.max_retries,
+            args.fetch_workers,
         )
         group_metrics, group_test_metrics, group_max_runs_per_metric = (
             get_max_metrics_grouped(
