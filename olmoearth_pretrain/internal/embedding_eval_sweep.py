@@ -609,11 +609,6 @@ def main() -> None:
     args, extra_cli = parser.parse_known_args()
 
     commands_to_run = build_commands(args, extra_cli)
-    if args.dry_run:
-        logger.info(f"--dry_run: would run {len(commands_to_run)} commands")
-        for cmd in commands_to_run:
-            logger.info(cmd)
-        return
     logger.info(f"Running {len(commands_to_run)} commands")
     for cmd in commands_to_run:
         logger.info(cmd)
