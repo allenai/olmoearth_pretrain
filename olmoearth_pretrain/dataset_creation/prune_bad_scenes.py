@@ -27,7 +27,9 @@ from upath import UPath
 
 # Product-id-shaped path components in error URLs, e.g.
 # LC08_L2SP_195021_20221105_20221115_02_T1 or S2A_MSIL2A_20220710T165911_...
-SCENE_ID_PATTERN = re.compile(r"/((?:LC|LE|LT|S1|S2)[A-Z0-9]{0,2}_[A-Za-z0-9_]+)/")
+SCENE_ID_PATTERN = re.compile(
+    r"/((?:LC|LE|LT|S1|S2)[A-Z0-9]{0,2}_[A-Za-z0-9_]+)(?:\.SAFE)?/"
+)
 
 
 def scene_ids_from_log(log_path: str) -> set[str]:
@@ -35,7 +37,7 @@ def scene_ids_from_log(log_path: str) -> set[str]:
     scene_ids = set()
     with open(log_path) as f:
         for line in f:
-            if "Error" not in line:
+            if "error" not in line.lower():
                 continue
             for match in SCENE_ID_PATTERN.finditer(line):
                 scene_ids.add(match.group(1))
