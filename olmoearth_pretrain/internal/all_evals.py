@@ -1842,6 +1842,34 @@ for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
             for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
         }
     )
+
+# The Landsat-ONLY stack, closing the sensor half-lattice: `sentinel2_landsat`
+# measures what Landsat ADDS to S2, and this measures what Landsat carries on
+# its own. That is the stack the DN-vs-reflectance A/B (the *_landsat_refl
+# pretraining configs) actually asks about: on every mixed stack the S2 stream
+# is byte-identical across the two arms, so it dilutes whatever the radiometry
+# change did to the Landsat representation.
+#
+# Registered as its own block rather than as a `_YEAR_ALIGNED_MODALITIES` entry
+# because that loop also emits `_sclmask` and `_cloudless` siblings, and both
+# mask through S2's SCL band -- with no S2 in the stack they would be exact
+# duplicates of the unmasked task under a name claiming otherwise. The
+# Landsat-side ladders (`_l8mask` / `_l8pixmask` / `_l8pixstrict`) iterate
+# explicit stack tuples, so they skip this stack; add "landsat" there if the
+# Landsat masking policies are wanted on it too.
+for _mode, _mode_suffix in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn")):
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_landsat{_mode_suffix}": _aef_ps1_task(
+                name,
+                _mode,
+                window_size=16,
+                input_modalities=[Modality.LANDSAT.name],
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+
 # Scene-level Landsat cloud-mask siblings of the landsat tasks: months whose
 # chosen Landsat scene reports cloud_cover >= this are masked MISSING (the
 # same threshold convention as the original exports' S2 scene filter).
