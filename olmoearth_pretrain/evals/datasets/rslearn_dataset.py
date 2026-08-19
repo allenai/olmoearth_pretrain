@@ -41,6 +41,7 @@ from olmoearth_pretrain.evals.datasets.rslearn_builder import (
     get_modality_layers,
     get_task_info,
     parse_model_config,
+    require_stack_inputs,
 )
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 from olmoearth_pretrain.evals.studio_ingest.provenance import (
@@ -556,8 +557,26 @@ class RslearnToOlmoEarthDataset(Dataset):
         if label_fraction != 1.0 and max_samples is not None:
             raise ValueError("Use either max_samples or label_fraction, not both.")
 
+        # Resolved before the dataset is built: require_stack_inputs needs the
+        # consumed stack to decide whether window resolution has to narrow.
+        if input_modalities is None:
+            layers = get_modality_layers(model_config)
+            input_modalities = []
+            for layer in layers:
+                # SCL and Landsat QA are mask inputs, not model modalities
+                # (see scl_cloud_mask / l8_pixel_cloud_mask).
+                if layer.startswith("sentinel2_scl"):
+                    continue
+                if layer.startswith("landsat_qa"):
+                    continue
+                resolved = resolve_rslearn_layer_name(layer)
+                if resolved is not None:
+                    input_modalities.append(RSLEARN_TO_OLMOEARTH[resolved].name)
+                else:
+                    input_modalities.append(layer)
+
         model_dataset = build_model_dataset(
-            model_config=model_config,
+            model_config=require_stack_inputs(model_config, input_modalities),
             source_path=source_path,
             split=split,
             max_samples=max_samples,
@@ -577,22 +596,6 @@ class RslearnToOlmoEarthDataset(Dataset):
                 :num_samples
             ].tolist()
             model_dataset = Subset(model_dataset, indices)
-
-        if input_modalities is None:
-            layers = get_modality_layers(model_config)
-            input_modalities = []
-            for layer in layers:
-                # SCL and Landsat QA are mask inputs, not model modalities
-                # (see scl_cloud_mask / l8_pixel_cloud_mask).
-                if layer.startswith("sentinel2_scl"):
-                    continue
-                if layer.startswith("landsat_qa"):
-                    continue
-                resolved = resolve_rslearn_layer_name(layer)
-                if resolved is not None:
-                    input_modalities.append(RSLEARN_TO_OLMOEARTH[resolved].name)
-                else:
-                    input_modalities.append(layer)
 
         task_info = get_task_info(model_config)
 
