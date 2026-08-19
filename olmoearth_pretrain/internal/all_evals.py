@@ -2150,6 +2150,21 @@ FT_EVAL_TASKS = {
 }
 
 
+# PASTIS2-DROM leave-one-territory-out spatial-generalization tasks (S2-only):
+# train on N-1 DROM territories, test on the held-out one. Each fold reads the
+# per-territory tag loio_<terr> (split_tag_key on the pastis2_drom_bg8_loio_<terr>
+# registry entry); test = all windows of the held-out territory. Both a frozen
+# linear probe (EMBEDDING_EVAL_TASKS) and a fine-tune (FT_EVAL_TASKS) per fold.
+for _loio_terr in ("reunion", "guadeloupe", "martinique", "guyane", "mayotte"):
+    _loio_ds = f"pastis2_drom_bg8_loio_{_loio_terr}"
+    FT_EVAL_TASKS[f"pastis2_drom_bg8_loio_{_loio_terr}_ft_ws16_ps1_sentinel2"] = (
+        _pastis_ft_task([Modality.SENTINEL2_L2A.name], dataset=_loio_ds)
+    )
+    EMBEDDING_EVAL_TASKS[f"pastis2_drom_bg8_loio_{_loio_terr}_ws16_ps1_sentinel2"] = (
+        _pastis_ps1_task([Modality.SENTINEL2_L2A.name], dataset=_loio_ds)
+    )
+
+
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
     MAX_DURATION = Duration.epochs(300)
