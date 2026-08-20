@@ -1,11 +1,14 @@
 #!/bin/bash
 # The candidate recipe on the new map set (GLO30 DSM + Meta Canopy Height) and Landsat
-# TOA reflectance, in three arms:
+# TOA reflectance, in four arms:
 #
 #   A  cand_ndvi as-is:      d128 + regsup w0p1 + NDVI arm + year_start anchor
 #   B  A + the full DSM:     GLO30 elevation+slope, plus aspect as sin/cos
 #   C  the shipping student: d768 teacher + detached linear [128, 64] student,
 #                            sup768 w1, full DSM (no NDVI, no anchor)
+#   D  C's teacher-only mirror: same d768 + w1 + full DSM, no student. Without it C
+#      has no single-knob partner -- C vs the in-flight elevation-only w1 run differs
+#      by both the DSM target and the student.
 #
 # A's A/B partner is the in-flight regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_
 # newsampling_psuniform_newmaps_landsat_refl (same everything, minus NDVI + anchor);
@@ -29,6 +32,7 @@ DIR="scripts/vnext/2026_07_24_new_maps"
 A="$DIR/regbtl_v1_2_gdyn_d128_wideread_regsup_ndvi_w0p1_tanchor_newsampling_psuniform_landsat_refl.py"
 B="$DIR/regbtl_v1_2_gdyn_d128_wideread_regsup_ndvi_w0p1_tanchor_newsampling_psuniform_landsat_refl_dsm3.py"
 C="$DIR/regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsampling_psuniform_landsat_refl_dsm3.py"
+D="$DIR/regbtl_v1_2_gdyn_d768_wideread_regsup_w1_newsampling_psuniform_landsat_refl_dsm3.py"
 
 python "$A" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_ndvi_w0p1_tanchor_psuniform_newmaps_refl" "$CLUSTER" \
     $LAUNCH_ARGS \
@@ -39,5 +43,9 @@ python "$B" launch "regbtl_v1_2_gdyn_d128_wideread_regsup_ndvi_w0p1_tanchor_psun
     --trainer.callbacks.wandb.project="$PROJECT"
 
 python "$C" launch "regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_psuniform_newmaps_refl_dsm3" "$CLUSTER" \
+    $LAUNCH_ARGS \
+    --trainer.callbacks.wandb.project="$PROJECT"
+
+python "$D" launch "regbtl_v1_2_gdyn_d768_wideread_regsup_w1_psuniform_newmaps_refl_dsm3" "$CLUSTER" \
     $LAUNCH_ARGS \
     --trainer.callbacks.wandb.project="$PROJECT"
