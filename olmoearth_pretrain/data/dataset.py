@@ -414,6 +414,7 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        computed_norm_config: str = "computed.json",
         cloud_cache_dir: str | None = None,
     ):
         """Initialize the dataset.
@@ -440,9 +441,14 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            computed_norm_config: Filename of the computed normalization config resource
+                to use for the COMPUTED strategy (under
+                ``olmoearth_pretrain.data.norm_configs``). Defaults to ``computed.json``;
+                set to a reflectance-specific variant when training on reflectance data.
             cloud_cache_dir: If set, directory of precomputed OmniCloudMask cloud-class
                 sidecars (see data.cloud_mask_cache); enables dropping mostly-cloud
-                target tokens. None disables cloud masking.
+                tokens (input and/or target, per the masking strategy). None disables
+                cloud masking.
 
         Returns:
             None
@@ -461,9 +467,12 @@ class OlmoEarthDataset(Dataset):
         self.normalize = normalize
         self.dataset_percentage = dataset_percentage
         self.seed = seed
+        self.computed_norm_config = computed_norm_config
         if self.normalize:
             self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+            self.normalizer_computed = Normalizer(
+                Strategy.COMPUTED, computed_config_filename=computed_norm_config
+            )
         self.max_sequence_length = max_sequence_length
 
         if samples_per_sec is None:
@@ -1032,11 +1041,12 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    computed_norm_config: str = "computed.json"
     # Directory of precomputed OmniCloudMask per-pixel cloud-class sidecars
     # (see olmoearth_pretrain.data.cloud_mask_cache). When set, each sample's S2
     # and Landsat cloud maps are loaded and carried alongside the sample so the
-    # masking strategy can drop mostly-cloud target tokens. None => cloud-masking
-    # disabled (default; other runs unaffected).
+    # masking strategy can drop mostly-cloud tokens (input and/or target). None =>
+    # cloud-masking disabled (default; other runs unaffected).
     cloud_cache_dir: str | None = None
 
     def get_numpy_dtype(self) -> np.dtype:

@@ -65,6 +65,7 @@ def get_eval_dataset(
             seed=kwargs.get("pretrain_seed", 42),
             split=kwargs.get("pretrain_split", split),
             target_modality=kwargs.get("target_modality"),
+            target_band_index=kwargs.get("target_band_index"),
             label_seed=kwargs.get("pretrain_label_seed", 42),
             train_samples=scale_train_samples(
                 kwargs.get("pretrain_train_samples", 512), label_fraction
@@ -172,4 +173,6 @@ def get_eval_dataset(
             landsat_cloud_cover_max=kwargs.get("landsat_cloud_cover_max"),
             l8_pixel_cloud_mask=kwargs.get("l8_pixel_cloud_mask", False),
             l8_pixel_cloud_bits=kwargs.get("l8_pixel_cloud_bits"),
+            landsat_reflectance=kwargs.get("landsat_reflectance", False),
+            computed_norm_config=kwargs.get("computed_norm_config", "computed.json"),
         )

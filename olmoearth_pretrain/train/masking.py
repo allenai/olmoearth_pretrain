@@ -1794,6 +1794,12 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
     randomly select some of those timesteps as encode only, and others as decode only.
     """
 
+    # Which mask roles a mostly-cloud token is dropped from when a cloud payload is
+    # supplied to apply_mask(cloud=...). "output" drops cloudy DECODER tokens (they
+    # can't be patch-discrimination targets); "input" drops cloudy ONLINE_ENCODER
+    # tokens (they're never fed to the online encoder); "both" does both.
+    CLOUD_APPLY_TO_CHOICES = ("output", "input", "both")
+
     def __init__(
         self,
         encode_ratio: float = 0.5,
@@ -1801,6 +1807,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         random_ratio: float = 0.5,
         only_decode_modalities: list[str] = [],
         cloud_skip_threshold: float = 0.5,
+        cloud_apply_to: str = "output",
     ):
         """Random masking strategy except for decode modalities, which only get decoded.
 
@@ -1810,17 +1817,28 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                       decode ratio applied.
         random_ratio: how often to apply random masking vs time masking.
         cloud_skip_threshold: when a per-sample cloud payload is supplied to
-                      apply_mask(cloud=...), DECODER tokens whose fraction of
-                      cloud/shadow pixels exceeds this are reassigned to MISSING
-                      (dropped from the patch-discrimination loss). Applies to
-                      every entry in CLOUD_SKIP_MODALITIES -- S2, Landsat, and
-                      the S2-derived ndvi decode target.
+                      apply_mask(cloud=...), tokens whose fraction of cloud/shadow
+                      pixels exceeds this are reassigned to MISSING, for the roles
+                      selected by ``cloud_apply_to``. Applies to every entry in
+                      CLOUD_SKIP_MODALITIES -- S2, Landsat, and the S2-derived
+                      ndvi decode target.
+        cloud_apply_to: which mask roles cloudy tokens are dropped from -- one of
+                      "output" (DECODER -> MISSING; the token can't be a patch-
+                      discrimination target), "input" (ONLINE_ENCODER -> MISSING; the
+                      token is never encoded), or "both". Only used when a cloud
+                      payload is supplied.
         """
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
         self.only_decode_modalities = only_decode_modalities
         self.random_ratio = random_ratio
         self.cloud_skip_threshold = cloud_skip_threshold
+        if cloud_apply_to not in self.CLOUD_APPLY_TO_CHOICES:
+            raise ValueError(
+                f"cloud_apply_to must be one of {self.CLOUD_APPLY_TO_CHOICES}, "
+                f"got {cloud_apply_to!r}"
+            )
+        self.cloud_apply_to = cloud_apply_to
         if self.random_ratio > 1:
             raise ValueError(f"Random ratio must be <= 1, got {self.random_ratio}")
 
@@ -2060,10 +2078,10 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                             MaskValue.DECODER.value,
                         )
 
-        # Cloud-aware skip: drop mostly-cloud DECODER tokens for S2/Landsat by
-        # reassigning their per-pixel mask to MISSING (whole patch uniformly, so the
-        # top-left-stride token reduction in tokenization picks it up). Consumed via
-        # kwargs so non-cloud runs / other strategies are untouched.
+        # Cloud-aware skip: reassign mostly-cloud tokens to MISSING for every entry in
+        # CLOUD_SKIP_MODALITIES, for the roles chosen by cloud_apply_to (whole patch
+        # uniformly, so the top-left-stride token reduction in tokenization picks it
+        # up). Consumed via kwargs so non-cloud runs / other strategies are untouched.
         cloud = kwargs.get("cloud")
         if cloud is not None and patch_size is not None:
             self._apply_cloud_skip(output_dict, cloud, patch_size)
@@ -2076,7 +2094,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         cloud: dict[str, torch.Tensor],
         patch_size: int,
     ) -> None:
-        """Reassign mostly-cloud DECODER pixels to MISSING, in place.
+        """Reassign mostly-cloud pixels to MISSING, in place.
 
         cloud[f"{mod}_cloud"]: (B,H,W,T,1) uint8 OCM classes (1/2/3 = cloud/shadow).
         The cloud maps live on the same 128 grid as their modality
@@ -2087,7 +2105,21 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         exact cropped (H,W,T) grid and the same cloud map applies unchanged. Without
         this the NDVI supervision head would still be asked to predict a vegetation
         index through cloud.
+
+        Which mask roles are dropped is set by ``cloud_apply_to``: "output" drops
+        cloudy DECODER tokens (removes them as patch-discrimination targets), "input"
+        drops cloudy ONLINE_ENCODER tokens (removes them from the encoder context),
+        and "both" drops from either role. TARGET_ENCODER_ONLY and already-MISSING
+        tokens are never touched.
         """
+        roles: tuple[int, ...]
+        if self.cloud_apply_to == "input":
+            roles = (MaskValue.ONLINE_ENCODER.value,)
+        elif self.cloud_apply_to == "both":
+            roles = (MaskValue.DECODER.value, MaskValue.ONLINE_ENCODER.value)
+        else:  # "output"
+            roles = (MaskValue.DECODER.value,)
+
         for modality_name, cloud_key in CLOUD_SKIP_MODALITIES:
             masked_name = MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
             mask = output_dict.get(masked_name)
@@ -2127,7 +2159,10 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                 full = torch.zeros((b, h, w, t), dtype=torch.bool, device=mask.device)
                 full[:, : cloudy_pix.shape[1], : cloudy_pix.shape[2], :] = cloudy_pix
                 cloudy_pix = full
-            drop = (mask == MaskValue.DECODER.value) & cloudy_pix.unsqueeze(-1)
+            cloudy_tok = cloudy_pix.unsqueeze(-1)  # (B,H,W,T,1) broadcast over bandsets
+            drop = torch.zeros_like(mask, dtype=torch.bool)
+            for role in roles:
+                drop |= (mask == role) & cloudy_tok
             output_dict[masked_name] = torch.where(
                 drop, torch.full_like(mask, MaskValue.MISSING.value), mask
             )

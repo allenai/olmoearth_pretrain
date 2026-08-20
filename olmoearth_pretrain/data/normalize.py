@@ -24,13 +24,18 @@ def load_predefined_config() -> dict[str, dict[str, dict[str, float]]]:
         return json.load(f)
 
 
-def load_computed_config() -> dict[str, dict]:
+def load_computed_config(filename: str = "computed.json") -> dict[str, dict]:
     """Load the computed config.
 
     The normalization config maps from modality -> band name to a dictionary with mean
     and std keys.
+
+    Args:
+        filename: Name of the computed-config resource under
+            ``olmoearth_pretrain.data.norm_configs`` (e.g. a reflectance-specific
+            variant). Defaults to the canonical ``computed.json``.
     """
-    with (files("olmoearth_pretrain.data.norm_configs") / "computed.json").open() as f:
+    with (files("olmoearth_pretrain.data.norm_configs") / filename).open() as f:
         return json.load(f)
 
 
@@ -49,6 +54,7 @@ class Normalizer:
         self,
         strategy: Strategy,
         std_multiplier: float | None = 2,
+        computed_config_filename: str = "computed.json",
     ) -> None:
         """Initialize the normalizer.
 
@@ -56,12 +62,16 @@ class Normalizer:
             strategy: The strategy to use for normalization (predefined or computed).
             std_multiplier: Optional, only for strategy COMPUTED.
                             The multiplier for the standard deviation when using computed values.
+            computed_config_filename: Which computed-config resource to load for the
+                            COMPUTED strategy (e.g. a reflectance-specific variant).
+                            Ignored for the PREDEFINED strategy.
 
         Returns:
             None
         """
         self.strategy = strategy
         self.std_multiplier = std_multiplier
+        self.computed_config_filename = computed_config_filename
         self.norm_config = self._load_config()
 
     def _load_config(self) -> dict:
@@ -69,7 +79,7 @@ class Normalizer:
         if self.strategy == Strategy.PREDEFINED:
             return load_predefined_config()
         elif self.strategy == Strategy.COMPUTED:
-            return load_computed_config()
+            return load_computed_config(self.computed_config_filename)
         else:
             raise ValueError(f"Invalid strategy: {self.strategy}")
 

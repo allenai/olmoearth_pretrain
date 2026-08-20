@@ -30,6 +30,20 @@ MAX_INTRA_SAMPLE_IMAGES = 256
 # Bounded so a dense task's millions of patch embeddings cost a fixed amount.
 MAX_PIPELINE_ROWS = 4096
 
+# These metrics are read as trends across checkpoints, so the subsample must not
+# move between calls -- otherwise sampling noise is indistinguishable from drift.
+SUBSAMPLE_SEED = 0
+
+
+def _subsample(embeddings: Tensor, max_samples: int) -> Tensor:
+    """Take a fixed pseudo-random subset of rows, identical across calls."""
+    n = embeddings.shape[0]
+    if n <= max_samples:
+        return embeddings
+    generator = torch.Generator().manual_seed(SUBSAMPLE_SEED)
+    idx = torch.randperm(n, generator=generator)[:max_samples]
+    return embeddings[idx.to(embeddings.device)]
+
 
 def effective_rank(embeddings: Tensor) -> float:
     """Effective rank via Shannon entropy of singular values.
@@ -37,10 +51,7 @@ def effective_rank(embeddings: Tensor) -> float:
     Returns a value between 1 (full collapse) and min(N, D) (maximally spread).
     Roy & Bhattacharyya (2007).
     """
-    n = embeddings.shape[0]
-    if n > MAX_SVD_SAMPLES:
-        idx = torch.randperm(n, device=embeddings.device)[:MAX_SVD_SAMPLES]
-        embeddings = embeddings[idx]
+    embeddings = _subsample(embeddings, MAX_SVD_SAMPLES)
     S = torch.linalg.svdvals(embeddings.float())
     S = S[S > 0]
     if S.numel() == 0:
@@ -53,11 +64,8 @@ def effective_rank(embeddings: Tensor) -> float:
 def uniformity(embeddings: Tensor, t: float = 2.0) -> float:
     """Uniformity metric (Wang & Isola 2020). More negative = more uniform."""
     z = torch.nn.functional.normalize(embeddings.float(), dim=-1)
+    z = _subsample(z, MAX_PAIRWISE_SAMPLES)
     n = z.shape[0]
-    if n > MAX_PAIRWISE_SAMPLES:
-        idx = torch.randperm(n, device=z.device)[:MAX_PAIRWISE_SAMPLES]
-        z = z[idx]
-        n = MAX_PAIRWISE_SAMPLES
     sq_dists = torch.cdist(z, z, p=2).pow(2)
     mask = torch.triu(torch.ones(n, n, device=z.device, dtype=torch.bool), diagonal=1)
     sq_dists_upper = sq_dists[mask]
@@ -67,11 +75,8 @@ def uniformity(embeddings: Tensor, t: float = 2.0) -> float:
 def pairwise_cosine_stats(embeddings: Tensor) -> dict[str, float]:
     """Pairwise cosine similarity stats. High mean + low std = crowding."""
     z = torch.nn.functional.normalize(embeddings.float(), dim=-1)
+    z = _subsample(z, MAX_PAIRWISE_SAMPLES)
     n = z.shape[0]
-    if n > MAX_PAIRWISE_SAMPLES:
-        idx = torch.randperm(n, device=z.device)[:MAX_PAIRWISE_SAMPLES]
-        z = z[idx]
-        n = MAX_PAIRWISE_SAMPLES
     sim = z @ z.T
     mask = torch.triu(torch.ones(n, n, device=z.device, dtype=torch.bool), diagonal=1)
     sims = sim[mask]
@@ -81,6 +86,40 @@ def pairwise_cosine_stats(embeddings: Tensor) -> dict[str, float]:
         "cosine_sim_min": sims.min().item(),
         "cosine_sim_max": sims.max().item(),
     }
+
+
+def anisotropy_stats(embeddings: Tensor) -> dict[str, float]:
+    """Split embedding spread into a shared offset and the per-sample variation.
+
+    ``effective_rank`` alone conflates two very different geometries: a cloud
+    genuinely spread over many directions, and a tight cloud sitting far from the
+    origin along one dominant direction. Cosine KNN and linear probes only see the
+    second component, so a representation can look healthy by rank while carrying
+    almost no usable per-sample signal.
+
+    ``common_mode_frac`` is ``||E[e]|| / E[||e||]``: 0 when embeddings are centered
+    at the origin, 1 when every sample is the same vector. ``centered_effective_rank``
+    re-measures rank after removing that offset, and ``top1_var_share`` is the
+    fraction of centered variance in the leading principal direction -- the standard
+    anisotropy summary, where a large value means one direction dominates whatever
+    variation survives.
+    """
+    e = embeddings.float()
+    mean = e.mean(dim=0)
+    mean_norm = mean.norm().item()
+    avg_norm = e.norm(dim=-1).mean().item()
+    centered = e - mean
+
+    metrics = {
+        "common_mode_frac": mean_norm / max(avg_norm, 1e-12),
+        "centered_effective_rank": effective_rank(centered),
+    }
+
+    S = torch.linalg.svdvals(_subsample(centered, MAX_SVD_SAMPLES))
+    total = S.pow(2).sum()
+    if total > 0:
+        metrics["top1_var_share"] = (S[0].pow(2) / total).item()
+    return metrics
 
 
 def embedding_norm_stats(embeddings: Tensor) -> dict[str, float]:
@@ -108,6 +147,7 @@ def compute_embedding_diagnostics(embeddings: Tensor) -> dict[str, float]:
     metrics["embedding_dim"] = float(d)
     metrics["num_samples"] = float(n)
     metrics.update(embedding_norm_stats(embeddings))
+    metrics.update(anisotropy_stats(embeddings))
 
     if n >= 4:
         metrics["uniformity"] = uniformity(embeddings)

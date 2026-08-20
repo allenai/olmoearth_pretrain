@@ -27,6 +27,9 @@ from olmoearth_pretrain.data.constants import (
 )
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 from olmoearth_pretrain.data.utils import convert_to_db
+from olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.landsat_calibration import (
+    convert_landsat_to_physical,
+)
 from olmoearth_pretrain.datatypes import MaskValue
 from olmoearth_pretrain.evals.constants import (
     RSLEARN_TO_OLMOEARTH,
@@ -38,6 +41,7 @@ from olmoearth_pretrain.evals.datasets.rslearn_builder import (
     get_modality_layers,
     get_task_info,
     parse_model_config,
+    require_stack_inputs,
 )
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 from olmoearth_pretrain.evals.studio_ingest.provenance import (
@@ -81,6 +85,15 @@ SCL_CLOUDLESS_CLASSES = (8, 9)
 # rslearn's LandsatOliTirsItem persists in items.json. Scene-level (whole
 # Landsat scene metadata), unlike the pixel-level SCL mask; -1 = unknown.
 LANDSAT_CLOUD_COVER_SIDECAR = "landsat_cloud_cover.json"
+
+# Per-month SUN_ELEVATION/platform of each window's base Landsat scene, written
+# by scripts/tools/build_landsat_calibration_sidecar.py. Needed only to convert
+# DN to reflectance for a reflectance-pretrained checkpoint; null = no scene or
+# unreadable MTL, which becomes a MISSING timestep.
+LANDSAT_CALIBRATION_SIDECAR = "landsat_calibration.json"
+
+# The year-aligned eval exports are twelve ascending monthly layers.
+MONTHS_PER_YEAR = 12
 
 # Landsat QA_PIXEL (CFMask) per-pixel cloud mask, the Landsat analogue of
 # "scl". The optional "landsat_qa" input carries the QA_PIXEL band of the
@@ -232,6 +245,9 @@ class RslearnToOlmoEarthDataset(Dataset):
         landsat_cloud_cover_table: dict[str, dict[str, float]] | None = None,
         l8_pixel_cloud_mask: bool = False,
         l8_pixel_cloud_bits: int | None = None,
+        landsat_reflectance: bool = False,
+        landsat_calibration_table: dict[str, dict[str, Any]] | None = None,
+        computed_norm_config: str = "computed.json",
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
@@ -305,6 +321,18 @@ class RslearnToOlmoEarthDataset(Dataset):
                 MaskValue.MISSING in the Landsat mask -- the Landsat analogue
                 of scl_cloud_mask, with the same never-blank-a-pixel guard
                 and the same leave-unmasked-with-a-warning fallbacks.
+            landsat_reflectance: If set, Landsat DN is converted to TOA
+                reflectance / brightness temperature at read time, matching
+                what the reflectance-pretrained h5 contains. Requires
+                landsat_calibration_table and computed_norm_config on the
+                reflectance scale; months without calibration become MISSING.
+            landsat_calibration_table: The parsed sidecar ("group/window" ->
+                {"moNN": {"sun_elevation", "platform"}}); required for
+                landsat_reflectance to do anything.
+            computed_norm_config: Which computed-config resource backs the
+                pretrain normalizer. Must match the checkpoint's training
+                config -- reflectance models need the reflectance-scale stats,
+                and pairing them with unconverted DN is catastrophic.
         """
         if (
             not norm_stats_from_pretrained
@@ -314,6 +342,22 @@ class RslearnToOlmoEarthDataset(Dataset):
             raise ValueError(
                 "norm_stats_from_pretrained=False requires a JSON file with dataset stats "
                 "or registry stats (set ds_norm_stats_json or ds_norm_stats)."
+            )
+
+        # Half of this feature is far worse than none of it: reflectance-scale
+        # stats (mean ~0.23) applied to raw DN (~1e4) put the model tens of
+        # thousands of sigma from anything it saw in training, so refuse the
+        # combination rather than silently producing garbage embeddings.
+        if landsat_reflectance and landsat_calibration_table is None:
+            raise ValueError(
+                "landsat_reflectance=True requires landsat_calibration_table; "
+                "build it with scripts/tools/build_landsat_calibration_sidecar.py"
+            )
+        if computed_norm_config != "computed.json" and not landsat_reflectance:
+            logger.warning(
+                f"computed_norm_config={computed_norm_config!r} without "
+                "landsat_reflectance=True: Landsat stays raw DN while the "
+                "stats may be on another scale. Verify this is intended."
             )
 
         if not input_modalities:
@@ -346,6 +390,11 @@ class RslearnToOlmoEarthDataset(Dataset):
         self.landsat_cloud_cover_max = landsat_cloud_cover_max
         self.landsat_cloud_cover_table = landsat_cloud_cover_table
         self._warned_l8_mask = False
+
+        self.landsat_reflectance = landsat_reflectance
+        self.landsat_calibration_table = landsat_calibration_table
+        self.computed_norm_config = computed_norm_config
+        self._warned_l8_calibration = False
 
         self.l8_pixel_cloud_mask = l8_pixel_cloud_mask
         # None keeps the aggressive default, so every existing _l8pixmask task
@@ -406,7 +455,9 @@ class RslearnToOlmoEarthDataset(Dataset):
         self._init_band_scatter(declared_bands)
 
         if self.norm_stats_from_pretrained:
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+            self.normalizer_computed = Normalizer(
+                Strategy.COMPUTED, computed_config_filename=computed_norm_config
+            )
         else:
             if ds_norm_stats is not None:
                 self.dataset_norm_stats = self._parse_norm_stats(ds_norm_stats)
@@ -442,6 +493,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         landsat_cloud_cover_max: float | None = None,
         l8_pixel_cloud_mask: bool = False,
         l8_pixel_cloud_bits: int | None = None,
+        landsat_reflectance: bool = False,
+        computed_norm_config: str = "computed.json",
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -489,6 +542,13 @@ class RslearnToOlmoEarthDataset(Dataset):
             l8_pixel_cloud_mask: Mask cloudy Landsat pixel-timesteps MISSING
                 using the optional "landsat_qa" input (see
                 RslearnToOlmoEarthDataset).
+            landsat_reflectance: Convert Landsat DN to TOA reflectance at load
+                time for a reflectance-pretrained checkpoint; loads the
+                calibration sidecar from the dataset root and raises if it is
+                missing (see RslearnToOlmoEarthDataset).
+            computed_norm_config: Computed-config resource backing the
+                pretrain normalizer; must match the checkpoint's training
+                config.
         """
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
@@ -497,8 +557,26 @@ class RslearnToOlmoEarthDataset(Dataset):
         if label_fraction != 1.0 and max_samples is not None:
             raise ValueError("Use either max_samples or label_fraction, not both.")
 
+        # Resolved before the dataset is built: require_stack_inputs needs the
+        # consumed stack to decide whether window resolution has to narrow.
+        if input_modalities is None:
+            layers = get_modality_layers(model_config)
+            input_modalities = []
+            for layer in layers:
+                # SCL and Landsat QA are mask inputs, not model modalities
+                # (see scl_cloud_mask / l8_pixel_cloud_mask).
+                if layer.startswith("sentinel2_scl"):
+                    continue
+                if layer.startswith("landsat_qa"):
+                    continue
+                resolved = resolve_rslearn_layer_name(layer)
+                if resolved is not None:
+                    input_modalities.append(RSLEARN_TO_OLMOEARTH[resolved].name)
+                else:
+                    input_modalities.append(layer)
+
         model_dataset = build_model_dataset(
-            model_config=model_config,
+            model_config=require_stack_inputs(model_config, input_modalities),
             source_path=source_path,
             split=split,
             max_samples=max_samples,
@@ -519,22 +597,6 @@ class RslearnToOlmoEarthDataset(Dataset):
             ].tolist()
             model_dataset = Subset(model_dataset, indices)
 
-        if input_modalities is None:
-            layers = get_modality_layers(model_config)
-            input_modalities = []
-            for layer in layers:
-                # SCL and Landsat QA are mask inputs, not model modalities
-                # (see scl_cloud_mask / l8_pixel_cloud_mask).
-                if layer.startswith("sentinel2_scl"):
-                    continue
-                if layer.startswith("landsat_qa"):
-                    continue
-                resolved = resolve_rslearn_layer_name(layer)
-                if resolved is not None:
-                    input_modalities.append(RSLEARN_TO_OLMOEARTH[resolved].name)
-                else:
-                    input_modalities.append(layer)
-
         task_info = get_task_info(model_config)
 
         landsat_cloud_cover_table = None
@@ -549,6 +611,22 @@ class RslearnToOlmoEarthDataset(Dataset):
                     f"{sidecar} ({type(e).__name__}: {e}); Landsat cloud "
                     "masking disabled for this dataset"
                 )
+
+        landsat_calibration_table = None
+        if landsat_reflectance:
+            sidecar = f"{str(source_path).rstrip('/')}/{LANDSAT_CALIBRATION_SIDECAR}"
+            try:
+                with open(sidecar) as f:
+                    landsat_calibration_table = json.load(f)["windows"]
+            except (OSError, KeyError, json.JSONDecodeError) as e:
+                # Unlike the cloud sidecar this cannot degrade to a no-op: the
+                # norm stats that accompany landsat_reflectance are on the
+                # reflectance scale, so unconverted DN would be meaningless.
+                raise ValueError(
+                    f"landsat_reflectance=True but sidecar unusable at "
+                    f"{sidecar} ({type(e).__name__}: {e}); build it with "
+                    "scripts/tools/build_landsat_calibration_sidecar.py"
+                ) from e
 
         # Per-input band lists as declared in model.yaml. A dataset may store a
         # subset of a modality's canonical bands; see band_scatter.
@@ -584,6 +662,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             scl_cloud_classes=scl_cloud_classes,
             landsat_cloud_cover_max=landsat_cloud_cover_max,
             landsat_cloud_cover_table=landsat_cloud_cover_table,
+            landsat_reflectance=landsat_reflectance,
+            landsat_calibration_table=landsat_calibration_table,
+            computed_norm_config=computed_norm_config,
             l8_pixel_cloud_mask=l8_pixel_cloud_mask,
             l8_pixel_cloud_bits=l8_pixel_cloud_bits,
         )
@@ -717,7 +798,8 @@ class RslearnToOlmoEarthDataset(Dataset):
 
         With tile set (tile_samples mode), (tile_row, tile_col) selects which
         window_size x window_size tile of the stored sample to emit.
-        window_key ("group/name") keys the Landsat cloud-cover sidecar.
+        window_key ("group/name") keys the Landsat cloud-cover and calibration
+        sidecars.
         """
         sample_dict: dict[str, Any] = {}
         sample_timesteps: int | None = None
@@ -780,6 +862,12 @@ class RslearnToOlmoEarthDataset(Dataset):
                 arr = convert_to_db(arr)
             if modality in self.band_scatter:
                 arr = self._scatter_bands(modality, arr)
+            # After scatter (needs the full canonical band order) and before
+            # alignment (the time axis is still this modality's own months).
+            if modality == Modality.LANDSAT.name and self.landsat_reflectance:
+                arr = self._landsat_to_physical(
+                    arr, window_key, stored_time_ranges.get(modality)
+                )
             raw[modality] = arr
 
         if not raw:
@@ -953,6 +1041,89 @@ class RslearnToOlmoEarthDataset(Dataset):
             and 0 <= cover
             and cover >= self.landsat_cloud_cover_max
         )
+
+    def _warn_l8_calibration_once(self, reason: str) -> None:
+        """Warn about missing Landsat calibration once per dataset instance."""
+        if not self._warned_l8_calibration:
+            logger.warning(
+                f"landsat calibration: {reason}; affected timesteps become "
+                "MISSING rather than DN on a reflectance scale"
+            )
+            self._warned_l8_calibration = True
+
+    def _landsat_to_physical(
+        self,
+        arr: np.ndarray,
+        window_key: str | None,
+        time_ranges: list[tuple[datetime, datetime]] | None,
+    ) -> np.ndarray:
+        """Convert Landsat DN to TOA reflectance / brightness temperature.
+
+        Reproduces the h5 conversion so a reflectance-pretrained checkpoint
+        sees its training radiometry. Runs on the modality's own time axis,
+        where timestep i is the month it was acquired in (post-alignment it
+        would not be), so each timestep pairs with the right sidecar scene.
+
+        Timesteps are matched to sidecar months by period start rather than
+        calendar month: the monthly layers are a 30-day grid, so moNN can
+        start in month NN-1 (mo06 begins May 31) and reading the month off
+        the date would apply a neighbouring scene's sun angle.
+
+        Args:
+            arr: (H, W, T, C) Landsat DN in canonical band order.
+            window_key: "group/window", the sidecar key.
+            time_ranges: the modality's stored acquisition ranges, if any.
+
+        Returns:
+            (H, W, T, C) float32; uncalibrated timesteps are MISSING_VALUE.
+        """
+        months = (self.landsat_calibration_table or {}).get(window_key or "")
+        if months is None:
+            self._warn_l8_calibration_once(f"window {window_key!r} not in sidecar")
+            months = {}
+
+        timesteps = arr.shape[2]
+        entries: list[dict[str, Any] | None]
+        dated = [
+            (datetime.fromisoformat(entry["start"]), entry)
+            for entry in months.values()
+            if entry and entry.get("start")
+        ]
+        if time_ranges is not None and len(time_ranges) == timesteps and dated:
+            entries = [
+                self._nearest_calibration(start, dated) for start, _ in time_ranges
+            ]
+        elif timesteps == MONTHS_PER_YEAR:
+            # No usable dates on either side: the axis is the twelve ascending
+            # monthly layers by construction, so position is the month.
+            entries = [months.get(f"mo{m:02d}") for m in range(1, MONTHS_PER_YEAR + 1)]
+        else:
+            self._warn_l8_calibration_once(
+                f"{timesteps} timesteps that cannot be matched to sidecar months"
+            )
+            entries = [None] * timesteps
+
+        return convert_landsat_to_physical(
+            arr,
+            solar_elevations=[e["sun_elevation"] if e else None for e in entries],
+            platforms=[e["platform"] if e else None for e in entries],
+            band_order=list(Modality.LANDSAT.band_order),
+        )
+
+    @staticmethod
+    def _nearest_calibration(
+        start: datetime, dated: list[tuple[datetime, dict[str, Any]]]
+    ) -> dict[str, Any] | None:
+        """The sidecar entry whose layer period starts nearest `start`.
+
+        Half a period (16 days) is the same tolerance _align_to_canonical
+        uses; beyond it the timestep has no month and stays uncalibrated.
+        """
+        nearest, entry = min(
+            ((abs((start - when).days), candidate) for when, candidate in dated),
+            key=lambda pair: pair[0],
+        )
+        return entry if nearest <= 16 else None
 
     def _warn_ragged_once(self, reason: str) -> None:
         """Warn about ragged/absent optional imagery once per dataset instance."""
@@ -1414,6 +1585,8 @@ def from_registry_entry(
     landsat_cloud_cover_max: float | None = None,
     l8_pixel_cloud_mask: bool = False,
     l8_pixel_cloud_bits: int | None = None,
+    landsat_reflectance: bool = False,
+    computed_norm_config: str = "computed.json",
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -1458,6 +1631,11 @@ def from_registry_entry(
             the aggressive default.
         l8_pixel_cloud_mask: Mask cloudy Landsat pixel-timesteps MISSING using
             the optional "landsat_qa" input (see RslearnToOlmoEarthDataset).
+        landsat_reflectance: Convert Landsat DN to TOA reflectance at load time
+            for a reflectance-pretrained checkpoint (see
+            RslearnToOlmoEarthDataset).
+        computed_norm_config: Computed-config resource backing the pretrain
+            normalizer; must match the checkpoint's training config.
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -1577,4 +1755,6 @@ def from_registry_entry(
         landsat_cloud_cover_max=landsat_cloud_cover_max,
         l8_pixel_cloud_mask=l8_pixel_cloud_mask,
         l8_pixel_cloud_bits=l8_pixel_cloud_bits,
+        landsat_reflectance=landsat_reflectance,
+        computed_norm_config=computed_norm_config,
     )

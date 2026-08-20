@@ -23,6 +23,12 @@ from upath import UPath
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.balanced_trial import BalancedTrialConfig
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.datasets.pretrain_subset import (
+    GLO30_BAND_ELEVATION,
+    GLO30_BAND_SLOPE,
+    GLO30_LABEL_ASPECT_COS,
+    GLO30_LABEL_ASPECT_SIN,
+)
 from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
     L8QA_CLOUD_ONLY_BITS_MASK,
     SCL_CLOUDLESS_CLASSES,
@@ -1144,6 +1150,14 @@ PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset
 # probes fall back to PRETRAIN_SUBSET_H5PY_DIR (in-distribution).
 PRETRAIN_AUX_EVAL_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/65536"
 
+# Frozen snapshot of the regenerated osm_sampling h5, which carries glo30 and
+# meta_canopy_height in place of srtm/wri_canopy_height_map. Used by the
+# glo30/meta-canopy probes, which read these DSM/canopy targets
+# in-distribution. Built with `--preset dsm_canopy --total 65536`; quotas give
+# ~50k meta_canopy-eligible and ~65k glo30-eligible samples, comfortably above
+# what the geographic splits need (valid/test see only ~10% of the pool).
+PRETRAIN_DSM_CANOPY_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_glo30_landsat_meta_canopy_height_openstreetmap_raster_sentinel1_sentinel2_l2a_worldcereal_worldcover/65536"
+
 MAP_MODALITY_PROBE_INPUTS = [
     Modality.SENTINEL2_L2A.name,
 ]
@@ -1165,6 +1179,7 @@ def _map_modality_probe(
     h5py_dir: str,
     split_strategy: str = "random",
     input_modalities: list[str] | None = None,
+    target_band_index: int | None = None,
 ) -> DownstreamTaskConfig:
     """Build a uniform DownstreamTaskConfig for a decode-only map modality probe."""
     return DownstreamTaskConfig(
@@ -1184,6 +1199,7 @@ def _map_modality_probe(
         primary_metric=primary_metric,
         h5py_dir=h5py_dir,
         pretrain_target_modality=target_modality,
+        pretrain_target_band_index=target_band_index,
         pretrain_train_samples=6144,
         pretrain_valid_samples=3072,
         pretrain_test_samples=3072,
@@ -1231,6 +1247,44 @@ EVAL_TASKS.update(
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
         ),
+        # In-distribution DSM/canopy regression probes, read from the full h5
+        # that carries glo30 (elevation/slope/aspect) and meta_canopy_height.
+        f"pretrain_meta_canopy_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_meta_canopy",
+            target_modality=Modality.META_CANOPY_HEIGHT.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+        ),
+        f"pretrain_glo30_elevation_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_elevation",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            target_band_index=GLO30_BAND_ELEVATION,
+        ),
+        f"pretrain_glo30_slope_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_slope",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            target_band_index=GLO30_BAND_SLOPE,
+        ),
+        # Aspect is probed as sin/cos of the compass bearing, not raw degrees:
+        # degree-space MSE is ill-posed across the 0/360 seam.
+        f"pretrain_glo30_aspect_sin_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_aspect_sin",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            target_band_index=GLO30_LABEL_ASPECT_SIN,
+        ),
+        f"pretrain_glo30_aspect_cos_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_aspect_cos",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            target_band_index=GLO30_LABEL_ASPECT_COS,
+        ),
         # Geographic-holdout variants: train/val/test split by spatial bins
         # so the test set is geographically disjoint from train.
         f"pretrain_worldcover_probe_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
@@ -1274,6 +1328,45 @@ EVAL_TASKS.update(
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
             split_strategy="geographic",
+        ),
+        f"pretrain_meta_canopy_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_meta_canopy",
+            target_modality=Modality.META_CANOPY_HEIGHT.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            split_strategy="geographic",
+        ),
+        f"pretrain_glo30_elevation_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_elevation",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            split_strategy="geographic",
+            target_band_index=GLO30_BAND_ELEVATION,
+        ),
+        f"pretrain_glo30_slope_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_slope",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            split_strategy="geographic",
+            target_band_index=GLO30_BAND_SLOPE,
+        ),
+        f"pretrain_glo30_aspect_sin_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_aspect_sin",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            split_strategy="geographic",
+            target_band_index=GLO30_LABEL_ASPECT_SIN,
+        ),
+        f"pretrain_glo30_aspect_cos_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
+            dataset="pretrain_subset_glo30_aspect_cos",
+            target_modality=Modality.GLO30.name,
+            primary_metric=EvalMetric.NEG_RMSE,
+            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
+            split_strategy="geographic",
+            target_band_index=GLO30_LABEL_ASPECT_COS,
         ),
         # SRTM elevation regression from S1-only and S2+S1 inputs, so we can
         # compare elevation signal across modality combinations.
@@ -1749,6 +1842,34 @@ for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
             for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
         }
     )
+
+# The Landsat-ONLY stack, closing the sensor half-lattice: `sentinel2_landsat`
+# measures what Landsat ADDS to S2, and this measures what Landsat carries on
+# its own. That is the stack the DN-vs-reflectance A/B (the *_landsat_refl
+# pretraining configs) actually asks about: on every mixed stack the S2 stream
+# is byte-identical across the two arms, so it dilutes whatever the radiometry
+# change did to the Landsat representation.
+#
+# Registered as its own block rather than as a `_YEAR_ALIGNED_MODALITIES` entry
+# because that loop also emits `_sclmask` and `_cloudless` siblings, and both
+# mask through S2's SCL band -- with no S2 in the stack they would be exact
+# duplicates of the unmasked task under a name claiming otherwise. The
+# Landsat-side ladders (`_l8mask` / `_l8pixmask` / `_l8pixstrict`) iterate
+# explicit stack tuples, so they skip this stack; add "landsat" there if the
+# Landsat masking policies are wanted on it too.
+for _mode, _mode_suffix in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn")):
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_landsat{_mode_suffix}": _aef_ps1_task(
+                name,
+                _mode,
+                window_size=16,
+                input_modalities=[Modality.LANDSAT.name],
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+
 # Scene-level Landsat cloud-mask siblings of the landsat tasks: months whose
 # chosen Landsat scene reports cloud_cover >= this are masked MISSING (the
 # same threshold convention as the original exports' S2 scene filter).
@@ -2151,6 +2272,32 @@ for _pstack, _pmods in _PASTIS_STACKS:
             l8_pixel_cloud_bits=L8QA_CLOUD_ONLY_BITS_MASK,
             **_pkwargs,
         )
+
+
+# Landsat norm stats on the reflectance scale, the twin of the pretraining
+# config used by the *_landsat_refl runs.
+LANDSAT_REFLECTANCE_NORM_CONFIG = "computed_landsat_reflectance.json"
+
+# A checkpoint pretrained on the reflectance h5 has to read Landsat as TOA
+# reflectance, so LANDSAT_REFLECTANCE=1 converts it at load time and swaps in
+# the matching stats (embedding_eval_sweep.py --landsat_reflectance).
+#
+# Applied as an override here rather than as `_refl` sibling tasks so the task
+# NAMES stay identical across the two arms: a DN run and a reflectance run then
+# land on the same wandb keys and diff one-to-one, instead of forcing a
+# name-mapping at analysis time.
+#
+# Only Landsat-bearing tasks are touched. The S2 and S1+S2 tasks keep DN-scale
+# stats under both arms, which is exactly what makes them the control for
+# "did retraining on reflectance move the non-Landsat representations too".
+if os.environ.get("LANDSAT_REFLECTANCE"):
+    for _name, _task in list(EMBEDDING_EVAL_TASKS.items()):
+        if Modality.LANDSAT.name in (_task.input_modalities or []):
+            EMBEDDING_EVAL_TASKS[_name] = replace(
+                _task,
+                landsat_reflectance=True,
+                computed_norm_config=LANDSAT_REFLECTANCE_NORM_CONFIG,
+            )
 
 
 EMBED_DIAG_TASKS = {
