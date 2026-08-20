@@ -1,11 +1,11 @@
-"""d768 wideread + regsup w1 on LANDSAT REFLECTANCE, with the FULL GLO30 DSM target.
+"""d128 wideread + regsup w0p1 on LANDSAT REFLECTANCE, with the FULL GLO30 DSM target.
 
-Exact twin of ``regbtl_v1_2_gdyn_d768_wideread_regsup_w1_newsampling_psuniform_
-landsat_refl`` -- same d768 full-width Perceiver register bottleneck, same regsup
-base_weight 1.0, same 1fwd + fused AdamW train module, same decorrelated newsampling
-at uniform patch sizes, same reflectance h5 and reflectance-scale Landsat norm stats
--- with ONE change: GLO30 is supervised on all three of its bands instead of
-elevation alone.
+Exact twin of ``regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_newsampling_psuniform_
+landsat_refl`` -- same d128 Perceiver register bottleneck reading at encoder width,
+same regsup base_weight 0.1, same 1fwd + fused AdamW train module, same decorrelated
+newsampling at uniform patch sizes, same reflectance h5 and reflectance-scale Landsat
+norm stats -- with ONE change: GLO30 is supervised on all three of its bands instead
+of elevation alone.
 
 * elevation + slope (bands 0, 1) as a 2-channel L1 regression. Slope (deg [0, 90)) is
   a well-behaved continuous target that the elevation-only head simply discarded.
@@ -17,24 +17,22 @@ elevation alone.
   due north over ~5.5% of pixels. The derived modality writes flat pixels out as
   MISSING_VALUE so the supervision valid mask drops them.
 
-WHY THIS RUN EXISTS: it is the TEACHER-ONLY mirror of
-``regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsampling_psuniform_landsat_refl_dsm3``
-(the distilled arm, d768 teacher + detached linear [128, 64] student). Without it the
-distilled arm has no single-knob partner: against the elevation-only w1 run it differs
-by both the DSM target and the student, and there is no way to tell which moved the
-result. With it the ladder is clean --
+READ IT AGAINST the in-flight ``..._d128_wideread_regsup_w0p1_..._landsat_refl``: the
+DSM target is the ONLY difference, at the width we actually ship. That is the whole
+point of this arm -- it is the ``_dsm3`` sibling that isolates the extra DSM targets
+with nothing else moving.
 
-    ..._d768_wideread_regsup_w1_..._landsat_refl        elev-only, no student
-    ..._d768_wideread_regsup_w1_..._landsat_refl_dsm3   full DSM,  no student  <- HERE
-    ..._d768_proj128lin_sup768_w1_..._landsat_refl_dsm3 full DSM,  + student
-
--- the first pair isolates the DSM target, the second isolates the student.
+Relation to the other _dsm3 arms: this is the ``_ndvi_w0p1_tanchor_..._dsm3``
+candidate arm WITHOUT the time-conditioned NDVI arm and WITHOUT the ``year_start``
+temporal anchor, so the DSM question is answered free of the candidate's two temporal
+knobs. The d768 ``proj128lin_sup768_w1`` arm carries the same DSM target at a
+different width, weight, and with a distilled student.
 
 Same DSM-not-DTM caveat as the other _dsm3 arms: GLO-30 is a surface model, so slope
 and aspect over forest and cities are canopy-edge and rooftop derivatives rather than
 landform.
 
-Run name: ``regbtl_v1_2_gdyn_d768_wideread_regsup_w1_psuniform_newmaps_refl_dsm3``
+Run name: ``regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_psuniform_newmaps_refl_dsm3``
 (70 chars, inside the in-loop eval callback's 94-char budget). ``dsm3`` = all three
 DSM bands supervised.
 """
@@ -45,7 +43,7 @@ from base import build_common_components, build_visualize_config
 from base import build_trainer_config as _base_build_trainer_config
 from perceiver_common import (
     GLO30_ELEV_SLOPE_BAND_INDICES,
-    SUPERVISION_BASE_WEIGHT_W1,
+    SUPERVISION_BASE_WEIGHT,
     add_register_supervision,
     apply_landsat_reflectance,
     apply_microbatch,
@@ -66,24 +64,24 @@ from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModul
 
 logger = logging.getLogger(__name__)
 
-REGISTER_DIM = 768
+REGISTER_DIM = 128
 # The aspect sin/cos target is derived in the dataset from the raw glo30 aspect band.
 EXTRA_DECODE_MODALITIES = [Modality.GLO30_ASPECT.name]
 MODULE_PATH = (
     "scripts/vnext/2026_07_24_new_maps/"
-    "regbtl_v1_2_gdyn_d768_wideread_regsup_w1_newsampling_psuniform"
+    "regbtl_v1_2_gdyn_d128_wideread_regsup_w0p1_newsampling_psuniform"
     "_landsat_refl_dsm3.py"
 )
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """d768 wideread + new-maps regsup at w1, GLO30 supervised on all three bands."""
+    """d128 wideread + new-maps regsup at w0p1, GLO30 supervised on all three bands."""
     config = build_wideread_regbtl_model_config(
         common, latent_self_attn=True, register_dim=REGISTER_DIM
     )
     return add_register_supervision(
         config,
-        base_weight=SUPERVISION_BASE_WEIGHT_W1,
+        base_weight=SUPERVISION_BASE_WEIGHT,
         glo30_bands=GLO30_ELEV_SLOPE_BAND_INDICES,
         include_glo30_aspect=True,
     )
