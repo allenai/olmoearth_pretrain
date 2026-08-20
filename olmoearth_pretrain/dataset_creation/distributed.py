@@ -215,7 +215,7 @@ def launch_beaker_jobs(
         config.preemptible = True
         config.retries = 2
         if priority is not None:
-            config.priority = BeakerPriority(priority)
+            config.priority = BeakerPriority[priority]
         # Replace --all-extras (which conflicts) with only what data workers need
         config.setup_steps = [
             s.replace(
