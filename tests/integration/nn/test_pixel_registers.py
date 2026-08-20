@@ -7,7 +7,9 @@ Covers the pixreg run group (see ``scripts/official/v1_2/regbtl_v1_2_pixreg_comm
 * the leakage guard: values at non-ONLINE units can never reach any output;
 * ONLINE-only register-init pooling (fully masked pixels contribute exactly zero);
 * the ``"thinconv"`` branch's independence from the coarse trunk (and, by contrast,
-  the ``"conv"`` branch's dependence on it through FiLM).
+  the ``"conv"`` branch's dependence on it through FiLM);
+* the ``embedread`` arm (``register_embed_read``): init-equivalence of the extra
+  zero-init patch-embed read, its liveness once opened, and its leakage guard.
 """
 
 import pytest
@@ -28,7 +30,9 @@ PIXEL_DIM = 16
 B, H, W, T = 2, 8, 8, 2
 
 
-def _build_encoder(pixel_branch_type: str | None = None) -> Encoder:
+def _build_encoder(
+    pixel_branch_type: str | None = None, embed_read: bool = False
+) -> Encoder:
     """Small pixel-grid register encoder mirroring the pixreg run configs."""
     return Encoder(
         supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
@@ -49,6 +53,7 @@ def _build_encoder(pixel_branch_type: str | None = None) -> Encoder:
         register_pixel_grid=True,
         register_latent_attn_dim=16,
         register_norm_affine=False,
+        register_embed_read=embed_read,
         pixel_branch_type=pixel_branch_type,
         pixel_embedding_size=PIXEL_DIM,
         pixel_every_k_blocks=2,
@@ -353,3 +358,101 @@ def test_pixel_branch_coarse_trunk_dependence(branch_type: str) -> None:
         assert torch.equal(init_before, init_after)
     else:
         assert not torch.equal(init_before, init_after)
+
+
+def _open_embed_read(encoder: Encoder) -> None:
+    """Open the embed read's zero-init residual paths so it actually contributes."""
+    bottleneck = encoder.register_bottleneck
+    assert bottleneck is not None and bottleneck.embed_read
+    torch.manual_seed(7)
+    nn.init.normal_(bottleneck.embed_read_block.attn.proj.weight, std=0.05)
+    nn.init.normal_(bottleneck.embed_read_block.mlp.fc2.weight, std=0.05)
+
+
+def test_embed_read_init_equivalence() -> None:
+    """At init the embed-read model equals the embed-read-free model bit-for-bit.
+
+    The extra read block's residual paths (attention out-projection + MLP second
+    linear) are zeroed after the blanket weight init, so the block is an exact
+    identity on the registers -- the embedread arm IS run 1 at step 0.
+    """
+    torch.manual_seed(0)
+    plain = _build_encoder()
+    torch.manual_seed(0)
+    embed = _build_encoder(embed_read=True)
+    missing, unexpected = embed.load_state_dict(plain.state_dict(), strict=False)
+    assert not unexpected
+    assert missing
+    assert all(key.startswith("register_bottleneck.embed_") for key in missing)
+
+    sample = _make_sample()
+    for patch_size in (1, 2, 4):
+        out_plain = _forward(plain, sample, patch_size)
+        out_embed = _forward(embed, sample, patch_size)
+        assert out_plain.keys() == out_embed.keys()
+        for key, value in out_plain.items():
+            if isinstance(value, torch.Tensor):
+                assert torch.equal(value, out_embed[key]), (key, patch_size)
+
+
+@pytest.mark.parametrize("patch_size", [1, 2, 4])
+def test_embed_read_contributes_once_opened(patch_size: int) -> None:
+    """With the zero-init paths opened, the embed read changes the registers.
+
+    Confirms the extra read is actually wired to a live source (the finalized
+    block-0 tokens) rather than silently dropped.
+    """
+    torch.manual_seed(0)
+    plain = _build_encoder()
+    torch.manual_seed(0)
+    embed = _build_encoder(embed_read=True)
+    embed.load_state_dict(plain.state_dict(), strict=False)
+    _open_embed_read(embed)
+
+    sample = _make_sample()
+    out_plain = _forward(plain, sample, patch_size)
+    out_embed = _forward(embed, sample, patch_size)
+    assert not torch.equal(out_plain["registers"], out_embed["registers"])
+
+
+def test_embed_read_masked_leakage_at_max_patch_size() -> None:
+    """End-to-end: the opened embed read introduces no masked-value leakage.
+
+    At ps = max_patch_size the coarse FlexiPatchEmbed applies no resize, so the
+    embed-read-free encoder is exactly invariant to masked-unit values; the embed
+    source is captured AFTER masked-token removal (re-added rows are zeros and
+    read-masked), so the embed-read model must be invariant too.
+    """
+    torch.manual_seed(0)
+    encoder = _build_encoder(embed_read=True)
+    _open_embed_read(encoder)
+
+    sample = _make_sample()
+    out_a = _forward(encoder, sample, patch_size=4)
+    out_b = _forward(encoder, _perturb_masked_units(sample), patch_size=4)
+    assert out_a.keys() == out_b.keys()
+    for key, value in out_a.items():
+        if isinstance(value, torch.Tensor):
+            assert torch.equal(value, out_b[key]), key
+
+
+def test_embed_read_rejects_multi_depth() -> None:
+    """embed_read is incompatible with multi-depth read_layers (bottleneck-level)."""
+    with pytest.raises(ValueError, match="read_layers"):
+        Encoder(
+            supported_modalities=[Modality.SENTINEL2_L2A],
+            embedding_size=16,
+            max_patch_size=4,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=2.0,
+            max_sequence_length=12,
+            depth=4,
+            drop_path=0.0,
+            position_encoding="rope",
+            use_register_bottleneck=True,
+            register_grid_size=0,
+            register_dim=REGISTER_DIM,
+            register_read_layers=[2, 4],
+            register_embed_read=True,
+        )

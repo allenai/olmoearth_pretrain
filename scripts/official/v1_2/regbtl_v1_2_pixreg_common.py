@@ -36,12 +36,33 @@ equal run 1 exactly at initialization. ``"conv"`` interleaves the steps with the
 coarse trunk (FiLM + zero-init fusion, every 4th block -- the old program's top
 pick); ``"thinconv"`` runs a standalone 4-step stack with no coarse interaction,
 isolating the value of an independent high-resolution register init.
+
+Two further arms attack the same question -- can a COARSE trunk (ps up to 4)
+retain pixel fidelity through a cheap side path -- without a pixel branch:
+
+* ``embedread``: one extra zero-init cross-attention read of the PATCH-EMBED
+  output (``register_embed_read``). At ps=4 the patch embed is a full linear map
+  on the 4x4xC block, so sub-pixel content is still exactly present in the embed
+  tokens; the trunk's final layer (the only thing the reads see today) has mixed
+  it away. The extra read lets each pixel register's RoPE query phase select its
+  own pixel's subspace directly from the undegraded tokens.
+* ``pixrecon``: per-pixel time-conditioned RAW-BAND reconstruction
+  (:func:`apply_pixel_reconstruction`): the NDVI head mechanism (MLP on
+  ``[register_cell ; phi(day_of_year)]``) pointed at the normalized S2 L2A + S1
+  values themselves, MSE, low weight. Each pixel register must store its own
+  seasonal reflectance trajectory -- a detail-forcing loss rather than a
+  detail-carrying architecture.
 """
 
 import logging
 
+from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
+from olmoearth_pretrain.nn.supervision_head import (
+    SupervisionModalityConfig,
+    SupervisionTaskType,
+)
 from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 logger = logging.getLogger(__name__)
@@ -66,6 +87,20 @@ PIXEL_EVERY_K_BLOCKS = 4
 PIXEL_CONV_KERNEL = 3
 PIXEL_MLP_RATIO = 4.0
 PIXEL_THIN_DEPTH = 4
+
+# Raw-band reconstruction (the pixrecon arm): the time-series input modalities the
+# time-conditioned heads reconstruct per (pixel, timestep), and the per-modality
+# loss weight. 0.05 x 2 modalities = 0.1 total, matching the NDVI head's weight in
+# the base recipe (regression task weight 1.0 x base 0.1): an auxiliary
+# detail-forcing nudge, not a competing objective.
+PIXEL_RECON_MODALITIES = (
+    Modality.SENTINEL2_L2A.name,
+    Modality.SENTINEL1.name,
+)
+PIXEL_RECON_WEIGHT = 0.05
+# Same annual-harmonic day-of-year basis as the NDVI head (K=4 spans
+# phenology-scale structure; see regbtl_v1_2_regsup_common.NDVI_TIME_HARMONICS).
+PIXEL_RECON_TIME_HARMONICS = 4
 
 
 def apply_ps14(config: OlmoEarthDataLoaderConfig) -> OlmoEarthDataLoaderConfig:
@@ -121,4 +156,41 @@ def apply_pixel_branch(config: LatentMIMConfig, branch_type: str) -> LatentMIMCo
     encoder_config.pixel_conv_kernel = PIXEL_CONV_KERNEL
     encoder_config.pixel_mlp_ratio = PIXEL_MLP_RATIO
     encoder_config.pixel_thin_depth = PIXEL_THIN_DEPTH
+    return config
+
+
+def apply_embed_read(config: LatentMIMConfig) -> LatentMIMConfig:
+    """Add the extra patch-embed register read (the ``embedread`` arm), in place.
+
+    One zero-init cross-attention read of the block-0 input before the standard
+    read schedule, so the model equals the embed-read-free run 1 at initialization.
+    """
+    config.encoder_config.register_embed_read = True
+    return config
+
+
+def apply_pixel_reconstruction(config: LatentMIMConfig) -> LatentMIMConfig:
+    """Add per-pixel raw-band reconstruction heads (the ``pixrecon`` arm), in place.
+
+    One time-conditioned supervision head per time-series input modality (S2 L2A,
+    S1), reusing the NDVI mechanism: a small MLP on ``[register_cell ;
+    phi(day_of_year)]`` predicts the cell's normalized band values at every observed
+    timestep (MSE, MISSING_VALUE-masked). The targets are the raw inputs already in
+    every batch, so no dataset/masking changes are needed. Apply AFTER
+    ``add_register_supervision`` (it extends the existing head config).
+    """
+    assert config.supervision_head_config is not None, (
+        "apply_pixel_reconstruction requires add_register_supervision first"
+    )
+    for name in PIXEL_RECON_MODALITIES:
+        config.supervision_head_config.modality_configs[name] = (
+            SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION,
+                num_output_channels=Modality.get(name).num_bands,
+                weight=PIXEL_RECON_WEIGHT,
+                regression_loss_type="mse",
+                time_conditioned=True,
+                time_harmonics=PIXEL_RECON_TIME_HARMONICS,
+            )
+        )
     return config

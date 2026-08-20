@@ -1582,6 +1582,7 @@ class SpatialRegisterBottleneck(nn.Module):
         latent_attn_dim: int | None = None,
         latent_num_heads: int | None = None,
         norm_affine: bool = True,
+        embed_read: bool = False,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1767,6 +1768,21 @@ class SpatialRegisterBottleneck(nn.Module):
                 projections (the DiT convention). The K/V ``input_norm``(s) and the
                 final output norm keep their affine. True (default) keeps the standard
                 affine norms (backwards compatible).
+            embed_read: If True, add ONE extra cross-attention read of the
+                PATCH-EMBED output (the trunk's block-0 input), run before the
+                standard read schedule. The final trunk layer has mixed away
+                modality-unique and sub-patch phase information that the embed
+                tokens still contain exactly; an embed-level read lets the
+                registers (whose RoPE query phases can select sub-patch subspaces
+                of the embed tokens' full linear patch projection) extract it
+                directly. The extra block gets its own input norm + K/V
+                projection at the same shape as the standard reads, and the
+                caller passes the finalized embed tokens via ``forward``'s
+                ``embed_tokens``. Call :meth:`zero_init_embed_read` after weight
+                init to make the block a no-op at init (init-equivalence with the
+                embed-read-free model). Incompatible with multi-depth
+                ``read_layers`` (which generalizes read sources differently).
+                False (default) keeps the standard schedule.
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1777,6 +1793,13 @@ class SpatialRegisterBottleneck(nn.Module):
         # the schedule reverts to the single-source rules.
         self.multi_depth = read_layers is not None
         self.read_layers = list(read_layers) if read_layers is not None else None
+        if embed_read and self.multi_depth:
+            raise ValueError(
+                "embed_read (one extra patch-embed read) cannot be combined with "
+                "read_layers (multi-depth reads): the embed read prepends one extra "
+                "source to the single-source schedule"
+            )
+        self.embed_read = embed_read
         if fused_read is not None:
             if fused_read not in ("uniform", "learned"):
                 raise ValueError(
@@ -2072,6 +2095,33 @@ class SpatialRegisterBottleneck(nn.Module):
                 for _ in range(num_latent_blocks)
             ]
         )
+        # One EXTRA read of the patch-embed output, before the standard schedule. Its
+        # own input norm + K/V projection (the embed tokens have different per-channel
+        # statistics than the final layer); the block itself matches the standard read
+        # shape. Zero-init via zero_init_embed_read() makes it a no-op at init.
+        if embed_read:
+            self.embed_input_norm = nn.LayerNorm(encoder_embedding_size)
+            self.embed_kv_proj: nn.Module = (
+                nn.Identity()
+                if attn_dim is not None
+                else nn.Linear(encoder_embedding_size, register_dim)
+            )
+            self.embed_read_block = Block(
+                register_dim,
+                num_heads,
+                mlp_ratio,
+                qkv_bias=True,
+                qk_norm=qk_norm,
+                norm_layer=block_norm_layer,
+                cross_attn=True,
+                use_flash_attn=False,
+                position_encoding=read_position_encoding,
+                rope_base=rope_base,
+                temporal_rope_dim_frac=temporal_rope_dim_frac,
+                rope_temporal_base=rope_temporal_base,
+                attn_dim=attn_dim,
+                kv_in_dim=(encoder_embedding_size if attn_dim is not None else None),
+            )
         # Learnable per-read residual gates (one scalar per read block). Init to 1.0 so the
         # gated update ``z + g*(read(z) - z)`` equals the ungated ``read(z)`` at init, making
         # this a no-op until the gates move (and leaving existing checkpoints unchanged).
@@ -2097,6 +2147,21 @@ class SpatialRegisterBottleneck(nn.Module):
             if unit_norm_scale is not None
             else math.sqrt(output_dim if output_dim is not None else register_dim)
         )
+
+    def zero_init_embed_read(self) -> None:
+        """Zero the embed-read block's residual contributions (no-op at init).
+
+        The block is residual (``x + attn(...)`` then ``x + mlp(...)``), so zeroing
+        the attention output projection and the MLP's second linear makes it an
+        exact identity until training moves the weights -- the embed-read model
+        equals the embed-read-free model at initialization. Call AFTER any blanket
+        weight init.
+        """
+        assert self.embed_read, "zero_init_embed_read requires embed_read=True"
+        for linear in (self.embed_read_block.attn.proj, self.embed_read_block.mlp.fc2):
+            nn.init.zeros_(linear.weight)
+            if linear.bias is not None:
+                nn.init.zeros_(linear.bias)
 
     def build_register_positions(
         self, patch_positions: Tensor, register_grid: tuple[int, int]
@@ -2213,6 +2278,7 @@ class SpatialRegisterBottleneck(nn.Module):
         patch_size: int | None = None,
         patch_coordinate_scale: float | None = None,
         register_init: Tensor | None = None,
+        embed_tokens: Tensor | None = None,
     ) -> tuple[Tensor, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -2244,6 +2310,10 @@ class SpatialRegisterBottleneck(nn.Module):
                 initialization for the register grid (e.g. a pixel branch's per-pixel
                 features through a zero-init projection), added to the (cloned)
                 learned latent before the first read. Dynamic mode only.
+            embed_tokens: The patch-embed output (the trunk's block-0 input) in the
+                same finalized layout as ``patch_tokens``; required when
+                ``embed_read`` is set (one extra read of this source runs before the
+                standard schedule), ignored otherwise.
 
         Returns:
             registers: ``[B, num_registers, register_dim]``
@@ -2409,6 +2479,26 @@ class SpatialRegisterBottleneck(nn.Module):
                 dim=-1,
             )
 
+        # One extra read of the patch-embed output BEFORE the standard schedule: the
+        # registers query the undegraded block-0 tokens (own norm + projection; same
+        # RoPE frame, visibility mask and windowing as the standard reads). Zero-init
+        # (see zero_init_embed_read) makes this a no-op at initialization.
+        if self.embed_read:
+            if embed_tokens is None:
+                raise ValueError(
+                    "embed_read requires embed_tokens (the finalized patch-embed "
+                    "output) at forward time"
+                )
+            embed_kv = self.embed_kv_proj(self.embed_input_norm(embed_tokens))
+            registers = self.embed_read_block(
+                x=registers,
+                y=embed_kv,
+                attn_mask=read_attn_mask,
+                rope_positions=read_register_positions,
+                rope_positions_y=patch_positions,
+                window_spec=read_window_spec,
+            )
+
         # Shared-K/V: project the one source into keys/values HERE, once, rather than
         # inside every read block. Block 0 owns the weights (the rest were built
         # ``kv_external``), so the whole stack reads through a single projection and a
@@ -2539,6 +2629,7 @@ class Encoder(FlexiVitBase):
         register_latent_attn_dim: int | None = None,
         register_latent_num_heads: int | None = None,
         register_norm_affine: bool = True,
+        register_embed_read: bool = False,
         pixel_branch_type: str | None = None,
         pixel_embedding_size: int = 128,
         pixel_every_k_blocks: int = 4,
@@ -2749,6 +2840,15 @@ class Encoder(FlexiVitBase):
                 register counts the gamma/beta gradient reduction is a measured
                 cost and the affine is redundant with the blocks' projections.
                 The input and final output norms keep their affine.
+            register_embed_read: If True, the bottleneck runs ONE extra
+                cross-attention read of the PATCH-EMBED output (the block-0
+                input, position/modality encodings included) before its standard
+                read schedule, letting the registers extract sub-patch/
+                modality-unique content the final trunk layer has mixed away.
+                Zero-initialized, so the model equals the embed-read-free model
+                at init. Primary bottleneck only (the detached student keeps its
+                final-layer read). Incompatible with ``register_read_layers``.
+                Defaults to False.
             pixel_branch_type: If set, attach the convolutional pixel branch whose
                 final ONLINE-pooled per-pixel features initialize the pixel
                 register grid through a zero-init projection (see
@@ -2928,6 +3028,7 @@ class Encoder(FlexiVitBase):
                 latent_attn_dim=register_latent_attn_dim,
                 latent_num_heads=register_latent_num_heads,
                 norm_affine=register_norm_affine,
+                embed_read=register_embed_read,
             )
             # Detached low-dim "student" readout (see the __init__ docstring). Both
             # variants consume DETACHED inputs, so the student is invisible to the
@@ -3086,6 +3187,9 @@ class Encoder(FlexiVitBase):
             # After the blanket init: every fusion path starts at zero, so the model
             # is exactly the branch-free model at step 0 (init equivalence).
             self.pixel_branch.zero_init()
+        if self.register_bottleneck is not None and self.register_bottleneck.embed_read:
+            # Same convention: the extra embed-level read contributes zero at step 0.
+            self.register_bottleneck.zero_init_embed_read()
 
     def enable_band_dropout(self) -> None:
         """Enable band dropout using the configured rate.
@@ -3605,6 +3709,15 @@ class Encoder(FlexiVitBase):
             multi_depth_read_layers = set(self.register_bottleneck.read_layers)
         cached_read_tokens: dict[int, Tensor] = {}
 
+        # Embed-level register read: stash the block-0 INPUT (patch-embed output plus
+        # position/modality encodings, in the in-loop packed layout) so the bottleneck
+        # can run its extra read against the undegraded tokens. Like the multi-depth
+        # caches, the patch stack never sees the registers, so stashing here is
+        # equivalent to reading before the trunk runs.
+        embed_read_source: Tensor | None = None
+        if self.register_bottleneck is not None and self.register_bottleneck.embed_read:
+            embed_read_source = tokens
+
         # Pixel branch: embed the raw sample's pixels into dense frames (non-ONLINE
         # pixels zeroed -- the leakage guard). "thinconv" runs its whole stack here,
         # independent of the trunk; "conv" interleaves with the blocks below. The
@@ -3716,23 +3829,23 @@ class Encoder(FlexiVitBase):
                 if self.register_bottleneck.dynamic_grid
                 else None
             )
+
+            def _finalize_read_tokens(raw: Tensor) -> Tensor:
+                # Bring a cached, in-loop tensor (a block output, or the block-0 input
+                # for the embed read) into the shape the bottleneck reads: drop
+                # register tokens, unpack (flash), and re-add masked tokens (the read
+                # masks them out). No norm here -- the bottleneck applies its own
+                # input_norm to every K/V source, so an encoder norm would be a
+                # redundant double-norm (and would mismatch across read depths).
+                t = raw
+                if self.has_register_tokens:
+                    t, _ = self.pop_register_tokens(t)
+                if self.use_flash_attn:
+                    t = self.unpack_tokens(t, new_mask, og_shape)
+                return self._maybe_add_removed_tokens(t, indices, new_mask, fast_pass)
+
             if self.register_bottleneck.multi_depth:
                 assert self.register_bottleneck.read_layers is not None
-
-                def _finalize_read_tokens(raw: Tensor) -> Tensor:
-                    # Bring a cached, in-loop block output into the shape the bottleneck
-                    # reads: drop register tokens, unpack (flash), and re-add masked tokens
-                    # (the read masks them out). No norm here -- the bottleneck applies its
-                    # own input_norm to every K/V source, so an encoder norm would be a
-                    # redundant double-norm (and would mismatch across read depths).
-                    t = raw
-                    if self.has_register_tokens:
-                        t, _ = self.pop_register_tokens(t)
-                    if self.use_flash_attn:
-                        t = self.unpack_tokens(t, new_mask, og_shape)
-                    return self._maybe_add_removed_tokens(
-                        t, indices, new_mask, fast_pass
-                    )
 
                 # One K/V source per read layer, each finalized from its cached (pre-norm)
                 # block output so all depths are normalized identically by the bottleneck's
@@ -3758,6 +3871,12 @@ class Encoder(FlexiVitBase):
             if pixel_frames is not None and pixel_ctx is not None:
                 assert self.pixel_branch is not None
                 register_init = self.pixel_branch.register_init(pixel_frames, pixel_ctx)
+            # Embed-level read source, finalized to the same layout as the other
+            # K/V sources (masked tokens re-added as zeros; the read's visibility
+            # mask keeps them out of attention).
+            embed_tokens_arg: Tensor | None = None
+            if embed_read_source is not None:
+                embed_tokens_arg = _finalize_read_tokens(embed_read_source)
             registers, register_positions = self.register_bottleneck(
                 patch_tokens=patch_tokens_arg,
                 patch_positions=register_kv_positions,
@@ -3772,6 +3891,7 @@ class Encoder(FlexiVitBase):
                 patch_size=patch_size,
                 patch_coordinate_scale=register_patch_coordinate_scale,
                 register_init=register_init,
+                embed_tokens=embed_tokens_arg,
             )
             register_output = {
                 "registers": registers,
@@ -4608,6 +4728,14 @@ class EncoderConfig(Config):
     # blocks' own linear projections. The K/V input norms and the final output norm
     # keep their affine. True (default) keeps standard norms (backwards compatible).
     register_norm_affine: bool = True
+    # One EXTRA cross-attention read of the PATCH-EMBED output (the trunk's block-0
+    # input), run before the bottleneck's standard read schedule. The embed tokens
+    # still contain the sub-patch / modality-unique content the final layer mixes
+    # away, and a register's RoPE query phase can select its own pixel's subspace of
+    # the linear patch projection. Zero-initialized (init-equivalent to the
+    # embed-read-free model). Incompatible with register_read_layers. False
+    # (default) keeps the standard schedule (backwards compatible).
+    register_embed_read: bool = False
     # Convolutional pixel branch whose final per-pixel features initialize the
     # pixel-resolution register grid through a zero-init projection (ported from the
     # dual-res encoder program; see nn/pixel_branch.py). "conv": FiLM-modulated
@@ -4781,6 +4909,11 @@ class EncoderConfig(Config):
                         f"register_read_layers must lie in [1, depth={self.depth}], got "
                         f"{self.register_read_layers}"
                     )
+                if self.register_embed_read:
+                    raise ValueError(
+                        "register_embed_read (one extra patch-embed read) is "
+                        "incompatible with register_read_layers (multi-depth reads)"
+                    )
             if self.register_fused_read is not None:
                 if self.register_fused_read not in ("uniform", "learned"):
                     raise ValueError(
@@ -4826,6 +4959,10 @@ class EncoderConfig(Config):
         elif self.register_pixel_grid:
             raise ValueError(
                 "register_pixel_grid requires use_register_bottleneck=True"
+            )
+        elif self.register_embed_read:
+            raise ValueError(
+                "register_embed_read requires use_register_bottleneck=True"
             )
         if self.pixel_branch_type is not None:
             if self.pixel_branch_type not in ("conv", "thinconv"):

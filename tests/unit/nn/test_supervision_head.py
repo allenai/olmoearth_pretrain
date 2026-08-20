@@ -610,6 +610,48 @@ class TestTimeConditionedSupervision:
         assert torch.isfinite(register_grid.grad).all()
         assert register_grid.grad.abs().sum() > 0
 
+    def test_multichannel_raw_band_reconstruction(self) -> None:
+        """The pixrecon arm: time-conditioned MSE on the raw S2 L2A bands.
+
+        The head predicts all C bands per (cell, timestep) from ``[register_cell ;
+        phi(t)]``; the target is the normalized input already in the batch, with
+        MISSING_VALUE holes excluded; the loss backpropagates into the grid.
+        """
+        num_bands = 12  # Modality.SENTINEL2_L2A.num_bands
+        cfg = {
+            "sentinel2_l2a": SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION,
+                num_output_channels=num_bands,
+                weight=0.05,
+                regression_loss_type="mse",
+                time_conditioned=True,
+            ),
+        }
+        head = SupervisionHead(
+            cfg,
+            embedding_dim=D,
+            max_patch_size=MAX_PATCH_SIZE,
+            register_supervision=True,
+        )
+        register_grid = torch.randn(B, P_H, P_W, D, requires_grad=True)
+        target = torch.randn(B, H_PIX, W_PIX, self.T, num_bands)
+        # A cloud hole (all bands missing at one pixel/timestep) and a fully
+        # missing timestep, both excluded by the valid mask.
+        target[:, :4, :4, 0] = MISSING_VALUE
+        target[:, :, :, 2] = MISSING_VALUE
+        batch = MaskedOlmoEarthSample(
+            timestamps=self._make_timestamps(), sentinel2_l2a=target
+        )
+        preds = head(TokensAndMasks(), batch, register_grid=register_grid)
+        assert preds["sentinel2_l2a"].shape == (B, H_PIX, W_PIX, self.T, num_bands)
+        total_loss, per_mod = compute_supervision_loss(preds, batch, head)
+        assert torch.isfinite(total_loss)
+        assert "sentinel2_l2a" in per_mod
+        total_loss.backward()
+        assert register_grid.grad is not None
+        assert torch.isfinite(register_grid.grad).all()
+        assert register_grid.grad.abs().sum() > 0
+
     def test_day_of_year_encoding(self) -> None:
         """Jan 1 encodes as (sin 0, cos 1) x K, and the encoding is year-invariant."""
         jan1_2023 = torch.tensor([[[1, 0, 2023]]], dtype=torch.long)
