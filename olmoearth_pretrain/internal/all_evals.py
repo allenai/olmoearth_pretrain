@@ -33,6 +33,7 @@ from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
     L8QA_CLOUD_ONLY_BITS_MASK,
     SCL_CLOUDLESS_CLASSES,
 )
+from olmoearth_pretrain.evals.embedding_transforms import EmbeddingNormalization
 from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
 from olmoearth_pretrain.internal.experiment import (
@@ -1559,6 +1560,7 @@ def _aef_ps1_task(
     landsat_cloud_cover_max: float | None = None,
     l8_pixel_cloud_mask: bool = False,
     l8_pixel_cloud_bits: int | None = None,
+    embedding_normalization: EmbeddingNormalization = EmbeddingNormalization.NONE,
 ) -> DownstreamTaskConfig:
     """AEF supplemental task under the per-pixel embedding-product convention.
 
@@ -1579,6 +1581,11 @@ def _aef_ps1_task(
     millisecond-scale closed-form fits off. The precomputed baselines (AEF,
     Tessera) run these same task objects, so they inherit the trials and stay
     directly comparable.
+
+    ``embedding_normalization`` defaults to NONE, which is what every task
+    registered before 2026-08-20 uses: the embedding goes into AEF's int8
+    companding curve exactly as the model emits it. The `_cl2` siblings below
+    override it; see that block for why.
     """
     scale = _embedding_eval_batch_scale(window_size)
     return DownstreamTaskConfig(
@@ -1598,6 +1605,7 @@ def _aef_ps1_task(
         window_size=window_size,
         patch_size=1,
         quantize_embeddings=True,
+        embedding_normalization=embedding_normalization,
         use_center_token=True,
         label_at_center_pixel=True,
         scl_cloud_mask=scl_cloud_mask,
@@ -1869,6 +1877,53 @@ for _mode, _mode_suffix in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn"))
             for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
         }
     )
+
+# `_cl2`: the same tasks with the embeddings CENTERED and L2-normalized before
+# the int8 round-trip, instead of fed to AEF's companding curve as emitted.
+# Every task above uses embedding_normalization=NONE, and the pipeline
+# diagnostics say that costs us two distinct things on d768 (numbers from the
+# 2026_08_18 Landsat-only run, 8 datasets):
+#
+#   - Hubness. `raw_mean_component_ratio` is 0.60-0.90, i.e. most of the
+#     embedding norm is a vector shared by every sample, and mean pairwise
+#     cosine is 0.36-0.80 (ethiopia_crops: 0.90 common mode, 0.80 mean cosine).
+#     KNN scores uncentered cosine, so that common mode compresses every pair
+#     toward 1 and the neighbor ranking is decided by what little is left.
+#   - Round-trip damage. cos(orig, round-trip) is 0.934-0.980 and relative MSE
+#     4-13%, with `clip_fraction_rows` at 100% on every dataset -- only 0.6-0.9%
+#     of COORDINATES saturate (per-dimension std is ~0.22, not the ~1 a raw
+#     LayerNorm would give), but that is still enough for every single
+#     embedding to lose at least one coordinate's magnitude.
+#
+# CENTER_L2 addresses both at once: centering removes the common mode, and the
+# L2 rescale puts coordinates in the range AEF's curve was designed for (their
+# embeddings are 64-d unit-L2, so their coordinates sit far below
+# QUANTIZE_CLIP_THRESHOLD). Chosen over plain L2 because the mean component is
+# the larger of the two effects and L2 alone does not touch it.
+#
+# Worth knowing before reading the deltas: with embedding_norm_stats_path unset
+# these fit the centering constants on each task's own train split, which is the
+# diagnostic form -- it answers "is the geometry the problem?" but is not itself
+# deployable, since a global embedding run has no per-dataset train split. If
+# the deltas are real, the shipping version is one fixed set of constants (or
+# register_unit_norm on the training side, which removes the need for any).
+#
+# KNN-only: the balanced trials are hosted on the KNN twin, KNN is the consumer
+# that cares most about the geometry, and the LP twin would cost 8 jobs per arm
+# for the probe-LR sweep. Registered on the full S1+S2+L8 stack only, the stack
+# the AEF numbers are being read on; add the other stacks if the deltas land.
+EMBEDDING_EVAL_TASKS.update(
+    {
+        f"{name}_ws16_ps1_sentinel1_sentinel2_landsat_cl2_knn": _aef_ps1_task(
+            name,
+            EvalMode.KNN,
+            window_size=16,
+            input_modalities=_YEAR_ALIGNED_MODALITIES["sentinel1_sentinel2_landsat"],
+            embedding_normalization=EmbeddingNormalization.CENTER_L2,
+        )
+        for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+    }
+)
 
 # Scene-level Landsat cloud-mask siblings of the landsat tasks: months whose
 # chosen Landsat scene reports cloud_cover >= this are masked MISSING (the
