@@ -2163,6 +2163,13 @@ for _loio_terr in ("reunion", "guadeloupe", "martinique", "guyane", "mayotte"):
     EMBEDDING_EVAL_TASKS[f"pastis2_drom_bg8_loio_{_loio_terr}_ws16_ps1_sentinel2"] = (
         _pastis_ps1_task([Modality.SENTINEL2_L2A.name], dataset=_loio_ds)
     )
+    # _full variant reads the full-modality config (declares gse + tessera_v2),
+    # so the AEF (--model=aef) and Tessera v2 (--model=tessera_v2_precomputed)
+    # precomputed baselines can be swept per held-out territory. OlmoEarth keeps
+    # using the S2-only entry above (cheaper I/O).
+    EMBEDDING_EVAL_TASKS[f"pastis2_drom_bg8_loio_{_loio_terr}_full_ws16_ps1_sentinel2"] = (
+        _pastis_ps1_task([Modality.SENTINEL2_L2A.name], dataset=f"{_loio_ds}_full")
+    )
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
