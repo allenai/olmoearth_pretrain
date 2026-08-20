@@ -17,6 +17,7 @@ from torch.utils.data import Dataset
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import (
+    GLO30_ASPECT_FLAT,
     MISSING_VALUE,
     Modality,
 )
@@ -56,8 +57,6 @@ GLO30_BAND_ASPECT = 2
 # cos of the bearing instead is continuous across north and bounded to [-1, 1].
 GLO30_LABEL_ASPECT_SIN = 3
 GLO30_LABEL_ASPECT_COS = 4
-# Aspect marks flat pixels with -1; they have no compass bearing at all.
-GLO30_ASPECT_FLAT = -1.0
 # WorldCereal channel used for the binary "is annual temporary crops" probe.
 WORLDCEREAL_PRIMARY_CHANNEL = 0
 # CDL uses 0 to mark no-data / background.

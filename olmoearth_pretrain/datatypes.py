@@ -94,6 +94,9 @@ class OlmoEarthSample(NamedTuple):
     srtm: ArrayTensor | None = None  # [B, H, W, 1, len(SRTM_bands)]
     # glo30 (Copernicus GLO-30 DSM): elevation, slope, aspect.
     glo30: ArrayTensor | None = None  # [B, H, W, 1, 3]
+    # glo30_aspect is derived from the glo30 aspect band (not loaded from file):
+    # [sin(aspect), cos(aspect)], MISSING_VALUE where aspect is the -1 flat sentinel.
+    glo30_aspect: ArrayTensor | None = None  # [B, H, W, 1, 2]
     landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
     # naip with different tile resolution is currently not used in favor of naip_10.
     naip: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
@@ -393,6 +396,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     srtm_mask: Tensor | None = None
     glo30: Tensor | None = None
     glo30_mask: Tensor | None = None
+    glo30_aspect: Tensor | None = None
+    glo30_aspect_mask: Tensor | None = None
     landsat: Tensor | None = None
     landsat_mask: Tensor | None = None
     naip: Tensor | None = None
@@ -548,6 +553,8 @@ class TokensAndMasks(NamedTuple):
     srtm_mask: Tensor | None = None
     glo30: Tensor | None = None
     glo30_mask: Tensor | None = None
+    glo30_aspect: Tensor | None = None
+    glo30_aspect_mask: Tensor | None = None
     landsat: Tensor | None = None
     landsat_mask: Tensor | None = None
     naip: Tensor | None = None

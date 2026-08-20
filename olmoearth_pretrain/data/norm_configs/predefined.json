@@ -29,6 +29,16 @@
       "min": 0
     }
   },
+  "glo30_aspect": {
+    "aspect_cos": {
+      "max": 1,
+      "min": -1
+    },
+    "aspect_sin": {
+      "max": 1,
+      "min": -1
+    }
+  },
   "gse": {
     "A00": {
       "count": 100,
