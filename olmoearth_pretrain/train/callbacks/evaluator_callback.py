@@ -200,6 +200,14 @@ class DownstreamTaskConfig:
     # Which QA_PIXEL bits count as cloud. None keeps the loader's aggressive
     # default (dilated|cirrus|cloud|shadow); the narrow policy is cloud alone.
     l8_pixel_cloud_bits: int | None = None
+    # Bands to blank at load time, as {model.yaml input name: [band, ...]}. The
+    # named bands are dropped from what rslearn reads, so the loader's band
+    # scatter widens what remains back to the modality's canonical order and
+    # leaves those channels zero AFTER normalization
+    # (RslearnToOlmoEarthDataset._init_band_scatter) -- indistinguishable from a
+    # dataset that never stored them, and what pretraining's band dropout
+    # produces. Prices a band's contribution against an otherwise identical run.
+    zero_bands: dict[str, list[str]] | None = None
     # Convert eval Landsat DN to TOA reflectance / brightness temperature at
     # load time, for checkpoints pretrained on the reflectance h5. Reads the
     # per-window sun-elevation sidecar; pair with the reflectance-scale
@@ -353,6 +361,7 @@ class DownstreamEvaluator:
         self.landsat_cloud_cover_max = task.landsat_cloud_cover_max
         self.l8_pixel_cloud_mask = task.l8_pixel_cloud_mask
         self.l8_pixel_cloud_bits = task.l8_pixel_cloud_bits
+        self.zero_bands = task.zero_bands
         self.landsat_reflectance = task.landsat_reflectance
         self.computed_norm_config = task.computed_norm_config
         self.tile_samples = task.tile_samples
@@ -635,6 +644,8 @@ class DownstreamEvaluator:
                 extra_kwargs["l8_pixel_cloud_mask"] = True
                 if self.l8_pixel_cloud_bits is not None:
                     extra_kwargs["l8_pixel_cloud_bits"] = self.l8_pixel_cloud_bits
+            if self.zero_bands:
+                extra_kwargs["zero_bands"] = self.zero_bands
             if self.landsat_reflectance:
                 extra_kwargs["landsat_reflectance"] = True
             if self.computed_norm_config != "computed.json":

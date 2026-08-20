@@ -173,6 +173,7 @@ def get_eval_dataset(
             landsat_cloud_cover_max=kwargs.get("landsat_cloud_cover_max"),
             l8_pixel_cloud_mask=kwargs.get("l8_pixel_cloud_mask", False),
             l8_pixel_cloud_bits=kwargs.get("l8_pixel_cloud_bits"),
+            zero_bands=kwargs.get("zero_bands"),
             landsat_reflectance=kwargs.get("landsat_reflectance", False),
             computed_norm_config=kwargs.get("computed_norm_config", "computed.json"),
         )

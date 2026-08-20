@@ -1559,6 +1559,8 @@ def _aef_ps1_task(
     landsat_cloud_cover_max: float | None = None,
     l8_pixel_cloud_mask: bool = False,
     l8_pixel_cloud_bits: int | None = None,
+    embedding_batch_size: int | None = None,
+    zero_bands: dict[str, list[str]] | None = None,
 ) -> DownstreamTaskConfig:
     """AEF supplemental task under the per-pixel embedding-product convention.
 
@@ -1579,11 +1581,19 @@ def _aef_ps1_task(
     millisecond-scale closed-form fits off. The precomputed baselines (AEF,
     Tessera) run these same task objects, so they inherit the trials and stay
     directly comparable.
+
+    ``embedding_batch_size`` defaults to the 32-at-ws16 budget scaled to hold
+    tokens per batch constant across window sizes. Override it for a dataset
+    whose time axis is not the usual twelve: tokens per window are
+    (window_size/patch_size)^2 x T, so a longer stack needs a smaller batch to
+    stay inside the same memory.
     """
     scale = _embedding_eval_batch_scale(window_size)
     return DownstreamTaskConfig(
         dataset=name,
-        embedding_batch_size=32 * scale,
+        embedding_batch_size=(
+            32 * scale if embedding_batch_size is None else embedding_batch_size
+        ),
         probe_batch_size=8 * scale,
         num_workers=8,
         pooling_type=PoolingType.MEAN,
@@ -1605,6 +1615,7 @@ def _aef_ps1_task(
         landsat_cloud_cover_max=landsat_cloud_cover_max,
         l8_pixel_cloud_mask=l8_pixel_cloud_mask,
         l8_pixel_cloud_bits=l8_pixel_cloud_bits,
+        zero_bands=zero_bands,
         balanced_trial=(
             BalancedTrialConfig(cap=_aef_max_trial_cap(name))
             if eval_mode == EvalMode.KNN
@@ -2014,6 +2025,90 @@ for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
                 for name in PIXEL_MOSAIC_DATASETS
             }
         )
+
+# The all-scenes S2 arm: same windows and labels as the year-aligned parents, but
+# S2 is up to 36 individual acquisitions spanning the year instead of twelve 30-day
+# mosaics (allscenes_export.py). The parents' median window holds ~72 acquisitions,
+# so the monthly scheme throws away eleven looks in twelve before the model sees
+# anything; this asks what that costs. 36 is three times the monthly budget, thinned
+# evenly in time.
+#
+# S2-ONLY, and no masked siblings. The stack is the variable under test, so mixing
+# in S1 or Landsat -- byte-identical monthly layers across both arms -- would only
+# dilute it. `_sclmask` / `_cloudless` are absent because they mask through the
+# monthly `sentinel2_scl_moNN` layers, which these datasets do not carry; the
+# per-acquisition SCL rides along inside the scene layer but reaching it needs a
+# different mechanism than the loader's scl_cloud_mask.
+#
+# Its S2 has ten bands (B01/B09 are absent from the fetch group these scenes come
+# from, see the model.yaml headers), so an all-scenes-vs-monthly delta bundles the
+# temporal change with the loss of those two 60 m atmospheric bands.
+#
+# Registered as its own block rather than by appending to
+# AEF_SUPPLEMENTAL_YEAR_ALIGNED, like PIXEL_MOSAIC_DATASETS above and for the same
+# reason: that tuple drives every other sweep's task cross-product and is
+# length-pinned by a test.
+ALLSCENES_DATASETS = (
+    "ethiopia_crops_s2all36_year_aligned",
+    "africa_crop_mask_s2all36_year_aligned",
+)
+# Tokens per window are 16 x 16 x T, so a 36-scene stack is three times the monthly
+# arm's sequence; the batch drops by the same factor to keep the memory a batch
+# holds roughly where the twelve-timestep tasks put it.
+ALLSCENES_EMBEDDING_BATCH_SIZE = 10
+for _mode, _mode_suffix in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn")):
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_sentinel2{_mode_suffix}": _aef_ps1_task(
+                name,
+                _mode,
+                window_size=16,
+                input_modalities=[Modality.SENTINEL2_L2A.name],
+                embedding_batch_size=ALLSCENES_EMBEDDING_BATCH_SIZE,
+            )
+            for name in ALLSCENES_DATASETS
+        }
+    )
+
+# The atmospheric-band control for the all-scenes arm above. That arm reads ten
+# S2 bands because its fetch group never materialized B01/B09, so an
+# all-scenes-vs-monthly delta bundles the temporal change with the loss of those
+# two. This blanks the same bands on the FULL monthly stack, pricing that loss on
+# its own so the temporal effect can be read net of it.
+#
+# Landsat's analogues are blanked alongside: B1 (coastal aerosol) and B9 (cirrus)
+# are the same atmospheric pair. The stack is sentinel1_sentinel2_landsat because
+# that is what the existing unzeroed baseline was run on, so these are matched
+# pairs against numbers we already have rather than a job spent reproducing them.
+#
+# This is the ten-band control the ccmos note above records as dropped as
+# infeasible. It works now because zero_bands drops the bands from the READ and
+# the loader's band scatter widens what remains back to the canonical twelve,
+# leaving those channels zero after normalization -- so the model still tokenizes
+# twelve bands and the token count, channel indices and positional layout are all
+# unchanged. Only the content is gone, which is what pretraining's band dropout
+# produces and what the partial exports genuinely look like.
+NOB0109_ZERO_BANDS = {
+    "sentinel2_l2a": ["B01", "B09"],
+    "landsat": ["B1", "B9"],
+}
+for _mode, _mode_suffix in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn")):
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_sentinel1_sentinel2_landsat_nob0109{_mode_suffix}": (
+                _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_YEAR_ALIGNED_MODALITIES[
+                        "sentinel1_sentinel2_landsat"
+                    ],
+                    zero_bands=NOB0109_ZERO_BANDS,
+                )
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
 
 # The NARROW Landsat pixel policy: `_l8pixstrict` masks on the cloud bit alone,
 # where `_l8pixmask` above also masks dilated cloud, cirrus and cloud shadow.

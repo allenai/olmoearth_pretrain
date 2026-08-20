@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from collections.abc import Iterator
@@ -493,6 +494,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         landsat_cloud_cover_max: float | None = None,
         l8_pixel_cloud_mask: bool = False,
         l8_pixel_cloud_bits: int | None = None,
+        zero_bands: dict[str, list[str]] | None = None,
         landsat_reflectance: bool = False,
         computed_norm_config: str = "computed.json",
     ) -> RslearnToOlmoEarthDataset:
@@ -542,6 +544,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             l8_pixel_cloud_mask: Mask cloudy Landsat pixel-timesteps MISSING
                 using the optional "landsat_qa" input (see
                 RslearnToOlmoEarthDataset).
+            zero_bands: {input name: [band, ...]} to drop from the read, so the
+                band scatter leaves those canonical channels zero after
+                normalization (see _apply_zero_bands).
             landsat_reflectance: Convert Landsat DN to TOA reflectance at load
                 time for a reflectance-pretrained checkpoint; loads the
                 calibration sidecar from the dataset root and raises if it is
@@ -556,6 +561,11 @@ class RslearnToOlmoEarthDataset(Dataset):
             label_fraction = 1.0
         if label_fraction != 1.0 and max_samples is not None:
             raise ValueError("Use either max_samples or label_fraction, not both.")
+
+        # Before anything reads the inputs: this rewrites the bands: lists that
+        # both the rslearn read and declared_bands are derived from.
+        if zero_bands:
+            model_config = _apply_zero_bands(model_config, zero_bands)
 
         # Resolved before the dataset is built: require_stack_inputs needs the
         # consumed stack to decide whether window resolution has to narrow.
@@ -1559,6 +1569,64 @@ class IterableRslearnToOlmoEarthDataset(IterableDataset, RslearnToOlmoEarthDatas
                 yield self._transform_sample(input_dict, target, window_key=window_key)
 
 
+def _apply_zero_bands(
+    model_config: dict[str, Any], zero_bands: dict[str, list[str]]
+) -> dict[str, Any]:
+    """Drop bands from the model.yaml inputs so the loader blanks them.
+
+    Removing a band from an input's ``bands:`` removes it from what rslearn
+    reads AND from the derived declared_bands, which is the whole trick: the
+    band scatter then widens the remaining channels back to the modality's
+    canonical order and leaves the dropped ones zero AFTER normalization
+    (_init_band_scatter). That is byte-for-byte the state an export that never
+    stored the band produces, so a zeroed run is directly comparable both to
+    the full-band run and to those partial exports.
+
+    Zeroing rather than deleting is what makes the arm interpretable: the model
+    still tokenizes the full band_order, so the channel count, the token count
+    and the positional layout are unchanged and only the band's content is
+    gone.
+
+    Args:
+        model_config: parsed model.yaml. Not mutated.
+        zero_bands: input name -> bands to drop from that input.
+
+    Returns:
+        A copy of model_config with those bands removed.
+
+    Raises:
+        ValueError: if an input or band is absent, which would otherwise leave
+            the arm a silent no-op scored as if the band had been blanked.
+    """
+    config = copy.deepcopy(model_config)
+    inputs = config.get("data", {}).get("init_args", {}).get("inputs", {})
+    for name, bands in zero_bands.items():
+        if name not in inputs:
+            raise ValueError(
+                f"zero_bands names input '{name}', which this dataset's "
+                f"model.yaml does not declare (it has {sorted(inputs)})"
+            )
+        declared = list(inputs[name].get("bands") or [])
+        missing = [band for band in bands if band not in declared]
+        if missing:
+            raise ValueError(
+                f"zero_bands asks to blank {missing} on input '{name}', which "
+                f"declares {declared}"
+            )
+        kept = [band for band in declared if band not in bands]
+        if not kept:
+            raise ValueError(
+                f"zero_bands would blank every band of input '{name}'; remove "
+                "the input from the stack instead"
+            )
+        inputs[name]["bands"] = kept
+        logger.info(
+            f"zero_bands: input '{name}' drops {sorted(bands)}; those canonical "
+            "channels will be zero after normalization"
+        )
+    return config
+
+
 def wrap_rslearn_dataset(**kwargs: Any) -> RslearnToOlmoEarthDataset:
     """Wrap an rslearn dataset, picking map-style or iterable based on what rslearn returns."""
     if isinstance(kwargs.get("model_dataset"), IterableDataset):
@@ -1585,6 +1653,7 @@ def from_registry_entry(
     landsat_cloud_cover_max: float | None = None,
     l8_pixel_cloud_mask: bool = False,
     l8_pixel_cloud_bits: int | None = None,
+    zero_bands: dict[str, list[str]] | None = None,
     landsat_reflectance: bool = False,
     computed_norm_config: str = "computed.json",
 ) -> RslearnToOlmoEarthDataset:
@@ -1631,6 +1700,8 @@ def from_registry_entry(
             the aggressive default.
         l8_pixel_cloud_mask: Mask cloudy Landsat pixel-timesteps MISSING using
             the optional "landsat_qa" input (see RslearnToOlmoEarthDataset).
+        zero_bands: Bands to blank, as {input name: [band, ...]} (see
+            RslearnToOlmoEarthDataset.from_model_config).
         landsat_reflectance: Convert Landsat DN to TOA reflectance at load time
             for a reflectance-pretrained checkpoint (see
             RslearnToOlmoEarthDataset).
@@ -1755,6 +1826,7 @@ def from_registry_entry(
         landsat_cloud_cover_max=landsat_cloud_cover_max,
         l8_pixel_cloud_mask=l8_pixel_cloud_mask,
         l8_pixel_cloud_bits=l8_pixel_cloud_bits,
+        zero_bands=zero_bands,
         landsat_reflectance=landsat_reflectance,
         computed_norm_config=computed_norm_config,
     )
