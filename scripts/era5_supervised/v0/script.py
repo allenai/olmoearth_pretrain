@@ -65,12 +65,8 @@ from olmoearth_pretrain.internal.experiment import (
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
 from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig, Era5Pooling
 from olmoearth_pretrain.nn.transforms.era5_corruption import (
-    MaskPolicy,
-    NaiveMaskPolicy,
+    SwtHaloSpanMaskPolicy,
     SwtNaiveMaskPolicy,
-    TemporalInterpolationStrategy,
-    WholeGroupSpanStrategy,
-    WithinGroupSingleVarStrategy,
 )
 from olmoearth_pretrain.train.callbacks import (
     OlmoEarthWandBCallback,
@@ -167,7 +163,6 @@ class Era5SupervisedCommonComponents(CommonComponents):
     # raw-input behavior is unchanged.
     # ------------------------------------------------------------------
     encoder_swt_input: bool = False
-    encoder_swt_input_wavelet: str = "haar"
     encoder_swt_input_levels: list[int] = field(
         default_factory=lambda: [0, 1, 2, 3, 4, 5]
     )
@@ -205,49 +200,24 @@ class Era5SupervisedCommonComponents(CommonComponents):
     recon_raw_lambda: float = 0.0
     recon_swt_lambda: float = 1.0
     recon_swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
-    recon_swt_wavelet: str = "haar"
-    # Settled default (v0.2.4xx-7xx): naive masking (m5, c[1,7], span[1,30]) was
-    # the winning masking policy.
-    recon_use_naive_masking: bool = True
-    # Naive-masking span count (NaiveMaskPolicy.max_num_masks).
-    recon_naive_max_num_masks: int = 5
-    # Naive-masking channel-count range (NaiveMaskPolicy.num_channels): each mask
-    # drops a random subset of this many channels.
-    recon_naive_num_channels: list[int] = field(default_factory=lambda: [1, 7])
-    # Naive-masking span length range in days (NaiveMaskPolicy.span_days).
-    recon_naive_span_days: list[int] = field(default_factory=lambda: [1, 30])
     # ------------------------------------------------------------------
-    # SWT-input reconstruction masking (only used when encoder_swt_input=True).
-    # The masker is always the simple budget masker (SwtNaiveMaskPolicy):
-    # ``recon_swt_naive_budget`` is the fraction of all (timestep x var x
-    # swt_band) elements masked uniformly at random.  ``recon_raw_loss_mask_reduce``
-    # reduces the band-space mask over the scale axis to a raw loss mask: "any"
-    # (supervise where any scale is masked) or "all" (only fully-masked columns).
+    # SWT-input reconstruction masking (reconstruction requires an
+    # is_swt_input encoder).  ``recon_mask_policy`` selects the masker:
+    #   * "swt_naive"     — per-element budget masking (baseline). Masks a
+    #                       ``recon_swt_naive_budget`` fraction of all
+    #                       (timestep x var x swt_band) elements at random.
+    #   * "swt_halo_span" — halo-corrected contiguous-span masking (no-leak).
     # ------------------------------------------------------------------
-    recon_raw_loss_mask_reduce: str = "any"
+    recon_mask_policy: str = "swt_naive"
     recon_swt_naive_budget: float = 0.5
-    recon_temporal_interpolation_prob: float = 1.0
-    recon_cross_variable_prob: float = 1.0
-    # When True, every sample gets at least one stage via a 50/50 competition
-    # + co-activation (ignores the two probs above). Used by the "both" policy
-    # so it never leaves samples uncorrupted.
-    recon_require_at_least_one_stage: bool = False
-    # Probability that BOTH stages fire under require_at_least_one_stage.
-    recon_both_activation_prob: float = 0.25
-    # Number of masking spans per strategy. Stage 1 (temporal interpolation)
-    # and the two span-based stage-2 strategies each lay down this many spans.
-    recon_temporal_num_masks: int = 3
-    # Stage-1 temporal-interpolation span length range (in days). Holding
-    # num_masks fixed and growing this span is the budget knob for the temporal
-    # mask-fraction sweep (keeps num_masks small while reaching higher budgets).
-    recon_temporal_span_days: list[int] = field(default_factory=lambda: [1, 1])
-    # Stage-1 temporal-interpolation excluded groups: groups whose daily signals
-    # are too noisy/event-driven for meaningful temporal infilling.
-    recon_temporal_excluded_groups: list[str] = field(
-        default_factory=lambda: ["wind", "hydro_flux"]
-    )
-    recon_within_group_num_masks: int = 1
-    recon_whole_group_span_num_masks: int = 1
+    # Halo-span policy knobs (used when recon_mask_policy == "swt_halo_span").
+    # Per sample, a span count in this inclusive range is drawn; each span
+    # draws a length (days) and a random subset of variables (count in
+    # recon_span_num_variables). Each span is expanded across bands with a
+    # per-band causal right halo so the span days are genuinely hidden.
+    recon_span_num_spans: list[int] = field(default_factory=lambda: [1, 5])
+    recon_span_days: list[int] = field(default_factory=lambda: [7, 60])
+    recon_span_num_variables: list[int] = field(default_factory=lambda: [1, 14])
     # ------------------------------------------------------------------
     # Mask-embedding visualization.
     # ------------------------------------------------------------------
@@ -703,43 +673,14 @@ def build_model_config(
             raw_lambda=common.recon_raw_lambda,
             swt_lambda=common.recon_swt_lambda,
             swt_levels=common.recon_swt_levels,
-            swt_wavelet=common.recon_swt_wavelet,
-            raw_loss_mask_reduce=common.recon_raw_loss_mask_reduce,
-            **(
-                # SWT-input runs always use the simple budget masker.
-                {
-                    "mask_policy": SwtNaiveMaskPolicy(
-                        budget=common.recon_swt_naive_budget,
-                    )
-                }
-                if common.encoder_swt_input
-                else {
-                    "mask_policy": NaiveMaskPolicy(
-                        max_num_masks=common.recon_naive_max_num_masks,
-                        num_channels=tuple(common.recon_naive_num_channels),
-                        span_days=tuple(common.recon_naive_span_days),
-                    )
-                }
-                if common.recon_use_naive_masking
-                else {
-                    "mask_policy": MaskPolicy(
-                        temporal_interpolation_prob=common.recon_temporal_interpolation_prob,
-                        cross_variable_prob=common.recon_cross_variable_prob,
-                        require_at_least_one_stage=common.recon_require_at_least_one_stage,
-                        both_activation_prob=common.recon_both_activation_prob,
-                        temporal_interpolation=TemporalInterpolationStrategy(
-                            num_masks=common.recon_temporal_num_masks,
-                            span_days=list(common.recon_temporal_span_days),
-                            excluded_groups=list(common.recon_temporal_excluded_groups),
-                        ),
-                        within_group_single_var=WithinGroupSingleVarStrategy(
-                            num_masks=common.recon_within_group_num_masks,
-                        ),
-                        whole_group_span=WholeGroupSpanStrategy(
-                            num_masks=common.recon_whole_group_span_num_masks,
-                        ),
-                    )
-                }
+            mask_policy=(
+                SwtHaloSpanMaskPolicy(
+                    num_spans=tuple(common.recon_span_num_spans),
+                    span_days=tuple(common.recon_span_days),
+                    num_variables=tuple(common.recon_span_num_variables),
+                )
+                if common.recon_mask_policy == "swt_halo_span"
+                else SwtNaiveMaskPolicy(budget=common.recon_swt_naive_budget)
             ),
         )
 
@@ -760,7 +701,6 @@ def build_model_config(
         use_mask_embed=common.enable_reconstruction,
         use_conv_stem=common.encoder_use_conv_stem,
         is_swt_input=common.encoder_swt_input,
-        swt_input_wavelet=common.encoder_swt_input_wavelet,
         swt_input_levels=common.encoder_swt_input_levels,
         swt_input_include_approx=common.encoder_swt_input_include_approx,
         swt_input_stats_path=common.encoder_swt_input_stats_path,

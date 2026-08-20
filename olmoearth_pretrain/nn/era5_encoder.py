@@ -166,7 +166,6 @@ class Era5DailyEncoderConfig(Config):
             with a two-layer stem (Conv1D + GroupNorm + GELU + 1x1 Conv1D)
             that has enough nonlinear capacity to gate out masked channels.
         is_swt_input: When True, the encoder works directly in wavelet space
-        swt_input_wavelet: Wavelet family for the input SWT (``haar`` / ``db2``).
         swt_input_levels: Which detail levels to include (0-indexed).
         swt_input_include_approx: When True, append the deepest level's
             approximation band (complete representation): ``n_bands =
@@ -193,7 +192,6 @@ class Era5DailyEncoderConfig(Config):
     use_mask_embed: bool = False
     use_conv_stem: bool = False
     is_swt_input: bool = False
-    swt_input_wavelet: str = "haar"
     swt_input_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
     swt_input_include_approx: bool = True
     swt_input_stats_path: str | None = None
@@ -297,7 +295,6 @@ class Era5DailyEncoder(nn.Module):
                 StationaryWaveletTransform1d(
                     num_channels=in_channels,
                     max_levels=max(levels) + 1,
-                    wavelet=config.swt_input_wavelet,
                 )
             )
             self.swt_channels = in_channels * self.swt_num_bands

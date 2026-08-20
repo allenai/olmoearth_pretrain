@@ -26,14 +26,14 @@ from olmoearth_pretrain.data.multi_task_era5_dataset import Era5SupervisedBatch
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
 from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig
 from olmoearth_pretrain.nn.transforms.era5_corruption import (
-    DEFAULT_VARIABLE_GROUPS,
-    MaskPolicy,
-    NaiveMaskPolicy,
+    Era5CorruptionMasks,
+    SwtHaloSpanMaskPolicy,
     SwtNaiveMaskPolicy,
-    corrupt_era5,
+    corrupt_era5_swt,
 )
 from olmoearth_pretrain.nn.transforms.era5_swt import (
     StationaryWaveletTransform1d,
+    swt_band_supports,
     swt_bands_to_channels,
 )
 from olmoearth_pretrain.train.train_module.era5_multiobjective import (
@@ -113,7 +113,17 @@ def _small_decoder_cfg(**overrides: Any) -> Era5TimeQueryDecoderConfig:
 
 
 class _FixedEncoder:
-    """Tiny encoder double for deterministic reconstruction objective tests."""
+    """Tiny SWT-input encoder double for deterministic reconstruction tests.
+
+    The reconstruction objective requires an ``is_swt_input`` encoder; this
+    double advertises the SWT attributes the objective reads while ignoring the
+    actual input (it returns fixed tokens).
+    """
+
+    is_swt_input = True
+    swt_num_bands = 7
+    swt_input_levels = [0, 1, 2, 3, 4, 5]
+    swt_input_include_approx = True
 
     def __call__(
         self,
@@ -360,7 +370,7 @@ class TestSwtTransform:
     def test_shapes_and_cropping(self):
         """Full and cropped SWT output shapes; cropped == full tail."""
         x = torch.randn(2, 4, T)
-        swt = StationaryWaveletTransform1d(num_channels=4, max_levels=6, wavelet="haar")
+        swt = StationaryWaveletTransform1d(num_channels=4, max_levels=6)
         levels = list(range(6))
 
         bands_full = swt(x, levels=levels, target_start=0)
@@ -382,7 +392,7 @@ class TestSwtTransform:
         """ISWT(SWT(x)) recovers the original signal in the target window."""
         torch.manual_seed(42)
         x = torch.randn(2, 4, T)
-        swt = StationaryWaveletTransform1d(num_channels=4, max_levels=6, wavelet="haar")
+        swt = StationaryWaveletTransform1d(num_channels=4, max_levels=6)
         levels = list(range(6))
 
         bands = swt(x, levels=levels, target_start=0)
@@ -397,7 +407,7 @@ class TestSwtTransform:
         """Verify that each level's inverse recovers the input to that level."""
         torch.manual_seed(42)
         x = torch.randn(2, 4, T)
-        swt = StationaryWaveletTransform1d(num_channels=4, max_levels=6, wavelet="haar")
+        swt = StationaryWaveletTransform1d(num_channels=4, max_levels=6)
         bands = swt(x, levels=list(range(6)), target_start=0)
 
         s2 = math.sqrt(2.0)
@@ -412,7 +422,7 @@ class TestSwtTransform:
         """Haar detail of a constant signal is exactly zero."""
         c = 3.14
         x = torch.full((1, 2, T), c)
-        swt = StationaryWaveletTransform1d(num_channels=2, max_levels=6, wavelet="haar")
+        swt = StationaryWaveletTransform1d(num_channels=2, max_levels=6)
         bands = swt(x, levels=list(range(6)), target_start=SWT_BUFFER)
 
         for i, (_, detail) in enumerate(bands):
@@ -425,7 +435,7 @@ class TestSwtTransform:
         x = torch.zeros(1, 1, T)
         step_t = 200
         x[:, :, step_t:] = 1.0
-        swt = StationaryWaveletTransform1d(num_channels=1, max_levels=6, wavelet="haar")
+        swt = StationaryWaveletTransform1d(num_channels=1, max_levels=6)
         bands = swt(x, levels=[0], target_start=0)
 
         _, detail = bands[0]
@@ -444,7 +454,7 @@ class TestSwtTransform:
         """Deepest-level approximation is included in the returned total."""
         from olmoearth_pretrain.nn.transforms.era5_swt import multiscale_swt_loss
 
-        swt = StationaryWaveletTransform1d(num_channels=4, max_levels=6, wavelet="haar")
+        swt = StationaryWaveletTransform1d(num_channels=4, max_levels=6)
         x = torch.zeros(2, T, 4)
         x_hat = torch.ones_like(x)
 
@@ -466,63 +476,150 @@ class TestSwtTransform:
 
 
 class TestMaskingInvariants:
-    """Masking respects buffer, group exclusions, and padding."""
+    """SWT band-space masking respects the buffer and halo arithmetic."""
 
-    def test_buffer_never_masked(self):
-        """Buffer region [0, 83) is never masked across many seeds."""
-        era5 = torch.randn(B, T, V)
+    N_BANDS = 7  # levels [0..5] detail + deepest approx
+    SUPPORTS = swt_band_supports([0, 1, 2, 3, 4, 5], include_approx=True)
 
-        for seed in range(50):
-            torch.manual_seed(seed)
-            mask = corrupt_era5(era5, MaskPolicy(), DEFAULT_VARIABLE_GROUPS, SWT_BUFFER)
-            assert not mask[:, :SWT_BUFFER, :].any(), f"Buffer masked at seed {seed}"
-            assert mask[:, SWT_BUFFER:, :].any(), f"Nothing masked at seed {seed}"
-
-    def test_naive_policy_buffer_clean(self):
-        """NaiveMaskPolicy also respects the buffer."""
-        era5 = torch.randn(B, T, V)
-
+    def test_naive_buffer_never_masked(self):
+        """Naive budget masking never touches the buffer, both masks."""
         for seed in range(20):
             torch.manual_seed(seed)
-            mask = corrupt_era5(
-                era5, NaiveMaskPolicy(), DEFAULT_VARIABLE_GROUPS, SWT_BUFFER
+            masks = corrupt_era5_swt(
+                B,
+                T,
+                V,
+                self.N_BANDS,
+                self.SUPPORTS,
+                SWT_BUFFER,
+                torch.device("cpu"),
+                SwtNaiveMaskPolicy(budget=0.5),
             )
-            assert not mask[:, :SWT_BUFFER, :].any()
-            assert mask[:, SWT_BUFFER:, :].any(), f"Nothing masked at seed {seed}"
+            assert not masks.band_mask[:, :SWT_BUFFER, :].any()
+            assert not masks.raw_loss_mask[:, :SWT_BUFFER, :].any()
+            assert masks.band_mask[:, SWT_BUFFER:, :].any()
 
-    def test_stage1_excludes_wind_hydro(self):
-        """With Stage 2 disabled, wind and hydro_flux bands are never masked."""
-        era5 = torch.randn(B, T, V)
-        policy = MaskPolicy(cross_variable_prob=0.0)
+    def test_naive_masked_fraction_tracks_budget(self):
+        """Naive band-mask fraction in the target window matches the budget."""
+        torch.manual_seed(0)
+        budget = 0.7
+        masks = corrupt_era5_swt(
+            B,
+            T,
+            V,
+            self.N_BANDS,
+            self.SUPPORTS,
+            SWT_BUFFER,
+            torch.device("cpu"),
+            SwtNaiveMaskPolicy(budget=budget),
+        )
+        frac = masks.band_mask[:, SWT_BUFFER:, :].float().mean().item()
+        assert abs(frac - budget) < 0.02, f"Band-mask fraction {frac} != {budget}"
 
-        wind_bands = DEFAULT_VARIABLE_GROUPS["wind"]
-        hydro_bands = DEFAULT_VARIABLE_GROUPS["hydro_flux"]
-        excluded = wind_bands + hydro_bands
-        eligible = [idx for idx in range(V) if idx not in excluded]
+    def test_naive_raw_loss_mask_reduce(self):
+        """'all' reduce supervises a strict subset of 'any' reduce."""
+        torch.manual_seed(0)
+        any_masks = corrupt_era5_swt(
+            B,
+            T,
+            V,
+            self.N_BANDS,
+            self.SUPPORTS,
+            SWT_BUFFER,
+            torch.device("cpu"),
+            SwtNaiveMaskPolicy(budget=0.5, raw_loss_mask_reduce="any"),
+        )
+        torch.manual_seed(0)
+        all_masks = corrupt_era5_swt(
+            B,
+            T,
+            V,
+            self.N_BANDS,
+            self.SUPPORTS,
+            SWT_BUFFER,
+            torch.device("cpu"),
+            SwtNaiveMaskPolicy(budget=0.5, raw_loss_mask_reduce="all"),
+        )
+        # Same band mask (same seed), but "all" supervises <= "any".
+        assert torch.equal(any_masks.band_mask, all_masks.band_mask)
+        assert (all_masks.raw_loss_mask & ~any_masks.raw_loss_mask).sum() == 0
+        assert all_masks.raw_loss_mask.sum() < any_masks.raw_loss_mask.sum()
 
-        for seed in range(30):
+    def test_halo_span_buffer_never_masked(self):
+        """Halo span masking never touches the buffer, both masks."""
+        for seed in range(20):
             torch.manual_seed(seed)
-            mask = corrupt_era5(era5, policy, DEFAULT_VARIABLE_GROUPS, SWT_BUFFER)
-            assert not mask[:, :, excluded].any(), (
-                f"Excluded bands masked at seed {seed}"
+            masks = corrupt_era5_swt(
+                B,
+                T,
+                V,
+                self.N_BANDS,
+                self.SUPPORTS,
+                SWT_BUFFER,
+                torch.device("cpu"),
+                SwtHaloSpanMaskPolicy(),
             )
-            assert mask[:, SWT_BUFFER:, eligible].any(), (
-                f"No eligible Stage 1 bands masked at seed {seed}"
-            )
+            assert not masks.band_mask[:, :SWT_BUFFER, :].any()
+            assert not masks.raw_loss_mask[:, :SWT_BUFFER, :].any()
+            assert masks.band_mask[:, SWT_BUFFER:, :].any()
 
-    def test_masked_fraction_reasonable(self):
-        """Masked fraction stays in a sane range."""
-        era5 = torch.randn(B, T, V)
+    def test_halo_span_arithmetic(self):
+        """Each band's mask equals the span extended by exactly support-1 days.
 
-        fracs = []
-        for seed in range(50):
+        With a single span over a single variable, band ``s`` must be masked
+        over ``[start, start+L + support_s - 1)`` while the raw loss mask covers
+        only the span days ``[start, start+L)``.
+        """
+        policy = SwtHaloSpanMaskPolicy(
+            num_spans=(1, 1), span_days=(20, 20), num_variables=(1, 1)
+        )
+        for seed in range(20):
             torch.manual_seed(seed)
-            mask = corrupt_era5(era5, MaskPolicy(), DEFAULT_VARIABLE_GROUPS, SWT_BUFFER)
-            frac = mask[:, SWT_BUFFER:, :].float().mean().item()
-            fracs.append(frac)
+            masks = corrupt_era5_swt(
+                1,
+                T,
+                V,
+                self.N_BANDS,
+                self.SUPPORTS,
+                SWT_BUFFER,
+                torch.device("cpu"),
+                policy,
+            )
+            band4d = masks.band_mask.view(1, T, V, self.N_BANDS)
+            # Identify the single masked variable / span from the raw loss mask.
+            raw = masks.raw_loss_mask[0]  # [T, V]
+            var = int(raw.any(dim=0).nonzero()[0])
+            days = raw[:, var].nonzero().flatten()
+            start, end = int(days[0]), int(days[-1]) + 1
+            assert end - start == 20
+            for s, support in enumerate(self.SUPPORTS):
+                col = band4d[0, :, var, s]
+                masked = col.nonzero().flatten()
+                assert int(masked[0]) == start
+                expected_end = min(end + support - 1, T)
+                assert int(masked[-1]) + 1 == expected_end
+            # Untouched variables have no band mask at all.
+            other_vars = [j for j in range(V) if j != var]
+            assert not band4d[0, :, other_vars, :].any()
 
-        avg_frac = sum(fracs) / len(fracs)
-        assert 0.01 < avg_frac < 0.5, f"Average masked fraction {avg_frac} out of range"
+    def test_halo_span_loss_mask_is_span_only(self):
+        """Raw loss mask covers strictly fewer positions than the band mask."""
+        torch.manual_seed(0)
+        masks = corrupt_era5_swt(
+            B,
+            T,
+            V,
+            self.N_BANDS,
+            self.SUPPORTS,
+            SWT_BUFFER,
+            torch.device("cpu"),
+            SwtHaloSpanMaskPolicy(),
+        )
+        band4d = masks.band_mask.view(B, T, V, self.N_BANDS)
+        band_any = band4d.any(dim=-1)  # [B, T, V]
+        # Every supervised raw position is band-masked; halos add strictly more.
+        assert (masks.raw_loss_mask & ~band_any).sum() == 0
+        assert masks.raw_loss_mask.sum() < band_any.sum()
 
 
 class TestPerGroupLossGating:
@@ -550,8 +647,11 @@ class TestPerGroupLossGating:
         mask[:, SWT_BUFFER:, 4] = True
         monkeypatch.setattr(
             era5_multiobjective,
-            "corrupt_era5",
-            lambda era5, policy, variable_groups, target_start: mask,
+            "corrupt_era5_swt",
+            lambda *args, **kwargs: Era5CorruptionMasks(
+                band_mask=torch.zeros(B, T, V * 7, dtype=torch.bool),
+                raw_loss_mask=mask,
+            ),
         )
 
         batch = replace(_make_batch(), era5=target)
@@ -651,8 +751,11 @@ class TestLossComputationCorrectness:
         mask[:, SWT_BUFFER:, [0, 1]] = True
         monkeypatch.setattr(
             era5_multiobjective,
-            "corrupt_era5",
-            lambda era5, policy, variable_groups, target_start: mask,
+            "corrupt_era5_swt",
+            lambda *args, **kwargs: Era5CorruptionMasks(
+                band_mask=torch.zeros(B, T, V * 7, dtype=torch.bool),
+                raw_loss_mask=mask,
+            ),
         )
 
         model = Era5MultiObjectiveModelConfig(
@@ -687,20 +790,32 @@ class TestLossComputationCorrectness:
         )
 
 
+@pytest.mark.skipif(
+    not SWT_STATS_PATH.is_file(),
+    reason=f"swt_input_stats.json not found at {SWT_STATS_PATH}",
+)
 class TestReconstructionE2EBackward:
     """Full forward+backward integration with gradient and metric checks."""
 
-    def test_default_policy(self):
-        torch.manual_seed(0)
-        model_cfg = Era5MultiObjectiveModelConfig(
-            encoder_config=_small_encoder_cfg(),
+    def _swt_model(self, **recon_overrides: Any):
+        return Era5MultiObjectiveModelConfig(
+            encoder_config=_small_encoder_cfg(
+                is_swt_input=True,
+                swt_input_stats_path=SWT_STATS_REL,
+            ),
             reconstruction_objective=ReconstructionObjectiveConfig(
                 decoder=_small_decoder_cfg(),
-                swt_levels=[0, 1, 2],
-                swt_lambda=0.1,
+                **recon_overrides,
             ),
+        ).build()
+
+    def test_naive_policy(self):
+        torch.manual_seed(0)
+        model = self._swt_model(
+            mask_policy=SwtNaiveMaskPolicy(budget=0.7),
+            swt_levels=[0, 1, 2],
+            swt_lambda=0.1,
         )
-        model = model_cfg.build()
         obj = model.objective_list[0]
         assert isinstance(obj, era5_multiobjective.ReconstructionObjective)
         batch = _make_batch()
@@ -730,26 +845,19 @@ class TestReconstructionE2EBackward:
         assert "reconstruction/raw_loss" in metrics
         assert "reconstruction/swt_loss" in metrics
         assert "reconstruction/masked_fraction" in metrics
+        assert "reconstruction/band_masked_fraction" in metrics
         for lvl in [0, 1, 2]:
             assert f"reconstruction/swt_level_{lvl}_loss" in metrics
         assert "reconstruction/swt_deepest_approx_loss" in metrics
         assert metrics["reconstruction/swt_deepest_approx_loss"].item() > 0
 
-        frac = metrics["reconstruction/masked_fraction"].item()
-        assert 0 < frac < 0.5
-
-    def test_naive_policy(self):
+    def test_halo_span_policy(self):
         torch.manual_seed(0)
-        model_cfg = Era5MultiObjectiveModelConfig(
-            encoder_config=_small_encoder_cfg(),
-            reconstruction_objective=ReconstructionObjectiveConfig(
-                decoder=_small_decoder_cfg(),
-                mask_policy=NaiveMaskPolicy(),
-                swt_levels=[0, 1],
-                swt_lambda=0.1,
-            ),
+        model = self._swt_model(
+            mask_policy=SwtHaloSpanMaskPolicy(),
+            swt_levels=[0, 1],
+            swt_lambda=0.1,
         )
-        model = model_cfg.build()
         obj = model.objective_list[0]
         batch = _make_batch()
 
@@ -766,6 +874,11 @@ class TestReconstructionE2EBackward:
             if p.grad is not None
         )
         assert encoder_grads > 0
+        # Halo band mask supervises strictly fewer raw positions than it hides.
+        assert (
+            metrics["reconstruction/masked_fraction"].item()
+            < metrics["reconstruction/band_masked_fraction"].item()
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -814,7 +927,7 @@ class TestSwtInputNormalization:
         out = enc._apply_swt(era5)
 
         # Recompute the unnormalized bands independently and standardize.
-        swt = StationaryWaveletTransform1d(num_channels=V, max_levels=6, wavelet="haar")
+        swt = StationaryWaveletTransform1d(num_channels=V, max_levels=6)
         bands = swt(era5.transpose(1, 2), levels=enc.swt_input_levels, target_start=0)
         raw_bands = swt_bands_to_channels(bands, include_approx=True)
         expected = (raw_bands - enc.swt_norm_mean) / enc.swt_norm_std

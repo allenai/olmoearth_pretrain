@@ -109,7 +109,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--num-workers", type=int, default=8)
     # SWT config: MUST match the encoder's swt_input_* config.
-    p.add_argument("--wavelet", default="haar")
     p.add_argument("--levels", type=int, nargs="+", default=[0, 1, 2, 3, 4, 5])
     p.add_argument("--no-approx", action="store_true")
     p.add_argument("--swt-buffer-days", type=int, default=83)
@@ -285,7 +284,7 @@ def run_raw_phase(args: argparse.Namespace) -> None:
     n_bands = len(args.levels) + (1 if include_approx else 0)
     c = v * n_bands
     swt = StationaryWaveletTransform1d(
-        num_channels=v, max_levels=max(args.levels) + 1, wavelet=args.wavelet
+        num_channels=v, max_levels=max(args.levels) + 1
     ).to(device)
 
     loader = build_loader(args, identity_norm=True)
@@ -355,7 +354,7 @@ def run_raw_phase(args: argparse.Namespace) -> None:
         "phase": "raw",
         "task": args.task,
         "n_windows": n_windows,
-        "wavelet": args.wavelet,
+        "wavelet": "haar",
         "levels": list(args.levels),
         "include_approx": include_approx,
         "n_bands_per_var": n_bands,
@@ -388,7 +387,7 @@ def run_swt_phase(args: argparse.Namespace) -> None:
     n_bands = len(args.levels) + (1 if include_approx else 0)
     c = v * n_bands
     swt = StationaryWaveletTransform1d(
-        num_channels=v, max_levels=max(args.levels) + 1, wavelet=args.wavelet
+        num_channels=v, max_levels=max(args.levels) + 1
     ).to(device)
 
     # Two normalization sources for the "normalized input":
@@ -467,7 +466,7 @@ def run_swt_phase(args: argparse.Namespace) -> None:
         "phase": "swt",
         "task": args.task,
         "n_windows": n_windows,
-        "wavelet": args.wavelet,
+        "wavelet": "haar",
         "levels": list(args.levels),
         "include_approx": include_approx,
         "n_bands_per_var": n_bands,

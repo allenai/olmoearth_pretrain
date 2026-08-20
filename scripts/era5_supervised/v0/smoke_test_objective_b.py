@@ -28,14 +28,14 @@ from olmoearth_pretrain.data.multi_task_era5_dataset import (
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
 from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig
 from olmoearth_pretrain.nn.transforms.era5_corruption import (
-    DEFAULT_VARIABLE_GROUPS,
-    MaskPolicy,
-    NaiveMaskPolicy,
-    corrupt_era5,
+    SwtHaloSpanMaskPolicy,
+    SwtNaiveMaskPolicy,
+    corrupt_era5_swt,
 )
 from olmoearth_pretrain.nn.transforms.era5_swt import (
     StationaryWaveletTransform1d,
     multiscale_swt_loss,
+    swt_band_supports,
 )
 from olmoearth_pretrain.train.train_module.era5_multiobjective import (
     Era5MultiObjectiveModelConfig,
@@ -86,30 +86,54 @@ def _make_ssl_batch(device: torch.device = torch.device("cpu")) -> Era5SslBatch:
     )
 
 
-def test_corruption():
-    """Test that corruption produces valid masks and shapes."""
-    print("--- test_corruption ---")
-    batch = _make_batch()
-    policy = MaskPolicy()
-    ts = SWT_BUFFER
-    mask = corrupt_era5(batch.era5, policy, DEFAULT_VARIABLE_GROUPS, ts)
-    assert mask.shape == (B, T, V), f"Bad mask shape: {mask.shape}"
-    assert mask.any(), "Nothing was masked"
-    frac = mask[:, ts:, :].float().mean().item()
-    print(f"  Target-window masked fraction: {frac:.3f}")
+# Relative to the repo root (run from ``.../olmoearth_pretrain``).
+SWT_STATS_REL = "scripts/era5_supervised/v0/norm_configs/swt_input_stats.json"
 
-    # Buffer region must be completely unmasked
-    assert not mask[:, :ts, :].any(), "Buffer region should never be masked"
-    print("  Buffer region clean: OK")
 
-    # Verify stage 1 excludes wind (bands 12, 13) and hydro_flux (bands 3, 11)
-    excluded_bands = (
-        DEFAULT_VARIABLE_GROUPS["wind"] + DEFAULT_VARIABLE_GROUPS["hydro_flux"]
+def _swt_encoder_config() -> Era5DailyEncoderConfig:
+    """SWT-input encoder config (reconstruction requires is_swt_input)."""
+    return Era5DailyEncoderConfig(
+        embedding_size=D,
+        depth=2,
+        num_heads=4,
+        max_sequence_length=T,
+        modality_name=Modality.ERA5L_DAY_10.name.lower(),
+        use_mask_embed=True,
+        use_conv_stem=True,
+        is_swt_input=True,
+        swt_input_stats_path=SWT_STATS_REL,
     )
-    eligible_bands = [i for i in range(V) if i not in excluded_bands]
-    eligible_masked = mask[:, ts:, eligible_bands].any().item()
-    assert eligible_masked, "Eligible channels should have stage-1 masking"
-    print("  Stage-1 channel eligibility: OK")
+
+
+def test_corruption():
+    """Test that both SWT masking policies produce valid mask pairs."""
+    print("--- test_corruption ---")
+    ts = SWT_BUFFER
+    n_bands = 7
+    supports = swt_band_supports([0, 1, 2, 3, 4, 5], include_approx=True)
+    device = torch.device("cpu")
+
+    # Naive budget policy.
+    naive = corrupt_era5_swt(
+        B, T, V, n_bands, supports, ts, device, SwtNaiveMaskPolicy(budget=0.7)
+    )
+    assert naive.band_mask.shape == (B, T, V * n_bands)
+    assert naive.raw_loss_mask.shape == (B, T, V)
+    assert not naive.band_mask[:, :ts, :].any(), "Buffer band-masked (naive)"
+    assert not naive.raw_loss_mask[:, :ts, :].any(), "Buffer loss-masked (naive)"
+    frac = naive.band_mask[:, ts:, :].float().mean().item()
+    print(f"  Naive band-mask fraction: {frac:.3f} (budget 0.7)")
+
+    # Halo-corrected span policy: loss mask is a strict subset of the band mask.
+    halo = corrupt_era5_swt(
+        B, T, V, n_bands, supports, ts, device, SwtHaloSpanMaskPolicy()
+    )
+    assert not halo.band_mask[:, :ts, :].any(), "Buffer band-masked (halo)"
+    assert not halo.raw_loss_mask[:, :ts, :].any(), "Buffer loss-masked (halo)"
+    band_any = halo.band_mask.view(B, T, V, n_bands).any(dim=-1)
+    assert (halo.raw_loss_mask & ~band_any).sum() == 0, "Loss mask outside band mask"
+    assert halo.raw_loss_mask.sum() < band_any.sum(), "Halo added no hidden positions"
+    print("  Halo loss-mask is a strict subset of band-mask: OK")
     print("  PASS")
 
 
@@ -118,13 +142,13 @@ def test_swt():
     print("--- test_swt ---")
     x = torch.randn(B, T, V)
     x_hat = x + 0.1 * torch.randn_like(x)
-    swt = StationaryWaveletTransform1d(num_channels=V, max_levels=6, wavelet="haar")
+    swt = StationaryWaveletTransform1d(num_channels=V, max_levels=6)
     levels = [0, 1, 2, 3, 4, 5]
     ts = SWT_BUFFER
     t_win = T - ts
 
     # Full-length SWT (no cropping)
-    bands_full = swt(x.transpose(1, 2), levels=levels)
+    bands_full = swt(x.transpose(1, 2), levels=levels, target_start=0)
     assert len(bands_full) == 6, f"Expected 6 levels, got {len(bands_full)}"
     for i, (approx, detail) in enumerate(bands_full):
         assert approx.shape == (B, V, T), f"Level {i} approx shape: {approx.shape}"
@@ -199,15 +223,7 @@ def test_b_only():
     """B-only: reconstruction objective produces finite loss, correct shapes."""
     print("--- test_b_only (reconstruction only) ---")
     model_cfg = Era5MultiObjectiveModelConfig(
-        encoder_config=Era5DailyEncoderConfig(
-            embedding_size=D,
-            depth=2,
-            num_heads=4,
-            max_sequence_length=T,
-            modality_name=Modality.ERA5L_DAY_10.name.lower(),
-            use_mask_embed=True,
-            use_conv_stem=True,
-        ),
+        encoder_config=_swt_encoder_config(),
         supervised_objective=None,
         reconstruction_objective=ReconstructionObjectiveConfig(
             decoder=Era5TimeQueryDecoderConfig(
@@ -250,15 +266,7 @@ def test_ssl_batch_dispatch():
     """SSL batch: reconstruction fires, supervised does not; loss/grads flow."""
     print("--- test_ssl_batch_dispatch (Era5SslBatch) ---")
     model_cfg = Era5MultiObjectiveModelConfig(
-        encoder_config=Era5DailyEncoderConfig(
-            embedding_size=D,
-            depth=2,
-            num_heads=4,
-            max_sequence_length=T,
-            modality_name=Modality.ERA5L_DAY_10.name.lower(),
-            use_mask_embed=True,
-            use_conv_stem=True,
-        ),
+        encoder_config=_swt_encoder_config(),
         supervised_objective=SupervisedObjectiveConfig(
             tasks=[
                 SupervisedTaskConfig(
@@ -323,15 +331,7 @@ def test_a_plus_b():
     """A+B: both objectives fire on the same batch, gradients flow."""
     print("--- test_a_plus_b (supervised + reconstruction) ---")
     model_cfg = Era5MultiObjectiveModelConfig(
-        encoder_config=Era5DailyEncoderConfig(
-            embedding_size=D,
-            depth=2,
-            num_heads=4,
-            max_sequence_length=T,
-            modality_name=Modality.ERA5L_DAY_10.name.lower(),
-            use_mask_embed=True,
-            use_conv_stem=True,
-        ),
+        encoder_config=_swt_encoder_config(),
         supervised_objective=SupervisedObjectiveConfig(
             tasks=[
                 SupervisedTaskConfig(
@@ -424,35 +424,23 @@ def test_recon_mode_gating():
     print("--- test_recon_mode_gating ---")
     swt_levels = [0, 1, 2]
 
-    # _parse_recon_mode unit tests
-    inc_raw, lvls = _parse_recon_mode("raw_plus_wavelet", swt_levels)
-    assert inc_raw is True and lvls == [0, 1, 2], f"raw_plus_wavelet: {inc_raw}, {lvls}"
+    # _parse_recon_mode unit tests (returns include_raw, detail_levels, lowpass)
+    inc_raw, lvls, inc_lp = _parse_recon_mode("raw_plus_all_swt", swt_levels)
+    assert inc_raw is True and lvls == [0, 1, 2] and inc_lp is False
 
-    inc_raw, lvls = _parse_recon_mode("raw_plus_slow_wavelet", swt_levels)
-    assert inc_raw is True and lvls == [1, 2], (
-        f"raw_plus_slow_wavelet: {inc_raw}, {lvls}"
-    )
+    inc_raw, lvls, inc_lp = _parse_recon_mode("raw_plus_no_fast_swt", swt_levels)
+    assert inc_raw is True and lvls == [1, 2] and inc_lp is False
 
-    inc_raw, lvls = _parse_recon_mode("slow_wavelet", swt_levels)
-    assert inc_raw is False and lvls == [1, 2], f"slow_wavelet: {inc_raw}, {lvls}"
+    inc_raw, lvls, inc_lp = _parse_recon_mode("raw_plus_slow_swt", swt_levels)
+    assert inc_raw is True and lvls == [2] and inc_lp is False
 
-    inc_raw, lvls = _parse_recon_mode("short_raw_plus_slow_wavelet", swt_levels)
-    assert inc_raw is True and lvls == [1, 2], (
-        f"short_raw_plus_slow_wavelet: {inc_raw}, {lvls}"
-    )
+    inc_raw, lvls, inc_lp = _parse_recon_mode("lowpass_plus_slow_swt", swt_levels)
+    assert inc_raw is False and lvls == [2] and inc_lp is True
     print("  _parse_recon_mode: OK")
 
     # End-to-end: B-only with default recon modes produces finite loss
     model_cfg = Era5MultiObjectiveModelConfig(
-        encoder_config=Era5DailyEncoderConfig(
-            embedding_size=D,
-            depth=2,
-            num_heads=4,
-            max_sequence_length=T,
-            modality_name=Modality.ERA5L_DAY_10.name.lower(),
-            use_mask_embed=True,
-            use_conv_stem=True,
-        ),
+        encoder_config=_swt_encoder_config(),
         reconstruction_objective=ReconstructionObjectiveConfig(
             decoder=Era5TimeQueryDecoderConfig(
                 embedding_size=D,
@@ -481,34 +469,13 @@ def test_recon_mode_gating():
     print("  PASS")
 
 
-def test_naive_masking():
-    """Test NaiveMaskPolicy produces valid masks and end-to-end loss."""
-    print("--- test_naive_masking ---")
+def test_halo_span_masking():
+    """Test SwtHaloSpanMaskPolicy end-to-end: finite loss + grads."""
+    print("--- test_halo_span_masking ---")
     batch = _make_batch()
-    policy = NaiveMaskPolicy()
-    ts = SWT_BUFFER
-    mask = corrupt_era5(batch.era5, policy, DEFAULT_VARIABLE_GROUPS, ts)
-    assert mask.shape == (B, T, V), f"Bad mask shape: {mask.shape}"
-    assert mask.any(), "Nothing was masked"
-    assert not mask[:, :ts, :].any(), "Buffer region should never be masked (naive)"
-    frac = mask[:, ts:, :].float().mean().item()
-    print(f"  Target-window masked fraction: {frac:.3f}")
 
-    if B > 1:
-        differs = not torch.equal(mask[0], mask[1])
-        print(f"  Samples differ: {differs}")
-
-    # End-to-end: B-only with naive policy produces finite loss + grads
     model_cfg = Era5MultiObjectiveModelConfig(
-        encoder_config=Era5DailyEncoderConfig(
-            embedding_size=D,
-            depth=2,
-            num_heads=4,
-            max_sequence_length=T,
-            modality_name=Modality.ERA5L_DAY_10.name.lower(),
-            use_mask_embed=True,
-            use_conv_stem=True,
-        ),
+        encoder_config=_swt_encoder_config(),
         reconstruction_objective=ReconstructionObjectiveConfig(
             decoder=Era5TimeQueryDecoderConfig(
                 embedding_size=D,
@@ -517,7 +484,7 @@ def test_naive_masking():
                 max_sequence_length=T,
                 num_output_channels=V,
             ),
-            mask_policy=NaiveMaskPolicy(),
+            mask_policy=SwtHaloSpanMaskPolicy(),
             swt_levels=[0, 1],
             swt_lambda=0.1,
         ),
@@ -527,7 +494,16 @@ def test_naive_masking():
     loss, metrics = obj.compute(model.encoder, batch)
     assert loss.ndim == 0, f"Loss should be scalar, got {loss.shape}"
     assert torch.isfinite(loss), f"Loss not finite: {loss.item()}"
-    print(f"  Naive recon loss: {loss.item():.6f}")
+    # Halos hide strictly more band elements than are supervised.
+    assert (
+        metrics["reconstruction/masked_fraction"].item()
+        < metrics["reconstruction/band_masked_fraction"].item()
+    ), "Halo band mask should exceed the supervised (span-only) loss mask"
+    print(f"  Halo recon loss: {loss.item():.6f}")
+    print(f"  Loss-mask fraction:  {metrics['reconstruction/masked_fraction']:.4f}")
+    print(
+        f"  Band-mask fraction:  {metrics['reconstruction/band_masked_fraction']:.4f}"
+    )
 
     loss.backward()
     encoder_grad = sum(
@@ -553,7 +529,7 @@ if __name__ == "__main__":
         test_a_plus_b,
         test_a_only,
         test_recon_mode_gating,
-        test_naive_masking,
+        test_halo_span_masking,
     ]
     failed = []
     for test_fn in tests:

@@ -56,10 +56,12 @@ from olmoearth_pretrain.nn.transforms.era5_corruption import (
     RECON_MODE_SPEC,
     MaskPolicy,
     SwtNaiveMaskPolicy,
-    corrupt_era5,
-    swt_naive_mask,
+    corrupt_era5_swt,
 )
-from olmoearth_pretrain.nn.transforms.era5_swt import StationaryWaveletTransform1d
+from olmoearth_pretrain.nn.transforms.era5_swt import (
+    StationaryWaveletTransform1d,
+    swt_band_supports,
+)
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
@@ -349,8 +351,8 @@ class ReconstructionObjectiveConfig(Config):
         name: Objective name used for metric keys.
         weight: Objective-level weight multiplied into the loss.
         decoder: Decoder config (cross-attention depth, heads, …).
-        mask_policy: Two-stage masking policy (temporal interpolation +
-            cross-variable reconstruction).
+        mask_policy: SWT band-space masking policy
+            (:class:`SwtNaiveMaskPolicy` or :class:`SwtHaloSpanMaskPolicy`).
         variable_groups: Mapping from group name to list of band indices.
         huber_delta: Delta for the raw Huber loss.
         raw_loss_on_masked_only: If True, compute raw Huber only over
@@ -359,7 +361,6 @@ class ReconstructionObjectiveConfig(Config):
             Set to 0.0 for wavelet-only reconstruction.
         swt_lambda: Weight of the wavelet multiscale loss term.
         swt_levels: Which SWT decomposition levels to use.
-        swt_wavelet: Wavelet family for the SWT (``db2`` or ``haar``).
         group_recon_mode: Per-group reconstruction mode (see
             :data:`~olmoearth_pretrain.nn.transforms.era5_corruption.GROUP_RECON_MODE`).
             Controls how each variable group's reconstruction loss is
@@ -371,7 +372,7 @@ class ReconstructionObjectiveConfig(Config):
     decoder: Era5TimeQueryDecoderConfig = field(
         default_factory=Era5TimeQueryDecoderConfig
     )
-    mask_policy: MaskPolicy = field(default_factory=MaskPolicy)
+    mask_policy: MaskPolicy = field(default_factory=SwtNaiveMaskPolicy)
     variable_groups: dict[str, list[int]] = field(
         default_factory=lambda: dict(DEFAULT_VARIABLE_GROUPS)
     )
@@ -380,16 +381,10 @@ class ReconstructionObjectiveConfig(Config):
     raw_lambda: float = 1.0
     swt_lambda: float = 0.1
     swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
-    swt_wavelet: str = "haar"
     swt_buffer_days: int = 83
     group_recon_mode: dict[str, str] = field(
         default_factory=lambda: dict(GROUP_RECON_MODE)
     )
-    # -- SWT-input masking knob (only used when the encoder has is_swt_input=True) --
-    # How to reduce the band-space corruption mask over the scale/freq axis to a
-    # raw ``[B,T,V]`` loss mask: ``"any"`` (supervise where any scale/freq is
-    # masked) or ``"all"`` (supervise only fully-masked columns).
-    raw_loss_mask_reduce: str = "any"
 
     def build(self) -> ReconstructionObjective:
         """Instantiate decoder, SWT, and the objective."""
@@ -399,7 +394,6 @@ class ReconstructionObjectiveConfig(Config):
         swt = StationaryWaveletTransform1d(
             num_channels=num_channels,
             max_levels=max_level,
-            wavelet=self.swt_wavelet,
         )
         module = _ReconstructionModule(decoder=decoder, swt=swt)
         return ReconstructionObjective(
@@ -415,7 +409,6 @@ class ReconstructionObjectiveConfig(Config):
             swt_lambda=self.swt_lambda,
             swt_levels=self.swt_levels,
             swt_buffer_days=self.swt_buffer_days,
-            raw_loss_mask_reduce=self.raw_loss_mask_reduce,
         )
 
 
@@ -455,7 +448,6 @@ class ReconstructionObjective(_Objective):
         swt_lambda: float = 0.1,
         swt_levels: list[int] | None = None,
         swt_buffer_days: int = 83,
-        raw_loss_mask_reduce: str = "any",
     ) -> None:
         """Initialize the reconstruction objective."""
         self.name = name
@@ -470,12 +462,6 @@ class ReconstructionObjective(_Objective):
         self.swt_lambda = swt_lambda
         self.swt_levels = swt_levels or [0, 1, 2, 3, 4, 5]
         self.swt_buffer_days = swt_buffer_days
-        if raw_loss_mask_reduce not in ("any", "all"):
-            raise ValueError(
-                f"raw_loss_mask_reduce must be 'any' or 'all', got "
-                f"{raw_loss_mask_reduce!r}"
-            )
-        self.raw_loss_mask_reduce = raw_loss_mask_reduce
         # Static variable-count weights for loss averaging. Each (group, scale)
         # term is weighted by the number of variables in the group
         self._raw_weight, self._swt_weight = self._compute_loss_weights()
@@ -556,45 +542,34 @@ class ReconstructionObjective(_Objective):
         var_valid = valid.all(dim=1)  # [B, V] True if variable fully valid
 
         # 1. Generate corruption mask (only target window is masked).
-        # When the encoder works in wavelet space, the mask is band-space
-        # ``[B, T, V*n_bands]`` and the raw ``[B, T, V]`` loss mask is derived
-        # by reducing over the scale axis (``any`` / ``all``). Otherwise the
-        # mask is the usual raw ``[B, T, V]`` mask used for both.
-        band_mask: Tensor | None = None
-        if getattr(encoder, "is_swt_input", False):
-            if not isinstance(self.mask_policy, SwtNaiveMaskPolicy):
-                raise ValueError(
-                    "is_swt_input reconstruction requires a SwtNaiveMaskPolicy "
-                    f"(got {type(self.mask_policy).__name__})."
-                )
-            n_bands = encoder.swt_num_bands
-            # Simple budget: mask a fraction of all band elements at random.
-            band_mask = swt_naive_mask(
-                b,
-                t,
-                v,
-                n_bands,
-                self.mask_policy.budget,
-                ts,
-                x.device,
+        # Masking operates in wavelet space: ``band_mask`` is band-space
+        # ``[B, T, V*n_bands]`` (fed to the encoder) and ``raw_loss_mask`` is
+        # the raw ``[B, T, V]`` mask of genuinely-hidden positions to supervise.
+        if not getattr(encoder, "is_swt_input", False):
+            raise ValueError(
+                "ReconstructionObjective requires an is_swt_input encoder; "
+                "raw-input masking has been removed."
             )
-            # Raw ``[B, T, V]`` reconstruction targets come from the random
-            # budget only; never target no-data cells.
-            band4d = band_mask.view(b, t, v, n_bands)
-            mask = (
-                band4d.all(dim=-1)
-                if self.raw_loss_mask_reduce == "all"
-                else band4d.any(dim=-1)
-            )
-            mask = mask & valid
-            # No-data band 0-fill is handled inside the encoder (universal across
-            # objectives); the corruption mask carries only the random budget.
-            corruption_mask = band_mask
-        else:
-            mask = corrupt_era5(x, self.mask_policy, self.variable_groups, ts)
-            # Never spend the reconstruction budget on no-data cells.
-            mask = mask & valid
-            corruption_mask = mask
+        n_bands = encoder.swt_num_bands
+        band_supports = swt_band_supports(
+            encoder.swt_input_levels,
+            encoder.swt_input_include_approx,
+        )
+        masks = corrupt_era5_swt(
+            b,
+            t,
+            v,
+            n_bands,
+            band_supports,
+            ts,
+            x.device,
+            self.mask_policy,
+        )
+        # Raw reconstruction targets: genuinely-hidden positions only; never
+        # target no-data cells. No-data band 0-fill is handled inside the
+        # encoder (universal across objectives).
+        mask = masks.raw_loss_mask & valid
+        corruption_mask = masks.band_mask
 
         # 2. Encode with corruption mask (encoder 0-fills no-data bands via valid)
         out = encoder(
@@ -741,9 +716,9 @@ class ReconstructionObjective(_Objective):
             f"{self.name}/masked_fraction": mask_tgt.float().mean().detach(),
             f"{self.name}/nodata_fraction": (~valid).float().mean().detach(),
         }
-        if band_mask is not None:
+        if masks.band_mask is not None:
             metrics[f"{self.name}/band_masked_fraction"] = (
-                band_mask[:, ts:, :].float().mean().detach()
+                masks.band_mask[:, ts:, :].float().mean().detach()
             )
         for level in self.swt_levels:
             cnt = level_loss_counts.get(level, 0)

@@ -1,10 +1,12 @@
-"""Undecimated (stationary) wavelet transform and multiscale loss for ERA5.
+"""Undecimated (stationary) Haar transform and multiscale loss for ERA5.
 
 Implements a dependency-free differentiable SWT along the time axis using
 dilated depthwise ``F.conv1d``.  The transform is non-decimated (à trous):
 each level ``j`` dilates the filters by ``2^j`` so every coefficient band
 has the same length ``T`` as the input — no downsampling, no alignment
 headaches.
+
+Haar is the only supported wavelet.
 
 The companion :func:`multiscale_swt_loss` computes band-normalized Huber
 losses between the wavelet coefficients of a prediction and target,
@@ -23,41 +25,17 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Wavelet filter banks (hardcoded, no external dependency)
+# Haar filter bank (hardcoded, no external dependency)
 # ---------------------------------------------------------------------------
 
-# Daubechies-2 (db2) decomposition filters
-_DB2_LO: list[float] = [
-    -0.12940952255092145,
-    0.22414386804185735,
-    0.836516303737469,
-    0.48296291314469025,
-]
-_DB2_HI: list[float] = [
-    -0.48296291314469025,
-    0.836516303737469,
-    -0.22414386804185735,
-    -0.12940952255092145,
-]
-
-# Haar (db1)
+# Haar (db1) decomposition filters. Haar is the only supported wavelet: its
+# 2-tap filters give the tightest coefficient support of any orthogonal
+# wavelet, which keeps the halo widths used by span masking as small as
+# possible (see :func:`swt_band_supports`).
 _HAAR_LO: list[float] = [0.7071067811865476, 0.7071067811865476]
 _HAAR_HI: list[float] = [-0.7071067811865476, 0.7071067811865476]
 
-_FILTER_BANKS: dict[str, tuple[list[float], list[float]]] = {
-    "db2": (_DB2_LO, _DB2_HI),
-    "haar": (_HAAR_LO, _HAAR_HI),
-    "db1": (_HAAR_LO, _HAAR_HI),
-}
-
-
-def _get_filters(name: str) -> tuple[list[float], list[float]]:
-    key = name.lower()
-    if key not in _FILTER_BANKS:
-        raise ValueError(
-            f"Unknown wavelet {name!r}; available: {sorted(_FILTER_BANKS)}"
-        )
-    return _FILTER_BANKS[key]
+HAAR_FILTER_LEN: int = len(_HAAR_LO)
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +44,7 @@ def _get_filters(name: str) -> tuple[list[float], list[float]]:
 
 
 class StationaryWaveletTransform1d(nn.Module):
-    """Causal undecimated (stationary) wavelet transform along the time axis.
+    """Causal undecimated (stationary) Haar transform along the time axis.
 
     Input shape ``[B, V, T]`` (channels-first, matching conv1d).
     Output: list of ``(approx, detail)`` tuples per level, each ``[B, V, T']``
@@ -81,17 +59,15 @@ class StationaryWaveletTransform1d(nn.Module):
         self,
         num_channels: int,
         max_levels: int = 6,
-        wavelet: str = "haar",
     ) -> None:
         """Initialize the stationary wavelet transform filters."""
         super().__init__()
-        lo, hi = _get_filters(wavelet)
-        self.filter_len = len(lo)
+        self.filter_len = HAAR_FILTER_LEN
         self.max_levels = max_levels
 
         # Depthwise filters: [V, 1, K] repeated for groups=V conv
-        lo_t = torch.tensor(lo, dtype=torch.float32).flip(0)
-        hi_t = torch.tensor(hi, dtype=torch.float32).flip(0)
+        lo_t = torch.tensor(_HAAR_LO, dtype=torch.float32).flip(0)
+        hi_t = torch.tensor(_HAAR_HI, dtype=torch.float32).flip(0)
         # Shape [num_channels, 1, K]
         lo_w = lo_t.unsqueeze(0).unsqueeze(0).expand(num_channels, -1, -1).clone()
         hi_w = hi_t.unsqueeze(0).unsqueeze(0).expand(num_channels, -1, -1).clone()
@@ -182,6 +158,41 @@ def swt_bands_to_channels(
     # var-major flatten: [B, V, n_bands, T] -> [B, V*n_bands, T] -> [B, T, C].
     stacked = stacked.permute(0, 2, 1, 3).reshape(b, v * n_bands, t)
     return stacked.transpose(1, 2).contiguous()
+
+
+def swt_band_supports(
+    levels: list[int],
+    include_approx: bool = True,
+) -> list[int]:
+    """Per-band causal temporal support (in days) of the SWT coefficients.
+
+    Because the transform is causal (left-only padding), the coefficient at
+    time ``t`` carries information about raw days up to ``support - 1`` steps
+    in the *past*. For the causal Haar à-trous cascade, the coefficients at
+    level ``j`` have support ``2**(j + 1)`` days.
+
+    Args:
+        levels: Detail levels included (0-indexed).
+        include_approx: If True, append the deepest level's approximation band,
+            matching the band order produced by :func:`swt_bands_to_channels`.
+
+    Returns:
+        Per-band supports in band order ``[detail_0, ..., detail_{L-1},
+        (approx_deepest)]``.
+    """
+    if not levels:
+        raise ValueError("swt_band_supports requires at least one level")
+
+    def support(j: int) -> int:
+        return 2 ** (j + 1)
+
+    # Mirror the band order emitted by ``forward`` / ``swt_bands_to_channels``:
+    # detail bands in ascending level order, then the deepest approximation.
+    detail_levels = [j for j in range(max(levels) + 1) if j in levels]
+    supports = [support(j) for j in detail_levels]
+    if include_approx:
+        supports.append(support(max(levels)))
+    return supports
 
 
 # ---------------------------------------------------------------------------

@@ -1,35 +1,49 @@
 """Input corruption strategies for ERA5 reconstruction (objective B).
 
-Masking operates on normalized ERA5 input ``[B, T, V]`` via a two-stage
-:class:`MaskPolicy`:
+Masking operates in the **SWT band space** ``[B, T, V * n_bands]`` that the
+encoder consumes when ``is_swt_input=True``.  Two policies are provided:
 
-* **Stage 1 — Temporal interpolation** (:class:`TemporalInterpolationStrategy`):
-  mask short contiguous time spans for eligible groups, forcing the
-  encoder to interpolate across time.  Groups whose signals are too
-  noisy or event-driven for temporal infilling (e.g. wind, hydro_flux)
-  are excluded.
+* :class:`SwtNaiveMaskPolicy` — the budget-only baseline.  Every band element
+  ``(timestep, variable, swt_band)`` in the target window is masked
+  independently with probability ``budget``.
 
-* **Stage 2 — Cross-variable reconstruction**: a weighted menu of
-  strategies that, per sample, drops specific variables or groups to
-  force reconstruction from cross-variable context.
+* :class:`SwtHaloSpanMaskPolicy` — halo-corrected span masking (no-leak).  A
+  few contiguous day spans are drawn per sample over a random subset of
+  variables; each span is expanded across bands with a per-band causal
+  right halo so the raw days in the span are *genuinely absent* from every
+  scale the encoder sees.
 
-Note: ERA5L_DAY_10 has one timestep per day, so span lengths expressed
-in *days* map directly onto timesteps.
+Why halos are necessary
+-----------------------
+The undecimated (stationary) wavelet transform is ~``n_bands``x overcomplete:
+every coefficient is a fixed linear functional of the same raw values.  As a
+result, masking scattered band elements — or even all bands of a short span —
+leaves the masked coefficients (and the raw values they encode) linearly
+recoverable from the visible ones, with no weather prior required.  To hide a
+contiguous raw span ``[s, s+L)`` from band ``s`` we must also mask every
+coefficient whose causal support reaches back into the span, i.e. extend the
+mask ``support_s - 1`` days to the *right* (the transform is causal, so no
+left halo is needed).  See
+:func:`~olmoearth_pretrain.nn.transforms.era5_swt.swt_band_supports`.
 
-Everything is applied on-the-fly on the GPU. Only timesteps at index
-``target_start`` and beyond are eligible for masking
+Because the halo positions are still (mostly) recoverable, the reconstruction
+loss is supervised only on the raw days inside each span — the
+``raw_loss_mask`` returned alongside the band-space ``band_mask``.
 
-:func:`corrupt_era5` returns a boolean corruption mask.  The encoder
-replaces masked positions with a learned per-band embedding before
-patchifying (see ``use_mask_embed`` in
-:class:`~olmoearth_pretrain.nn.era5_encoder.Era5DailyEncoder`).
+Note: ERA5L_DAY_10 has one timestep per day, so span lengths expressed in
+*days* map directly onto timesteps.  Everything is applied on-the-fly on the
+GPU and only timesteps at index ``target_start`` and beyond are eligible for
+masking; the causal buffer ``[:target_start]`` is never corrupted.
+
+:func:`corrupt_era5_swt` returns an :class:`Era5CorruptionMasks` with both the
+band-space corruption mask (fed to the encoder's learned ``mask_embed``) and
+the raw ``[B, T, V]`` loss mask.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 import torch
 from torch import Tensor
@@ -61,26 +75,11 @@ logger = logging.getLogger(__name__)
 # tp — total precipitation (m). Rain + snow water equivalent.
 # These are the components of the local surface water balance (precip in; evaporation and runoff out), so they're physically coupled.
 
-# TODO: for V2
-# add (or reconstruct?) derived channels
-# wind_speed = sqrt(u10**2 + v10**2)
-# vpd_proxy or rh_proxy from t2m, d2m, sp
-# net_radiation = ssr + str
-# albedo_proxy = 1 - ssr / ssrd
-# Then groups could be:
-# ERA5_GROUPS_WITH_DERIVED = {
-#    "thermo_humidity": ["t2m", "d2m", "sp", "vpd_or_rh"],
-#    "wind": ["u10", "v10", "wind_speed"],
-#    "radiation": ["ssr", "ssrd", "str", "net_radiation", "albedo_proxy"],
-#    "soil_moisture": ["swvl1", "swvl2"],
-#    "evaporative_flux": ["e", "pev"],
-#    "hydro_flux": ["tp", "ro"],
-# }
-
-# TODO: for ablations
-# instead of reconstructing raw signals then swt transform to band signals,
-# we can decode bands directly, then reconstruct raw/time signal from inverse swt
-# This forces the reconstruction to pass through the multiscale representation
+# TODO: the loss-side tables below (DEFAULT_VARIABLE_GROUPS, GROUP_RECON_MODE,
+# RECON_MODE_SPEC) are retained unchanged so baseline reconstruction losses are
+# identical to prior runs.  They are no longer used by any masking policy and
+# should be deleted (and the change A/B-tested) in a follow-up once the group
+# recon-mode loss weighting is confirmed unnecessary.
 
 DEFAULT_VARIABLE_GROUPS: dict[str, list[int]] = {
     # Near-surface thermodynamic state.
@@ -103,12 +102,12 @@ DEFAULT_VARIABLE_GROUPS: dict[str, list[int]] = {
 
 
 # ---------------------------------------------------------------------------
-# Per-group controls
+# Per-group reconstruction-loss controls (loss side, not masking)
 # ---------------------------------------------------------------------------
 #
-# These tables describe, for each variable group, *how* it should be
-# reconstructed and *how* it is allowed to be masked.  They are the single
-# source of truth that the :class:`MaskPolicy` defaults are assembled from.
+# These tables describe, for each variable group, *how* its reconstruction
+# loss is weighted across raw vs. wavelet bands.  They feed the loss weighting
+# in the reconstruction objective, not any masking policy.
 
 SWT_DETAIL_LEVELS: list[int] = [0, 1, 2, 3, 4, 5]
 
@@ -149,353 +148,204 @@ GROUP_RECON_MODE: dict[str, str] = {
     # No pointwise reconstruction; only baseline + slow structure.
     "pressure": "lowpass_plus_slow_swt",
 }
-# Groups where a *single variable* may be masked across the entire sequence
-# (all T) while the remaining group member(s) stay visible.  This is safe for
-# highly redundant pairs (ssr/ssrd, swvl1/swvl2, e/pev) because the visible
-# partner carries strong signal about the hidden one.
-SINGLE_VAR_ALL_T_ALLOWED: set[str] = {
-    "shortwave_radiation",
-    "soil_moisture",
-    "evaporation",
-}
-
-# Groups where the *entire* group may be masked across all T.  Much riskier
-# than single-var masking because no within-group signal remains — the model
-# must reconstruct purely from cross-group context.  Start empty; consider
-# adding "soil_moisture" later as a low-weight robustness signal.
-WHOLE_GROUP_ALL_T_ALLOWED: set[str] = set()
-
-GROUPS_WITH_MULT_VARIABLES = {
-    group for group, vars_ in DEFAULT_VARIABLE_GROUPS.items() if len(vars_) >= 2
-}
-
-# Span length range (in days == timesteps for ERA5L_DAY_10) per group.
-GROUP_SPAN_DAYS: dict[str, list[int]] = {
-    "thermo": [1, 7],
-    "wind": [1, 3],
-    "shortwave_radiation": [3, 30],
-    "longwave_radiation": [3, 30],
-    "soil_moisture": [7, 90],
-    "evaporation": [7, 30],
-    "hydro_flux": [1, 3],
-    "pressure": [3, 30],
-}
-
-# Long-span length range (in days) used by the single-variable masking
-# strategy.  Group-specific because a long in-paint is only fair when the
-# remaining channels of the group carry enough signal about the dropped one.
-# A global (30, 180) is fine for highly redundant pairs (ssr/ssrd, swvl1/
-# swvl2, e/pev) but far too hard for weakly mutually-predictive pairs such
-# as tp from ro or u10 from v10, so those get shorter windows.
-WITHIN_GROUP_LONG_SPAN_DAYS: dict[str, list[int]] = {
-    "thermo": [7, 60],
-    "wind": [1, 3],
-    "shortwave_radiation": [30, 180],
-    "soil_moisture": [30, 180],
-    "evaporation": [14, 90],
-    "hydro_flux": [1, 7],
-}
 
 
 # ---------------------------------------------------------------------------
-# Mask policy — per-strategy dataclasses
+# Masking policies (SWT band space)
 # ---------------------------------------------------------------------------
 
 
 @dataclass
-class WithinGroupSingleVarStrategy:
-    """Drop a single variable inside a randomly chosen multi-variable group.
+class SwtNaiveMaskPolicy:
+    """Budget-only masking for SWT-input reconstruction (baseline).
 
-    If the group is in ``full_t_allowed``, the variable is masked across
-    *all* timesteps with probability ``all_T_prob``; otherwise it is masked
-    across a contiguous span drawn from ``long_span_days``.  The masking is
-    repeated ``num_masks`` times (each draws its own group/variable/span).
-    """
+    Every band element ``(timestep, variable, swt_band)`` in the target
+    window is masked independently with probability ``budget``, so masking is
+    spread uniformly at random across all three axes with no spans or
+    per-group structure.
 
-    prob: float = 0.5
-    num_masks: int = 1
-    all_T_prob: float = 0.25
-    groups: list[str] = field(
-        default_factory=lambda: sorted(GROUPS_WITH_MULT_VARIABLES)
-    )
-    full_t_allowed: list[str] = field(
-        default_factory=lambda: sorted(
-            SINGLE_VAR_ALL_T_ALLOWED & GROUPS_WITH_MULT_VARIABLES
-        )
-    )
-    long_span_days: dict[str, list[int]] = field(
-        default_factory=lambda: {
-            k: list(v) for k, v in WITHIN_GROUP_LONG_SPAN_DAYS.items()
-        }
-    )
-
-
-@dataclass
-class WholeGroupSpanStrategy:
-    """Drop an entire group across a contiguous span.
-
-    The span length (in days) is sampled from the per-group ``span_days``
-    range.  The group is chosen uniformly from groups that have both a
-    span range and exist in the variable groups.  The masking is repeated
-    ``num_masks`` times (each draws its own group/span).
-    """
-
-    prob: float = 0.5
-    num_masks: int = 1
-    span_days: dict[str, list[int]] = field(
-        default_factory=lambda: {k: list(v) for k, v in GROUP_SPAN_DAYS.items()}
-    )
-
-
-@dataclass
-class WholeGroupAllTStrategy:
-    """Drop an entire group across *all* timesteps.
-
-    Much riskier than single-var masking — no within-group signal remains.
-    The group is chosen uniformly from ``allowed_groups``.  Disabled by
-    default (prob=0.0, empty allowed list).
-    """
-
-    prob: float = 0.0
-    allowed_groups: list[str] = field(
-        default_factory=lambda: sorted(WHOLE_GROUP_ALL_T_ALLOWED)
-    )
-
-
-@dataclass
-class TemporalInterpolationStrategy:
-    """Stage 1: mask short time spans for eligible groups.
-
-    Groups like wind and hydro_flux are excluded by default because their
-    daily signals are too noisy or event-driven for meaningful temporal
-    infilling.
-    """
-
-    num_masks: int = 3
-    span_days: list[int] = field(default_factory=lambda: [1, 1])
-    excluded_groups: list[str] = field(default_factory=lambda: ["wind", "hydro_flux"])
-
-
-@dataclass
-class MaskPolicy:
-    """Two-stage masking policy with per-stage probabilities.
-
-    **Stage 1** — :attr:`temporal_interpolation`
-
-    **Stage 2** — cross-variable reconstruction: one strategy is drawn per
-    sample (according to ``prob``).
-    """
-
-    temporal_interpolation_prob: float = 1.0
-    cross_variable_prob: float = 1.0
-    # When True, guarantee every sample gets at least one stage via a single
-    # uniform draw (u<0.5 -> temporal, u>=0.5 -> xvar, outer tails co-activate
-    # both). This ignores temporal_interpolation_prob / cross_variable_prob.
-    require_at_least_one_stage: bool = False
-    # Total probability that BOTH stages fire when require_at_least_one_stage
-    # is set (the two outer tails, each of width both_activation_prob/2).
-    both_activation_prob: float = 0.25
-
-    temporal_interpolation: TemporalInterpolationStrategy = field(
-        default_factory=TemporalInterpolationStrategy
-    )
-    within_group_single_var: WithinGroupSingleVarStrategy = field(
-        default_factory=WithinGroupSingleVarStrategy
-    )
-    whole_group_span: WholeGroupSpanStrategy = field(
-        default_factory=WholeGroupSpanStrategy
-    )
-    whole_group_all_T: WholeGroupAllTStrategy = field(
-        default_factory=WholeGroupAllTStrategy
-    )
-
-    def strategies(self) -> list[tuple[str, Any]]:
-        """Return stage 2 ``(name, strategy)`` pairs in fixed order."""
-        return [
-            ("within_group_single_var", self.within_group_single_var),
-            ("whole_group_span", self.whole_group_span),
-            ("whole_group_all_T", self.whole_group_all_T),
-        ]
-
-
-@dataclass
-class NaiveMaskPolicy(MaskPolicy):
-    """Naive baseline: random contiguous spans x random channel subsets."""
-
-    max_num_masks: int = 5
-    span_days: tuple[int, int] = (1, 30)
-    num_channels: tuple[int, int] = (1, 7)
-
-
-@dataclass
-class SwtNaiveMaskPolicy(MaskPolicy):
-    """Budget-only masking for SWT-input reconstruction.
-
-    The single knob ``budget`` is the target fraction of the maskable band
-    elements — ``target_window_length * V * n_bands`` — that get corrupted.
-    Each element ``(timestep, variable, swt_band)`` in the target window is
-    masked independently with probability ``budget``, so masking is spread
-    uniformly at random across all three axes with no spans or per-group
-    structure.  Only meaningful when the encoder has ``is_swt_input=True``.
+    The raw ``[B, T, V]`` loss mask is derived by reducing the band-space mask
+    over the scale axis: ``"any"`` supervises a raw position where any band is
+    masked, ``"all"`` only where every band is masked.
     """
 
     budget: float = 0.5
+    raw_loss_mask_reduce: str = "any"
 
 
-def corrupt_era5(
-    era5: Tensor,
-    policy: MaskPolicy,
-    variable_groups: dict[str, list[int]],
-    target_start: int,
-) -> Tensor:
-    """Generate a corruption mask for a batch of ERA5 sequences.
+@dataclass
+class SwtHaloSpanMaskPolicy:
+    """Halo-corrected contiguous-span masking for SWT-input reconstruction.
 
-    Dispatches to the appropriate masking logic based on the policy type:
-
-    * :class:`MaskPolicy` — two-stage physics-aware masking.
-    * :class:`NaiveMaskPolicy` — simple random span x channel baseline.
-
-    Only timesteps at index ``target_start`` and beyond are eligible for
-    masking; the buffer region ``[:target_start]`` is never corrupted.
-
-    Args:
-        era5: ``[B, T, V]`` normalized input (used only for shape/device).
-        policy: Masking policy (:class:`MaskPolicy` or :class:`NaiveMaskPolicy`).
-        variable_groups: Group name -> band-index mapping.
-        target_start: First index of the target window.  Indices before this
-            are treated as a causal buffer and are never masked.
-
-    Returns:
-        ``mask`` — ``[B, T, V]`` bool (True = corrupted position).
+    Per sample, ``num_spans`` spans are drawn (count sampled uniformly in the
+    inclusive range).  Each span draws a length from ``span_days`` and a random
+    subset of variables (size drawn uniformly from ``num_variables``).  Each
+    span is expanded across bands with a per-band causal right halo of
+    ``support_s - 1`` days so the span's raw days are genuinely hidden from
+    every scale.  The loss is supervised only on the raw span days.
     """
-    if isinstance(policy, NaiveMaskPolicy):
-        return _corrupt_naive(era5, policy, target_start)
-    return _corrupt_two_stage(era5, policy, variable_groups, target_start)
+
+    num_spans: tuple[int, int] = (1, 5)
+    span_days: tuple[int, int] = (7, 60)
+    num_variables: tuple[int, int] = (1, 14)
 
 
-def _corrupt_naive(
-    era5: Tensor,
-    policy: NaiveMaskPolicy,
-    target_start: int,
-) -> Tensor:
-    """Naive masking: random spans x random channels, repeated ``num_masks`` times."""
-    b, t, v = era5.shape
-    device = era5.device
-    mask = torch.zeros(b, t, v, dtype=torch.bool, device=device)
-    span_range = _as_span(policy.span_days)
-    target_window_length = t - target_start
-
-    for i in range(b):
-        n_masks = _randint(1, policy.max_num_masks, device)
-        for _ in range(n_masks):
-            span_mask = _random_span(span_range, target_window_length, device)
-            nc = _randint(
-                policy.num_channels[0], min(policy.num_channels[1], v), device
-            )
-            channels = torch.randperm(v, device=device)[:nc]
-            mask[i, target_start:, channels] |= span_mask.unsqueeze(1)
-
-    return mask
+MaskPolicy = SwtNaiveMaskPolicy | SwtHaloSpanMaskPolicy
 
 
-def swt_naive_mask(
+@dataclass
+class Era5CorruptionMasks:
+    """Pair of masks produced by :func:`corrupt_era5_swt`.
+
+    Attributes:
+        band_mask: ``[B, T, V * n_bands]`` bool (True = corrupted band element).
+            Fed to the encoder to replace positions with the learned mask
+            embedding.
+        raw_loss_mask: ``[B, T, V]`` bool (True = genuinely-hidden raw position
+            that should be supervised).
+    """
+
+    band_mask: Tensor
+    raw_loss_mask: Tensor
+
+
+# ---------------------------------------------------------------------------
+# Corruption entry point
+# ---------------------------------------------------------------------------
+
+
+def corrupt_era5_swt(
     b: int,
     t: int,
     v: int,
     n_bands: int,
-    budget: float,
+    band_supports: list[int],
     target_start: int,
     device: torch.device,
-) -> Tensor:
-    """Budget-based random band-space mask for SWT-input reconstruction.
+    policy: MaskPolicy,
+) -> Era5CorruptionMasks:
+    """Generate SWT band-space corruption masks for a batch.
 
-    Every band element ``(timestep, variable, swt_band)`` in the target
-    window is masked independently with probability ``budget``, so the
-    expected masked fraction of the ``target_window_length * V * n_bands``
-    maskable elements equals ``budget``.  Masking is spread uniformly at
-    random across all three axes — no spans, no per-group structure.
+    Dispatches on the policy type:
+
+    * :class:`SwtNaiveMaskPolicy` — per-element budget masking.
+    * :class:`SwtHaloSpanMaskPolicy` — halo-corrected span masking.
 
     Args:
         b: Batch size.
-        t: Sequence length.
+        t: Sequence length (timesteps).
         v: Number of raw variables.
         n_bands: Number of SWT bands per variable (channels ``= v * n_bands``).
-        budget: Target masked fraction in ``[0, 1]``.
+        band_supports: Per-band causal support in days, in band order
+            ``[detail_0, ..., detail_{L-1}, (approx_deepest)]`` (see
+            :func:`~olmoearth_pretrain.nn.transforms.era5_swt.swt_band_supports`).
+            Only used by the halo span policy.
         target_start: First maskable timestep; ``[:target_start]`` is never
             masked.
-        device: Device for the returned tensor.
+        device: Device for the returned tensors.
+        policy: Masking policy.
 
     Returns:
-        ``mask`` — ``[B, T, V * n_bands]`` bool (True = corrupted position).
+        :class:`Era5CorruptionMasks` with ``band_mask`` ``[B, T, V*n_bands]``
+        and ``raw_loss_mask`` ``[B, T, V]``.
     """
-    c = v * n_bands
-    mask = torch.zeros(b, t, c, dtype=torch.bool, device=device)
-    if budget <= 0.0:
-        return mask
-    window = t - target_start
-    mask[:, target_start:, :] = torch.rand(b, window, c, device=device) < budget
-    return mask
+    if isinstance(policy, SwtNaiveMaskPolicy):
+        return _corrupt_swt_naive(b, t, v, n_bands, target_start, device, policy)
+    if isinstance(policy, SwtHaloSpanMaskPolicy):
+        return _corrupt_swt_halo_span(
+            b, t, v, n_bands, band_supports, target_start, device, policy
+        )
+    raise TypeError(f"Unsupported mask policy: {type(policy).__name__}")
 
 
-def _corrupt_two_stage(
-    era5: Tensor,
-    policy: MaskPolicy,
-    variable_groups: dict[str, list[int]],
+def _corrupt_swt_naive(
+    b: int,
+    t: int,
+    v: int,
+    n_bands: int,
     target_start: int,
-) -> Tensor:
-    """Two-stage physics-aware masking (temporal interpolation + cross-variable).
+    device: torch.device,
+    policy: SwtNaiveMaskPolicy,
+) -> Era5CorruptionMasks:
+    """Per-element budget masking (baseline)."""
+    if policy.raw_loss_mask_reduce not in ("any", "all"):
+        raise ValueError(
+            f"raw_loss_mask_reduce must be 'any' or 'all', got "
+            f"{policy.raw_loss_mask_reduce!r}"
+        )
+    c = v * n_bands
+    band_mask = torch.zeros(b, t, c, dtype=torch.bool, device=device)
+    if policy.budget > 0.0:
+        window = t - target_start
+        band_mask[:, target_start:, :] = (
+            torch.rand(b, window, c, device=device) < policy.budget
+        )
+    band4d = band_mask.view(b, t, v, n_bands)
+    raw_loss_mask = (
+        band4d.all(dim=-1)
+        if policy.raw_loss_mask_reduce == "all"
+        else band4d.any(dim=-1)
+    )
+    return Era5CorruptionMasks(band_mask=band_mask, raw_loss_mask=raw_loss_mask)
 
-    All masking is restricted to the target window ``[target_start:]``.
-    """
-    b, t, v = era5.shape
-    device = era5.device
-    mask = torch.zeros(b, t, v, dtype=torch.bool, device=device)
-    target_window_length = t - target_start
 
-    # Per-sample stage selection.
-    if policy.require_at_least_one_stage:
-        # Single uniform per sample guarantees at least one stage
-        u = torch.rand(b, device=device)
-        half = policy.both_activation_prob / 2.0
-        both = (u < half) | (u >= 1.0 - half)
-        do_stage1 = (u < 0.5) | both
-        do_stage2 = (u >= 0.5) | both
-    else:
-        do_stage1 = torch.rand(b, device=device) < policy.temporal_interpolation_prob
-        do_stage2 = torch.rand(b, device=device) < policy.cross_variable_prob
+def _corrupt_swt_halo_span(
+    b: int,
+    t: int,
+    v: int,
+    n_bands: int,
+    band_supports: list[int],
+    target_start: int,
+    device: torch.device,
+    policy: SwtHaloSpanMaskPolicy,
+) -> Era5CorruptionMasks:
+    """Halo-corrected contiguous-span masking (no-leak)."""
+    if len(band_supports) != n_bands:
+        raise ValueError(
+            f"band_supports has {len(band_supports)} entries, expected "
+            f"n_bands={n_bands}"
+        )
+    band4d = torch.zeros(b, t, v, n_bands, dtype=torch.bool, device=device)
+    raw_loss_mask = torch.zeros(b, t, v, dtype=torch.bool, device=device)
+    window = t - target_start
+    if window <= 0:
+        return Era5CorruptionMasks(
+            band_mask=band4d.reshape(b, t, v * n_bands),
+            raw_loss_mask=raw_loss_mask,
+        )
 
-    # --- Stage 1: Temporal interpolation (target window only) ---
-    ti = policy.temporal_interpolation
-    if ti.num_masks > 0 and do_stage1.any():
-        excluded = set(ti.excluded_groups)
-        eligible = torch.zeros(v, dtype=torch.bool, device=device)
-        for gname, gidx in variable_groups.items():
-            if gname not in excluded:
-                eligible[gidx] = True
+    span_lo, span_hi = int(policy.span_days[0]), int(policy.span_days[1])
+    nspan_lo, nspan_hi = int(policy.num_spans[0]), int(policy.num_spans[1])
+    nvar_lo, nvar_hi = int(policy.num_variables[0]), int(policy.num_variables[1])
+    nvar_hi = min(nvar_hi, v)
 
-        if eligible.any():
-            lo, hi = _as_span(ti.span_days)
-            for _ in range(ti.num_masks):
-                lengths = torch.randint(lo, hi + 1, (b,), device=device)
-                max_start = (target_window_length - lengths).clamp(min=0)
-                starts = (torch.rand(b, device=device) * (max_start.float() + 1)).long()
-                idx = torch.arange(target_window_length, device=device).unsqueeze(0)
-                span = (idx >= starts.unsqueeze(1)) & (
-                    idx < (starts + lengths).unsqueeze(1)
-                )
-                span = span & do_stage1.unsqueeze(1)
-                mask[:, target_start:, :] = mask[:, target_start:, :] | (
-                    span.unsqueeze(-1) & eligible[None, None, :]
-                )
+    for i in range(b):
+        n_spans = _randint(nspan_lo, nspan_hi, device)
+        for _ in range(n_spans):
+            length = min(_randint(span_lo, span_hi, device), window)
+            max_start = t - length
+            start = _randint(target_start, max_start, device)
+            end = start + length
 
-    # --- Stage 2: Cross-variable reconstruction (target window only) ---
-    _apply_stage2_mask_policy(mask, policy, variable_groups, do_stage2, target_start)
+            n_vars = _randint(nvar_lo, nvar_hi, device)
+            var_idx = torch.randperm(v, device=device)[:n_vars]
 
-    return mask
+            # Supervise only the genuinely-hidden raw span days.
+            raw_loss_mask[i, start:end][:, var_idx] = True
+
+            # Hide each band over the span plus its causal right halo.
+            for s, support in enumerate(band_supports):
+                halo_end = min(end + int(support) - 1, t)
+                band4d[i, start:halo_end][:, var_idx, s] = True
+
+    return Era5CorruptionMasks(
+        band_mask=band4d.reshape(b, t, v * n_bands),
+        raw_loss_mask=raw_loss_mask,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Masking helpers
+# Helpers
 # ---------------------------------------------------------------------------
 
 
@@ -504,125 +354,3 @@ def _randint(lo: int, hi: int, device: torch.device) -> int:
     if hi <= lo:
         return int(lo)
     return int(torch.randint(int(lo), int(hi) + 1, (1,), device=device))
-
-
-def _random_choice(items: list[Any], device: torch.device) -> Any:
-    """Uniformly pick one element from a non-empty list."""
-    return items[int(torch.randint(0, len(items), (1,), device=device))]
-
-
-def _as_span(span_days: Any) -> tuple[int, int]:
-    """Coerce a ``(min, max)`` day range (tuple/list) into an int 2-tuple."""
-    return (int(span_days[0]), int(span_days[1]))
-
-
-def _random_span(
-    span_days: tuple[int, int], window_length: int, device: torch.device
-) -> Tensor:
-    """Return a ``[window_length]`` bool mask for a random contiguous span.
-
-    Args:
-        span_days: ``(min, max)`` span-length range in days (== timesteps
-            for ERA5L_DAY_10). The drawn length is clamped to
-            ``window_length``.
-        window_length: Length of the window the span is placed within; also
-            the length of the returned mask.
-        device: Device for the returned tensor.
-    """
-    length = min(_randint(span_days[0], span_days[1], device), window_length)
-    max_start = max(window_length - length, 0)
-    start = _randint(0, max_start, device)
-    span_mask = torch.zeros(window_length, dtype=torch.bool, device=device)
-    span_mask[start : start + length] = True
-    return span_mask
-
-
-def _apply_stage2_mask_policy(
-    mask: Tensor,
-    policy: MaskPolicy,
-    variable_groups: dict[str, list[int]],
-    do_stage2: Tensor,
-    target_start: int,
-) -> None:
-    """Sample and apply one masking strategy per sample (in place).
-
-    All masking is restricted to the target window ``[target_start:]``.
-
-    Args:
-        mask: ``[B, T, V]`` bool mask to update in place.
-        policy: :class:`MaskPolicy` instance.
-        variable_groups: Group name -> band-index mapping.
-        do_stage2: ``[B]`` bool, True = apply stage 2 to this sample.
-        target_start: First index of the target window.
-    """
-    b, t, v = mask.shape
-    device = mask.device
-    target_window_length = t - target_start
-    group_names = list(variable_groups.keys())
-    if not group_names:
-        return
-
-    strategies = policy.strategies()
-    probs = torch.tensor(
-        [s.prob for _, s in strategies],
-        dtype=torch.float,
-        device=device,
-    )
-    if probs.sum() <= 0:
-        return
-    probs = probs / probs.sum()
-    choices = torch.multinomial(probs, b, replacement=True)
-
-    for i in range(b):
-        if not do_stage2[i]:
-            continue
-        strat_name, strat = strategies[int(choices[i])]
-
-        # Whole-group all-T masks the entire window, so there are no spans to
-        # repeat: apply it once and move on.
-        if isinstance(strat, WholeGroupAllTStrategy):
-            candidates = [g for g in strat.allowed_groups if g in variable_groups]
-            if not candidates:
-                continue
-            group = _random_choice(candidates, device)
-            for bi in variable_groups[group]:
-                mask[i, target_start:, bi] = True
-            continue
-
-        for _ in range(strat.num_masks):
-            if isinstance(strat, WithinGroupSingleVarStrategy):
-                group = _random_choice(strat.groups or group_names, device)
-                bi = _random_choice(variable_groups[group], device)
-                full_t_allowed = set(strat.full_t_allowed)
-                if (
-                    group in full_t_allowed
-                    and float(torch.rand(1, device=device)) < strat.all_T_prob
-                ):
-                    mask[i, target_start:, bi] = True
-                else:
-                    if group not in strat.long_span_days:
-                        raise ValueError(
-                            f"WithinGroupSingleVarStrategy: group {group!r} has no "
-                            f"entry in long_span_days. Add it to "
-                            f"WITHIN_GROUP_LONG_SPAN_DAYS to use single-var masking "
-                            f"for this group."
-                        )
-                    span_mask = _random_span(
-                        _as_span(strat.long_span_days[group]),
-                        target_window_length,
-                        device,
-                    )
-                    mask[i, target_start:, bi] |= span_mask
-
-            elif isinstance(strat, WholeGroupSpanStrategy):
-                candidates = [g for g in strat.span_days if g in variable_groups]
-                if not candidates:
-                    continue
-                group = _random_choice(candidates, device)
-                span_mask = _random_span(
-                    _as_span(strat.span_days[group]),
-                    target_window_length,
-                    device,
-                )
-                for bi in variable_groups[group]:
-                    mask[i, target_start:, bi] |= span_mask
