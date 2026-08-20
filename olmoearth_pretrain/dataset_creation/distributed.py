@@ -172,6 +172,8 @@ def launch_beaker_jobs(
     num_shards: int,
     clusters: list[str] | str,
     shard_ids: list[int] | None = None,
+    gpus: int = 0,
+    priority: str | None = None,
 ) -> list[str]:
     """Submit Beaker jobs for each shard.
 
@@ -182,10 +184,14 @@ def launch_beaker_jobs(
         num_shards: total number of shards.
         clusters: Beaker cluster(s) (e.g. "ai2/jupiter" or ["ai2/jupiter", "ai2/saturn"]).
         shard_ids: if set, only launch these shard ids (for resume).
+        gpus: GPUs to reserve per job. The work is CPU-only; request 8 to hold a whole
+            node so the shard gets the node's full CPU/network capacity.
+        priority: Beaker priority to use (default: keep build_launch_config's default).
 
     Returns:
         list of experiment IDs.
     """
+    from olmo_core.launch.beaker import BeakerPriority
     from olmo_core.utils import generate_uuid
 
     from olmoearth_pretrain.internal.common import build_launch_config
@@ -204,10 +210,12 @@ def launch_beaker_jobs(
             clusters=clusters,
             task_name=f"{step_name}-worker",
         )
-        config.num_gpus = 0
+        config.num_gpus = gpus
         config.num_nodes = 1
         config.preemptible = True
         config.retries = 2
+        if priority is not None:
+            config.priority = BeakerPriority(priority)
         # Replace --all-extras (which conflicts) with only what data workers need
         config.setup_steps = [
             s.replace(

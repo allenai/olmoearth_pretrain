@@ -593,6 +593,8 @@ def cmd_launch_rslearn(args: argparse.Namespace) -> None:
         num_shards=args.num_shards,
         clusters=args.clusters,
         shard_ids=args.shard_ids,
+        gpus=args.gpus,
+        priority=args.priority,
     )
     for eid in experiment_ids:
         print(f"  https://beaker.org/ex/{eid}")
@@ -985,6 +987,18 @@ def main() -> None:
         type=int,
         default=None,
         help="Only launch these shard IDs (for resuming failed/missing shards)",
+    )
+    p.add_argument(
+        "--gpus",
+        type=int,
+        default=0,
+        help="GPUs to reserve per shard job (8 = hold a whole node for CPU/network)",
+    )
+    p.add_argument(
+        "--priority",
+        default=None,
+        choices=["low", "normal", "high", "urgent"],
+        help="Beaker priority (default: build_launch_config default)",
     )
     p.set_defaults(func=cmd_launch_rslearn)
 
