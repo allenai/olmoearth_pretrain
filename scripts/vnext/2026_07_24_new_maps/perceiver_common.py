@@ -25,6 +25,7 @@ so it never imports from ``scripts/official/v1_2``, which is hard-wired to the o
 """
 
 import logging
+import os
 from dataclasses import replace
 
 from base import ONLY_DECODE_MODALITIES, _masking_config
@@ -36,6 +37,7 @@ from olmo_core.config import DType
 from olmo_core.distributed.parallel import DataParallelConfig, DataParallelType
 from olmo_core.train.common import Duration
 
+from olmoearth_pretrain.data.cloud_mask_cache import default_cache_dir
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
 from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig
@@ -667,3 +669,82 @@ def route_proj_loop_evals_to_beaker(
     evaluator.beaker_eval_module_path = module_path
     evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
     return trainer_config
+
+
+# --------------------------------------------------------------------------- #
+# Cloud-aware patch discrimination (port of regbtl_v1_2_cloudmask_common).      #
+# --------------------------------------------------------------------------- #
+
+# Root of the weka mount the h5 and cloud caches live under. Used only to decide
+# whether the cache-presence check below can run: inside a Beaker job the mount is
+# there and the check is meaningful; on a laptop building a launch spec it is not.
+_WEKA_ROOT = "/weka"
+
+
+def _assert_cloud_cache_present(cache_dir: str) -> None:
+    """Fail loudly when a cloud cache is configured but not actually there.
+
+    An ABSENT cache is silent, not fatal: ``load_sample_clouds`` returns None per
+    sample and ``dataset.__getitem__`` just skips the side-payload, so the run trains
+    with NO cloud skip while its config claims otherwise -- the same failure mode that
+    voided the ``_l8pixmask`` eval variants. This turns that into a crash at config
+    build time.
+
+    Skipped when the weka mount is not present at all, since ``launch`` builds the
+    config locally to construct the Beaker spec and cannot see the cache from there.
+    """
+    if not os.path.isdir(_WEKA_ROOT):
+        logger.warning(
+            "cloud cache presence NOT verified (%s is not mounted here) -- the check "
+            "will run in the Beaker job, where a missing cache is a hard failure "
+            "rather than a silent no-op. Configured cache: %s",
+            _WEKA_ROOT,
+            cache_dir,
+        )
+        return
+    if not os.path.isdir(cache_dir):
+        raise FileNotFoundError(
+            f"cloud_cache_dir {cache_dir!r} does not exist. The OmniCloudMask "
+            "sidecars have to be precomputed for THIS h5 set before a cloud-skip arm "
+            "can run -- see olmoearth_pretrain.data.cloud_mask_cache "
+            "(--h5_dir/--cache_dir) and scripts/tools/precompute_clouds_8gpu.sh. "
+            "Without them the run trains with no cloud skip and reports nothing wrong."
+        )
+    shards = [e for e in os.scandir(cache_dir) if e.is_dir()]
+    if not shards:
+        raise FileNotFoundError(
+            f"cloud_cache_dir {cache_dir!r} exists but holds no shard directories, so "
+            "every sample would miss the cache and the cloud skip would be a no-op."
+        )
+
+
+def apply_cloud_cache(
+    config: OlmoEarthDatasetConfig, cache_dir: str | None = None
+) -> OlmoEarthDatasetConfig:
+    """Point the dataset at the precomputed OmniCloudMask sidecars.
+
+    Args:
+        config: The dataset config to modify in place.
+        cache_dir: Explicit cache directory. Leave None to derive the sibling of the
+            configured ``h5py_dir`` (``default_cache_dir`` swaps the ``h5py_data*``
+            path component for ``cloud_masks_omnicloudmask``). Pass it explicitly to
+            REUSE a cache computed for a different h5 set -- valid only because the
+            sidecar key is the raw h5 sample id (``dataset.__getitem__`` indexes with
+            ``sample_indices[idx]``, not the filtered position), so any h5 built from
+            the same underlying sample set is index-compatible.
+    """
+    resolved = cache_dir or default_cache_dir(config.h5py_dir)
+    _assert_cloud_cache_present(resolved)
+    config.cloud_cache_dir = resolved
+    return config
+
+
+def apply_cloud_skip_threshold(config, threshold: float):
+    """Record the per-token cloud-skip threshold on a config's masking strategy.
+
+    Must be set on BOTH masking configs. The dataloader's copy is the operative one
+    (masking runs inside the collate fn), but the train module keeps its own, and
+    setting only one leaves the saved run config disagreeing with what actually ran.
+    """
+    config.masking_config.strategy_config["cloud_skip_threshold"] = threshold
+    return config
