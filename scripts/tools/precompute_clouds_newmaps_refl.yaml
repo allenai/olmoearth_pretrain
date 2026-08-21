@@ -73,7 +73,7 @@ tasks:
     gpuCount: 8
     sharedMemory: 256 GiB
   context:
-    priority: high
+    priority: urgent
     preemptible: true
   constraints:
     cluster:
