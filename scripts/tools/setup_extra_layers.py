@@ -25,6 +25,18 @@ sampling window readiness, so re-running ``run --go`` advances the pipeline:
 first invocation launches SCL materialize + Landsat prepare, a later one
 (once prepare reads complete) launches Landsat materialize.
 
+``landsat_qa`` -- the pixel-level Landsat cloud mask (QA_PIXEL, CFMask
+cloud/shadow/cirrus/dilated bit flags), the Landsat analogue of ``scl``.
+Twelve ``landsat_qa_moNN`` layers are derived from the dataset's OWN
+``landsat_moNN`` layers, and every window's Landsat items.json entries are
+CLONED under the QA names -- like SCL, the metadata copy IS the prepare, so
+the QA raster is guaranteed to describe exactly the scene the imagery came
+from. The band is fetched through ``l8qa_plugin.LandsatOliTirsQA`` (rslearn's
+LandsatOliTirs hardcodes the spectral bands); ``apply`` copies the plugin to
+``PLUGIN_WEKA_DIR`` and jobs import it via an injected PYTHONPATH. Requires
+the ``landsat`` set to be applied+prepared first. Off by default: pass
+``--layer_sets landsat_qa`` explicitly.
+
 Commands:
 
 - ``plan``   -- report per dataset x layer set: config state, window
@@ -123,13 +135,27 @@ MONTHS = 12
 S2_LAYERS = [f"sentinel2_l2a_mo{i:02d}" for i in range(1, MONTHS + 1)]
 SCL_LAYERS = [f"sentinel2_scl_mo{i:02d}" for i in range(1, MONTHS + 1)]
 LANDSAT_LAYERS = [f"landsat_mo{i:02d}" for i in range(1, MONTHS + 1)]
+LANDSAT_QA_LAYERS = [f"landsat_qa_mo{i:02d}" for i in range(1, MONTHS + 1)]
 S2_TO_SCL = dict(zip(S2_LAYERS, SCL_LAYERS))
+LANDSAT_TO_QA = dict(zip(LANDSAT_LAYERS, LANDSAT_QA_LAYERS))
+# landsat_qa is opt-in: it depends on the landsat set being applied+prepared,
+# so the default selection stays the original pair.
 LAYER_SET_NAMES = ("scl", "landsat")
+ALL_LAYER_SET_NAMES = ("scl", "landsat", "landsat_qa")
 
 # SCL ships at 20 m (zoom_offset -1, matching the B05/B06/... band set) and is
 # categorical, so it must be resampled nearest -- bilinear would invent
 # classes on upsample.
 SCL_BAND_SET = {"bands": ["SCL"], "dtype": "uint8", "zoom_offset": -1}
+
+# QA_PIXEL is uint16 bit flags at 30 m (zoom_offset -1 like B1-B11) and is
+# categorical, so nearest resampling for the same reason as SCL.
+QA_BAND_SET = {"bands": ["QA_PIXEL"], "dtype": "uint16", "zoom_offset": -1}
+# The materialize job runs the plain rslp image (no helios checkout), so the
+# QA-capable data source lives in a weka-hosted plugin module injected via
+# PYTHONPATH (see l8qa_plugin.py's docstring).
+PLUGIN_WEKA_DIR = "/weka/dfive-default/rslearn-eai/plugins"
+QA_CLASS_PATH = "l8qa_plugin.LandsatOliTirsQA"
 
 DATASETS = (
     "africa_crop_mask_year_aligned",
@@ -165,7 +191,11 @@ FETCH_GROUP_SUFFIX = "_tessera_v2"
 
 def layer_names(layer_set: str) -> list[str]:
     """The twelve monthly layer names of a layer set."""
-    return SCL_LAYERS if layer_set == "scl" else LANDSAT_LAYERS
+    if layer_set == "scl":
+        return SCL_LAYERS
+    if layer_set == "landsat_qa":
+        return LANDSAT_QA_LAYERS
+    return LANDSAT_LAYERS
 
 
 # ---------------------------------------------------------------------------
@@ -209,12 +239,39 @@ def build_landsat_layers() -> dict[str, dict]:
     return layers
 
 
+def build_landsat_qa_layer(landsat_layer: dict) -> dict:
+    """Derive one QA_PIXEL layer config from its landsat_moNN sibling.
+
+    Copies the data source verbatim (duration, time_offset, sort_by) except
+    the class_path, which points at the plugin subclass that knows the
+    QA_PIXEL asset -- same 30-day period, same scene ordering, so the cloned
+    items resolve identically.
+    """
+    layer = json.loads(json.dumps(landsat_layer))
+    layer["alias"] = "landsat_qa"
+    layer["band_sets"] = [dict(QA_BAND_SET)]
+    layer["resampling_method"] = "nearest"
+    layer["data_source"]["class_path"] = QA_CLASS_PATH
+    return layer
+
+
 def expected_layers(config: dict, layer_set: str) -> dict[str, dict]:
     """The layer configs a layer set should add to this dataset's config."""
     if layer_set == "scl":
         return {
             S2_TO_SCL[s2_name]: build_scl_layer(config["layers"][s2_name])
             for s2_name in S2_LAYERS
+        }
+    if layer_set == "landsat_qa":
+        missing = [name for name in LANDSAT_LAYERS if name not in config["layers"]]
+        if missing:
+            raise ValueError(
+                f"dataset lacks landsat layers ({missing[:3]}...); "
+                "apply + prepare the landsat set first"
+            )
+        return {
+            LANDSAT_TO_QA[name]: build_landsat_qa_layer(config["layers"][name])
+            for name in LANDSAT_LAYERS
         }
     return build_landsat_layers()
 
@@ -286,6 +343,35 @@ def copy_window_scl_items(window: Window) -> str:
     return "partial" if len(s2_present) < MONTHS else "copied"
 
 
+def copy_window_landsat_qa_items(window: Window) -> str:
+    """Clone a window's Landsat monthly layer datas under the QA names.
+
+    Mirrors copy_window_scl_items: "copied", "partial" (some Landsat months
+    unprepared), "already", or "unprepared" (Landsat prepare never reached
+    this window).
+    """
+    layer_datas = window.load_layer_datas()
+    landsat_present = [name for name in LANDSAT_LAYERS if name in layer_datas]
+    if not landsat_present:
+        return "unprepared"
+
+    changed = False
+    for landsat_name in landsat_present:
+        qa_name = LANDSAT_TO_QA[landsat_name]
+        if qa_name in layer_datas:
+            continue
+        serialized = json.loads(json.dumps(layer_datas[landsat_name].serialize()))
+        serialized["layer_name"] = qa_name
+        serialized["materialized"] = False
+        layer_datas[qa_name] = WindowLayerData.deserialize(serialized)
+        changed = True
+    if changed:
+        window.save_layer_datas(layer_datas)
+    if not changed:
+        return "already"
+    return "partial" if len(landsat_present) < MONTHS else "copied"
+
+
 def window_state(window: Window, layer_set: str) -> str:
     """Classify one window's readiness for a layer set (read-only).
 
@@ -298,6 +384,13 @@ def window_state(window: Window, layer_set: str) -> str:
         if have == MONTHS:
             return "prepared"
         return "partially prepared" if have else "needs prepare"
+    if layer_set == "landsat_qa":
+        landsat_present = [name for name in LANDSAT_LAYERS if name in layer_datas]
+        if not landsat_present:
+            return "unprepared"
+        if all(LANDSAT_TO_QA[name] in layer_datas for name in landsat_present):
+            return "already"
+        return "partial landsat" if len(landsat_present) < MONTHS else "needs copy"
     s2_present = [name for name in S2_LAYERS if name in layer_datas]
     if not s2_present:
         return "unprepared"
@@ -338,17 +431,32 @@ def apply_dataset(
         with config_path.open("w") as f:
             json.dump(config, f, indent=2)
 
-    if "scl" not in layer_sets:
+    copy_fns = {
+        "scl": copy_window_scl_items,
+        "landsat_qa": copy_window_landsat_qa_items,
+    }
+    todo = [name for name in ("scl", "landsat_qa") if name in layer_sets]
+    if not todo:
         return
     windows = list_windows(ds_path, group)
-    logger.info(f"  copying SCL layer datas for {len(windows)} windows...")
-    counts: Counter = Counter()
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        for i, state in enumerate(pool.map(copy_window_scl_items, windows)):
-            counts[state] += 1
-            if (i + 1) % 10000 == 0:
-                logger.info(f"    {i + 1}/{len(windows)}")
-    logger.info(f"  scl items: {dict(counts)}")
+    for layer_set in todo:
+        logger.info(f"  copying {layer_set} layer datas for {len(windows)} windows...")
+        counts: Counter = Counter()
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for i, state in enumerate(pool.map(copy_fns[layer_set], windows)):
+                counts[state] += 1
+                if (i + 1) % 10000 == 0:
+                    logger.info(f"    {i + 1}/{len(windows)}")
+        logger.info(f"  {layer_set} items: {dict(counts)}")
+
+
+def sync_qa_plugin() -> None:
+    """Copy l8qa_plugin.py to PLUGIN_WEKA_DIR so materialize jobs can import it."""
+    src = Path(__file__).resolve().parent / "l8qa_plugin.py"
+    dst_dir = UPath(PLUGIN_WEKA_DIR)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    (dst_dir / "l8qa_plugin.py").write_text(src.read_text())
+    logger.info(f"  synced l8qa_plugin.py -> {PLUGIN_WEKA_DIR}")
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +520,10 @@ def launch_stage(states: Counter, layer_set: str) -> str | None:
     """
     if layer_set == "scl":
         if states["needs copy"] + states["partial s2"]:
+            return None
+        return "materialize"
+    if layer_set == "landsat_qa":
+        if states["needs copy"] + states["partial landsat"]:
             return None
         return "materialize"
     return (
@@ -499,8 +611,11 @@ def launch_job(
     from beaker import Constraints, DataMount, DataSource, EnvVar, ExperimentSpec
 
     env_vars = []
-    if layer_set == "landsat":
+    if layer_set in ("landsat", "landsat_qa"):
         env_vars = [EnvVar(name=secret, secret=secret) for secret in AWS_SECRET_NAMES]
+    if layer_set == "landsat_qa":
+        # The QA data source lives in a weka-hosted plugin (see l8qa_plugin.py).
+        env_vars.append(EnvVar(name="PYTHONPATH", value=PLUGIN_WEKA_DIR))
     spec = ExperimentSpec.new(
         budget=BEAKER_BUDGET,
         task_name=name,
@@ -582,7 +697,8 @@ def main() -> int:
     parser.add_argument(
         "--layer_sets",
         default=",".join(LAYER_SET_NAMES),
-        help=f"Comma-separated subset of {LAYER_SET_NAMES}.",
+        help=f"Comma-separated subset of {ALL_LAYER_SET_NAMES} "
+        "(landsat_qa is opt-in; default runs the original pair).",
     )
     parser.add_argument(
         "--only",
@@ -641,9 +757,11 @@ def main() -> int:
     args = parser.parse_args()
 
     layer_sets = [s for s in args.layer_sets.replace(",", " ").split() if s]
-    unknown = [s for s in layer_sets if s not in LAYER_SET_NAMES]
+    unknown = [s for s in layer_sets if s not in ALL_LAYER_SET_NAMES]
     if unknown:
-        parser.error(f"unknown layer set(s) {unknown}; choose from {LAYER_SET_NAMES}")
+        parser.error(
+            f"unknown layer set(s) {unknown}; choose from {ALL_LAYER_SET_NAMES}"
+        )
 
     targets = resolve_targets(args, layer_sets)
 
@@ -662,6 +780,9 @@ def main() -> int:
             )
         else:
             beaker_client = get_beaker_client()
+
+    if "landsat_qa" in layer_sets and do_apply and (args.command == "apply" or args.go):
+        sync_qa_plugin()
 
     failures = 0
     launched = 0
@@ -691,7 +812,11 @@ def main() -> int:
                     print(
                         f"  DRY RUN [{layer_set}]: would add {len(added)} config "
                         f"layers ({len(present)} present)"
-                        + (" and copy window items" if layer_set == "scl" else "")
+                        + (
+                            " and copy window items"
+                            if layer_set in ("scl", "landsat_qa")
+                            else ""
+                        )
                     )
 
         if do_launch:

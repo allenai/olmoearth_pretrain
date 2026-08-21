@@ -23,7 +23,9 @@ from olmoearth_pretrain._compat import (
     deprecated_class_alias as _deprecated_class_alias,
 )
 from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.data import cloud_mask_cache
 from olmoearth_pretrain.data.constants import (
+    GLO30_ASPECT_FLAT,
     MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
     WORLDCOVER_CLASSES,
@@ -109,7 +111,7 @@ def _get_max_t_within_token_budget(
     used_tokens = 0
     time_multiply_tokens = 0
     for attribute in sample.as_dict().keys():
-        if attribute in ("timestamps", "latlon"):
+        if attribute in ("timestamps", "latlon") or attribute.endswith("_cloud"):
             continue
         if attribute in exclude_modalities:
             continue
@@ -229,6 +231,15 @@ def subset_sample_default(
             continue
         if attribute == "latlon":
             new_data_dict[attribute] = modality
+            continue
+        if attribute.endswith("_cloud"):
+            # Cloud side-payload: spacetime, stored on the same 128 grid as its
+            # modality (image_tile_size_factor == 1). Crop in lockstep.
+            new_data_dict[attribute] = modality[
+                start_h : start_h + sampled_hw,
+                start_w : start_w + sampled_hw,
+                start_t : start_t + max_t,
+            ]
             continue
         modality_spec = Modality.get(attribute)
         if modality_spec.is_spacetime_varying:
@@ -404,6 +415,8 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        computed_norm_config: str = "computed.json",
+        cloud_cache_dir: str | None = None,
     ):
         """Initialize the dataset.
 
@@ -429,6 +442,14 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            computed_norm_config: Filename of the computed normalization config resource
+                to use for the COMPUTED strategy (under
+                ``olmoearth_pretrain.data.norm_configs``). Defaults to ``computed.json``;
+                set to a reflectance-specific variant when training on reflectance data.
+            cloud_cache_dir: If set, directory of precomputed OmniCloudMask cloud-class
+                sidecars (see data.cloud_mask_cache); enables dropping mostly-cloud
+                tokens (input and/or target, per the masking strategy). None disables
+                cloud masking.
 
         Returns:
             None
@@ -441,14 +462,18 @@ class OlmoEarthDataset(Dataset):
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         self.training_modalities = training_modalities
+        self.cloud_cache_dir = cloud_cache_dir
 
         self.dtype = dtype
         self.normalize = normalize
         self.dataset_percentage = dataset_percentage
         self.seed = seed
+        self.computed_norm_config = computed_norm_config
         if self.normalize:
             self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+            self.normalizer_computed = Normalizer(
+                Strategy.COMPUTED, computed_config_filename=computed_norm_config
+            )
         self.max_sequence_length = max_sequence_length
 
         if samples_per_sec is None:
@@ -648,6 +673,48 @@ class OlmoEarthDataset(Dataset):
         except Exception:
             return self.normalizer_predefined.normalize(modality, image)
 
+    def _compute_glo30_aspect_sincos(
+        self,
+        glo30_data: np.ndarray,
+        missing_modalities: list[str],
+    ) -> tuple[np.ndarray, list[str]]:
+        """Encode the GLO30 aspect band as [sin(aspect), cos(aspect)].
+
+        Aspect is a compass bearing in degrees [0, 360) with -1 meaning "flat", so
+        neither plain z-scoring nor an L1/MSE regression on degrees is correct: 359
+        and 1 are the same bearing but sit at opposite ends of the range, and the
+        flat sentinel normalizes to almost exactly due north. sin/cos is bounded,
+        continuous across north, and the natural target for a regression head.
+
+        Flat pixels (aspect == -1) and pixels where aspect is already MISSING_VALUE
+        are written out as MISSING_VALUE in BOTH channels, so the supervision head's
+        valid mask (which requires every band non-missing) drops them.
+
+        Mirrors the eval-side encoding in
+        ``evals.datasets.pretrain_subset`` (GLO30_LABEL_ASPECT_SIN/_COS), which marks
+        the same pixels NaN.
+
+        Args:
+            glo30_data: Raw (un-normalized) glo30 data, shape [H, W, T, 3]
+                ordered [elevation, slope, aspect].
+            missing_modalities: List of modalities that are entirely missing.
+
+        Returns:
+            Tuple of (aspect array [H, W, T, 2], updated missing_modalities).
+        """
+        glo30_band_order = Modality.GLO30.band_order
+        aspect = glo30_data[..., glo30_band_order.index("aspect")]
+
+        missing = (aspect == MISSING_VALUE) | (aspect == GLO30_ASPECT_FLAT)
+
+        radians = np.deg2rad(aspect.astype(np.float64))
+        sincos = np.stack((np.sin(radians), np.cos(radians)), axis=-1)
+        sincos = np.where(missing[..., np.newaxis], MISSING_VALUE, sincos)
+
+        # Remove "glo30_aspect" from missing_modalities since we computed it
+        updated_missing = [m for m in missing_modalities if m != "glo30_aspect"]
+        return sincos.astype(self.dtype), updated_missing
+
     def _compute_ndvi(
         self,
         s2_data: np.ndarray,
@@ -729,7 +796,7 @@ class OlmoEarthDataset(Dataset):
         """Extract h, w, t from sample_dict."""
         time = sample_dict["timestamps"].shape[0]
         for mod_name, mod_data in sample_dict.items():
-            if mod_name == "timestamps":
+            if mod_name == "timestamps" or mod_name.endswith("_cloud"):
                 continue
             mod_spec = Modality.get(mod_name)
             if mod_spec.is_spatial and mod_data is not None:
@@ -913,6 +980,29 @@ class OlmoEarthDataset(Dataset):
             sample_dict["timestamps"], missing_timesteps_masks
         )
         sample_dict["timestamps"] = timestamps
+        # Cloud side-payload: load precomputed OmniCloudMask maps and de-compact them
+        # to nominal timesteps using the SAME cropped mask the modality will use in
+        # fill_sample_with_missing_values, so they stay time-aligned. Gated on
+        # cloud_cache_dir; skipped under cutmix and for uncached samples (train
+        # normally). Carried as `<modality>_cloud` fields (excluded from .modalities).
+        if self.cloud_cache_dir is not None and not self.apply_cutmix:
+            clouds = cloud_mask_cache.load_sample_clouds(self.cloud_cache_dir, index)
+            if clouds is not None:
+                for npz_key, modality in (
+                    ("s2_cloud", "sentinel2_l2a"),
+                    ("landsat_cloud", "landsat"),
+                ):
+                    if (
+                        npz_key in clouds
+                        and modality in sample_dict
+                        and modality in missing_timesteps_masks
+                    ):
+                        aligned = cloud_mask_cache.align_cloud_to_nominal(
+                            clouds[npz_key],
+                            missing_timesteps_masks[modality],
+                            self.max_sequence_length,
+                        )
+                        sample_dict[f"{modality}_cloud"] = aligned[..., None]
         sample_dict, current_length = self._pad_timestamps(sample_dict)
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
         sample, missing_modalities = self.fill_sample_with_missing_values(
@@ -956,9 +1046,23 @@ class OlmoEarthDataset(Dataset):
                 sample_dict["sentinel2_l2a"], missing_modalities
             )
 
+        # Encode glo30's circular aspect band as sin/cos from the raw (un-normalized)
+        # degrees, before the normalization loop below sees it.
+        if (
+            "glo30_aspect" in sample_dict
+            and "glo30" in sample_dict
+            and "glo30" not in missing_modalities
+        ):
+            (
+                sample_dict["glo30_aspect"],
+                missing_modalities,
+            ) = self._compute_glo30_aspect_sincos(
+                sample_dict["glo30"], missing_modalities
+            )
+
         if self.normalize:
             for modality_name in sample_dict.keys():
-                if modality_name == "timestamps":
+                if modality_name == "timestamps" or modality_name.endswith("_cloud"):
                     continue
                 # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
                 if modality_name in missing_modalities:
@@ -994,6 +1098,13 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    computed_norm_config: str = "computed.json"
+    # Directory of precomputed OmniCloudMask per-pixel cloud-class sidecars
+    # (see olmoearth_pretrain.data.cloud_mask_cache). When set, each sample's S2
+    # and Landsat cloud maps are loaded and carried alongside the sample so the
+    # masking strategy can drop mostly-cloud tokens (input and/or target). None =>
+    # cloud-masking disabled (default; other runs unaffected).
+    cloud_cache_dir: str | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

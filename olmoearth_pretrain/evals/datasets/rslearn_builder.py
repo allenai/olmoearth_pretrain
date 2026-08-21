@@ -24,6 +24,10 @@ from rslearn.train.dataset import ModelDataset
 from rslearn.utils.jsonargparse import init_jsonargparse
 from upath import UPath
 
+from olmoearth_pretrain.evals.constants import (
+    RSLEARN_TO_OLMOEARTH,
+    resolve_rslearn_layer_name,
+)
 from olmoearth_pretrain.evals.studio_ingest.provenance import (
     verify_config_json_hash,
 )
@@ -31,6 +35,41 @@ from olmoearth_pretrain.evals.studio_ingest.provenance import (
 logger = logging.getLogger(__name__)
 
 _JSONARGPARSE_INITIALIZED = False
+
+
+def _make_index_save_best_effort() -> None:
+    """Stop a failed dataset-index cache write from killing the eval.
+
+    DatasetIndex.save_windows writes <hash>.json.tmp.<pid> then renames.
+    Containerized eval jobs share weka AND pid numbers, so two jobs
+    cold-building the same index write the SAME tmp file; the winner's
+    rename removes it and the loser dies FileNotFoundError — this killed a
+    tranche of the 20260808 sweep. The index is purely a cache (the loser
+    computed its window list fine and the winner already persisted an
+    identical index), so a failed save should be a warning, not a crash.
+    """
+    from rslearn.train.dataset_index import DatasetIndex
+
+    if getattr(DatasetIndex.save_windows, "_best_effort", False):
+        return
+    orig = DatasetIndex.save_windows
+
+    def save_windows(self, windows):  # type: ignore[no-untyped-def]
+        try:
+            orig(self, windows)
+        except OSError as e:
+            logger.warning(
+                "dataset index save failed (concurrent writer?), continuing "
+                "without cache: %s: %s",
+                type(e).__name__,
+                e,
+            )
+
+    save_windows._best_effort = True  # type: ignore[attr-defined]
+    DatasetIndex.save_windows = save_windows
+
+
+_make_index_save_best_effort()
 
 
 def _ensure_jsonargparse() -> None:
@@ -287,6 +326,63 @@ def get_modality_layers(model_config: dict[str, Any]) -> list[str]:
             if input_layers:
                 layers.append(input_layers[0])
     return layers
+
+
+def require_stack_inputs(
+    model_config: dict[str, Any], input_modalities: list[str]
+) -> dict[str, Any]:
+    """Promote an all-optional input stack to required in a copy of the config.
+
+    rslearn drops an optional ``load_all_layers`` input entirely when any one
+    of its layers is unmaterialized, and the eval loader represents an absent
+    modality as all-MISSING. That only holds while a required input (the S2/S1
+    monthlies) is present to carry the sample: on a stack built purely from
+    optional inputs -- Landsat-only -- a window with a partial Landsat year
+    arrives with no modalities at all. Requiring the stack hands the decision
+    to rslearn's window resolution, which skips those windows up front instead.
+
+    The stack the model consumes is a subset of the inputs model.yaml loads, so
+    this only ever narrows the window set for the tasks that need narrowing;
+    mixed stacks keep a required input and are returned untouched.
+    """
+    inputs = model_config.get("data", {}).get("init_args", {}).get("inputs", {})
+    wanted = set(input_modalities)
+
+    stack_names = []
+    for name, cfg in inputs.items():
+        if cfg.get("is_target"):
+            continue
+        layers = cfg.get("layers", [])
+        if not layers:
+            continue
+        # SCL and QA are mask inputs, not model modalities, and they resolve to
+        # the modality they mask (landsat_qa_mo01 -> landsat). Requiring them
+        # would drop windows over gaps in a band the stack may never read.
+        if layers[0].startswith(("sentinel2_scl", "landsat_qa")):
+            continue
+        resolved = resolve_rslearn_layer_name(layers[0])
+        modality = (
+            RSLEARN_TO_OLMOEARTH[resolved].name if resolved is not None else layers[0]
+        )
+        if modality in wanted:
+            stack_names.append(name)
+
+    if not stack_names:
+        return model_config
+    if any(inputs[name].get("required", True) for name in stack_names):
+        return model_config
+
+    patched = copy.deepcopy(model_config)
+    patched_inputs = patched["data"]["init_args"]["inputs"]
+    for name in stack_names:
+        patched_inputs[name]["required"] = True
+    logger.info(
+        "Stack %s is optional in model.yaml; requiring inputs %s so windows "
+        "lacking them are skipped instead of yielding empty samples",
+        sorted(wanted),
+        sorted(stack_names),
+    )
+    return patched
 
 
 # ---------------------------------------------------------------------------

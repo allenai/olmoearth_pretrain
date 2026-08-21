@@ -46,7 +46,7 @@ def discover_modality_csvs(
                 f"Modality {modality.name} has resolution_factor="
                 f"{modality.tile_resolution_factor}, expected {resolution_factor}"
             )
-        for ts in [TimeSpan.STATIC, TimeSpan.YEAR, TimeSpan.TWO_WEEK]:
+        for ts in [TimeSpan.STATIC, TimeSpan.YEAR]:
             csv_path = (
                 src
                 / f"{modality.get_tile_resolution()}_{modality.name}{ts.get_suffix()}.csv"

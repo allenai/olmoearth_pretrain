@@ -75,6 +75,7 @@ import argparse
 import itertools
 import json
 import logging
+import zlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -150,6 +151,18 @@ class DatasetSpec:
 # (Jan 1 Y, Jan 1 Y+1) by reanchor_year_aligned_dataset.py, so their own range
 # is already the product year and is read per window -- which is what a
 # multi-year dataset needs, since no single --year would be right for it.
+# scripts/tools/setup_tessera_v2.py orchestrates the pipeline across all of
+# YEAR_ALIGNED_DATASETS.
+YEAR_ALIGNED_DATASETS = (
+    "africa_crop_mask",
+    "canada_crops_coarse",
+    "canada_crops_fine",
+    "descals",
+    "ethiopia_crops",
+    "glance",
+    "lcmap_lu",
+    "us_trees",
+)
 DATASETS: dict[str, DatasetSpec] = {
     "pastis_rslearn": DatasetSpec(
         fetch_group="pastis_tessera_v2", eval_groups=["pastis"], year=2019
@@ -157,10 +170,10 @@ DATASETS: dict[str, DatasetSpec] = {
     "pastis_year_aligned": DatasetSpec(
         fetch_group="pastis_tessera_v2", eval_groups=["pastis"], year=2019
     ),
-    "africa_crop_mask_year_aligned": DatasetSpec(
-        fetch_group="africa_crop_mask_tessera_v2"
-    ),
-    "ethiopia_crops_year_aligned": DatasetSpec(fetch_group="ethiopia_crops_tessera_v2"),
+    **{
+        f"{name}_year_aligned": DatasetSpec(fetch_group=f"{name}_tessera_v2")
+        for name in YEAR_ALIGNED_DATASETS
+    },
 }
 
 # Tessera's S2 input channel order (see tessera_v2_model.S2_BAND_ORDER),
@@ -232,6 +245,21 @@ def resolve_spec(
     if not spec.fetch_group:
         raise SystemExit("pass --dataset or --fetch_group")
     return spec
+
+
+class NoS2ScenesError(ValueError):
+    """A fetch window's S2 layer was prepared but matched zero scenes.
+
+    Zero S2 over a window is a real archive outcome, not only a pipeline
+    failure: glance has 4 windows hard against the antimeridian (Chukotka /
+    Wrangel Island, UTM zones 1 and 60) where Planetary Computer returns no
+    S2 for the whole year -- and the same gap hit their monthly eval layers,
+    so no eval reads those windows either. ``infer`` records them as
+    coverage gaps in the manifest (no imagery means no product, exactly like
+    a published product's coverage hole) rather than failures, which would
+    hard-block wire_embedding_modalities.py. An *unmaterialized* S2 layer
+    still raises a plain ValueError and counts as a failure.
+    """
 
 
 def scl_to_valid_mask(scl: np.ndarray) -> np.ndarray:
@@ -384,9 +412,11 @@ def build_dpixel_inputs(
     """
     s2, s2_doys = _read_scenes(fetch_window, S2_LAYER, S2_BAND_SETS)
     if s2.shape[0] == 0:
-        # Missing S1 passes can be real (orbit geometry); zero S2 scenes over
-        # an eval window can only be a fetch-pipeline failure.
-        raise ValueError(
+        # Missing S1 passes can be real (orbit geometry). Zero prepared S2
+        # scenes is a real archive gap too (see NoS2ScenesError) -- but the
+        # window cannot be embedded, so it is typed for infer to record as a
+        # coverage gap.
+        raise NoS2ScenesError(
             f"window {fetch_window.group}/{fetch_window.name} has zero "
             f"{S2_LAYER} scenes"
         )
@@ -572,6 +602,8 @@ def infer(
     overwrite: bool = False,
     read_workers: int = 8,
     allow_unmaterialized_s1: bool = False,
+    num_shards: int = 1,
+    shard_index: int = 0,
 ) -> None:
     """Run v2 student inference per window and write the tessera_v2 layer.
 
@@ -593,9 +625,18 @@ def infer(
             persistent 404 on Planetary Computer, say) — otherwise it masks an
             incomplete materialize. The affected windows are listed in the
             manifest. S2 stays strict either way.
+        num_shards: split the eval windows into this many disjoint shards (by
+            a stable hash of the window name) so N GPU jobs can run the same
+            dataset concurrently. Shard runs do NOT write the manifest — its
+            counters would only cover the shard, and the wiring gate reads
+            them as dataset totals. After every shard finishes, run one final
+            unsharded pass: it skips all written windows and writes a correct
+            combined manifest.
+        shard_index: which shard this run processes (0-based).
 
     Raises:
-        SystemExit: if an eval window has no matching fetch window.
+        SystemExit: if an eval window has no matching fetch window, or the
+            shard arguments are inconsistent.
     """
     from olmoearth_pretrain.evals.models.tessera.tessera_v2_infer import encode_tile
     from olmoearth_pretrain.evals.models.tessera.tessera_v2_model import load_model
@@ -605,10 +646,23 @@ def infer(
     )
     model = load_model(checkpoint_path, device=torch_device)
 
+    if not 0 <= shard_index < num_shards:
+        raise SystemExit(f"--shard_index {shard_index} not in [0, {num_shards})")
     out_ds_path = eval_ds_path or ds_path
     provider = RslearnWindowProvider(UPath(out_ds_path), groups=spec.eval_groups)
     eval_windows = eval_windows_of(provider, spec)
     check_names_unique(eval_windows)
+    if num_shards > 1:
+        # crc32, not hash(): python's str hash is salted per process, and the
+        # shards must partition identically across independent jobs.
+        eval_windows = [
+            w
+            for w in eval_windows
+            if zlib.crc32(w.name.encode()) % num_shards == shard_index
+        ]
+        logger.info(
+            f"shard {shard_index}/{num_shards}: {len(eval_windows)} eval windows"
+        )
     fetch_provider = RslearnWindowProvider(UPath(ds_path), groups=[spec.fetch_group])
     fetch_windows = {w.name: w for w in fetch_provider.load_windows()}
     missing = [w.name for w in eval_windows if w.name not in fetch_windows]
@@ -620,19 +674,22 @@ def infer(
 
     def read_one(
         eval_window: Window,
-    ) -> tuple[Window, dict[str, Any] | None, bool]:
-        """Load one window's inputs -> (window, inputs or None, failed)."""
+    ) -> tuple[Window, dict[str, Any] | None, str]:
+        """Load one window's inputs -> (window, inputs or None, status)."""
         if not overwrite and provider.is_layer_written(eval_window, LAYER_NAME):
-            return eval_window, None, False
+            return eval_window, None, "skipped"
         try:
             inputs = build_dpixel_inputs(
                 fetch_windows[eval_window.name],
                 allow_unmaterialized_s1=allow_unmaterialized_s1,
             )
+        except NoS2ScenesError as e:
+            logger.warning(f"window {eval_window.name}: coverage gap -- {e}")
+            return eval_window, None, "gap"
         except Exception:
             logger.exception(f"window {eval_window.name}: reading inputs failed")
-            return eval_window, None, True
-        return eval_window, inputs, False
+            return eval_window, None, "failed"
+        return eval_window, inputs, "ok"
 
     def bounded_map(pool: ThreadPoolExecutor, windows: list[Window]) -> Any:
         """pool.map with bounded read-ahead.
@@ -654,13 +711,17 @@ def infer(
     written = 0
     skipped = 0
     failed: list[str] = []
+    coverage_gaps: list[str] = []
     # Overlap raster reads (I/O-bound) with GPU inference.
     with ThreadPoolExecutor(max_workers=read_workers) as pool:
-        for eval_window, inputs, read_failed in bounded_map(pool, eval_windows):
-            if read_failed:
+        for eval_window, inputs, status in bounded_map(pool, eval_windows):
+            if status == "failed":
                 failed.append(eval_window.name)
                 continue
-            if inputs is None:
+            if status == "gap":
+                coverage_gaps.append(eval_window.name)
+                continue
+            if status == "skipped":
                 skipped += 1
                 continue
             try:
@@ -684,10 +745,21 @@ def infer(
             if written % 50 == 0:
                 logger.info(f"{written}/{len(eval_windows)} windows written")
 
+    if num_shards > 1:
+        # A shard's counters cover only its slice; writing them as THE
+        # manifest would feed the wiring gate shard totals as dataset totals.
+        logger.info(
+            f"Shard {shard_index}/{num_shards} done: {written} written, "
+            f"{skipped} skipped, {len(coverage_gaps)} gaps, {len(failed)} "
+            "failed. NO manifest written -- after all shards finish, run one "
+            "final unsharded pass to write the combined manifest."
+        )
+        return
     # Same key names the embedding materializer writes, so the coverage gate in
-    # wire_embedding_modalities.py reads this manifest unchanged. There is no
-    # coverage-gap category here: we run the model ourselves, so a window
-    # either succeeds or lands in windows_failed.
+    # wire_embedding_modalities.py reads this manifest unchanged. Coverage
+    # gaps are windows whose S2 layer was prepared but matched zero scenes
+    # (see NoS2ScenesError): no imagery, no product -- distinct from
+    # windows_failed, which hard-blocks the wiring script.
     write_manifest(
         UPath(out_ds_path),
         LAYER_NAME,
@@ -702,8 +774,8 @@ def infer(
             ),
             "num_windows_written": written,
             "num_windows_skipped_existing": skipped,
-            "num_coverage_gaps": 0,
-            "coverage_gaps": [],
+            "num_coverage_gaps": len(coverage_gaps),
+            "coverage_gaps": sorted(coverage_gaps),
             "num_windows_without_year": 0,
             "windows_without_year": [],
             "num_windows_failed": len(failed),
@@ -717,7 +789,10 @@ def infer(
             },
         },
     )
-    logger.info(f"Done: {written} written, {skipped} skipped, {len(failed)} failed")
+    logger.info(
+        f"Done: {written} written, {skipped} skipped, "
+        f"{len(coverage_gaps)} coverage gaps, {len(failed)} failed"
+    )
     if failed:
         logger.warning(
             f"{len(failed)} windows failed; re-run to retry them "
@@ -789,6 +864,17 @@ def main() -> None:
     p_infer.add_argument("--overwrite", action="store_true")
     p_infer.add_argument("--read_workers", type=int, default=8)
     p_infer.add_argument(
+        "--num_shards",
+        type=int,
+        default=1,
+        help="Partition the eval windows into N disjoint shards (stable hash "
+        "of the window name) so N GPU jobs run concurrently. Shard runs skip "
+        "the manifest; finish with one unsharded pass to write it.",
+    )
+    p_infer.add_argument(
+        "--shard_index", type=int, default=0, help="Which shard to process."
+    )
+    p_infer.add_argument(
         "--allow_unmaterialized_s1",
         action="store_true",
         help="Embed windows whose S1 layer failed to materialize entirely, "
@@ -818,6 +904,8 @@ def main() -> None:
             overwrite=args.overwrite,
             read_workers=args.read_workers,
             allow_unmaterialized_s1=args.allow_unmaterialized_s1,
+            num_shards=args.num_shards,
+            shard_index=args.shard_index,
         )
 
 

@@ -15,6 +15,7 @@ from olmoearth_pretrain.dataset.utils import get_modality_fname
 
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
+from .cli import add_common_arguments
 
 START_TIME = datetime(2021, 1, 1, tzinfo=UTC)
 END_TIME = datetime(2022, 1, 1, tzinfo=UTC)
@@ -37,10 +38,7 @@ def convert_worldcover(window: Window, olmoearth_path: UPath) -> None:
 
     assert len(Modality.WORLDCOVER.band_sets) == 1
     band_set = Modality.WORLDCOVER.band_sets[0]
-    raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
-    image = GEOTIFF_RASTER_FORMAT.decode_raster(
-        raster_dir, window.projection, window.bounds
-    )
+    image = window.data.read_raster(LAYER_NAME, band_set.bands, GEOTIFF_RASTER_FORMAT)
     dst_fname = get_modality_fname(
         olmoearth_path,
         Modality.WORLDCOVER,
@@ -82,24 +80,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Post-process OlmoEarth Pretrain data",
     )
-    parser.add_argument(
-        "--ds_path",
-        type=str,
-        help="Source rslearn dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--olmoearth_path",
-        type=str,
-        help="Destination OlmoEarth Pretrain dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        help="Number of workers to use",
-        default=32,
-    )
+    add_common_arguments(parser)
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))

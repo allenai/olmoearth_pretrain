@@ -121,6 +121,19 @@ class SupervisionModalityConfig(Config):
             two-layer MLP head. Kept small on purpose: the point of the loss
             is to force the REGISTER to store the trajectory, not to let a
             clever head reconstruct it from weak features.
+        target_band_index: Regression only. For multi-band targets where only
+            one band should be supervised (e.g. glo30's ``elevation`` band 0,
+            leaving the circular ``aspect`` band unsupervised since plain L1/MSE
+            is lossy on a wrap-around angle), select that band from the raw
+            target before the loss. ``num_output_channels`` must then be 1.
+            ``None`` (default) supervises every band of the target.
+        target_band_indices: Regression only. Like ``target_band_index`` but
+            selects a *subset* of bands (e.g. glo30 ``[0, 1]`` = elevation +
+            slope, still skipping the circular ``aspect`` band). The raw target
+            is sliced to these bands (in the given order) before the loss and
+            ``num_output_channels`` must equal ``len(target_band_indices)``.
+            Mutually exclusive with ``target_band_index``. ``None`` (default)
+            leaves band selection to ``target_band_index`` / all bands.
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
@@ -133,6 +146,8 @@ class SupervisionModalityConfig(Config):
     time_conditioned: bool = False
     time_harmonics: int = 4
     time_mlp_hidden_dim: int = 64
+    target_band_index: int | None = None
+    target_band_indices: list[int] | None = None
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -157,6 +172,32 @@ class SupervisionModalityConfig(Config):
             if self.time_harmonics < 1:
                 raise ValueError(
                     f"time_harmonics must be >= 1, got {self.time_harmonics}"
+                )
+        if self.target_band_index is not None:
+            if self.task_type != SupervisionTaskType.REGRESSION:
+                raise ValueError(
+                    f"target_band_index only supports regression, got {self.task_type}"
+                )
+            if self.num_output_channels != 1:
+                raise ValueError(
+                    "target_band_index selects a single band, so "
+                    "num_output_channels must be 1, got "
+                    f"{self.num_output_channels}"
+                )
+        if self.target_band_indices is not None:
+            if self.target_band_index is not None:
+                raise ValueError(
+                    "set only one of target_band_index / target_band_indices"
+                )
+            if self.task_type != SupervisionTaskType.REGRESSION:
+                raise ValueError(
+                    "target_band_indices only supports regression, got "
+                    f"{self.task_type}"
+                )
+            if self.num_output_channels != len(self.target_band_indices):
+                raise ValueError(
+                    "num_output_channels must equal len(target_band_indices), got "
+                    f"{self.num_output_channels} vs {len(self.target_band_indices)}"
                 )
 
 
@@ -476,6 +517,18 @@ def _compute_per_modality_losses(
                 pred, raw_target, regression_loss_type=cfg.regression_loss_type
             )
             continue
+
+        # Single-band supervision of a multi-band target (e.g. glo30 elevation):
+        # slice the chosen band so the valid mask and loss run at 1 channel,
+        # matching the head's num_output_channels=1.
+        if cfg.target_band_index is not None:
+            idx = cfg.target_band_index
+            raw_target = raw_target[..., idx : idx + 1]
+        # Subset supervision of a multi-band target (e.g. glo30 elevation+slope):
+        # slice the chosen bands (in order) so the valid mask and loss run at
+        # len(indices) channels, matching the head's num_output_channels.
+        elif cfg.target_band_indices is not None:
+            raw_target = raw_target[..., cfg.target_band_indices]
 
         valid_mask = _build_valid_mask(raw_target)
 

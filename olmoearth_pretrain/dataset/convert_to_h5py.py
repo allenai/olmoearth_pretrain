@@ -33,6 +33,9 @@ from olmoearth_pretrain.dataset.sample import (
     image_tiles_to_samples,
     load_image_for_sample,
 )
+from olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.landsat_calibration import (
+    convert_landsat_to_physical,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -397,6 +400,17 @@ class ConvertToH5py:
             if modality == Modality.SENTINEL1:
                 # Convert Sentinel1 data to dB
                 image = convert_to_db(image)
+
+            if modality == Modality.LANDSAT:
+                # Convert Landsat DN to TOA reflectance (B1-B9) / brightness
+                # temperature (B10-B11) using the per-timestep scene sun elevation
+                # and platform captured during dataset creation.
+                image = convert_landsat_to_physical(
+                    image,
+                    [im.solar_elevation for im in sample_modality.images],
+                    [im.platform for im in sample_modality.images],
+                    modality.band_order,
+                )
 
             if modality.is_spatial:
                 # Calculate row and column indices for grid

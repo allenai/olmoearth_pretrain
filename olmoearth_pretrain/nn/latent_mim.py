@@ -221,7 +221,18 @@ class LatentMIM(nn.Module, DistributedMixins):
             else:
                 supervision_preds = self.supervision_head(decoded, x)
 
-        projection_outputs = None
+        # Surfaced whenever a register bottleneck ran, not only when a distillation
+        # student exists: losses that shape the register grid itself (e.g. the
+        # uniformity term) apply to non-distilled models too, and the grid is
+        # otherwise visible only inside decoder_kwargs.
+        registers = decoder_kwargs.get("registers")
+        projection_outputs: dict | None = None
+        if registers is not None:
+            projection_outputs = {
+                "registers": registers,
+                "projected_registers": None,
+                "supervision_preds": None,
+            }
         if projected_registers is not None:
             projection_supervision_preds = None
             if self.projection_supervision_heads is not None:
@@ -240,11 +251,11 @@ class LatentMIM(nn.Module, DistributedMixins):
                     )
                     for dim_str, head in self.projection_supervision_heads.items()
                 }
-            projection_outputs = {
-                "registers": decoder_kwargs.get("registers"),
-                "projected_registers": projected_registers,
-                "supervision_preds": projection_supervision_preds,
-            }
+            assert projection_outputs is not None, (
+                "a projection student cannot exist without a register bottleneck"
+            )
+            projection_outputs["projected_registers"] = projected_registers
+            projection_outputs["supervision_preds"] = projection_supervision_preds
 
         return (
             latent,
@@ -363,14 +374,20 @@ class LatentMIMConfig(Config):
                 "use_register_bottleneck must match between encoder and decoder"
             )
         if encoder_uses_registers:
-            encoder_register_dim = self.encoder_config.register_dim or (
-                self.encoder_config.embedding_size // 2
+            # The decoder cross-attends the grid the encoder SHIPS. With
+            # ``register_output_dim`` the bottleneck runs internally at
+            # ``register_dim`` and projects down on output, so it is the projected
+            # width the decoder must match -- not the internal one.
+            encoder_register_dim = (
+                getattr(self.encoder_config, "register_output_dim", None)
+                or self.encoder_config.register_dim
+                or (self.encoder_config.embedding_size // 2)
             )
             if self.decoder_config.register_dim != encoder_register_dim:
                 raise ValueError(
                     "decoder_config.register_dim "
-                    f"({self.decoder_config.register_dim}) must match the encoder "
-                    f"register dim ({encoder_register_dim})"
+                    f"({self.decoder_config.register_dim}) must match the encoder's "
+                    f"shipped register dim ({encoder_register_dim})"
                 )
         if (
             self.supervision_head_config is not None
@@ -451,9 +468,13 @@ class LatentMIMConfig(Config):
         projection_supervision_heads = None
         if self.supervision_head_config is not None:
             if getattr(self.supervision_head_config, "register_supervision", False):
-                # Heads read the register grid, so embedding_dim is the register dim.
-                embedding_dim = self.encoder_config.register_dim or (
-                    self.encoder_config.embedding_size // 2
+                # Heads read the register grid, so embedding_dim is the width that grid
+                # is SHIPPED at -- register_output_dim when the bottleneck projects its
+                # output down, otherwise the internal register width.
+                embedding_dim = (
+                    getattr(self.encoder_config, "register_output_dim", None)
+                    or self.encoder_config.register_dim
+                    or (self.encoder_config.embedding_size // 2)
                 )
                 if self.supervision_source in ("registers", "both"):
                     supervision_head = self.supervision_head_config.build(
