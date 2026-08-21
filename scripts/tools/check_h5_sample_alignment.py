@@ -44,6 +44,7 @@ import logging
 import sys
 
 import h5py
+import hdf5plugin  # noqa: F401  (registers the zstd filter these h5 files use)
 import numpy as np
 from upath import UPath
 
@@ -145,7 +146,9 @@ def main() -> int:
         args.h5_dir_a, args.h5_dir_b, args.n, args.num_samples, args.seed
     )
     total = matched + mismatched + missing
-    print(f"\nprobed {total}: {matched} matched, {mismatched} mismatched, {missing} missing")
+    print(
+        f"\nprobed {total}: {matched} matched, {mismatched} mismatched, {missing} missing"
+    )
     if mismatched or missing:
         print(
             "VERDICT: DO NOT reuse A's cloud cache for B. The index does not address "
