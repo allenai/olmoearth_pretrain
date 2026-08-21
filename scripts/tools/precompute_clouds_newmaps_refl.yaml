@@ -44,17 +44,37 @@ tasks:
     echo "code pinned at: $(git rev-parse HEAD)"
     pip install -q omnicloudmask h5py hdf5plugin einops numpy
 
-    # One process per GPU, shards interleaved (i % 8) for balanced runtime. Each
-    # sample is compute-if-missing with an atomic temp+rename write, so this is
-    # idempotent and resumable: re-running the job finishes whatever was left.
-    GPUS=8
+    # WIDTH. OCM runs once per non-empty timestep PER SENSOR -- up to ~24 tiny
+    # predict_from_array calls per sample, each on a (3,128,128) S2 array or a
+    # (3,~43,~43) strided Landsat one. That makes this launch-latency and CPU/IO
+    # bound (h5 open + zstd decompress + array prep), not compute bound, so one
+    # process per GPU leaves the GPU idle most of the wall clock. Hence 3 processes
+    # per GPU, overlapping one process's read with another's forward. 192 CPUs are
+    # requested for them.
+    #
+    # NUM_SHARDS is the total across ALL jobs and must equal GPUS*PROCS_PER_GPU
+    # times the number of jobs; SHARD_BASE is this job's first shard. To fan out
+    # further, submit more copies with SHARD_BASE=24, 48, ... and NUM_SHARDS raised
+    # to match. Shards are disjoint (ids = [i for i in range(n) if i % num_shards
+    # == shard]), and even overlapping ones would only duplicate work, never corrupt:
+    # every sample is compute-if-missing with an atomic temp+rename write. The whole
+    # job is therefore idempotent and resumable -- resubmitting finishes the rest.
+    GPUS=${GPUS:-8}
+    PROCS_PER_GPU=${PROCS_PER_GPU:-3}
+    SHARD_BASE=${SHARD_BASE:-0}
+    NUM_SHARDS=${NUM_SHARDS:-$((GPUS * PROCS_PER_GPU))}
+    echo "width: GPUS=$GPUS x PROCS_PER_GPU=$PROCS_PER_GPU, shards $SHARD_BASE..$((SHARD_BASE + GPUS*PROCS_PER_GPU - 1)) of $NUM_SHARDS"
+
     pids=()
     for g in $(seq 0 $((GPUS - 1))); do
-      CUDA_VISIBLE_DEVICES="$g" PYTHONPATH=/repo \
-        python -m olmoearth_pretrain.data.cloud_mask_cache \
-          --h5_dir "$H5_DIR" --num_shards "$GPUS" --shard "$g" \
-          > "/outputs/shard_$g.log" 2>&1 &
-      pids+=($!)
+      for r in $(seq 0 $((PROCS_PER_GPU - 1))); do
+        shard=$((SHARD_BASE + r * GPUS + g))
+        CUDA_VISIBLE_DEVICES="$g" PYTHONPATH=/repo \
+          python -m olmoearth_pretrain.data.cloud_mask_cache \
+            --h5_dir "$H5_DIR" --num_shards "$NUM_SHARDS" --shard "$shard" \
+            > "/outputs/shard_$shard.log" 2>&1 &
+        pids+=($!)
+      done
     done
     rc=0
     for p in "${pids[@]}"; do wait "$p" || rc=1; done
@@ -64,7 +84,7 @@ tasks:
     # training-side guard only catches a wholly absent or shard-less directory.
     n=$(find "$CACHE" -name 'sample_*.npz' | wc -l)
     echo "ALL SHARDS DONE (rc=$rc): $n / 1138828 npz written"
-    tail -n 5 /outputs/shard_*.log
+    for f in /outputs/shard_*.log; do echo "-- $f"; tail -n 2 "$f"; done
     test "$n" -eq 1138828 || { echo "INCOMPLETE -- rerun this job to resume"; exit 1; }
     echo "CACHE COMPLETE"
   result:
