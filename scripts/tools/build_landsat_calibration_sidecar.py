@@ -58,6 +58,13 @@ LAYER_PREFIX = "landsat_mo"
 MONTHS = 12
 OUTPUT_NAME = "landsat_calibration.json"
 FETCH_GROUP_SUFFIX = "_tessera_v2"
+# Above this share of scenes with no readable MTL the build is refused rather
+# than written. A credential-less or S3-denied run resolves NOTHING, and an
+# all-null sidecar is not a loud failure: it is valid JSON that the loader
+# accepts, turning every Landsat timestep MISSING: a Landsat-bearing task then
+# silently scores as if it were S2-only. Missing-file is the safe state, so
+# never trade it for that.
+DEFAULT_MAX_MTL_FAILURE_RATE = 0.05
 
 # Set once from --sun_elevation_cache_dir before the fetch pool starts; the
 # worker threads only read it.
@@ -96,6 +103,34 @@ def cached_sun_elevation(blob_path: str) -> float | None:
     except OSError:
         pass
     return sun_elevation
+
+
+def describe_existing(out_path: Path) -> str:
+    """One-line summary of a sidecar already on disk, for the --force refusal.
+
+    Reports the coverage that decides whether the file is worth keeping: an
+    all-null sidecar (scenes_without_mtl == unique_scenes) is the signature of
+    a build whose S3 pass resolved nothing, and is the one case where a rebuild
+    is strictly an improvement.
+    """
+    try:
+        meta = json.loads(out_path.read_text()).get("meta", {})
+    except (OSError, json.JSONDecodeError) as e:
+        return (
+            f"  existing file is UNREADABLE ({type(e).__name__}); --force to replace it"
+        )
+    scenes = meta.get("unique_scenes")
+    failed = meta.get("scenes_without_mtl")
+    line = (
+        f"  windows_scanned={meta.get('windows_scanned')} "
+        f"unique_scenes={scenes} scenes_without_mtl={failed}"
+    )
+    if isinstance(scenes, int) and isinstance(failed, int) and scenes:
+        if failed == scenes:
+            line += "\n  ALL scenes unresolved -- Landsat reads all-MISSING; rebuild with --force"
+        else:
+            line += f"\n  {1 - failed / scenes:.1%} of scenes calibrated"
+    return line
 
 
 def read_window_scenes(window_dir: Path) -> dict[str, dict[str, str]] | None:
@@ -149,6 +184,25 @@ def main() -> int:
     )
     parser.add_argument("--workers", type=int, default=32)
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Overwrite an existing sidecar. Without it an existing file is "
+            "left alone and its coverage printed, since a rebuild can only "
+            "replace a good sidecar with a worse one."
+        ),
+    )
+    parser.add_argument(
+        "--max_mtl_failure_rate",
+        type=float,
+        default=DEFAULT_MAX_MTL_FAILURE_RATE,
+        help=(
+            "Refuse to write when more than this share of scenes had no "
+            "readable MTL (default %(default)s). Guards the all-null sidecar, "
+            "which fails silently at eval rather than loudly."
+        ),
+    )
+    parser.add_argument(
         "--sun_elevation_cache_dir",
         default=None,
         help=(
@@ -165,6 +219,12 @@ def main() -> int:
         _SUN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     root = Path(args.ds_path)
+    out_path = (Path(args.out) if args.out else root) / OUTPUT_NAME
+    if out_path.exists() and not args.force:
+        print(f"{out_path} already exists; refusing to rebuild without --force")
+        print(describe_existing(out_path))
+        return 1
+
     window_dirs = [
         p
         for p in (root / "windows").glob("*/*")
@@ -197,8 +257,24 @@ def main() -> int:
         share = _CACHE_HITS / max(len(blob_paths), 1)
         print(f"  cache hits: {_CACHE_HITS}/{len(blob_paths)} ({share:.1%})")
     failed = sum(1 for e in elevations if e is None)
+    failure_rate = failed / max(len(blob_paths), 1)
     if failed:
-        print(f"WARNING: {failed}/{len(blob_paths)} scenes had no readable MTL")
+        print(
+            f"WARNING: {failed}/{len(blob_paths)} scenes had no readable MTL "
+            f"({failure_rate:.1%})"
+        )
+    if failure_rate > args.max_mtl_failure_rate:
+        # Nothing is written: a missing sidecar makes the loader raise with the
+        # path, which is recoverable. A sidecar built from unresolved scenes
+        # loads cleanly and silently drops Landsat instead.
+        print(
+            f"REFUSING to write: MTL failure rate {failure_rate:.1%} exceeds "
+            f"--max_mtl_failure_rate {args.max_mtl_failure_rate:.1%}. "
+            "s3://usgs-landsat is requester-pays -- check "
+            "AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY and the cache dir "
+            "before retrying. Existing sidecar (if any) left untouched."
+        )
+        return 1
 
     windows: dict[str, dict[str, dict[str, object] | None]] = {}
     for key, months in per_window.items():
@@ -216,9 +292,8 @@ def main() -> int:
             }
         windows[key] = entry
 
-    out_root = Path(args.out) if args.out else root
-    out_path = out_root / OUTPUT_NAME
-    out_path.write_text(
+    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+    tmp_path.write_text(
         json.dumps(
             {
                 "meta": {
@@ -236,6 +311,9 @@ def main() -> int:
             }
         )
     )
+    # Rename last: a killed write leaves the old sidecar (or no sidecar)
+    # intact rather than a truncated file that parses as far as it got.
+    tmp_path.replace(out_path)
     print(f"wrote {out_path}")
 
     total = MONTHS * len(windows)
