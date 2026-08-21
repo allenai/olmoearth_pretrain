@@ -5,6 +5,7 @@ import torch
 
 from olmoearth_pretrain.evals.embedding_diagnostics import (
     MAX_PIPELINE_ROWS,
+    anisotropy_stats,
     compute_embedding_diagnostics,
     compute_pipeline_diagnostics,
     compute_spatial_embedding_diagnostics,
@@ -20,6 +21,52 @@ from olmoearth_pretrain.evals.embedding_transforms import (
     dequantize_embeddings,
     quantize_embeddings,
 )
+
+
+class TestAnisotropyStats:
+    """Tests for anisotropy_stats function."""
+
+    def test_centered_cloud_has_no_common_mode(self) -> None:
+        """An origin-centered cloud has common_mode_frac near 0."""
+        torch.manual_seed(0)
+        stats = anisotropy_stats(torch.randn(2000, 32))
+        assert stats["common_mode_frac"] < 0.1
+
+    def test_offset_cloud_is_almost_all_common_mode(self) -> None:
+        """A tight cloud far from the origin has common_mode_frac near 1."""
+        torch.manual_seed(0)
+        offset = 50.0 * torch.nn.functional.normalize(torch.randn(32), dim=0)
+        stats = anisotropy_stats(torch.randn(2000, 32) * 0.1 + offset)
+        assert stats["common_mode_frac"] > 0.99
+
+    def test_common_mode_does_not_lower_centered_rank(self) -> None:
+        """Adding a constant offset changes only the common mode, not the rank.
+
+        This is the property that motivates reporting both: uncentered
+        effective_rank collapses under a large offset even though no per-sample
+        information was lost.
+        """
+        torch.manual_seed(0)
+        base = torch.randn(2000, 32)
+        offset = 50.0 * torch.nn.functional.normalize(torch.randn(32), dim=0)
+        centered_rank = anisotropy_stats(base)["centered_effective_rank"]
+        offset_rank = anisotropy_stats(base + offset)["centered_effective_rank"]
+        assert abs(centered_rank - offset_rank) < 0.01
+        assert effective_rank(base + offset) < 0.5 * centered_rank
+
+    def test_top1_var_share_detects_dominant_direction(self) -> None:
+        """Variance concentrated in one direction pushes top1_var_share to 1."""
+        torch.manual_seed(0)
+        direction = torch.nn.functional.normalize(torch.randn(32), dim=0)
+        spike = torch.randn(2000, 32) * 0.05 + torch.randn(2000, 1) * direction
+        assert anisotropy_stats(spike)["top1_var_share"] > 0.9
+        assert anisotropy_stats(torch.randn(2000, 32))["top1_var_share"] < 0.1
+
+    def test_deterministic_across_calls(self) -> None:
+        """Subsampling is fixed, so trends across checkpoints are comparable."""
+        torch.manual_seed(0)
+        embeddings = torch.randn(6000, 32)
+        assert anisotropy_stats(embeddings) == anisotropy_stats(embeddings)
 
 
 class TestEffectiveRank:
@@ -125,6 +172,9 @@ class TestComputeEmbeddingDiagnostics:
             "cosine_sim_std",
             "cosine_sim_min",
             "cosine_sim_max",
+            "common_mode_frac",
+            "centered_effective_rank",
+            "top1_var_share",
         }
         assert expected == set(metrics.keys())
 

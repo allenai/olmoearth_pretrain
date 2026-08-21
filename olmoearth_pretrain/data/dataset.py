@@ -25,6 +25,7 @@ from olmoearth_pretrain._compat import (
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data import cloud_mask_cache
 from olmoearth_pretrain.data.constants import (
+    GLO30_ASPECT_FLAT,
     MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
     WORLDCOVER_CLASSES,
@@ -414,6 +415,7 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        computed_norm_config: str = "computed.json",
         cloud_cache_dir: str | None = None,
     ):
         """Initialize the dataset.
@@ -440,9 +442,14 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            computed_norm_config: Filename of the computed normalization config resource
+                to use for the COMPUTED strategy (under
+                ``olmoearth_pretrain.data.norm_configs``). Defaults to ``computed.json``;
+                set to a reflectance-specific variant when training on reflectance data.
             cloud_cache_dir: If set, directory of precomputed OmniCloudMask cloud-class
                 sidecars (see data.cloud_mask_cache); enables dropping mostly-cloud
-                target tokens. None disables cloud masking.
+                tokens (input and/or target, per the masking strategy). None disables
+                cloud masking.
 
         Returns:
             None
@@ -461,9 +468,12 @@ class OlmoEarthDataset(Dataset):
         self.normalize = normalize
         self.dataset_percentage = dataset_percentage
         self.seed = seed
+        self.computed_norm_config = computed_norm_config
         if self.normalize:
             self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+            self.normalizer_computed = Normalizer(
+                Strategy.COMPUTED, computed_config_filename=computed_norm_config
+            )
         self.max_sequence_length = max_sequence_length
 
         if samples_per_sec is None:
@@ -662,6 +672,48 @@ class OlmoEarthDataset(Dataset):
             return self.normalizer_computed.normalize(modality, image)
         except Exception:
             return self.normalizer_predefined.normalize(modality, image)
+
+    def _compute_glo30_aspect_sincos(
+        self,
+        glo30_data: np.ndarray,
+        missing_modalities: list[str],
+    ) -> tuple[np.ndarray, list[str]]:
+        """Encode the GLO30 aspect band as [sin(aspect), cos(aspect)].
+
+        Aspect is a compass bearing in degrees [0, 360) with -1 meaning "flat", so
+        neither plain z-scoring nor an L1/MSE regression on degrees is correct: 359
+        and 1 are the same bearing but sit at opposite ends of the range, and the
+        flat sentinel normalizes to almost exactly due north. sin/cos is bounded,
+        continuous across north, and the natural target for a regression head.
+
+        Flat pixels (aspect == -1) and pixels where aspect is already MISSING_VALUE
+        are written out as MISSING_VALUE in BOTH channels, so the supervision head's
+        valid mask (which requires every band non-missing) drops them.
+
+        Mirrors the eval-side encoding in
+        ``evals.datasets.pretrain_subset`` (GLO30_LABEL_ASPECT_SIN/_COS), which marks
+        the same pixels NaN.
+
+        Args:
+            glo30_data: Raw (un-normalized) glo30 data, shape [H, W, T, 3]
+                ordered [elevation, slope, aspect].
+            missing_modalities: List of modalities that are entirely missing.
+
+        Returns:
+            Tuple of (aspect array [H, W, T, 2], updated missing_modalities).
+        """
+        glo30_band_order = Modality.GLO30.band_order
+        aspect = glo30_data[..., glo30_band_order.index("aspect")]
+
+        missing = (aspect == MISSING_VALUE) | (aspect == GLO30_ASPECT_FLAT)
+
+        radians = np.deg2rad(aspect.astype(np.float64))
+        sincos = np.stack((np.sin(radians), np.cos(radians)), axis=-1)
+        sincos = np.where(missing[..., np.newaxis], MISSING_VALUE, sincos)
+
+        # Remove "glo30_aspect" from missing_modalities since we computed it
+        updated_missing = [m for m in missing_modalities if m != "glo30_aspect"]
+        return sincos.astype(self.dtype), updated_missing
 
     def _compute_ndvi(
         self,
@@ -994,6 +1046,20 @@ class OlmoEarthDataset(Dataset):
                 sample_dict["sentinel2_l2a"], missing_modalities
             )
 
+        # Encode glo30's circular aspect band as sin/cos from the raw (un-normalized)
+        # degrees, before the normalization loop below sees it.
+        if (
+            "glo30_aspect" in sample_dict
+            and "glo30" in sample_dict
+            and "glo30" not in missing_modalities
+        ):
+            (
+                sample_dict["glo30_aspect"],
+                missing_modalities,
+            ) = self._compute_glo30_aspect_sincos(
+                sample_dict["glo30"], missing_modalities
+            )
+
         if self.normalize:
             for modality_name in sample_dict.keys():
                 if modality_name == "timestamps" or modality_name.endswith("_cloud"):
@@ -1032,11 +1098,12 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    computed_norm_config: str = "computed.json"
     # Directory of precomputed OmniCloudMask per-pixel cloud-class sidecars
     # (see olmoearth_pretrain.data.cloud_mask_cache). When set, each sample's S2
     # and Landsat cloud maps are loaded and carried alongside the sample so the
-    # masking strategy can drop mostly-cloud target tokens. None => cloud-masking
-    # disabled (default; other runs unaffected).
+    # masking strategy can drop mostly-cloud tokens (input and/or target). None =>
+    # cloud-masking disabled (default; other runs unaffected).
     cloud_cache_dir: str | None = None
 
     def get_numpy_dtype(self) -> np.dtype:

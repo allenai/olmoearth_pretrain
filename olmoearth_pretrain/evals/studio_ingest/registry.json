@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updated_at": "2026-08-17T07:12:05.038384",
+  "updated_at": "2026-08-19T20:51:22.017287",
   "datasets": {
     "africa_crop_mask": {
       "name": "africa_crop_mask",
@@ -4822,10 +4822,11 @@
       },
       "modalities": [
         "gse",
+        "landsat",
         "sentinel1",
         "sentinel2_l2a",
         "tessera",
-        "landsat"
+        "tessera_v2"
       ],
       "imputes": [],
       "window_size": 32,
@@ -4925,7 +4926,7 @@
       "start_time": null,
       "end_time": null,
       "config_repo_dir": "data/rslearn_dataset_configs/us_trees_year_aligned",
-      "config_json_sha256": "595177171a8f5922faaaa21fd78ed7ba2add09a133645c76ca8412b12468ba1d"
+      "config_json_sha256": "fcd6c869b3e1d4732fae304a8608fb8b81db404b235d83799dae47dd94dc0158"
     },
     "yemen_crop": {
       "name": "yemen_crop",

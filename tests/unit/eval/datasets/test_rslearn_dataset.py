@@ -9,7 +9,10 @@ import pytest
 import torch
 from rslearn.train.model_context import RasterImage
 
-from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
+from olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.landsat_calibration import (
+    convert_landsat_to_physical,
+)
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
     L8QA_INPUT_NAME,
@@ -464,7 +467,7 @@ LANDSAT = Modality.LANDSAT.name
 NUM_LANDSAT_BANDS = len(Modality.get(LANDSAT).band_order)
 
 
-def monthly_ranges(year: int, months: list[int]) -> list[tuple]:
+def monthly_ranges(year: int, months: list[int]) -> list[tuple[datetime, datetime]]:
     """(start, end) ranges for the given month slots of `year`'s 30-day grid."""
     jan1 = datetime(year, 1, 1, tzinfo=UTC)
     return [
@@ -594,6 +597,166 @@ class TestLandsatCloudMask:
             )
             mask = getattr(masked_sample, self.LANDSAT_MASK)
             assert (mask == MaskValue.ONLINE_ENCODER.value).all()
+
+
+class TestLandsatReflectance:
+    """DN -> TOA reflectance conversion for reflectance-pretrained checkpoints.
+
+    The eval GeoTIFFs are raw Collection-2 DN, so a checkpoint trained on the
+    reflectance h5 is otherwise evaluated out of domain.
+    """
+
+    BAND_ORDER = list(Modality.LANDSAT.band_order)
+
+    @staticmethod
+    def calibration(sun_elevation: float, month: int) -> dict[str, Any]:
+        """A sidecar entry for one month slot of the 30-day grid."""
+        start, _ = monthly_ranges(2020, [month])[0]
+        return {
+            "sun_elevation": sun_elevation,
+            "platform": "LC08",
+            "start": start.isoformat(),
+        }
+
+    @classmethod
+    def full_year(cls, sun_elevation: float = 50.0) -> dict[str, dict]:
+        """A sidecar window with every month calibrated."""
+        return {f"mo{m + 1:02d}": cls.calibration(sun_elevation, m) for m in range(12)}
+
+    @staticmethod
+    def dataset_with_calibration(table: dict | None) -> RslearnToOlmoEarthDataset:
+        """A wrapper with reflectance conversion armed."""
+        ds = build_dataset(input_modalities=[S2, LANDSAT])
+        ds.landsat_reflectance = True
+        ds.landsat_calibration_table = table
+        return ds
+
+    @staticmethod
+    def dn_array(timesteps: int) -> np.ndarray:
+        """Deterministic DN in the Collection-2 uint16 range."""
+        rng = np.random.default_rng(0)
+        return rng.integers(1, 65535, size=(2, 2, timesteps, NUM_LANDSAT_BANDS)).astype(
+            np.float32
+        )
+
+    def test_matches_h5_conversion(self) -> None:
+        """The loader reproduces exactly what the h5 conversion writes."""
+        ds = self.dataset_with_calibration({"g/w1": self.full_year()})
+        dn = self.dn_array(12)
+
+        actual = ds._landsat_to_physical(
+            dn, "g/w1", monthly_ranges(2020, list(range(12)))
+        )
+        expected = convert_landsat_to_physical(
+            dn, [50.0] * 12, ["LC08"] * 12, self.BAND_ORDER
+        )
+        np.testing.assert_allclose(actual, expected)
+
+    def test_reflective_bands_land_on_reflectance_scale(self) -> None:
+        """Sanity: B4 leaves DN (~1e4) for physical reflectance (~0-1.5)."""
+        ds = self.dataset_with_calibration(
+            {"g/w1": {"mo01": self.calibration(50.0, 0)}}
+        )
+        dn = np.full((1, 1, 1, NUM_LANDSAT_BANDS), 12000.0, dtype=np.float32)
+
+        out = ds._landsat_to_physical(dn, "g/w1", monthly_ranges(2020, [0]))
+        red = out[0, 0, 0, self.BAND_ORDER.index("B4")]
+        assert 0.0 < red < 1.5, red
+
+    def test_ragged_year_calibrates_by_layer_period(self) -> None:
+        """A ragged year calibrates by period, not by position or calendar month.
+
+        Landsat's 16-day revisit drops whole months, so timestep i is not
+        month i -- reading the sidecar positionally would apply January's sun
+        angle to a June scene. The layers are also a 30-day grid rather than
+        calendar months, so mo06 starts on May 31: taking the month off the
+        date would pick mo05 instead.
+        """
+        table = {
+            "g/w1": {
+                "mo01": self.calibration(20.0, 0),
+                "mo02": self.calibration(90.0, 1),  # the positional-bug answer
+                "mo05": self.calibration(80.0, 4),  # the calendar-month-bug answer
+                "mo06": self.calibration(70.0, 5),
+            }
+        }
+        ds = self.dataset_with_calibration(table)
+        dn = self.dn_array(2)
+
+        actual = ds._landsat_to_physical(dn, "g/w1", monthly_ranges(2020, [0, 5]))
+        expected = convert_landsat_to_physical(
+            dn, [20.0, 70.0], ["LC08"] * 2, self.BAND_ORDER
+        )
+        np.testing.assert_allclose(actual, expected)
+
+    @pytest.mark.parametrize(
+        "table",
+        [
+            None,
+            {},
+            {
+                "g/other": {
+                    "mo01": {
+                        "sun_elevation": 50.0,
+                        "start": "2020-01-01T00:00:00+00:00",
+                    }
+                }
+            },
+        ],
+    )
+    def test_uncalibrated_months_become_missing(self, table: dict | None) -> None:
+        """Without calibration a timestep is MISSING, never DN on a refl scale."""
+        ds = self.dataset_with_calibration(table)
+        dn = self.dn_array(12)
+
+        out = ds._landsat_to_physical(dn, "g/w1", monthly_ranges(2020, list(range(12))))
+        assert (out == MISSING_VALUE).all()
+
+    def test_disabled_leaves_dn_untouched(self) -> None:
+        """The DN model's inputs must be byte-for-byte what they were."""
+        input_dict, target = TestRaggedModalities.sample_with_landsat(list(range(12)))
+        baseline = build_dataset(input_modalities=[S2, LANDSAT])
+        armed = self.dataset_with_calibration({"g/w1": self.full_year()})
+        armed.landsat_reflectance = False
+
+        before, _ = baseline._transform_sample(input_dict, target, window_key="g/w1")
+        after, _ = armed._transform_sample(input_dict, target, window_key="g/w1")
+        torch.testing.assert_close(
+            getattr(before, LANDSAT), getattr(after, LANDSAT), rtol=0, atol=0
+        )
+
+    def test_enabled_changes_the_sample(self) -> None:
+        """Guard against the conversion silently not running end to end."""
+        input_dict, target = TestRaggedModalities.sample_with_landsat(list(range(12)))
+        baseline = build_dataset(input_modalities=[S2, LANDSAT])
+        armed = self.dataset_with_calibration({"g/w1": self.full_year()})
+
+        before, _ = baseline._transform_sample(input_dict, target, window_key="g/w1")
+        after, _ = armed._transform_sample(input_dict, target, window_key="g/w1")
+        assert not torch.allclose(getattr(before, LANDSAT), getattr(after, LANDSAT))
+
+    def test_requires_a_calibration_table(self) -> None:
+        """Reflectance stats over unconverted DN must be impossible to request."""
+        with pytest.raises(ValueError, match="requires landsat_calibration_table"):
+            RslearnToOlmoEarthDataset(
+                model_dataset=None,  # type: ignore[arg-type]
+                input_modalities=[LANDSAT],
+                landsat_reflectance=True,
+            )
+
+    def test_normalizer_honours_computed_norm_config(self) -> None:
+        """The pretrain normalizer loads the checkpoint's own stats resource."""
+        ds = RslearnToOlmoEarthDataset(
+            model_dataset=None,  # type: ignore[arg-type]
+            input_modalities=[LANDSAT],
+            landsat_reflectance=True,
+            landsat_calibration_table={},
+            computed_norm_config="computed_landsat_reflectance.json",
+        )
+        assert (
+            ds.normalizer_computed.computed_config_filename
+            == "computed_landsat_reflectance.json"
+        )
 
 
 # QA_PIXEL codes: clear land is 21824 (the quality bits, no cloud bits); the

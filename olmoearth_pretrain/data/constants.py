@@ -20,6 +20,10 @@ PROJECTION_CRS = "EPSG:4326"
 # Default missing value for raster data.
 MISSING_VALUE = -99999
 
+# glo30's aspect band marks flat pixels with -1: they have no compass bearing at
+# all, so every aspect-derived target must exclude them rather than regress -1.
+GLO30_ASPECT_FLAT = -1.0
+
 # Default maximum sequence length.
 MAX_SEQUENCE_LENGTH = 12
 
@@ -583,6 +587,45 @@ class Modality:
         band_sets=[BandSet(["B1"], 16)],
         is_multitemporal=False,
         ignore_when_parsing=False,
+    )
+
+    # Copernicus GLO-30 DSM, resampled to 10 m/pixel: elevation (m),
+    # slope (deg [0, 90)), and aspect (deg [0, 360), -1 for flat).
+    # This is a *surface* model, not a terrain model: elevation includes canopy
+    # and buildings, so it partly overlaps the META_CANOPY_HEIGHT target.
+    # aspect is circular and carries a -1 "flat" sentinel, so plain z-scoring it
+    # is lossy; consumers should prefer a sin/cos encoding (see
+    # evals.datasets.pretrain_subset.GLO30_LABEL_ASPECT_SIN).
+    GLO30 = ModalitySpec(
+        name="glo30",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["elevation", "slope", "aspect"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    # Meta Canopy Height Map V2, 1 m native, resampled to 10 m/pixel.
+    META_CANOPY_HEIGHT = ModalitySpec(
+        name="meta_canopy_height",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["canopy_height"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    # Circular encoding of the GLO30 aspect band, derived in the dataset from the
+    # raw (un-normalized) glo30 aspect degrees: [sin(theta), cos(theta)]. Bounded,
+    # continuous across north, and with the -1 "flat" sentinel written out as
+    # MISSING_VALUE so the supervision valid mask drops those pixels. This is the
+    # pretraining-side twin of the eval probes' GLO30_LABEL_ASPECT_SIN/_COS
+    # (see evals.datasets.pretrain_subset); supervise it instead of the raw
+    # aspect band, which plain L1/MSE cannot represent across the 0/360 seam.
+    GLO30_ASPECT = ModalitySpec(
+        name="glo30_aspect",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["aspect_sin", "aspect_cos"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=True,  # derived from glo30, not loaded from file
     )
 
     NDVI = ModalitySpec(

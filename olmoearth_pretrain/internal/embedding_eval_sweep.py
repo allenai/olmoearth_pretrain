@@ -375,6 +375,13 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         base_run_name += f"_norm{normalization.replace('_', '')}"
 
     env_prefix = f"TRAIN_SCRIPT_PATH={module_path} EMBEDDING_EVALS=1"
+    if getattr(args, "landsat_reflectance", False):
+        # The radiometry is a property of the arm, not of the checkpoint path,
+        # so name it: running the DN checkpoint under this flag (deliberately
+        # or by mistake) must not collide with its own baseline run. Kept to
+        # two letters because these run names are already near Beaker's limit.
+        base_run_name += "_rf"
+        env_prefix += " LANDSAT_REFLECTANCE=1"
     common = (
         f"{env_prefix} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {{run_name}} {args.cluster} {launch_overrides} "
@@ -429,6 +436,46 @@ def _parse_model_arg(value: str) -> BaselineModelName:
     return model
 
 
+# Beaker rejects experiment names over 128 characters, and it appends
+# "-<task_name>-<8 hex>" to the run name we pass. These run names are built by
+# concatenating the checkpoint dir, the step, and one suffix per arm, so they
+# sit close to the limit; catching it here turns a slow 400 from the Beaker API
+# (one per command, after the config has already been resolved) into an
+# immediate local error naming the offending run.
+BEAKER_MAX_NAME_LEN = 128
+_BEAKER_NAME_OVERHEAD = len("-evaluate-") + 8
+
+
+def _check_run_names_fit_beaker(commands: list[str]) -> None:
+    """Fail before launch if any run name would exceed Beaker's name limit."""
+    too_long = []
+    for cmd in commands:
+        # "<subcmd> <run_name> <cluster>" -- the run name follows the subcommand.
+        # Split on the launch path as it actually appears in the command
+        # (".../internal/all_evals.py"); matching a bare " all_evals.py " never
+        # fires, which silently turns this whole check into a no-op.
+        _, sep, tail = cmd.partition(f"{EVAL_LAUNCH_PATH} ")
+        if not sep:
+            continue
+        parts = tail.split()
+        if len(parts) < 2:
+            continue
+        run_name = parts[1]
+        total = len(run_name) + _BEAKER_NAME_OVERHEAD
+        if total > BEAKER_MAX_NAME_LEN:
+            too_long.append((run_name, total))
+    if too_long:
+        detail = "\n".join(
+            f"  {name} -> {total} chars (over by {total - BEAKER_MAX_NAME_LEN})"
+            for name, total in too_long
+        )
+        raise ValueError(
+            f"{len(too_long)} run name(s) exceed Beaker's {BEAKER_MAX_NAME_LEN}-char "
+            f"limit once it appends its task/id suffix:\n{detail}\n"
+            "Shorten the checkpoint directory name or the arm suffixes."
+        )
+
+
 def main() -> None:
     """Run the embedding-product eval sweep."""
     parser = argparse.ArgumentParser()
@@ -477,6 +524,19 @@ def main() -> None:
         type=str,
         default=None,
         help="Beaker job priority (default high), e.g. urgent",
+    )
+    parser.add_argument(
+        "--landsat_reflectance",
+        action="store_true",
+        help=(
+            "For checkpoints pretrained on the Landsat-reflectance h5: convert "
+            "eval Landsat DN to TOA reflectance at load time and use the "
+            "reflectance-scale norm stats. Applies to Landsat-bearing tasks "
+            "only, leaving the S2/S1+S2 tasks as a shared control. Requires a "
+            "landsat_calibration.json in each dataset root "
+            "(build_landsat_calibration_sidecar.py); the loader refuses to run "
+            "without it rather than feeding DN to reflectance-scale stats."
+        ),
     )
     parser.add_argument(
         "--window_size",
@@ -590,6 +650,7 @@ def main() -> None:
     args, extra_cli = parser.parse_known_args()
 
     commands_to_run = build_commands(args, extra_cli)
+    _check_run_names_fit_beaker(commands_to_run)
     logger.info(f"Running {len(commands_to_run)} commands")
     for cmd in commands_to_run:
         logger.info(cmd)

@@ -15,6 +15,30 @@
       "var": 22500
     }
   },
+  "glo30": {
+    "aspect": {
+      "max": 360,
+      "min": -1
+    },
+    "elevation": {
+      "max": 9000,
+      "min": -420
+    },
+    "slope": {
+      "max": 90,
+      "min": 0
+    }
+  },
+  "glo30_aspect": {
+    "aspect_cos": {
+      "max": 1,
+      "min": -1
+    },
+    "aspect_sin": {
+      "max": 1,
+      "min": -1
+    }
+  },
   "gse": {
     "A00": {
       "count": 100,
@@ -423,6 +447,12 @@
     "z": {
       "max": 1,
       "min": -1
+    }
+  },
+  "meta_canopy_height": {
+    "canopy_height": {
+      "max": 70,
+      "min": 0
     }
   },
   "ndvi": {
