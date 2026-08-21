@@ -292,6 +292,23 @@ def main() -> int:
             }
         windows[key] = entry
 
+    total = MONTHS * len(windows)
+    calibrated = sum(1 for m in windows.values() for v in m.values() if v is not None)
+    if not calibrated:
+        # Nothing resolved, so there is nothing to write that the loader could
+        # use: an empty or all-null table is indistinguishable at eval time from
+        # a dataset with no Landsat, and reads as all-MISSING under a
+        # Landsat-bearing task name. Hit when --ds_path is a tree whose windows
+        # were never materialized with landsat_moNN layers -- point it at the
+        # tree that actually holds the items, or accept that the dataset has no
+        # Landsat to calibrate.
+        print(
+            f"REFUSING to write: 0 of {total} window-months calibrated "
+            f"({len(windows)} windows with landsat items, {skipped} without). "
+            "Nothing was written."
+        )
+        return 1
+
     tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
     tmp_path.write_text(
         json.dumps(
@@ -316,8 +333,6 @@ def main() -> int:
     tmp_path.replace(out_path)
     print(f"wrote {out_path}")
 
-    total = MONTHS * len(windows)
-    calibrated = sum(1 for m in windows.values() for v in m.values() if v is not None)
     print(
         f"\nwindow-months: {total}; calibrated: {calibrated} "
         f"({calibrated / total:.1%}); MISSING at eval: {total - calibrated}"
