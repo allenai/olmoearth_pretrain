@@ -594,6 +594,7 @@ def cmd_launch_rslearn(args: argparse.Namespace) -> None:
         clusters=args.clusters,
         shard_ids=args.shard_ids,
         gpus=args.gpus,
+        cpus=args.cpus,
         priority=args.priority,
     )
     for eid in experiment_ids:
@@ -993,6 +994,12 @@ def main() -> None:
         type=int,
         default=0,
         help="GPUs to reserve per shard job (8 = hold a whole node for CPU/network)",
+    )
+    p.add_argument(
+        "--cpus",
+        type=int,
+        default=None,
+        help="CPUs to reserve per shard job (bounds per-node footprint of 0-GPU jobs)",
     )
     p.add_argument(
         "--priority",

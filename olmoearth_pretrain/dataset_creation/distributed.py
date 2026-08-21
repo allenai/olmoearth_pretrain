@@ -173,6 +173,7 @@ def launch_beaker_jobs(
     clusters: list[str] | str,
     shard_ids: list[int] | None = None,
     gpus: int = 0,
+    cpus: int | None = None,
     priority: str | None = None,
 ) -> list[str]:
     """Submit Beaker jobs for each shard.
@@ -186,6 +187,7 @@ def launch_beaker_jobs(
         shard_ids: if set, only launch these shard ids (for resume).
         gpus: GPUs to reserve per job. The work is CPU-only; request 8 to hold a whole
             node so the shard gets the node's full CPU/network capacity.
+        cpus: CPUs to reserve per job (for 0-GPU jobs, bounds per-node footprint).
         priority: Beaker priority to use (default: keep build_launch_config's default).
 
     Returns:
@@ -214,6 +216,8 @@ def launch_beaker_jobs(
         config.num_nodes = 1
         config.preemptible = True
         config.retries = 2
+        if cpus is not None:
+            config.cpu_count = cpus
         if priority is not None:
             config.priority = BeakerPriority[priority]
         # Replace --all-extras (which conflicts) with only what data workers need

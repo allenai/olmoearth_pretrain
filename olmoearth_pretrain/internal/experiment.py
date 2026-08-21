@@ -43,12 +43,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class OlmoEarthBeakerLaunchConfig(BeakerLaunchConfig):
-    """Extend BeakerLaunchConfig with hostnames option.
+    """Extend BeakerLaunchConfig with hostnames and cpu_count options.
 
-    This enables targeting specific Beaker hosts.
+    This enables targeting specific Beaker hosts and reserving CPUs for
+    CPU-only (0-GPU) jobs.
     """
 
     hostnames: list[str] | None = None
+    cpu_count: int | None = None
 
     def build_experiment_spec(
         self, torchrun: bool = True, entrypoint: str | None = None
@@ -62,6 +64,8 @@ class OlmoEarthBeakerLaunchConfig(BeakerLaunchConfig):
             constraints = spec.tasks[0].constraints
             constraints.cluster = None
             constraints.hostname = self.hostnames
+        if self.cpu_count is not None:
+            spec.tasks[0].resources.cpu_count = self.cpu_count
         return spec
 
 
