@@ -23,6 +23,7 @@ from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import _worker_ignore_sigterm
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.evals.balanced_trial import (
     BalancedTrialConfig,
     run_balanced_trials,
@@ -87,6 +88,36 @@ def _seed_worker(worker_id: int, base_seed: int) -> None:
     random.seed(worker_seed)
     np.random.seed(worker_seed)
     torch.manual_seed(worker_seed)
+
+
+def _crop_to_center_pixel(sample: MaskedOlmoEarthSample) -> MaskedOlmoEarthSample:
+    """Strip a batch's spatial context down to its center pixel.
+
+    Every spatial tensor on the sample is [B, H, W, T, ...] (masks included), so
+    the crop is the same slice on dims 1 and 2 for all of them. ``timestamps``
+    is [B, T, 3] and carries no spatial axis, so it is passed through untouched
+    -- slicing it would silently truncate the (day, month, year) triple.
+    """
+    cropped = {}
+    for name, value in sample.as_dict().items():
+        if (
+            name == "timestamps"
+            or not isinstance(value, torch.Tensor)
+            or value.dim() < 4
+        ):
+            cropped[name] = value
+            continue
+        row = value.shape[1] // 2
+        col = value.shape[2] // 2
+        cropped[name] = value[:, row : row + 1, col : col + 1]
+    return MaskedOlmoEarthSample.from_dict(cropped)
+
+
+def _compose_transforms(first: Any | None, second: Any) -> Any:
+    """Apply ``first`` (if any) then ``second`` to a sample."""
+    if first is None:
+        return second
+    return lambda sample: second(first(sample))
 
 
 class EvalMode(StrEnum):
@@ -164,6 +195,15 @@ class DownstreamTaskConfig:
     # pixel — unless tile_samples is set. Not supported for other dataset
     # families.
     window_size: int | None = None
+    # Multi-scale fusion: additionally embed each sample with its spatial
+    # context stripped to the single labeled pixel, and combine that with the
+    # window_size embedding before the probe. "concat" stacks the two blocks
+    # (dim doubles), "mean" averages them; both L2-normalize each block first,
+    # since the two passes see 256x different token counts and their norms are
+    # not comparable. The local pass is the center 1x1 crop of the same batch,
+    # which is exactly what a window_size=1 task loads, so no second pass over
+    # the data is needed. None runs the ordinary single-scale embedding.
+    multiscale_fusion: str | None = None
     # For registry (rslearn) datasets with dense labels (e.g. pastis_rslearn):
     # tile every stored sample into non-overlapping window_size x window_size
     # windows (the pastis convention above) instead of center-cropping one
@@ -444,6 +484,12 @@ class DownstreamEvaluator:
         self.eval_on_projected_registers = task.eval_on_projected_registers
         self.eval_projection_dim = task.eval_projection_dim
         self.use_center_token = task.use_center_token
+        self.multiscale_fusion = task.multiscale_fusion
+        if self.multiscale_fusion not in (None, "concat", "mean"):
+            raise ValueError(
+                f"multiscale_fusion must be None, 'concat' or 'mean', got "
+                f"{self.multiscale_fusion!r}"
+            )
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
         self.quantize_bits = task.quantize_bits
@@ -763,11 +809,22 @@ class DownstreamEvaluator:
             "use_center_token": self.use_center_token,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
+        should_quantize = self.quantize_embeddings if quantize is None else quantize
+        if self.multiscale_fusion is not None:
+            return self._get_fused_embeddings(
+                data_loader=data_loader,
+                model=model,
+                is_train=is_train,
+                sample_transform=sample_transform,
+                normalizer=normalizer,
+                quantize=should_quantize,
+                diagnostics_out=diagnostics_out,
+            )
         return get_embeddings(
             data_loader=data_loader,
             model=model,
             is_train=is_train,
-            quantize=(self.quantize_embeddings if quantize is None else quantize),
+            quantize=should_quantize,
             quantize_bits=self.quantize_bits,
             quantile_config=self.quantile_config,
             sample_transform=sample_transform,
@@ -775,6 +832,82 @@ class DownstreamEvaluator:
             normalizer=normalizer,
             diagnostics_out=diagnostics_out,
         )
+
+    def _get_fused_embeddings(
+        self,
+        data_loader: DataLoader,
+        model: Any,
+        is_train: bool,
+        sample_transform: Any | None,
+        normalizer: EmbeddingNormalizer | None,
+        quantize: bool,
+        diagnostics_out: dict[str, float] | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Embed each sample at the task's window size and at the center pixel, and fuse.
+
+        The local pass reuses the same batches with their spatial extent cropped
+        to the center pixel, which is bit-identical to what a window_size=1 task
+        would load (the crop happens before the model, and normalization is
+        per-band, so cropping and loading-cropped agree).
+
+        Both passes run in float and the int8 round-trip is applied once to the
+        fused vector, so the stored product is quantized exactly once -- the
+        same treatment the single-scale arms get.
+        """
+        if normalizer is not None:
+            raise ValueError(
+                "multiscale_fusion does not support a fitted embedding "
+                "normalizer: it is fitted against a single block's width, "
+                "which the fused vector does not have"
+            )
+
+        context, labels = get_embeddings(
+            data_loader=data_loader,
+            model=model,
+            is_train=is_train,
+            quantize=False,
+            sample_transform=sample_transform,
+            quantization_scheme=self.quantization_scheme,
+        )
+        local, _ = get_embeddings(
+            data_loader=data_loader,
+            model=model,
+            is_train=is_train,
+            quantize=False,
+            sample_transform=_compose_transforms(
+                sample_transform, _crop_to_center_pixel
+            ),
+            quantization_scheme=self.quantization_scheme,
+        )
+
+        context = torch.nn.functional.normalize(context.float(), dim=-1)
+        local = torch.nn.functional.normalize(local.float(), dim=-1)
+        cosine = float((context * local).sum(dim=-1).mean())
+        logger.info(
+            f"multiscale_fusion={self.multiscale_fusion}: mean cosine between the "
+            f"window and center-pixel embeddings is {cosine:.3f} "
+            "(near 1.0 would mean the two views are redundant)"
+        )
+        if diagnostics_out is not None:
+            diagnostics_out["multiscale_cosine"] = cosine
+
+        if self.multiscale_fusion == "concat":
+            # 1/sqrt(2) keeps the fused vector unit-norm, so the int8 clip
+            # threshold sees the same value range as a single-scale arm.
+            fused = torch.cat([context, local], dim=-1) / (2**0.5)
+        else:
+            fused = torch.nn.functional.normalize(context + local, dim=-1)
+
+        fused = normalize_and_quantize(
+            fused,
+            normalizer=None,
+            quantize=quantize,
+            quantize_bits=self.quantize_bits,
+            quantile_config=self.quantile_config,
+            diagnostics_out=diagnostics_out,
+            quantization_scheme=self.quantization_scheme,
+        )
+        return fused, labels
 
     def _knn_accuracy(
         self,

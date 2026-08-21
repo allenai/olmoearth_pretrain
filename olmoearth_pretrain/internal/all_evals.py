@@ -1561,6 +1561,7 @@ def _aef_ps1_task(
     l8_pixel_cloud_bits: int | None = None,
     embedding_batch_size: int | None = None,
     zero_bands: dict[str, list[str]] | None = None,
+    multiscale_fusion: str | None = None,
 ) -> DownstreamTaskConfig:
     """AEF supplemental task under the per-pixel embedding-product convention.
 
@@ -1616,6 +1617,7 @@ def _aef_ps1_task(
         l8_pixel_cloud_mask=l8_pixel_cloud_mask,
         l8_pixel_cloud_bits=l8_pixel_cloud_bits,
         zero_bands=zero_bands,
+        multiscale_fusion=multiscale_fusion,
         balanced_trial=(
             BalancedTrialConfig(cap=_aef_max_trial_cap(name))
             if eval_mode == EvalMode.KNN
@@ -2104,6 +2106,34 @@ for _mode, _mode_suffix in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn"))
                         "sentinel1_sentinel2_landsat"
                     ],
                     zero_bands=NOB0109_ZERO_BANDS,
+                )
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+
+# Multi-scale fusion: the ws16 embedding is contextual (with the register
+# bottleneck, the center register cross-attends over the whole 16x16 window)
+# while the ws1 embedding is purely spectral-temporal at the labeled pixel.
+# These fuse the two rather than picking one, which the ws16/ws8/ws4/ws1 sweep
+# cannot do. `_fuseconcat` stacks the blocks and `_fusemean` averages them,
+# each L2-normalizing per block first; concat is the one to beat, since for a
+# neighbor lookup it makes squared distance the sum of the two blocks' squared
+# distances, where the mean lets disagreement between the views cancel.
+# KNN only, on the unmasked S1+S2+Landsat stack, matching the arm these are
+# meant to be read against.
+for _fusion in ("concat", "mean"):
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_sentinel1_sentinel2_landsat_fuse{_fusion}_knn": (
+                _aef_ps1_task(
+                    name,
+                    EvalMode.KNN,
+                    window_size=16,
+                    input_modalities=_YEAR_ALIGNED_MODALITIES[
+                        "sentinel1_sentinel2_landsat"
+                    ],
+                    multiscale_fusion=_fusion,
                 )
             )
             for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
