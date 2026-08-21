@@ -73,7 +73,7 @@ def _read_probe(h5_dir: UPath, index: int) -> dict[str, object] | None:
                 raw = np.ascontiguousarray(h5file[HASHED_KEY][()])
                 out[HASHED_KEY] = (
                     raw.shape,
-                    hashlib.sha1(raw.tobytes()).hexdigest(),
+                    hashlib.sha1(raw.tobytes(), usedforsecurity=False).hexdigest(),
                 )
             else:
                 out[HASHED_KEY] = None
