@@ -1,4 +1,4 @@
-"""Check whether two h5 builds address the SAME sample under the same index.
+r"""Check whether two h5 builds address the SAME sample under the same index.
 
 WHY THIS EXISTS. The OmniCloudMask cloud sidecars are keyed by the raw h5 sample id
 (``dataset.__getitem__`` does ``index = sample_indices[args.idx]``, then reads
