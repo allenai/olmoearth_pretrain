@@ -8,6 +8,15 @@
 #   NUM_SHARDS  total shards across ALL jobs (default 8 = a single 8-GPU job covers all)
 #   SHARD_BASE  first shard index this job owns (default 0; use 8,16,... for extra jobs)
 #   GPUS        GPUs (= processes) in THIS job (default 8)
+#   H5_DIR      h5 build to compute clouds FOR (default: cloud_mask_cache.DEFAULT_H5_DIR,
+#               the old cdl_gse_... map set). The cache is written to the sibling
+#               cloud_masks_omnicloudmask path of whatever this points at, which is also
+#               where default_cache_dir() will look for it at training time. A cache is
+#               NOT transferable between h5 builds: sidecars are keyed by raw h5 sample
+#               id, and the builds are not index-aligned (measured 2026-08-21: 0/150
+#               probed indices agreed between the old map set and the new-maps
+#               reflectance build, see scripts/tools/check_h5_sample_alignment.py). Set
+#               this whenever training on a build that has no cache of its own.
 set -euo pipefail
 
 REPO=/weka/dfive-default/yawenz/olmoearth_pretrain
@@ -20,11 +29,13 @@ python -m pip install -q omnicloudmask h5py hdf5plugin einops numpy || true
 cd "$REPO"
 
 echo "launching $GPUS shard processes: NUM_SHARDS=$NUM_SHARDS SHARD_BASE=$SHARD_BASE"
+echo "h5_dir: ${H5_DIR:-<cloud_mask_cache.DEFAULT_H5_DIR>}"
 pids=()
 for g in $(seq 0 $((GPUS - 1))); do
   shard=$((SHARD_BASE + g))
   CUDA_VISIBLE_DEVICES="$g" OCM_MODEL_DIR="$WEIGHTS" PYTHONPATH="$REPO" \
     python -m olmoearth_pretrain.data.cloud_mask_cache \
+      ${H5_DIR:+--h5_dir "$H5_DIR"} \
       --num_shards "$NUM_SHARDS" --shard "$shard" &
   pids+=($!)
 done
