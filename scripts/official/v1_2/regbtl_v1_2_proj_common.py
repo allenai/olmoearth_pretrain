@@ -144,96 +144,21 @@ class StudentArm:
         supervision_scale: Attach supervision heads to the student at this fraction
             of the register head's weight (needs supervision_source="both").
         gram_weight: Weight of the flat (mostly cross-scene) relational term.
-        gram_within_weight: Weight of the within-scene (block-diagonal) term.
     """
 
     slug: str
     constant_lr: bool = False
     supervision_scale: float | None = None
     gram_weight: float = 1.0
-    gram_within_weight: float = 0.0
 
 
-#: The five arms. Rationale for each is in its run script's docstring.
+#: The student arms. Rationale for each is in its run script's docstring.
 STUDENT_ARMS = {
     arm.slug: arm
     for arm in [
         StudentArm(slug="flatlr", constant_lr=True),
         StudentArm(slug="supstu0p1", supervision_scale=0.1),
         StudentArm(slug="supstu0p01", supervision_scale=0.01),
-        StudentArm(slug="gramwithin", gram_weight=0.5, gram_within_weight=0.5),
-        StudentArm(slug="gramonly", gram_weight=0.0, gram_within_weight=1.0),
-        # Both spatial remedies at once. The single-arm runs test two independent
-        # routes to the same deficiency -- the objective applies almost no pressure
-        # to discriminate CELLS within a scene, since the cosine term is satisfiable
-        # by the scene-mean direction and ~98% of the flat Gram's pairs are
-        # cross-scene. gramonly supplies that pressure relationally (every pair
-        # within one scene); supstu0p1 supplies it directly (each cell must predict
-        # the map modalities at its own location). Whether they compose, or one
-        # subsumes the other, is not answerable from the single-knob arms.
-        StudentArm(
-            slug="gramonly_supstu0p1",
-            supervision_scale=0.1,
-            gram_weight=0.0,
-            gram_within_weight=1.0,
-        ),
-        StudentArm(
-            slug="gramwithin_supstu0p1",
-            supervision_scale=0.1,
-            gram_weight=0.5,
-            gram_within_weight=0.5,
-        ),
-        # The same two combinations on a flat student LR. Only arms whose slug ends
-        # in ``_flatlr`` hold the LR constant after warmup; every other arm inherits
-        # the encoder's CosWithWarmup(alpha_f=0.1) and its 10x decay, which is the
-        # baseline's schedule. Run as pairs so the schedule stays attributable
-        # rather than folded into the combination.
-        StudentArm(
-            slug="gramonly_supstu0p1_flatlr",
-            constant_lr=True,
-            supervision_scale=0.1,
-            gram_weight=0.0,
-            gram_within_weight=1.0,
-        ),
-        StudentArm(
-            slug="gramwithin_supstu0p1_flatlr",
-            constant_lr=True,
-            supervision_scale=0.1,
-            gram_weight=0.5,
-            gram_within_weight=0.5,
-        ),
-        # The same four combinations at a TENTH the student supervision weight.
-        # Supervision trades early speed for late stability -- supboth_w1 (1.0x)
-        # sits ~6 mIoU behind at 40k and only crosses sup768 at 400k, once sup768
-        # has degraded. 0.1x reproduces that shape scaled down (-1.3 at 40k, -0.6
-        # by 120k). 0.01x asks whether the protection survives at a dose small
-        # enough to cost nothing early, or whether it is simply too weak to act.
-        StudentArm(
-            slug="gramonly_supstu0p01",
-            supervision_scale=0.01,
-            gram_weight=0.0,
-            gram_within_weight=1.0,
-        ),
-        StudentArm(
-            slug="gramwithin_supstu0p01",
-            supervision_scale=0.01,
-            gram_weight=0.5,
-            gram_within_weight=0.5,
-        ),
-        StudentArm(
-            slug="gramonly_supstu0p01_flatlr",
-            constant_lr=True,
-            supervision_scale=0.01,
-            gram_weight=0.0,
-            gram_within_weight=1.0,
-        ),
-        StudentArm(
-            slug="gramwithin_supstu0p01_flatlr",
-            constant_lr=True,
-            supervision_scale=0.01,
-            gram_weight=0.5,
-            gram_within_weight=0.5,
-        ),
     ]
 }
 
@@ -259,7 +184,6 @@ def apply_arm(
 ) -> LatentMIMTrainModuleConfig:
     """Apply the arm's distillation weights and LR schedule, in place."""
     config.projection_distill_gram_weight = arm.gram_weight
-    config.projection_distill_gram_within_weight = arm.gram_within_weight
     if arm.constant_lr:
         add_student_lr_group(config, scheduler=student_constant_scheduler(config))
     return config
