@@ -225,28 +225,6 @@ class Attention(nn.Module):
         self.proj = nn.Linear(attn_dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def _apply_rope(
-        self, t: torch.Tensor, positions: torch.Tensor | None
-    ) -> torch.Tensor:
-        """Apply this module's RoPE variant to a ``(B, H, N, D)`` tensor."""
-        if not PositionEncoding.is_rope(self.position_encoding):
-            return t
-        if positions is None:
-            raise ValueError("rope positions must be provided when RoPE is enabled")
-        if self.position_encoding == PositionEncoding.AXIAL_2D_ROPE:
-            return apply_2d_axial_rope(t, positions, base=self.rope_base)
-        if self.position_encoding == PositionEncoding.MIXED_2D_ROPE:
-            return apply_2d_mixed_rope(t, positions, self.rope_mixed_freqs)
-        if self.position_encoding == PositionEncoding.AXIAL_3D_ROPE:
-            return apply_3d_axial_rope(
-                t,
-                positions,
-                base=self.rope_base,
-                temporal_dim_frac=self.temporal_rope_dim_frac,
-                temporal_base=self.rope_temporal_base,
-            )
-        return apply_3d_mixed_rope(t, positions, self.rope_mixed_freqs)
-
     def sdpa(
         self,
         q: torch.Tensor,
