@@ -1594,6 +1594,13 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
                 window_size=_ws,
                 dataset="pastis2_drom_bg8",
             ),
+            # bg8void: identical 8 trained classes, but excluded crops are void
+            # (masked from loss/metrics) instead of folded into Background.
+            f"pastis2_drom_bg8void_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void",
+            ),
             f"pastis2_drom_bg8_ws{_ws}_ps1_sentinel1": _pastis_ps1_task(
                 [Modality.SENTINEL1.name],
                 window_size=_ws,
