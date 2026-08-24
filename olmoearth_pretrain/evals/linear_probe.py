@@ -557,28 +557,35 @@ def train_and_eval_probe(
             task_type=config.task_type,
         )
 
-        # Optional marker-gated dump of the literal best-probe test predictions
-        # (+ labels) for offline visualization. No effect unless the weka marker
-        # file exists. Keyed by dump_tag (model/dataset/modalities) + lr.
+        # Optional dump of the literal best-probe test predictions (+ labels) for
+        # offline visualization. No effect unless OE_PRED_DIR is set or the weka
+        # marker file exists. Keyed by dump_tag (dataset/height_width/modalities) + lr.
         import os as _os
-        _pmark = "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/oe_pred_dir.txt"
-        if dump_tag is not None and _os.path.exists(_pmark):
-            with open(_pmark) as _mf:
-                _pdir = _mf.read().strip()
-            if _pdir:
-                _os.makedirs(_pdir, exist_ok=True)
-                _pp = _os.path.join(_pdir, f"{dump_tag}_lr{lr}_preds.pt")
-                torch.save(
-                    {
-                        "preds": all_preds.cpu(),
-                        "labels": all_labels.cpu(),
-                        "lr": lr,
-                        "dump_tag": dump_tag,
-                        "height_width": getattr(config, "height_width", None),
-                    },
-                    _pp,
-                )
-                logger.info(f"[OE_PRED_DUMP] wrote {_pp} preds={tuple(all_preds.shape)}")
+        # OE_PRED_DIR takes precedence over the weka marker, mirroring OE_DUMP_DIR for
+        # the embedding dump. dump_tag is (dataset, height_width, modalities) and carries
+        # no model identifier, so two checkpoints evaluated on the same task and LR write
+        # the same filename and overwrite each other silently. Setting OE_PRED_DIR per run
+        # keeps them apart.
+        _pdir = _os.environ.get("OE_PRED_DIR")
+        if not _pdir:
+            _pmark = "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/oe_pred_dir.txt"
+            if _os.path.exists(_pmark):
+                with open(_pmark) as _mf:
+                    _pdir = _mf.read().strip()
+        if dump_tag is not None and _pdir:
+            _os.makedirs(_pdir, exist_ok=True)
+            _pp = _os.path.join(_pdir, f"{dump_tag}_lr{lr}_preds.pt")
+            torch.save(
+                {
+                    "preds": all_preds.cpu(),
+                    "labels": all_labels.cpu(),
+                    "lr": lr,
+                    "dump_tag": dump_tag,
+                    "height_width": getattr(config, "height_width", None),
+                },
+                _pp,
+            )
+            logger.info(f"[OE_PRED_DUMP] wrote {_pp} preds={tuple(all_preds.shape)}")
 
         # Map regression preds/labels back to original target units so the
         # downstream metrics (and bootstrap resamples of them) are reported
