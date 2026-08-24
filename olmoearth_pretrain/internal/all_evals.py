@@ -2207,6 +2207,20 @@ for _loio_terr in ("reunion", "guadeloupe", "martinique", "guyane", "mayotte"):
         _pastis_ps1_task([Modality.SENTINEL2_L2A.name], dataset=f"{_loio_ds}_full")
     )
 
+    # bg8void LOIO: same folds, but the excluded crops are void rather than folded
+    # into Background. Probe + fine-tune on the S2-trimmed entry; _full for the
+    # AEF / Tessera precomputed baselines via an input_modalities override.
+    _void_ds = f"pastis2_drom_bg8void_loio_{_loio_terr}"
+    FT_EVAL_TASKS[f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws16_ps1_sentinel2"] = (
+        _pastis_ft_task([Modality.SENTINEL2_L2A.name], dataset=_void_ds)
+    )
+    EMBEDDING_EVAL_TASKS[f"pastis2_drom_bg8void_loio_{_loio_terr}_ws16_ps1_sentinel2"] = (
+        _pastis_ps1_task([Modality.SENTINEL2_L2A.name], dataset=_void_ds)
+    )
+    EMBEDDING_EVAL_TASKS[f"pastis2_drom_bg8void_loio_{_loio_terr}_full_ws16_ps1_sentinel2"] = (
+        _pastis_ps1_task([Modality.SENTINEL2_L2A.name], dataset=f"{_void_ds}_full")
+    )
+
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
