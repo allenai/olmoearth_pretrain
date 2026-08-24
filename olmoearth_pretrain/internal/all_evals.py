@@ -1602,6 +1602,30 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
                 window_size=_ws,
                 dataset="pastis2_drom_bg8void",
             ),
+            f"pastis2_drom_bg8void_ws{_ws}_ps1_sentinel1": _pastis_ps1_task(
+                [Modality.SENTINEL1.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void",
+            ),
+            f"pastis2_drom_bg8void_ws{_ws}_ps1_sentinel1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void",
+            ),
+            f"pastis2_drom_bg8void_ws{_ws}_ps1_sentinel2_landsat": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void",
+            ),
+            f"pastis2_drom_bg8void_ws{_ws}_ps1_sentinel1_sentinel2_landsat": _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void",
+            ),
             f"pastis2_drom_bg8_ws{_ws}_ps1_sentinel1": _pastis_ps1_task(
                 [Modality.SENTINEL1.name],
                 window_size=_ws,
