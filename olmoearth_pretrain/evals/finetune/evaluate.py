@@ -171,20 +171,26 @@ def eval_seg(
     labels = torch.cat(labels_all, 0)
     scores = torch.cat(scores_all, 0)
 
-    # Optional marker-gated dump of the finetuned test predictions (+ labels) for
-    # offline visualization, mirroring the linear-probe OE_PRED_DUMP. No effect
-    # unless the weka marker file exists and dump_tag is set (test split only).
+    # Optional dump of the finetuned test predictions (+ labels) for offline
+    # visualization, mirroring the linear-probe OE_PRED_DUMP. No effect unless
+    # OE_PRED_DIR is set or the weka marker file exists, and dump_tag is set
+    # (test split only). dump_tag here is just the task name - it carries neither a
+    # model identifier nor an LR, so two checkpoints finetuned on the same task
+    # write the same filename and overwrite each other. Set OE_PRED_DIR per run to
+    # keep them apart, as the linear probe does.
     import os as _os
 
-    _pmark = "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/oe_pred_dir.txt"
-    if dump_tag is not None and _os.path.exists(_pmark):
-        with open(_pmark) as _mf:
-            _pdir = _mf.read().strip()
-        if _pdir:
-            _os.makedirs(_pdir, exist_ok=True)
-            _pp = _os.path.join(_pdir, f"{dump_tag}_preds.pt")
-            torch.save({"preds": preds, "labels": labels, "dump_tag": dump_tag}, _pp)
-            print(f"[FT_PRED_DUMP] wrote {_pp} preds={tuple(preds.shape)}", flush=True)
+    _pdir = _os.environ.get("OE_PRED_DIR")
+    if not _pdir:
+        _pmark = "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/oe_pred_dir.txt"
+        if _os.path.exists(_pmark):
+            with open(_pmark) as _mf:
+                _pdir = _mf.read().strip()
+    if dump_tag is not None and _pdir:
+        _os.makedirs(_pdir, exist_ok=True)
+        _pp = _os.path.join(_pdir, f"{dump_tag}_preds.pt")
+        torch.save({"preds": preds, "labels": labels, "dump_tag": dump_tag}, _pp)
+        print(f"[FT_PRED_DUMP] wrote {_pp} preds={tuple(preds.shape)}", flush=True)
 
     return segmentation_metrics(
         preds,
