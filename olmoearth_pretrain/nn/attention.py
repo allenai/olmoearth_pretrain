@@ -396,36 +396,6 @@ class Attention(nn.Module):
             else:
                 q = apply_3d_mixed_rope(q, rope_positions, self.rope_mixed_freqs)
                 k = apply_3d_mixed_rope(k, k_positions, self.rope_mixed_freqs)
-        return self._finish_attention(
-            q,
-            k,
-            v,
-            original_shape,
-            cu_seqlens=cu_seqlens,
-            cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_k=cu_seqlens_k,
-            max_seqlen=max_seqlen,
-            max_seqlen_q=max_seqlen_q,
-            max_seqlen_k=max_seqlen_k,
-            attn_mask=attn_mask,
-        )
-
-    def _finish_attention(
-        self,
-        q: torch.Tensor,
-        k: torch.Tensor,
-        v: torch.Tensor,
-        original_shape: torch.Size,
-        *,
-        cu_seqlens: torch.Tensor | None = None,
-        cu_seqlens_q: torch.Tensor | None = None,
-        cu_seqlens_k: torch.Tensor | None = None,
-        max_seqlen: int | None = None,
-        max_seqlen_q: int | None = None,
-        max_seqlen_k: int | None = None,
-        attn_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """SDPA over prepared q/k/v, then reshape and output-project."""
         x = self.sdpa(
             q,
             k,
