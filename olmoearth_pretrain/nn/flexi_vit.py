@@ -26,7 +26,6 @@ from olmoearth_pretrain.datatypes import (
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
     PositionEncoding,
-    WindowSpec,
     axial_3d_dim_split,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -1278,35 +1277,6 @@ class FlexiVitBase(nn.Module):
         positions, _ = self.collapse_and_combine_hwtc(position_dict)
         return positions
 
-    def build_spatial_token_mask(
-        self,
-        tokens_only_dict: dict[str, Tensor],
-        original_masks_dict: dict[str, Tensor],
-    ) -> Tensor:
-        """Per-token spatial flag in the same collapsed order as positions.
-
-        ``True`` where a token belongs to a spatial modality (matching the order of
-        :meth:`build_rope_positions`).
-
-        Tokens of non-spatial modalities have no meaningful ``(row, col)`` (they sit
-        at the coordinate origin), so windowed attention treats them as *global*:
-        this flag marks which tokens are spatial so the rest can be exempted.
-        """
-        flag_dict: dict[str, Tensor] = {}
-        available_modalities = return_modalities_from_dict(tokens_only_dict)
-        modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
-        )
-        for modality_name in modalities_to_process:
-            tokens = tokens_only_dict[modality_name]
-            is_spatial = float(Modality.get(modality_name).is_spatial)
-            flag_dict[modality_name] = tokens.new_full(
-                (*tokens.shape[:-1], 1), is_spatial
-            )
-        flag_dict.update(original_masks_dict)
-        flags, _ = self.collapse_and_combine_hwtc(flag_dict)
-        return flags.squeeze(-1) > 0.5
-
     def build_temporal_token_mask(
         self,
         tokens_only_dict: dict[str, Tensor],
@@ -1679,7 +1649,6 @@ class SpatialRegisterBottleneck(nn.Module):
         rope_temporal_base: float | None = None,
         unit_norm: bool = False,
         unit_norm_scale: float | None = None,
-        shared_read_kv: bool = False,
         output_dim: int | None = None,
         latent_every_n: int = 1,
     ) -> None:
@@ -1831,15 +1800,6 @@ class SpatialRegisterBottleneck(nn.Module):
                 the product must ship at (128). Unlike ``register_projection_dims``,
                 this projection is IN the gradient path -- it is the model's output, not
                 a detached distillation student.
-            shared_read_kv: If True, project the patch tokens into keys/values ONCE and
-                let every read block attend over that single copy. Read blocks are cheap
-                in FLOPs but expensive in memory -- each otherwise stores its own
-                input-norm output, k, rotated k and v over the full token array for
-                backward -- so this is what makes a deep read stack trainable, and it
-                also removes ~73% of a read block's FLOPs. The reads then SHARE key/value
-                weights and differ only in their queries, which is a model change rather
-                than a pure optimization. Requires a single K/V source: incompatible with
-                ``read_layers`` and with ``per_depth_read_proj``.
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1869,32 +1829,6 @@ class SpatialRegisterBottleneck(nn.Module):
                 )
         self.fused_read = fused_read
         self.attn_dim = attn_dim
-        # Shared-K/V: project the patch tokens into keys/values ONCE and let every
-        # read block attend over that one copy, instead of each block re-projecting
-        # the full token array. The saving is mostly MEMORY: a read block otherwise
-        # stores its own input-norm output, k, rotated k and v -- four token-array-
-        # sized tensors -- for backward, which is what caps the usable read depth
-        # (measured: 16 reads fit at micro 64, 24 do not). It also removes ~73% of a
-        # read block's FLOPs, since the K/V projection dominates them.
-        #
-        # THE TRADE: all read blocks now SHARE key/value weights, so successive reads
-        # can no longer look at the source through different lenses -- only their
-        # queries differ (which, under ``interleave``, is where the depth diversity
-        # lives anyway: read N queries registers refined N-1 times). This is a model
-        # change, not a pure optimization; arms with and without it are not directly
-        # comparable.
-        if shared_read_kv:
-            if multi_depth_sources := (read_layers is not None):
-                raise ValueError(
-                    "shared_read_kv reads one source; it cannot be combined with "
-                    f"register_read_layers (multi_depth={multi_depth_sources})"
-                )
-            if per_depth_read_proj:
-                raise ValueError(
-                    "shared_read_kv replaces the per-depth read projections: there "
-                    "is one shared K/V source, so per-block norms cannot apply"
-                )
-        self.shared_read_kv = shared_read_kv
         # Single linear map from the internal register width to the shipped width.
         # Applied after the output norm and before any unit-norm, so the norm still
         # standardizes the stack's own residual stream and the sphere constraint (when
@@ -2084,10 +2018,6 @@ class SpatialRegisterBottleneck(nn.Module):
                     kv_in_dim=(
                         encoder_embedding_size if attn_dim is not None else None
                     ),
-                    # Shared-K/V: only block 0 owns key/value projections; the rest
-                    # consume its output via ``kv_cached`` and never build their own
-                    # (so they cannot contribute unused parameters to DDP's allreduce).
-                    kv_external=(shared_read_kv and i > 0),
                 )
                 for i in range(num_read_blocks)
             ]
@@ -2210,8 +2140,6 @@ class SpatialRegisterBottleneck(nn.Module):
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
         spatial_grid: tuple[int, int] | None = None,
-        window_half_extent: float | None = None,
-        patch_is_global: Tensor | None = None,
     ) -> tuple[Tensor, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -2227,13 +2155,6 @@ class SpatialRegisterBottleneck(nn.Module):
                 (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
             spatial_grid: ``(n_h, n_w)`` patch grid; required in dynamic mode (the single
                 latent is cloned to this many cells), ignored in fixed-grid mode.
-            window_half_extent: If set, restrict the read (register query vs patch key) and
-                the latent self-attention (register vs register) to a sliding window of this
-                half-width, in the same coordinate units as the positions. None -> the read
-                and latent transformer use full attention (backwards compatible).
-            patch_is_global: Optional ``[B, N]`` bool, True where a patch key is non-spatial
-                and should be readable from every register regardless of the window. Used
-                only when ``window_half_extent`` is set.
 
         Returns:
             registers: ``[B, num_registers, register_dim]``
@@ -2309,7 +2230,7 @@ class SpatialRegisterBottleneck(nn.Module):
                 self.registers.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
             )
         # With a temporal anchor the K/V positions arrive as anchor-relative
-        # (t, row, col). Everything spatial -- register placement, windowing, the
+        # (t, row, col). Everything spatial -- register placement, the
         # latent blocks' 2D RoPE, the returned positions -- uses the (row, col)
         # part; only the read blocks rotate over the full 3D coordinate.
         spatial_patch_positions = patch_positions
@@ -2329,33 +2250,10 @@ class SpatialRegisterBottleneck(nn.Module):
             register_positions = self.build_register_positions(
                 spatial_patch_positions, register_grid
             )
-        # Read mask: by default just the [B, N] key-visibility mask. With windowing the
-        # read instead restricts each register to a spatial window of the patch tokens
-        # (non-spatial patches stay globally readable), AND-ed with visibility; the latent
-        # transformer windows register-over-register. Both windowed masks are built lazily
-        # per query-chunk inside attention (via WindowSpec) to bound memory.
+        # Read mask: the [B, N] key-visibility mask.
         read_attn_mask: Tensor | None = (
             visible_mask.bool() if visible_mask is not None else None
         )
-        read_window_spec: WindowSpec | None = None
-        latent_window_spec: WindowSpec | None = None
-        if window_half_extent is not None and self.use_2d_rope:
-            assert (
-                register_positions is not None and spatial_patch_positions is not None
-            )
-            read_attn_mask = None  # validity carried by read_window_spec.key_valid
-            read_window_spec = WindowSpec(
-                q_positions=register_positions,
-                k_positions=spatial_patch_positions,
-                half_extent=window_half_extent,
-                k_is_global=patch_is_global,
-                key_valid=visible_mask.bool() if visible_mask is not None else None,
-            )
-            latent_window_spec = WindowSpec(
-                q_positions=register_positions,
-                k_positions=register_positions,
-                half_extent=window_half_extent,
-            )
 
         # The read's rotary coordinates: with a temporal anchor the register queries
         # sit at t=0 (the anchor) ahead of their (row, col), and the patch keys keep
@@ -2367,25 +2265,13 @@ class SpatialRegisterBottleneck(nn.Module):
                 dim=-1,
             )
 
-        # Shared-K/V: project the one source into keys/values HERE, once, rather than
-        # inside every read block. Block 0 owns the weights (the rest were built
-        # ``kv_external``), so the whole stack reads through a single projection and a
-        # single stored copy of the context.
-        shared_kv: tuple[Tensor, Tensor] | None = None
-        if self.shared_read_kv:
-            shared_kv = self.read_blocks[0].attn.compute_kv(
-                kv_per_read[0], patch_positions
-            )
-
         def read(registers: Tensor, i: int, blk: nn.Module, kv: Tensor) -> Tensor:
             out = blk(
                 x=registers,
-                y=None if shared_kv is not None else kv,
-                kv_cached=shared_kv,
+                y=kv,
                 attn_mask=read_attn_mask,
                 rope_positions=read_register_positions,
                 rope_positions_y=patch_positions,
-                window_spec=read_window_spec,
             )
             if self.learned_read_weighting:
                 # Gate the read's residual contribution; g=1 reproduces the ungated read.
@@ -2411,7 +2297,6 @@ class SpatialRegisterBottleneck(nn.Module):
                     registers = self.latent_blocks[latent_idx](
                         x=registers,
                         rope_positions=register_positions,
-                        window_spec=latent_window_spec,
                     )
         else:
             # Legacy: all reads first, then the latent transformer.
@@ -2421,7 +2306,6 @@ class SpatialRegisterBottleneck(nn.Module):
                 registers = latent_blk(
                     x=registers,
                     rope_positions=register_positions,
-                    window_spec=latent_window_spec,
                 )
         out = self.output_proj(self.norm(registers))
         if self.unit_norm:
@@ -2472,7 +2356,6 @@ class Encoder(FlexiVitBase):
         rope_temporal_base: float | None = None,
         rope_temporal_coordinate_scale: float = 1.0,
         spatial_pos_encoding: str | None = None,
-        attn_window_size: int | None = None,
         use_register_bottleneck: bool = False,
         register_grid_size: int | None = 0,
         register_dim: int | None = None,
@@ -2487,7 +2370,6 @@ class Encoder(FlexiVitBase):
         register_latent_self_attn: bool = True,
         register_attn_dim: int | None = None,
         register_temporal_anchor: str | None = None,
-        register_shared_read_kv: bool = False,
         register_output_dim: int | None = None,
         register_latent_every_n: int = 1,
         register_contrastive_source: str = "registers",
@@ -2559,12 +2441,6 @@ class Encoder(FlexiVitBase):
                 temporal RoPE coordinates (default 1.0 = raw days). E.g. set to
                 1/30 for months.
             spatial_pos_encoding: Deprecated alias for ``position_encoding``.
-            attn_window_size: If set, restrict every attention block (encoder self-attention,
-                register read, register latent self-attention) to a square sliding window of
-                this side length (in patch cells) centred on each query. Requires
-                ``spatial_pos_encoding="rope"`` and ``use_flash_attn=False``. When the input
-                patch grid is no larger than the window in both dims, full attention is used.
-                None (default) -> full attention.
             use_register_bottleneck: If True, add a Perceiver-style spatial register
                 bottleneck that reads the encoded patch tokens into a fixed register grid.
             register_grid_size: Side length of the (square) register grid; the grid has
@@ -2628,9 +2504,6 @@ class Encoder(FlexiVitBase):
                 bottleneck's output, so the read/latent stack runs at ``register_dim``
                 while the decoder, supervision heads and evals consume this width. In the
                 gradient path, unlike the detached ``register_projection_dims`` student.
-            register_shared_read_kv: If set, the register bottleneck projects the patch
-                tokens into keys/values once and shares them across all read blocks (see
-                ``SpatialRegisterBottleneck.shared_read_kv``).
             register_temporal_anchor: If set, make the register READ temporally aware
                 while keeping the registers a time-free 2D grid: the bottleneck's read
                 blocks run axial 3D RoPE with each register anchored at a per-sample
@@ -2711,7 +2584,6 @@ class Encoder(FlexiVitBase):
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
-        self.attn_window_size = attn_window_size
         self.log_token_norm_stats = log_token_norm_stats
         if self.has_register_tokens:
             self.register_tokens = nn.Parameter(
@@ -2837,7 +2709,6 @@ class Encoder(FlexiVitBase):
                 latent_self_attn=register_latent_self_attn,
                 attn_dim=register_attn_dim,
                 temporal_anchor=register_temporal_anchor,
-                shared_read_kv=register_shared_read_kv,
                 output_dim=register_output_dim,
                 latent_every_n=register_latent_every_n,
                 temporal_rope_dim_frac=temporal_rope_dim_frac,
@@ -2896,7 +2767,6 @@ class Encoder(FlexiVitBase):
                         latent_self_attn=register_latent_self_attn,
                         attn_dim=embedding_size,
                         temporal_anchor=register_temporal_anchor,
-                        shared_read_kv=register_shared_read_kv,
                         temporal_rope_dim_frac=temporal_rope_dim_frac,
                         rope_temporal_base=rope_temporal_base,
                         # The student IS the served embedding when it is deployed, so
@@ -3301,32 +3171,6 @@ class Encoder(FlexiVitBase):
             else:
                 register_kv_positions = register_kv_positions[..., 1:]
 
-        # Windowed (local) spatial attention setup. Active only when the patch grid is
-        # larger than the window in some dim; otherwise we leave the fast (full-attention)
-        # path untouched. `patch_spatial_flag` is in the full (pre-masking) collapsed order
-        # for the register read; `encoder_spatial_flag` is reduced alongside `positions`.
-        window_half_extent: float | None = None
-        patch_spatial_flag: Tensor | None = None
-        encoder_spatial_flag: Tensor | None = None
-        window_spec: WindowSpec | None = None
-        if self.attn_window_size is not None:
-            if not PositionEncoding.is_2d_rope(self.position_encoding):
-                raise ValueError(
-                    "attn_window_size requires a 2D RoPE position_encoding "
-                    '(e.g. "rope" or "rope_mixed")'
-                )
-            grid_h, grid_w = self._patch_grid_hw(tokens_only_dict)
-            if grid_h > self.attn_window_size or grid_w > self.attn_window_size:
-                gsd_ratio = (
-                    CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
-                    * self.rope_coordinate_scale
-                )
-                window_half_extent = (self.attn_window_size / 2.0) * gsd_ratio
-                patch_spatial_flag = self.build_spatial_token_mask(
-                    tokens_only_dict, original_masks_dict
-                )
-                encoder_spatial_flag = patch_spatial_flag
-
         tokens_dict.update(original_masks_dict)
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -3336,11 +3180,6 @@ class Encoder(FlexiVitBase):
         )
         if positions is not None and bool_mask is not None:
             positions, _, _, _, _ = self.remove_masked_tokens(positions, bool_mask)
-            if encoder_spatial_flag is not None:
-                reduced_flag, _, _, _, _ = self.remove_masked_tokens(
-                    encoder_spatial_flag[..., None].float(), bool_mask
-                )
-                encoder_spatial_flag = reduced_flag.squeeze(-1) > 0.5
 
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
@@ -3370,42 +3209,6 @@ class Encoder(FlexiVitBase):
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
             if positions is not None:
                 positions = self.add_register_positions(positions)
-
-        if window_half_extent is not None:
-            # Now that positions include the prepended global register tokens, assemble the
-            # window ingredients. The per-block mask is built lazily, one query-chunk at a
-            # time inside attention (see WindowSpec / Attention._windowed_sdpa), so peak
-            # memory is bounded by the chunk rather than by N*N -- without this the full
-            # unmasked eval sequence (no MAE masking) would OOM a dense [B, N, N] mask. The
-            # spec carries key validity, so it replaces the [B, N] key mask for every block
-            # (train and eval alike). Register tokens are global (non-spatial); padded keys
-            # are excluded via the true padding mask (`new_mask`), independent of fast_pass.
-            assert encoder_spatial_flag is not None
-            if self.has_register_tokens:
-                reg_flag = encoder_spatial_flag.new_zeros(
-                    encoder_spatial_flag.shape[0], self.num_register_tokens
-                )
-                encoder_spatial_flag = torch.cat(
-                    [reg_flag, encoder_spatial_flag], dim=1
-                )
-            key_valid: Tensor | None = None
-            if new_mask is not None:
-                key_valid = new_mask.bool()
-                if self.has_register_tokens:
-                    reg_valid = key_valid.new_ones(
-                        key_valid.shape[0], self.num_register_tokens
-                    )
-                    key_valid = torch.cat([reg_valid, key_valid], dim=1)
-            is_global = ~encoder_spatial_flag
-            window_spec = WindowSpec(
-                q_positions=positions,
-                k_positions=positions,
-                half_extent=window_half_extent,
-                q_is_global=is_global,
-                k_is_global=is_global,
-                key_valid=key_valid,
-            )
-            attn_mask = None  # validity carried by window_spec.key_valid
 
         # Multi-depth register reads: stash the (raw, in-loop) patch tokens at the
         # configured 1-indexed depths so the bottleneck can read each one. The patch stack
@@ -3445,7 +3248,6 @@ class Encoder(FlexiVitBase):
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
                 rope_positions=positions,
-                window_spec=window_spec,
             )
             # Stash this depth's output for the multi-depth register read (1-indexed).
             if (i_blk + 1) in multi_depth_read_layers:
@@ -3527,12 +3329,6 @@ class Encoder(FlexiVitBase):
                 patch_positions=register_kv_positions,
                 visible_mask=bool_mask,
                 spatial_grid=spatial_grid,
-                window_half_extent=window_half_extent,
-                # `patch_spatial_flag` is in the full (pre-masking) order matching
-                # `register_kv_positions`; non-spatial patches read globally.
-                patch_is_global=(
-                    ~patch_spatial_flag if patch_spatial_flag is not None else None
-                ),
             )
             register_output = {
                 "registers": registers,
@@ -3553,10 +3349,6 @@ class Encoder(FlexiVitBase):
                     patch_positions=register_kv_positions,
                     visible_mask=bool_mask,
                     spatial_grid=spatial_grid,
-                    window_half_extent=window_half_extent,
-                    patch_is_global=(
-                        ~patch_spatial_flag if patch_spatial_flag is not None else None
-                    ),
                 )
                 register_output["projected_registers"] = projected
 
@@ -4238,13 +4030,6 @@ class EncoderConfig(Config):
     # so old checkpoint configs deserialized via Config.from_dict still carry it
     # through to __post_init__ for reconciliation.
     spatial_pos_encoding: str | None = None
-    # Windowed (local) spatial attention: each token attends only to tokens within a
-    # square window of side ``attn_window_size`` patch cells centred on it (sliding
-    # window), applied to encoder self-attention and the register read + latent
-    # self-attention. None -> full attention (backwards compatible). When the input
-    # patch grid is no larger than the window in both dims, full attention is used.
-    # Requires a 2D RoPE position_encoding and is incompatible with use_flash_attn.
-    attn_window_size: int | None = None
     # Perceiver-style spatial register bottleneck (sweepable).
     use_register_bottleneck: bool = False
     # >0 -> fixed grid of distinct per-cell latents; 0 -> dynamic single cloned latent
@@ -4306,11 +4091,6 @@ class EncoderConfig(Config):
     # position_encoding. None (default) keeps the purely spatial read (backwards
     # compatible).
     register_temporal_anchor: str | None = None
-    # Share ONE key/value projection across all register read blocks (see
-    # SpatialRegisterBottleneck.shared_read_kv). Caps read-side activation memory at a
-    # single stored copy of the context instead of one per read, which is what makes
-    # deep read stacks trainable; in exchange the reads lose independent K/V lenses.
-    register_shared_read_kv: bool = False
     # Width the register grid is projected to on output. The read/latent stack runs
     # at register_dim (chosen for GEMM efficiency); the decoder, supervision heads and
     # evals all consume this width. In the gradient path, unlike the detached
@@ -4408,22 +4188,6 @@ class EncoderConfig(Config):
             raise ValueError(
                 f"rope_coordinate_scale must be positive, got {self.rope_coordinate_scale}"
             )
-        if self.attn_window_size is not None:
-            if self.attn_window_size <= 0:
-                raise ValueError(
-                    f"attn_window_size must be positive, got {self.attn_window_size}"
-                )
-            if not PositionEncoding.is_2d_rope(self.position_encoding):
-                raise ValueError(
-                    "attn_window_size requires a 2D RoPE position_encoding (the window "
-                    "is computed from per-token RoPE coordinates)"
-                )
-            if self.use_flash_attn:
-                raise ValueError(
-                    "attn_window_size is incompatible with use_flash_attn (the flash "
-                    "varlen path cannot express a 2D spatial mask); set "
-                    "use_flash_attn=False"
-                )
         if self.use_register_bottleneck:
             # Legacy None sentinel -> 0 (dynamic single-latent grid).
             if self.register_grid_size is None:

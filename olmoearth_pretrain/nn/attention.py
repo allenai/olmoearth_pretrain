@@ -12,22 +12,15 @@ from torch.jit import Final
 
 from olmoearth_pretrain.nn.encodings import (
     PositionEncoding,
-    WindowSpec,
     apply_2d_axial_rope,
     apply_2d_mixed_rope,
     apply_3d_axial_rope,
     apply_3d_mixed_rope,
     axial_3d_dim_split,
-    build_window_mask,
     init_2d_mixed_rope_freqs,
     init_3d_mixed_rope_freqs,
     resolve_position_encoding,
 )
-
-# Cap on (chunk_queries * batch * num_keys) elements when materializing a windowed
-# attention mask one query-chunk at a time. Bounds peak mask memory regardless of
-# sequence length (~a few hundred MB of bool/float working set per chunk).
-WINDOW_MASK_CHUNK_ELEMENTS = 256 * 1024 * 1024
 
 try:
     import flash_attn
@@ -137,7 +130,6 @@ class Attention(nn.Module):
         spatial_pos_encoding: str | None = None,
         attn_dim: int | None = None,
         kv_in_dim: int | None = None,
-        kv_external: bool = False,
     ) -> None:
         """Initialize the attention module.
 
@@ -171,11 +163,6 @@ class Attention(nn.Module):
             kv_in_dim: Input width of the key/value source ``y`` when it differs
                 from ``dim`` (cross-attention over a wider stream). ``None``
                 (default) ties it to ``dim``.
-            kv_external: If True, do not create key/value projections at all; a caller
-                must supply them precomputed via ``forward(kv_cached=...)``. Lets several
-                cross-attention modules share one projection over a large context. The
-                Linears are omitted rather than left unused so they cannot become
-                gradient-less parameters, which would stall a DDP allreduce.
         """
         super().__init__()
         position_encoding = resolve_position_encoding(
@@ -229,22 +216,8 @@ class Attention(nn.Module):
             )
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
         self.q = nn.Linear(dim, attn_dim, bias=qkv_bias)
-        # ``kv_external``: this module never projects its own keys/values -- a caller
-        # supplies them precomputed via ``forward(kv_cached=...)``. The k/v Linears are
-        # NOT created, so they cannot become unused parameters (which would stall DDP's
-        # gradient allreduce). Used by the register bottleneck's shared-K/V mode, where
-        # one projection is computed once and reused by every read block.
-        self.kv_external = kv_external
-        self.k: nn.Module = (
-            nn.Identity()
-            if kv_external
-            else nn.Linear(kv_in_dim, attn_dim, bias=qkv_bias)
-        )
-        self.v: nn.Module = (
-            nn.Identity()
-            if kv_external
-            else nn.Linear(kv_in_dim, attn_dim, bias=qkv_bias)
-        )
+        self.k = nn.Linear(kv_in_dim, attn_dim, bias=qkv_bias)
+        self.v = nn.Linear(kv_in_dim, attn_dim, bias=qkv_bias)
 
         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
@@ -274,82 +247,6 @@ class Attention(nn.Module):
             )
         return apply_3d_mixed_rope(t, positions, self.rope_mixed_freqs)
 
-    def compute_kv(
-        self, y: torch.Tensor, rope_positions_y: torch.Tensor | None = None
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Project a cross-attention context into attention-ready keys and values.
-
-        Returns ``(k, v)`` shaped ``(B, H, Nk, D)``, already head-split, k-normed and
-        RoPE-rotated -- exactly the tensors :meth:`forward` would have built internally.
-        Pass them back in via ``forward(kv_cached=...)`` to reuse one projection across
-        several attention modules that share this one's key/value weights.
-
-        The point is memory, not just compute: each cross-attention over a large context
-        otherwise stores its own ``k``, rotated ``k`` and ``v`` -- three context-sized
-        tensors -- for backward. Computing them once turns "per read block" into "per
-        forward", which is what makes a deep stack of reads over a big token array
-        affordable.
-        """
-        if self.kv_external:
-            raise RuntimeError(
-                "compute_kv called on a kv_external attention module, which has no "
-                "key/value projections of its own"
-            )
-        if self.use_flash_attn:
-            raise NotImplementedError(
-                "compute_kv targets the SDPA path; flash attention packs k/v differently"
-            )
-        k = rearrange(self.k(y), "b n (h d) -> b h n d", h=self.num_heads)
-        v = rearrange(self.v(y), "b n (h d) -> b h n d", h=self.num_heads)
-        k = self.k_norm(k)
-        return self._apply_rope(k, rope_positions_y), v
-
-    def _windowed_sdpa(
-        self,
-        q: torch.Tensor,
-        k: torch.Tensor,
-        v: torch.Tensor,
-        spec: WindowSpec,
-    ) -> torch.Tensor:
-        """SDPA restricted to a sliding spatial window, built per query-chunk.
-
-        ``q, k, v`` are ``(B, H, N, D)``. The window mask depends only on positions, so it
-        is rebuilt for each query slice and applied with standard SDPA. This bounds the
-        mask working set to ``WINDOW_MASK_CHUNK_ELEMENTS`` while leaving the math identical
-        to a single full-mask SDPA call; short sequences run as a single chunk.
-        """
-        if not self.fast_attn:
-            raise NotImplementedError(
-                "windowed attention requires scaled_dot_product_attention"
-            )
-        b, _, nq, _ = q.shape
-        nk = k.shape[2]
-        chunk = max(1, min(nq, WINDOW_MASK_CHUNK_ELEMENTS // max(1, b * nk)))
-        outputs = []
-        for start in range(0, nq, chunk):
-            end = min(start + chunk, nq)
-            q_glob = (
-                spec.q_is_global[:, start:end] if spec.q_is_global is not None else None
-            )
-            chunk_mask = build_window_mask(
-                spec.q_positions[:, start:end],
-                spec.k_positions,
-                spec.half_extent,
-                q_is_global=q_glob,
-                k_is_global=spec.k_is_global,
-                key_valid=spec.key_valid,
-            )  # (B, 1, end - start, Nk)
-            outputs.append(
-                F.scaled_dot_product_attention(
-                    q[:, :, start:end],
-                    k,
-                    v,
-                    attn_mask=chunk_mask,
-                    dropout_p=self.attn_drop.p,
-                )
-            )
-        return torch.cat(outputs, dim=2)
-
     def sdpa(
         self,
         q: torch.Tensor,
@@ -363,7 +260,6 @@ class Attention(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
-        window_spec: WindowSpec | None = None,
     ) -> torch.Tensor:
         """Compute scaled dot product attention.
 
@@ -379,8 +275,6 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
-            window_spec: Optional windowed-attention ingredients; when set, attention is
-                restricted to a sliding spatial window built per query-chunk (bounds memory).
 
         Returns:
             Output tensor of shape (B, H, N, D)
@@ -403,10 +297,6 @@ class Attention(nn.Module):
             # Output is (B, Nq, H, D), transpose back to (B, H, Nq, D)
             # matching the transpose of the other attention implementations that need to be transposed back
             x = x.transpose(1, 2)
-        elif window_spec is not None:
-            # Windowed (local) spatial attention: build the (B, 1, Cq, Nk) mask one
-            # query-chunk at a time so peak memory is bounded by the chunk, not Nq*Nk.
-            x = self._windowed_sdpa(q, k, v, window_spec)
         elif self.fast_attn:
             if attn_mask is not None and attn_mask.dim() == 2:
                 # A 1D-per-sample key mask (B, Nk): add head/query dims and let SDPA
@@ -451,8 +341,6 @@ class Attention(nn.Module):
         attn_mask: torch.Tensor | None = None,
         rope_positions: torch.Tensor | None = None,
         rope_positions_y: torch.Tensor | None = None,
-        window_spec: WindowSpec | None = None,
-        kv_cached: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -470,13 +358,6 @@ class Attention(nn.Module):
                 ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
             rope_positions_y: Optional RoPE coordinates for y/key tokens:
                 ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
-            window_spec: Optional windowed-attention ingredients; when set, attention is
-                restricted to a sliding spatial window built per query-chunk (bounds memory).
-            kv_cached: Optional ``(k, v)`` already projected, head-split, normed and
-                RoPE-rotated by :meth:`Attention.compute_kv`. When given, the key side
-                is not recomputed here -- which is what lets many blocks read one
-                context while storing only a single copy of it for backward. Mutually
-                exclusive with ``y``; cross-attention and the SDPA path only.
 
         Returns:
             Output tensor of shape (B, N, C) or (B* N , C) if packed
@@ -484,35 +365,6 @@ class Attention(nn.Module):
         original_shape = x.shape
 
         q = self.q(x)
-
-        if kv_cached is not None:
-            # Shared-K/V path: the caller already projected, head-split, k-normed and
-            # RoPE-rotated the context (see :meth:`compute_kv`), so only the query side
-            # runs here. This is what lets many cross-attention blocks read one large
-            # context without each storing its own k/v copies of it for backward.
-            if not self.cross_attn:
-                raise ValueError("kv_cached is only meaningful for cross-attention")
-            if y is not None:
-                raise ValueError("pass either y or kv_cached, not both")
-            if self.use_flash_attn:
-                raise NotImplementedError("kv_cached targets the SDPA path")
-            k, v = kv_cached
-            q = rearrange(q, "b n (h d) -> b h n d", h=self.num_heads)
-            q = self._apply_rope(self.q_norm(q), rope_positions)
-            return self._finish_attention(
-                q,
-                k,
-                v,
-                original_shape,
-                cu_seqlens=cu_seqlens,
-                cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_k=cu_seqlens_k,
-                max_seqlen=max_seqlen,
-                max_seqlen_q=max_seqlen_q,
-                max_seqlen_k=max_seqlen_k,
-                attn_mask=attn_mask,
-                window_spec=window_spec,
-            )
 
         if y is None:
             assert not self.cross_attn
@@ -578,7 +430,6 @@ class Attention(nn.Module):
             max_seqlen_q=max_seqlen_q,
             max_seqlen_k=max_seqlen_k,
             attn_mask=attn_mask,
-            window_spec=window_spec,
         )
 
     def _finish_attention(
@@ -595,7 +446,6 @@ class Attention(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
-        window_spec: WindowSpec | None = None,
     ) -> torch.Tensor:
         """SDPA over prepared q/k/v, then reshape and output-project."""
         x = self.sdpa(
@@ -612,7 +462,6 @@ class Attention(nn.Module):
             max_seqlen_q=max_seqlen_q,
             max_seqlen_k=max_seqlen_k,
             attn_mask=attn_mask,
-            window_spec=window_spec,
         )
         # The attention output is at the internal attention width (== the input width
         # unless attn_dim decouples them); proj maps it back to the input width.
@@ -799,7 +648,6 @@ class Block(nn.Module):
         spatial_pos_encoding: str | None = None,
         attn_dim: int | None = None,
         kv_in_dim: int | None = None,
-        kv_external: bool = False,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -833,8 +681,6 @@ class Block(nn.Module):
                 the caller.
             kv_in_dim: Optional key/value source width for cross-attention when
                 the context ``y`` is wider than ``dim`` (see :class:`Attention`).
-            kv_external: Build the attention without its own key/value projections; keys
-                and values must then be passed to ``forward`` as ``kv_cached``.
         """
         super().__init__()
         position_encoding = resolve_position_encoding(
@@ -858,7 +704,6 @@ class Block(nn.Module):
             rope_temporal_base=rope_temporal_base,
             attn_dim=attn_dim,
             kv_in_dim=kv_in_dim,
-            kv_external=kv_external,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -889,8 +734,6 @@ class Block(nn.Module):
         attn_mask: torch.Tensor | None = None,
         rope_positions: torch.Tensor | None = None,
         rope_positions_y: torch.Tensor | None = None,
-        window_spec: WindowSpec | None = None,
-        kv_cached: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -908,13 +751,6 @@ class Block(nn.Module):
                 ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
             rope_positions_y: Optional RoPE coordinates for y/key tokens:
                 ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
-            window_spec: Optional windowed-attention ingredients; when set, attention is
-                restricted to a sliding spatial window built per query-chunk (bounds memory).
-            kv_cached: Optional ``(k, v)`` already projected, head-split, normed and
-                RoPE-rotated by :meth:`Attention.compute_kv`. When given, the key side
-                is not recomputed here -- which is what lets many blocks read one
-                context while storing only a single copy of it for backward. Mutually
-                exclusive with ``y``; cross-attention and the SDPA path only.
 
         Returns:
             Output tensor of shape (B, N, C)
@@ -933,8 +769,6 @@ class Block(nn.Module):
                     attn_mask=attn_mask,
                     rope_positions=rope_positions,
                     rope_positions_y=rope_positions_y,
-                    window_spec=window_spec,
-                    kv_cached=kv_cached,
                 )
             )
         )
