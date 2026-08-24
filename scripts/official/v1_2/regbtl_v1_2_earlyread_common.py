@@ -25,8 +25,8 @@ WHY (what licenses this):
 * Every mechanism that lets training re-weight toward LATE depths is neutral-to-harmful
   on the frozen evals in that same file (``lrw``: +0.01 on noic, -1.03 on ictok;
   learned vs uniform ``fsum``: -0.06). Training's preference for the final layer is a
-  pretext-side artifact, not an eval-side gain -- so ``register_learned_read_weighting``
-  stays OFF here.
+  pretext-side artifact, not an eval-side gain -- which is why the learned-read-gate and
+  fused-read knobs were removed from the encoder rather than swept further.
 * Precedent: TokenLearner (arXiv:2106.11297) reduces tokens partway through a ViT and
   spends the savings on more layers over the reduced set -- ViT-B/16 baseline 55.6
   GFLOPs / 84.73%, vs 21-layer TokenLearner 47.1 GFLOPs / 85.21%.
