@@ -96,6 +96,12 @@ MONTHS = 12
 # floor from clipping, and both mean "no radar here" for display purposes.
 S1_NODATA_BELOW = -60.0
 
+# Fixed display ranges for the S1 composite, in dB: vv, vh, and the vv-vh
+# ratio. Sized to the spread RTC gamma0 actually shows over land -- the ratio
+# sits around 5-8 dB for volume scattering and only drops towards 0 over smooth
+# surfaces, so a 0-15 dB range renders every land pixel as the same mid-blue.
+S1_FIXED_RANGES = ((-20.0, 0.0), (-27.0, -7.0), (2.0, 12.0))
+
 S2_REFLECTANCE_SCALE = 1.0 / 10000.0
 # Landsat Collection 2 Level-1 TOA reflectance rescaling (the constant
 # coefficients that hold for every C2 L1 scene).
@@ -368,8 +374,8 @@ VIEW_LIST: list[ViewSpec] = [
         ("vv",),
         "gray",
         scale="raw",
-        vmin=-25.0,
-        vmax=5.0,
+        vmin=S1_FIXED_RANGES[0][0],
+        vmax=S1_FIXED_RANGES[0][1],
         cmap="viridis",
     ),
     ViewSpec(
@@ -379,8 +385,8 @@ VIEW_LIST: list[ViewSpec] = [
         ("vh",),
         "gray",
         scale="raw",
-        vmin=-32.0,
-        vmax=0.0,
+        vmin=S1_FIXED_RANGES[1][0],
+        vmax=S1_FIXED_RANGES[1][1],
         cmap="viridis",
     ),
 ]
@@ -799,6 +805,15 @@ def view_channels(
 # ---------------------------------------------------------------------------
 
 
+def display_channels(view: ViewSpec, channels: list[np.ndarray]) -> list[np.ndarray]:
+    """The channels as actually drawn: the s1 composite appends the vv-vh ratio."""
+    if view.kind == "s1":
+        vv = channels[0]
+        vh = channels[1] if len(channels) > 1 else channels[0]
+        return [vv, vh, vv - vh]
+    return channels
+
+
 def stretch_to_uint8(
     channel: np.ndarray, lo: float, hi: float
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -833,17 +848,17 @@ def window_stretch(
     """Percentile stretch pooled over all twelve months of a view."""
     dataset = DATASETS[ds_name]
     view = VIEWS[view_key]
-    pooled: list[list[np.ndarray]] = [[] for _ in view.bands]
+    pooled: dict[int, list[np.ndarray]] = {}
     months = range(1, MONTHS + 1) if view.monthly else [1]
     for month in months:
         channels = view_channels(dataset, group, name, view, month)
         if channels is None:
             continue
-        for idx, channel in enumerate(channels):
-            pooled[idx].append(channel.ravel())
-    if not pooled[0]:
+        for idx, channel in enumerate(display_channels(view, channels)):
+            pooled.setdefault(idx, []).append(channel.ravel())
+    if not pooled:
         return tuple((0.0, 1.0) for _ in view.bands)
-    joined = [np.concatenate(parts) for parts in pooled]
+    joined = [np.concatenate(pooled[idx]) for idx in sorted(pooled)]
     return tuple(percentiles(joined, low, high))
 
 
@@ -955,21 +970,14 @@ def render_view(
         return grey_out(rgb, ~np.isfinite(ndvi))
 
     if view.kind == "s1":
-        vv = channels[0]
-        vh = channels[1] if len(channels) > 1 else channels[0]
-        stacked = [vv, vh, vv - vh]
-        ranges = [(-25.0, 5.0), (-32.0, 0.0), (0.0, 15.0)]
+        stacked = display_channels(view, channels)
+        ranges = list(S1_FIXED_RANGES)
         if mode == "window":
             ranges = list(
                 window_stretch(
                     dataset.name, group, name, view.key, percentile_low, percentile_high
                 )
             )
-            ranges = [
-                ranges[0],
-                ranges[1] if len(ranges) > 1 else ranges[0],
-                (0.0, 15.0),
-            ]
         elif mode == "image":
             ranges = percentiles(stacked, percentile_low, percentile_high)
         planes, masks = zip(
@@ -1606,6 +1614,26 @@ def dump_window(
                 rgb, defaults["tile_size"] * 2, mark_center=(view.kind == "label")
             ).save(out_dir / f"{view.key}{suffix}.png")
         print(f"{view.key:22s} " + " ".join(marks))
+    print("\nper-channel spread, pooled over all months (display units):")
+    print(
+        f"  {'view':12s} {'channel':9s} {'p2':>10s} {'p50':>10s} {'p98':>10s}  fixed range"
+    )
+    for view in dataset.available_views():
+        if view.kind in {"scl", "qa", "label", "median"}:
+            continue
+        lo_hi = window_stretch(dataset.name, group, name, view.key, 2.0, 98.0)
+        mid = window_stretch(dataset.name, group, name, view.key, 50.0, 50.0)
+        names = list(view.bands) + (["vv-vh"] if view.kind == "s1" else [])
+        for idx, (lo, hi) in enumerate(lo_hi):
+            fixed = (
+                S1_FIXED_RANGES[idx] if view.kind == "s1" else (view.vmin, view.vmax)
+            )
+            label = names[idx] if idx < len(names) else f"ch{idx}"
+            print(
+                f"  {view.key:12s} {label:9s} {lo:10.3f} {mid[idx][0]:10.3f} "
+                f"{hi:10.3f}  {fixed[0]:.3f}..{fixed[1]:.3f}"
+            )
+
     items = window_items(dataset.name, group, name)
     print("\nscenes:")
     for layer in sorted(items):

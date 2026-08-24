@@ -1638,7 +1638,6 @@ class SpatialRegisterBottleneck(nn.Module):
         rope_base: float = 10000.0,
         qk_norm: bool = False,
         interleave: bool = False,
-        read_layers: list[int] | None = None,
         per_depth_read_proj: bool = False,
         latent_self_attn: bool = True,
         attn_dim: int | None = None,
@@ -1673,21 +1672,10 @@ class SpatialRegisterBottleneck(nn.Module):
                 so the latents re-query the input after each refinement, instead of reading
                 once up front. If False (default, backwards compatible), do all ``read_depth``
                 reads first, then all ``latent_transformer_depth`` self-attention blocks.
-            read_layers: If set, enables *multi-depth* reads: the bottleneck reads from a
-                different encoder depth at each ``[read -> self-attend]`` step instead of
-                re-reading the final layer. ``read_layers`` is the (1-indexed, ascending)
-                list of encoder block depths that supply the K/V at each step, so there is
-                one read + one latent block per entry. This recovers modality-unique
-                information that the final layer drops (Lee et al., CVPR 2026, "Beyond
-                What's Shared"). The encoder passes one K/V tensor per layer at forward
-                time. When set it forces the interleaved schedule and overrides
-                ``read_depth`` / ``latent_transformer_depth``; when None (default) behaviour
-                is unchanged (all reads share the final-layer K/V).
             per_depth_read_proj: If True, give each read block its own ``input_norm``
                 LayerNorm *and* ``kv_proj`` down-projection instead of a single shared
-                pair. In multi-depth mode each read draws from a different encoder depth,
-                which have different per-channel statistics and semantics, so a shared
-                affine (γ, β) and a shared projection are a poor fit across all of them.
+                pair. Successive reads then get their own lens on the source instead of
+                being forced through one shared projection.
                 In interleaved single-source mode every read re-queries the same final
                 layer, so per-block projections instead let successive reads extract
                 different views through their own lens. Requires more than one read block
@@ -1769,10 +1757,6 @@ class SpatialRegisterBottleneck(nn.Module):
         super().__init__()
         self.register_dim = register_dim
         self.use_2d_rope = use_2d_rope
-        # Multi-depth reads force the interleaved schedule (one read + one latent block per
-        # source layer); the read/latent counts are then set by ``read_layers``.
-        self.multi_depth = read_layers is not None
-        self.read_layers = list(read_layers) if read_layers is not None else None
         self.attn_dim = attn_dim
         # Single linear map from the internal register width to the shipped width.
         # Applied after the output norm and before any unit-norm, so the norm still
@@ -1796,7 +1780,7 @@ class SpatialRegisterBottleneck(nn.Module):
                     "read is expressed through the read blocks' rotary positions"
                 )
         self.temporal_anchor = temporal_anchor
-        self.interleave = interleave or self.multi_depth
+        self.interleave = interleave
         self.dynamic_grid = register_grid is None
         if register_grid is None:
             if not use_2d_rope:
@@ -1824,19 +1808,11 @@ class SpatialRegisterBottleneck(nn.Module):
         # The read + latent transformer run on small unpacked [B, N, D] tensors with an
         # attention mask, so they use the SDPA path (use_flash_attn=False) regardless of
         # the encoder's flash setting.
-        # Multi-depth: one read + one latent per source layer.
         # Interleave: one read per self-attention block, so the read count matches
         # latent_transformer_depth.
         # Legacy: read_depth reads up front, then latent_transformer_depth self-attentions.
-        if self.multi_depth:
-            assert self.read_layers is not None
-            num_read_blocks = len(self.read_layers)
-            num_latent_blocks = len(self.read_layers)
-        else:
-            num_read_blocks = (
-                latent_transformer_depth if self.interleave else read_depth
-            )
-            num_latent_blocks = latent_transformer_depth
+        num_read_blocks = latent_transformer_depth if self.interleave else read_depth
+        num_latent_blocks = latent_transformer_depth
         # Optionally drop the latent self-attention entirely (cross-attention reads only).
         # The read count is unchanged; only the register-to-register self-attention blocks
         # are removed, isolating the latent transformer's contribution.
@@ -1870,18 +1846,10 @@ class SpatialRegisterBottleneck(nn.Module):
             )
         # Per-depth read front-end: give every read block its own input norm + K/V
         # down-projection instead of a single shared pair. Only meaningful with >1 read
-        # block. Multi-depth: each block draws from a different encoder depth (distinct
-        # per-channel statistics), so a shared affine + projection is a poor fit.
-        # Interleaved single-source: each block re-queries the SAME final-layer tokens
-        # through its own projection, so successive reads can extract different views
-        # instead of being forced through one shared lens.
-        # The ``multi_depth`` clause preserves the original gate exactly (multi-depth runs
-        # always got per-depth projections when requested); ``num_read_blocks > 1`` extends
-        # it to interleaved single-source reads. So this is a strict superset of the old
-        # behaviour -- existing checkpoints build the identical parameter set.
-        self.per_depth_read_proj = per_depth_read_proj and (
-            self.multi_depth or num_read_blocks > 1
-        )
+        # block: each block re-queries the SAME final-layer tokens through its own
+        # projection, so successive reads can extract different views instead of being
+        # forced through one shared lens.
+        self.per_depth_read_proj = per_depth_read_proj and num_read_blocks > 1
         # Down-project the patch K/V source to the (smaller) register dim. The existing
         # Attention ties q/k/v to a single dim, so the read happens entirely at register_dim.
         if self.per_depth_read_proj:
@@ -2014,7 +1982,7 @@ class SpatialRegisterBottleneck(nn.Module):
 
     def forward(
         self,
-        patch_tokens: Tensor | list[Tensor],
+        patch_tokens: Tensor,
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
         spatial_grid: tuple[int, int] | None = None,
@@ -2022,9 +1990,7 @@ class SpatialRegisterBottleneck(nn.Module):
         """Read the (visible) patch tokens into the register grid.
 
         Args:
-            patch_tokens: Encoded tokens ``[B, N, encoder_embedding_size]``. In multi-depth
-                mode (``read_layers`` set) this is instead a list of one such tensor per
-                read block, giving the K/V source at each successive encoder depth.
+            patch_tokens: Encoded tokens ``[B, N, encoder_embedding_size]``.
             patch_positions: GSD-scaled ``[B, N, 2]`` ``(row, col)`` coords (None if not
                 using RoPE). With ``temporal_anchor`` set this is instead ``[B, N, 3]``
                 ``(t, row, col)`` where ``t`` is the anchor-RELATIVE temporal
@@ -2038,48 +2004,19 @@ class SpatialRegisterBottleneck(nn.Module):
             registers: ``[B, num_registers, register_dim]``
             register_positions: ``[B, num_registers, 2]`` or None
         """
-        # Down-project the K/V source(s) to register_dim. Multi-depth gets one source per
-        # read block; otherwise a single source is reused by every read. With
-        # per_depth_read_proj each read block has its own norm + projection (so even the
-        # single-source case is projected once per block); otherwise they share one pair.
-        if self.multi_depth:
-            if not isinstance(patch_tokens, list):
-                raise ValueError(
-                    "multi-depth register bottleneck expects a list of per-layer "
-                    "patch_tokens (one per read block)"
-                )
-            assert self.read_layers is not None
-            if len(patch_tokens) != len(self.read_layers):
-                raise ValueError(
-                    f"expected {len(self.read_layers)} K/V sources (one per read layer), "
-                    f"got {len(patch_tokens)}"
-                )
-            if self.per_depth_read_proj:
-                kv_per_read = [
-                    proj(norm(t))
-                    for norm, proj, t in zip(
-                        self.input_norms, self.kv_projs, patch_tokens
-                    )
-                ]
-            else:
-                kv_per_read = [self.kv_proj(self.input_norm(t)) for t in patch_tokens]
-            reference_tokens = patch_tokens[0]
+        # Down-project the patch K/V source to register_dim. With per_depth_read_proj each
+        # read block has its own norm + projection; otherwise they share one pair.
+        if self.per_depth_read_proj:
+            # Each read block re-projects the same final-layer source through its own
+            # norm + projection (interleaved single-source reads).
+            kv_per_read = [
+                proj(norm(patch_tokens))
+                for norm, proj in zip(self.input_norms, self.kv_projs)
+            ]
         else:
-            if isinstance(patch_tokens, list):
-                raise ValueError(
-                    "single-source register bottleneck expects a tensor, not a list"
-                )
-            if self.per_depth_read_proj:
-                # Each read block re-projects the same final-layer source through its own
-                # norm + projection (interleaved single-source reads).
-                kv_per_read = [
-                    proj(norm(patch_tokens))
-                    for norm, proj in zip(self.input_norms, self.kv_projs)
-                ]
-            else:
-                kv = self.kv_proj(self.input_norm(patch_tokens))
-                kv_per_read = [kv] * len(self.read_blocks)
-            reference_tokens = patch_tokens
+            kv = self.kv_proj(self.input_norm(patch_tokens))
+            kv_per_read = [kv] * len(self.read_blocks)
+        reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
         if self.dynamic_grid:
             if spatial_grid is None:
@@ -2234,7 +2171,6 @@ class Encoder(FlexiVitBase):
         register_latent_depth: int = 2,
         register_num_heads: int | None = None,
         register_interleave: bool = False,
-        register_read_layers: list[int] | None = None,
         register_per_depth_read_proj: bool = False,
         register_latent_self_attn: bool = True,
         register_attn_dim: int | None = None,
@@ -2334,18 +2270,10 @@ class Encoder(FlexiVitBase):
                 latent self-attention (``[read -> self] x register_latent_depth``) so the
                 registers re-query the input after each refinement, instead of reading once
                 up front. Defaults to False (legacy schedule, backwards compatible).
-            register_read_layers: If set, the register bottleneck reads from these (1-indexed,
-                ascending) encoder block depths -- one ``[read -> self-attend]`` step per
-                entry, each reading the patch tokens at that depth -- instead of re-reading
-                the final layer. Recovers modality-unique information that the final layer
-                drops. Forces the interleaved schedule and overrides ``register_read_depth``
-                / ``register_latent_depth``. Defaults to None (final-layer read only,
-                backwards compatible).
             register_per_depth_read_proj: If True, give each read block its own input
-                LayerNorm and K/V down-projection instead of one shared pair. Helps
-                multi-depth reads (different encoder depths have different statistics) and
-                interleaved single-source reads (each block gets its own lens on the final
-                layer). Requires more than one read block. Defaults to False (shared norm +
+                LayerNorm and K/V down-projection instead of one shared pair, so each
+                interleaved read gets its own lens on the final layer. Requires more than
+                one read block. Defaults to False (shared norm +
                 projection, backwards compatible).
             register_latent_self_attn: If False, drop the bottleneck's latent
                 self-attention blocks entirely (cross-attention reads only, no
@@ -2514,17 +2442,6 @@ class Encoder(FlexiVitBase):
                     f"{self.position_encoding!r})"
                 )
         if use_register_bottleneck:
-            if register_read_layers is not None:
-                if sorted(set(register_read_layers)) != list(register_read_layers):
-                    raise ValueError(
-                        "register_read_layers must be strictly ascending and unique, got "
-                        f"{register_read_layers}"
-                    )
-                if not all(1 <= layer <= depth for layer in register_read_layers):
-                    raise ValueError(
-                        f"register_read_layers must lie in [1, depth={depth}], got "
-                        f"{register_read_layers}"
-                    )
             resolved_register_dim = (
                 register_dim if register_dim is not None else embedding_size // 2
             )
@@ -2556,7 +2473,6 @@ class Encoder(FlexiVitBase):
                 rope_base=rope_base,
                 qk_norm=qk_norm,
                 interleave=register_interleave,
-                read_layers=register_read_layers,
                 per_depth_read_proj=register_per_depth_read_proj,
                 latent_self_attn=register_latent_self_attn,
                 attn_dim=register_attn_dim,
@@ -2612,7 +2528,6 @@ class Encoder(FlexiVitBase):
                         rope_base=rope_base,
                         qk_norm=qk_norm,
                         interleave=register_interleave,
-                        read_layers=None,
                         per_depth_read_proj=register_per_depth_read_proj,
                         latent_self_attn=register_latent_self_attn,
                         attn_dim=embedding_size,
@@ -3060,19 +2975,6 @@ class Encoder(FlexiVitBase):
             if positions is not None:
                 positions = self.add_register_positions(positions)
 
-        # Multi-depth register reads: stash the (raw, in-loop) patch tokens at the
-        # configured 1-indexed depths so the bottleneck can read each one. The patch stack
-        # is independent of the registers (registers never write back), so caching here is
-        # equivalent to truly interleaving the reads into the block loop.
-        multi_depth_read_layers: set[int] = set()
-        if (
-            self.register_bottleneck is not None
-            and self.register_bottleneck.multi_depth
-        ):
-            assert self.register_bottleneck.read_layers is not None
-            multi_depth_read_layers = set(self.register_bottleneck.read_layers)
-        cached_read_tokens: dict[int, Tensor] = {}
-
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
@@ -3099,9 +3001,6 @@ class Encoder(FlexiVitBase):
                 attn_mask=attn_mask,
                 rope_positions=positions,
             )
-            # Stash this depth's output for the multi-depth register read (1-indexed).
-            if (i_blk + 1) in multi_depth_read_layers:
-                cached_read_tokens[i_blk + 1] = tokens
 
         if self.has_register_tokens:
             tokens, register_tokens = self.pop_register_tokens(tokens)
@@ -3146,36 +3045,8 @@ class Encoder(FlexiVitBase):
                 if self.register_bottleneck.dynamic_grid
                 else None
             )
-            if self.register_bottleneck.multi_depth:
-                assert self.register_bottleneck.read_layers is not None
-
-                def _finalize_read_tokens(raw: Tensor) -> Tensor:
-                    # Bring a cached, in-loop block output into the shape the bottleneck
-                    # reads: drop register tokens, unpack (flash), and re-add masked tokens
-                    # (the read masks them out). No norm here -- the bottleneck applies its
-                    # own input_norm to every K/V source, so an encoder norm would be a
-                    # redundant double-norm (and would mismatch across read depths).
-                    t = raw
-                    if self.has_register_tokens:
-                        t, _ = self.pop_register_tokens(t)
-                    if self.use_flash_attn:
-                        t = self.unpack_tokens(t, new_mask, og_shape)
-                    return self._maybe_add_removed_tokens(
-                        t, indices, new_mask, fast_pass
-                    )
-
-                # One K/V source per read layer, each finalized from its cached (pre-norm)
-                # block output so all depths are normalized identically by the bottleneck's
-                # input_norm. Every read layer is cached above, including the final depth
-                # when it is a read layer.
-                patch_tokens_arg: Tensor | list[Tensor] = [
-                    _finalize_read_tokens(cached_read_tokens[depth])
-                    for depth in self.register_bottleneck.read_layers
-                ]
-            else:
-                patch_tokens_arg = tokens
             registers, register_positions = self.register_bottleneck(
-                patch_tokens=patch_tokens_arg,
+                patch_tokens=tokens,
                 patch_positions=register_kv_positions,
                 visible_mask=bool_mask,
                 spatial_grid=spatial_grid,
@@ -3895,13 +3766,9 @@ class EncoderConfig(Config):
     # Interleave reads with latent self-attention ([read -> self] x register_latent_depth)
     # instead of reading once up front. False -> legacy schedule (backwards compatible).
     register_interleave: bool = False
-    # Multi-depth reads: 1-indexed, ascending encoder depths the bottleneck reads from
-    # (one [read -> self-attend] step per entry). Forces the interleaved schedule and
-    # overrides register_read_depth / register_latent_depth. None -> final-layer read only.
-    register_read_layers: list[int] | None = None
     # Give each read block its own input norm + K/V down-projection instead of sharing one
-    # pair (multi-depth: per-depth stats; interleave: a distinct lens per re-read). Needs
-    # >1 read block. False -> shared (backwards compatible).
+    # pair, so each interleaved re-read gets a distinct lens. Needs >1 read block.
+    # False -> shared (backwards compatible).
     register_per_depth_read_proj: bool = False
     # Where the contrastive head reads when the bottleneck is on: "registers" (default,
     # project from the register latents) or "encoder_tokens" (project from the encoder
@@ -4073,21 +3940,6 @@ class EncoderConfig(Config):
                     "2D RoPE requires register head_dim divisible by 4, got "
                     f"{attn_width // register_heads}"
                 )
-            if self.register_read_layers is not None:
-                if sorted(set(self.register_read_layers)) != list(
-                    self.register_read_layers
-                ):
-                    raise ValueError(
-                        "register_read_layers must be strictly ascending and unique, got "
-                        f"{self.register_read_layers}"
-                    )
-                if not all(
-                    1 <= layer <= self.depth for layer in self.register_read_layers
-                ):
-                    raise ValueError(
-                        f"register_read_layers must lie in [1, depth={self.depth}], got "
-                        f"{self.register_read_layers}"
-                    )
             if self.register_projection_dims is not None:
                 if len(self.register_projection_dims) == 0 or any(
                     d <= 0 for d in self.register_projection_dims
@@ -4101,10 +3953,6 @@ class EncoderConfig(Config):
                         "register_projection_type must be 'linear' or 'perceiver', "
                         f"got {self.register_projection_type!r}"
                     )
-        elif self.register_read_layers is not None:
-            raise ValueError(
-                "register_read_layers requires use_register_bottleneck=True"
-            )
         elif self.register_projection_dims is not None:
             raise ValueError(
                 "register_projection_dims requires use_register_bottleneck=True"

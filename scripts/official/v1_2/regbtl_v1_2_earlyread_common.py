@@ -32,7 +32,7 @@ WHY (what licenses this):
   GFLOPs / 84.73%, vs 21-layer TokenLearner 47.1 GFLOPs / 85.21%.
 
 WHAT STAYS THE SAME INSIDE THE BOTTLENECK: single-source re-reads
-(``register_read_layers=None``), so every read re-queries the same shallow trunk output
+so every read re-queries the same shallow trunk output
 through its own norm. Under ``interleave`` the reads are still distinct from one another
 -- read 1 queries blank cloned latents, read N queries registers refined N-1 times
 (Perceiver iterative attention). The depth diversity moves from the KEY side to the QUERY
@@ -226,15 +226,9 @@ def build_earlyread_model_config(
     encoder_config.register_latent_every_n = latent_every_n
 
     # Single-source re-reads: every read re-queries the trunk's final layer through its
-    # own norm (per_depth_read_proj), rather than one read per encoder depth. Asserted
-    # rather than assigned so that a change to the BASE script fails loudly here instead
-    # of silently switching these arms to a different bottleneck. ``register_read_layers``
-    # is validated as strictly ascending, unique and bounded by ``depth``, so a stale
-    # [3, 6, 9, 12] would hard-error against a 3-layer trunk anyway -- but the other two
-    # are silent, and the anchor is what makes a shallow trunk viable at all.
-    assert encoder_config.register_read_layers is None, (
-        "early-read arms use single-source re-reads; register_read_layers must be None"
-    )
+    # own norm (per_depth_read_proj). Asserted rather than assigned so that a change to
+    # the BASE script fails loudly here instead of silently switching these arms to a
+    # different bottleneck; the anchor is what makes a shallow trunk viable at all.
     assert encoder_config.register_interleave, (
         "early-read arms need the interleaved [read -> self] schedule"
     )

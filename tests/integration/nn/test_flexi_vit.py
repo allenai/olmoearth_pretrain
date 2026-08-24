@@ -1424,163 +1424,13 @@ def test_encoder_register_bottleneck_interleave(
     assert bottleneck.read_blocks[-1].attn.q.weight.grad is not None
 
 
-def test_encoder_register_bottleneck_multi_depth(
-    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
-) -> None:
-    """register_read_layers reads a different encoder depth at each interleaved step."""
-    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
-    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
-    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
-    grid_size, register_dim, depth = 3, 8, 4
-    # Read only from depth 2 (an intermediate layer): blocks AFTER depth 2 then have no
-    # path to the registers, which pins down that the read sources the intermediate layer
-    # rather than the final one.
-    read_layers = [2]
-    encoder = Encoder(
-        supported_modalities=supported_modalities,
-        embedding_size=16,
-        max_patch_size=4,
-        min_patch_size=1,
-        num_heads=2,
-        mlp_ratio=2.0,
-        max_sequence_length=12,
-        depth=depth,
-        drop_path=0.0,
-        position_encoding="rope",
-        use_register_bottleneck=True,
-        register_grid_size=grid_size,
-        register_dim=register_dim,
-        # read_depth / latent_depth are overridden by read_layers.
-        register_read_depth=1,
-        register_latent_depth=99,
-        register_read_layers=read_layers,
-    )
-    bottleneck = encoder.register_bottleneck
-    assert bottleneck is not None
-    assert bottleneck.multi_depth
-    assert bottleneck.interleave  # multi-depth forces the interleaved schedule
-    assert bottleneck.read_layers == read_layers
-    # One read + one latent block per source layer (read_depth / latent_depth ignored).
-    assert len(bottleneck.read_blocks) == len(read_layers)
-    assert len(bottleneck.latent_blocks) == len(read_layers)
-
-    # Also build a stride-2 encoder to confirm the read/latent counts track len(read_layers).
-    stride2 = Encoder(
-        supported_modalities=supported_modalities,
-        embedding_size=16,
-        max_patch_size=4,
-        min_patch_size=1,
-        num_heads=2,
-        mlp_ratio=2.0,
-        max_sequence_length=12,
-        depth=depth,
-        drop_path=0.0,
-        position_encoding="rope",
-        use_register_bottleneck=True,
-        register_grid_size=grid_size,
-        register_dim=register_dim,
-        register_read_layers=[2, 4],
-    )
-    assert stride2.register_bottleneck is not None
-    assert len(stride2.register_bottleneck.read_blocks) == 2
-    assert len(stride2.register_bottleneck.latent_blocks) == 2
-
-    B, H, W, T = 2, 8, 8, 2
-    timestamps = torch.tensor(
-        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
-    )
-    sample = MaskedOlmoEarthSample(
-        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
-        sentinel2_l2a_mask=torch.zeros(
-            B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
-        ),
-        latlon=torch.randn(B, latlon_num_bands),
-        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
-        timestamps=timestamps,
-    )
-    output_dict = encoder.forward(sample, patch_size=2, input_res=10)
-    assert output_dict["registers"].shape == (B, grid_size * grid_size, register_dim)
-    output_dict["registers"].sum().backward()
-    # The read draws K/V from the depth-2 output, so the read block and blocks up to and
-    # including depth 2 (indices 0, 1) receive gradient...
-    assert bottleneck.read_blocks[0].attn.q.weight.grad is not None
-    assert encoder.blocks[0].attn.q.weight.grad is not None
-    assert encoder.blocks[1].attn.q.weight.grad is not None
-    # ...while blocks AFTER the deepest read layer (depths 3, 4) do not -- they have no
-    # path to the registers, proving the read sources the intermediate layer, not the final.
-    assert encoder.blocks[2].attn.q.weight.grad is None
-    assert encoder.blocks[3].attn.q.weight.grad is None
-
-
-def test_encoder_register_bottleneck_per_depth_read_proj(
-    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
-) -> None:
-    """per_depth_read_proj gives each multi-depth read its own input_norm + kv_proj.
-
-    Companion ``test_..._per_depth_read_proj_interleave`` covers the single-source
-    (interleaved, non-multi-depth) case.
-    """
-    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
-    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
-    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
-    grid_size, register_dim, depth = 3, 8, 4
-    read_layers = [2, 4]
-    encoder = Encoder(
-        supported_modalities=supported_modalities,
-        embedding_size=16,
-        max_patch_size=4,
-        min_patch_size=1,
-        num_heads=2,
-        mlp_ratio=2.0,
-        max_sequence_length=12,
-        depth=depth,
-        drop_path=0.0,
-        position_encoding="rope",
-        use_register_bottleneck=True,
-        register_grid_size=grid_size,
-        register_dim=register_dim,
-        register_read_layers=read_layers,
-        register_per_depth_read_proj=True,
-    )
-    bottleneck = encoder.register_bottleneck
-    assert bottleneck is not None
-    assert bottleneck.per_depth_read_proj
-    # One norm + one projection per read layer; no shared pair.
-    assert len(bottleneck.input_norms) == len(read_layers)
-    assert len(bottleneck.kv_projs) == len(read_layers)
-    assert not hasattr(bottleneck, "input_norm")
-    assert not hasattr(bottleneck, "kv_proj")
-
-    B, H, W = 2, 8, 8
-    timestamps = torch.tensor(
-        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
-    )
-    sample = MaskedOlmoEarthSample(
-        sentinel2_l2a=torch.randn(B, H, W, 2, sentinel2_l2a_num_bands),
-        sentinel2_l2a_mask=torch.zeros(
-            B, H, W, 2, sentinel2_l2a_num_bands, dtype=torch.long
-        ),
-        latlon=torch.randn(B, latlon_num_bands),
-        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
-        timestamps=timestamps,
-    )
-    output_dict = encoder.forward(sample, patch_size=2, input_res=10)
-    assert output_dict["registers"].shape == (B, grid_size * grid_size, register_dim)
-    output_dict["registers"].sum().backward()
-    # Each per-depth norm + projection receives gradient.
-    for norm in bottleneck.input_norms:
-        assert norm.weight.grad is not None
-    for proj in bottleneck.kv_projs:
-        assert proj.weight.grad is not None
-
-
 def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
-    """per_depth_read_proj also applies to interleaved (single-source) reads.
+    """per_depth_read_proj gives each interleaved read its own input_norm + kv_proj.
 
-    No multi-depth (register_read_layers=None): every read re-queries the same final
-    layer, but each read block still gets its own input_norm + kv_proj.
+    Every read re-queries the same final layer, but each read block still gets its own
+    norm + projection rather than sharing one pair.
     """
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
     sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
@@ -1606,7 +1456,6 @@ def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
     )
     bottleneck = encoder.register_bottleneck
     assert bottleneck is not None
-    assert not bottleneck.multi_depth
     assert bottleneck.per_depth_read_proj
     # Interleave -> one read block per latent block; one norm + projection each, no shared.
     assert len(bottleneck.read_blocks) == latent_depth
