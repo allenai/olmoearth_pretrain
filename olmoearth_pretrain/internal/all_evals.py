@@ -2221,6 +2221,43 @@ for _loio_terr in ("reunion", "guadeloupe", "martinique", "guyane", "mayotte"):
         _pastis_ps1_task([Modality.SENTINEL2_L2A.name], dataset=f"{_void_ds}_full")
     )
 
+    # bg8void LOIO, the other four input modalities. These read the *_full entry, not
+    # the S2-trimmed one: the trimmed dataset declares only sentinel2_l2a, and
+    # full_eval_sweep skips any task whose modality is absent from the dataset's
+    # supported_modalities, so an S1 task on the trimmed entry would be silently
+    # dropped rather than fail. The _full entry already declares
+    # gse / landsat / sentinel1 / sentinel2_l2a / tessera_v2 against the same
+    # loio_<terr> split tag, so no dataset or registry change is required.
+    #
+    # The S2 entries above are deliberately left on the trimmed dataset: their numbers
+    # are already published, and repointing them would change results for no reason.
+    # Name suffixes match the 443 tasks exactly, so existing harvest globs work.
+    EMBEDDING_EVAL_TASKS[f"pastis2_drom_bg8void_loio_{_loio_terr}_ws16_ps1_sentinel1"] = (
+        _pastis_ps1_task([Modality.SENTINEL1.name], dataset=f"{_void_ds}_full")
+    )
+    EMBEDDING_EVAL_TASKS[
+        f"pastis2_drom_bg8void_loio_{_loio_terr}_ws16_ps1_sentinel1_sentinel2"
+    ] = _pastis_ps1_task(
+        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        dataset=f"{_void_ds}_full",
+    )
+    EMBEDDING_EVAL_TASKS[
+        f"pastis2_drom_bg8void_loio_{_loio_terr}_ws16_ps1_sentinel2_landsat"
+    ] = _pastis_ps1_task(
+        [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+        dataset=f"{_void_ds}_full",
+    )
+    EMBEDDING_EVAL_TASKS[
+        f"pastis2_drom_bg8void_loio_{_loio_terr}_ws16_ps1_sentinel1_sentinel2_landsat"
+    ] = _pastis_ps1_task(
+        [
+            Modality.SENTINEL1.name,
+            Modality.SENTINEL2_L2A.name,
+            Modality.LANDSAT.name,
+        ],
+        dataset=f"{_void_ds}_full",
+    )
+
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
