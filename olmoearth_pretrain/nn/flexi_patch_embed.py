@@ -94,6 +94,7 @@ class FlexiPatchEmbed(nn.Module):
             raise ValueError(
                 "post_proj_hidden_sizes requires use_linear_patch_embed=True"
             )
+
         p_h, p_w = self.base_patch_size
         self.pixel_proj: nn.Sequential | None = None
         if use_linear_patch_embed:
@@ -181,10 +182,8 @@ class FlexiPatchEmbed(nn.Module):
             # [b, c, H, W] -> [b, H, W, c] -> MLP -> [b, H, W, h[-1]]
             # Then patchify: [b, h_patches, w_patches, p_h * p_w * h[-1]]
             x = rearrange(x, "b c h w -> b h w c")
-            pixel_feats = self.pixel_proj(x)
-            x = rearrange(
-                pixel_feats, "b (h p1) (w p2) c -> b (h w) (p1 p2 c)", p1=p_h, p2=p_w
-            )
+            x = self.pixel_proj(x)
+            x = rearrange(x, "b (h p1) (w p2) c -> b (h w) (p1 p2 c)", p1=p_h, p2=p_w)
         else:
             x = rearrange(x, "b c (h p1) (w p2) -> b (h w) (p1 p2 c)", p1=p_h, p2=p_w)
         x = self.proj(x)
