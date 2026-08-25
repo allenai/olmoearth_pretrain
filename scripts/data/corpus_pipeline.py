@@ -174,6 +174,7 @@ def _run_rslearn_steps(
     workers: int,
     shard_id: int,
     group: str = "res_10.0",
+    jobs_per_process: int | None = None,
 ) -> None:
     """Run rslearn prepare/dedup/ingest/materialize in-process.
 
@@ -240,6 +241,7 @@ def _run_rslearn_steps(
             dataset=dataset,
             names=window_names,
             workers=workers,
+            jobs_per_process=jobs_per_process,
         ):
             pass  # consume generator; summaries logged internally
 
@@ -306,6 +308,7 @@ def cmd_rslearn_worker(args: argparse.Namespace) -> None:
         workers=args.workers,
         shard_id=args.shard_id,
         group=args.group,
+        jobs_per_process=args.jobs_per_process,
     )
 
     _write_progress(rslearn_dir, "rslearn", args.shard_id, "done")
@@ -571,6 +574,8 @@ def cmd_launch_rslearn(args: argparse.Namespace) -> None:
         str(args.workers),
         "--group",
         args.group,
+        "--jobs-per-process",
+        str(args.jobs_per_process),
     ]
     if getattr(args, "window_manifest", None):
         cmd_template.extend(["--window-manifest", args.window_manifest])
@@ -1007,6 +1012,12 @@ def main() -> None:
         choices=["low", "normal", "high", "urgent"],
         help="Beaker priority (default: build_launch_config default)",
     )
+    p.add_argument(
+        "--jobs-per-process",
+        type=int,
+        default=8,
+        help="Recycle worker processes after this many window batches (bounds fd leaks)",
+    )
     p.set_defaults(func=cmd_launch_rslearn)
 
     # -- rslearn-worker --
@@ -1014,6 +1025,7 @@ def main() -> None:
     p.add_argument("--corpus", default=None)
     p.add_argument("--window-manifest", default=None)
     p.add_argument("--group", default="res_10.0")
+    p.add_argument("--jobs-per-process", type=int, default=8)
     p.add_argument("--rslearn-dir", required=True)
     p.add_argument("--rslearn-config", default=None)
     p.add_argument("--shard-id", type=int, required=True)
