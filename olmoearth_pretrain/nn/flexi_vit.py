@@ -2095,8 +2095,9 @@ class Encoder(FlexiVitBase):
                 accepted), use the dynamic single-latent mode: one shared latent cloned
                 across a grid that matches the input patch grid at forward time (requires
                 ``spatial_pos_encoding="rope"``).
-            register_dim: Width of the register grid (the bottleneck dim). Defaults to
-                ``embedding_size // 2`` when None.
+            register_dim: Width of the register grid (the bottleneck dim). Required
+                when ``use_register_bottleneck`` is True; the decoder cross-attends
+                this same width, so it is stated rather than defaulted.
             register_read_depth: Number of cross-attention read blocks.
             register_latent_depth: Number of latent-transformer self-attention blocks
                 over the register grid.
@@ -2276,9 +2277,11 @@ class Encoder(FlexiVitBase):
                     f"{self.position_encoding!r})"
                 )
         if use_register_bottleneck:
-            resolved_register_dim = (
-                register_dim if register_dim is not None else embedding_size // 2
-            )
+            if register_dim is None:
+                raise ValueError(
+                    "register_dim is required when use_register_bottleneck is True"
+                )
+            resolved_register_dim = register_dim
             resolved_register_heads = (
                 register_num_heads if register_num_heads is not None else num_heads
             )
@@ -3717,11 +3720,11 @@ class EncoderConfig(Config):
                     "per-cell 2D (row, col) coordinates. A 3D encoder is fine -- the "
                     "bottleneck reads with the spatial axes only (see use_2d_rope)."
                 )
-            register_dim = (
-                self.register_dim
-                if self.register_dim is not None
-                else self.embedding_size // 2
-            )
+            if self.register_dim is None:
+                raise ValueError(
+                    "register_dim must be set when use_register_bottleneck is True"
+                )
+            register_dim = self.register_dim
             register_heads = (
                 self.register_num_heads
                 if self.register_num_heads is not None
