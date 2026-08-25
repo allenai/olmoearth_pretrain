@@ -7,6 +7,7 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+from einops import rearrange
 from torch.distributed import DeviceMesh
 from torch.distributed.fsdp import (
     MixedPrecisionPolicy,
@@ -150,7 +151,9 @@ class LatentMIM(nn.Module, DistributedMixins):
                 register projection (else None): the teacher ``registers``, the
                 student ``projected_registers``, and the student's
                 ``supervision_preds`` (or None). Consumed by the train module's
-                distillation / projection-supervision losses.
+                distillation / projection-supervision losses. The two grids are
+                FLATTENED to ``[B, N, D]`` here: every consumer (uniformity, Gram,
+                cosine) is relational over cells and takes a token sequence.
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         output_dict = self.encoder(x, patch_size=patch_size)
@@ -174,15 +177,10 @@ class LatentMIM(nn.Module, DistributedMixins):
         supervision_preds = None
         if self.supervision_head is not None:
             if getattr(self.supervision_head, "register_supervision", False):
-                # Supervise the register grid directly: reshape [B, n_reg, D] to the
-                # spatial grid [B, n_h, n_w, D] the heads expect.
-                registers = decoder_kwargs.get("registers")
-                n_h, n_w = self.encoder.register_bottleneck.register_grid
-                register_grid = registers.reshape(
-                    registers.shape[0], n_h, n_w, registers.shape[-1]
-                )
+                # The encoder already hands back the grid as [B, n_h, n_w, D], which
+                # is the shape the heads expect.
                 supervision_preds = self.supervision_head(
-                    decoded, x, register_grid=register_grid
+                    decoded, x, register_grid=decoder_kwargs.get("registers")
                 )
             else:
                 supervision_preds = self.supervision_head(decoded, x)
@@ -195,22 +193,19 @@ class LatentMIM(nn.Module, DistributedMixins):
         projection_outputs: dict | None = None
         if registers is not None:
             projection_outputs = {
-                "registers": registers,
+                "registers": rearrange(registers, "b h w d -> b (h w) d"),
                 "projected_registers": None,
                 "supervision_preds": None,
             }
         if projected_registers is not None:
             projection_supervision_preds = None
             if self.projection_supervision_heads is not None:
-                # Same grid as the registers (the student mirrors the primary's grid).
-                # Head d reads the first d dims (the Matryoshka prefix), so every
-                # listed width is supervised as a self-sufficient embedding. The
-                # student input is already detached inside the encoder, so these
-                # gradients stop at the projection.
-                n_h, n_w = self.encoder.register_bottleneck.register_grid
-                projected_grid = projected_registers.reshape(
-                    projected_registers.shape[0], n_h, n_w, -1
-                )
+                # Same grid as the registers (the student mirrors the primary's grid),
+                # already shaped [B, n_h, n_w, d] by the encoder. Head d reads the first
+                # d dims (the Matryoshka prefix), so every listed width is supervised as
+                # a self-sufficient embedding. The student input is already detached
+                # inside the encoder, so these gradients stop at the projection.
+                projected_grid = projected_registers
                 projection_supervision_preds = {
                     dim_str: head(
                         decoded, x, register_grid=projected_grid[..., : int(dim_str)]
@@ -220,7 +215,9 @@ class LatentMIM(nn.Module, DistributedMixins):
             assert projection_outputs is not None, (
                 "a projection student cannot exist without a register bottleneck"
             )
-            projection_outputs["projected_registers"] = projected_registers
+            projection_outputs["projected_registers"] = rearrange(
+                projected_registers, "b h w d -> b (h w) d"
+            )
             projection_outputs["supervision_preds"] = projection_supervision_preds
 
         return (

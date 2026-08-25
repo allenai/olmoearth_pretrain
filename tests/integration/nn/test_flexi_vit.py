@@ -1108,7 +1108,7 @@ def test_encoder_register_bottleneck(
         registers = output_dict["registers"]
         register_positions = output_dict["register_positions"]
         # Register count is fixed regardless of patch grid; width is the bottleneck dim.
-        assert registers.shape == (B, grid_size * grid_size, register_dim)
+        assert registers.shape == (B, grid_size, grid_size, register_dim)
         assert register_positions.shape == (B, grid_size * grid_size, 2)
         # With a register bottleneck, project_and_aggregate pools the register tokens
         # (only), so the contrastive projection is sized to register_dim.
@@ -1177,11 +1177,12 @@ def test_encoder_register_bottleneck_dynamic_grid(
         # The register grid tracks the patch grid (H//patch_size) instead of being fixed.
         expected_side = H // patch_size
         n_reg = expected_side * expected_side
-        assert encoder.register_bottleneck.register_grid == (
+        assert output_dict["registers"].shape == (
+            B,
             expected_side,
             expected_side,
+            register_dim,
         )
-        assert output_dict["registers"].shape == (B, n_reg, register_dim)
         assert output_dict["register_positions"].shape == (B, n_reg, 2)
 
         output_dict["registers"].sum().backward()
@@ -1239,7 +1240,12 @@ def test_encoder_register_bottleneck_3d_rope_encoder_2d_read(
     output_dict = encoder.forward(sample, patch_size=4, input_res=10)
     expected_side = H // 4
     n_reg = expected_side * expected_side
-    assert output_dict["registers"].shape == (B, n_reg, register_dim)
+    assert output_dict["registers"].shape == (
+        B,
+        expected_side,
+        expected_side,
+        register_dim,
+    )
     # Register positions are spatial only -- 2D, regardless of the 3D encoder.
     assert output_dict["register_positions"].shape == (B, n_reg, 2)
     output_dict["registers"].sum().backward()
@@ -1310,7 +1316,12 @@ def test_encoder_register_bottleneck_temporal_anchor(
     output_dict = encoder.forward(sample, patch_size=4, input_res=10)
     expected_side = H // 4
     n_reg = expected_side * expected_side
-    assert output_dict["registers"].shape == (B, n_reg, register_dim)
+    assert output_dict["registers"].shape == (
+        B,
+        expected_side,
+        expected_side,
+        register_dim,
+    )
     # The grid contract is unchanged: spatial-only 2D positions.
     assert output_dict["register_positions"].shape == (B, n_reg, 2)
     output_dict["registers"].sum().backward()
@@ -1418,7 +1429,7 @@ def test_encoder_register_bottleneck_interleave(
         timestamps=timestamps,
     )
     output_dict = encoder.forward(sample, patch_size=2, input_res=10)
-    assert output_dict["registers"].shape == (B, grid_size * grid_size, register_dim)
+    assert output_dict["registers"].shape == (B, grid_size, grid_size, register_dim)
     output_dict["registers"].sum().backward()
     # Gradients reach the last interleaved read (only reached if reads run between selves).
     assert bottleneck.read_blocks[-1].attn.q.weight.grad is not None
@@ -1478,7 +1489,7 @@ def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
         timestamps=timestamps,
     )
     output_dict = encoder.forward(sample, patch_size=2, input_res=10)
-    assert output_dict["registers"].shape == (B, grid_size * grid_size, register_dim)
+    assert output_dict["registers"].shape == (B, grid_size, grid_size, register_dim)
     output_dict["registers"].sum().backward()
     # Every per-block norm + projection receives gradient.
     for norm in bottleneck.input_norms:
@@ -1555,7 +1566,7 @@ def test_encoder_register_bottleneck_decoupled_attn_dim(
     patch_size = 2
     output_dict = encoder.forward(sample, patch_size=patch_size, input_res=10)
     grid = (H // patch_size, W // patch_size)
-    assert output_dict["registers"].shape == (B, grid[0] * grid[1], register_dim)
+    assert output_dict["registers"].shape == (B, grid[0], grid[1], register_dim)
     output_dict["registers"].sum().backward()
     assert read_attn.q.weight.grad is not None
     assert read_attn.k.weight.grad is not None

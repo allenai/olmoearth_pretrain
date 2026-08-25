@@ -112,10 +112,9 @@ def test_encoder_register_projection_detached(
     B = masked_sample_dict["sentinel2_l2a"].shape[0]
 
     output_dict = encoder.forward(x, patch_size=4, input_res=10)
-    n_reg = GRID_SIZE * GRID_SIZE
-    assert output_dict["registers"].shape == (B, n_reg, REGISTER_DIM)
+    assert output_dict["registers"].shape == (B, GRID_SIZE, GRID_SIZE, REGISTER_DIM)
     projected = output_dict["projected_registers"]
-    assert projected.shape == (B, n_reg, max(PROJECTION_DIMS))
+    assert projected.shape == (B, GRID_SIZE, GRID_SIZE, max(PROJECTION_DIMS))
     if projection_type == "linear":
         assert encoder.register_projection is not None
         assert encoder.register_projection_student is None

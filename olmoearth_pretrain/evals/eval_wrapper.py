@@ -193,18 +193,16 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                     "register_projection_dims (no projected_registers in the encoder "
                     "output)"
                 )
-            registers = encoder_output["projected_registers"]  # [B, n_reg, d]
+            grid = encoder_output["projected_registers"]  # [B, n_h, n_w, d]
             if self.eval_projection_dim is not None:
-                registers = registers[..., : self.eval_projection_dim]
+                grid = grid[..., : self.eval_projection_dim]
         else:
-            registers = encoder_output["registers"]  # [B, n_reg, D]
-        if self.spatial_pool or self.use_center_token:
-            n_h, n_w = self.model.register_bottleneck.register_grid
-            grid = rearrange(registers, "b (h w) d -> b h w d", h=n_h, w=n_w)
-            if self.spatial_pool:
-                return grid
+            grid = encoder_output["registers"]  # [B, n_h, n_w, D]
+        if self.spatial_pool:
+            return grid
+        if self.use_center_token:
             return self._extract_center_token(grid)
-        return reduce(registers, "b n d -> b d", self.pooling_type)
+        return reduce(grid, "b h w d -> b d", self.pooling_type)
 
     def __call__(
         self,

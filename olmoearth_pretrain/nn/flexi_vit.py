@@ -1672,7 +1672,7 @@ class SpatialRegisterBottleneck(nn.Module):
                     "use_2d_rope=True to differentiate grid cells."
                 )
             # Grid count + positions are resolved per-forward from the patch grid; the
-            # last-used grid is exposed on ``register_grid`` for eval/supervision reshapes.
+            # shape reaches consumers on the returned tensor, not via module state.
             self.register_grid: tuple[int, int] | None = None
             self.num_registers: int | None = None
             # A single learned latent, cloned across every grid cell (see class docstring).
@@ -1857,8 +1857,12 @@ class SpatialRegisterBottleneck(nn.Module):
                 latent is cloned to this many cells), ignored in fixed-grid mode.
 
         Returns:
-            registers: ``[B, num_registers, register_dim]``
-            register_positions: ``[B, num_registers, 2]`` or None
+            registers: ``[B, n_h, n_w, register_dim]`` -- the grid, shaped, so callers
+                never rebuild it from a flat sequence.
+            register_positions: ``[B, n_h * n_w, 2]`` or None. Deliberately FLAT: its
+                only consumer is the decoder's cross-attention, which wants a token
+                sequence. Row-major (``indexing="ij"``), so cell ``[i, j]`` of
+                ``registers`` is entry ``i * n_w + j`` of ``register_positions``.
         """
         # Down-project the patch K/V source to register_dim. With per_depth_read_proj each
         # read block has its own norm + projection; otherwise they share one pair.
@@ -1880,8 +1884,6 @@ class SpatialRegisterBottleneck(nn.Module):
                     "dynamic register bottleneck requires a spatial_grid (the patch grid)"
                 )
             register_grid = spatial_grid
-            # Expose the grid actually used so eval/supervision can reshape the registers.
-            self.register_grid = register_grid
             num_registers = register_grid[0] * register_grid[1]
             # Clone the single learned latent across the batch and all grid cells; RoPE on
             # the per-cell register_positions is what differentiates them.
@@ -1968,6 +1970,12 @@ class SpatialRegisterBottleneck(nn.Module):
         out = self.output_proj(self.norm(registers))
         if self.unit_norm:
             out = nn.functional.normalize(out, dim=-1) * self.unit_norm_scale
+        # Hand back the grid with its spatial axes intact. Attention needs a flat token
+        # sequence, so the stack runs on [B, N, D] internally and reshapes once here --
+        # rather than every consumer recovering (n_h, n_w) from the module.
+        out = rearrange(
+            out, "b (h w) d -> b h w d", h=register_grid[0], w=register_grid[1]
+        )
         return out, register_positions
 
 
@@ -3386,7 +3394,11 @@ class Predictor(PredictorBase):
                     "Predictor received registers but was built without "
                     "use_register_bottleneck=True"
                 )
-            context = self.register_to_decoder_embed(registers)
+            # Cross-attention consumes a token sequence, so flatten the grid here.
+            # register_positions is already flat and in the same row-major order.
+            context = self.register_to_decoder_embed(
+                rearrange(registers, "b h w d -> b (h w) d")
+            )
             context_positions = register_positions
             num_registers = context.shape[1]
             if self.use_flash_attn:
@@ -3476,10 +3488,12 @@ class Predictor(PredictorBase):
             timestamps: Timestamps of the tokens
             patch_size: Patch size of the tokens
             input_res: Input resolution of the tokens
-            registers: Optional encoder register grid ``[B, n_reg, register_dim]``. When
-                provided (register bottleneck), the decoder cross-attends to it instead of
-                the visible patch tokens.
-            register_positions: Optional ``[B, n_reg, 2]`` register coordinates for RoPE.
+            registers: Optional encoder register grid ``[B, n_h, n_w, register_dim]``.
+                When provided (register bottleneck), the decoder cross-attends to it
+                instead of the visible patch tokens; it is flattened to a token
+                sequence here.
+            register_positions: Optional flat ``[B, n_h * n_w, 2]`` register coordinates
+                for RoPE, row-major to match the flattened grid.
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
