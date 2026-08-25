@@ -167,7 +167,6 @@ def build_earlyread_model_config(
     latent_depth: int,
     register_dim: int | None = None,
     output_dim: int | None = None,
-    latent_every_n: int = 1,
 ) -> LatentMIMConfig:
     """The d128 NDVI tanchor base, with the encoder/bottleneck depth split reallocated.
 
@@ -196,11 +195,6 @@ def build_earlyread_model_config(
             ``register_dim=768, output_dim=128`` to keep the shipped embedding at 128.
             In the gradient path, unlike the detached ``register_projection_dims``
             student.
-        latent_every_n: Latent self-attention blocks per read -- 1 is the 1:1 default,
-            2 runs one LSA per two reads (plus one after the last). LSA blocks are half
-            the bottleneck's sequential depth and depth is what drives wall-clock, so
-            thinning them is a direct saving; the lsa/nolsa ablation says the FIRST block
-            is worth +8.4 pts on the noic arm, which this preserves.
 
     Returns:
         The base model config with ``depth`` and ``register_latent_depth`` overridden.
@@ -223,7 +217,6 @@ def build_earlyread_model_config(
                 f"register_dim ({config.decoder_config.register_dim}) must equal "
                 f"output_dim ({output_dim})"
             )
-    encoder_config.register_latent_every_n = latent_every_n
 
     # Single-source re-reads: every read re-queries the trunk's final layer through its
     # own norm (per_depth_read_proj). Asserted rather than assigned so that a change to
