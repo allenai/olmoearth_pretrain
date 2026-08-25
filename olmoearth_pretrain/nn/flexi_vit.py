@@ -3326,22 +3326,18 @@ class Predictor(PredictorBase):
                 rearrange(registers, "b h w d -> b (h w) d")
             )
             context_positions = register_positions
-            num_registers = context.shape[1]
+            batch_size, num_registers = context.shape[0], context.shape[1]
             if self.use_flash_attn:
-                register_bool = torch.ones(
-                    context.shape[0],
-                    num_registers,
-                    dtype=torch.bool,
-                    device=context.device,
-                )
-                context = self.pack_tokens(context, register_bool)
+                # Every register is valid, so "packing" for varlen is just a flatten --
+                # a view, not the gather pack_tokens does for a real validity mask --
+                # and every sample contributes the same num_registers keys, so
+                # cu_seqlens is a fixed stride.
+                context = torch.flatten(context, end_dim=1)
                 if context_positions is not None:
-                    context_positions = self.pack_tokens(
-                        context_positions, register_bool
-                    )
+                    context_positions = torch.flatten(context_positions, end_dim=1)
                 cu_seqlens_context = get_cumulative_sequence_lengths(
                     torch.full(
-                        (register_bool.shape[0],),
+                        (batch_size,),
                         num_registers,
                         dtype=torch.int32,
                         device=context.device,

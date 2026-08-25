@@ -4,10 +4,13 @@ Any methods that piece together multiple steps or are the entire forward pass fo
 """
 
 import logging
+from typing import Any
 
 import pytest
 import torch
+import torch.nn as nn
 from einops import rearrange
+from torch import Tensor
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.nn.encodings import PositionEncoding
@@ -2198,3 +2201,93 @@ def test_predictor_forward_rope_3d_mixed(
     assert len(grads) > 0
     assert all(torch.isfinite(g).all() for g in grads)
     assert sum(g.abs().sum() for g in grads) > 0
+
+
+def test_predictor_flash_register_context_matches_packing(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """The flash varlen K side is whatever ``pack_tokens`` would have produced.
+
+    Every register is valid, so packing the context for varlen degenerates to a plain
+    flatten -- which is what the decoder does, to avoid the mask-gather. This pins the
+    EQUIVALENCE rather than the implementation: it passes whether the context is
+    flattened or packed, and fails only if the two stop agreeing. Asserted on the
+    kwargs the decoder blocks receive, WITHOUT invoking the flash kernel, which needs
+    a CUDA GPU and the flash-attn package (see test_flash_attn_equivalence.py).
+    """
+    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
+    B, H, W, T = 2, 2, 2, 3
+    grid_h, grid_w, register_dim = 3, 4, 8
+    n_reg = grid_h * grid_w
+    predictor = Predictor(
+        supported_modalities=supported_modalities,
+        encoder_embedding_size=8,
+        decoder_embedding_size=16,
+        depth=2,
+        mlp_ratio=4.0,
+        num_heads=2,
+        max_sequence_length=12,
+        drop_path=0.0,
+        use_flash_attn=True,
+        use_register_bottleneck=True,
+        register_dim=register_dim,
+    )
+
+    # Capture what the block is handed, then pass the queries through untouched so
+    # no attention (and therefore no flash kernel) ever runs.
+    seen: list[dict[str, Any]] = []
+
+    class _SpyBlock(nn.Module):
+        def forward(self, **kwargs: Any) -> Tensor:
+            seen.append(kwargs)
+            return kwargs["x"]
+
+    predictor.blocks = nn.ModuleList([_SpyBlock()])
+
+    s2_sets, _ = modality_band_set_len_and_total_bands["sentinel2_l2a"]
+    latlon_sets, _ = modality_band_set_len_and_total_bands["latlon"]
+    emb = predictor.encoder_to_decoder_embed.in_features
+    s2_mask = torch.full(
+        (B, H, W, T, s2_sets), MaskValue.DECODER.value, dtype=torch.float32
+    )
+    s2_mask[..., 0] = MaskValue.ONLINE_ENCODER.value
+    encoded = TokensAndMasks(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2_sets, emb),
+        sentinel2_l2a_mask=s2_mask,
+        latlon=torch.randn(B, latlon_sets, emb),
+        latlon_mask=torch.zeros(B, latlon_sets, dtype=torch.float32),
+    )
+    timestamps = rearrange(
+        torch.tensor(
+            [[[1, 15, 30], [6, 7, 8], [2018, 2018, 2018]]] * B, dtype=torch.long
+        ),
+        "b d t -> b t d",
+    )
+    registers = torch.randn(B, grid_h, grid_w, register_dim)
+
+    with torch.no_grad():
+        predictor.forward(
+            encoded, timestamps, patch_size=4, input_res=1, registers=registers
+        )
+
+        # The reference: project the grid, then pack it the way genuinely ragged
+        # patch tokens are packed -- with an all-valid mask, since no register is
+        # ever masked out.
+        assert predictor.register_to_decoder_embed is not None
+        expected = predictor.pack_tokens(
+            predictor.register_to_decoder_embed(
+                rearrange(registers, "b h w d -> b (h w) d")
+            ),
+            torch.ones(B, n_reg, dtype=torch.bool),
+        )
+
+    assert seen, "the spy block was never called"
+    kwargs = seen[0]
+    torch.testing.assert_close(kwargs["y"], expected)
+    # Every sample contributes exactly n_reg keys, so cu_seqlens is a fixed stride.
+    assert torch.equal(
+        kwargs["cu_seqlens_k"], torch.arange(B + 1, dtype=torch.int32) * n_reg
+    )
+    assert kwargs["max_seqlen_k"] == n_reg
+    # Every register is valid, so there is nothing to mask on the context side.
+    assert kwargs["attn_mask"] is None
