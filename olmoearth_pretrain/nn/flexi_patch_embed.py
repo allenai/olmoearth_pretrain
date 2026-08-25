@@ -44,7 +44,6 @@ class FlexiPatchEmbed(nn.Module):
         use_linear_patch_embed: bool = True,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
-        patch_embed_linear_skip: bool = False,
     ) -> None:
         """2D image to patch embedding w/ flexible patch sizes.
 
@@ -76,13 +75,6 @@ class FlexiPatchEmbed(nn.Module):
                 applied AFTER the patch projection (``self.proj``). Each entry adds a
                 ReLU -> Linear(prev, h) layer. Applied before the norm layer.
                 Only supported when use_linear_patch_embed=True.
-            patch_embed_linear_skip: If True, add a per-pixel *linear* (ReLU-free)
-                projection in parallel to the per-pixel MLP and sum the two, i.e.
-                ``pixel_features = MLP(x) + Linear(x)``. This preserves a clean linear
-                function of the raw spectrum alongside the nonlinear path, so band-level
-                spectral contrast survives to the token (helps linear/KNN probes) while
-                the MLP still provides the rank lift that stabilizes training. Requires
-                ``patch_embed_hidden_sizes`` (there must be an MLP to skip around).
         """
         super().__init__()
 
@@ -102,15 +94,8 @@ class FlexiPatchEmbed(nn.Module):
             raise ValueError(
                 "post_proj_hidden_sizes requires use_linear_patch_embed=True"
             )
-        if patch_embed_linear_skip and not patch_embed_hidden_sizes:
-            raise ValueError(
-                "patch_embed_linear_skip requires patch_embed_hidden_sizes (there must "
-                "be a per-pixel MLP to add the linear skip around)"
-            )
-
         p_h, p_w = self.base_patch_size
         self.pixel_proj: nn.Sequential | None = None
-        self.pixel_skip: nn.Linear | None = None
         if use_linear_patch_embed:
             # Reshape patches to (p1 p2 c) then project — hits cuBLAS GEMM (always fast
             # on TensorCores) vs Conv2d which hits slow cuDNN paths for small in_chans.
@@ -129,11 +114,6 @@ class FlexiPatchEmbed(nn.Module):
                 for m in self.pixel_proj:
                     if isinstance(m, nn.Linear):
                         m._skip_custom_init = True
-                if patch_embed_linear_skip:
-                    # ReLU-free parallel path preserving a linear map of the raw
-                    # spectrum: pixel_features = MLP(x) + Linear(x).
-                    self.pixel_skip = nn.Linear(in_chans, prev, bias=bias)
-                    self.pixel_skip._skip_custom_init = True
                 patch_in_features = prev * p_h * p_w
             else:
                 patch_in_features = in_chans * p_h * p_w
@@ -202,8 +182,6 @@ class FlexiPatchEmbed(nn.Module):
             # Then patchify: [b, h_patches, w_patches, p_h * p_w * h[-1]]
             x = rearrange(x, "b c h w -> b h w c")
             pixel_feats = self.pixel_proj(x)
-            if self.pixel_skip is not None:
-                pixel_feats = pixel_feats + self.pixel_skip(x)
             x = rearrange(
                 pixel_feats, "b (h p1) (w p2) c -> b (h w) (p1 p2 c)", p1=p_h, p2=p_w
             )
