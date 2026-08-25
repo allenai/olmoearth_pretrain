@@ -337,15 +337,9 @@ class LatentMIMConfig(Config):
                 "use_register_bottleneck must match between encoder and decoder"
             )
         if encoder_uses_registers:
-            # The decoder cross-attends the grid the encoder SHIPS. With
-            # ``register_output_dim`` the bottleneck runs internally at
-            # ``register_dim`` and projects down on output, so it is the projected
-            # width the decoder must match -- not the internal one.
-            encoder_register_dim = (
-                getattr(self.encoder_config, "register_output_dim", None)
-                or self.encoder_config.register_dim
-                or (self.encoder_config.embedding_size // 2)
-            )
+            # The decoder cross-attends the grid the encoder ships, so its width must
+            # match the bottleneck's register_dim (required whenever the bottleneck is on).
+            encoder_register_dim = self.encoder_config.register_dim
             if self.decoder_config.register_dim != encoder_register_dim:
                 raise ValueError(
                     "decoder_config.register_dim "
@@ -432,13 +426,8 @@ class LatentMIMConfig(Config):
         if self.supervision_head_config is not None:
             if getattr(self.supervision_head_config, "register_supervision", False):
                 # Heads read the register grid, so embedding_dim is the width that grid
-                # is SHIPPED at -- register_output_dim when the bottleneck projects its
-                # output down, otherwise the internal register width.
-                embedding_dim = (
-                    getattr(self.encoder_config, "register_output_dim", None)
-                    or self.encoder_config.register_dim
-                    or (self.encoder_config.embedding_size // 2)
-                )
+                # is shipped at: the bottleneck's register_dim.
+                embedding_dim = self.encoder_config.register_dim
                 if self.supervision_source in ("registers", "both"):
                     supervision_head = self.supervision_head_config.build(
                         embedding_dim=embedding_dim,

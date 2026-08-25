@@ -166,7 +166,6 @@ def build_earlyread_model_config(
     trunk_depth: int,
     latent_depth: int,
     register_dim: int | None = None,
-    output_dim: int | None = None,
 ) -> LatentMIMConfig:
     """The d128 NDVI tanchor base, with the encoder/bottleneck depth split reallocated.
 
@@ -189,12 +188,6 @@ def build_earlyread_model_config(
             a bet that the stack is launch-bound, where extra FLOPs at an unchanged kernel
             count are close to free -- it is NOT a speedup, and the arm's s/step is itself
             the measurement of which regime we are in.
-        output_dim: If set, a single ``Linear(register_dim, output_dim)`` on the
-            bottleneck's output, so the decoder, supervision heads and evals all consume
-            ``output_dim`` while the stack runs at ``register_dim``. Use with
-            ``register_dim=768, output_dim=128`` to keep the shipped embedding at 128.
-            In the gradient path, unlike the detached ``register_projection_dims``
-            student.
 
     Returns:
         The base model config with ``depth`` and ``register_latent_depth`` overridden.
@@ -209,14 +202,6 @@ def build_earlyread_model_config(
         # Only the encoder's INTERNAL width moves. The decoder keeps the base's 128,
         # which is what the output projection delivers to it.
         encoder_config.register_dim = register_dim
-    if output_dim is not None:
-        encoder_config.register_output_dim = output_dim
-        if config.decoder_config.register_dim != output_dim:
-            raise ValueError(
-                "the decoder cross-attends the SHIPPED register grid, so its "
-                f"register_dim ({config.decoder_config.register_dim}) must equal "
-                f"output_dim ({output_dim})"
-            )
 
     # Single-source re-reads: every read re-queries the trunk's final layer through its
     # own norm (per_depth_read_proj). Asserted rather than assigned so that a change to

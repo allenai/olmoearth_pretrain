@@ -1535,9 +1535,6 @@ class SpatialRegisterBottleneck(nn.Module):
         temporal_anchor: str | None = None,
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
-        unit_norm: bool = False,
-        unit_norm_scale: float | None = None,
-        output_dim: int | None = None,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1613,42 +1610,11 @@ class SpatialRegisterBottleneck(nn.Module):
                 ``temporal_anchor``; matches the encoder's setting).
             rope_temporal_base: Optional separate frequency base for the temporal axis
                 of the read blocks' axial 3D RoPE. ``None`` reuses ``rope_base``.
-            unit_norm: If True, L2-normalize the output so every register cell is a
-                DIRECTION on a sphere (AlphaEarth's convention, where an embedding is
-                the mean direction of a von Mises-Fisher distribution). The constraint
-                binds on everything downstream -- the decoder reads the registers
-                through a bare Linear and the supervision heads read the grid directly,
-                so neither re-normalizes today -- and on the frozen evals, which probe
-                the same tensor. Magnitude stops being an available channel; pair with
-                a uniformity loss (``compute_register_uniformity_loss``) if the goal is
-                embeddings spread over the sphere rather than merely on it.
-            unit_norm_scale: Radius of that sphere. ``None`` uses
-                ``sqrt(register_dim)``, LayerNorm's own output norm, so the constraint
-                is scale-neutral at init instead of silently rescaling the decoder's
-                context input.
-            output_dim: If set, apply a single ``Linear(register_dim, output_dim)`` to
-                the bottleneck's output, so the grid the decoder, supervision heads and
-                evals consume is ``output_dim`` wide while the read/latent stack runs at
-                ``register_dim``. Lets the internal width be chosen for the hardware
-                (square, tensor-core-friendly GEMMs at 768) independently of the width
-                the product must ship at (128). Unlike ``register_projection_dims``,
-                this projection is IN the gradient path -- it is the model's output, not
-                a detached distillation student.
         """
         super().__init__()
         self.register_dim = register_dim
         self.use_2d_rope = use_2d_rope
         self.attn_dim = attn_dim
-        # Single linear map from the internal register width to the shipped width.
-        # Applied after the output norm and before any unit-norm, so the norm still
-        # standardizes the stack's own residual stream and the sphere constraint (when
-        # enabled) applies to what actually leaves the module.
-        self.output_dim = output_dim
-        self.output_proj: nn.Module = (
-            nn.Linear(register_dim, output_dim)
-            if output_dim is not None
-            else nn.Identity()
-        )
         if temporal_anchor is not None:
             if temporal_anchor not in ("year_start", "first_timestep"):
                 raise ValueError(
@@ -1792,24 +1758,6 @@ class SpatialRegisterBottleneck(nn.Module):
             ]
         )
         self.norm = nn.LayerNorm(register_dim)
-        # Optional unit-sphere output (AlphaEarth's convention: every embedding is a
-        # direction). Placed here rather than at each consumer because forward()
-        # returns ONE tensor that the decoder, the supervision heads and the frozen
-        # evals all read -- so normalizing here constrains the served vector itself
-        # and no consumer can be missed.
-        self.unit_norm = unit_norm
-        # LayerNorm's output has norm exactly sqrt(register_dim) before its learned
-        # affine, so that is the scale at which this is a no-op at init; it also puts
-        # per-coordinate RMS at ~1, which keeps the register half of the
-        # time-conditioned supervision head's [cell ; phi(t)] concat commensurate with
-        # the bounded sinusoidal half. Override to hold a different operating point.
-        # Follows the SHIPPED width: with an output projection the sphere constraint
-        # applies to the projected grid, so its scale-neutral default is that width.
-        self.unit_norm_scale = (
-            unit_norm_scale
-            if unit_norm_scale is not None
-            else math.sqrt(output_dim if output_dim is not None else register_dim)
-        )
 
     def build_register_positions(
         self, patch_positions: Tensor, register_grid: tuple[int, int]
@@ -1967,9 +1915,7 @@ class SpatialRegisterBottleneck(nn.Module):
                     x=registers,
                     rope_positions=register_positions,
                 )
-        out = self.output_proj(self.norm(registers))
-        if self.unit_norm:
-            out = nn.functional.normalize(out, dim=-1) * self.unit_norm_scale
+        out = self.norm(registers)
         # Hand back the grid with its spatial axes intact. Attention needs a flat token
         # sequence, so the stack runs on [B, N, D] internally and reshapes once here --
         # rather than every consumer recovering (n_h, n_w) from the module.
@@ -2031,12 +1977,9 @@ class Encoder(FlexiVitBase):
         register_latent_self_attn: bool = True,
         register_attn_dim: int | None = None,
         register_temporal_anchor: str | None = None,
-        register_output_dim: int | None = None,
         register_contrastive_source: str = "registers",
         register_projection_dims: list[int] | None = None,
         register_projection_type: str = "linear",
-        register_unit_norm: bool = False,
-        register_unit_norm_scale: float | None = None,
     ):
         """Initialize the encoder.
 
@@ -2129,10 +2072,6 @@ class Encoder(FlexiVitBase):
                 self-attention blocks entirely (cross-attention reads only, no
                 register-to-register mixing); the read count is unchanged. Defaults to True
                 (keep the latent transformer, backwards compatible).
-            register_output_dim: If set, one ``Linear(register_dim, output_dim)`` on the
-                bottleneck's output, so the read/latent stack runs at ``register_dim``
-                while the decoder, supervision heads and evals consume this width. In the
-                gradient path, unlike the detached ``register_projection_dims`` student.
             register_temporal_anchor: If set, make the register READ temporally aware
                 while keeping the registers a time-free 2D grid: the bottleneck's read
                 blocks run axial 3D RoPE with each register anchored at a per-sample
@@ -2180,13 +2119,6 @@ class Encoder(FlexiVitBase):
                 final-layer patch tokens -- the deployed narrow-bottleneck
                 architecture, trained by distillation instead of the pretext loss.
                 Defaults to ``"linear"``.
-            register_unit_norm: Put the register grid on a sphere, so the served
-                embedding is a direction (see
-                :class:`SpatialRegisterBottleneck`). Applied to the primary
-                bottleneck AND to the perceiver student, since either can be the
-                deployed embedding. Defaults to False.
-            register_unit_norm_scale: Radius of that sphere; ``None`` uses
-                ``sqrt(register_dim)`` so the change is scale-neutral at init.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2322,11 +2254,8 @@ class Encoder(FlexiVitBase):
                 latent_self_attn=register_latent_self_attn,
                 attn_dim=register_attn_dim,
                 temporal_anchor=register_temporal_anchor,
-                output_dim=register_output_dim,
                 temporal_rope_dim_frac=temporal_rope_dim_frac,
                 rope_temporal_base=rope_temporal_base,
-                unit_norm=register_unit_norm,
-                unit_norm_scale=register_unit_norm_scale,
             )
             # Detached low-dim "student" readout (see the __init__ docstring). Both
             # variants consume DETACHED inputs, so the student is invisible to the
@@ -2380,8 +2309,6 @@ class Encoder(FlexiVitBase):
                         rope_temporal_base=rope_temporal_base,
                         # The student IS the served embedding when it is deployed, so
                         # it takes the same constraint as the primary.
-                        unit_norm=register_unit_norm,
-                        unit_norm_scale=register_unit_norm_scale,
                     )
                 # One back-projection per Matryoshka prefix: dim d reconstructs the
                 # teacher from student[..., :d], forcing the first d dims to be
@@ -2409,12 +2336,11 @@ class Encoder(FlexiVitBase):
             and register_contrastive_source == "registers"
         )
         # When projecting from the register tokens the head operates at the width the
-        # bottleneck SHIPS -- register_output_dim when it projects its output down,
-        # otherwise its internal register_dim; the head reads the returned grid, not the
+        # bottleneck ships (its register_dim); the head reads the returned grid, not the
         # stack's residual stream. Otherwise it reads the encoder's final-embedding-size
         # patch tokens.
         project_aggregate_embedding_size = (
-            (register_output_dim or self.register_dim)
+            self.register_dim
             if self.contrastive_from_registers
             else final_embedding_size
         )
@@ -3643,11 +3569,6 @@ class EncoderConfig(Config):
     # position_encoding. None (default) keeps the purely spatial read (backwards
     # compatible).
     register_temporal_anchor: str | None = None
-    # Width the register grid is projected to on output. The read/latent stack runs
-    # at register_dim (chosen for GEMM efficiency); the decoder, supervision heads and
-    # evals all consume this width. In the gradient path, unlike the detached
-    # register_projection_dims student. None keeps the grid at register_dim.
-    register_output_dim: int | None = None
     # If set, add a DETACHED low-dim "student" readout of the register grid, exported
     # as ``projected_registers`` (at width max(dims)) alongside the registers. The
     # student's inputs are detached, so its training signal (distillation to the
@@ -3665,17 +3586,6 @@ class EncoderConfig(Config):
     # loss). Ignored without register_projection_dims.
     register_projection_type: str = "linear"
     # Put the register grid on a sphere: L2-normalize the bottleneck's output so the
-    # served embedding is a DIRECTION (AlphaEarth's convention). Binds on every
-    # consumer at once -- decoder context, supervision heads, frozen evals -- because
-    # they all read the tensor the bottleneck returns. Magnitude stops being an
-    # available channel. On its own this constrains where embeddings live, NOT how
-    # they are distributed there; pair it with LatentMIMTrainModuleConfig's
-    # register_uniformity_weight for the spread.
-    register_unit_norm: bool = False
-    # Radius of that sphere. None -> sqrt(register_dim), which is LayerNorm's own
-    # output norm, so turning this on does not also rescale the decoder's context
-    # input (which would confound the constraint with a global rescale).
-    register_unit_norm_scale: float | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""

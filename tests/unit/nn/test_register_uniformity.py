@@ -1,10 +1,7 @@
-"""Unit tests for the register unit-sphere output and the uniformity loss."""
-
-import math
+"""Unit tests for the register uniformity loss."""
 
 import torch
 
-from olmoearth_pretrain.nn.flexi_vit import SpatialRegisterBottleneck
 from olmoearth_pretrain.train.train_module.latent_mim import (
     compute_register_uniformity_loss,
 )
@@ -69,62 +66,3 @@ class TestRegisterUniformityLoss:
         loss, _ = compute_register_uniformity_loss(x, weight=1.0)
         loss.backward()
         assert x.grad is not None and x.grad.abs().sum() > 0
-
-
-class TestRegisterUnitNorm:
-    """Tests for the bottleneck's unit-sphere output."""
-
-    def _bottleneck(
-        self,
-        register_dim: int,
-        unit_norm: bool = False,
-        unit_norm_scale: float | None = None,
-    ) -> "SpatialRegisterBottleneck":
-        return SpatialRegisterBottleneck(
-            encoder_embedding_size=32,
-            register_dim=register_dim,
-            register_grid=(2, 2),
-            num_heads=2,
-            mlp_ratio=2.0,
-            read_depth=1,
-            latent_transformer_depth=1,
-            use_2d_rope=False,
-            unit_norm=unit_norm,
-            unit_norm_scale=unit_norm_scale,
-        )
-
-    def test_off_by_default(self) -> None:
-        """Existing configs are untouched."""
-        assert self._bottleneck(16).unit_norm is False
-
-    def test_default_scale_is_layernorm_norm(self) -> None:
-        """sqrt(register_dim) is LayerNorm's own output norm, so init is unchanged."""
-        bottleneck = self._bottleneck(64, unit_norm=True)
-        assert math.isclose(bottleneck.unit_norm_scale, math.sqrt(64))
-
-    def test_explicit_scale_is_respected(self) -> None:
-        """The radius can be pinned to hold a measured operating point."""
-        bottleneck = self._bottleneck(64, unit_norm=True, unit_norm_scale=5.7)
-        assert math.isclose(bottleneck.unit_norm_scale, 5.7)
-
-    def test_forward_output_lies_on_the_sphere(self) -> None:
-        """Every cell comes out at the configured radius, for every consumer."""
-        torch.manual_seed(0)
-        bottleneck = self._bottleneck(16, unit_norm=True)
-        patch_tokens = torch.randn(3, 5, 32)
-        out, _ = bottleneck(
-            patch_tokens=patch_tokens, patch_positions=None, visible_mask=None
-        )
-        norms = out.norm(dim=-1)
-        assert torch.allclose(norms, torch.full_like(norms, math.sqrt(16)), atol=1e-4)
-
-    def test_forward_unnormalized_by_default(self) -> None:
-        """Without the flag the norms vary, as they do today."""
-        torch.manual_seed(0)
-        bottleneck = self._bottleneck(16)
-        out, _ = bottleneck(
-            patch_tokens=torch.randn(3, 5, 32),
-            patch_positions=None,
-            visible_mask=None,
-        )
-        assert out.norm(dim=-1).std() > 1e-6
