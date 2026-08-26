@@ -58,6 +58,9 @@ from regbtl_v1_2_faster_common import build_wideread_regbtl_model_config
 from regbtl_v1_2_regsup_common import add_register_supervision
 
 from olmoearth_pretrain.internal.all_evals import (
+    AEF_SUPPLEMENTAL_YEAR_ALIGNED,
+)
+from olmoearth_pretrain.internal.all_evals import (
     EMBEDDING_EVAL_TASKS as _EMBEDDING_EVAL_TASKS,
 )
 from olmoearth_pretrain.internal.experiment import CommonComponents
@@ -431,6 +434,72 @@ def set_proj_earlyread_loop_evals(
     # student cells (lesson from the 2026-08-18 baseline sweep, which ran
     # teacher-first and made the deliverable wait).
     evaluator.tasks = {**proj_tasks, **base_tasks}
+    evaluator.run_as_beaker_job = True
+    evaluator.beaker_eval_module_path = module_path
+    evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
+    return trainer_config
+
+
+# --- AEF-trial + PASTIS in-loop evals, student widths only ------------------------
+# The eight year-aligned AEF datasets on S1+S2+Landsat (kNN twins, which carry AEF's
+# balanced-trial protocol automatically -- _aef_ps1_task attaches a
+# BalancedTrialConfig whenever eval_mode is KNN, and that is where the aeftrial_*
+# metrics come from) plus the year-aligned PASTIS task on the same input. Names are
+# looked up in the canonical registry so a typo raises KeyError at import instead of
+# silently dropping a task.
+_AEFTRIAL_LOOP_EVAL_NAMES = tuple(
+    f"{dataset}_ws16_ps1_sentinel1_sentinel2_landsat_knn"
+    for dataset in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+) + ("pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat",)
+
+
+def set_proj_aeftrial_loop_evals(
+    trainer_config,
+    module_path: str,
+    *,
+    interval_steps: int = 80000,
+    projection_dims: tuple[int, ...] = (128, 64),
+):
+    """REPLACE the eval set with the AEF trials + PASTIS on the STUDENT widths.
+
+    Nine tasks -- the eight AEF-supplemental datasets' kNN twins (which report
+    ``aeftrial_{ridge,knn5,knn20}``) and PASTIS -- all on unmasked S1+S2+Landsat,
+    duplicated at each entry of ``projection_dims``. Every task probes the detached
+    student (``eval_on_projected_registers``); the d768 teacher is deliberately NOT
+    scored here, since these runs are judged on the shipped embedding and the
+    teacher rows would add half again to an already long job.
+
+    Task ORDER is d128 before d64, PASTIS before the trials within each width. Eval
+    jobs at urgent priority get preempted mid-run and the trailing tasks are the ones
+    that systematically lose their metrics, so the order is the priority order: the
+    shipped width first, and the segmentation readout -- the cell the width question
+    hurts most -- ahead of the classification block.
+
+    ``interval_steps`` defaults to **80k**, double the proj runs' 40k. This is an
+    18-task job over ~159k windows per width at three modality passes each; the
+    12-task early-read job already needed 40k to finish before its successor spawned,
+    and consecutive jobs sharing one resumed W&B run silently drop the overlapping
+    writer's rows. Must be a multiple of the checkpointer save_interval (5000).
+    """
+    base_tasks = {
+        name: replace(
+            _EMBEDDING_EVAL_TASKS[name], eval_interval=Duration.steps(interval_steps)
+        )
+        for name in _AEFTRIAL_LOOP_EVAL_NAMES
+    }
+    # Ordered dict comprehension: widths outer, PASTIS-first inner.
+    ordered = sorted(base_tasks, key=lambda n: (not n.startswith("pastis"), n))
+    tasks = {
+        f"{name}_proj{dim}": replace(
+            base_tasks[name],
+            eval_on_projected_registers=True,
+            eval_projection_dim=dim,
+        )
+        for dim in projection_dims
+        for name in ordered
+    }
+    evaluator = trainer_config.callbacks["downstream_evaluator"]
+    evaluator.tasks = tasks
     evaluator.run_as_beaker_job = True
     evaluator.beaker_eval_module_path = module_path
     evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)

@@ -1980,6 +1980,7 @@ class Encoder(FlexiVitBase):
         register_contrastive_source: str = "registers",
         register_projection_dims: list[int] | None = None,
         register_projection_type: str = "linear",
+        register_projection_output_norm: bool = False,
     ):
         """Initialize the encoder.
 
@@ -2119,6 +2120,18 @@ class Encoder(FlexiVitBase):
                 final-layer patch tokens -- the deployed narrow-bottleneck
                 architecture, trained by distillation instead of the pretext loss.
                 Defaults to ``"linear"``.
+            register_projection_output_norm: Put a ``LayerNorm`` on the LINEAR
+                student's output. The perceiver student already ends in one (its
+                ``SpatialRegisterBottleneck`` does), and so does the primary
+                bottleneck, which makes the bare ``Linear`` the only served
+                representation with no norm at its own width -- nothing in the
+                distillation loss pins its scale either, since the cosine term is
+                taken after a learned back-projection that absorbs any rescaling.
+                The norm is applied at the FULL student width, so a Matryoshka
+                prefix is a slice of a normalized vector rather than a normalized
+                slice; that is deliberate, because a truncating deployment reads
+                exactly that slice. Requires ``register_projection_type="linear"``.
+                Defaults to False (the shipped behaviour).
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2201,6 +2214,7 @@ class Encoder(FlexiVitBase):
         )
         self.register_projection_type = register_projection_type
         self.register_projection: nn.Linear | None = None
+        self.register_projection_norm: nn.LayerNorm | None = None
         self.register_projection_student: SpatialRegisterBottleneck | None = None
         self.register_back_projections: nn.ModuleDict | None = None
         self.register_temporal_anchor = register_temporal_anchor
@@ -2273,10 +2287,27 @@ class Encoder(FlexiVitBase):
                         f"{register_projection_dims}"
                     )
                 student_dim = self.register_projection_dims[0]
+                if (
+                    register_projection_output_norm
+                    and register_projection_type != "linear"
+                ):
+                    raise ValueError(
+                        "register_projection_output_norm applies to the linear "
+                        "student only; the perceiver student already ends in a "
+                        "LayerNorm, so enabling it there would norm twice"
+                    )
                 if register_projection_type == "linear":
                     # Per-cell linear map on the detached register grid.
                     self.register_projection = nn.Linear(
                         resolved_register_dim, student_dim
+                    )
+                    # Optional output norm at the full student width (see the
+                    # constructor docstring for why the linear student is the only
+                    # head without one).
+                    self.register_projection_norm = (
+                        nn.LayerNorm(student_dim)
+                        if register_projection_output_norm
+                        else None
                     )
                 else:
                     # A second bottleneck at the projection width, re-reading the
@@ -2831,9 +2862,10 @@ class Encoder(FlexiVitBase):
             # Both consume DETACHED tensors, so no student gradient reaches the
             # encoder or the primary bottleneck.
             if self.register_projection is not None:
-                register_output["projected_registers"] = self.register_projection(
-                    registers.detach()
-                )
+                projected = self.register_projection(registers.detach())
+                if self.register_projection_norm is not None:
+                    projected = self.register_projection_norm(projected)
+                register_output["projected_registers"] = projected
             elif self.register_projection_student is not None:
                 projected, _ = self.register_projection_student(
                     patch_tokens=tokens.detach(),
@@ -3581,6 +3613,14 @@ class EncoderConfig(Config):
     # narrow-bottleneck architecture trained by distillation instead of the pretext
     # loss). Ignored without register_projection_dims.
     register_projection_type: str = "linear"
+    # LayerNorm on the LINEAR student's output. The primary bottleneck and the
+    # perceiver student both end in one; the bare Linear does not, and the cosine
+    # distillation term is taken after a learned back-projection, so nothing pins
+    # its scale. Applied at the full student width -- a Matryoshka prefix is then a
+    # slice of a normalized vector, which is what a truncating deployment reads.
+    # Requires register_projection_type="linear". Ignored without
+    # register_projection_dims.
+    register_projection_output_norm: bool = False
     # Put the register grid on a sphere: L2-normalize the bottleneck's output so the
 
     def __post_init__(self) -> None:
