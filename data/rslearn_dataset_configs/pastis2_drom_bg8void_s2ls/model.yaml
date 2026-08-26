@@ -1,0 +1,124 @@
+# AUTO-GENERATED per-combo trim of pastis2_drom_bg8 for FT combo 's2ls'.
+# Reads ONLY ['landsat', 'sentinel2_l2a', 'targets'] (drops unused gse/tessera_v2 + off-combo imagery)
+# to cut per-window I/O, the FT dataloader bottleneck. See gen_percombo_configs.py.
+data:
+  class_path: rslearn.train.data_module.RslearnDataModule
+  init_args:
+    path: /weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly
+    inputs:
+      sentinel2_l2a:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+        - sentinel2_l2a_mo01
+        - sentinel2_l2a_mo02
+        - sentinel2_l2a_mo03
+        - sentinel2_l2a_mo04
+        - sentinel2_l2a_mo05
+        - sentinel2_l2a_mo06
+        - sentinel2_l2a_mo07
+        - sentinel2_l2a_mo08
+        - sentinel2_l2a_mo09
+        - sentinel2_l2a_mo10
+        - sentinel2_l2a_mo11
+        - sentinel2_l2a_mo12
+        load_all_layers: true
+        bands:
+        - B02
+        - B03
+        - B04
+        - B08
+        - B05
+        - B06
+        - B07
+        - B8A
+        - B11
+        - B12
+        - B01
+        - B09
+        passthrough: true
+      landsat:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+        - landsat_mo01
+        - landsat_mo02
+        - landsat_mo03
+        - landsat_mo04
+        - landsat_mo05
+        - landsat_mo06
+        - landsat_mo07
+        - landsat_mo08
+        - landsat_mo09
+        - landsat_mo10
+        - landsat_mo11
+        - landsat_mo12
+        load_all_layers: true
+        required: false
+        bands:
+        - B8
+        - B1
+        - B2
+        - B3
+        - B4
+        - B5
+        - B6
+        - B7
+        - B9
+        - B10
+        - B11
+        passthrough: true
+      targets:
+        data_type: raster
+        dtype: INT32
+        layers:
+        - label
+        bands:
+        - class_id
+        is_target: true
+    task:
+      class_path: rslearn.train.tasks.segmentation.SegmentationTask
+      init_args:
+        num_classes: 8
+        nodata_value: 255
+        class_id_mapping:
+          0: 0
+          1: 1
+          12: 2
+          16: 3
+          19: 4
+          20: 5
+          21: 6
+          23: 7
+          2: 255
+          3: 255
+          4: 255
+          5: 255
+          6: 255
+          7: 255
+          8: 255
+          9: 255
+          10: 255
+          11: 255
+          13: 255
+          14: 255
+          15: 255
+          17: 255
+          18: 255
+          22: 255
+          24: 255
+          25: 255
+        enable_miou_metric: true
+        enable_f1_metric: true
+        report_metric_per_class: true
+        class_names:
+        - Background
+        - Meadow
+        - Fruits/vegetables/flowers
+        - Orchard
+        - Sugarcane
+        - Banana
+        - Pineapple
+        - Tropical tuber
+    batch_size: 8
+    num_workers: 8
