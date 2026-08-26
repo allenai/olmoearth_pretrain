@@ -2156,6 +2156,18 @@ class Encoder(FlexiVitBase):
                 SimReg establishes AND the ceiling Chen et al. establish, not a
                 compromise between them.
 
+                AND NOTE THEIR 1-Proj IS NOT OUR HEAD. Chen et al.'s shallowest
+                config is ``g(s) = sigma(Ws)`` -- Linear plus ReLU -- while ours
+                is a bare affine map with no activation anywhere, which appears
+                in neither paper except as SimReg's losing row. We cannot adopt
+                their 1-Proj either: its ReLU sits on the OUTPUT, which is fine
+                against post-ReLU CNN feature maps but not against a LayerNorm'd
+                teacher grid (see the final-layer note below). Two layers is
+                therefore the SHALLOWEST head that has a nonlinearity at all
+                while leaving the output free -- not a deeper head than their
+                best, but their nonlinearity relocated to where this loss allows
+                it.
+
                 H IS FIXED ACROSS PREFIXES, NOT SCALED WITH ``d``. SimReg's
                 ``(m, 2m, d)`` has m as a fixed backbone width, not a swept one; a
                 literal reading would give the 16-dim prefix a 32-unit hidden layer
