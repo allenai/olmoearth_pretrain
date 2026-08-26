@@ -1,0 +1,1380 @@
+{
+  "note": "Parameter manifest built from this config at 5c573d7a2, the last commit where it deserializes natively (register_learned_read_weighting still existed). HEAD must rebuild the identical parameter set after patch_legacy_encoder_config strips it.",
+  "recorded_at_commit": "5c573d7a2",
+  "shapes": {
+    "blocks.0.attn.k.bias": [
+      768
+    ],
+    "blocks.0.attn.k.weight": [
+      768,
+      768
+    ],
+    "blocks.0.attn.proj.bias": [
+      768
+    ],
+    "blocks.0.attn.proj.weight": [
+      768,
+      768
+    ],
+    "blocks.0.attn.q.bias": [
+      768
+    ],
+    "blocks.0.attn.q.weight": [
+      768,
+      768
+    ],
+    "blocks.0.attn.rope_mixed_freqs": [
+      3,
+      12,
+      32
+    ],
+    "blocks.0.attn.v.bias": [
+      768
+    ],
+    "blocks.0.attn.v.weight": [
+      768,
+      768
+    ],
+    "blocks.0.mlp.fc1.bias": [
+      3072
+    ],
+    "blocks.0.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "blocks.0.mlp.fc2.bias": [
+      768
+    ],
+    "blocks.0.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "blocks.0.norm1.bias": [
+      768
+    ],
+    "blocks.0.norm1.weight": [
+      768
+    ],
+    "blocks.0.norm2.bias": [
+      768
+    ],
+    "blocks.0.norm2.weight": [
+      768
+    ],
+    "blocks.1.attn.k.bias": [
+      768
+    ],
+    "blocks.1.attn.k.weight": [
+      768,
+      768
+    ],
+    "blocks.1.attn.proj.bias": [
+      768
+    ],
+    "blocks.1.attn.proj.weight": [
+      768,
+      768
+    ],
+    "blocks.1.attn.q.bias": [
+      768
+    ],
+    "blocks.1.attn.q.weight": [
+      768,
+      768
+    ],
+    "blocks.1.attn.rope_mixed_freqs": [
+      3,
+      12,
+      32
+    ],
+    "blocks.1.attn.v.bias": [
+      768
+    ],
+    "blocks.1.attn.v.weight": [
+      768,
+      768
+    ],
+    "blocks.1.mlp.fc1.bias": [
+      3072
+    ],
+    "blocks.1.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "blocks.1.mlp.fc2.bias": [
+      768
+    ],
+    "blocks.1.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "blocks.1.norm1.bias": [
+      768
+    ],
+    "blocks.1.norm1.weight": [
+      768
+    ],
+    "blocks.1.norm2.bias": [
+      768
+    ],
+    "blocks.1.norm2.weight": [
+      768
+    ],
+    "blocks.10.attn.k.bias": [
+      768
+    ],
+    "blocks.10.attn.k.weight": [
+      768,
+      768
+    ],
+    "blocks.10.attn.proj.bias": [
+      768
+    ],
+    "blocks.10.attn.proj.weight": [
+      768,
+      768
+    ],
+    "blocks.10.attn.q.bias": [
+      768
+    ],
+    "blocks.10.attn.q.weight": [
+      768,
+      768
+    ],
+    "blocks.10.attn.rope_mixed_freqs": [
+      3,
+      12,
+      32
+    ],
+    "blocks.10.attn.v.bias": [
+      768
+    ],
+    "blocks.10.attn.v.weight": [
+      768,
+      768
+    ],
+    "blocks.10.mlp.fc1.bias": [
+      3072
+    ],
+    "blocks.10.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "blocks.10.mlp.fc2.bias": [
+      768
+    ],
+    "blocks.10.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "blocks.10.norm1.bias": [
+      768
+    ],
+    "blocks.10.norm1.weight": [
+      768
+    ],
+    "blocks.10.norm2.bias": [
+      768
+    ],
+    "blocks.10.norm2.weight": [
+      768
+    ],
+    "blocks.11.attn.k.bias": [
+      768
+    ],
+    "blocks.11.attn.k.weight": [
+      768,
+      768
+    ],
+    "blocks.11.attn.proj.bias": [
+      768
+    ],
+    "blocks.11.attn.proj.weight": [
+      768,
+      768
+    ],
+    "blocks.11.attn.q.bias": [
+      768
+    ],
+    "blocks.11.attn.q.weight": [
+      768,
+      768
+    ],
+    "blocks.11.attn.rope_mixed_freqs": [
+      3,
+      12,
+      32
+    ],
+    "blocks.11.attn.v.bias": [
+      768
+    ],
+    "blocks.11.attn.v.weight": [
+      768,
+      768
+    ],
+    "blocks.11.mlp.fc1.bias": [
+      3072
+    ],
+    "blocks.11.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "blocks.11.mlp.fc2.bias": [
+      768
+    ],
+    "blocks.11.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "blocks.11.norm1.bias": [
+      768
+    ],
+    "blocks.11.norm1.weight": [
+      768
+    ],
+    "blocks.11.norm2.bias": [
+      768
+    ],
+    "blocks.11.norm2.weight": [
+      768
+    ],
+    "blocks.2.attn.k.bias": [
+      768
+    ],
+    "blocks.2.attn.k.weight": [
+      768,
+      768
+    ],
+    "blocks.2.attn.proj.bias": [
+      768
+    ],
+    "blocks.2.attn.proj.weight": [
+      768,
+      768
+    ],
+    "blocks.2.attn.q.bias": [
+      768
+    ],
+    "blocks.2.attn.q.weight": [
+      768,
+      768
+    ],
+    "blocks.2.attn.rope_mixed_freqs": [
+      3,
+      12,
+      32
+    ],
+    "blocks.2.attn.v.bias": [
+      768
+    ],
+    "blocks.2.attn.v.weight": [
+      768,
+      768
+    ],
+    "blocks.2.mlp.fc1.bias": [
+      3072
+    ],
+    "blocks.2.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "blocks.2.mlp.fc2.bias": [
+      768
+    ],
+    "blocks.2.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "blocks.2.norm1.bias": [
+      768
+    ],
+    "blocks.2.norm1.weight": [
+      768
+    ],
+    "blocks.2.norm2.bias": [
+      768
+    ],
+    "blocks.2.norm2.weight": [
+      768
+    ],
+    "blocks.3.attn.k.bias": [
+      768
+    ],
+    "blocks.3.attn.k.weight": [
+      768,
+      768
+    ],
+    "blocks.3.attn.proj.bias": [
+      768
+    ],
+    "blocks.3.attn.proj.weight": [
+      768,
+      768
+    ],
+    "blocks.3.attn.q.bias": [
+      768
+    ],
+    "blocks.3.attn.q.weight": [
+      768,
+      768
+    ],
+    "blocks.3.attn.rope_mixed_freqs": [
+      3,
+      12,
+      32
+    ],
+    "blocks.3.attn.v.bias": [
+      768
+    ],
+    "blocks.3.attn.v.weight": [
+      768,
+      768
+    ],
+    "blocks.3.mlp.fc1.bias": [
+      3072
+    ],
+    "blocks.3.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "blocks.3.mlp.fc2.bias": [
+      768
+    ],
+    "blocks.3.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "blocks.3.norm1.bias": [
+      768
+    ],
+    "blocks.3.norm1.weight": [
+      768
+    ],
+    "blocks.3.norm2.bias": [
+      768
+    ],
+    "blocks.3.norm2.weight": [
+      768
+    ],
+    "blocks.4.attn.k.bias": [
+      768
+    ],
+    "blocks.4.attn.k.weight": [
+      768,
+      768
+    ],
+    "blocks.4.attn.proj.bias": [
+      768
+    ],
+    "blocks.4.attn.proj.weight": [
+      768,
+      768
+    ],
+    "blocks.4.attn.q.bias": [
+      768
+    ],
+    "blocks.4.attn.q.weight": [
+      768,
+      768
+    ],
+    "blocks.4.attn.rope_mixed_freqs": [
+      3,
+      12,
+      32
+    ],
+    "blocks.4.attn.v.bias": [
+      768
+    ],
+    "blocks.4.attn.v.weight": [
+      768,
+      768
+    ],
+    "blocks.4.mlp.fc1.bias": [
+      3072
+    ],
+    "blocks.4.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "blocks.4.mlp.fc2.bias": [
+      768
+    ],
+    "blocks.4.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "blocks.4.norm1.bias": [
+      768
+    ],
+    "blocks.4.norm1.weight": [
+      768
+    ],
+    "blocks.4.norm2.bias": [
+      768
+    ],
+    "blocks.4.norm2.weight": [
+      768
+    ],
+    "blocks.5.attn.k.bias": [
+      768
+    ],
+    "blocks.5.attn.k.weight": [
+      768,
+      768
+    ],
+    "blocks.5.attn.proj.bias": [
+      768
+    ],
+    "blocks.5.attn.proj.weight": [
+      768,
+      768
+    ],
+    "blocks.5.attn.q.bias": [
+      768
+    ],
+    "blocks.5.attn.q.weight": [
+      768,
+      768
+    ],
+    "blocks.5.attn.rope_mixed_freqs": [
+      3,
+      12,
+      32
+    ],
+    "blocks.5.attn.v.bias": [
+      768
+    ],
+    "blocks.5.attn.v.weight": [
+      768,
+      768
+    ],
+    "blocks.5.mlp.fc1.bias": [
+      3072
+    ],
+    "blocks.5.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "blocks.5.mlp.fc2.bias": [
+      768
+    ],
+    "blocks.5.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "blocks.5.norm1.bias": [
+      768
+    ],
+    "blocks.5.norm1.weight": [
+      768
+    ],
+    "blocks.5.norm2.bias": [
+      768
+    ],
+    "blocks.5.norm2.weight": [
+      768
+    ],
+    "blocks.6.attn.k.bias": [
+      768
+    ],
+    "blocks.6.attn.k.weight": [
+      768,
+      768
+    ],
+    "blocks.6.attn.proj.bias": [
+      768
+    ],
+    "blocks.6.attn.proj.weight": [
+      768,
+      768
+    ],
+    "blocks.6.attn.q.bias": [
+      768
+    ],
+    "blocks.6.attn.q.weight": [
+      768,
+      768
+    ],
+    "blocks.6.attn.rope_mixed_freqs": [
+      3,
+      12,
+      32
+    ],
+    "blocks.6.attn.v.bias": [
+      768
+    ],
+    "blocks.6.attn.v.weight": [
+      768,
+      768
+    ],
+    "blocks.6.mlp.fc1.bias": [
+      3072
+    ],
+    "blocks.6.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "blocks.6.mlp.fc2.bias": [
+      768
+    ],
+    "blocks.6.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "blocks.6.norm1.bias": [
+      768
+    ],
+    "blocks.6.norm1.weight": [
+      768
+    ],
+    "blocks.6.norm2.bias": [
+      768
+    ],
+    "blocks.6.norm2.weight": [
+      768
+    ],
+    "blocks.7.attn.k.bias": [
+      768
+    ],
+    "blocks.7.attn.k.weight": [
+      768,
+      768
+    ],
+    "blocks.7.attn.proj.bias": [
+      768
+    ],
+    "blocks.7.attn.proj.weight": [
+      768,
+      768
+    ],
+    "blocks.7.attn.q.bias": [
+      768
+    ],
+    "blocks.7.attn.q.weight": [
+      768,
+      768
+    ],
+    "blocks.7.attn.rope_mixed_freqs": [
+      3,
+      12,
+      32
+    ],
+    "blocks.7.attn.v.bias": [
+      768
+    ],
+    "blocks.7.attn.v.weight": [
+      768,
+      768
+    ],
+    "blocks.7.mlp.fc1.bias": [
+      3072
+    ],
+    "blocks.7.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "blocks.7.mlp.fc2.bias": [
+      768
+    ],
+    "blocks.7.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "blocks.7.norm1.bias": [
+      768
+    ],
+    "blocks.7.norm1.weight": [
+      768
+    ],
+    "blocks.7.norm2.bias": [
+      768
+    ],
+    "blocks.7.norm2.weight": [
+      768
+    ],
+    "blocks.8.attn.k.bias": [
+      768
+    ],
+    "blocks.8.attn.k.weight": [
+      768,
+      768
+    ],
+    "blocks.8.attn.proj.bias": [
+      768
+    ],
+    "blocks.8.attn.proj.weight": [
+      768,
+      768
+    ],
+    "blocks.8.attn.q.bias": [
+      768
+    ],
+    "blocks.8.attn.q.weight": [
+      768,
+      768
+    ],
+    "blocks.8.attn.rope_mixed_freqs": [
+      3,
+      12,
+      32
+    ],
+    "blocks.8.attn.v.bias": [
+      768
+    ],
+    "blocks.8.attn.v.weight": [
+      768,
+      768
+    ],
+    "blocks.8.mlp.fc1.bias": [
+      3072
+    ],
+    "blocks.8.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "blocks.8.mlp.fc2.bias": [
+      768
+    ],
+    "blocks.8.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "blocks.8.norm1.bias": [
+      768
+    ],
+    "blocks.8.norm1.weight": [
+      768
+    ],
+    "blocks.8.norm2.bias": [
+      768
+    ],
+    "blocks.8.norm2.weight": [
+      768
+    ],
+    "blocks.9.attn.k.bias": [
+      768
+    ],
+    "blocks.9.attn.k.weight": [
+      768,
+      768
+    ],
+    "blocks.9.attn.proj.bias": [
+      768
+    ],
+    "blocks.9.attn.proj.weight": [
+      768,
+      768
+    ],
+    "blocks.9.attn.q.bias": [
+      768
+    ],
+    "blocks.9.attn.q.weight": [
+      768,
+      768
+    ],
+    "blocks.9.attn.rope_mixed_freqs": [
+      3,
+      12,
+      32
+    ],
+    "blocks.9.attn.v.bias": [
+      768
+    ],
+    "blocks.9.attn.v.weight": [
+      768,
+      768
+    ],
+    "blocks.9.mlp.fc1.bias": [
+      3072
+    ],
+    "blocks.9.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "blocks.9.mlp.fc2.bias": [
+      768
+    ],
+    "blocks.9.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "blocks.9.norm1.bias": [
+      768
+    ],
+    "blocks.9.norm1.weight": [
+      768
+    ],
+    "blocks.9.norm2.bias": [
+      768
+    ],
+    "blocks.9.norm2.weight": [
+      768
+    ],
+    "composite_encodings.month_embed.weight": [
+      12,
+      192
+    ],
+    "composite_encodings.per_modality_channel_embeddings.cdl": [
+      1,
+      192
+    ],
+    "composite_encodings.per_modality_channel_embeddings.landsat": [
+      1,
+      192
+    ],
+    "composite_encodings.per_modality_channel_embeddings.openstreetmap_raster": [
+      1,
+      192
+    ],
+    "composite_encodings.per_modality_channel_embeddings.sentinel1": [
+      1,
+      192
+    ],
+    "composite_encodings.per_modality_channel_embeddings.sentinel2_l2a": [
+      1,
+      192
+    ],
+    "composite_encodings.per_modality_channel_embeddings.srtm": [
+      1,
+      192
+    ],
+    "composite_encodings.per_modality_channel_embeddings.worldcereal": [
+      1,
+      192
+    ],
+    "composite_encodings.per_modality_channel_embeddings.worldcover": [
+      1,
+      192
+    ],
+    "composite_encodings.per_modality_channel_embeddings.wri_canopy_height_map": [
+      1,
+      192
+    ],
+    "norm.bias": [
+      768
+    ],
+    "norm.weight": [
+      768
+    ],
+    "patch_embeddings.per_modality_embeddings.cdl.cdl__0.pixel_proj.0.bias": [
+      64
+    ],
+    "patch_embeddings.per_modality_embeddings.cdl.cdl__0.pixel_proj.0.weight": [
+      64,
+      1
+    ],
+    "patch_embeddings.per_modality_embeddings.cdl.cdl__0.proj.bias": [
+      768
+    ],
+    "patch_embeddings.per_modality_embeddings.cdl.cdl__0.proj.weight": [
+      768,
+      4096
+    ],
+    "patch_embeddings.per_modality_embeddings.landsat.landsat__0.pixel_proj.0.bias": [
+      64
+    ],
+    "patch_embeddings.per_modality_embeddings.landsat.landsat__0.pixel_proj.0.weight": [
+      64,
+      11
+    ],
+    "patch_embeddings.per_modality_embeddings.landsat.landsat__0.proj.bias": [
+      768
+    ],
+    "patch_embeddings.per_modality_embeddings.landsat.landsat__0.proj.weight": [
+      768,
+      4096
+    ],
+    "patch_embeddings.per_modality_embeddings.openstreetmap_raster.openstreetmap_raster__0.pixel_proj.0.bias": [
+      64
+    ],
+    "patch_embeddings.per_modality_embeddings.openstreetmap_raster.openstreetmap_raster__0.pixel_proj.0.weight": [
+      64,
+      30
+    ],
+    "patch_embeddings.per_modality_embeddings.openstreetmap_raster.openstreetmap_raster__0.proj.bias": [
+      768
+    ],
+    "patch_embeddings.per_modality_embeddings.openstreetmap_raster.openstreetmap_raster__0.proj.weight": [
+      768,
+      4096
+    ],
+    "patch_embeddings.per_modality_embeddings.sentinel1.sentinel1__0.pixel_proj.0.bias": [
+      64
+    ],
+    "patch_embeddings.per_modality_embeddings.sentinel1.sentinel1__0.pixel_proj.0.weight": [
+      64,
+      2
+    ],
+    "patch_embeddings.per_modality_embeddings.sentinel1.sentinel1__0.proj.bias": [
+      768
+    ],
+    "patch_embeddings.per_modality_embeddings.sentinel1.sentinel1__0.proj.weight": [
+      768,
+      4096
+    ],
+    "patch_embeddings.per_modality_embeddings.sentinel2_l2a.sentinel2_l2a__0.pixel_proj.0.bias": [
+      64
+    ],
+    "patch_embeddings.per_modality_embeddings.sentinel2_l2a.sentinel2_l2a__0.pixel_proj.0.weight": [
+      64,
+      12
+    ],
+    "patch_embeddings.per_modality_embeddings.sentinel2_l2a.sentinel2_l2a__0.proj.bias": [
+      768
+    ],
+    "patch_embeddings.per_modality_embeddings.sentinel2_l2a.sentinel2_l2a__0.proj.weight": [
+      768,
+      4096
+    ],
+    "patch_embeddings.per_modality_embeddings.srtm.srtm__0.pixel_proj.0.bias": [
+      64
+    ],
+    "patch_embeddings.per_modality_embeddings.srtm.srtm__0.pixel_proj.0.weight": [
+      64,
+      1
+    ],
+    "patch_embeddings.per_modality_embeddings.srtm.srtm__0.proj.bias": [
+      768
+    ],
+    "patch_embeddings.per_modality_embeddings.srtm.srtm__0.proj.weight": [
+      768,
+      4096
+    ],
+    "patch_embeddings.per_modality_embeddings.worldcereal.worldcereal__0.pixel_proj.0.bias": [
+      64
+    ],
+    "patch_embeddings.per_modality_embeddings.worldcereal.worldcereal__0.pixel_proj.0.weight": [
+      64,
+      8
+    ],
+    "patch_embeddings.per_modality_embeddings.worldcereal.worldcereal__0.proj.bias": [
+      768
+    ],
+    "patch_embeddings.per_modality_embeddings.worldcereal.worldcereal__0.proj.weight": [
+      768,
+      4096
+    ],
+    "patch_embeddings.per_modality_embeddings.worldcover.worldcover__0.pixel_proj.0.bias": [
+      64
+    ],
+    "patch_embeddings.per_modality_embeddings.worldcover.worldcover__0.pixel_proj.0.weight": [
+      64,
+      1
+    ],
+    "patch_embeddings.per_modality_embeddings.worldcover.worldcover__0.proj.bias": [
+      768
+    ],
+    "patch_embeddings.per_modality_embeddings.worldcover.worldcover__0.proj.weight": [
+      768,
+      4096
+    ],
+    "patch_embeddings.per_modality_embeddings.wri_canopy_height_map.wri_canopy_height_map__0.pixel_proj.0.bias": [
+      64
+    ],
+    "patch_embeddings.per_modality_embeddings.wri_canopy_height_map.wri_canopy_height_map__0.pixel_proj.0.weight": [
+      64,
+      1
+    ],
+    "patch_embeddings.per_modality_embeddings.wri_canopy_height_map.wri_canopy_height_map__0.proj.bias": [
+      768
+    ],
+    "patch_embeddings.per_modality_embeddings.wri_canopy_height_map.wri_canopy_height_map__0.proj.weight": [
+      768,
+      4096
+    ],
+    "project_and_aggregate.projection.0.bias": [
+      768
+    ],
+    "project_and_aggregate.projection.0.weight": [
+      768,
+      768
+    ],
+    "register_back_projections.128.bias": [
+      768
+    ],
+    "register_back_projections.128.weight": [
+      768,
+      128
+    ],
+    "register_back_projections.64.bias": [
+      768
+    ],
+    "register_back_projections.64.weight": [
+      768,
+      64
+    ],
+    "register_bottleneck.input_norms.0.bias": [
+      768
+    ],
+    "register_bottleneck.input_norms.0.weight": [
+      768
+    ],
+    "register_bottleneck.input_norms.1.bias": [
+      768
+    ],
+    "register_bottleneck.input_norms.1.weight": [
+      768
+    ],
+    "register_bottleneck.input_norms.2.bias": [
+      768
+    ],
+    "register_bottleneck.input_norms.2.weight": [
+      768
+    ],
+    "register_bottleneck.input_norms.3.bias": [
+      768
+    ],
+    "register_bottleneck.input_norms.3.weight": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.0.attn.k.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.0.attn.k.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.0.attn.proj.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.0.attn.proj.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.0.attn.q.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.0.attn.q.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.0.attn.v.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.0.attn.v.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.0.mlp.fc1.bias": [
+      3072
+    ],
+    "register_bottleneck.latent_blocks.0.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "register_bottleneck.latent_blocks.0.mlp.fc2.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.0.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "register_bottleneck.latent_blocks.0.norm1.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.0.norm1.weight": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.0.norm2.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.0.norm2.weight": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.1.attn.k.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.1.attn.k.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.1.attn.proj.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.1.attn.proj.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.1.attn.q.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.1.attn.q.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.1.attn.v.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.1.attn.v.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.1.mlp.fc1.bias": [
+      3072
+    ],
+    "register_bottleneck.latent_blocks.1.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "register_bottleneck.latent_blocks.1.mlp.fc2.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.1.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "register_bottleneck.latent_blocks.1.norm1.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.1.norm1.weight": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.1.norm2.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.1.norm2.weight": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.2.attn.k.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.2.attn.k.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.2.attn.proj.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.2.attn.proj.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.2.attn.q.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.2.attn.q.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.2.attn.v.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.2.attn.v.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.2.mlp.fc1.bias": [
+      3072
+    ],
+    "register_bottleneck.latent_blocks.2.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "register_bottleneck.latent_blocks.2.mlp.fc2.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.2.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "register_bottleneck.latent_blocks.2.norm1.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.2.norm1.weight": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.2.norm2.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.2.norm2.weight": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.3.attn.k.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.3.attn.k.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.3.attn.proj.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.3.attn.proj.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.3.attn.q.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.3.attn.q.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.3.attn.v.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.3.attn.v.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.latent_blocks.3.mlp.fc1.bias": [
+      3072
+    ],
+    "register_bottleneck.latent_blocks.3.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "register_bottleneck.latent_blocks.3.mlp.fc2.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.3.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "register_bottleneck.latent_blocks.3.norm1.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.3.norm1.weight": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.3.norm2.bias": [
+      768
+    ],
+    "register_bottleneck.latent_blocks.3.norm2.weight": [
+      768
+    ],
+    "register_bottleneck.norm.bias": [
+      768
+    ],
+    "register_bottleneck.norm.weight": [
+      768
+    ],
+    "register_bottleneck.read_blocks.0.attn.k.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.0.attn.k.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.0.attn.proj.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.0.attn.proj.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.0.attn.q.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.0.attn.q.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.0.attn.v.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.0.attn.v.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.0.mlp.fc1.bias": [
+      3072
+    ],
+    "register_bottleneck.read_blocks.0.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "register_bottleneck.read_blocks.0.mlp.fc2.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.0.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "register_bottleneck.read_blocks.0.norm1.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.0.norm1.weight": [
+      768
+    ],
+    "register_bottleneck.read_blocks.0.norm2.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.0.norm2.weight": [
+      768
+    ],
+    "register_bottleneck.read_blocks.1.attn.k.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.1.attn.k.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.1.attn.proj.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.1.attn.proj.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.1.attn.q.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.1.attn.q.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.1.attn.v.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.1.attn.v.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.1.mlp.fc1.bias": [
+      3072
+    ],
+    "register_bottleneck.read_blocks.1.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "register_bottleneck.read_blocks.1.mlp.fc2.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.1.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "register_bottleneck.read_blocks.1.norm1.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.1.norm1.weight": [
+      768
+    ],
+    "register_bottleneck.read_blocks.1.norm2.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.1.norm2.weight": [
+      768
+    ],
+    "register_bottleneck.read_blocks.2.attn.k.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.2.attn.k.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.2.attn.proj.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.2.attn.proj.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.2.attn.q.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.2.attn.q.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.2.attn.v.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.2.attn.v.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.2.mlp.fc1.bias": [
+      3072
+    ],
+    "register_bottleneck.read_blocks.2.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "register_bottleneck.read_blocks.2.mlp.fc2.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.2.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "register_bottleneck.read_blocks.2.norm1.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.2.norm1.weight": [
+      768
+    ],
+    "register_bottleneck.read_blocks.2.norm2.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.2.norm2.weight": [
+      768
+    ],
+    "register_bottleneck.read_blocks.3.attn.k.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.3.attn.k.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.3.attn.proj.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.3.attn.proj.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.3.attn.q.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.3.attn.q.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.3.attn.v.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.3.attn.v.weight": [
+      768,
+      768
+    ],
+    "register_bottleneck.read_blocks.3.mlp.fc1.bias": [
+      3072
+    ],
+    "register_bottleneck.read_blocks.3.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "register_bottleneck.read_blocks.3.mlp.fc2.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.3.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "register_bottleneck.read_blocks.3.norm1.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.3.norm1.weight": [
+      768
+    ],
+    "register_bottleneck.read_blocks.3.norm2.bias": [
+      768
+    ],
+    "register_bottleneck.read_blocks.3.norm2.weight": [
+      768
+    ],
+    "register_bottleneck.register": [
+      1,
+      768
+    ],
+    "register_projection.bias": [
+      128
+    ],
+    "register_projection.weight": [
+      128,
+      768
+    ]
+  }
+}
