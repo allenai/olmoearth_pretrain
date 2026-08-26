@@ -1,15 +1,20 @@
 """Gram OFF, linear back-projection head (arm: gram0).
 
-One cell of the 2x2 {Gram weight} x {back-projection head} matrix on top of
+One cell of the 2x3 {Gram variant} x {back-projection head} matrix on top of
 ``regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsampling_psuniform_stunorm``, which IS the
-(gram=1, linear head) cell and is not re-run. The other three cells are this
-module and its two siblings (``_gram0``, ``_mlpgram1``, ``_mlpgram0``).
+(flat gram=1, linear head) cell and is not re-run. The other five cells are
+this module and its siblings ``_gram0``, ``_mlpgram1``, ``_mlpgram0``,
+``_gramonly``, ``_mlpgramonly``.
 Everything else -- teacher, sampler, supervision, data, in-loop evals -- is
 byte-identical to that base, so the four runs are a clean factorial.
 
 THE TWO AXES.
 
-* **Gram weight** (``projection_distill_gram_weight``, 1.0 -> 0.0). Gram is the
+* **Gram variant**. Three levels: the family default FLAT term
+  (``projection_distill_gram_weight=1.0``, built over the flattened ``[B * N]``
+  grid, so only ~1/B of its pairs relate two cells of the same scene); OFF
+  entirely; and GRAMONLY (flat 0.0, ``projection_distill_gram_within_weight=1.0``
+  -- the block-diagonal form, where 100% of pairs are within-scene). Gram is the
   only distillation term that touches the SERVED embedding directly: it is an MSE
   between the student's and the teacher's token-token cosine-similarity matrices,
   taken on the raw prefix. Cosine, by contrast, constrains the student only
@@ -17,7 +22,13 @@ THE TWO AXES.
   distillation loss is per-prefix cosine alone -- so gram=0 is the arm that
   actually matches the recipe this family was built to follow. Sixteen
   gram-*scope* arms were previously a null (all inside the 0.88 pt LP noise
-  floor), but gram *presence* has never been tested.
+  floor) -- but that sweep varied gram SCOPE against a bare-Linear head and
+  never once set the weight to zero, so gram *presence* has never been tested at
+  all. Gramonly is included because it was the best-scoring gram variant of that
+  sweep on our-sampling (``gramonly_supstu0p01_flatlr_w1``, -0.11 pts vs the
+  candidate over 33 common cells -- a null, but the least-bad one), and because
+  dense probes discriminate WITHIN a scene, which is exactly the pair population
+  the flat term almost never samples.
 
 * **Back-projection head** (``register_back_projection_hidden``, None -> 256).
   A single ``Linear(d, 768)`` demands the student be a linear image of the

@@ -1,4 +1,4 @@
-"""Gram OFF, 2-layer MLP back-projection head (arm: mlpgram0).
+"""GRAMONLY (within-scene Gram), linear back-projection head (arm: gramonly).
 
 One cell of the 2x3 {Gram variant} x {back-projection head} matrix on top of
 ``regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsampling_psuniform_stunorm``, which IS the
@@ -56,7 +56,11 @@ d64/d128 cosine ratio too: it ran ~1.5x and widening on the parent, and prefix
 terms are summed UNWEIGHTED, so a deeper head that fits the narrow prefix better
 also silently re-weights the Matryoshka objective.
 
-THIS CELL: gram=0, 2-layer MLP head at H=256. Both changes -- the hypothesised best cell, and the one where nothing but the head constrains the served embedding.
+THIS CELL: gramonly -- flat Gram 0.0, within-scene Gram 1.0 -- on the base's
+bare-Linear head. Head-matched to the base, so the contrast against it is the
+gram SCOPE change alone: the comparison the previous 16-arm sweep made, now
+with the weight-zero cell (``_gram0``) alongside it to anchor what "no gram"
+is actually worth. Gramonly was that sweep's least-bad gram variant.
 """
 
 import logging
@@ -77,7 +81,6 @@ from regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsampling_psuniform_stunorm im
     build_train_module_config as _base_build_train_module_config,
 )
 from regbtl_v1_2_proj_common import (
-    BACK_PROJECTION_HIDDEN,
     set_proj_aeftrial_loop_evals,
 )
 
@@ -87,13 +90,13 @@ from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModul
 
 logger = logging.getLogger(__name__)
 
-MODULE_PATH = "scripts/official/v1_2/regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsampling_psuniform_stunorm_mlpgram0.py"
+MODULE_PATH = "scripts/official/v1_2/regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsampling_psuniform_stunorm_gramonly.py"
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """The stunorm base's model config, with this cell's head architecture."""
     config = _base_build_model_config(common)
-    config.encoder_config.register_back_projection_hidden = BACK_PROJECTION_HIDDEN
+    # linear head: the base's bare Linear(d, 768) is left alone
     return config
 
 
@@ -101,6 +104,7 @@ def build_train_module_config(common: CommonComponents) -> LatentMIMTrainModuleC
     """The stunorm base's train module, with this cell's Gram weight."""
     config = _base_build_train_module_config(common)
     config.projection_distill_gram_weight = 0.0
+    config.projection_distill_gram_within_weight = 1.0
     return config
 
 
