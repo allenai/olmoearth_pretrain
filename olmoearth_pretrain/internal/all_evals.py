@@ -1906,6 +1906,7 @@ EMBED_DIAG_TASKS = {
     ),
 }
 
+
 def _pastis_ft_task(
     input_modalities: list[str],
     dataset: str = "pastis2_drom_bg8",
@@ -1937,11 +1938,34 @@ FT_EVAL_TASKS = {
     "pastis2_drom_bg8void_ft_ws16_ps1_sentinel2": _pastis_ft_task(
         [Modality.SENTINEL2_L2A.name], dataset="pastis2_drom_bg8void_s2"
     ),
+    # bg8void fine-tune, the multi-modal combos. Each reads its own per-combo trim of
+    # the void config, mirroring the bg8 entries above: the trims drop gse/tessera_v2
+    # and off-combo imagery to cut per-window I/O, which is the FT dataloader
+    # bottleneck -- fine-tuning reads the dataset for every epoch, unlike the probe's
+    # single embedding pass, so pointing these at the full config would be costly.
+    "pastis2_drom_bg8void_ft_ws16_ps1_sentinel1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_s1s2",
+    ),
+    "pastis2_drom_bg8void_ft_ws16_ps1_sentinel2_landsat": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+        dataset="pastis2_drom_bg8void_s2ls",
+    ),
+    "pastis2_drom_bg8void_ft_ws16_ps1_sentinel1_sentinel2_landsat": _pastis_ft_task(
+        [
+            Modality.SENTINEL1.name,
+            Modality.SENTINEL2_L2A.name,
+            Modality.LANDSAT.name,
+        ],
+        dataset="pastis2_drom_bg8void_s1s2ls",
+    ),
     "pastis2_drom_bg8_ft_ws16_ps1_sentinel1_sentinel2": _pastis_ft_task(
-        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name], dataset="pastis2_drom_bg8_s1s2"
+        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8_s1s2",
     ),
     "pastis2_drom_bg8_ft_ws16_ps1_sentinel2_landsat": _pastis_ft_task(
-        [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name], dataset="pastis2_drom_bg8_s2ls"
+        [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+        dataset="pastis2_drom_bg8_s2ls",
     ),
     "pastis2_drom_bg8_ft_ws16_ps1_sentinel1_sentinel2_landsat": _pastis_ft_task(
         [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
@@ -2203,9 +2227,9 @@ for _loio_terr in ("reunion", "guadeloupe", "martinique", "guyane", "mayotte"):
     # so the AEF (--model=aef) and Tessera v2 (--model=tessera_v2_precomputed)
     # precomputed baselines can be swept per held-out territory. OlmoEarth keeps
     # using the S2-only entry above (cheaper I/O).
-    EMBEDDING_EVAL_TASKS[f"pastis2_drom_bg8_loio_{_loio_terr}_full_ws16_ps1_sentinel2"] = (
-        _pastis_ps1_task([Modality.SENTINEL2_L2A.name], dataset=f"{_loio_ds}_full")
-    )
+    EMBEDDING_EVAL_TASKS[
+        f"pastis2_drom_bg8_loio_{_loio_terr}_full_ws16_ps1_sentinel2"
+    ] = _pastis_ps1_task([Modality.SENTINEL2_L2A.name], dataset=f"{_loio_ds}_full")
 
     # bg8void LOIO: same folds, but the excluded crops are void rather than folded
     # into Background. Probe + fine-tune on the S2-trimmed entry; _full for the
@@ -2214,12 +2238,12 @@ for _loio_terr in ("reunion", "guadeloupe", "martinique", "guyane", "mayotte"):
     FT_EVAL_TASKS[f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws16_ps1_sentinel2"] = (
         _pastis_ft_task([Modality.SENTINEL2_L2A.name], dataset=_void_ds)
     )
-    EMBEDDING_EVAL_TASKS[f"pastis2_drom_bg8void_loio_{_loio_terr}_ws16_ps1_sentinel2"] = (
-        _pastis_ps1_task([Modality.SENTINEL2_L2A.name], dataset=_void_ds)
-    )
-    EMBEDDING_EVAL_TASKS[f"pastis2_drom_bg8void_loio_{_loio_terr}_full_ws16_ps1_sentinel2"] = (
-        _pastis_ps1_task([Modality.SENTINEL2_L2A.name], dataset=f"{_void_ds}_full")
-    )
+    EMBEDDING_EVAL_TASKS[
+        f"pastis2_drom_bg8void_loio_{_loio_terr}_ws16_ps1_sentinel2"
+    ] = _pastis_ps1_task([Modality.SENTINEL2_L2A.name], dataset=_void_ds)
+    EMBEDDING_EVAL_TASKS[
+        f"pastis2_drom_bg8void_loio_{_loio_terr}_full_ws16_ps1_sentinel2"
+    ] = _pastis_ps1_task([Modality.SENTINEL2_L2A.name], dataset=f"{_void_ds}_full")
 
     # bg8void LOIO, the other four input modalities. These read the *_full entry, not
     # the S2-trimmed one: the trimmed dataset declares only sentinel2_l2a, and
@@ -2232,9 +2256,9 @@ for _loio_terr in ("reunion", "guadeloupe", "martinique", "guyane", "mayotte"):
     # The S2 entries above are deliberately left on the trimmed dataset: their numbers
     # are already published, and repointing them would change results for no reason.
     # Name suffixes match the 443 tasks exactly, so existing harvest globs work.
-    EMBEDDING_EVAL_TASKS[f"pastis2_drom_bg8void_loio_{_loio_terr}_ws16_ps1_sentinel1"] = (
-        _pastis_ps1_task([Modality.SENTINEL1.name], dataset=f"{_void_ds}_full")
-    )
+    EMBEDDING_EVAL_TASKS[
+        f"pastis2_drom_bg8void_loio_{_loio_terr}_ws16_ps1_sentinel1"
+    ] = _pastis_ps1_task([Modality.SENTINEL1.name], dataset=f"{_void_ds}_full")
     EMBEDDING_EVAL_TASKS[
         f"pastis2_drom_bg8void_loio_{_loio_terr}_ws16_ps1_sentinel1_sentinel2"
     ] = _pastis_ps1_task(
