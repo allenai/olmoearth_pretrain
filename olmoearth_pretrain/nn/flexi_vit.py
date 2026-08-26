@@ -2146,10 +2146,15 @@ class Encoder(FlexiVitBase):
                 compression. SimReg (BMVC'21) ablates exactly this head: their
                 "Linear" row is this module, and it lost 3.7 pts 1-NN / 10.2 pts
                 linear-probe to a deeper head, with ~94% of that recovered by the
-                first hidden layer alone. Depth past 2 is where the contrary
-                evidence starts (Chen et al. 2023 measure degradation at 2L->4L,
-                mechanism: the projector overfits the teacher), so 2 layers is the
-                point the two literatures agree on.
+                first hidden layer alone. Two layers is what BOTH literatures
+                favour: Chen et al. 2023 (2310.17183) Table IV, CIFAR-100, has
+                2L-MLP best or tied-best on both pairs -- VGG13-VGG8 1-Proj 73.76
+                -> 2L 73.84 (a tie inside +/-0.25), ResNet32x4-ResNet8x4 1-Proj
+                73.66 -> 2L 75.14 (+1.48, well outside +/-0.21) -- with
+                degradation only from 3L on (73.31/73.02 and 75.12/74.30),
+                mechanism: the projector overfits the teacher. So 2 is the floor
+                SimReg establishes AND the ceiling Chen et al. establish, not a
+                compromise between them.
 
                 H IS FIXED ACROSS PREFIXES, NOT SCALED WITH ``d``. SimReg's
                 ``(m, 2m, d)`` has m as a fixed backbone width, not a swept one; a
