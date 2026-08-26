@@ -243,6 +243,27 @@ REMOVED_ENCODER_FIELDS: dict[str, _RemovedField] = {
         feature="the patch-embed linear skip",
         note="the pixel_skip Linear no longer exists",
     ),
+    "merge_bandsets": _RemovedField(
+        inert=(False,),
+        feature="bandset merging (multi-bandset tokens merged into one)",
+        note="the merge step and the token count it produced are both gone",
+    ),
+    # Unused whenever merging is off, which the entry above enforces. Unlike
+    # register_unit_norm_scale this field is int-defaulted, so it is always PRESENT in a
+    # config from that window rather than dropped -- hence a real inert value, not ().
+    "merge_after_layer": _RemovedField(
+        inert=(-1,),
+        feature="the bandset-merge depth",
+        note="only meaningful with merge_bandsets, which was removed",
+    ),
+    "register_students": _RemovedField(
+        inert=(None, []),
+        feature="multi-student distillation from one backbone",
+        note=(
+            "the per-student projection heads were replaced by the three scalar knobs; "
+            "this checkpoint's student weights have no home"
+        ),
+    ),
 }
 
 
