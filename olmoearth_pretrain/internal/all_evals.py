@@ -2282,6 +2282,35 @@ for _loio_terr in ("reunion", "guadeloupe", "martinique", "guyane", "mayotte"):
         dataset=f"{_void_ds}_full",
     )
 
+    # bg8void LOIO fine-tune, the multi-modal combos. Each fold reads its OWN per-combo
+    # trim -- dataset key "<fold>_<combo>", registered against the same loio_<terr>
+    # split tag but pointing at the combo's config. Deliberately NOT the "_full" entry
+    # the probes above use: fine-tuning re-reads the dataset every epoch, so carrying
+    # gse/tessera_v2 and off-combo imagery would cost I/O for bands it never touches.
+    # The S2 fine-tune entry stays on the S2 trim and is untouched.
+    FT_EVAL_TASKS[
+        f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws16_ps1_sentinel1_sentinel2"
+    ] = _pastis_ft_task(
+        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        dataset=f"{_void_ds}_s1s2",
+    )
+    FT_EVAL_TASKS[
+        f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws16_ps1_sentinel2_landsat"
+    ] = _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+        dataset=f"{_void_ds}_s2ls",
+    )
+    FT_EVAL_TASKS[
+        f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws16_ps1_sentinel1_sentinel2_landsat"
+    ] = _pastis_ft_task(
+        [
+            Modality.SENTINEL1.name,
+            Modality.SENTINEL2_L2A.name,
+            Modality.LANDSAT.name,
+        ],
+        dataset=f"{_void_ds}_s1s2ls",
+    )
+
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""

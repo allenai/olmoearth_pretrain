@@ -5897,6 +5897,403 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
       "window_size": 128
     },
+    "pastis2_drom_bg8void_loio_guadeloupe_s1s2": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s1s2",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_loio_guadeloupe_s1s2",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_guadeloupe",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_loio_guadeloupe_s1s2ls": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s1s2ls",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "sentinel2_l2a",
+        "landsat"
+      ],
+      "name": "pastis2_drom_bg8void_loio_guadeloupe_s1s2ls",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_guadeloupe",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_loio_guadeloupe_s2ls": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s2ls",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a",
+        "landsat"
+      ],
+      "name": "pastis2_drom_bg8void_loio_guadeloupe_s2ls",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_guadeloupe",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
     "pastis2_drom_bg8void_loio_guyane": {
       "classes": [
         "0",
@@ -6051,6 +6448,403 @@
         "landsat"
       ],
       "name": "pastis2_drom_bg8void_loio_guyane_full",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_guyane",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_loio_guyane_s1s2": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s1s2",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_loio_guyane_s1s2",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_guyane",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_loio_guyane_s1s2ls": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s1s2ls",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "sentinel2_l2a",
+        "landsat"
+      ],
+      "name": "pastis2_drom_bg8void_loio_guyane_s1s2ls",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_guyane",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_loio_guyane_s2ls": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s2ls",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a",
+        "landsat"
+      ],
+      "name": "pastis2_drom_bg8void_loio_guyane_s2ls",
       "norm_stats": {
         "sentinel1": {
           "vh": {
@@ -6429,6 +7223,403 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
       "window_size": 128
     },
+    "pastis2_drom_bg8void_loio_martinique_s1s2": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s1s2",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_loio_martinique_s1s2",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_martinique",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_loio_martinique_s1s2ls": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s1s2ls",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "sentinel2_l2a",
+        "landsat"
+      ],
+      "name": "pastis2_drom_bg8void_loio_martinique_s1s2ls",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_martinique",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_loio_martinique_s2ls": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s2ls",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a",
+        "landsat"
+      ],
+      "name": "pastis2_drom_bg8void_loio_martinique_s2ls",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_martinique",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
     "pastis2_drom_bg8void_loio_mayotte": {
       "classes": [
         "0",
@@ -6695,6 +7886,403 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
       "window_size": 128
     },
+    "pastis2_drom_bg8void_loio_mayotte_s1s2": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s1s2",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_loio_mayotte_s1s2",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_mayotte",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_loio_mayotte_s1s2ls": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s1s2ls",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "sentinel2_l2a",
+        "landsat"
+      ],
+      "name": "pastis2_drom_bg8void_loio_mayotte_s1s2ls",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_mayotte",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_loio_mayotte_s2ls": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s2ls",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a",
+        "landsat"
+      ],
+      "name": "pastis2_drom_bg8void_loio_mayotte_s2ls",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_mayotte",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
     "pastis2_drom_bg8void_loio_reunion": {
       "classes": [
         "0",
@@ -6849,6 +8437,403 @@
         "landsat"
       ],
       "name": "pastis2_drom_bg8void_loio_reunion_full",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_reunion",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_loio_reunion_s1s2": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s1s2",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_loio_reunion_s1s2",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_reunion",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_loio_reunion_s1s2ls": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s1s2ls",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "sentinel2_l2a",
+        "landsat"
+      ],
+      "name": "pastis2_drom_bg8void_loio_reunion_s1s2ls",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "loio_reunion",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_loio_reunion_s2ls": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_s2ls",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a",
+        "landsat"
+      ],
+      "name": "pastis2_drom_bg8void_loio_reunion_s2ls",
       "norm_stats": {
         "sentinel1": {
           "vh": {
