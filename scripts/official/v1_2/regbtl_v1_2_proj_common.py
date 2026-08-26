@@ -75,6 +75,12 @@ logger = logging.getLogger(__name__)
 # stored artifact serves both widths by truncation (Tessera-v2 per-prefix heads).
 REGISTER_DIM = 768
 PROJECTION_DIMS = [128, 64]
+# Hidden width of the 2-layer back-projection heads, for the arms that use one
+# (``register_back_projection_hidden``). SimReg's ``(m, 2m, d)`` rule read at
+# ``m = max(PROJECTION_DIMS)``, then held FIXED across prefixes so that prefix
+# width is the only thing varying between Matryoshka heads. The heads are
+# training-only, so this is free at serving time.
+BACK_PROJECTION_HIDDEN = 256
 # w0p1 (base 0.1) everywhere heads attach: best for the smaller register dims, and
 # d768 has only w0.01/w1 completed evals, so this doubles as the missing d768 w0p1
 # point. The sup768 variant is encoder-identical to the in-flight

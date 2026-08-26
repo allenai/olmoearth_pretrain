@@ -1981,6 +1981,7 @@ class Encoder(FlexiVitBase):
         register_projection_dims: list[int] | None = None,
         register_projection_type: str = "linear",
         register_projection_output_norm: bool = False,
+        register_back_projection_hidden: int | None = None,
     ):
         """Initialize the encoder.
 
@@ -2132,6 +2133,37 @@ class Encoder(FlexiVitBase):
                 slice; that is deliberate, because a truncating deployment reads
                 exactly that slice. Requires ``register_projection_type="linear"``.
                 Defaults to False (the shipped behaviour).
+            register_back_projection_hidden: Hidden width of the per-prefix
+                back-projection heads. ``None`` (default) keeps the shipped single
+                ``Linear(d, register_dim)``; an int makes each head a 2-layer MLP
+                ``Linear(d, H) -> LayerNorm -> ReLU -> Linear(H, register_dim)``.
+                The heads are TRAINING-ONLY scaffolding -- they are discarded at
+                inference, so this costs nothing at serving time and does not
+                change the shipped embedding's architecture.
+
+                WHY AN MLP. A single Linear demands the student be a *linear*
+                image of the teacher, which is close to demanding PCA of a 768->128
+                compression. SimReg (BMVC'21) ablates exactly this head: their
+                "Linear" row is this module, and it lost 3.7 pts 1-NN / 10.2 pts
+                linear-probe to a deeper head, with ~94% of that recovered by the
+                first hidden layer alone. Depth past 2 is where the contrary
+                evidence starts (Chen et al. 2023 measure degradation at 2L->4L,
+                mechanism: the projector overfits the teacher), so 2 layers is the
+                point the two literatures agree on.
+
+                H IS FIXED ACROSS PREFIXES, NOT SCALED WITH ``d``. SimReg's
+                ``(m, 2m, d)`` has m as a fixed backbone width, not a swept one; a
+                literal reading would give the 16-dim prefix a 32-unit hidden layer
+                and confound "narrower code" with "weaker decoder" in exactly the
+                Matryoshka comparison the narrow prefixes exist to make. Since the
+                head is thrown away there is no reason to shrink it, so every
+                prefix decodes through the same width and ``d`` is the only
+                variable.
+
+                NO NORM OR ACTIVATION AFTER THE FINAL LAYER: the output is
+                regressed against the teacher's register grid, which comes out of a
+                LayerNorm and therefore has negative entries. A ReLU'd output is
+                non-negative and would cap the cosine against it.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2343,10 +2375,21 @@ class Encoder(FlexiVitBase):
                     )
                 # One back-projection per Matryoshka prefix: dim d reconstructs the
                 # teacher from student[..., :d], forcing the first d dims to be
-                # self-sufficient (Tessera-v2 per-prefix heads).
+                # self-sufficient (Tessera-v2 per-prefix heads). Training-only --
+                # discarded at inference, so head capacity is free at serving time.
+                if (
+                    register_back_projection_hidden is not None
+                    and register_back_projection_hidden <= 0
+                ):
+                    raise ValueError(
+                        "register_back_projection_hidden must be positive, got "
+                        f"{register_back_projection_hidden}"
+                    )
                 self.register_back_projections = nn.ModuleDict(
                     {
-                        str(d): nn.Linear(d, resolved_register_dim)
+                        str(d): self._build_back_projection(
+                            d, resolved_register_dim, register_back_projection_hidden
+                        )
                         for d in self.register_projection_dims
                     }
                 )
@@ -2388,6 +2431,26 @@ class Encoder(FlexiVitBase):
                 p.requires_grad = False
         if self.has_register_tokens:
             self._init_register_tokens()
+
+    @staticmethod
+    def _build_back_projection(
+        prefix_dim: int, register_dim: int, hidden: int | None
+    ) -> nn.Module:
+        """One per-prefix distillation head: ``prefix_dim -> register_dim``.
+
+        ``hidden=None`` is the shipped bare ``Linear``; an int gives a 2-layer MLP
+        at that hidden width. Nothing follows the final layer -- see
+        ``register_back_projection_hidden`` in the constructor docstring for why the
+        output must stay unnormalized and unactivated.
+        """
+        if hidden is None:
+            return nn.Linear(prefix_dim, register_dim)
+        return nn.Sequential(
+            nn.Linear(prefix_dim, hidden),
+            nn.LayerNorm(hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, register_dim),
+        )
 
     def enable_band_dropout(self) -> None:
         """Enable band dropout using the configured rate.
@@ -3621,6 +3684,14 @@ class EncoderConfig(Config):
     # Requires register_projection_type="linear". Ignored without
     # register_projection_dims.
     register_projection_output_norm: bool = False
+    # Hidden width of the per-prefix back-projection ("distillation head") that
+    # reconstructs the teacher from student[..., :d]. None = the shipped single
+    # Linear(d, register_dim); an int makes each head a 2-layer MLP
+    # Linear(d, H) -> LayerNorm -> ReLU -> Linear(H, register_dim). The heads are
+    # discarded at inference, so this is free at serving time and leaves the shipped
+    # embedding's architecture untouched. Fixed across prefixes on purpose -- see
+    # Encoder.__init__'s docstring. Ignored without register_projection_dims.
+    register_back_projection_hidden: int | None = None
     # Put the register grid on a sphere: L2-normalize the bottleneck's output so the
 
     def __post_init__(self) -> None:
@@ -3722,6 +3793,14 @@ class EncoderConfig(Config):
                     raise ValueError(
                         "register_projection_type must be 'linear' or 'perceiver', "
                         f"got {self.register_projection_type!r}"
+                    )
+                if (
+                    self.register_back_projection_hidden is not None
+                    and self.register_back_projection_hidden <= 0
+                ):
+                    raise ValueError(
+                        "register_back_projection_hidden must be positive, got "
+                        f"{self.register_back_projection_hidden}"
                     )
         elif self.register_projection_dims is not None:
             raise ValueError(
