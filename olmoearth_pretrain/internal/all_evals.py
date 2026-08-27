@@ -1594,6 +1594,17 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
                 window_size=_ws,
                 dataset="pastis2_drom_bg8",
             ),
+            # PASTIS (metropolitan France) on the same convention as pastis2_drom:
+            # 128 px windows, 12 monthly mosaics, Sept 2018 - Sept 2019. Registered so
+            # its embeddings can be dumped and compared with the DROM ones;
+            # pastis_year_aligned cannot serve that purpose -- 212 timesteps over the
+            # 2019 calendar year is a different input shape. The dataset is already in
+            # the registry, so this only gives it a task.
+            f"pastis_rslearn_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_rslearn",
+            ),
             # bg8void: same 8 trained classes, excluded crops void instead of
             # folded into Background. Full-modality config, so the AEF and
             # Tessera baselines reuse this entry with an input_modalities override.
