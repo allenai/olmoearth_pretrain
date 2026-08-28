@@ -140,6 +140,16 @@ def build_launch_config(
     # Gantry writes the GCP credentials and exports GOOGLE_APPLICATION_CREDENTIALS
     # itself (see google_credentials_secret below), so it's not set here.
     env_vars: list[BeakerEnvVar] = []
+    if weka_buckets:
+        # Share a uv cache on Weka across jobs so wheels are downloaded (and
+        # sdists like flash-attn are compiled) only once. Gantry's entrypoint
+        # picks this up and flock-guards it against concurrent jobs.
+        env_vars.append(
+            BeakerEnvVar(
+                name="UV_CACHE_DIR",
+                value=f"/weka/{DEFAULT_OLMOEARTH_PRETRAIN_WEKA_BUCKET.bucket}/{PROJECT_NAME}/uv-cache",
+            )
+        )
     nccl_debug_env_vars = set_nccl_debug_env_vars(nccl_debug=nccl_debug)
     if nccl_debug_env_vars is not None:
         env_vars.extend(nccl_debug_env_vars)
