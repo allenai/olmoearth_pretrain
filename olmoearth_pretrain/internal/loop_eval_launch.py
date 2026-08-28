@@ -62,12 +62,13 @@ def resolve_parent_priority(default: str = "high") -> str:
         return default
     try:
         from beaker import Beaker
+        from beaker.types import BeakerJobPriority
 
-        beaker = Beaker.from_env()
-        priority = beaker.job.get(job_id).priority
-        if priority is not None:
-            # Priority is a StrEnum -> str() yields e.g. "high".
-            return str(priority)
+        with Beaker.from_env() as beaker:
+            priority = beaker.job.get(job_id).system_details.priority
+        if priority:
+            # Convert the protobuf enum value to its name, e.g. "high".
+            return BeakerJobPriority(priority).name
         logger.warning(
             "Parent Beaker job %s has no priority set; using %r", job_id, default
         )
