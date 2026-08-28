@@ -23,6 +23,15 @@
 # is COMMITTED AND PUSHED, not the working tree. The flags live in the new module, so
 # an unpushed tree would silently train a second copy of the parent.
 #
+# Extra args are forwarded, which is how this was actually launched on 2026-08-28:
+#   ./launch_regbtl_v1_2_proj128_supstu_nodistill.sh --launch.allow_dirty=true
+# An UNRELATED work-in-progress edit (the FT sweep's --task-names flag) was sitting
+# in the tree and tripped olmo-core's dirty-tree guard. That guard protects against
+# launching code you have not pushed; the module this run trains WAS committed and
+# pushed, and the Beaker job checks out $GIT_REF regardless, so the dirty file never
+# reaches the job. Do not add the flag to COMMON -- with a genuinely relevant dirty
+# tree it would silently train the pushed version instead.
+#
 # In-loop evals: the parent's proj-earlyread 12-task set on both heads at 40k, so the
 # curves overlay the parent's directly. projection/distill_* metrics are absent here
 # by construction -- the terms are not computed.
@@ -40,4 +49,4 @@ COMMON=(ai2/jupiter
 
 python scripts/official/v1_2/regbtl_v1_2_gdyn_d768_proj128lin_supstu0p1_w1_newsampling_psuniform_nodistill.py \
     launch regbtl_v1_2_gdyn_d768_proj128lin_supstu0p1_w1_newsamp_psuniform_nodistill \
-    "${COMMON[@]}"
+    "${COMMON[@]}" "$@"
