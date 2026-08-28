@@ -120,13 +120,24 @@ olmoearth_args = " ".join(
 )
 
 
-def loop_through_params(no_norm: bool = False) -> Generator[dict[str, Any], None, None]:
-    """Yield a dict of the hps we are sweeping over."""
+def loop_through_params(
+    no_norm: bool = False, sweep_lr: bool = True
+) -> Generator[dict[str, Any], None, None]:
+    """Yield a dict of the hps we are sweeping over.
+
+    ``sweep_lr=False`` pins the probe LR to a single value. ``lr_args`` is built
+    only for tasks whose type maps to ``linear_probe``, so when none are
+    selected -- a KNN-only run, e.g. ``--task-names=m_eurosat,m_brick_kiln`` --
+    no ``probe_lr`` override is emitted at all and the eight LRs produce eight
+    identical runs of each (norm, pooling) pair. The norm and pooling sweeps are
+    untouched; only the dead axis collapses.
+    """
     if no_norm:
         normalization_modes = ["dataset"]
     else:
         normalization_modes = Normalization_MODES
-    for lr in LP_LRs:
+    learning_rates = LP_LRs if sweep_lr else LP_LRs[:1]
+    for lr in learning_rates:
         for norm_mode in normalization_modes:
             for pooling_type in pooling_types:
                 yield {
@@ -718,11 +729,8 @@ def _get_window_size_run_suffix(args: argparse.Namespace) -> str:
     return f"_ws{window_size}"
 
 
-def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
-    """Build a downstream evaluator include-list override."""
-    if getattr(args, "embedding_diagnostics_only", False):
-        return ""
-
+def selected_task_names(args: argparse.Namespace) -> list[str]:
+    """Resolve which eval tasks a sweep will run, after include/skip filtering."""
     selected_tasks = parse_task_names(getattr(args, "task_names", None))
     skip_tasks = parse_task_names(getattr(args, "task_skip_names", None))
 
@@ -734,6 +742,29 @@ def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
     if skip_tasks:
         skip_task_set = set(skip_tasks)
         tasks_to_run = [task for task in tasks_to_run if task not in skip_task_set]
+    return tasks_to_run
+
+
+def any_linear_probe_task_selected(args: argparse.Namespace) -> bool:
+    """Whether the probe LR reaches any selected task.
+
+    ``lr_args`` is emitted per task, and only for those whose type maps to
+    ``linear_probe``. If a run selects none of them the LR axis is inert, and
+    sweeping it just repeats every (norm, pooling) run eight times.
+    """
+    return any(
+        get_eval_mode(dataset_to_config(EVAL_TASKS[name].dataset).task_type)
+        == "linear_probe"
+        for name in selected_task_names(args)
+    )
+
+
+def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
+    """Build a downstream evaluator include-list override."""
+    if getattr(args, "embedding_diagnostics_only", False):
+        return ""
+
+    tasks_to_run = selected_task_names(args)
 
     if len(tasks_to_run) == len(EVAL_TASKS):
         return ""
@@ -1276,7 +1307,8 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                     continue
 
                 hp_params = loop_through_params(
-                    no_norm=(args.model in dataset_norm_only_models)
+                    no_norm=(args.model in dataset_norm_only_models),
+                    sweep_lr=any_linear_probe_task_selected(args),
                 )
 
                 for params in hp_params:

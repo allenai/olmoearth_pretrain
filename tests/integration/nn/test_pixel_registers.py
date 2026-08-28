@@ -140,7 +140,8 @@ def test_pixel_grid_register_shapes(patch_size: int) -> None:
     output = encoder.forward(sample, patch_size=patch_size, input_res=10)
 
     n_reg = H * W
-    assert output["registers"].shape == (B, n_reg, REGISTER_DIM)
+    # The bottleneck returns the grid shaped; positions stay flat (row-major).
+    assert output["registers"].shape == (B, H, W, REGISTER_DIM)
     assert output["register_positions"].shape == (B, n_reg, 2)
     # Consecutive pixels are evenly spaced along each axis.
     grid = output["register_positions"][0].view(H, W, 2)
@@ -434,25 +435,3 @@ def test_embed_read_masked_leakage_at_max_patch_size() -> None:
     for key, value in out_a.items():
         if isinstance(value, torch.Tensor):
             assert torch.equal(value, out_b[key]), key
-
-
-def test_embed_read_rejects_multi_depth() -> None:
-    """embed_read is incompatible with multi-depth read_layers (bottleneck-level)."""
-    with pytest.raises(ValueError, match="read_layers"):
-        Encoder(
-            supported_modalities=[Modality.SENTINEL2_L2A],
-            embedding_size=16,
-            max_patch_size=4,
-            min_patch_size=1,
-            num_heads=2,
-            mlp_ratio=2.0,
-            max_sequence_length=12,
-            depth=4,
-            drop_path=0.0,
-            position_encoding="rope",
-            use_register_bottleneck=True,
-            register_grid_size=0,
-            register_dim=REGISTER_DIM,
-            register_read_layers=[2, 4],
-            register_embed_read=True,
-        )

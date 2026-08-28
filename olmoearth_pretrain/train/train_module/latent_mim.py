@@ -240,7 +240,7 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     projection_distill_gram_within_max_cells: int = 256
     # Uniformity (AlphaEarth's "batch uniformity", S2.2.4): push the register grid
     # to cover the sphere instead of crowding into a cap of it, using strictly
-    # cross-scene pairs. Only meaningful alongside EncoderConfig.register_unit_norm
+    # cross-scene pairs.
     # (on an unnormalized grid the term can be minimized by shrinking magnitudes
     # rather than by spreading directions). 0.0 (default) leaves the loss exactly as
     # every run so far has seen it. The second weight applies the same term to the
@@ -368,7 +368,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 scene for the within-scene Gram term.
             register_uniformity_weight: Weight of the cross-scene uniformity term on
                 the register grid (AlphaEarth's batch uniformity). Shapes the
-                encoder. Expects EncoderConfig.register_unit_norm.
+                encoder.
             projection_uniformity_weight: The same term applied to the distillation
                 student's own output.
             register_uniformity_rotations: Batch offsets averaged per step.
@@ -450,21 +450,6 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 raise ValueError(
                     "uniformity weights require a register bottleneck (there is no "
                     "register grid to spread otherwise)"
-                )
-            if register_uniformity_weight > 0 and not getattr(
-                self.model.encoder, "register_unit_norm", False
-            ):
-                # The uniformity term itself normalizes internally, so it cannot be
-                # gamed by shrinking magnitudes -- but without the sphere the SERVED
-                # register grid keeps arbitrary norms while only its directions are
-                # spread, which is usually not the geometry the term was chosen for.
-                # Student-only uniformity (projection_uniformity_weight alone) is
-                # exempt: the lin student has no norm layer by design and the spread
-                # is applied in its own (direction-only) space.
-                logger.warning(
-                    "register uniformity is enabled without "
-                    "EncoderConfig.register_unit_norm; the register grid's "
-                    "directions will be spread but its norms remain unconstrained"
                 )
             self.total_loss_name = f"{self.total_loss_name}+uniformity"
         if getattr(self.model.encoder, "register_projection_dims", None) is not None:

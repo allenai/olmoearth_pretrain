@@ -25,14 +25,14 @@ WHY (what licenses this):
 * Every mechanism that lets training re-weight toward LATE depths is neutral-to-harmful
   on the frozen evals in that same file (``lrw``: +0.01 on noic, -1.03 on ictok;
   learned vs uniform ``fsum``: -0.06). Training's preference for the final layer is a
-  pretext-side artifact, not an eval-side gain -- so ``register_learned_read_weighting``
-  stays OFF here.
+  pretext-side artifact, not an eval-side gain -- which is why the learned-read-gate and
+  fused-read knobs were removed from the encoder rather than swept further.
 * Precedent: TokenLearner (arXiv:2106.11297) reduces tokens partway through a ViT and
   spends the savings on more layers over the reduced set -- ViT-B/16 baseline 55.6
   GFLOPs / 84.73%, vs 21-layer TokenLearner 47.1 GFLOPs / 85.21%.
 
 WHAT STAYS THE SAME INSIDE THE BOTTLENECK: single-source re-reads
-(``register_read_layers=None``), so every read re-queries the same shallow trunk output
+so every read re-queries the same shallow trunk output
 through its own norm. Under ``interleave`` the reads are still distinct from one another
 -- read 1 queries blank cloned latents, read N queries registers refined N-1 times
 (Perceiver iterative attention). The depth diversity moves from the KEY side to the QUERY
@@ -165,10 +165,7 @@ def build_earlyread_model_config(
     *,
     trunk_depth: int,
     latent_depth: int,
-    shared_read_kv: bool = False,
     register_dim: int | None = None,
-    output_dim: int | None = None,
-    latent_every_n: int = 1,
 ) -> LatentMIMConfig:
     """The d128 NDVI tanchor base, with the encoder/bottleneck depth split reallocated.
 
@@ -191,22 +188,6 @@ def build_earlyread_model_config(
             a bet that the stack is launch-bound, where extra FLOPs at an unchanged kernel
             count are close to free -- it is NOT a speedup, and the arm's s/step is itself
             the measurement of which regime we are in.
-        output_dim: If set, a single ``Linear(register_dim, output_dim)`` on the
-            bottleneck's output, so the decoder, supervision heads and evals all consume
-            ``output_dim`` while the stack runs at ``register_dim``. Use with
-            ``register_dim=768, output_dim=128`` to keep the shipped embedding at 128.
-            In the gradient path, unlike the detached ``register_projection_dims``
-            student.
-        latent_every_n: Latent self-attention blocks per read -- 1 is the 1:1 default,
-            2 runs one LSA per two reads (plus one after the last). LSA blocks are half
-            the bottleneck's sequential depth and depth is what drives wall-clock, so
-            thinning them is a direct saving; the lsa/nolsa ablation says the FIRST block
-            is worth +8.4 pts on the noic arm, which this preserves.
-        shared_read_kv: Project the patch tokens into keys/values once and share them
-            across every read, instead of each read re-projecting the full token array.
-            Lifts the read-depth ceiling (unshared, 16 reads fit at micro 64 and 24 do
-            not) and removes ~73% of a read block's FLOPs, at the cost of the reads
-            sharing K/V weights. Replaces ``register_per_depth_read_proj``.
 
     Returns:
         The base model config with ``depth`` and ``register_latent_depth`` overridden.
@@ -217,46 +198,20 @@ def build_earlyread_model_config(
     encoder_config.depth = trunk_depth
     encoder_config.register_latent_depth = latent_depth
 
-    # Shared-K/V: one key/value projection of the patch tokens, reused by every read.
-    # This is what lifts the read-depth ceiling -- without it a read block stores its own
-    # input-norm output, k, rotated k and v (four token-array-sized tensors) for backward,
-    # and 24+ reads exceed 80 GB at micro 64 while 16 fit. It also removes ~73% of a read
-    # block's FLOPs. It REPLACES per-depth read projections (there is one source, so
-    # per-block norms have nothing to differentiate), and it is a model change rather than
-    # a pure optimization: the reads share K/V weights and differ only in their queries.
     if register_dim is not None:
         # Only the encoder's INTERNAL width moves. The decoder keeps the base's 128,
         # which is what the output projection delivers to it.
         encoder_config.register_dim = register_dim
-    if output_dim is not None:
-        encoder_config.register_output_dim = output_dim
-        if config.decoder_config.register_dim != output_dim:
-            raise ValueError(
-                "the decoder cross-attends the SHIPPED register grid, so its "
-                f"register_dim ({config.decoder_config.register_dim}) must equal "
-                f"output_dim ({output_dim})"
-            )
-    encoder_config.register_latent_every_n = latent_every_n
-    encoder_config.register_shared_read_kv = shared_read_kv
-    if shared_read_kv:
-        encoder_config.register_per_depth_read_proj = False
 
     # Single-source re-reads: every read re-queries the trunk's final layer through its
-    # own norm (per_depth_read_proj), rather than one read per encoder depth. Asserted
-    # rather than assigned so that a change to the BASE script fails loudly here instead
-    # of silently switching these arms to a different bottleneck. ``register_read_layers``
-    # is validated as strictly ascending, unique and bounded by ``depth``, so a stale
-    # [3, 6, 9, 12] would hard-error against a 3-layer trunk anyway -- but the other two
-    # are silent, and the anchor is what makes a shallow trunk viable at all.
-    assert encoder_config.register_read_layers is None, (
-        "early-read arms use single-source re-reads; register_read_layers must be None"
-    )
+    # own norm (per_depth_read_proj). Asserted rather than assigned so that a change to
+    # the BASE script fails loudly here instead of silently switching these arms to a
+    # different bottleneck; the anchor is what makes a shallow trunk viable at all.
     assert encoder_config.register_interleave, (
         "early-read arms need the interleaved [read -> self] schedule"
     )
-    assert shared_read_kv or encoder_config.register_per_depth_read_proj, (
-        "early-read arms give each read its own lens on the shared source, unless "
-        "shared_read_kv replaces the per-depth projections with one shared K/V"
+    assert encoder_config.register_per_depth_read_proj, (
+        "early-read arms give each read its own lens on the shared source"
     )
     assert encoder_config.register_temporal_anchor is not None, (
         "a shallow trunk leaves the anchored read as the only path for temporal "

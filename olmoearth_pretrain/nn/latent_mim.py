@@ -7,13 +7,13 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+from einops import rearrange
 from torch.distributed import DeviceMesh
 from torch.distributed.fsdp import (
     MixedPrecisionPolicy,
     fully_shard,
     register_fsdp_forward_method,
 )
-from torch.distributed.tensor import DTensor
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
@@ -173,7 +173,9 @@ class LatentMIM(nn.Module, DistributedMixins):
                 register projection (else None): the teacher ``registers``, the
                 student ``projected_registers``, and the student's
                 ``supervision_preds`` (or None). Consumed by the train module's
-                distillation / projection-supervision losses.
+                distillation / projection-supervision losses. The two grids are
+                FLATTENED to ``[B, N, D]`` here: every consumer (uniformity, Gram,
+                cosine) is relational over cells and takes a token sequence.
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         output_dict = self.encoder(x, patch_size=patch_size)
@@ -187,39 +189,6 @@ class LatentMIM(nn.Module, DistributedMixins):
         extra_metrics = {}
         if token_norm_stats is not None:
             extra_metrics["token_norm_stats"] = token_norm_stats
-        # Log the learned per-read residual gates (when enabled) keyed by encoder read
-        # depth, so we can see whether the multi-depth reads stay distributed or collapse
-        # toward the final layer. Tiny (one scalar per read); full_tensor() gathers the
-        # FSDP-sharded parameter (a collective all ranks hit, since the flag is uniform).
-        register_bottleneck = getattr(self.encoder, "register_bottleneck", None)
-        if register_bottleneck is not None and getattr(
-            register_bottleneck, "learned_read_weighting", False
-        ):
-            gates = register_bottleneck.read_gates.detach()
-            if isinstance(gates, DTensor):
-                gates = gates.full_tensor()
-            read_layers = register_bottleneck.read_layers or list(
-                range(1, gates.numel() + 1)
-            )
-            extra_metrics["register_read_gates"] = {
-                str(layer): gates[i].item() for i, layer in enumerate(read_layers)
-            }
-        # Log the per-depth contribution norms of the fused read source (when enabled),
-        # keyed by encoder read depth. In the learned arm, drift of these norms (e.g.
-        # collapse onto the final layer) is the signal the A/B exists to measure; in the
-        # uniform arm they are ~constant by construction. Activations, not parameters, so
-        # no FSDP gather is needed.
-        if (
-            register_bottleneck is not None
-            and getattr(register_bottleneck, "fused_read", None) is not None
-            and register_bottleneck.last_read_source_norms is not None
-        ):
-            source_norms = register_bottleneck.last_read_source_norms
-            assert register_bottleneck.read_layers is not None
-            extra_metrics["register_read_source_norms"] = {
-                str(layer): source_norms[i].item()
-                for i, layer in enumerate(register_bottleneck.read_layers)
-            }
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
@@ -230,15 +199,10 @@ class LatentMIM(nn.Module, DistributedMixins):
         supervision_preds = None
         if self.supervision_head is not None:
             if getattr(self.supervision_head, "register_supervision", False):
-                # Supervise the register grid directly: reshape [B, n_reg, D] to the
-                # spatial grid [B, n_h, n_w, D] the heads expect.
-                registers = decoder_kwargs.get("registers")
-                n_h, n_w = self.encoder.register_bottleneck.register_grid
-                register_grid = registers.reshape(
-                    registers.shape[0], n_h, n_w, registers.shape[-1]
-                )
+                # The encoder already hands back the grid as [B, n_h, n_w, D], which
+                # is the shape the heads expect.
                 supervision_preds = self.supervision_head(
-                    decoded, x, register_grid=register_grid
+                    decoded, x, register_grid=decoder_kwargs.get("registers")
                 )
             else:
                 supervision_preds = self.supervision_head(decoded, x)
@@ -251,22 +215,19 @@ class LatentMIM(nn.Module, DistributedMixins):
         projection_outputs: dict | None = None
         if registers is not None:
             projection_outputs = {
-                "registers": registers,
+                "registers": rearrange(registers, "b h w d -> b (h w) d"),
                 "projected_registers": None,
                 "supervision_preds": None,
             }
         if projected_registers is not None:
             projection_supervision_preds = None
             if self.projection_supervision_heads is not None:
-                # Same grid as the registers (the student mirrors the primary's grid).
-                # Head d reads the first d dims (the Matryoshka prefix), so every
-                # listed width is supervised as a self-sufficient embedding. The
-                # student input is already detached inside the encoder, so these
-                # gradients stop at the projection.
-                n_h, n_w = self.encoder.register_bottleneck.register_grid
-                projected_grid = projected_registers.reshape(
-                    projected_registers.shape[0], n_h, n_w, -1
-                )
+                # Same grid as the registers (the student mirrors the primary's grid),
+                # already shaped [B, n_h, n_w, d] by the encoder. Head d reads the first
+                # d dims (the Matryoshka prefix), so every listed width is supervised as
+                # a self-sufficient embedding. The student input is already detached
+                # inside the encoder, so these gradients stop at the projection.
+                projected_grid = projected_registers
                 projection_supervision_preds = {
                     dim_str: head(
                         decoded, x, register_grid=projected_grid[..., : int(dim_str)]
@@ -276,7 +237,9 @@ class LatentMIM(nn.Module, DistributedMixins):
             assert projection_outputs is not None, (
                 "a projection student cannot exist without a register bottleneck"
             )
-            projection_outputs["projected_registers"] = projected_registers
+            projection_outputs["projected_registers"] = rearrange(
+                projected_registers, "b h w d -> b (h w) d"
+            )
             projection_outputs["supervision_preds"] = projection_supervision_preds
 
         return (
@@ -408,15 +371,9 @@ class LatentMIMConfig(Config):
                 "use_register_bottleneck must match between encoder and decoder"
             )
         if encoder_uses_registers:
-            # The decoder cross-attends the grid the encoder SHIPS. With
-            # ``register_output_dim`` the bottleneck runs internally at
-            # ``register_dim`` and projects down on output, so it is the projected
-            # width the decoder must match -- not the internal one.
-            encoder_register_dim = (
-                getattr(self.encoder_config, "register_output_dim", None)
-                or self.encoder_config.register_dim
-                or (self.encoder_config.embedding_size // 2)
-            )
+            # The decoder cross-attends the grid the encoder ships, so its width must
+            # match the bottleneck's register_dim (required whenever the bottleneck is on).
+            encoder_register_dim = self.encoder_config.register_dim
             if self.decoder_config.register_dim != encoder_register_dim:
                 raise ValueError(
                     "decoder_config.register_dim "
@@ -503,13 +460,8 @@ class LatentMIMConfig(Config):
         if self.supervision_head_config is not None:
             if getattr(self.supervision_head_config, "register_supervision", False):
                 # Heads read the register grid, so embedding_dim is the width that grid
-                # is SHIPPED at -- register_output_dim when the bottleneck projects its
-                # output down, otherwise the internal register width.
-                embedding_dim = (
-                    getattr(self.encoder_config, "register_output_dim", None)
-                    or self.encoder_config.register_dim
-                    or (self.encoder_config.embedding_size // 2)
-                )
+                # is shipped at: the bottleneck's register_dim.
+                embedding_dim = self.encoder_config.register_dim
                 if self.supervision_source in ("registers", "both"):
                     supervision_head = self.supervision_head_config.build(
                         embedding_dim=embedding_dim,

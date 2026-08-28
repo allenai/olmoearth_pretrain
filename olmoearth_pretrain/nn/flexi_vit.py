@@ -33,7 +33,6 @@ from olmoearth_pretrain.datatypes import (
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
     PositionEncoding,
-    WindowSpec,
     axial_3d_dim_split,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -230,10 +229,8 @@ class MultiModalPatchEmbeddings(nn.Module):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
-        band_dropout_groups: dict[str, list[list[str]]] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
-        patch_embed_linear_skip: bool = False,
     ):
         """Initialize the patch embeddings.
 
@@ -254,14 +251,6 @@ class MultiModalPatchEmbeddings(nn.Module):
                 and acts as stronger augmentation. Default: False (fixed rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
-            band_dropout_groups: Optional mapping modality name -> list of band-name
-                groups. When a modality has an entry here, band dropout for that
-                modality switches from per-band (zero each band independently) to
-                *grouped*: with probability ``band_dropout_rate``, exactly one group
-                (chosen uniformly at random per sample) is zeroed, leaving the other
-                groups intact. This mirrors realistic missing-sensor-group scenarios
-                (e.g. S2 10 m / 20 m / 60 m resolution groups, or Landsat with/without
-                the panchromatic B8) and preserves within-group spectral contrast.
                 Modalities absent from this mapping fall back to per-band dropout.
                 Default: None (all per-band).
             patch_embed_hidden_sizes: Optional list of hidden layer widths for a
@@ -277,9 +266,6 @@ class MultiModalPatchEmbeddings(nn.Module):
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm. Only applies
                 to the spatial branch (FlexiPatchEmbed).
-            patch_embed_linear_skip: Passed through to FlexiPatchEmbed. If True, add a
-                per-pixel ReLU-free linear skip parallel to the patch-embed MLP
-                (pixel_features = MLP(x) + Linear(x)); requires patch_embed_hidden_sizes.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -290,10 +276,8 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
-        self.band_dropout_groups = band_dropout_groups
         self.patch_embed_hidden_sizes = patch_embed_hidden_sizes
         self.post_proj_hidden_sizes = post_proj_hidden_sizes
-        self.patch_embed_linear_skip = patch_embed_linear_skip
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -314,56 +298,12 @@ class MultiModalPatchEmbeddings(nn.Module):
                     buffer_name, banset_indices_tensor, persistent=False
                 )
 
-        # For grouped band dropout, precompute a [num_groups, num_bands_in_bandset]
-        # 0/1 mask per (modality, bandset) that marks which local band positions
-        # belong to each droppable group. Registered as (non-persistent) buffers so
-        # they follow the module's device/dtype without entering the checkpoint.
-        self._band_dropout_group_counts: dict[str, int] = {}
-        if self.band_dropout_groups:
-            for modality, groups in self.band_dropout_groups.items():
-                if modality not in self.supported_modality_names:
-                    continue
-                base_spec = Modality.get(modality)
-                name_to_global = {
-                    name: i for i, name in enumerate(base_spec.band_order)
-                }
-                bandset_index_lists = self.tokenization_config.get_bandset_indices(
-                    modality
-                )
-                for idx, bandset_indices in enumerate(bandset_index_lists):
-                    local_pos = {g: j for j, g in enumerate(bandset_indices)}
-                    group_mask = torch.zeros(
-                        (len(groups), len(bandset_indices)), dtype=torch.float32
-                    )
-                    for g_idx, group in enumerate(groups):
-                        for band_name in group:
-                            global_idx = name_to_global[band_name]
-                            if global_idx in local_pos:
-                                group_mask[g_idx, local_pos[global_idx]] = 1.0
-                    # Drop groups that don't touch this bandset (all-zero rows) so a
-                    # uniform group choice never becomes a no-op drop.
-                    nonempty = group_mask.sum(dim=1) > 0
-                    group_mask = group_mask[nonempty]
-                    self._band_dropout_group_counts[
-                        self._get_buffer_name(modality, idx)
-                    ] = int(group_mask.shape[0])
-                    self.register_buffer(
-                        self._get_group_mask_buffer_name(modality, idx),
-                        group_mask,
-                        persistent=False,
-                    )
-
         # Create a dictionary of per modality index tensors to do  index select with registered buffer
 
     @staticmethod
     def _get_buffer_name(modality: str, idx: int) -> str:
         """Get the buffer name."""
         return f"{modality}__{idx}_buffer"
-
-    @staticmethod
-    def _get_group_mask_buffer_name(modality: str, idx: int) -> str:
-        """Get the grouped-band-dropout mask buffer name."""
-        return f"{modality}__{idx}_group_mask_buffer"
 
     @staticmethod
     def _get_embedding_module_name(modality: str, idx: int) -> str:
@@ -403,7 +343,6 @@ class MultiModalPatchEmbeddings(nn.Module):
                         use_linear_patch_embed=self.use_linear_patch_embed,
                         patch_embed_hidden_sizes=self.patch_embed_hidden_sizes,
                         post_proj_hidden_sizes=self.post_proj_hidden_sizes,
-                        patch_embed_linear_skip=self.patch_embed_linear_skip,
                     )
                     for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
@@ -452,27 +391,14 @@ class MultiModalPatchEmbeddings(nn.Module):
                 num_bands = inp_data.shape[-1]
                 # Only apply band dropout if there are more than 1 band
                 if num_bands > 1:
-                    grouped = (
-                        self.band_dropout_groups is not None
-                        and modality in self.band_dropout_groups
-                        and self._band_dropout_group_counts.get(buffer_name, 0) > 0
-                    )
-                    if grouped:
-                        group_mask = getattr(
-                            self, self._get_group_mask_buffer_name(modality, idx)
-                        )
-                        inp_data = self._apply_group_band_dropout(
-                            inp_data, group_mask, self.band_dropout_rate
+                    if self.random_band_dropout:
+                        rate = (
+                            torch.rand(1, device=inp_data.device).item()
+                            * self.band_dropout_rate
                         )
                     else:
-                        if self.random_band_dropout:
-                            rate = (
-                                torch.rand(1, device=inp_data.device).item()
-                                * self.band_dropout_rate
-                            )
-                        else:
-                            rate = self.band_dropout_rate
-                        inp_data = self._apply_band_dropout(inp_data, rate)
+                        rate = self.band_dropout_rate
+                    inp_data = self._apply_band_dropout(inp_data, rate)
 
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
@@ -506,42 +432,6 @@ class MultiModalPatchEmbeddings(nn.Module):
                 num_bands, (no_bands_kept.sum(),), device=keep_mask.device
             )
             keep_mask[no_bands_kept, rand_idx] = True
-        # Broadcast: [B, 1, 1, ..., num_bands]
-        view_shape = [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
-        return patchified_data * keep_mask.view(*view_shape).to(patchified_data.dtype)
-
-    @staticmethod
-    def _apply_group_band_dropout(
-        patchified_data: Tensor, group_mask: Tensor, rate: float
-    ) -> Tensor:
-        """Drop one whole band group at a time to mirror missing sensor groups.
-
-        For each sample independently, with probability ``rate`` exactly one group
-        (row of ``group_mask``) is selected uniformly at random and its bands are
-        zeroed; with probability ``1 - rate`` all bands are kept. The other groups are
-        always left intact, so within-group spectral contrast is preserved and at
-        least one group always survives (there are >= 2 groups by construction).
-
-        Args:
-            patchified_data: Input tensor with bands in the last dimension.
-            group_mask: [num_groups, num_bands] 0/1 mask; row g marks the bands of
-                group g within this bandset.
-            rate: Probability that a group is dropped for a given sample.
-
-        Returns:
-            Tensor with one randomly chosen group zeroed per selected sample.
-        """
-        num_bands = patchified_data.shape[-1]
-        batch_size = patchified_data.shape[0]
-        num_groups = group_mask.shape[0]
-        device = patchified_data.device
-        # Which group to drop per sample, and whether to drop at all this sample.
-        which = torch.randint(num_groups, (batch_size,), device=device)
-        do_drop = torch.rand(batch_size, device=device) < rate
-        # Gather the chosen group's band mask, gated by do_drop -> [B, num_bands].
-        chosen = group_mask.to(device).index_select(0, which)
-        drop_mask = chosen * do_drop.to(chosen.dtype).unsqueeze(-1)
-        keep_mask = 1.0 - drop_mask
         # Broadcast: [B, 1, 1, ..., num_bands]
         view_shape = [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
         return patchified_data * keep_mask.view(*view_shape).to(patchified_data.dtype)
@@ -1285,35 +1175,6 @@ class FlexiVitBase(nn.Module):
         positions, _ = self.collapse_and_combine_hwtc(position_dict)
         return positions
 
-    def build_spatial_token_mask(
-        self,
-        tokens_only_dict: dict[str, Tensor],
-        original_masks_dict: dict[str, Tensor],
-    ) -> Tensor:
-        """Per-token spatial flag in the same collapsed order as positions.
-
-        ``True`` where a token belongs to a spatial modality (matching the order of
-        :meth:`build_rope_positions`).
-
-        Tokens of non-spatial modalities have no meaningful ``(row, col)`` (they sit
-        at the coordinate origin), so windowed attention treats them as *global*:
-        this flag marks which tokens are spatial so the rest can be exempted.
-        """
-        flag_dict: dict[str, Tensor] = {}
-        available_modalities = return_modalities_from_dict(tokens_only_dict)
-        modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
-        )
-        for modality_name in modalities_to_process:
-            tokens = tokens_only_dict[modality_name]
-            is_spatial = float(Modality.get(modality_name).is_spatial)
-            flag_dict[modality_name] = tokens.new_full(
-                (*tokens.shape[:-1], 1), is_spatial
-            )
-        flag_dict.update(original_masks_dict)
-        flags, _ = self.collapse_and_combine_hwtc(flag_dict)
-        return flags.squeeze(-1) > 0.5
-
     def build_temporal_token_mask(
         self,
         tokens_only_dict: dict[str, Tensor],
@@ -1675,20 +1536,12 @@ class SpatialRegisterBottleneck(nn.Module):
         rope_base: float = 10000.0,
         qk_norm: bool = False,
         interleave: bool = False,
-        read_layers: list[int] | None = None,
         per_depth_read_proj: bool = False,
-        learned_read_weighting: bool = False,
-        fused_read: str | None = None,
         latent_self_attn: bool = True,
         attn_dim: int | None = None,
         temporal_anchor: str | None = None,
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
-        unit_norm: bool = False,
-        unit_norm_scale: float | None = None,
-        shared_read_kv: bool = False,
-        output_dim: int | None = None,
-        latent_every_n: int = 1,
         pixel_grid: bool = False,
         latent_attn_dim: int | None = None,
         latent_num_heads: int | None = None,
@@ -1718,58 +1571,15 @@ class SpatialRegisterBottleneck(nn.Module):
                 so the latents re-query the input after each refinement, instead of reading
                 once up front. If False (default, backwards compatible), do all ``read_depth``
                 reads first, then all ``latent_transformer_depth`` self-attention blocks.
-            read_layers: If set, enables *multi-depth* reads: the bottleneck reads from a
-                different encoder depth at each ``[read -> self-attend]`` step instead of
-                re-reading the final layer. ``read_layers`` is the (1-indexed, ascending)
-                list of encoder block depths that supply the K/V at each step, so there is
-                one read + one latent block per entry. This recovers modality-unique
-                information that the final layer drops (Lee et al., CVPR 2026, "Beyond
-                What's Shared"). The encoder passes one K/V tensor per layer at forward
-                time. When set it forces the interleaved schedule and overrides
-                ``read_depth`` / ``latent_transformer_depth``; when None (default) behaviour
-                is unchanged (all reads share the final-layer K/V).
             per_depth_read_proj: If True, give each read block its own ``input_norm``
                 LayerNorm *and* ``kv_proj`` down-projection instead of a single shared
-                pair. In multi-depth mode each read draws from a different encoder depth,
-                which have different per-channel statistics and semantics, so a shared
-                affine (γ, β) and a shared projection are a poor fit across all of them.
+                pair. Successive reads then get their own lens on the source instead of
+                being forced through one shared projection.
                 In interleaved single-source mode every read re-queries the same final
                 layer, so per-block projections instead let successive reads extract
                 different views through their own lens. Requires more than one read block
                 (ignored otherwise). False (default) keeps the shared norm + projection
                 (backwards compatible).
-            learned_read_weighting: If True, give each read block a learnable scalar gate
-                on its residual contribution to the latent: ``z = z + g_d * (read_d(z) -
-                z)``. With multi-depth reads this lets the model weight how much each
-                encoder depth contributes (ELMo-style scalar mixing / LayerScale per read),
-                e.g. down-weighting the early mid-level reads that dilute the pretext-aligned
-                final-layer read. Gates initialise to 1.0, so the module is a strict no-op
-                at init (reproduces the ungated behaviour) and existing checkpoints are
-                unaffected; the learned gates are exposed as ``read_gates`` for logging.
-                False (default) keeps the ungated reads.
-            fused_read: If set, the multi-depth K/V sources are combined into ONE fused
-                source (RAEv2 "multi-layer sum" style) instead of one read block per
-                depth: the read/latent schedule reverts to the single-source rules
-                (``interleave`` / ``read_depth`` / ``latent_transformer_depth``), and
-                every read consumes the fused source -- so the bottleneck architecture
-                matches a final-layer-only model exactly, with only the K/V source
-                differing. Two combinations:
-
-                - ``"uniform"``: each depth is standardized by a parameter-free
-                  LayerNorm and the depths are averaged, then fed through the standard
-                  shared ``input_norm``/``kv_proj``. Training cannot re-weight the
-                  combination, so mid-depth features are preserved even where the
-                  pretext loss would discard them.
-                - ``"learned"``: each depth gets its own LayerNorm + projection to
-                  ``register_dim`` and the projected contributions are averaged
-                  (replacing the shared ``input_norm``/``kv_proj``). The projections
-                  can learn to re-weight or suppress depths.
-
-                Per-depth contribution norms are stashed on ``last_read_source_norms``
-                for logging (collapse toward the final layer in the learned arm is the
-                signal to watch). Requires ``read_layers``; incompatible with
-                ``per_depth_read_proj`` (the fusion replaces per-depth projections).
-                None (default) keeps one read block per depth.
             latent_self_attn: If True (default), self-attention "latent" blocks run over
                 the register grid -- interleaved after each read, or after all reads in the
                 legacy schedule. If False, those blocks are dropped entirely: the registers
@@ -1790,8 +1600,7 @@ class SpatialRegisterBottleneck(nn.Module):
                 diversity (head count) and RoPE anchoring (head dim) at narrow widths
                 -- observed as 2x slowdowns at <8 heads and degrading spatial evals at
                 head_dim <64. ``None`` (default) keeps the classic tied-width blocks
-                (backwards compatible). Incompatible with ``fused_read`` (the fusion
-                projections are register_dim-specific).
+                (backwards compatible).
             temporal_anchor: If set, make the cross-attention READ temporally aware:
                 the read blocks run axial 3D RoPE over ``(t, row, col)`` with each
                 register anchored at ``t=0`` and the K/V patch positions carrying an
@@ -1813,45 +1622,6 @@ class SpatialRegisterBottleneck(nn.Module):
                 ``temporal_anchor``; matches the encoder's setting).
             rope_temporal_base: Optional separate frequency base for the temporal axis
                 of the read blocks' axial 3D RoPE. ``None`` reuses ``rope_base``.
-            unit_norm: If True, L2-normalize the output so every register cell is a
-                DIRECTION on a sphere (AlphaEarth's convention, where an embedding is
-                the mean direction of a von Mises-Fisher distribution). The constraint
-                binds on everything downstream -- the decoder reads the registers
-                through a bare Linear and the supervision heads read the grid directly,
-                so neither re-normalizes today -- and on the frozen evals, which probe
-                the same tensor. Magnitude stops being an available channel; pair with
-                a uniformity loss (``compute_register_uniformity_loss``) if the goal is
-                embeddings spread over the sphere rather than merely on it.
-            unit_norm_scale: Radius of that sphere. ``None`` uses
-                ``sqrt(register_dim)``, LayerNorm's own output norm, so the constraint
-                is scale-neutral at init instead of silently rescaling the decoder's
-                context input.
-            latent_every_n: Run a latent self-attention block after every ``n``-th read
-                instead of after every read (1 = the 1:1 default). A final block always
-                fires after the last read, so the grid that ships has been spatially
-                mixed. LSA blocks are half the bottleneck's sequential depth, and depth
-                -- not FLOPs -- is what drives wall-clock here, so 1:2 removes ~20% of
-                the blocks. Zero LSA is NOT the same trade: the lsa/nolsa ablation on the
-                noic arm is worth +8.4 pts over 76 tasks, so the first block earns its
-                place; this bets only that the eighth does not. Requires ``interleave``
-                and ``latent_self_attn``.
-            output_dim: If set, apply a single ``Linear(register_dim, output_dim)`` to
-                the bottleneck's output, so the grid the decoder, supervision heads and
-                evals consume is ``output_dim`` wide while the read/latent stack runs at
-                ``register_dim``. Lets the internal width be chosen for the hardware
-                (square, tensor-core-friendly GEMMs at 768) independently of the width
-                the product must ship at (128). Unlike ``register_projection_dims``,
-                this projection is IN the gradient path -- it is the model's output, not
-                a detached distillation student.
-            shared_read_kv: If True, project the patch tokens into keys/values ONCE and
-                let every read block attend over that single copy. Read blocks are cheap
-                in FLOPs but expensive in memory -- each otherwise stores its own
-                input-norm output, k, rotated k and v over the full token array for
-                backward -- so this is what makes a deep read stack trainable, and it
-                also removes ~73% of a read block's FLOPs. The reads then SHARE key/value
-                weights and differ only in their queries, which is a model change rather
-                than a pure optimization. Requires a single K/V source: incompatible with
-                ``read_layers`` and with ``per_depth_read_proj``.
             pixel_grid: If True (dynamic mode only), the register grid is laid at PIXEL
                 resolution instead of matching the patch grid: the single latent is
                 cloned onto ``(n_h * patch_size, n_w * patch_size)`` cells whose RoPE
@@ -1891,81 +1661,14 @@ class SpatialRegisterBottleneck(nn.Module):
                 caller passes the finalized embed tokens via ``forward``'s
                 ``embed_tokens``. Call :meth:`zero_init_embed_read` after weight
                 init to make the block a no-op at init (init-equivalence with the
-                embed-read-free model). Incompatible with multi-depth
-                ``read_layers`` (which generalizes read sources differently).
-                False (default) keeps the standard schedule.
+                embed-read-free model). False (default) keeps the standard
+                schedule.
         """
         super().__init__()
         self.register_dim = register_dim
         self.use_2d_rope = use_2d_rope
-        # Multi-depth reads force the interleaved schedule (one read + one latent block per
-        # source layer); the read/latent counts are then set by ``read_layers``. With
-        # ``fused_read`` the per-depth sources are combined into one K/V source instead, so
-        # the schedule reverts to the single-source rules.
-        self.multi_depth = read_layers is not None
-        self.read_layers = list(read_layers) if read_layers is not None else None
-        if embed_read and self.multi_depth:
-            raise ValueError(
-                "embed_read (one extra patch-embed read) cannot be combined with "
-                "read_layers (multi-depth reads): the embed read prepends one extra "
-                "source to the single-source schedule"
-            )
         self.embed_read = embed_read
-        if fused_read is not None:
-            if fused_read not in ("uniform", "learned"):
-                raise ValueError(
-                    f"fused_read must be 'uniform' or 'learned', got {fused_read!r}"
-                )
-            if not self.multi_depth:
-                raise ValueError("fused_read requires read_layers (the depths to fuse)")
-            if per_depth_read_proj:
-                raise ValueError(
-                    "fused_read replaces the per-depth read projections; it cannot be "
-                    "combined with per_depth_read_proj"
-                )
-            if attn_dim is not None:
-                raise ValueError(
-                    "attn_dim (decoupled attention width) is not supported with "
-                    "fused_read (the fusion projections are register_dim-specific)"
-                )
-        self.fused_read = fused_read
         self.attn_dim = attn_dim
-        # Shared-K/V: project the patch tokens into keys/values ONCE and let every
-        # read block attend over that one copy, instead of each block re-projecting
-        # the full token array. The saving is mostly MEMORY: a read block otherwise
-        # stores its own input-norm output, k, rotated k and v -- four token-array-
-        # sized tensors -- for backward, which is what caps the usable read depth
-        # (measured: 16 reads fit at micro 64, 24 do not). It also removes ~73% of a
-        # read block's FLOPs, since the K/V projection dominates them.
-        #
-        # THE TRADE: all read blocks now SHARE key/value weights, so successive reads
-        # can no longer look at the source through different lenses -- only their
-        # queries differ (which, under ``interleave``, is where the depth diversity
-        # lives anyway: read N queries registers refined N-1 times). This is a model
-        # change, not a pure optimization; arms with and without it are not directly
-        # comparable.
-        if shared_read_kv:
-            if multi_depth_sources := (read_layers is not None):
-                raise ValueError(
-                    "shared_read_kv reads one source; it cannot be combined with "
-                    f"register_read_layers (multi_depth={multi_depth_sources})"
-                )
-            if per_depth_read_proj:
-                raise ValueError(
-                    "shared_read_kv replaces the per-depth read projections: there "
-                    "is one shared K/V source, so per-block norms cannot apply"
-                )
-        self.shared_read_kv = shared_read_kv
-        # Single linear map from the internal register width to the shipped width.
-        # Applied after the output norm and before any unit-norm, so the norm still
-        # standardizes the stack's own residual stream and the sphere constraint (when
-        # enabled) applies to what actually leaves the module.
-        self.output_dim = output_dim
-        self.output_proj: nn.Module = (
-            nn.Linear(register_dim, output_dim)
-            if output_dim is not None
-            else nn.Identity()
-        )
         if temporal_anchor is not None:
             if temporal_anchor not in ("year_start", "first_timestep"):
                 raise ValueError(
@@ -1978,9 +1681,7 @@ class SpatialRegisterBottleneck(nn.Module):
                     "read is expressed through the read blocks' rotary positions"
                 )
         self.temporal_anchor = temporal_anchor
-        # Per-depth contribution norms from the most recent fused read, for logging.
-        self.last_read_source_norms: Tensor | None = None
-        self.interleave = interleave or (self.multi_depth and fused_read is None)
+        self.interleave = interleave
         self.dynamic_grid = register_grid is None
         if pixel_grid and register_grid is not None:
             raise ValueError(
@@ -1998,7 +1699,7 @@ class SpatialRegisterBottleneck(nn.Module):
                     "use_2d_rope=True to differentiate grid cells."
                 )
             # Grid count + positions are resolved per-forward from the patch grid; the
-            # last-used grid is exposed on ``register_grid`` for eval/supervision reshapes.
+            # shape reaches consumers on the returned tensor, not via module state.
             self.register_grid: tuple[int, int] | None = None
             self.num_registers: int | None = None
             # A single learned latent, cloned across every grid cell (see class docstring).
@@ -2015,80 +1716,26 @@ class SpatialRegisterBottleneck(nn.Module):
         # The read + latent transformer run on small unpacked [B, N, D] tensors with an
         # attention mask, so they use the SDPA path (use_flash_attn=False) regardless of
         # the encoder's flash setting.
-        # Multi-depth: one read + one latent per source layer.
         # Interleave: one read per self-attention block, so the read count matches
         # latent_transformer_depth.
         # Legacy: read_depth reads up front, then latent_transformer_depth self-attentions.
-        if self.multi_depth and self.fused_read is None:
-            assert self.read_layers is not None
-            num_read_blocks = len(self.read_layers)
-            num_latent_blocks = len(self.read_layers)
-        else:
-            num_read_blocks = (
-                latent_transformer_depth if self.interleave else read_depth
-            )
-            num_latent_blocks = latent_transformer_depth
+        num_read_blocks = latent_transformer_depth if self.interleave else read_depth
+        num_latent_blocks = latent_transformer_depth
         # Optionally drop the latent self-attention entirely (cross-attention reads only).
         # The read count is unchanged; only the register-to-register self-attention blocks
         # are removed, isolating the latent transformer's contribution.
         self.latent_self_attn = latent_self_attn
         if not latent_self_attn:
             num_latent_blocks = 0
-        # Which read is followed by which latent block. ``None`` means "no LSA after this
-        # read". Only meaningful for the interleaved schedule; the legacy schedule runs
-        # all reads and then all latents, where a ratio has nothing to interleave with.
-        if latent_every_n < 1:
-            raise ValueError(f"latent_every_n must be >= 1, got {latent_every_n}")
-        self.latent_every_n = latent_every_n
-        self.latent_schedule: list[int | None] | None = None
-        if self.interleave and latent_self_attn:
-            schedule: list[int | None] = []
-            built = 0
-            for i in range(num_read_blocks):
-                # Fire every n-th read, and always after the last one so the shipped grid
-                # is mixed rather than left as whatever the final read wrote.
-                if (i + 1) % latent_every_n == 0 or i == num_read_blocks - 1:
-                    schedule.append(built)
-                    built += 1
-                else:
-                    schedule.append(None)
-            self.latent_schedule = schedule
-            num_latent_blocks = built
-        elif latent_every_n > 1:
-            raise ValueError(
-                "latent_every_n > 1 requires the interleaved schedule with latent "
-                "self-attention enabled (interleave=True, latent_self_attn=True)"
-            )
         # Per-depth read front-end: give every read block its own input norm + K/V
         # down-projection instead of a single shared pair. Only meaningful with >1 read
-        # block. Multi-depth: each block draws from a different encoder depth (distinct
-        # per-channel statistics), so a shared affine + projection is a poor fit.
-        # Interleaved single-source: each block re-queries the SAME final-layer tokens
-        # through its own projection, so successive reads can extract different views
-        # instead of being forced through one shared lens.
-        # The ``multi_depth`` clause preserves the original gate exactly (multi-depth runs
-        # always got per-depth projections when requested); ``num_read_blocks > 1`` extends
-        # it to interleaved single-source reads. So this is a strict superset of the old
-        # behaviour -- existing checkpoints build the identical parameter set.
-        self.per_depth_read_proj = per_depth_read_proj and (
-            self.multi_depth or num_read_blocks > 1
-        )
+        # block: each block re-queries the SAME final-layer tokens through its own
+        # projection, so successive reads can extract different views instead of being
+        # forced through one shared lens.
+        self.per_depth_read_proj = per_depth_read_proj and num_read_blocks > 1
         # Down-project the patch K/V source to the (smaller) register dim. The existing
         # Attention ties q/k/v to a single dim, so the read happens entirely at register_dim.
-        if self.fused_read == "learned":
-            # One norm + projection per fused source depth; their mean IS the fused K/V
-            # source (already at register_dim), so no shared input_norm/kv_proj pair.
-            assert self.read_layers is not None
-            self.fused_norms = nn.ModuleList(
-                [nn.LayerNorm(encoder_embedding_size) for _ in self.read_layers]
-            )
-            self.fused_projs = nn.ModuleList(
-                [
-                    nn.Linear(encoder_embedding_size, register_dim)
-                    for _ in self.read_layers
-                ]
-            )
-        elif self.per_depth_read_proj:
+        if self.per_depth_read_proj:
             # One norm + projection per read block. With a decoupled attn_dim the K/V
             # source stays at encoder width (the read blocks' internal K/V projections
             # consume it directly), so the down-projection becomes an Identity and only
@@ -2107,12 +1754,6 @@ class SpatialRegisterBottleneck(nn.Module):
                 ]
             )
         else:
-            if self.fused_read == "uniform":
-                # Parameter-free per-depth standardization before the uniform average;
-                # no learnable affine, so training cannot re-weight the combination.
-                self.fused_norm = nn.LayerNorm(
-                    encoder_embedding_size, elementwise_affine=False
-                )
             self.input_norm = nn.LayerNorm(encoder_embedding_size)
             self.kv_proj: nn.Module = (
                 nn.Identity()
@@ -2176,10 +1817,6 @@ class SpatialRegisterBottleneck(nn.Module):
                     kv_in_dim=(
                         encoder_embedding_size if attn_dim is not None else None
                     ),
-                    # Shared-K/V: only block 0 owns key/value projections; the rest
-                    # consume its output via ``kv_cached`` and never build their own
-                    # (so they cannot contribute unused parameters to DDP's allreduce).
-                    kv_external=(shared_read_kv and i > 0),
                 )
                 for i in range(num_read_blocks)
             ]
@@ -2233,31 +1870,7 @@ class SpatialRegisterBottleneck(nn.Module):
                 attn_dim=attn_dim,
                 kv_in_dim=(encoder_embedding_size if attn_dim is not None else None),
             )
-        # Learnable per-read residual gates (one scalar per read block). Init to 1.0 so the
-        # gated update ``z + g*(read(z) - z)`` equals the ungated ``read(z)`` at init, making
-        # this a no-op until the gates move (and leaving existing checkpoints unchanged).
-        self.learned_read_weighting = learned_read_weighting
-        if learned_read_weighting:
-            self.read_gates = nn.Parameter(torch.ones(num_read_blocks))
         self.norm = nn.LayerNorm(register_dim)
-        # Optional unit-sphere output (AlphaEarth's convention: every embedding is a
-        # direction). Placed here rather than at each consumer because forward()
-        # returns ONE tensor that the decoder, the supervision heads and the frozen
-        # evals all read -- so normalizing here constrains the served vector itself
-        # and no consumer can be missed.
-        self.unit_norm = unit_norm
-        # LayerNorm's output has norm exactly sqrt(register_dim) before its learned
-        # affine, so that is the scale at which this is a no-op at init; it also puts
-        # per-coordinate RMS at ~1, which keeps the register half of the
-        # time-conditioned supervision head's [cell ; phi(t)] concat commensurate with
-        # the bounded sinusoidal half. Override to hold a different operating point.
-        # Follows the SHIPPED width: with an output projection the sphere constraint
-        # applies to the projected grid, so its scale-neutral default is that width.
-        self.unit_norm_scale = (
-            unit_norm_scale
-            if unit_norm_scale is not None
-            else math.sqrt(output_dim if output_dim is not None else register_dim)
-        )
 
     def zero_init_embed_read(self) -> None:
         """Zero the embed-read block's residual contributions (no-op at init).
@@ -2338,54 +1951,12 @@ class SpatialRegisterBottleneck(nn.Module):
         grid = torch.stack([grid_h, grid_w], dim=-1).reshape(-1, 2)
         return grid.unsqueeze(0).expand(batch_size, -1, -1)
 
-    def _fuse_read_sources(
-        self, patch_tokens: list[Tensor], visible_mask: Tensor | None
-    ) -> Tensor:
-        """Mean-combine the per-depth K/V sources into one fused source.
-
-        ``uniform``: standardize each depth with the parameter-free ``fused_norm`` and
-        average, then run the standard shared ``input_norm`` + ``kv_proj``. ``learned``:
-        project each depth through its own ``fused_norms[i]`` + ``fused_projs[i]`` and
-        average the projected contributions (already at register_dim).
-
-        Stashes the mean per-depth contribution norm (over visible tokens) on
-        ``last_read_source_norms`` -- in the learned arm these drifting apart (e.g.
-        collapsing onto the final layer) is the signal the run exists to measure; in the
-        uniform arm they are ~constant by construction and just confirm uniformity.
-        """
-        if self.fused_read == "learned":
-            contribs = [
-                proj(norm(t))
-                for norm, proj, t in zip(
-                    self.fused_norms, self.fused_projs, patch_tokens
-                )
-            ]
-            kv = torch.stack(contribs).mean(dim=0)
-        else:
-            contribs = [self.fused_norm(t) for t in patch_tokens]
-            kv = self.kv_proj(self.input_norm(torch.stack(contribs).mean(dim=0)))
-        with torch.no_grad():
-            per_depth = []
-            for contrib in contribs:
-                token_norms = contrib.detach().float().norm(dim=-1)  # [B, N]
-                if visible_mask is not None:
-                    mask = visible_mask.bool()
-                    per_depth.append(
-                        (token_norms * mask).sum() / mask.sum().clamp(min=1)
-                    )
-                else:
-                    per_depth.append(token_norms.mean())
-            self.last_read_source_norms = torch.stack(per_depth)
-        return kv
-
     def forward(
         self,
-        patch_tokens: Tensor | list[Tensor],
+        patch_tokens: Tensor,
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
         spatial_grid: tuple[int, int] | None = None,
-        window_half_extent: float | None = None,
-        patch_is_global: Tensor | None = None,
         patch_size: int | None = None,
         patch_coordinate_scale: float | None = None,
         register_init: Tensor | None = None,
@@ -2394,9 +1965,7 @@ class SpatialRegisterBottleneck(nn.Module):
         """Read the (visible) patch tokens into the register grid.
 
         Args:
-            patch_tokens: Encoded tokens ``[B, N, encoder_embedding_size]``. In multi-depth
-                mode (``read_layers`` set) this is instead a list of one such tensor per
-                read block, giving the K/V source at each successive encoder depth.
+            patch_tokens: Encoded tokens ``[B, N, encoder_embedding_size]``.
             patch_positions: GSD-scaled ``[B, N, 2]`` ``(row, col)`` coords (None if not
                 using RoPE). With ``temporal_anchor`` set this is instead ``[B, N, 3]``
                 ``(t, row, col)`` where ``t`` is the anchor-RELATIVE temporal
@@ -2405,13 +1974,6 @@ class SpatialRegisterBottleneck(nn.Module):
                 (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
             spatial_grid: ``(n_h, n_w)`` patch grid; required in dynamic mode (the single
                 latent is cloned to this many cells), ignored in fixed-grid mode.
-            window_half_extent: If set, restrict the read (register query vs patch key) and
-                the latent self-attention (register vs register) to a sliding window of this
-                half-width, in the same coordinate units as the positions. None -> the read
-                and latent transformer use full attention (backwards compatible).
-            patch_is_global: Optional ``[B, N]`` bool, True where a patch key is non-spatial
-                and should be readable from every register regardless of the window. Used
-                only when ``window_half_extent`` is set.
             patch_size: Patch size of this forward pass; required in pixel-grid mode
                 (the register grid is ``spatial_grid * patch_size``), ignored otherwise.
             patch_coordinate_scale: Spacing of the patch RoPE coordinates (GSD ratio x
@@ -2427,55 +1989,26 @@ class SpatialRegisterBottleneck(nn.Module):
                 standard schedule), ignored otherwise.
 
         Returns:
-            registers: ``[B, num_registers, register_dim]``
-            register_positions: ``[B, num_registers, 2]`` or None
+            registers: ``[B, n_h, n_w, register_dim]`` -- the grid, shaped, so callers
+                never rebuild it from a flat sequence.
+            register_positions: ``[B, n_h * n_w, 2]`` or None. Deliberately FLAT: its
+                only consumer is the decoder's cross-attention, which wants a token
+                sequence. Row-major (``indexing="ij"``), so cell ``[i, j]`` of
+                ``registers`` is entry ``i * n_w + j`` of ``register_positions``.
         """
-        # Down-project the K/V source(s) to register_dim. Multi-depth gets one source per
-        # read block; otherwise a single source is reused by every read. With
-        # per_depth_read_proj each read block has its own norm + projection (so even the
-        # single-source case is projected once per block); otherwise they share one pair.
-        if self.multi_depth:
-            if not isinstance(patch_tokens, list):
-                raise ValueError(
-                    "multi-depth register bottleneck expects a list of per-layer "
-                    "patch_tokens (one per read block)"
-                )
-            assert self.read_layers is not None
-            if len(patch_tokens) != len(self.read_layers):
-                raise ValueError(
-                    f"expected {len(self.read_layers)} K/V sources (one per read layer), "
-                    f"got {len(patch_tokens)}"
-                )
-            if self.fused_read is not None:
-                # All reads consume the single fused source (RAEv2 multi-layer-sum style).
-                kv = self._fuse_read_sources(patch_tokens, visible_mask)
-                kv_per_read = [kv] * len(self.read_blocks)
-            elif self.per_depth_read_proj:
-                kv_per_read = [
-                    proj(norm(t))
-                    for norm, proj, t in zip(
-                        self.input_norms, self.kv_projs, patch_tokens
-                    )
-                ]
-            else:
-                kv_per_read = [self.kv_proj(self.input_norm(t)) for t in patch_tokens]
-            reference_tokens = patch_tokens[0]
+        # Down-project the patch K/V source to register_dim. With per_depth_read_proj each
+        # read block has its own norm + projection; otherwise they share one pair.
+        if self.per_depth_read_proj:
+            # Each read block re-projects the same final-layer source through its own
+            # norm + projection (interleaved single-source reads).
+            kv_per_read = [
+                proj(norm(patch_tokens))
+                for norm, proj in zip(self.input_norms, self.kv_projs)
+            ]
         else:
-            if isinstance(patch_tokens, list):
-                raise ValueError(
-                    "single-source register bottleneck expects a tensor, not a list"
-                )
-            if self.per_depth_read_proj:
-                # Each read block re-projects the same final-layer source through its own
-                # norm + projection (interleaved single-source reads).
-                kv_per_read = [
-                    proj(norm(patch_tokens))
-                    for norm, proj in zip(self.input_norms, self.kv_projs)
-                ]
-            else:
-                kv = self.kv_proj(self.input_norm(patch_tokens))
-                kv_per_read = [kv] * len(self.read_blocks)
-            reference_tokens = patch_tokens
+            kv = self.kv_proj(self.input_norm(patch_tokens))
+            kv_per_read = [kv] * len(self.read_blocks)
+        reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
         if self.dynamic_grid:
             if spatial_grid is None:
@@ -2496,8 +2029,6 @@ class SpatialRegisterBottleneck(nn.Module):
                 )
             else:
                 register_grid = spatial_grid
-            # Expose the grid actually used so eval/supervision can reshape the registers.
-            self.register_grid = register_grid
             num_registers = register_grid[0] * register_grid[1]
             # Clone the single learned latent across the batch and all grid cells; RoPE on
             # the per-cell register_positions is what differentiates them.
@@ -2522,7 +2053,7 @@ class SpatialRegisterBottleneck(nn.Module):
                 )
             registers = registers + register_init.to(registers.dtype)
         # With a temporal anchor the K/V positions arrive as anchor-relative
-        # (t, row, col). Everything spatial -- register placement, windowing, the
+        # (t, row, col). Everything spatial -- register placement, the
         # latent blocks' 2D RoPE, the returned positions -- uses the (row, col)
         # part; only the read blocks rotate over the full 3D coordinate.
         spatial_patch_positions = patch_positions
@@ -2552,33 +2083,10 @@ class SpatialRegisterBottleneck(nn.Module):
                 register_positions = self.build_register_positions(
                     spatial_patch_positions, register_grid
                 )
-        # Read mask: by default just the [B, N] key-visibility mask. With windowing the
-        # read instead restricts each register to a spatial window of the patch tokens
-        # (non-spatial patches stay globally readable), AND-ed with visibility; the latent
-        # transformer windows register-over-register. Both windowed masks are built lazily
-        # per query-chunk inside attention (via WindowSpec) to bound memory.
+        # Read mask: the [B, N] key-visibility mask.
         read_attn_mask: Tensor | None = (
             visible_mask.bool() if visible_mask is not None else None
         )
-        read_window_spec: WindowSpec | None = None
-        latent_window_spec: WindowSpec | None = None
-        if window_half_extent is not None and self.use_2d_rope:
-            assert (
-                register_positions is not None and spatial_patch_positions is not None
-            )
-            read_attn_mask = None  # validity carried by read_window_spec.key_valid
-            read_window_spec = WindowSpec(
-                q_positions=register_positions,
-                k_positions=spatial_patch_positions,
-                half_extent=window_half_extent,
-                k_is_global=patch_is_global,
-                key_valid=visible_mask.bool() if visible_mask is not None else None,
-            )
-            latent_window_spec = WindowSpec(
-                q_positions=register_positions,
-                k_positions=register_positions,
-                half_extent=window_half_extent,
-            )
 
         # The read's rotary coordinates: with a temporal anchor the register queries
         # sit at t=0 (the anchor) ahead of their (row, col), and the patch keys keep
@@ -2592,8 +2100,8 @@ class SpatialRegisterBottleneck(nn.Module):
 
         # One extra read of the patch-embed output BEFORE the standard schedule: the
         # registers query the undegraded block-0 tokens (own norm + projection; same
-        # RoPE frame, visibility mask and windowing as the standard reads). Zero-init
-        # (see zero_init_embed_read) makes this a no-op at initialization.
+        # RoPE frame and visibility mask as the standard reads). Zero-init (see
+        # zero_init_embed_read) makes this a no-op at initialization.
         if self.embed_read:
             if embed_tokens is None:
                 raise ValueError(
@@ -2607,32 +2115,16 @@ class SpatialRegisterBottleneck(nn.Module):
                 attn_mask=read_attn_mask,
                 rope_positions=read_register_positions,
                 rope_positions_y=patch_positions,
-                window_spec=read_window_spec,
-            )
-
-        # Shared-K/V: project the one source into keys/values HERE, once, rather than
-        # inside every read block. Block 0 owns the weights (the rest were built
-        # ``kv_external``), so the whole stack reads through a single projection and a
-        # single stored copy of the context.
-        shared_kv: tuple[Tensor, Tensor] | None = None
-        if self.shared_read_kv:
-            shared_kv = self.read_blocks[0].attn.compute_kv(
-                kv_per_read[0], patch_positions
             )
 
         def read(registers: Tensor, i: int, blk: nn.Module, kv: Tensor) -> Tensor:
             out = blk(
                 x=registers,
-                y=None if shared_kv is not None else kv,
-                kv_cached=shared_kv,
+                y=kv,
                 attn_mask=read_attn_mask,
                 rope_positions=read_register_positions,
                 rope_positions_y=patch_positions,
-                window_spec=read_window_spec,
             )
-            if self.learned_read_weighting:
-                # Gate the read's residual contribution; g=1 reproduces the ungated read.
-                return registers + self.read_gates[i] * (out - registers)
             return out
 
         if self.interleave:
@@ -2643,18 +2135,11 @@ class SpatialRegisterBottleneck(nn.Module):
             for i, (read_blk, kv) in enumerate(zip(self.read_blocks, kv_per_read)):
                 registers = read(registers, i, read_blk, kv)
                 # latent_blocks is empty when latent self-attention is disabled;
-                # otherwise latent_schedule says which (if any) block follows this read --
-                # every read at the 1:1 default, every n-th plus the last when thinned.
-                latent_idx = (
-                    self.latent_schedule[i]
-                    if self.latent_schedule is not None
-                    else None
-                )
-                if self.latent_blocks and latent_idx is not None:
-                    registers = self.latent_blocks[latent_idx](
+                # otherwise one latent block follows each read (1:1).
+                if self.latent_blocks:
+                    registers = self.latent_blocks[i](
                         x=registers,
                         rope_positions=register_positions,
-                        window_spec=latent_window_spec,
                     )
         else:
             # Legacy: all reads first, then the latent transformer.
@@ -2664,11 +2149,14 @@ class SpatialRegisterBottleneck(nn.Module):
                 registers = latent_blk(
                     x=registers,
                     rope_positions=register_positions,
-                    window_spec=latent_window_spec,
                 )
-        out = self.output_proj(self.norm(registers))
-        if self.unit_norm:
-            out = nn.functional.normalize(out, dim=-1) * self.unit_norm_scale
+        out = self.norm(registers)
+        # Hand back the grid with its spatial axes intact. Attention needs a flat token
+        # sequence, so the stack runs on [B, N, D] internally and reshapes once here --
+        # rather than every consumer recovering (n_h, n_w) from the module.
+        out = rearrange(
+            out, "b (h w) d -> b h w d", h=register_grid[0], w=register_grid[1]
+        )
         return out, register_positions
 
 
@@ -2703,10 +2191,8 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
-        band_dropout_groups: dict[str, list[list[str]]] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
-        patch_embed_linear_skip: bool = False,
         position_encoding: str = "absolute",
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
@@ -2715,7 +2201,6 @@ class Encoder(FlexiVitBase):
         rope_temporal_base: float | None = None,
         rope_temporal_coordinate_scale: float = 1.0,
         spatial_pos_encoding: str | None = None,
-        attn_window_size: int | None = None,
         use_register_bottleneck: bool = False,
         register_grid_size: int | None = 0,
         register_dim: int | None = None,
@@ -2723,21 +2208,15 @@ class Encoder(FlexiVitBase):
         register_latent_depth: int = 2,
         register_num_heads: int | None = None,
         register_interleave: bool = False,
-        register_read_layers: list[int] | None = None,
         register_per_depth_read_proj: bool = False,
-        register_learned_read_weighting: bool = False,
-        register_fused_read: str | None = None,
         register_latent_self_attn: bool = True,
         register_attn_dim: int | None = None,
         register_temporal_anchor: str | None = None,
-        register_shared_read_kv: bool = False,
-        register_output_dim: int | None = None,
-        register_latent_every_n: int = 1,
         register_contrastive_source: str = "registers",
         register_projection_dims: list[int] | None = None,
         register_projection_type: str = "linear",
-        register_unit_norm: bool = False,
-        register_unit_norm_scale: float | None = None,
+        register_projection_output_norm: bool = False,
+        register_back_projection_hidden: int | None = None,
         register_pixel_grid: bool = False,
         register_latent_attn_dim: int | None = None,
         register_latent_num_heads: int | None = None,
@@ -2783,9 +2262,6 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
-            band_dropout_groups: Optional modality -> list of band-name groups. When a
-                modality is listed, its band dropout becomes grouped (one whole group
-                zeroed per sample w.p. band_dropout_rate) rather than per-band.
             patch_embed_hidden_sizes: Optional list of hidden layer widths for a
                 per-pixel MLP applied BEFORE patchification in the spatial patch
                 projection. If None or empty, the projection is a single nn.Linear
@@ -2797,9 +2273,6 @@ class Encoder(FlexiVitBase):
             post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm.
-            patch_embed_linear_skip: If True, add a per-pixel ReLU-free linear skip
-                parallel to the patch-embed MLP (pixel_features = MLP(x) + Linear(x)).
-                Requires patch_embed_hidden_sizes.
             position_encoding: Position encoding mode; one of the
                 ``PositionEncoding`` values.
             rope_base: Frequency base for axial RoPE.
@@ -2814,12 +2287,6 @@ class Encoder(FlexiVitBase):
                 temporal RoPE coordinates (default 1.0 = raw days). E.g. set to
                 1/30 for months.
             spatial_pos_encoding: Deprecated alias for ``position_encoding``.
-            attn_window_size: If set, restrict every attention block (encoder self-attention,
-                register read, register latent self-attention) to a square sliding window of
-                this side length (in patch cells) centred on each query. Requires
-                ``spatial_pos_encoding="rope"`` and ``use_flash_attn=False``. When the input
-                patch grid is no larger than the window in both dims, full attention is used.
-                None (default) -> full attention.
             use_register_bottleneck: If True, add a Perceiver-style spatial register
                 bottleneck that reads the encoded patch tokens into a fixed register grid.
             register_grid_size: Side length of the (square) register grid; the grid has
@@ -2828,8 +2295,9 @@ class Encoder(FlexiVitBase):
                 accepted), use the dynamic single-latent mode: one shared latent cloned
                 across a grid that matches the input patch grid at forward time (requires
                 ``spatial_pos_encoding="rope"``).
-            register_dim: Width of the register grid (the bottleneck dim). Defaults to
-                ``embedding_size // 2`` when None.
+            register_dim: Width of the register grid (the bottleneck dim). Required
+                when ``use_register_bottleneck`` is True; the decoder cross-attends
+                this same width, so it is stated rather than defaulted.
             register_read_depth: Number of cross-attention read blocks.
             register_latent_depth: Number of latent-transformer self-attention blocks
                 over the register grid.
@@ -2844,48 +2312,15 @@ class Encoder(FlexiVitBase):
                 latent self-attention (``[read -> self] x register_latent_depth``) so the
                 registers re-query the input after each refinement, instead of reading once
                 up front. Defaults to False (legacy schedule, backwards compatible).
-            register_read_layers: If set, the register bottleneck reads from these (1-indexed,
-                ascending) encoder block depths -- one ``[read -> self-attend]`` step per
-                entry, each reading the patch tokens at that depth -- instead of re-reading
-                the final layer. Recovers modality-unique information that the final layer
-                drops. Forces the interleaved schedule and overrides ``register_read_depth``
-                / ``register_latent_depth``. Defaults to None (final-layer read only,
-                backwards compatible).
             register_per_depth_read_proj: If True, give each read block its own input
-                LayerNorm and K/V down-projection instead of one shared pair. Helps
-                multi-depth reads (different encoder depths have different statistics) and
-                interleaved single-source reads (each block gets its own lens on the final
-                layer). Requires more than one read block. Defaults to False (shared norm +
+                LayerNorm and K/V down-projection instead of one shared pair, so each
+                interleaved read gets its own lens on the final layer. Requires more than
+                one read block. Defaults to False (shared norm +
                 projection, backwards compatible).
-            register_learned_read_weighting: If True, give each read block a learnable scalar
-                gate on its residual contribution (``z + g_d * (read_d(z) - z)``), so the
-                model can weight how much each (multi-depth) read contributes. Gates init to
-                1.0 (no-op at init); exposed as ``register_bottleneck.read_gates``. Defaults
-                to False.
-            register_fused_read: If set (``"uniform"`` or ``"learned"``), fuse the
-                multi-depth K/V sources (``register_read_layers``) into ONE source read on
-                the standard single-source schedule (RAEv2 multi-layer-sum style), instead
-                of one read block per depth. ``"uniform"`` standardizes and averages the
-                depths with no learnable combination weights; ``"learned"`` gives each
-                depth its own norm + projection (mean-combined), which can re-weight
-                depths. Per-depth contribution norms are exposed as
-                ``register_bottleneck.last_read_source_norms`` for logging. Requires
-                ``register_read_layers``; incompatible with
-                ``register_per_depth_read_proj``. Defaults to None (one read per depth).
             register_latent_self_attn: If False, drop the bottleneck's latent
                 self-attention blocks entirely (cross-attention reads only, no
                 register-to-register mixing); the read count is unchanged. Defaults to True
                 (keep the latent transformer, backwards compatible).
-            register_latent_every_n: Run a latent self-attention block after every
-                n-th read instead of after every read (see
-                ``SpatialRegisterBottleneck.latent_every_n``).
-            register_output_dim: If set, one ``Linear(register_dim, output_dim)`` on the
-                bottleneck's output, so the read/latent stack runs at ``register_dim``
-                while the decoder, supervision heads and evals consume this width. In the
-                gradient path, unlike the detached ``register_projection_dims`` student.
-            register_shared_read_kv: If set, the register bottleneck projects the patch
-                tokens into keys/values once and shares them across all read blocks (see
-                ``SpatialRegisterBottleneck.shared_read_kv``).
             register_temporal_anchor: If set, make the register READ temporally aware
                 while keeping the registers a time-free 2D grid: the bottleneck's read
                 blocks run axial 3D RoPE with each register anchored at a per-sample
@@ -2933,13 +2368,71 @@ class Encoder(FlexiVitBase):
                 final-layer patch tokens -- the deployed narrow-bottleneck
                 architecture, trained by distillation instead of the pretext loss.
                 Defaults to ``"linear"``.
-            register_unit_norm: Put the register grid on a sphere, so the served
-                embedding is a direction (see
-                :class:`SpatialRegisterBottleneck`). Applied to the primary
-                bottleneck AND to the perceiver student, since either can be the
-                deployed embedding. Defaults to False.
-            register_unit_norm_scale: Radius of that sphere; ``None`` uses
-                ``sqrt(register_dim)`` so the change is scale-neutral at init.
+            register_projection_output_norm: Put a ``LayerNorm`` on the LINEAR
+                student's output. The perceiver student already ends in one (its
+                ``SpatialRegisterBottleneck`` does), and so does the primary
+                bottleneck, which makes the bare ``Linear`` the only served
+                representation with no norm at its own width -- nothing in the
+                distillation loss pins its scale either, since the cosine term is
+                taken after a learned back-projection that absorbs any rescaling.
+                The norm is applied at the FULL student width, so a Matryoshka
+                prefix is a slice of a normalized vector rather than a normalized
+                slice; that is deliberate, because a truncating deployment reads
+                exactly that slice. Requires ``register_projection_type="linear"``.
+                Defaults to False (the shipped behaviour).
+            register_back_projection_hidden: Hidden width of the per-prefix
+                back-projection heads. ``None`` (default) keeps the shipped single
+                ``Linear(d, register_dim)``; an int makes each head a 2-layer MLP
+                ``Linear(d, H) -> LayerNorm -> ReLU -> Linear(H, register_dim)``.
+                The heads are TRAINING-ONLY scaffolding -- they are discarded at
+                inference, so this costs nothing at serving time and does not
+                change the shipped embedding's architecture.
+
+                WHY AN MLP. A single Linear demands the student be a *linear*
+                image of the teacher, which is close to demanding PCA of a 768->128
+                compression. SimReg (BMVC'21) ablates exactly this head: their
+                "Linear" row is this module, and it lost 3.7 pts 1-NN / 10.2 pts
+                linear-probe to a deeper head, with ~94% of that recovered by the
+                first hidden layer alone.
+
+                THE COUNTER-EVIDENCE, STATED HONESTLY. Chen et al. 2023
+                (2310.17183) Table 4, CIFAR-100, finds ONE layer optimal and every
+                extra layer harmful. Columns are Student / w/o Proj / 1-Proj / 2L
+                / 3L / 4L / Teacher:
+                  VGG13-VGG8       70.74  73.76  **73.84**  73.31  73.02  72.73
+                  ResNet32x4-8x4   72.93  73.66  **75.14**  75.12  74.56  74.30
+                So 2L costs -0.53 (VGG) and -0.02 (ResNet) against their best. Do
+                NOT cite this paper as endorsing two layers; it does not.
+
+                WHY WE USE TWO ANYWAY. Their winning 1-Proj is ``g(s) =
+                sigma(Ws)`` -- Linear plus ReLU ON THE OUTPUT -- and that config
+                is NOT AVAILABLE to us: their target is a post-ReLU CNN feature
+                map (non-negative), ours is a LayerNorm'd register grid with
+                negative entries, so an output ReLU would cap the cosine (see the
+                final-layer note below). Among heads this loss admits -- nothing
+                squashing the output -- two layers is the SHALLOWEST with any
+                nonlinearity at all. And our bare affine head appears in neither
+                paper's table (their "w/o Proj" is no map at all; their 1-Proj has
+                the ReLU), except as SimReg's losing row.
+
+                So the case rests on SimReg, not on both: bare-Linear -> 2L is
+                worth 10.2 pts linear-probe there, against Chen et al.'s <=0.53 pt
+                penalty for 2L over a config we cannot run. That asymmetry is the
+                bet, and it is what the mlpgram* arms measure.
+
+                H IS FIXED ACROSS PREFIXES, NOT SCALED WITH ``d``. SimReg's
+                ``(m, 2m, d)`` has m as a fixed backbone width, not a swept one; a
+                literal reading would give the 16-dim prefix a 32-unit hidden layer
+                and confound "narrower code" with "weaker decoder" in exactly the
+                Matryoshka comparison the narrow prefixes exist to make. Since the
+                head is thrown away there is no reason to shrink it, so every
+                prefix decodes through the same width and ``d`` is the only
+                variable.
+
+                NO NORM OR ACTIVATION AFTER THE FINAL LAYER: the output is
+                regressed against the teacher's register grid, which comes out of a
+                LayerNorm and therefore has negative entries. A ReLU'd output is
+                non-negative and would cap the cosine against it.
             register_pixel_grid: If True, lay the dynamic register grid at PIXEL
                 resolution (``patch grid * patch_size``) instead of matching the
                 patch grid: one register per pixel regardless of the trunk's patch
@@ -2966,8 +2459,7 @@ class Encoder(FlexiVitBase):
                 modality-unique content the final trunk layer has mixed away.
                 Zero-initialized, so the model equals the embed-read-free model
                 at init. Primary bottleneck only (the detached student keeps its
-                final-layer read). Incompatible with ``register_read_layers``.
-                Defaults to False.
+                final-layer read). Defaults to False.
             pixel_branch_type: If set, attach the convolutional pixel branch whose
                 final ONLINE-pooled per-pixel features initialize the pixel
                 register grid through a zero-init projection (see
@@ -3014,7 +2506,6 @@ class Encoder(FlexiVitBase):
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
-        self.attn_window_size = attn_window_size
         self.log_token_norm_stats = log_token_norm_stats
         if self.has_register_tokens:
             self.register_tokens = nn.Parameter(
@@ -3030,10 +2521,8 @@ class Encoder(FlexiVitBase):
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
-        self.band_dropout_groups = band_dropout_groups
         self.patch_embed_hidden_sizes = patch_embed_hidden_sizes
         self.post_proj_hidden_sizes = post_proj_hidden_sizes
-        self.patch_embed_linear_skip = patch_embed_linear_skip
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
@@ -3043,10 +2532,8 @@ class Encoder(FlexiVitBase):
             band_dropout_rate=0.0,
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
-            band_dropout_groups=self.band_dropout_groups,
             patch_embed_hidden_sizes=self.patch_embed_hidden_sizes,
             post_proj_hidden_sizes=self.post_proj_hidden_sizes,
-            patch_embed_linear_skip=self.patch_embed_linear_skip,
         )
         self.output_embedding_size = output_embedding_size
         # If output_embedding_size is set, project tokens to that size after attention
@@ -3075,6 +2562,7 @@ class Encoder(FlexiVitBase):
         )
         self.register_projection_type = register_projection_type
         self.register_projection: nn.Linear | None = None
+        self.register_projection_norm: nn.LayerNorm | None = None
         self.register_projection_student: SpatialRegisterBottleneck | None = None
         self.register_back_projections: nn.ModuleDict | None = None
         self.register_temporal_anchor = register_temporal_anchor
@@ -3091,20 +2579,11 @@ class Encoder(FlexiVitBase):
                     f"{self.position_encoding!r})"
                 )
         if use_register_bottleneck:
-            if register_read_layers is not None:
-                if sorted(set(register_read_layers)) != list(register_read_layers):
-                    raise ValueError(
-                        "register_read_layers must be strictly ascending and unique, got "
-                        f"{register_read_layers}"
-                    )
-                if not all(1 <= layer <= depth for layer in register_read_layers):
-                    raise ValueError(
-                        f"register_read_layers must lie in [1, depth={depth}], got "
-                        f"{register_read_layers}"
-                    )
-            resolved_register_dim = (
-                register_dim if register_dim is not None else embedding_size // 2
-            )
+            if register_dim is None:
+                raise ValueError(
+                    "register_dim is required when use_register_bottleneck is True"
+                )
+            resolved_register_dim = register_dim
             resolved_register_heads = (
                 register_num_heads if register_num_heads is not None else num_heads
             )
@@ -3133,20 +2612,12 @@ class Encoder(FlexiVitBase):
                 rope_base=rope_base,
                 qk_norm=qk_norm,
                 interleave=register_interleave,
-                read_layers=register_read_layers,
                 per_depth_read_proj=register_per_depth_read_proj,
-                learned_read_weighting=register_learned_read_weighting,
-                fused_read=register_fused_read,
                 latent_self_attn=register_latent_self_attn,
                 attn_dim=register_attn_dim,
                 temporal_anchor=register_temporal_anchor,
-                shared_read_kv=register_shared_read_kv,
-                output_dim=register_output_dim,
-                latent_every_n=register_latent_every_n,
                 temporal_rope_dim_frac=temporal_rope_dim_frac,
                 rope_temporal_base=rope_temporal_base,
-                unit_norm=register_unit_norm,
-                unit_norm_scale=register_unit_norm_scale,
                 pixel_grid=register_pixel_grid,
                 latent_attn_dim=register_latent_attn_dim,
                 latent_num_heads=register_latent_num_heads,
@@ -3169,10 +2640,27 @@ class Encoder(FlexiVitBase):
                         f"{register_projection_dims}"
                     )
                 student_dim = self.register_projection_dims[0]
+                if (
+                    register_projection_output_norm
+                    and register_projection_type != "linear"
+                ):
+                    raise ValueError(
+                        "register_projection_output_norm applies to the linear "
+                        "student only; the perceiver student already ends in a "
+                        "LayerNorm, so enabling it there would norm twice"
+                    )
                 if register_projection_type == "linear":
                     # Per-cell linear map on the detached register grid.
                     self.register_projection = nn.Linear(
                         resolved_register_dim, student_dim
+                    )
+                    # Optional output norm at the full student width (see the
+                    # constructor docstring for why the linear student is the only
+                    # head without one).
+                    self.register_projection_norm = (
+                        nn.LayerNorm(student_dim)
+                        if register_projection_output_norm
+                        else None
                     )
                 else:
                     # A second bottleneck at the projection width, re-reading the
@@ -3197,30 +2685,34 @@ class Encoder(FlexiVitBase):
                         rope_base=rope_base,
                         qk_norm=qk_norm,
                         interleave=register_interleave,
-                        read_layers=None,
                         per_depth_read_proj=register_per_depth_read_proj,
-                        learned_read_weighting=False,
-                        fused_read=None,
                         latent_self_attn=register_latent_self_attn,
                         attn_dim=embedding_size,
                         temporal_anchor=register_temporal_anchor,
-                        shared_read_kv=register_shared_read_kv,
                         temporal_rope_dim_frac=temporal_rope_dim_frac,
                         rope_temporal_base=rope_temporal_base,
                         # The student IS the served embedding when it is deployed, so
-                        # it takes the same constraint as the primary (and mirrors its
-                        # grid resolution / norm convention).
-                        unit_norm=register_unit_norm,
-                        unit_norm_scale=register_unit_norm_scale,
+                        # it mirrors the primary's grid resolution / norm convention.
                         pixel_grid=register_pixel_grid,
                         norm_affine=register_norm_affine,
                     )
                 # One back-projection per Matryoshka prefix: dim d reconstructs the
                 # teacher from student[..., :d], forcing the first d dims to be
-                # self-sufficient (Tessera-v2 per-prefix heads).
+                # self-sufficient (Tessera-v2 per-prefix heads). Training-only --
+                # discarded at inference, so head capacity is free at serving time.
+                if (
+                    register_back_projection_hidden is not None
+                    and register_back_projection_hidden <= 0
+                ):
+                    raise ValueError(
+                        "register_back_projection_hidden must be positive, got "
+                        f"{register_back_projection_hidden}"
+                    )
                 self.register_back_projections = nn.ModuleDict(
                     {
-                        str(d): nn.Linear(d, resolved_register_dim)
+                        str(d): self._build_back_projection(
+                            d, resolved_register_dim, register_back_projection_hidden
+                        )
                         for d in self.register_projection_dims
                     }
                 )
@@ -3241,12 +2733,11 @@ class Encoder(FlexiVitBase):
             and register_contrastive_source == "registers"
         )
         # When projecting from the register tokens the head operates at the width the
-        # bottleneck SHIPS -- register_output_dim when it projects its output down,
-        # otherwise its internal register_dim; the head reads the returned grid, not the
+        # bottleneck ships (its register_dim); the head reads the returned grid, not the
         # stack's residual stream. Otherwise it reads the encoder's final-embedding-size
         # patch tokens.
         project_aggregate_embedding_size = (
-            (register_output_dim or self.register_dim)
+            self.register_dim
             if self.contrastive_from_registers
             else final_embedding_size
         )
@@ -3313,6 +2804,26 @@ class Encoder(FlexiVitBase):
         if self.register_bottleneck is not None and self.register_bottleneck.embed_read:
             # Same convention: the extra embed-level read contributes zero at step 0.
             self.register_bottleneck.zero_init_embed_read()
+
+    @staticmethod
+    def _build_back_projection(
+        prefix_dim: int, register_dim: int, hidden: int | None
+    ) -> nn.Module:
+        """One per-prefix distillation head: ``prefix_dim -> register_dim``.
+
+        ``hidden=None`` is the shipped bare ``Linear``; an int gives a 2-layer MLP
+        at that hidden width. Nothing follows the final layer -- see
+        ``register_back_projection_hidden`` in the constructor docstring for why the
+        output must stay unnormalized and unactivated.
+        """
+        if hidden is None:
+            return nn.Linear(prefix_dim, register_dim)
+        return nn.Sequential(
+            nn.Linear(prefix_dim, hidden),
+            nn.LayerNorm(hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, register_dim),
+        )
 
     def enable_band_dropout(self) -> None:
         """Enable band dropout using the configured rate.
@@ -3713,32 +3224,6 @@ class Encoder(FlexiVitBase):
             else:
                 register_kv_positions = register_kv_positions[..., 1:]
 
-        # Windowed (local) spatial attention setup. Active only when the patch grid is
-        # larger than the window in some dim; otherwise we leave the fast (full-attention)
-        # path untouched. `patch_spatial_flag` is in the full (pre-masking) collapsed order
-        # for the register read; `encoder_spatial_flag` is reduced alongside `positions`.
-        window_half_extent: float | None = None
-        patch_spatial_flag: Tensor | None = None
-        encoder_spatial_flag: Tensor | None = None
-        window_spec: WindowSpec | None = None
-        if self.attn_window_size is not None:
-            if not PositionEncoding.is_2d_rope(self.position_encoding):
-                raise ValueError(
-                    "attn_window_size requires a 2D RoPE position_encoding "
-                    '(e.g. "rope" or "rope_mixed")'
-                )
-            grid_h, grid_w = self._patch_grid_hw(tokens_only_dict)
-            if grid_h > self.attn_window_size or grid_w > self.attn_window_size:
-                gsd_ratio = (
-                    CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
-                    * self.rope_coordinate_scale
-                )
-                window_half_extent = (self.attn_window_size / 2.0) * gsd_ratio
-                patch_spatial_flag = self.build_spatial_token_mask(
-                    tokens_only_dict, original_masks_dict
-                )
-                encoder_spatial_flag = patch_spatial_flag
-
         tokens_dict.update(original_masks_dict)
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -3748,11 +3233,6 @@ class Encoder(FlexiVitBase):
         )
         if positions is not None and bool_mask is not None:
             positions, _, _, _, _ = self.remove_masked_tokens(positions, bool_mask)
-            if encoder_spatial_flag is not None:
-                reduced_flag, _, _, _, _ = self.remove_masked_tokens(
-                    encoder_spatial_flag[..., None].float(), bool_mask
-                )
-                encoder_spatial_flag = reduced_flag.squeeze(-1) > 0.5
 
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
@@ -3783,60 +3263,11 @@ class Encoder(FlexiVitBase):
             if positions is not None:
                 positions = self.add_register_positions(positions)
 
-        if window_half_extent is not None:
-            # Now that positions include the prepended global register tokens, assemble the
-            # window ingredients. The per-block mask is built lazily, one query-chunk at a
-            # time inside attention (see WindowSpec / Attention._windowed_sdpa), so peak
-            # memory is bounded by the chunk rather than by N*N -- without this the full
-            # unmasked eval sequence (no MAE masking) would OOM a dense [B, N, N] mask. The
-            # spec carries key validity, so it replaces the [B, N] key mask for every block
-            # (train and eval alike). Register tokens are global (non-spatial); padded keys
-            # are excluded via the true padding mask (`new_mask`), independent of fast_pass.
-            assert encoder_spatial_flag is not None
-            if self.has_register_tokens:
-                reg_flag = encoder_spatial_flag.new_zeros(
-                    encoder_spatial_flag.shape[0], self.num_register_tokens
-                )
-                encoder_spatial_flag = torch.cat(
-                    [reg_flag, encoder_spatial_flag], dim=1
-                )
-            key_valid: Tensor | None = None
-            if new_mask is not None:
-                key_valid = new_mask.bool()
-                if self.has_register_tokens:
-                    reg_valid = key_valid.new_ones(
-                        key_valid.shape[0], self.num_register_tokens
-                    )
-                    key_valid = torch.cat([reg_valid, key_valid], dim=1)
-            is_global = ~encoder_spatial_flag
-            window_spec = WindowSpec(
-                q_positions=positions,
-                k_positions=positions,
-                half_extent=window_half_extent,
-                q_is_global=is_global,
-                k_is_global=is_global,
-                key_valid=key_valid,
-            )
-            attn_mask = None  # validity carried by window_spec.key_valid
-
-        # Multi-depth register reads: stash the (raw, in-loop) patch tokens at the
-        # configured 1-indexed depths so the bottleneck can read each one. The patch stack
-        # is independent of the registers (registers never write back), so caching here is
-        # equivalent to truly interleaving the reads into the block loop.
-        multi_depth_read_layers: set[int] = set()
-        if (
-            self.register_bottleneck is not None
-            and self.register_bottleneck.multi_depth
-        ):
-            assert self.register_bottleneck.read_layers is not None
-            multi_depth_read_layers = set(self.register_bottleneck.read_layers)
-        cached_read_tokens: dict[int, Tensor] = {}
-
         # Embed-level register read: stash the block-0 INPUT (patch-embed output plus
         # position/modality encodings, in the in-loop packed layout) so the bottleneck
-        # can run its extra read against the undegraded tokens. Like the multi-depth
-        # caches, the patch stack never sees the registers, so stashing here is
-        # equivalent to reading before the trunk runs.
+        # can run its extra read against the undegraded tokens. The patch stack never
+        # sees the registers, so stashing here is equivalent to reading before the
+        # trunk runs.
         embed_read_source: Tensor | None = None
         if self.register_bottleneck is not None and self.register_bottleneck.embed_read:
             embed_read_source = tokens
@@ -3885,7 +3316,6 @@ class Encoder(FlexiVitBase):
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
                 rope_positions=positions,
-                window_spec=window_spec,
             )
             # Interleaved "conv" pixel step: refine the dense pixel frames (FiLM from
             # the current coarse tokens) and fuse the pooled pixel update back into
@@ -3905,9 +3335,6 @@ class Encoder(FlexiVitBase):
                     new_mask=new_mask,
                     max_seqlen=max_seqlen,
                 )
-            # Stash this depth's output for the multi-depth register read (1-indexed).
-            if (i_blk + 1) in multi_depth_read_layers:
-                cached_read_tokens[i_blk + 1] = tokens
 
         if self.has_register_tokens:
             tokens, register_tokens = self.pop_register_tokens(tokens)
@@ -3954,12 +3381,12 @@ class Encoder(FlexiVitBase):
             )
 
             def _finalize_read_tokens(raw: Tensor) -> Tensor:
-                # Bring a cached, in-loop tensor (a block output, or the block-0 input
-                # for the embed read) into the shape the bottleneck reads: drop
-                # register tokens, unpack (flash), and re-add masked tokens (the read
-                # masks them out). No norm here -- the bottleneck applies its own
-                # input_norm to every K/V source, so an encoder norm would be a
-                # redundant double-norm (and would mismatch across read depths).
+                # Bring the cached, in-loop block-0 input (the embed read's K/V
+                # source) into the shape the bottleneck reads: drop register tokens,
+                # unpack (flash), and re-add masked tokens (the read masks them
+                # out). No norm here -- the bottleneck applies its own input_norm
+                # to every K/V source, so an encoder norm would be a redundant
+                # double-norm.
                 t = raw
                 if self.has_register_tokens:
                     t, _ = self.pop_register_tokens(t)
@@ -3967,19 +3394,6 @@ class Encoder(FlexiVitBase):
                     t = self.unpack_tokens(t, new_mask, og_shape)
                 return self._maybe_add_removed_tokens(t, indices, new_mask, fast_pass)
 
-            if self.register_bottleneck.multi_depth:
-                assert self.register_bottleneck.read_layers is not None
-
-                # One K/V source per read layer, each finalized from its cached (pre-norm)
-                # block output so all depths are normalized identically by the bottleneck's
-                # input_norm. Every read layer is cached above, including the final depth
-                # when it is a read layer.
-                patch_tokens_arg: Tensor | list[Tensor] = [
-                    _finalize_read_tokens(cached_read_tokens[depth])
-                    for depth in self.register_bottleneck.read_layers
-                ]
-            else:
-                patch_tokens_arg = tokens
             # In pixel-grid mode the bottleneck needs the patch size (to size the
             # pixel grid) and the patch coordinate spacing (to place pixel-center
             # RoPE coordinates in the same frame the patch positions use).
@@ -4001,16 +3415,10 @@ class Encoder(FlexiVitBase):
             if embed_read_source is not None:
                 embed_tokens_arg = _finalize_read_tokens(embed_read_source)
             registers, register_positions = self.register_bottleneck(
-                patch_tokens=patch_tokens_arg,
+                patch_tokens=tokens,
                 patch_positions=register_kv_positions,
                 visible_mask=bool_mask,
                 spatial_grid=spatial_grid,
-                window_half_extent=window_half_extent,
-                # `patch_spatial_flag` is in the full (pre-masking) order matching
-                # `register_kv_positions`; non-spatial patches read globally.
-                patch_is_global=(
-                    ~patch_spatial_flag if patch_spatial_flag is not None else None
-                ),
                 patch_size=patch_size,
                 patch_coordinate_scale=register_patch_coordinate_scale,
                 register_init=register_init,
@@ -4026,19 +3434,16 @@ class Encoder(FlexiVitBase):
             # Both consume DETACHED tensors, so no student gradient reaches the
             # encoder or the primary bottleneck.
             if self.register_projection is not None:
-                register_output["projected_registers"] = self.register_projection(
-                    registers.detach()
-                )
+                projected = self.register_projection(registers.detach())
+                if self.register_projection_norm is not None:
+                    projected = self.register_projection_norm(projected)
+                register_output["projected_registers"] = projected
             elif self.register_projection_student is not None:
                 projected, _ = self.register_projection_student(
                     patch_tokens=tokens.detach(),
                     patch_positions=register_kv_positions,
                     visible_mask=bool_mask,
                     spatial_grid=spatial_grid,
-                    window_half_extent=window_half_extent,
-                    patch_is_global=(
-                        ~patch_spatial_flag if patch_spatial_flag is not None else None
-                    ),
                     patch_size=patch_size,
                     patch_coordinate_scale=register_patch_coordinate_scale,
                 )
@@ -4524,24 +3929,24 @@ class Predictor(PredictorBase):
                     "Predictor received registers but was built without "
                     "use_register_bottleneck=True"
                 )
-            context = self.register_to_decoder_embed(registers)
+            # Cross-attention consumes a token sequence, so flatten the grid here.
+            # register_positions is already flat and in the same row-major order.
+            context = self.register_to_decoder_embed(
+                rearrange(registers, "b h w d -> b (h w) d")
+            )
             context_positions = register_positions
-            num_registers = context.shape[1]
+            batch_size, num_registers = context.shape[0], context.shape[1]
             if self.use_flash_attn:
-                register_bool = torch.ones(
-                    context.shape[0],
-                    num_registers,
-                    dtype=torch.bool,
-                    device=context.device,
-                )
-                context = self.pack_tokens(context, register_bool)
+                # Every register is valid, so "packing" for varlen is just a flatten --
+                # a view, not the gather pack_tokens does for a real validity mask --
+                # and every sample contributes the same num_registers keys, so
+                # cu_seqlens is a fixed stride.
+                context = torch.flatten(context, end_dim=1)
                 if context_positions is not None:
-                    context_positions = self.pack_tokens(
-                        context_positions, register_bool
-                    )
+                    context_positions = torch.flatten(context_positions, end_dim=1)
                 cu_seqlens_context = get_cumulative_sequence_lengths(
                     torch.full(
-                        (register_bool.shape[0],),
+                        (batch_size,),
                         num_registers,
                         dtype=torch.int32,
                         device=context.device,
@@ -4614,10 +4019,12 @@ class Predictor(PredictorBase):
             timestamps: Timestamps of the tokens
             patch_size: Patch size of the tokens
             input_res: Input resolution of the tokens
-            registers: Optional encoder register grid ``[B, n_reg, register_dim]``. When
-                provided (register bottleneck), the decoder cross-attends to it instead of
-                the visible patch tokens.
-            register_positions: Optional ``[B, n_reg, 2]`` register coordinates for RoPE.
+            registers: Optional encoder register grid ``[B, n_h, n_w, register_dim]``.
+                When provided (register bottleneck), the decoder cross-attends to it
+                instead of the visible patch tokens; it is flattened to a token
+                sequence here.
+            register_positions: Optional flat ``[B, n_h * n_w, 2]`` register coordinates
+                for RoPE, row-major to match the flattened grid.
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
@@ -4708,12 +4115,10 @@ class EncoderConfig(Config):
     # dropout for it becomes grouped (drop one whole group per sample w.p.
     # band_dropout_rate) instead of per-band; modalities not listed fall back to
     # per-band dropout. See MultiModalPatchEmbeddings for details.
-    band_dropout_groups: dict[str, list[list[str]]] | None = None
     patch_embed_hidden_sizes: list[int] | None = None
     post_proj_hidden_sizes: list[int] | None = None
     # Add a per-pixel ReLU-free linear skip parallel to the patch-embed MLP
     # (pixel_features = MLP(x) + Linear(x)). Requires patch_embed_hidden_sizes.
-    patch_embed_linear_skip: bool = False
     position_encoding: str = "absolute"
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
@@ -4725,13 +4130,6 @@ class EncoderConfig(Config):
     # so old checkpoint configs deserialized via Config.from_dict still carry it
     # through to __post_init__ for reconciliation.
     spatial_pos_encoding: str | None = None
-    # Windowed (local) spatial attention: each token attends only to tokens within a
-    # square window of side ``attn_window_size`` patch cells centred on it (sliding
-    # window), applied to encoder self-attention and the register read + latent
-    # self-attention. None -> full attention (backwards compatible). When the input
-    # patch grid is no larger than the window in both dims, full attention is used.
-    # Requires a 2D RoPE position_encoding and is incompatible with use_flash_attn.
-    attn_window_size: int | None = None
     # Perceiver-style spatial register bottleneck (sweepable).
     use_register_bottleneck: bool = False
     # >0 -> fixed grid of distinct per-cell latents; 0 -> dynamic single cloned latent
@@ -4747,27 +4145,10 @@ class EncoderConfig(Config):
     # Interleave reads with latent self-attention ([read -> self] x register_latent_depth)
     # instead of reading once up front. False -> legacy schedule (backwards compatible).
     register_interleave: bool = False
-    # Multi-depth reads: 1-indexed, ascending encoder depths the bottleneck reads from
-    # (one [read -> self-attend] step per entry). Forces the interleaved schedule and
-    # overrides register_read_depth / register_latent_depth. None -> final-layer read only.
-    register_read_layers: list[int] | None = None
     # Give each read block its own input norm + K/V down-projection instead of sharing one
-    # pair (multi-depth: per-depth stats; interleave: a distinct lens per re-read). Needs
-    # >1 read block. False -> shared (backwards compatible).
+    # pair, so each interleaved re-read gets a distinct lens. Needs >1 read block.
+    # False -> shared (backwards compatible).
     register_per_depth_read_proj: bool = False
-    # Learnable per-read residual gate (z + g_d * (read_d(z) - z)), letting the model weight
-    # how much each (multi-depth) read contributes. Gates init to 1.0 (no-op at init).
-    # False -> ungated reads (backwards compatible).
-    register_learned_read_weighting: bool = False
-    # Fuse the multi-depth K/V sources into ONE source read on the standard single-source
-    # schedule (RAEv2 multi-layer-sum style), instead of one read block per depth.
-    # "uniform": parameter-free standardize-and-average (training cannot re-weight the
-    # combination, so mid-depth features survive even where the pretext loss would discard
-    # them); "learned": per-depth norm + projection, mean-combined (can re-weight depths;
-    # per-depth contribution norms are logged to watch for collapse onto the final layer).
-    # Requires register_read_layers; incompatible with register_per_depth_read_proj.
-    # None -> one read per depth (backwards compatible).
-    register_fused_read: str | None = None
     # Where the contrastive head reads when the bottleneck is on: "registers" (default,
     # project from the register latents) or "encoder_tokens" (project from the encoder
     # patch-token output, as before the bottleneck existed). Ignored when bottleneck off.
@@ -4793,20 +4174,6 @@ class EncoderConfig(Config):
     # position_encoding. None (default) keeps the purely spatial read (backwards
     # compatible).
     register_temporal_anchor: str | None = None
-    # Share ONE key/value projection across all register read blocks (see
-    # SpatialRegisterBottleneck.shared_read_kv). Caps read-side activation memory at a
-    # single stored copy of the context instead of one per read, which is what makes
-    # deep read stacks trainable; in exchange the reads lose independent K/V lenses.
-    register_shared_read_kv: bool = False
-    # Width the register grid is projected to on output. The read/latent stack runs
-    # at register_dim (chosen for GEMM efficiency); the decoder, supervision heads and
-    # evals all consume this width. In the gradient path, unlike the detached
-    # register_projection_dims student. None keeps the grid at register_dim.
-    register_output_dim: int | None = None
-    # Latent self-attention blocks per read: 1 = the 1:1 default, 2 = one LSA per
-    # two reads (see SpatialRegisterBottleneck.latent_every_n). LSA blocks are half
-    # the bottleneck's sequential depth, which is what drives wall-clock.
-    register_latent_every_n: int = 1
     # If set, add a DETACHED low-dim "student" readout of the register grid, exported
     # as ``projected_registers`` (at width max(dims)) alongside the registers. The
     # student's inputs are detached, so its training signal (distillation to the
@@ -4823,18 +4190,22 @@ class EncoderConfig(Config):
     # narrow-bottleneck architecture trained by distillation instead of the pretext
     # loss). Ignored without register_projection_dims.
     register_projection_type: str = "linear"
-    # Put the register grid on a sphere: L2-normalize the bottleneck's output so the
-    # served embedding is a DIRECTION (AlphaEarth's convention). Binds on every
-    # consumer at once -- decoder context, supervision heads, frozen evals -- because
-    # they all read the tensor the bottleneck returns. Magnitude stops being an
-    # available channel. On its own this constrains where embeddings live, NOT how
-    # they are distributed there; pair it with LatentMIMTrainModuleConfig's
-    # register_uniformity_weight for the spread.
-    register_unit_norm: bool = False
-    # Radius of that sphere. None -> sqrt(register_dim), which is LayerNorm's own
-    # output norm, so turning this on does not also rescale the decoder's context
-    # input (which would confound the constraint with a global rescale).
-    register_unit_norm_scale: float | None = None
+    # LayerNorm on the LINEAR student's output. The primary bottleneck and the
+    # perceiver student both end in one; the bare Linear does not, and the cosine
+    # distillation term is taken after a learned back-projection, so nothing pins
+    # its scale. Applied at the full student width -- a Matryoshka prefix is then a
+    # slice of a normalized vector, which is what a truncating deployment reads.
+    # Requires register_projection_type="linear". Ignored without
+    # register_projection_dims.
+    register_projection_output_norm: bool = False
+    # Hidden width of the per-prefix back-projection ("distillation head") that
+    # reconstructs the teacher from student[..., :d]. None = the shipped single
+    # Linear(d, register_dim); an int makes each head a 2-layer MLP
+    # Linear(d, H) -> LayerNorm -> ReLU -> Linear(H, register_dim). The heads are
+    # discarded at inference, so this is free at serving time and leaves the shipped
+    # embedding's architecture untouched. Fixed across prefixes on purpose -- see
+    # Encoder.__init__'s docstring. Ignored without register_projection_dims.
+    register_back_projection_hidden: int | None = None
     # Registers at PIXEL resolution: the dynamic single latent is cloned onto
     # (patch_grid * patch_size) cells at pixel-center RoPE coordinates, whatever patch
     # size the encoder/reads run at (at ps=1 this is identical to the patch-matched
@@ -4864,8 +4235,8 @@ class EncoderConfig(Config):
     # still contain the sub-patch / modality-unique content the final layer mixes
     # away, and a register's RoPE query phase can select its own pixel's subspace of
     # the linear patch projection. Zero-initialized (init-equivalent to the
-    # embed-read-free model). Incompatible with register_read_layers. False
-    # (default) keeps the standard schedule (backwards compatible).
+    # embed-read-free model). False (default) keeps the standard schedule
+    # (backwards compatible).
     register_embed_read: bool = False
     # Convolutional pixel branch whose final per-pixel features initialize the
     # pixel-resolution register grid through a zero-init projection (ported from the
@@ -4916,26 +4287,6 @@ class EncoderConfig(Config):
                     f"band_dropout_modalities contains modalities not in "
                     f"supported_modality_names: {unknown}"
                 )
-        if self.band_dropout_groups is not None:
-            unknown = set(self.band_dropout_groups) - set(self.supported_modality_names)
-            if unknown:
-                raise ValueError(
-                    f"band_dropout_groups contains modalities not in "
-                    f"supported_modality_names: {unknown}"
-                )
-            for mod_name, groups in self.band_dropout_groups.items():
-                valid_bands = set(Modality.get(mod_name).band_order)
-                for group in groups:
-                    bad = set(group) - valid_bands
-                    if bad:
-                        raise ValueError(
-                            f"band_dropout_groups[{mod_name!r}] contains bands not in "
-                            f"the modality band order: {bad}"
-                        )
-        if self.patch_embed_linear_skip and not self.patch_embed_hidden_sizes:
-            raise ValueError(
-                "patch_embed_linear_skip requires patch_embed_hidden_sizes"
-            )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
         if self.position_encoding not in PositionEncoding.values():
@@ -4949,22 +4300,6 @@ class EncoderConfig(Config):
             raise ValueError(
                 f"rope_coordinate_scale must be positive, got {self.rope_coordinate_scale}"
             )
-        if self.attn_window_size is not None:
-            if self.attn_window_size <= 0:
-                raise ValueError(
-                    f"attn_window_size must be positive, got {self.attn_window_size}"
-                )
-            if not PositionEncoding.is_2d_rope(self.position_encoding):
-                raise ValueError(
-                    "attn_window_size requires a 2D RoPE position_encoding (the window "
-                    "is computed from per-token RoPE coordinates)"
-                )
-            if self.use_flash_attn:
-                raise ValueError(
-                    "attn_window_size is incompatible with use_flash_attn (the flash "
-                    "varlen path cannot express a 2D spatial mask); set "
-                    "use_flash_attn=False"
-                )
         if self.use_register_bottleneck:
             # Legacy None sentinel -> 0 (dynamic single-latent grid).
             if self.register_grid_size is None:
@@ -4983,11 +4318,11 @@ class EncoderConfig(Config):
                     "per-cell 2D (row, col) coordinates. A 3D encoder is fine -- the "
                     "bottleneck reads with the spatial axes only (see use_2d_rope)."
                 )
-            register_dim = (
-                self.register_dim
-                if self.register_dim is not None
-                else self.embedding_size // 2
-            )
+            if self.register_dim is None:
+                raise ValueError(
+                    "register_dim must be set when use_register_bottleneck is True"
+                )
+            register_dim = self.register_dim
             register_heads = (
                 self.register_num_heads
                 if self.register_num_heads is not None
@@ -5045,43 +4380,6 @@ class EncoderConfig(Config):
                     "2D RoPE requires register latent head_dim divisible by 4, got "
                     f"{latent_attn_width // latent_heads}"
                 )
-            if self.register_read_layers is not None:
-                if sorted(set(self.register_read_layers)) != list(
-                    self.register_read_layers
-                ):
-                    raise ValueError(
-                        "register_read_layers must be strictly ascending and unique, got "
-                        f"{self.register_read_layers}"
-                    )
-                if not all(
-                    1 <= layer <= self.depth for layer in self.register_read_layers
-                ):
-                    raise ValueError(
-                        f"register_read_layers must lie in [1, depth={self.depth}], got "
-                        f"{self.register_read_layers}"
-                    )
-                if self.register_embed_read:
-                    raise ValueError(
-                        "register_embed_read (one extra patch-embed read) is "
-                        "incompatible with register_read_layers (multi-depth reads)"
-                    )
-            if self.register_fused_read is not None:
-                if self.register_fused_read not in ("uniform", "learned"):
-                    raise ValueError(
-                        "register_fused_read must be 'uniform' or 'learned', got "
-                        f"{self.register_fused_read!r}"
-                    )
-                if self.register_read_layers is None:
-                    raise ValueError(
-                        "register_fused_read requires register_read_layers (the depths "
-                        "to fuse)"
-                    )
-                if self.register_per_depth_read_proj:
-                    raise ValueError(
-                        "register_fused_read is incompatible with "
-                        "register_per_depth_read_proj (the fusion replaces the per-depth "
-                        "read projections)"
-                    )
             if self.register_projection_dims is not None:
                 if len(self.register_projection_dims) == 0 or any(
                     d <= 0 for d in self.register_projection_dims
@@ -5095,14 +4393,14 @@ class EncoderConfig(Config):
                         "register_projection_type must be 'linear' or 'perceiver', "
                         f"got {self.register_projection_type!r}"
                     )
-        elif self.register_read_layers is not None:
-            raise ValueError(
-                "register_read_layers requires use_register_bottleneck=True"
-            )
-        elif self.register_fused_read is not None:
-            raise ValueError(
-                "register_fused_read requires use_register_bottleneck=True"
-            )
+                if (
+                    self.register_back_projection_hidden is not None
+                    and self.register_back_projection_hidden <= 0
+                ):
+                    raise ValueError(
+                        "register_back_projection_hidden must be positive, got "
+                        f"{self.register_back_projection_hidden}"
+                    )
         elif self.register_projection_dims is not None:
             raise ValueError(
                 "register_projection_dims requires use_register_bottleneck=True"
