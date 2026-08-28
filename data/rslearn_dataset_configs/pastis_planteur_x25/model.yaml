@@ -1,0 +1,111 @@
+# PASTIS + X-shot PLANTEUR, unified 23-class space. Standalone: its own dataset root,
+# its own label rasters, nothing shared with the PLANTEUR benchmark dataset.
+#
+# The labels in this dataset are ALREADY in the unified space, so class_id_mapping is the
+# identity. That is deliberate and load-bearing: PASTIS uses id 19 for VOID while the DROM
+# taxonomy uses 19 for Sugarcane, and 13.55%% of PASTIS pixels are id 19. A class map keyed
+# on id cannot tell the two sources apart, so the reconciliation has to happen when the
+# rasters are written, not here. PASTIS's 19 became 255; the four DROM crops were
+# renumbered {19,20,21,23} -> {19,20,21,22}.
+data:
+  class_path: rslearn.train.data_module.RslearnDataModule
+  init_args:
+    path: /weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_unified/x25
+    inputs:
+      sentinel2_l2a:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+        - sentinel2_l2a_mo01
+        - sentinel2_l2a_mo02
+        - sentinel2_l2a_mo03
+        - sentinel2_l2a_mo04
+        - sentinel2_l2a_mo05
+        - sentinel2_l2a_mo06
+        - sentinel2_l2a_mo07
+        - sentinel2_l2a_mo08
+        - sentinel2_l2a_mo09
+        - sentinel2_l2a_mo10
+        - sentinel2_l2a_mo11
+        - sentinel2_l2a_mo12
+        load_all_layers: true
+        bands:
+        - B02
+        - B03
+        - B04
+        - B08
+        - B05
+        - B06
+        - B07
+        - B8A
+        - B11
+        - B12
+        - B01
+        - B09
+        passthrough: true
+      targets:
+        data_type: raster
+        dtype: INT32
+        layers:
+        - label
+        bands:
+        - class_id
+        is_target: true
+    task:
+      class_path: rslearn.train.tasks.segmentation.SegmentationTask
+      init_args:
+        num_classes: 23
+        nodata_value: 255
+        class_id_mapping:
+          0: 0
+          1: 1
+          2: 2
+          3: 3
+          4: 4
+          5: 5
+          6: 6
+          7: 7
+          8: 8
+          9: 9
+          10: 10
+          11: 11
+          12: 12
+          13: 13
+          14: 14
+          15: 15
+          16: 16
+          17: 17
+          18: 18
+          19: 19
+          20: 20
+          21: 21
+          22: 22
+        enable_miou_metric: true
+        enable_f1_metric: true
+        report_metric_per_class: true
+        class_names:
+        - Background
+        - Meadow
+        - Soft winter wheat
+        - Corn
+        - Winter barley
+        - Winter rapeseed
+        - Spring barley
+        - Sunflower
+        - Grapevine
+        - Beet
+        - Winter triticale
+        - Winter durum wheat
+        - Fruits/vegetables/flowers
+        - Potatoes
+        - Leguminous fodder
+        - Soybeans
+        - Orchard
+        - Mixed cereal
+        - Sorghum
+        - Sugarcane
+        - Banana
+        - Pineapple
+        - Tropical tuber
+    batch_size: 8
+    num_workers: 8
