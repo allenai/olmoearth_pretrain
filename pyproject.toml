@@ -42,6 +42,8 @@ extend-select = ["D", "I", "UP"]
 # restyle so re-vendoring stays a clean diff.
 "olmoearth_pretrain/evals/models/tessera/tessera_v2_model.py" = ["D", "E702"]
 "olmoearth_pretrain/evals/models/tessera/tessera_v2_infer.py" = ["D", "E702", "F841"]
+# Vendored from the CopernicusFM release; kept unstyled for the same reason.
+"olmoearth_pretrain/evals/models/copernicusfm/src/*" = ["D", "UP", "E", "F"]
 
 [[tool.mypy.overrides]]
 # Vendored verbatim from github.com/ucam-eo/tessera (branch v2); not typed to

@@ -5,6 +5,10 @@ from typing import Any
 
 from olmoearth_pretrain.evals.models.anysat.anysat import AnySat, AnySatConfig
 from olmoearth_pretrain.evals.models.clay.clay import Clay, ClayConfig
+from olmoearth_pretrain.evals.models.copernicusfm.copernicusfm import (
+    CopernicusFM,
+    CopernicusFMConfig,
+)
 from olmoearth_pretrain.evals.models.croma.croma import CROMA_SIZES, Croma, CromaConfig
 from olmoearth_pretrain.evals.models.dinov3.constants import DinoV3Models
 from olmoearth_pretrain.evals.models.dinov3.dinov3 import DINOv3, DINOv3Config
@@ -43,6 +47,7 @@ class BaselineModelName(StrEnum):
     GALILEO = "galileo"
     SATLAS = "satlas"
     CROMA = "croma"
+    COPERNICUSFM = "copernicusfm"
     PRESTO = "presto"
     ANYSAT = "anysat"
     TESSERA = "tessera"
@@ -81,6 +86,8 @@ def get_launch_script_path(model_name: str) -> str:
         return "olmoearth_pretrain/evals/models/croma/croma_launch.py"
     elif model_name == BaselineModelName.CLAY:
         return "olmoearth_pretrain/evals/models/clay/clay_launch.py"
+    elif model_name == BaselineModelName.COPERNICUSFM:
+        return "olmoearth_pretrain/evals/models/copernicusfm/copernicusfm_launch.py"
     elif model_name == BaselineModelName.PRESTO:
         return "olmoearth_pretrain/evals/models/presto/presto_launch.py"
     elif model_name == BaselineModelName.ANYSAT:
@@ -125,6 +132,8 @@ __all__ = [
     "CromaConfig",
     "Clay",
     "ClayConfig",
+    "CopernicusFM",
+    "CopernicusFMConfig",
     "PrestoWrapper",
     "PrestoConfig",
     "AnySat",

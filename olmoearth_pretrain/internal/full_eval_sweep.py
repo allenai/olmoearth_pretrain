@@ -352,6 +352,18 @@ def get_clay_args(pretrained_normalizer: bool = True) -> str:
     return clay_args
 
 
+def get_copernicusfm_args() -> str:
+    """Get the copernicusfm arguments."""
+    copernicusfm_args = dataset_args
+    copernicusfm_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_2_STD"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    return copernicusfm_args
+
+
 def get_anysat_args() -> str:
     """Get the anysat arguments."""
     anysat_args = dataset_args
@@ -536,6 +548,7 @@ def _get_model_specific_args(model: BaselineModelName | None) -> str:
         BaselineModelName.GALILEO: get_galileo_args,
         BaselineModelName.SATLAS: get_satlas_args,
         BaselineModelName.CROMA: get_croma_args,
+        BaselineModelName.COPERNICUSFM: get_copernicusfm_args,
         BaselineModelName.PRESTO: get_presto_args,
         BaselineModelName.ANYSAT: get_anysat_args,
         BaselineModelName.TESSERA: get_tessera_args,
@@ -1244,10 +1257,11 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             models = [args.model]
         for model in models:
             args.model = model
-            # Models that only use dataset normalization or need dataset normalization to scale to 0 - 1 then always use pretrained
+            # Models that only use dataset normalizaiton or need dataset normalization to scale to 0 - 1 then always use pretrained
             dataset_norm_only_models = {
                 BaselineModelName.DINO_V3,
                 BaselineModelName.PANOPTICON,
+                BaselineModelName.COPERNICUSFM,
                 BaselineModelName.TESSERA,
             }
             if args.size is not None:
