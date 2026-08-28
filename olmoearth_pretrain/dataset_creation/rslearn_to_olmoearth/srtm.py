@@ -15,7 +15,7 @@ from olmoearth_pretrain.dataset.utils import get_modality_fname
 
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
-from .cli import add_common_arguments
+from .cli import add_common_arguments, filter_paired_secondary_windows
 
 START_TIME = datetime(2000, 1, 1, tzinfo=UTC)
 END_TIME = datetime(2001, 1, 1, tzinfo=UTC)
@@ -88,8 +88,10 @@ if __name__ == "__main__":
     olmoearth_path = UPath(args.olmoearth_path)
 
     jobs = []
-    for window in dataset.load_windows(
-        workers=args.workers, show_progress=True, groups=args.groups
+    for window in filter_paired_secondary_windows(
+        dataset.load_windows(
+            workers=args.workers, show_progress=True, groups=args.groups
+        )
     ):
         jobs.append(
             dict(

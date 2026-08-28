@@ -1,25 +1,33 @@
 """Unit tests for open-set window/label construction helpers."""
 
+import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
+import pytest
 from rasterio.crs import CRS
+from rslearn.dataset import Dataset
 from rslearn.utils.geometry import Projection
 from rslearn.utils.raster_array import RasterArray
 from upath import UPath
 
 from olmoearth_pretrain.dataset_creation.create_windows.from_open_set import (
     LABEL_RASTER_FORMAT,
+    MAX_PAIRED_WINDOW_DAYS,
     ClassLookup,
     _build_open_set_label,
     _build_regression_label,
     _centered_window_bounds,
-    _parse_time_range,
+    _trim_time_range,
     _window_geometry_for_sample,
+    create_sample_window,
     load_exclusion_index,
     normalize_regression,
 )
 from olmoearth_pretrain.open_set_segmentation_data.pretrain_constants import (
+    OPEN_SET_GROUP,
+    OPEN_SET_LAYER,
     OPEN_SET_NODATA,
     REGRESSION_VALUE_MAX_OUT,
     REGRESSION_VALUE_MIN_OUT,
@@ -27,36 +35,124 @@ from olmoearth_pretrain.open_set_segmentation_data.pretrain_constants import (
 
 CRS_STR = "EPSG:32610"
 
+PRE_RANGE = ["2019-01-01T00:00:00+00:00", "2019-07-30T00:00:00+00:00"]  # 210 days
+POST_RANGE = ["2021-01-01T00:00:00+00:00", "2021-06-01T00:00:00+00:00"]  # 151 days
+
+
+def _paired_sparse_sample() -> dict:
+    return {
+        "kind": "sparse",
+        "slug": "ds",
+        "sample_id": "p1",
+        "lon": -122.3,
+        "lat": 47.6,
+        "label": 5,
+        "time_range": None,
+        "pre_time_range": PRE_RANGE,
+        "post_time_range": POST_RANGE,
+    }
+
 
 def test_centered_window_bounds() -> None:
     """Centered window bounds are computed from center pixel and size."""
     assert _centered_window_bounds(100, 200, 128) == (36, 136, 164, 264)
 
 
-def test_pre_post_time_ranges_fail_instead_of_using_fallback() -> None:
-    """Paired change samples are not silently expanded to the fallback range."""
-    try:
-        _parse_time_range(
-            None,
-            ["2019-01-01T00:00:00+00:00", "2019-07-01T00:00:00+00:00"],
-            ["2021-01-01T00:00:00+00:00", "2021-07-01T00:00:00+00:00"],
-        )
-    except ValueError as error:
-        assert "paired-window materialization" in str(error)
-    else:
-        raise AssertionError("expected paired change sample to be rejected")
+def test_trim_time_range() -> None:
+    """Overlong ranges are trimmed toward the kept edge; short ranges are unchanged."""
+    start = datetime(2019, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=200)
+    trimmed_end = _trim_time_range((start, end), keep="end")
+    assert trimmed_end == (end - timedelta(days=MAX_PAIRED_WINDOW_DAYS), end)
+    trimmed_start = _trim_time_range((start, end), keep="start")
+    assert trimmed_start == (start, start + timedelta(days=MAX_PAIRED_WINDOW_DAYS))
+    short = (start, start + timedelta(days=30))
+    assert _trim_time_range(short, keep="end") == short
 
 
-def test_pre_post_time_ranges_can_be_explicitly_skipped() -> None:
-    """The single-window build can explicitly count paired samples as skipped."""
-    time_range = _parse_time_range(
+def test_paired_samples_can_be_explicitly_skipped() -> None:
+    """The skip policy counts paired samples as skipped without creating windows."""
+    status = create_sample_window(
+        None,  # type: ignore[arg-type]  # unused before the policy check returns
+        _paired_sparse_sample(),
+        ClassLookup(local_to_global={"ds": {5: 42}}, regression={}),
+        UPath("."),
         None,
-        ["2019-01-01T00:00:00+00:00", "2019-07-01T00:00:00+00:00"],
-        ["2021-01-01T00:00:00+00:00", "2021-07-01T00:00:00+00:00"],
         paired_change_policy="skip",
     )
+    assert status == "skipped_paired_change"
 
-    assert time_range is None
+
+def test_paired_samples_error_policy_raises() -> None:
+    """The error policy rejects paired samples."""
+    with pytest.raises(ValueError, match="pre/post change time ranges"):
+        create_sample_window(
+            None,  # type: ignore[arg-type]
+            _paired_sparse_sample(),
+            ClassLookup(local_to_global={"ds": {5: 42}}, regression={}),
+            UPath("."),
+            None,
+            paired_change_policy="error",
+        )
+
+
+def test_paired_sample_creates_two_windows(tmp_path: Path) -> None:
+    """A paired change sample creates pre/post windows sharing an example_id."""
+    ds_path = tmp_path / "dataset"
+    ds_path.mkdir()
+    config = {
+        "layers": {
+            OPEN_SET_LAYER: {
+                "type": "raster",
+                "band_sets": [{"bands": ["class"], "dtype": "uint16"}],
+            },
+        },
+        "window_data_storage": {
+            "class_path": (
+                "rslearn.dataset.window_data_storage.per_layer.PerLayerStorageFactory"
+            )
+        },
+    }
+    with open(ds_path / "config.json", "w") as f:
+        json.dump(config, f)
+    dataset = Dataset(UPath(ds_path))
+
+    lookup = ClassLookup(local_to_global={"ds": {5: 42}}, regression={})
+    status = create_sample_window(
+        dataset, _paired_sparse_sample(), lookup, UPath("."), None
+    )
+    assert status == "created_paired"
+
+    windows = {
+        w.name: w for w in dataset.load_windows(groups=[OPEN_SET_GROUP], workers=0)
+    }
+    assert set(windows) == {"ds_p1_pre", "ds_p1_post"}
+    pre = windows["ds_p1_pre"]
+    post = windows["ds_p1_post"]
+
+    # Shared identity and pairing options.
+    boundary = datetime.fromisoformat(POST_RANGE[0])
+    for window, part in ((pre, "pre"), (post, "post")):
+        assert window.options["example_id"] == "ds_p1"
+        assert window.options["paired_part"] == part
+        assert datetime.fromisoformat(window.options["time"]) == boundary
+    assert post.options["paired_primary"] and not pre.options["paired_primary"]
+    assert pre.projection == post.projection and pre.bounds == post.bounds
+
+    # The overlong pre range is trimmed toward its end; post is kept as-is.
+    pre_end = datetime.fromisoformat(PRE_RANGE[1])
+    assert pre.time_range == (
+        pre_end - timedelta(days=MAX_PAIRED_WINDOW_DAYS),
+        pre_end,
+    )
+    assert post.time_range == (
+        datetime.fromisoformat(POST_RANGE[0]),
+        datetime.fromisoformat(POST_RANGE[1]),
+    )
+
+    # The label layer is written only to the post (primary) window.
+    assert post.is_layer_completed(OPEN_SET_LAYER)
+    assert not pre.is_layer_completed(OPEN_SET_LAYER)
 
 
 def test_normalize_regression_endpoints() -> None:

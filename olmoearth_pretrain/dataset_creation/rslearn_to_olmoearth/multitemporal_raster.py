@@ -12,13 +12,14 @@ from rslearn.utils.raster_array import RasterArray
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import (
+    MAX_SEQUENCE_LENGTH,
     SENTINEL1_NODATA,
     BandSet,
     Modality,
     ModalitySpec,
     TimeSpan,
 )
-from olmoearth_pretrain.dataset.utils import get_modality_fname
+from olmoearth_pretrain.dataset.utils import WindowMetadata, get_modality_fname
 
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
@@ -89,35 +90,19 @@ def get_adjusted_projection_and_bounds(
     return adjusted_projection, adjusted_bounds
 
 
-def convert_period_mosaic(
+def _read_period_mosaics(
     window: Window,
-    olmoearth_path: UPath,
     layer_name: str,
     modality: ModalitySpec,
-    time_span: TimeSpan = TimeSpan.YEAR,
     missing_okay: bool = True,
     unprepared_okay: bool = True,
     image_tile_size: int = PIXELS_PER_TILE,
-) -> None:
-    """Add period-mosaic multitemporal data (one mosaic per period) to the dataset.
+) -> tuple[dict[BandSet, list[npt.NDArray]], list[tuple[datetime, datetime]]]:
+    """Read one window's period mosaics for a MOSAIC layer.
 
-    Reads a single MOSAIC layer whose item groups are per-period mosaics (see the
-    open-set dataset config: ``space_mode=MOSAIC`` with ``period_duration``). Each item
-    group becomes one timestep, stacked in the order the groups were materialized
-    (chronological when ``per_period_mosaic_reverse_time_order=false``), using each
-    group's period time range for the metadata. Item groups may contain multiple items
-    (a mosaic), and per-group timestamps come from the layer's ``group_time_ranges``.
-
-    Args:
-        window: the rslearn window to read data from.
-        olmoearth_path: OlmoEarth Pretrain dataset path to write to.
-        layer_name: the name of the single MOSAIC layer to read.
-        modality: the modality.
-        time_span: the OlmoEarth Pretrain time span to write under (default YEAR).
-        missing_okay: whether it is okay if some item groups are not completed.
-        unprepared_okay: whether to skip windows where the layer is not prepared.
-        image_tile_size: the window size in pixels at the base grid resolution. Defaults
-            to PIXELS_PER_TILE (256); the open-set dataset uses its 128 px window size.
+    Returns per-band-set image lists and the matching per-mosaic time ranges (both
+    empty if the layer is unprepared or has no usable mosaics). Blank mosaics and
+    mosaics without a period time range are skipped.
     """
     window_metadata = get_window_metadata(window)
     layer_datas = window.load_layer_datas()
@@ -128,9 +113,14 @@ def convert_period_mosaic(
             + f"resolution as modality ({modality.get_tile_resolution()})"
         )
 
+    images: dict[BandSet, list[npt.NDArray]] = {
+        band_set: [] for band_set in modality.band_sets
+    }
+    time_ranges: list[tuple[datetime, datetime]] = []
+
     if layer_name not in layer_datas:
         if unprepared_okay:
-            return
+            return images, time_ranges
         raise ValueError(
             f"layer {layer_name} is missing from layer datas for window {window.name}"
         )
@@ -138,10 +128,6 @@ def convert_period_mosaic(
     layer_data = layer_datas[layer_name]
     group_time_ranges = layer_data.group_time_ranges
 
-    images: dict[BandSet, list[npt.NDArray]] = {
-        band_set: [] for band_set in modality.band_sets
-    }
-    time_ranges: list[tuple[datetime, datetime] | None] = []
     for group_idx in range(len(layer_data.serialized_item_groups)):
         if not window.is_layer_completed(layer_name, group_idx):
             if missing_okay:
@@ -201,12 +187,37 @@ def convert_period_mosaic(
         for band_set, image in cur_images.items():
             images[band_set].append(image)
 
-    if len(time_ranges) == 0:
-        return
+    return images, time_ranges
 
+
+def _write_multitemporal_example(
+    olmoearth_path: UPath,
+    modality: ModalitySpec,
+    time_span: TimeSpan,
+    window_metadata: WindowMetadata,
+    projection: Projection,
+    bounds: PixelBounds,
+    images: dict[BandSet, list[npt.NDArray]],
+    time_ranges: list[tuple[datetime, datetime]],
+    meta_name: str,
+) -> None:
+    """Write a stacked multitemporal series + its per-example metadata CSV.
+
+    Args:
+        olmoearth_path: OlmoEarth Pretrain dataset path to write to.
+        modality: the modality.
+        time_span: the OlmoEarth Pretrain time span to write under.
+        window_metadata: the window metadata keying the output filenames.
+        projection: the window projection.
+        bounds: the window bounds.
+        images: per-band-set image lists, one image per timestep.
+        time_ranges: the per-timestep time ranges (chronological).
+        meta_name: the name of the temporary per-example metadata file (the window
+            name, or the shared example_id for merged pre/post pairs).
+    """
     for band_set, band_set_images in images.items():
         adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
-            modality, band_set, window.projection, window.bounds
+            modality, band_set, projection, bounds
         )
         stacked_image = np.concatenate(band_set_images, axis=0)
         dst_fname = get_modality_fname(
@@ -226,15 +237,13 @@ def convert_period_mosaic(
         )
 
     metadata_fname = get_modality_temp_meta_fname(
-        olmoearth_path, modality, time_span, window.name
+        olmoearth_path, modality, time_span, meta_name
     )
     metadata_fname.parent.mkdir(parents=True, exist_ok=True)
     with metadata_fname.open("w") as f:
         writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
         writer.writeheader()
         for image_idx, cur_time_range in enumerate(time_ranges):
-            start_time = cur_time_range[0].isoformat() if cur_time_range else ""
-            end_time = cur_time_range[1].isoformat() if cur_time_range else ""
             writer.writerow(
                 dict(
                     example_id=window_metadata.example_id or "",
@@ -243,10 +252,148 @@ def convert_period_mosaic(
                     row=window_metadata.row,
                     tile_time=window_metadata.time.isoformat(),
                     image_idx=image_idx,
-                    start_time=start_time,
-                    end_time=end_time,
+                    start_time=cur_time_range[0].isoformat(),
+                    end_time=cur_time_range[1].isoformat(),
                 )
             )
+
+
+def convert_period_mosaic(
+    window: Window,
+    olmoearth_path: UPath,
+    layer_name: str,
+    modality: ModalitySpec,
+    time_span: TimeSpan = TimeSpan.YEAR,
+    missing_okay: bool = True,
+    unprepared_okay: bool = True,
+    image_tile_size: int = PIXELS_PER_TILE,
+) -> None:
+    """Add period-mosaic multitemporal data (one mosaic per period) to the dataset.
+
+    Reads a single MOSAIC layer whose item groups are per-period mosaics (see the
+    open-set dataset config: ``space_mode=MOSAIC`` with ``period_duration``). Each item
+    group becomes one timestep, stacked in the order the groups were materialized
+    (chronological when ``per_period_mosaic_reverse_time_order=false``), using each
+    group's period time range for the metadata. Item groups may contain multiple items
+    (a mosaic), and per-group timestamps come from the layer's ``group_time_ranges``.
+
+    Args:
+        window: the rslearn window to read data from.
+        olmoearth_path: OlmoEarth Pretrain dataset path to write to.
+        layer_name: the name of the single MOSAIC layer to read.
+        modality: the modality.
+        time_span: the OlmoEarth Pretrain time span to write under (default YEAR).
+        missing_okay: whether it is okay if some item groups are not completed.
+        unprepared_okay: whether to skip windows where the layer is not prepared.
+        image_tile_size: the window size in pixels at the base grid resolution. Defaults
+            to PIXELS_PER_TILE (256); the open-set dataset uses its 128 px window size.
+    """
+    images, time_ranges = _read_period_mosaics(
+        window,
+        layer_name,
+        modality,
+        missing_okay=missing_okay,
+        unprepared_okay=unprepared_okay,
+        image_tile_size=image_tile_size,
+    )
+    if len(time_ranges) == 0:
+        return
+    _write_multitemporal_example(
+        olmoearth_path,
+        modality,
+        time_span,
+        get_window_metadata(window),
+        window.projection,
+        window.bounds,
+        images,
+        time_ranges,
+        meta_name=window.name,
+    )
+
+
+def convert_paired_period_mosaic(
+    windows: list[Window],
+    olmoearth_path: UPath,
+    layer_name: str,
+    modality: ModalitySpec,
+    time_span: TimeSpan = TimeSpan.YEAR,
+    missing_okay: bool = True,
+    unprepared_okay: bool = True,
+    image_tile_size: int = PIXELS_PER_TILE,
+) -> None:
+    """Merge paired pre/post windows into ONE multitemporal OlmoEarth example.
+
+    The windows must share the same ``example_id`` option, projection, and bounds (they
+    differ only in time range; see ``create_windows.from_open_set``). Each window's
+    period mosaics are read separately and concatenated in chronological order (pre
+    then post), then written as a single stacked series + metadata CSV keyed by the
+    shared example_id. A window with no usable mosaics contributes no timesteps (the
+    per-modality missing-timestep masks cover the gap during training).
+
+    Args:
+        windows: the paired windows (typically the pre and post window).
+        olmoearth_path: OlmoEarth Pretrain dataset path to write to.
+        layer_name: the name of the single MOSAIC layer to read.
+        modality: the modality.
+        time_span: the OlmoEarth Pretrain time span to write under (default YEAR).
+        missing_okay: whether it is okay if some item groups are not completed.
+        unprepared_okay: whether to skip windows where the layer is not prepared.
+        image_tile_size: the window size in pixels at the base grid resolution.
+    """
+    windows = sorted(windows, key=lambda w: w.time_range[0])
+    window_metadata = get_window_metadata(windows[0])
+    if window_metadata.example_id is None:
+        raise ValueError(
+            f"paired window {windows[0].name} is missing an example_id option"
+        )
+    for other in windows[1:]:
+        other_metadata = get_window_metadata(other)
+        if (
+            other_metadata.example_id != window_metadata.example_id
+            or other.projection != windows[0].projection
+            or other.bounds != windows[0].bounds
+        ):
+            raise ValueError(
+                f"paired windows {windows[0].name} and {other.name} do not share "
+                "example_id/projection/bounds"
+            )
+
+    merged_images: dict[BandSet, list[npt.NDArray]] = {
+        band_set: [] for band_set in modality.band_sets
+    }
+    merged_time_ranges: list[tuple[datetime, datetime]] = []
+    for window in windows:
+        images, time_ranges = _read_period_mosaics(
+            window,
+            layer_name,
+            modality,
+            missing_okay=missing_okay,
+            unprepared_okay=unprepared_okay,
+            image_tile_size=image_tile_size,
+        )
+        merged_time_ranges.extend(time_ranges)
+        for band_set, band_set_images in images.items():
+            merged_images[band_set].extend(band_set_images)
+
+    if len(merged_time_ranges) == 0:
+        return
+    if len(merged_time_ranges) > MAX_SEQUENCE_LENGTH:
+        raise ValueError(
+            f"merged pre/post series for {window_metadata.example_id} has "
+            f"{len(merged_time_ranges)} timesteps, exceeding the training cap of "
+            f"{MAX_SEQUENCE_LENGTH}; the paired window time ranges must be trimmed"
+        )
+    _write_multitemporal_example(
+        olmoearth_path,
+        modality,
+        time_span,
+        window_metadata,
+        windows[0].projection,
+        windows[0].bounds,
+        merged_images,
+        merged_time_ranges,
+        meta_name=window_metadata.example_id,
+    )
 
 
 def convert_monthly(

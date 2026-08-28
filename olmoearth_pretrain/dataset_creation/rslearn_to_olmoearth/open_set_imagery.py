@@ -7,8 +7,14 @@ follows the label's own time range: one mosaic per ~30-day period, one mosaic fo
 sub-30-day range, etc. This reads that layer's period groups and writes them as the
 modality's multitemporal series, keyed by the window's ``example_id``.
 
+Paired pre/post change samples consist of TWO windows sharing one ``example_id`` (with
+a ``paired_part`` option of "pre" or "post"; see ``create_windows.from_open_set``).
+Their period mosaics are merged in chronological order into a single multitemporal
+series for that example_id.
+
 The static modalities (worldcover, srtm, cdl, worldcereal, wri_canopy_height_map,
-openstreetmap) reuse their existing conversion scripts unchanged.
+openstreetmap) reuse their existing conversion scripts unchanged (they skip the
+secondary window of each pair; see ``cli.filter_paired_secondary_windows``).
 """
 
 import argparse
@@ -25,7 +31,7 @@ from olmoearth_pretrain.open_set_segmentation_data.pretrain_constants import (
 )
 
 from .cli import add_common_arguments
-from .multitemporal_raster import convert_period_mosaic
+from .multitemporal_raster import convert_paired_period_mosaic, convert_period_mosaic
 
 # CLI modality choice -> (rslearn layer name, ModalitySpec name). The layer name matches
 # the modality name in config_open_set.json.
@@ -37,23 +43,50 @@ MODALITIES = {
 
 
 def convert_open_set_imagery(
-    window: Window, olmoearth_path: UPath, modality_name: str
+    windows: list[Window], olmoearth_path: UPath, modality_name: str
 ) -> None:
-    """Convert one window's period-mosaic layer for the given modality.
+    """Convert one example's period-mosaic layer for the given modality.
 
     Args:
-        window: the rslearn window to read data from.
+        windows: the rslearn window(s) making up one example: a single window for
+            regular samples, or the pre/post window pair of a change sample (merged
+            into one multitemporal series).
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
         modality_name: one of ``sentinel2_l2a``, ``sentinel1``, ``landsat``.
     """
     modality = MODALITIES[modality_name]
-    convert_period_mosaic(
-        window,
-        olmoearth_path,
-        layer_name=modality_name,
-        modality=modality,
-        image_tile_size=OPEN_SET_WINDOW_SIZE,
-    )
+    if len(windows) == 1:
+        convert_period_mosaic(
+            windows[0],
+            olmoearth_path,
+            layer_name=modality_name,
+            modality=modality,
+            image_tile_size=OPEN_SET_WINDOW_SIZE,
+        )
+    else:
+        convert_paired_period_mosaic(
+            windows,
+            olmoearth_path,
+            layer_name=modality_name,
+            modality=modality,
+            image_tile_size=OPEN_SET_WINDOW_SIZE,
+        )
+
+
+def group_windows_by_example(windows: list[Window]) -> list[list[Window]]:
+    """Group windows into per-example lists.
+
+    Paired pre/post windows (those with a ``paired_part`` option) are grouped by their
+    shared ``example_id``; all other windows form singleton groups.
+    """
+    groups: dict[str, list[Window]] = {}
+    singles: list[list[Window]] = []
+    for window in windows:
+        if window.options.get("paired_part"):
+            groups.setdefault(window.options["example_id"], []).append(window)
+        else:
+            singles.append([window])
+    return singles + list(groups.values())
 
 
 if __name__ == "__main__":
@@ -75,13 +108,14 @@ if __name__ == "__main__":
     dataset = Dataset(UPath(args.ds_path))
     olmoearth_path = UPath(args.olmoearth_path)
 
-    jobs = []
-    for window in dataset.load_windows(
+    windows = dataset.load_windows(
         workers=args.workers, show_progress=True, groups=args.groups
-    ):
+    )
+    jobs = []
+    for window_group in group_windows_by_example(windows):
         jobs.append(
             dict(
-                window=window,
+                windows=window_group,
                 olmoearth_path=olmoearth_path,
                 modality_name=args.modality,
             )

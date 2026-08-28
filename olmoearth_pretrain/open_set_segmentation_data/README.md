@@ -15,8 +15,11 @@ It differs from the grid-based pretraining pipeline in `dataset_creation/`:
   remapped to `[1, 65535]`, `0` = nodata).
 
 > Requires the newest `rslearn` (`window.data` / `PerLayerStorageFactory` /
-> `data_factory`). Single-window classification and regression training are implemented;
-> paired pre/post change training remains a separate follow-up.
+> `data_factory`). Single-window classification and regression training are implemented.
+> Paired pre/post change samples are materialized as two windows per sample (one per
+> observation range) that are merged into one example at conversion time;
+> change-specific training (probing on the pre/post difference) remains a separate
+> follow-up.
 
 ## Background
 
@@ -101,15 +104,22 @@ python -m olmoearth_pretrain.dataset_creation.create_windows.from_open_set \
     --ds_path open_set_dataset \
     --class_mapping data/open_set_segmentation_data/class_mapping.json \
     --exclude_geojson data/open_set_segmentation_data/eval_exclusion.geojson \
-    --paired_change_policy skip \
     --workers 32
 ```
 
 Creates one window per label sample (single group `open_set`) and writes the `open_set` or
 `open_set_regression` label layer through `window.data`. Use `--slugs a,b,c` to restrict to
-  specific datasets (useful for a small verification run). This single-window build cannot
-  represent paired pre/post change samples: the default policy is `error`; the explicit
-  `skip` above excludes them and reports `skipped_paired_change` in the final counts.
+specific datasets (useful for a small verification run).
+
+Paired pre/post change samples (those with `pre_time_range`/`post_time_range` instead of
+a single `time_range`) get **two** windows, `{example_id}_pre` and `{example_id}_post`,
+one per observation range. Each range is trimmed to ≤180 days so the merged series stays
+within the 12-timestep training cap (6 mosaics per side), both windows carry the pre/post
+boundary as their `time` option, and the label layer is written only to the post window.
+The two windows share one `example_id`, so the conversion in step 6 merges them into a
+single training example; `created_paired` in the final counts is the number of pairs.
+Pass `--paired_change_policy skip` to exclude change samples instead (reported as
+`skipped_paired_change`).
 
 ### 5. Materialize imagery
 
@@ -145,8 +155,13 @@ for m in sentinel2_l2a sentinel1 landsat; do
 done
 ```
 
+Paired pre/post change windows (which share an `example_id`) are merged here: each pair's
+period mosaics are concatenated chronologically (pre then post) into ONE multitemporal
+series per example.
+
 Static raster modalities reuse their existing converters, selecting the open-set group
-explicitly:
+explicitly. For paired change samples they process only the pair's primary (post) window,
+so each example is emitted exactly once:
 
 ```bash
 for m in worldcover srtm cdl worldcereal wri_canopy_height_map; do
@@ -222,9 +237,9 @@ python -m olmoearth_pretrain.internal.run_h5_conversion \
 
 Unlike the grid pipeline, there is **no full-year / 12-timestep requirement**: each window
 keeps exactly the period mosaics of its own label time range (1 for a sub-30-day label, up
-to 12 for an annual one). The training data loader pads every sample to 12 months and masks
-the absent timesteps, so variable-length samples are handled without any training-side
-change.
+to 12 for an annual one, up to 6+6 for a merged pre/post change pair). The training data
+loader pads every sample to 12 months and masks the absent timesteps, so variable-length
+samples are handled without any training-side change.
 
 ### 8. Train
 

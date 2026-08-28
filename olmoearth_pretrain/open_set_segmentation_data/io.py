@@ -39,8 +39,17 @@ def check_disk(path: UPath = OUTPUT_ROOT) -> int:
     return free
 
 
-def dataset_dir(slug: str) -> UPath:
-    """Return the output directory for a dataset's processed windows."""
+def dataset_dir(slug: str, root: UPath | None = None) -> UPath:
+    """Return the output directory for a dataset's processed windows.
+
+    Args:
+        slug: the dataset slug.
+        root: the datasets root to use instead of the default label bank
+            (``OUTPUT_ROOT/datasets``). Used by datasets that live outside the
+            open-set label bank, e.g. the LCC change sampler.
+    """
+    if root is not None:
+        return root / slug
     return OUTPUT_ROOT / "datasets" / slug
 
 
@@ -229,15 +238,22 @@ def write_sample_json(
     tmp.rename(d / f"{sample_id}.json")
 
 
-def write_dataset_metadata(slug: str, metadata: dict[str, Any]) -> None:
-    """Write datasets/{slug}/metadata.json."""
-    d = dataset_dir(slug)
+def write_dataset_metadata(
+    slug: str, metadata: dict[str, Any], root: UPath | None = None
+) -> None:
+    """Write datasets/{slug}/metadata.json (or {root}/{slug}/metadata.json)."""
+    d = dataset_dir(slug, root=root)
     d.mkdir(parents=True, exist_ok=True)
     with (d / "metadata.json").open("w") as f:
         json.dump(metadata, f, indent=2)
 
 
-def write_points_table(slug: str, task_type: str, points: list[dict[str, Any]]) -> None:
+def write_points_table(
+    slug: str,
+    task_type: str,
+    points: list[dict[str, Any]],
+    root: UPath | None = None,
+) -> None:
     """Write the dataset-wide point table as GeoJSON: datasets/{slug}/points.geojson (spec §2a).
 
     Each input point dict should have: id, lon, lat, label (class id or value), time_range
@@ -267,7 +283,7 @@ def write_points_table(slug: str, task_type: str, points: list[dict[str, Any]]) 
         "pre_time_range",
         "post_time_range",
     }
-    d = dataset_dir(slug)
+    d = dataset_dir(slug, root=root)
     d.mkdir(parents=True, exist_ok=True)
     features = []
     for p in points:

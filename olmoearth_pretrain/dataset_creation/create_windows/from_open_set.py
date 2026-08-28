@@ -6,6 +6,14 @@ range. It also writes the combined ``open_set`` (classification) or
 ``open_set_regression`` label layer into the window, remapping per-dataset local class
 ids to the global ids from ``class_mapping.json``.
 
+Paired pre/post change samples (which carry ``pre_time_range``/``post_time_range``
+instead of a single ``time_range``) get TWO windows, named ``{example_id}_pre`` and
+``{example_id}_post``, one per observation range (each trimmed to <= 180 days). Both
+windows share the same ``example_id`` option, so the rslearn-to-OlmoEarth conversion
+merges their imagery into one training example (see
+``rslearn_to_olmoearth.open_set_imagery``). The label layer is written only to the
+post window.
+
 Windows are bound to the dataset's ``window_data_storage`` factory (expected to be
 ``PerLayerStorageFactory``) so that the later-materialized imagery and these label
 layers are stored one file per layer.
@@ -27,7 +35,7 @@ import multiprocessing
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import shapely
@@ -85,6 +93,12 @@ _FALLBACK_TIME_RANGE = (
     datetime(2024, 6, 1, tzinfo=UTC),
 )
 
+# Maximum duration of each window of a paired pre/post change sample. The imagery
+# layers produce one ~30-day period mosaic per period of the window's time range, and
+# the training loader caps a sample at MAX_SEQUENCE_LENGTH (12) timesteps, so each side
+# is trimmed to <= 180 days (6 mosaics), keeping the merged pre+post series <= 12.
+MAX_PAIRED_WINDOW_DAYS = 180
+
 
 @dataclass
 class ClassLookup:
@@ -96,29 +110,40 @@ class ClassLookup:
     regression: dict[str, dict]
 
 
-def _parse_time_range(
-    tr: list[str] | None,
-    pre_time_range: list[str] | None = None,
-    post_time_range: list[str] | None = None,
-    paired_change_policy: str = "error",
-) -> tuple[datetime, datetime] | None:
+def _parse_time_range(tr: list[str] | None) -> tuple[datetime, datetime]:
     """Parse an [iso, iso] time range, falling back to a default if absent."""
-    if not tr and (pre_time_range or post_time_range):
-        if paired_change_policy == "skip":
-            return None
-        if paired_change_policy != "error":
-            raise ValueError(
-                f"invalid paired_change_policy {paired_change_policy!r}; "
-                "expected error or skip"
-            )
-        raise ValueError(
-            "pre/post change samples cannot be represented by one rslearn window; "
-            "paired-window materialization and training support must be implemented "
-            "before creating this sample"
-        )
     if not tr:
         return _FALLBACK_TIME_RANGE
     return (datetime.fromisoformat(tr[0]), datetime.fromisoformat(tr[1]))
+
+
+def _parse_optional_time_range(
+    tr: list[str] | None,
+) -> tuple[datetime, datetime] | None:
+    """Parse an [iso, iso] time range, returning None if absent."""
+    if not tr:
+        return None
+    return (datetime.fromisoformat(tr[0]), datetime.fromisoformat(tr[1]))
+
+
+def _trim_time_range(
+    tr: tuple[datetime, datetime],
+    keep: str,
+    max_days: int = MAX_PAIRED_WINDOW_DAYS,
+) -> tuple[datetime, datetime]:
+    """Trim a time range to at most max_days.
+
+    ``keep="end"`` drops the earliest days (used for the pre window, so it stays
+    adjacent to the change event); ``keep="start"`` drops the latest days (post window).
+    """
+    start, end = tr
+    if end - start <= timedelta(days=max_days):
+        return tr
+    if keep == "end":
+        return (end - timedelta(days=max_days), end)
+    elif keep == "start":
+        return (start, start + timedelta(days=max_days))
+    raise ValueError(f"invalid keep {keep!r}; expected start or end")
 
 
 def load_class_lookup(class_mapping_path: str) -> ClassLookup:
@@ -426,15 +451,120 @@ def _write_label_layer(
     window.mark_layer_completed(layer_name)
 
 
+def _write_sample_label(
+    window: Window,
+    sample: dict,
+    lookup: ClassLookup,
+    datasets_root: UPath,
+    projection: Projection,
+    bounds: tuple[int, int, int, int],
+) -> None:
+    """Build and write the sample's label layer (classification or regression)."""
+    is_regression = sample["slug"] in lookup.regression
+    if is_regression:
+        array = _build_regression_label(
+            sample, lookup, datasets_root, projection, bounds
+        )
+        _write_label_layer(
+            window,
+            OPEN_SET_REGRESSION_LAYER,
+            OPEN_SET_REGRESSION_BANDS,
+            array,
+            REGRESSION_VALUE_NODATA,
+        )
+    else:
+        array = _build_open_set_label(sample, lookup, datasets_root, projection, bounds)
+        _write_label_layer(
+            window, OPEN_SET_LAYER, OPEN_SET_BANDS, array, OPEN_SET_NODATA
+        )
+
+
+def _create_paired_windows(
+    dataset: Dataset,
+    sample: dict,
+    lookup: ClassLookup,
+    datasets_root: UPath,
+    projection: Projection,
+    bounds: tuple[int, int, int, int],
+    center_col: int,
+    center_row: int,
+    pre_time_range: tuple[datetime, datetime] | None,
+    post_time_range: tuple[datetime, datetime] | None,
+) -> str:
+    """Create the pre/post window pair for a change sample.
+
+    The two windows share one ``example_id`` (the sanitized ``slug_sampleid``), so the
+    downstream OlmoEarth conversion merges them into one training example. Each side is
+    trimmed to MAX_PAIRED_WINDOW_DAYS, and both windows carry the pre/post boundary as
+    their ``time`` option (the meta CSVs' ``tile_time``). The label layer is written
+    only to the post window, so the label converter emits it once per pair.
+    """
+    if pre_time_range is not None:
+        pre_time_range = _trim_time_range(pre_time_range, keep="end")
+    if post_time_range is not None:
+        post_time_range = _trim_time_range(post_time_range, keep="start")
+    # The boundary between the two windows; if one side is absent (unusual, but the
+    # label bank format allows it), the edge of the present side is used.
+    boundary = (
+        post_time_range[0] if post_time_range is not None else pre_time_range[1]  # type: ignore[index]
+    )
+
+    parts: list[tuple[str, tuple[datetime, datetime]]] = []
+    if pre_time_range is not None:
+        parts.append(("pre", pre_time_range))
+    if post_time_range is not None:
+        parts.append(("post", post_time_range))
+    label_part = parts[-1][0]
+
+    name = _sanitize_name(f"{sample['slug']}_{sample['sample_id']}")
+    for part, time_range in parts:
+        options = {
+            "crs": projection.crs.to_string(),
+            "resolution": OPEN_SET_RESOLUTION,
+            "col": int(center_col),
+            "row": int(center_row),
+            "time": boundary.isoformat(),
+            "example_id": name,
+            "source_slug": sample["slug"],
+            "paired_part": part,
+            # The primary window carries the label layer, and is the only member of
+            # the pair processed by the static (non-multitemporal) modality
+            # converters, which must emit each example exactly once.
+            "paired_primary": part == label_part,
+        }
+        window = Window(
+            storage=dataset.storage,
+            group=OPEN_SET_GROUP,
+            name=f"{name}_{part}",
+            projection=projection,
+            bounds=bounds,
+            time_range=time_range,
+            options=options,
+            data_factory=dataset.window_data_storage_factory,
+        )
+        window.save()
+        if part == label_part:
+            _write_sample_label(
+                window, sample, lookup, datasets_root, projection, bounds
+            )
+    return "created_paired"
+
+
 def create_sample_window(
     dataset: Dataset,
     sample: dict,
     lookup: ClassLookup,
     datasets_root: UPath,
     exclusion: STRtree | None,
-    paired_change_policy: str = "error",
+    paired_change_policy: str = "pair",
 ) -> str:
-    """Create one window (+ label layer) for a sample. Returns a status string."""
+    """Create the window(s) (+ label layer) for a sample. Returns a status string.
+
+    Non-change samples get one window with the sample's own time range. Paired pre/post
+    change samples get two windows (one per observation range) that share an example_id
+    and are merged downstream, unless ``paired_change_policy`` is "skip" (exclude them)
+    or "error" (raise).
+    """
     sample = _hydrate_sample(sample, datasets_root)
     projection, bounds, center_col, center_row = _window_geometry_for_sample(sample)
 
@@ -443,14 +573,36 @@ def create_sample_window(
         if len(exclusion.query(box, predicate="intersects")) > 0:
             return "excluded"
 
-    time_range = _parse_time_range(
-        sample.get("time_range"),
-        sample.get("pre_time_range"),
-        sample.get("post_time_range"),
-        paired_change_policy=paired_change_policy,
-    )
-    if time_range is None:
-        return "skipped_paired_change"
+    pre_time_range = _parse_optional_time_range(sample.get("pre_time_range"))
+    post_time_range = _parse_optional_time_range(sample.get("post_time_range"))
+    if pre_time_range is not None or post_time_range is not None:
+        if paired_change_policy == "skip":
+            return "skipped_paired_change"
+        if paired_change_policy == "error":
+            raise ValueError(
+                "sample has pre/post change time ranges; use "
+                "--paired_change_policy pair to create paired windows or skip to "
+                "exclude these samples"
+            )
+        if paired_change_policy != "pair":
+            raise ValueError(
+                f"invalid paired_change_policy {paired_change_policy!r}; "
+                "expected pair, skip, or error"
+            )
+        return _create_paired_windows(
+            dataset,
+            sample,
+            lookup,
+            datasets_root,
+            projection,
+            bounds,
+            center_col,
+            center_row,
+            pre_time_range,
+            post_time_range,
+        )
+
+    time_range = _parse_time_range(sample.get("time_range"))
     center_time = time_range[0] + (time_range[1] - time_range[0]) / 2
     name = _sanitize_name(f"{sample['slug']}_{sample['sample_id']}")
     options = {
@@ -474,23 +626,7 @@ def create_sample_window(
     )
     window.save()
 
-    is_regression = sample["slug"] in lookup.regression
-    if is_regression:
-        array = _build_regression_label(
-            sample, lookup, datasets_root, projection, bounds
-        )
-        _write_label_layer(
-            window,
-            OPEN_SET_REGRESSION_LAYER,
-            OPEN_SET_REGRESSION_BANDS,
-            array,
-            REGRESSION_VALUE_NODATA,
-        )
-    else:
-        array = _build_open_set_label(sample, lookup, datasets_root, projection, bounds)
-        _write_label_layer(
-            window, OPEN_SET_LAYER, OPEN_SET_BANDS, array, OPEN_SET_NODATA
-        )
+    _write_sample_label(window, sample, lookup, datasets_root, projection, bounds)
     return "created"
 
 
@@ -575,11 +711,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--paired_change_policy",
-        choices=["error", "skip"],
-        default="error",
+        choices=["pair", "error", "skip"],
+        default="pair",
         help=(
-            "How to handle paired pre/post change samples, which this single-window "
-            "build cannot represent"
+            "How to handle paired pre/post change samples: pair (default) creates two "
+            "windows sharing an example_id that are merged at conversion, skip "
+            "excludes them, error raises"
         ),
     )
     parser.add_argument("--workers", type=int, default=32)
