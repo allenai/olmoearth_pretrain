@@ -1629,6 +1629,34 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
                 window_size=_ws,
                 dataset="pastis_planteur_x100",
             ),
+            # Full-modality sibling: AEF and Tessera v2 run this task with a
+            # runtime input_modalities override, as they do on the DROM benchmark.
+            f"pastis_planteur_x10_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_x10_full",
+            ),
+            # Full-modality sibling: AEF and Tessera v2 run this task with a
+            # runtime input_modalities override, as they do on the DROM benchmark.
+            f"pastis_planteur_x25_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_x25_full",
+            ),
+            # Full-modality sibling: AEF and Tessera v2 run this task with a
+            # runtime input_modalities override, as they do on the DROM benchmark.
+            f"pastis_planteur_x50_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_x50_full",
+            ),
+            # Full-modality sibling: AEF and Tessera v2 run this task with a
+            # runtime input_modalities override, as they do on the DROM benchmark.
+            f"pastis_planteur_x100_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_x100_full",
+            ),
             # bg8void: same 8 trained classes, excluded crops void instead of
             # folded into Background. Full-modality config, so the AEF and
             # Tessera baselines reuse this entry with an input_modalities override.
