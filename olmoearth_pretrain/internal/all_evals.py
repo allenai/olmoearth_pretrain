@@ -1605,6 +1605,30 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
                 window_size=_ws,
                 dataset="pastis_rslearn",
             ),
+            # PASTIS + 10 PLANTEUR windows per class, unified 23-class space.
+            f"pastis_planteur_x10_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_x10",
+            ),
+            # PASTIS + 25 PLANTEUR windows per class, unified 23-class space.
+            f"pastis_planteur_x25_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_x25",
+            ),
+            # PASTIS + 50 PLANTEUR windows per class, unified 23-class space.
+            f"pastis_planteur_x50_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_x50",
+            ),
+            # PASTIS + 100 PLANTEUR windows per class, unified 23-class space.
+            f"pastis_planteur_x100_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_x100",
+            ),
             # bg8void: same 8 trained classes, excluded crops void instead of
             # folded into Background. Full-modality config, so the AEF and
             # Tessera baselines reuse this entry with an input_modalities override.
@@ -1944,6 +1968,18 @@ FT_EVAL_TASKS = {
     # S2+S1+Landsat (encoder unfrozen, end-to-end on the 443-window split).
     "pastis2_drom_bg8_ft_ws16_ps1_sentinel2": _pastis_ft_task(
         [Modality.SENTINEL2_L2A.name], dataset="pastis2_drom_bg8_s2"
+    ),
+    "pastis_planteur_x10_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_x10"
+    ),
+    "pastis_planteur_x25_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_x25"
+    ),
+    "pastis_planteur_x50_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_x50"
+    ),
+    "pastis_planteur_x100_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_x100"
     ),
     # bg8void fine-tune, S2 combo (per-combo trim of the void config).
     "pastis2_drom_bg8void_ft_ws16_ps1_sentinel2": _pastis_ft_task(
