@@ -74,16 +74,21 @@ class BandSet:
         """Compute the resolution."""
         return get_resolution(self.resolution_factor)
 
-    def get_expected_image_size(self, modality_resolution_factor: int) -> int:
+    def get_expected_image_size(
+        self, modality_resolution_factor: int, image_tile_size: int = IMAGE_TILE_SIZE
+    ) -> int:
         """Get the expected size of images containing these bands.
 
         Args:
             modality_resolution_factor: the resolution factor of the modality.
+            image_tile_size: the modality grid tile size in pixels. Defaults to
+                IMAGE_TILE_SIZE (256); per-window datasets (e.g. open-set) pass their
+                own window size.
 
         Returns:
             the expected image size.
         """
-        return IMAGE_TILE_SIZE // (self.resolution_factor // modality_resolution_factor)
+        return image_tile_size // (self.resolution_factor // modality_resolution_factor)
 
 
 class TimeSpan(str, Enum):
@@ -550,6 +555,30 @@ class Modality:
         band_sets=[BandSet(["B1"], 16)],
         is_multitemporal=False,
         ignore_when_parsing=False,
+    )
+
+    # Open-set segmentation label layer: a single band of globally-unique class ids
+    # (uint16; nodata = 65535). Categorical, so normalization is skipped. 10 m/pixel.
+    OPEN_SET = ModalitySpec(
+        name="open_set",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["class"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+        skip_normalization=True,
+    )
+
+    # Open-set regression label layer: two bands (dataset_id, value) as uint16. band 0 is
+    # the 1-based regression dataset id (0 = no label); band 1 is the value linearly
+    # remapped into [1, 65535] (0 = nodata). Values are pre-normalized, so normalization
+    # is skipped. 10 m/pixel.
+    OPEN_SET_REGRESSION = ModalitySpec(
+        name="open_set_regression",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["dataset_id", "value"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+        skip_normalization=True,
     )
 
     @classmethod

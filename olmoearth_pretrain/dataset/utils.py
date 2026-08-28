@@ -25,6 +25,7 @@ class WindowMetadata:
         col: int,
         row: int,
         time: datetime,
+        example_id: str | None = None,
     ):
         """Create a new WindowMetadata.
 
@@ -34,12 +35,20 @@ class WindowMetadata:
             col: the column of the tile in the grid.
             row: the row of the tile in the grid.
             time: the center time used at this tile.
+            example_id: optional globally-unique example identifier. When set, it is
+                used as the output example filename instead of the grid-derived
+                ``crs_col_row`` name. This is needed for windows that are centered on a
+                sample rather than snapped to a global grid (e.g. the open-set
+                segmentation dataset), where the pixel col/row are not unique across
+                datasets. Defaults to None, which preserves the existing grid-based
+                naming for all other pipelines.
         """
         self.crs = crs
         self.resolution = resolution
         self.col = col
         self.row = row
         self.time = time
+        self.example_id = example_id
 
     def get_window_name(self) -> str:
         """Encode the metadata back to a window name."""
@@ -119,8 +128,14 @@ def get_modality_fname(
         the filename to store the data in.
     """
     modality_dir = get_modality_dir(path, modality, time_span)
-    crs = window_metadata.crs
-    col = window_metadata.col
-    row = window_metadata.row
-    fname = f"{crs}_{col}_{row}_{resolution}.{ext}"
+    if window_metadata.example_id is not None:
+        # Centered (non-grid) windows use a globally-unique example id, since the pixel
+        # col/row are not unique across datasets. The resolution suffix is kept so the
+        # naming stays parallel with the grid-based examples.
+        fname = f"{window_metadata.example_id}_{resolution}.{ext}"
+    else:
+        crs = window_metadata.crs
+        col = window_metadata.col
+        row = window_metadata.row
+        fname = f"{crs}_{col}_{row}_{resolution}.{ext}"
     return modality_dir / fname

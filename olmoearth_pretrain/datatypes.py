@@ -106,6 +106,12 @@ class OlmoEarthSample(NamedTuple):
     # ndvi is computed from S2 L2A bands B04 (Red) and B08 (NIR), not loaded from file.
     ndvi: ArrayTensor | None = None  # [B, H, W, T, 1]
     eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
+    # open_set is a supervision label layer (not an encoder input): a single band of
+    # globally-unique class ids (uint16; nodata 65535).
+    open_set: ArrayTensor | None = None  # [B, H, W, 1, 1]
+    # open_set_regression is a supervision label layer: band 0 = 1-based regression
+    # dataset id (0 = no label), band 1 = value remapped to [1, 65535] (0 = nodata).
+    open_set_regression: ArrayTensor | None = None  # [B, H, W, 1, 2]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
 
@@ -391,6 +397,12 @@ class MaskedOlmoEarthSample(NamedTuple):
     ndvi_mask: Tensor | None = None
     eurocrops: Tensor | None = None
     eurocrops_mask: Tensor | None = None
+    # Supervision label layers (see OlmoEarthSample). Carried through masking so they
+    # reach the train module; the encoder never tokenizes them.
+    open_set: Tensor | None = None
+    open_set_mask: Tensor | None = None
+    open_set_regression: Tensor | None = None
+    open_set_regression_mask: Tensor | None = None
 
     def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
         """Convert to a dictionary.

@@ -17,7 +17,7 @@ from olmoearth_pretrain.dataset.utils import get_modality_fname
 
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
-from .cli import add_common_arguments
+from .cli import add_common_arguments, filter_paired_secondary_windows
 
 # Fake time range, it actually varies across the data.
 START_TIME = datetime(2020, 1, 1, tzinfo=UTC)
@@ -76,6 +76,7 @@ def convert_chm(window: Window, olmoearth_path: UPath) -> None:
         writer.writeheader()
         writer.writerow(
             dict(
+                example_id=window_metadata.example_id or "",
                 crs=window_metadata.crs,
                 col=window_metadata.col,
                 row=window_metadata.row,
@@ -93,15 +94,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Post-process OlmoEarth Pretrain data",
     )
-    add_common_arguments(parser)
+    add_common_arguments(parser, default_groups=["res_10"])
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))
     olmoearth_path = UPath(args.olmoearth_path)
 
     jobs = []
-    for window in dataset.load_windows(
-        workers=args.workers, show_progress=True, groups=["res_10"]
+    for window in filter_paired_secondary_windows(
+        dataset.load_windows(
+            workers=args.workers, show_progress=True, groups=args.groups
+        )
     ):
         jobs.append(
             dict(
