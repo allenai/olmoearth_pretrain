@@ -629,3 +629,55 @@ def test_finetune_task_names_selects_only_those_tasks() -> None:
 
     with pytest.raises(ValueError, match="Unknown FT eval task names: m_brickkiln"):
         run("--task-names=m_eurosat,m_brickkiln")
+
+
+def test_lr_axis_collapses_when_no_linear_probe_task_is_selected() -> None:
+    """A KNN-only selection must not repeat every config once per probe LR.
+
+    ``lr_args`` is emitted only for tasks whose type maps to ``linear_probe``,
+    so a KNN-only run (m-eurosat and m-brick-kiln are both classification) gets
+    no ``probe_lr`` override at all and the eight LRs would produce eight
+    identical runs of each (norm, pooling) pair. The norm and pooling sweeps
+    must survive the collapse untouched -- that is the part that carries real
+    information.
+    """
+    import sys as _sys
+
+    from olmoearth_pretrain.internal import full_eval_sweep as fs
+
+    def run(task_args: list[str]) -> list[str]:
+        captured: list[str] = []
+
+        def capture(cmd: str, **kwargs: Any) -> Mock:
+            captured.append(cmd)
+            return Mock(returncode=0)
+
+        argv = ["full_eval_sweep", "--cluster=local", "--dry_run", "--model=croma"]
+        with (
+            patch.object(_sys, "argv", argv + task_args),
+            patch.object(fs.subprocess, "run", side_effect=capture),
+        ):
+            fs.main()
+        return captured
+
+    knn_only = run(["--task-names=m_eurosat,m_brick_kiln"])
+    assert len(knn_only) == len(Normalization_MODES) * len(pooling_types)
+    # Every (norm, pooling) pair still runs; only the dead LR axis is gone.
+    combos = {
+        (
+            "pretrained" if "norm_stats_from_pretrained=True" in cmd else "dataset",
+            "mean" if "pooling_type=mean" in cmd else "max",
+        )
+        for cmd in knn_only
+    }
+    assert combos == {
+        (norm, pool) for norm in ("pretrained", "dataset") for pool in ("mean", "max")
+    }
+
+    # A linear-probe task in the selection makes the LR axis meaningful again.
+    with_probe = run(["--task-names=m_eurosat,m_cashew_plant"])
+    assert len(with_probe) == len(LP_LRs) * len(Normalization_MODES) * len(
+        pooling_types
+    )
+    # And an unfiltered sweep is unaffected.
+    assert len(run([])) == len(with_probe)
