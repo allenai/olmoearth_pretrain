@@ -581,3 +581,51 @@ class TestIntegration:
                 "--trainer.callbacks.downstream_evaluator.tasks_to_run=[m_eurosat]"
                 in command
             )
+
+
+def test_finetune_task_names_selects_only_those_tasks() -> None:
+    """--task-names must narrow the FT sweep, and a typo must not widen it.
+
+    The FT sweep only had a skip-list, which is the wrong shape for re-running
+    two tasks out of twenty-one: a task added to FT_EVAL_TASKS later would
+    silently join the run. Both sweeps parse with parse_known_args, so an
+    unrecognized selector is forwarded to the eval command rather than
+    rejected -- which is why an unknown name has to raise here.
+    """
+    import json as _json
+    import sys as _sys
+
+    from olmoearth_pretrain.internal import full_eval_sweep_finetune as ft
+
+    def run(task_arg: str) -> list[str]:
+        captured: list[str] = []
+        argv = [
+            "full_eval_sweep_finetune",
+            "--cluster=local",
+            "--dry_run",
+            "--checkpoint_path=/weka/fake/step1",
+            "--module_path=scripts/official/v1_2/base.py",
+            task_arg,
+        ]
+
+        def capture(cmd: str, **kwargs: Any) -> Mock:
+            captured.append(cmd)
+            return Mock(returncode=0)
+
+        with (
+            patch.object(_sys, "argv", argv),
+            patch.object(ft.subprocess, "run", side_effect=capture),
+        ):
+            ft.main()
+        return captured
+
+    commands = run("--task-names=m_eurosat,m_brick_kiln")
+    assert commands, "expected one command per FT learning rate"
+    expected = _json.dumps(["m_eurosat", "m_brick_kiln"], separators=(",", ":"))
+    for cmd in commands:
+        # Compact separators: a space after the comma is word-split when the
+        # override is re-serialized into a launched command.
+        assert f"tasks_to_run='{expected}'" in cmd
+
+    with pytest.raises(ValueError, match="Unknown FT eval task names: m_brickkiln"):
+        run("--task-names=m_eurosat,m_brickkiln")
