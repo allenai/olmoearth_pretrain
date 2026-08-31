@@ -1741,6 +1741,94 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
                 window_size=_ws,
                 dataset="pastis_planteur_pxi1000_full",
             ),
+            # CLASS-BALANCING CONTROL (build_xshot_bal.py). Three arms share the
+            # same PLANTEUR pixels and differ only in what PASTIS contributes:
+            #   pxi{X}  X px of PLANTEUR's 8 classes + ALL 21.5M PASTIS pixels
+            #   bal{X}  X px of every class in BOTH sources (27X px; the 4 shared
+            #           classes draw X from each source, so they get 2X)
+            #   plo{X}  X px of PLANTEUR's 8 classes, no PASTIS at all
+            # Offline probing put bal{100} 3.4 mIoU above pxi{100} on 2,700 pixels
+            # against 21.5M; these tasks re-measure that in the real probe path.
+            f"pastis_planteur_bal10_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_bal10",
+            ),
+            f"pastis_planteur_bal10_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_bal10_full",
+            ),
+            f"pastis_planteur_bal25_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_bal25",
+            ),
+            f"pastis_planteur_bal25_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_bal25_full",
+            ),
+            f"pastis_planteur_bal100_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_bal100",
+            ),
+            f"pastis_planteur_bal100_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_bal100_full",
+            ),
+            f"pastis_planteur_bal1000_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_bal1000",
+            ),
+            f"pastis_planteur_bal1000_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_bal1000_full",
+            ),
+            f"pastis_planteur_plo10_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_plo10",
+            ),
+            f"pastis_planteur_plo10_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_plo10_full",
+            ),
+            f"pastis_planteur_plo25_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_plo25",
+            ),
+            f"pastis_planteur_plo25_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_plo25_full",
+            ),
+            f"pastis_planteur_plo100_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_plo100",
+            ),
+            f"pastis_planteur_plo100_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_plo100_full",
+            ),
+            f"pastis_planteur_plo1000_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_plo1000",
+            ),
+            f"pastis_planteur_plo1000_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_plo1000_full",
+            ),
             # bg8void: same 8 trained classes, excluded crops void instead of
             # folded into Background. Full-modality config, so the AEF and
             # Tessera baselines reuse this entry with an input_modalities override.
