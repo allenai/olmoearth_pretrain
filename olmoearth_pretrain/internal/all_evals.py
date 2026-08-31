@@ -2009,6 +2009,16 @@ FT_EVAL_TASKS = {
     "pastis_planteur_x100_ft_ws16_ps1_sentinel2": _pastis_ft_task(
         [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_x100"
     ),
+    # PASTIS (metropolitan France) fine-tune. Stage 1 of the two-stage transfer probe:
+    # fine-tune the encoder on France, then freeze it and train a fresh linear probe on
+    # PLANTEUR by pointing a probe spec's --trainer.load_path at this run's saved
+    # checkpoint. The fine-tune's own 19-class French head is discarded at that point --
+    # only the encoder carries over. Reuses the already-registered pastis_rslearn
+    # dataset, which matches PLANTEUR's convention (128 px, 12 monthly mosaics,
+    # Sept 2018 - Sept 2019); pastis_year_aligned would not.
+    "pastis_rslearn_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_rslearn"
+    ),
     # bg8void fine-tune, S2 combo (per-combo trim of the void config).
     "pastis2_drom_bg8void_ft_ws16_ps1_sentinel2": _pastis_ft_task(
         [Modality.SENTINEL2_L2A.name], dataset="pastis2_drom_bg8void_s2"
