@@ -1657,6 +1657,50 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
                 window_size=_ws,
                 dataset="pastis_planteur_x100_full",
             ),
+            # PASTIS + 10 labelled PIXELS per PLANTEUR class.
+            f"pastis_planteur_px10_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_px10",
+            ),
+            f"pastis_planteur_px10_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_px10_full",
+            ),
+            # PASTIS + 25 labelled PIXELS per PLANTEUR class.
+            f"pastis_planteur_px25_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_px25",
+            ),
+            f"pastis_planteur_px25_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_px25_full",
+            ),
+            # PASTIS + 100 labelled PIXELS per PLANTEUR class.
+            f"pastis_planteur_px100_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_px100",
+            ),
+            f"pastis_planteur_px100_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_px100_full",
+            ),
+            # PASTIS + 1000 labelled PIXELS per PLANTEUR class.
+            f"pastis_planteur_px1000_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_px1000",
+            ),
+            f"pastis_planteur_px1000_full_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis_planteur_px1000_full",
+            ),
             # bg8void: same 8 trained classes, excluded crops void instead of
             # folded into Background. Full-modality config, so the AEF and
             # Tessera baselines reuse this entry with an input_modalities override.
@@ -2018,6 +2062,18 @@ FT_EVAL_TASKS = {
     # Sept 2018 - Sept 2019); pastis_year_aligned would not.
     "pastis_rslearn_ft_ws16_ps1_sentinel2": _pastis_ft_task(
         [Modality.SENTINEL2_L2A.name], dataset="pastis_rslearn"
+    ),
+    "pastis_planteur_px10_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_px10"
+    ),
+    "pastis_planteur_px25_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_px25"
+    ),
+    "pastis_planteur_px100_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_px100"
+    ),
+    "pastis_planteur_px1000_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_px1000"
     ),
     # bg8void fine-tune, S2 combo (per-combo trim of the void config).
     "pastis2_drom_bg8void_ft_ws16_ps1_sentinel2": _pastis_ft_task(
