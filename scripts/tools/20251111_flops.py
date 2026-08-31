@@ -43,7 +43,7 @@ from olmoearth_pretrain.evals.models import (
     Terramind,
 )
 from olmoearth_pretrain.evals.models.dinov3.dinov3 import DINOv3, DinoV3Models
-from olmoearth_pretrain.nn.flexi_vit import Encoder
+from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
@@ -79,6 +79,67 @@ SINGLE_BANDSET_CONFIG = TokenizationConfig(
         "landsat": LANDSAT_SINGLE_BANDSET,
     }
 )
+
+
+def build_v1_3_rc_encoder(with_projection: bool) -> Encoder:
+    """The v1.3 distillation release candidate's encoder.
+
+    Field values mirror ``encoder_config`` in
+    regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsamp_psuniform_config.json.
+    ``with_projection=True`` includes the shipped d128/d64 linear projection
+    (the distillation student); ``False`` measures the register bottleneck alone.
+    """
+    config = EncoderConfig(
+        supported_modality_names=[
+            "sentinel2_l2a",
+            "sentinel1",
+            "landsat",
+            "worldcover",
+            "srtm",
+            "openstreetmap_raster",
+            "wri_canopy_height_map",
+            "cdl",
+            "worldcereal",
+        ],
+        embedding_size=768,
+        max_patch_size=8,
+        min_patch_size=1,
+        num_heads=12,
+        mlp_ratio=4.0,
+        depth=12,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=SINGLE_BANDSET_CONFIG,
+        use_linear_patch_embed=True,
+        band_dropout_rate=0.2,
+        random_band_dropout=True,
+        band_dropout_modalities=["sentinel2_l2a", "landsat"],
+        patch_embed_hidden_sizes=[64],
+        position_encoding="rope_3d_mixed",
+        rope_base=10000.0,
+        rope_coordinate_scale=1.0,
+        rope_mixed_base=10000.0,
+        temporal_rope_dim_frac=0.25,
+        rope_temporal_coordinate_scale=1.0 / 30.0,
+        use_register_bottleneck=True,
+        register_grid_size=0,
+        register_dim=768,
+        register_read_depth=1,
+        register_latent_depth=4,
+        register_interleave=True,
+        register_per_depth_read_proj=True,
+        register_contrastive_source="registers",
+        register_latent_self_attn=True,
+        register_attn_dim=768,
+        register_projection_dims=[128, 64] if with_projection else None,
+        register_projection_type="linear",
+    )
+    encoder = config.build()
+    if with_projection:
+        # The per-prefix back-projections are training-only (never run in forward,
+        # discarded at inference); drop them so the param count is what ships.
+        encoder.register_back_projections = None
+    return encoder
 
 
 def _sdpa_cpu_flop(q_shape, k_shape, v_shape, *args, out_shape=None, **kwargs):
@@ -188,6 +249,19 @@ if __name__ == "__main__":
     num_tasks = sum([s[1] for s in samples])
     # this is what we say in our figure
     assert num_tasks == 13
+
+    # The v1.3 distillation release candidate, with the shipped d128/d64 linear
+    # projection and without it. Run with --rc-only to skip the baseline zoo
+    # (which needs local model weights).
+    for label, rc_model in [
+        ("v1.3 RC (bottleneck + d128 linear projection)", build_v1_3_rc_encoder(True)),
+        ("v1.3 RC (bottleneck only, no projection)", build_v1_3_rc_encoder(False)),
+    ]:
+        fpm = flops_per_model(rc_model, samples)
+        print(label, count_params(rc_model), fpm, clever_format(fpm))
+    if "--rc-only" in sys.argv:
+        sys.exit(0)
+
     modalities = [
         Modality.SENTINEL2_L2A,
         Modality.SENTINEL1,
