@@ -10709,6 +10709,1102 @@
       "weka_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_px/x25",
       "window_size": 128
     },
+    "pastis_planteur_pxi10": {
+      "classes": [
+        "Background",
+        "Meadow",
+        "Soft winter wheat",
+        "Corn",
+        "Winter barley",
+        "Winter rapeseed",
+        "Spring barley",
+        "Sunflower",
+        "Grapevine",
+        "Beet",
+        "Winter triticale",
+        "Winter durum wheat",
+        "Fruits/vegetables/flowers",
+        "Potatoes",
+        "Leguminous fodder",
+        "Soybeans",
+        "Orchard",
+        "Mixed cereal",
+        "Sorghum",
+        "Sugarcane",
+        "Banana",
+        "Pineapple",
+        "Tropical tuber"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis_planteur_pxi10",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis_planteur_pxi10",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 23,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x10",
+      "split_stats": {},
+      "split_tag_key": "split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x10",
+      "window_size": 128
+    },
+    "pastis_planteur_pxi100": {
+      "classes": [
+        "Background",
+        "Meadow",
+        "Soft winter wheat",
+        "Corn",
+        "Winter barley",
+        "Winter rapeseed",
+        "Spring barley",
+        "Sunflower",
+        "Grapevine",
+        "Beet",
+        "Winter triticale",
+        "Winter durum wheat",
+        "Fruits/vegetables/flowers",
+        "Potatoes",
+        "Leguminous fodder",
+        "Soybeans",
+        "Orchard",
+        "Mixed cereal",
+        "Sorghum",
+        "Sugarcane",
+        "Banana",
+        "Pineapple",
+        "Tropical tuber"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis_planteur_pxi100",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis_planteur_pxi100",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 23,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x100",
+      "split_stats": {},
+      "split_tag_key": "split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x100",
+      "window_size": 128
+    },
+    "pastis_planteur_pxi1000": {
+      "classes": [
+        "Background",
+        "Meadow",
+        "Soft winter wheat",
+        "Corn",
+        "Winter barley",
+        "Winter rapeseed",
+        "Spring barley",
+        "Sunflower",
+        "Grapevine",
+        "Beet",
+        "Winter triticale",
+        "Winter durum wheat",
+        "Fruits/vegetables/flowers",
+        "Potatoes",
+        "Leguminous fodder",
+        "Soybeans",
+        "Orchard",
+        "Mixed cereal",
+        "Sorghum",
+        "Sugarcane",
+        "Banana",
+        "Pineapple",
+        "Tropical tuber"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis_planteur_pxi1000",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis_planteur_pxi1000",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 23,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x1000",
+      "split_stats": {},
+      "split_tag_key": "split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x1000",
+      "window_size": 128
+    },
+    "pastis_planteur_pxi1000_full": {
+      "classes": [
+        "Background",
+        "Meadow",
+        "Soft winter wheat",
+        "Corn",
+        "Winter barley",
+        "Winter rapeseed",
+        "Spring barley",
+        "Sunflower",
+        "Grapevine",
+        "Beet",
+        "Winter triticale",
+        "Winter durum wheat",
+        "Fruits/vegetables/flowers",
+        "Potatoes",
+        "Leguminous fodder",
+        "Soybeans",
+        "Orchard",
+        "Mixed cereal",
+        "Sorghum",
+        "Sugarcane",
+        "Banana",
+        "Pineapple",
+        "Tropical tuber"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis_planteur_pxi1000_full",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a",
+        "gse",
+        "tessera_v2"
+      ],
+      "name": "pastis_planteur_pxi1000_full",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 23,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x1000",
+      "split_stats": {},
+      "split_tag_key": "split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x1000",
+      "window_size": 128
+    },
+    "pastis_planteur_pxi100_full": {
+      "classes": [
+        "Background",
+        "Meadow",
+        "Soft winter wheat",
+        "Corn",
+        "Winter barley",
+        "Winter rapeseed",
+        "Spring barley",
+        "Sunflower",
+        "Grapevine",
+        "Beet",
+        "Winter triticale",
+        "Winter durum wheat",
+        "Fruits/vegetables/flowers",
+        "Potatoes",
+        "Leguminous fodder",
+        "Soybeans",
+        "Orchard",
+        "Mixed cereal",
+        "Sorghum",
+        "Sugarcane",
+        "Banana",
+        "Pineapple",
+        "Tropical tuber"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis_planteur_pxi100_full",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a",
+        "gse",
+        "tessera_v2"
+      ],
+      "name": "pastis_planteur_pxi100_full",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 23,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x100",
+      "split_stats": {},
+      "split_tag_key": "split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x100",
+      "window_size": 128
+    },
+    "pastis_planteur_pxi10_full": {
+      "classes": [
+        "Background",
+        "Meadow",
+        "Soft winter wheat",
+        "Corn",
+        "Winter barley",
+        "Winter rapeseed",
+        "Spring barley",
+        "Sunflower",
+        "Grapevine",
+        "Beet",
+        "Winter triticale",
+        "Winter durum wheat",
+        "Fruits/vegetables/flowers",
+        "Potatoes",
+        "Leguminous fodder",
+        "Soybeans",
+        "Orchard",
+        "Mixed cereal",
+        "Sorghum",
+        "Sugarcane",
+        "Banana",
+        "Pineapple",
+        "Tropical tuber"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis_planteur_pxi10_full",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a",
+        "gse",
+        "tessera_v2"
+      ],
+      "name": "pastis_planteur_pxi10_full",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 23,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x10",
+      "split_stats": {},
+      "split_tag_key": "split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x10",
+      "window_size": 128
+    },
+    "pastis_planteur_pxi25": {
+      "classes": [
+        "Background",
+        "Meadow",
+        "Soft winter wheat",
+        "Corn",
+        "Winter barley",
+        "Winter rapeseed",
+        "Spring barley",
+        "Sunflower",
+        "Grapevine",
+        "Beet",
+        "Winter triticale",
+        "Winter durum wheat",
+        "Fruits/vegetables/flowers",
+        "Potatoes",
+        "Leguminous fodder",
+        "Soybeans",
+        "Orchard",
+        "Mixed cereal",
+        "Sorghum",
+        "Sugarcane",
+        "Banana",
+        "Pineapple",
+        "Tropical tuber"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis_planteur_pxi25",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis_planteur_pxi25",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 23,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x25",
+      "split_stats": {},
+      "split_tag_key": "split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x25",
+      "window_size": 128
+    },
+    "pastis_planteur_pxi25_full": {
+      "classes": [
+        "Background",
+        "Meadow",
+        "Soft winter wheat",
+        "Corn",
+        "Winter barley",
+        "Winter rapeseed",
+        "Spring barley",
+        "Sunflower",
+        "Grapevine",
+        "Beet",
+        "Winter triticale",
+        "Winter durum wheat",
+        "Fruits/vegetables/flowers",
+        "Potatoes",
+        "Leguminous fodder",
+        "Soybeans",
+        "Orchard",
+        "Mixed cereal",
+        "Sorghum",
+        "Sugarcane",
+        "Banana",
+        "Pineapple",
+        "Tropical tuber"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis_planteur_pxi25_full",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a",
+        "gse",
+        "tessera_v2"
+      ],
+      "name": "pastis_planteur_pxi25_full",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 7.221030235290527,
+            "mean": -15.098032315572103,
+            "min": -35.51401901245117,
+            "std": 4.4273418695246685
+          },
+          "vv": {
+            "max": 18.264982223510742,
+            "mean": -9.210824966430664,
+            "min": -32.15142059326172,
+            "std": 4.590144095611179
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 23,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x25",
+      "split_stats": {},
+      "split_tag_key": "split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/xshot_pxi/x25",
+      "window_size": 128
+    },
     "pastis_planteur_x10": {
       "classes": [
         "Background",
