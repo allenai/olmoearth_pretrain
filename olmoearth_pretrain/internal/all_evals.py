@@ -2341,6 +2341,37 @@ FT_EVAL_TASKS = {
     "pastis_planteur_pxi1000_ft_ws16_ps1_sentinel2": _pastis_ft_task(
         [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_pxi1000"
     ),
+    # Fine-tune arms of the class-balancing control. The probe arms were registered in
+    # b2a8568c; these add the fine-tune half so the X experiments can be run with the
+    # v1.2 checkpoint across all three training mixes rather than only all-PASTIS:
+    #   pxi{X}  all PASTIS + X px per PLANTEUR class   (already above)
+    #   bal{X}  X px of every class, both sources
+    #   plo{X}  X px per PLANTEUR class, no PASTIS
+    # Each points at its plain S2-only dataset, exactly as the pxi entries do.
+    "pastis_planteur_bal10_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_bal10"
+    ),
+    "pastis_planteur_bal25_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_bal25"
+    ),
+    "pastis_planteur_bal100_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_bal100"
+    ),
+    "pastis_planteur_bal1000_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_bal1000"
+    ),
+    "pastis_planteur_plo10_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_plo10"
+    ),
+    "pastis_planteur_plo25_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_plo25"
+    ),
+    "pastis_planteur_plo100_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_plo100"
+    ),
+    "pastis_planteur_plo1000_ft_ws16_ps1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis_planteur_plo1000"
+    ),
     # bg8void fine-tune, S2 combo (per-combo trim of the void config).
     "pastis2_drom_bg8void_ft_ws16_ps1_sentinel2": _pastis_ft_task(
         [Modality.SENTINEL2_L2A.name], dataset="pastis2_drom_bg8void_s2"
