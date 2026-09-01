@@ -2651,8 +2651,11 @@ for _loio_terr in ("reunion", "guadeloupe", "martinique", "guyane", "mayotte"):
     FT_EVAL_TASKS[f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws16_ps1_sentinel2"] = (
         _pastis_ft_task([Modality.SENTINEL2_L2A.name], dataset=_void_ds)
     )
+    # the S1-only variant, not _void_ds: the plain LOIO dataset declares only
+    # sentinel2_l2a in its supported modalities, so asking it for sentinel1 raises
+    # "input_modalities must be a subset of supported_modalities" at startup.
     FT_EVAL_TASKS[f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws16_ps1_sentinel1"] = (
-        _pastis_ft_task([Modality.SENTINEL1.name], dataset=_void_ds)
+        _pastis_ft_task([Modality.SENTINEL1.name], dataset=f"{_void_ds}_s1")
     )
     EMBEDDING_EVAL_TASKS[
         f"pastis2_drom_bg8void_loio_{_loio_terr}_ws16_ps1_sentinel2"
