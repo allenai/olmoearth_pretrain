@@ -2354,6 +2354,12 @@ FT_EVAL_TASKS = {
         [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         dataset="pastis2_drom_bg8void_s1s2",
     ),
+    # S1-only fine-tune. The probe has had an S1 column from the start
+    # (pastis2_drom_bg8void_ws16_ps1_sentinel1); the fine-tune never did, which left the
+    # S1 cell of the fine-tune row empty rather than measured.
+    "pastis2_drom_bg8void_ft_ws16_ps1_sentinel1": _pastis_ft_task(
+        [Modality.SENTINEL1.name], dataset="pastis2_drom_bg8void_s1"
+    ),
     "pastis2_drom_bg8void_ft_ws16_ps1_sentinel2_landsat": _pastis_ft_task(
         [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
         dataset="pastis2_drom_bg8void_s2ls",
@@ -2644,6 +2650,9 @@ for _loio_terr in ("reunion", "guadeloupe", "martinique", "guyane", "mayotte"):
     _void_ds = f"pastis2_drom_bg8void_loio_{_loio_terr}"
     FT_EVAL_TASKS[f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws16_ps1_sentinel2"] = (
         _pastis_ft_task([Modality.SENTINEL2_L2A.name], dataset=_void_ds)
+    )
+    FT_EVAL_TASKS[f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws16_ps1_sentinel1"] = (
+        _pastis_ft_task([Modality.SENTINEL1.name], dataset=_void_ds)
     )
     EMBEDDING_EVAL_TASKS[
         f"pastis2_drom_bg8void_loio_{_loio_terr}_ws16_ps1_sentinel2"
