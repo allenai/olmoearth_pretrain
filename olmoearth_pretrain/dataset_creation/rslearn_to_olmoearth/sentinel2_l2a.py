@@ -10,10 +10,8 @@ from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 
-from .multitemporal_raster import convert_freq, convert_monthly
-
-# rslearn layer for frequent data.
-LAYER_FREQ = "sentinel2_l2a_freq"
+from .cli import add_common_arguments
+from .multitemporal_raster import convert_monthly
 
 # rslearn layer prefix for monthly data.
 LAYER_MONTHLY = "sentinel2_l2a"
@@ -27,14 +25,6 @@ def convert_sentinel2_l2a(window: Window, olmoearth_path: UPath) -> None:
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
     """
     try:
-        convert_freq(
-            window,
-            olmoearth_path,
-            LAYER_FREQ,
-            Modality.SENTINEL2_L2A,
-            missing_okay=True,
-            unprepared_okay=True,
-        )
         convert_monthly(window, olmoearth_path, LAYER_MONTHLY, Modality.SENTINEL2_L2A)
     except Exception as e:
         print(f"warning: error handling window {window.name}: {e}")
@@ -46,24 +36,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Post-process OlmoEarth Pretrain data",
     )
-    parser.add_argument(
-        "--ds_path",
-        type=str,
-        help="Source rslearn dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--olmoearth_path",
-        type=str,
-        help="Destination OlmoEarth Pretrain dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        help="Number of workers to use",
-        default=32,
-    )
+    add_common_arguments(parser)
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))

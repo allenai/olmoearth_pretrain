@@ -57,6 +57,65 @@ GEOBENCH_L8_BAND_NAMES = [
 ]
 
 
+def _apply_band_name_corrections(
+    band_names: list[str], corrections: dict[str, str]
+) -> list[str]:
+    """Relabel mislabelled source bands with the band they actually hold.
+
+    A correction map renames channels in place: the mapping is applied to all
+    channels at once, so chains like ``06 -> 07`` alongside ``07 -> 08A`` mean
+    what they look like and do not cascade. The names need not stay within the
+    modality's band set -- a channel may turn out not to be a spectral band at
+    all -- but no two channels may end up claiming the same band, which is what
+    a typo in a config looks like. That is checked here so it fails at
+    construction with a readable message rather than silently feeding the model
+    one band twice. Whether the surviving names still cover every slot the
+    modality needs is checked separately, once ``imputes`` is known.
+    """
+    unknown = set(corrections) - set(band_names)
+    if unknown:
+        raise ValueError(
+            f"band_name_corrections refers to bands the dataset does not have: "
+            f"{sorted(unknown)}. Present: {band_names}"
+        )
+    corrected = [corrections.get(name, name) for name in band_names]
+    duplicated = {name for name in corrected if corrected.count(name) > 1}
+    if duplicated:
+        raise ValueError(
+            f"band_name_corrections made more than one channel claim to be "
+            f"{sorted(duplicated)}: {band_names} became {corrected}."
+        )
+    return corrected
+
+
+def _validate_band_coverage(
+    present: list[str],
+    imputes: list[tuple[str, str]],
+    all_bands: list[str],
+    dataset: str,
+) -> None:
+    """Check every band slot is either present or imputed before we build a sample.
+
+    Without this, a band left uncovered surfaces much later as a missing
+    normalization stat or a stack of the wrong width, neither of which points at
+    the config that caused it.
+    """
+    covered = set(present) | {target for _, target in imputes}
+    missing = [name for name in all_bands if name not in covered]
+    if missing:
+        raise ValueError(
+            f"{dataset}: after band_name_corrections these bands are neither "
+            f"present nor imputed: {missing}. Present: {present}. Add an impute "
+            f"for each, or correct the mapping."
+        )
+    unusable = [src for src, _ in imputes if src not in present]
+    if unusable:
+        raise ValueError(
+            f"{dataset}: imputes read from bands the dataset does not have "
+            f"(after corrections): {unusable}. Present: {present}."
+        )
+
+
 # Map low-label fractions to GeoBench's upstream ``partition_name`` strings.
 # ``"default"`` is the full-data partition used by GeoBench for 1.0.
 _LABEL_FRACTION_TO_PARTITION = {
@@ -148,7 +207,31 @@ class GeobenchDataset(Dataset):
             self.dataset[0].bands[i].band_info.name
             for i in range(len(self.dataset[0].bands))
         ]
-        self.band_names = [x.name for x in task.bands_info]
+        all_bands = GEOBENCH_L8_BAND_NAMES if self.is_landsat else EVAL_S2_BAND_NAMES
+        band_stats = task.band_stats
+        if config.band_name_corrections:
+            # Relabel each channel with the band it actually holds. Only the
+            # names move; the pixel data is untouched. The dataset's own norm
+            # stats are keyed by the same wrong names, so they are relabelled
+            # identically.
+            original_band_names = _apply_band_name_corrections(
+                original_band_names, config.band_name_corrections
+            )
+            band_stats = {
+                config.band_name_corrections.get(name, name): stats
+                for name, stats in band_stats.items()
+            }
+            # Keep the channels that turned out to be real bands of this
+            # modality, in the order we emit them. A correction may reveal that
+            # a channel is not a spectral band at all (GeoBench gave m-brick-kiln
+            # SWIR names for three 8-bit true-colour renders), and those drop out
+            # here because their corrected names are not in ``all_bands``.
+            # Anything genuinely missing is filled by ``imputes`` in
+            # ``_impute_bands``, exactly as for a dataset that never shipped it.
+            self.band_names = [n for n in all_bands if n in original_band_names]
+            _validate_band_coverage(self.band_names, config.imputes, all_bands, dataset)
+        else:
+            self.band_names = [x.name for x in task.bands_info]
         self.band_indices = [
             original_band_names.index(band_name) for band_name in self.band_names
         ]
@@ -164,7 +247,7 @@ class GeobenchDataset(Dataset):
             ]
 
         imputed_band_info = impute_normalization_stats(
-            task.band_stats,
+            band_stats,
             config.imputes,
             all_bands=GEOBENCH_L8_BAND_NAMES if self.is_landsat else EVAL_S2_BAND_NAMES,
         )

@@ -15,6 +15,7 @@ from typing import Any
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config, get_eval_mode
+from olmoearth_pretrain.evals.embedding_transforms import QuantizationScheme
 from olmoearth_pretrain.evals.models import (
     MODELS_WITH_MULTIPLE_SIZES,
     BaselineModelName,
@@ -119,13 +120,24 @@ olmoearth_args = " ".join(
 )
 
 
-def loop_through_params(no_norm: bool = False) -> Generator[dict[str, Any], None, None]:
-    """Yield a dict of the hps we are sweeping over."""
+def loop_through_params(
+    no_norm: bool = False, sweep_lr: bool = True
+) -> Generator[dict[str, Any], None, None]:
+    """Yield a dict of the hps we are sweeping over.
+
+    ``sweep_lr=False`` pins the probe LR to a single value. ``lr_args`` is built
+    only for tasks whose type maps to ``linear_probe``, so when none are
+    selected -- a KNN-only run, e.g. ``--task-names=m_eurosat,m_brick_kiln`` --
+    no ``probe_lr`` override is emitted at all and the eight LRs produce eight
+    identical runs of each (norm, pooling) pair. The norm and pooling sweeps are
+    untouched; only the dead axis collapses.
+    """
     if no_norm:
         normalization_modes = ["dataset"]
     else:
         normalization_modes = Normalization_MODES
-    for lr in LP_LRs:
+    learning_rates = LP_LRs if sweep_lr else LP_LRs[:1]
+    for lr in learning_rates:
         for norm_mode in normalization_modes:
             for pooling_type in pooling_types:
                 yield {
@@ -233,6 +245,8 @@ def _get_precomputed_embedding_args(modality_name: str) -> str:
     each capable task reads the precomputed modality instead of imagery. Tasks
     whose dataset has no such modality baked in keep their imagery
     input_modalities and are skipped at runtime by the modality check.
+
+    Quantization is per-product, see ``QUANTIZE_AT_EVAL_MODALITIES``.
     """
     capable_tasks = _modality_capable_tasks(modality_name)
     args = dataset_args
@@ -244,14 +258,19 @@ def _get_precomputed_embedding_args(modality_name: str) -> str:
         f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.input_modalities=[{modality_name}]"
         for task_name in capable_tasks
     )
-    # Embedding products are already int8 at source (their quantization loss is
-    # baked into the stored values), so never round-trip them through the int8
-    # quantizer again — even on tasks that set quantize_embeddings=True to
-    # evaluate forward-pass models as int8 products.
+    quantize = modality_name in QUANTIZE_AT_EVAL_MODALITIES
     args += " " + " ".join(
-        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.quantize_embeddings=False"
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}"
+        f".quantize_embeddings={quantize}"
         for task_name in capable_tasks
     )
+    if quantize:
+        scheme = QUANTIZE_SCHEME_BY_MODALITY[modality_name]
+        args += " " + " ".join(
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}"
+            f".quantization_scheme=QuantizationScheme.{scheme.name}"
+            for task_name in capable_tasks
+        )
     return args
 
 
@@ -710,11 +729,8 @@ def _get_window_size_run_suffix(args: argparse.Namespace) -> str:
     return f"_ws{window_size}"
 
 
-def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
-    """Build a downstream evaluator include-list override."""
-    if getattr(args, "embedding_diagnostics_only", False):
-        return ""
-
+def selected_task_names(args: argparse.Namespace) -> list[str]:
+    """Resolve which eval tasks a sweep will run, after include/skip filtering."""
     selected_tasks = parse_task_names(getattr(args, "task_names", None))
     skip_tasks = parse_task_names(getattr(args, "task_skip_names", None))
 
@@ -726,6 +742,29 @@ def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
     if skip_tasks:
         skip_task_set = set(skip_tasks)
         tasks_to_run = [task for task in tasks_to_run if task not in skip_task_set]
+    return tasks_to_run
+
+
+def any_linear_probe_task_selected(args: argparse.Namespace) -> bool:
+    """Whether the probe LR reaches any selected task.
+
+    ``lr_args`` is emitted per task, and only for those whose type maps to
+    ``linear_probe``. If a run selects none of them the LR axis is inert, and
+    sweeping it just repeats every (norm, pooling) run eight times.
+    """
+    return any(
+        get_eval_mode(dataset_to_config(EVAL_TASKS[name].dataset).task_type)
+        == "linear_probe"
+        for name in selected_task_names(args)
+    )
+
+
+def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
+    """Build a downstream evaluator include-list override."""
+    if getattr(args, "embedding_diagnostics_only", False):
+        return ""
+
+    tasks_to_run = selected_task_names(args)
 
     if len(tasks_to_run) == len(EVAL_TASKS):
         return ""
@@ -1268,7 +1307,8 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                     continue
 
                 hp_params = loop_through_params(
-                    no_norm=(args.model in dataset_norm_only_models)
+                    no_norm=(args.model in dataset_norm_only_models),
+                    sweep_lr=any_linear_probe_task_selected(args),
                 )
 
                 for params in hp_params:
@@ -1322,6 +1362,35 @@ PRECOMPUTED_MODEL_TO_MODALITY = {
         Modality.TESSERA_V2.name,
         "tessera_v2",
     ),
+}
+
+
+# Precomputed modalities that must be int8 round-tripped AT EVAL TIME, because
+# unlike the others they do not already carry their product's quantization loss.
+#
+# The rule is "score every product at the precision it ships", and the three
+# downloaded products satisfy it for free: the GSE fetcher reads int8 COGs and
+# dequantizes to float32, and Tessera v1/v1.1 arrive pre-dequantized from
+# geotessera -- in both cases the loss is baked into the stored values, so
+# re-quantizing would charge them twice.
+#
+# tessera_v2 is the exception, and it is an artifact of HOW WE MADE IT: we run
+# their pixel student ourselves (docs/TesseraV2Inference.md) and their
+# infer_v2.py defaults to float32, with `--int8` opt-in. The shipped v2 product
+# is int8 (quantization-aware training, see the TESSERA paper), so leaving this
+# unquantized scores v2 ABOVE its own release precision -- which is exactly the
+# mistake made in the 2026-08-07 and 2026-08-11 ethiopia/africa sweeps.
+#
+# Each product is quantized under ITS OWN scheme, not ours: AlphaEarth's
+# fixed-scale power scheme suits AEF's unit-L2 vectors and clips a
+# LayerNorm-geometry embedding (see QuantizationScheme), and the v2 student ends
+# in a non-affine LayerNorm, so scoring v2 under the power scheme would charge it
+# a ~5-point cosine loss its real product does not pay. TESSERA_PER_VECTOR
+# reproduces geotessera's decoder instead.
+QUANTIZE_AT_EVAL_MODALITIES = frozenset({Modality.TESSERA_V2.name})
+
+QUANTIZE_SCHEME_BY_MODALITY = {
+    Modality.TESSERA_V2.name: QuantizationScheme.TESSERA_PER_VECTOR,
 }
 
 

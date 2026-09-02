@@ -79,10 +79,13 @@ def test_fetch_layers_match_the_pastis_config() -> None:
     file). If the two drift, a v2 export on another dataset stops mirroring
     what pastis was built from.
 
-    max_matches is the one deliberate difference: pastis was fetched at the
+    Two deliberate differences. max_matches: pastis was fetched at the
     original 150 for S2, which truncated 4.94% of ethiopia_crops windows (and
     from the END of the year, since the layer sorts datetime ascending), so
-    the shared config raises it. Everything else must stay identical.
+    the shared config raises it. And the B01/B09 band set, which only
+    pixel_mosaic_export needs (v2 inference reads the first two band sets via
+    TESSERA_S2_INDICES) and which pastis therefore does not carry. Everything
+    else must stay identical.
     """
     shared = json.loads(FETCH_LAYERS_CONFIG.read_text())["layers"]
     pastis = json.loads(
@@ -93,7 +96,14 @@ def test_fetch_layers_match_the_pastis_config() -> None:
         a, b = copy.deepcopy(shared[name]), copy.deepcopy(pastis[name])
         for layer in (a, b):
             layer["data_source"]["query_config"].pop("max_matches")
+            layer["band_sets"] = [
+                bs for bs in layer["band_sets"] if bs["bands"] != ["B01", "B09"]
+            ]
         assert a == b, name
+    assert [bs["bands"] for bs in shared["sentinel2_l2a_all"]["band_sets"]][-1] == [
+        "B01",
+        "B09",
+    ], "the 60 m set must stay last: it pins COMPOSITE_BANDS"
     assert (
         shared["sentinel2_l2a_all"]["data_source"]["query_config"]["max_matches"]
         > (pastis["sentinel2_l2a_all"]["data_source"]["query_config"]["max_matches"])
@@ -157,6 +167,63 @@ def test_resolve_spec_presets_and_overrides() -> None:
         resolve_spec("nope")
     with pytest.raises(SystemExit, match="pass --dataset or --fetch_group"):
         resolve_spec(None)
+
+
+def test_zero_s2_scenes_raises_the_typed_coverage_gap_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prepared-but-zero-matches S2 is typed so infer records a coverage gap.
+
+    Real case: glance has 4 antimeridian windows with no S2 in the archive at
+    all. They must land in the manifest's coverage_gaps (tolerated by the
+    wiring coverage gate), not windows_failed (hard-blocks wiring).
+    """
+    empty = (
+        np.zeros((0, 2, 2, 10), dtype=np.float32),
+        np.zeros((0,), dtype=np.int64),
+    )
+    monkeypatch.setattr(tessera_v2_export, "_read_scenes", lambda *a, **k: empty)
+    window = SimpleNamespace(group="g", name="w", bounds=(0, 0, 2, 2))
+    with pytest.raises(tessera_v2_export.NoS2ScenesError):
+        tessera_v2_export.build_dpixel_inputs(window)
+    # Callers catching the old ValueError keep working.
+    assert issubclass(tessera_v2_export.NoS2ScenesError, ValueError)
+
+
+def test_shard_hash_partitions_windows_completely_and_disjointly() -> None:
+    """The crc32 shard rule is a stable partition: every window in exactly one shard.
+
+    Stability across processes is why it is crc32 and not hash() -- python
+    salts str hashes per process, which would make concurrent shard jobs
+    overlap and miss windows.
+    """
+    import zlib
+
+    names = [f"sample_{i}" for i in range(1000)]
+    for num_shards in (2, 4, 7):
+        shards = [
+            {n for n in names if zlib.crc32(n.encode()) % num_shards == i}
+            for i in range(num_shards)
+        ]
+        assert set().union(*shards) == set(names)
+        assert sum(len(s) for s in shards) == len(names)
+        # Roughly balanced: no shard more than 40% off the ideal share.
+        ideal = len(names) / num_shards
+        assert all(abs(len(s) - ideal) < 0.4 * ideal for s in shards)
+
+
+def test_every_year_aligned_dataset_has_a_per_window_year_preset() -> None:
+    """All eight supplemental datasets resolve with per-window years.
+
+    setup_tessera_v2.py iterates YEAR_ALIGNED_DATASETS, so a dataset missing
+    here silently falls out of the export sweep.
+    """
+    assert len(tessera_v2_export.YEAR_ALIGNED_DATASETS) == 8
+    for base in tessera_v2_export.YEAR_ALIGNED_DATASETS:
+        spec = resolve_spec(f"{base}_year_aligned")
+        assert spec.year is None
+        assert spec.fetch_group == f"{base}_tessera_v2"
+        assert spec.eval_groups is None
 
 
 def test_read_scenes_distinguishes_absent_from_unmaterialized(

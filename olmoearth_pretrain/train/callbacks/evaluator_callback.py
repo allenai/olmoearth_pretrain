@@ -18,11 +18,21 @@ from olmo_core.train.callbacks.callback import Callback, CallbackConfig
 from olmo_core.train.callbacks.checkpointer import CheckpointerCallback
 from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
-from torch.utils.data import DataLoader, IterableDataset
+from torch.utils.data import DataLoader, IterableDataset, Subset
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import _worker_ignore_sigterm
+from olmoearth_pretrain.evals.balanced_trial import (
+    BalancedTrialConfig,
+    run_balanced_trials,
+    trial_task_name,
+)
+from olmoearth_pretrain.evals.band_sensitivity import (
+    embedding_drift,
+    occlude_band,
+    reliance_profile,
+)
 from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
     DATASET_TO_CONFIG,
@@ -38,21 +48,36 @@ from olmoearth_pretrain.evals.embedding_diagnostics import (
     compute_spatial_embedding_diagnostics,
 )
 from olmoearth_pretrain.evals.embedding_transforms import (
+    FITTED_NORMALIZATIONS,
+    EmbeddingNormalization,
+    EmbeddingNormalizer,
+    QuantizationScheme,
     dequantize_embeddings,
     dequantize_embeddings_percentile,
     load_quantile_config,
     reduce_embedding_dim,
 )
-from olmoearth_pretrain.evals.embeddings import get_embeddings
+from olmoearth_pretrain.evals.embeddings import get_embeddings, normalize_and_quantize
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
 from olmoearth_pretrain.evals.knn import run_knn
-from olmoearth_pretrain.evals.linear_probe import ProbeType, train_and_eval_probe
+from olmoearth_pretrain.evals.linear_probe import (
+    ProbeInputNorm,
+    ProbeType,
+    train_and_eval_probe,
+)
 from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 
 logger = logging.getLogger(__name__)
+
+# Beaker rejects experiment names longer than this many characters.
+_BEAKER_MAX_NAME_LEN = 128
+# common.build_launch_config forms the experiment name as
+# ``{run_name}-{cmd}-{8-char-uuid}``; for in-loop evals ``cmd`` is ``evaluate``,
+# so the suffix appended after the eval run name is ``-evaluate-`` + 8 chars.
+_BEAKER_LAUNCH_NAME_SUFFIX_LEN = len("-evaluate-") + 8
 
 
 def _seed_worker(worker_id: int, base_seed: int) -> None:
@@ -161,6 +186,28 @@ class DownstreamTaskConfig:
     # set (nodata/saturated/shadow/cloud-med/cloud-high/cirrus); the
     # "cloudless" variants pass (8, 9) for unambiguous cloud only.
     scl_cloud_classes: tuple[int, ...] | None = None
+    # Scene-level Landsat cloud threshold: months whose chosen scene's
+    # cloud_cover meets/exceeds this are masked MISSING, using the
+    # landsat_cloud_cover.json sidecar at the dataset root
+    # (build_landsat_cloud_cover_sidecar.py). None = no Landsat masking.
+    landsat_cloud_cover_max: float | None = None
+    # Per-pixel Landsat cloud mask: LANDSAT pixel-timesteps whose QA_PIXEL
+    # (the optional "landsat_qa" input, setup_extra_layers.py layer set
+    # `landsat_qa`) flags dilated/cirrus/cloud/shadow are masked MISSING at
+    # load time -- the Landsat analogue of scl_cloud_mask. Windows without
+    # the input are left unmasked.
+    l8_pixel_cloud_mask: bool = False
+    # Which QA_PIXEL bits count as cloud. None keeps the loader's aggressive
+    # default (dilated|cirrus|cloud|shadow); the narrow policy is cloud alone.
+    l8_pixel_cloud_bits: int | None = None
+    # Convert eval Landsat DN to TOA reflectance / brightness temperature at
+    # load time, for checkpoints pretrained on the reflectance h5. Reads the
+    # per-window sun-elevation sidecar; pair with the reflectance-scale
+    # computed_norm_config below (the two must always be set together).
+    landsat_reflectance: bool = False
+    # Which computed-config resource backs the pretrain normalizer. Must match
+    # the checkpoint's training-time computed_norm_config.
+    computed_norm_config: str = "computed.json"
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: NormMethod = field(
@@ -179,10 +226,47 @@ class DownstreamTaskConfig:
     quantize_bits: int | None = None
     # Path to HDF5 file with precomputed quantile boundaries for percentile quantization
     quantile_config_path: str | None = None
+    # Which int8 scheme quantize_embeddings applies. AEF_POWER (the default) is
+    # AlphaEarth's published scheme; TESSERA_PER_VECTOR is Tessera's, and is set
+    # for the tessera_v2 arm so each product is scored under its own
+    # quantization rather than under a competitor's (see QuantizationScheme).
+    quantization_scheme: QuantizationScheme = QuantizationScheme.AEF_POWER
+    # Normalize the extracted embeddings before the int8 round-trip and the
+    # probe. Nothing in pretraining pins an embedding head's output geometry
+    # (see EmbeddingNormalization), and three consumers care: the int8 power
+    # scheme (assumes AEF's value range), KNN (uncentered cosine), and the
+    # segmentation probe (no BatchNorm in front). NONE = today's behavior.
+    embedding_normalization: EmbeddingNormalization = EmbeddingNormalization.NONE
+    # Where the fitted normalizations (center/center_l2/zscore) get their
+    # constants. None fits them on THIS task's train split -- the diagnostic
+    # form, which answers whether the geometry is the problem but is not
+    # deployable (a global run has no per-dataset train split). Point this at
+    # constants written by scripts/tools/fit_embedding_norm_stats.py to use one
+    # fixed set everywhere, which is what shipping the fix would look like.
+    embedding_norm_stats_path: str | None = None
+    # Log embedding geometry, int8 clipping, and round-trip-damage diagnostics
+    # alongside the task's score (bounded row subsample; no effect on scores).
+    embedding_pipeline_diagnostics: bool = True
+    # What sits in front of the linear probe's weights. BATCHNORM (default) is
+    # the historical behavior: BatchNorm1d for classification tasks, nothing for
+    # segmentation. NONE scores classification exactly like the dense probes, so
+    # embedding geometry reaches the weights and no batch coupling is involved.
+    # Changing this moves every classification LP number, so run it as an arm.
+    probe_input_norm: ProbeInputNorm = ProbeInputNorm.BATCHNORM
     # Reduce embedding dimensionality via PCA (None = no reduction)
     embedding_dim: int | None = None
     # Use weighted dice loss instead of cross-entropy (only for specific tasks like wildfire)
     use_dice_loss: bool = False
+    # Additionally run the AlphaEarth Foundations balanced-trial protocol on the
+    # embeddings this task materializes: a class-balanced draw of
+    # min(cap, least class) points per class from the pooled splits, a
+    # closed-form ridge (and kNN) fit on the draw, and metrics on the remainder,
+    # repeated over AEF's k draws. Purely additive -- the task's own train -> val
+    # result is unchanged and the trial metrics are logged beside it as ``bt_*``.
+    # Only supported for single-label classification tasks in an embedding-based
+    # eval mode (KNN / LINEAR_PROBE); it is hosted on the KNN twin so the trials
+    # compute once instead of once per swept probe LR. None = don't run.
+    balanced_trial: BalancedTrialConfig | None = None
     # Override the default primary metric (e.g. EvalMetric.F1 instead of ACCURACY).
     # None = use the default for the task type (accuracy for classification, miou for segmentation).
     primary_metric: EvalMetric | None = None
@@ -194,6 +278,11 @@ class DownstreamTaskConfig:
     pretrain_max_samples: int = 512
     # For pretrain subset auxiliary probes: target modality to predict.
     pretrain_target_modality: str | None = None
+    # For multi-band regression targets (e.g. glo30), the band selected for this
+    # single-channel probe: 0=elevation, 1=slope, 2=aspect in degrees, plus the
+    # virtual 3=sin(aspect) / 4=cos(aspect) encodings preferred for the circular
+    # aspect band. None = full target. See evals.datasets.pretrain_subset.
+    pretrain_target_band_index: int | None = None
     pretrain_label_seed: int = 42
     pretrain_train_samples: int = 512
     pretrain_valid_samples: int = 512
@@ -203,6 +292,22 @@ class DownstreamTaskConfig:
     # latlon-bin holdouts so train/val/test are spatially disjoint.
     pretrain_split_strategy: str = "random"
     pretrain_geographic_bin_size_deg: float = 5.0
+    # Per-band occlusion sensitivity (KNN / linear-probe tasks only). Set to a
+    # modality name to re-embed the task once per band of that modality with the
+    # band zeroed, reporting how far the embedding moves and how much a KNN probe
+    # loses. Answers which bands the encoder still reads, which the accuracy
+    # curve alone cannot. Costs one extra embedding pass per band, so it is off
+    # by default; see evals.band_sensitivity. None = disabled.
+    band_sensitivity_modality: str | None = None
+    # Cap on samples per split for the band sweep, bounding both its runtime and
+    # the batch cache it holds in memory. The subset is drawn with
+    # max_train_samples_seed so the same samples are used at every checkpoint and
+    # the profile is comparable over training. The default covers m-eurosat's
+    # splits (2000 train / 1000 valid) whole, which keeps the sweep's unoccluded
+    # reference accuracy directly comparable to the task's headline number;
+    # per-band accuracy drops are only a few points, so a smaller subset leaves
+    # them buried in probe noise and only the embedding drift stays readable.
+    band_sensitivity_max_samples: int = 2048
 
 
 class DownstreamEvaluator:
@@ -245,6 +350,11 @@ class DownstreamEvaluator:
         self.label_at_center_pixel = task.label_at_center_pixel
         self.scl_cloud_mask = task.scl_cloud_mask
         self.scl_cloud_classes = task.scl_cloud_classes
+        self.landsat_cloud_cover_max = task.landsat_cloud_cover_max
+        self.l8_pixel_cloud_mask = task.l8_pixel_cloud_mask
+        self.l8_pixel_cloud_bits = task.l8_pixel_cloud_bits
+        self.landsat_reflectance = task.landsat_reflectance
+        self.computed_norm_config = task.computed_norm_config
         self.tile_samples = task.tile_samples
         if self.tile_samples:
             if not self._is_registry_dataset:
@@ -287,9 +397,11 @@ class DownstreamEvaluator:
             self.config = dataclasses.replace(
                 self.config, task_type=TaskType.CLASSIFICATION, height_width=None
             )
-        if self.scl_cloud_mask and not self._is_registry_dataset:
+        if (
+            self.scl_cloud_mask or self.l8_pixel_cloud_mask
+        ) and not self._is_registry_dataset:
             raise ValueError(
-                f"scl_cloud_mask is only supported for registry datasets, "
+                f"scl_cloud_mask/l8_pixel_cloud_mask are only supported for registry datasets, "
                 f"got dataset '{task.dataset}'"
             )
         self.trainer = trainer
@@ -326,25 +438,49 @@ class DownstreamEvaluator:
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
         self.quantize_bits = task.quantize_bits
+        self.quantization_scheme = task.quantization_scheme
         self.quantile_config_path = task.quantile_config_path
         # Load quantile config if path is provided
         self.quantile_config: dict | None = None
         if self.quantile_config_path is not None:
             logger.info(f"Loading quantile config from {self.quantile_config_path}")
             self.quantile_config = load_quantile_config(self.quantile_config_path)
+        self.embedding_normalization = task.embedding_normalization
+        self.embedding_norm_stats_path = task.embedding_norm_stats_path
+        self.embedding_pipeline_diagnostics = task.embedding_pipeline_diagnostics
+        self.probe_input_norm = task.probe_input_norm
         self.embedding_dim = task.embedding_dim
         self.use_dice_loss = task.use_dice_loss
         self.primary_metric = task.primary_metric
         self.primary_metric_class = task.primary_metric_class
+        self.balanced_trial = task.balanced_trial
         self.h5py_dir = task.h5py_dir
         self.pretrain_max_samples = task.pretrain_max_samples
         self.pretrain_target_modality = task.pretrain_target_modality
+        self.pretrain_target_band_index = task.pretrain_target_band_index
         self.pretrain_label_seed = task.pretrain_label_seed
         self.pretrain_train_samples = task.pretrain_train_samples
         self.pretrain_valid_samples = task.pretrain_valid_samples
         self.pretrain_test_samples = task.pretrain_test_samples
         self.pretrain_split_strategy = task.pretrain_split_strategy
         self.pretrain_geographic_bin_size_deg = task.pretrain_geographic_bin_size_deg
+        self.band_sensitivity_modality = task.band_sensitivity_modality
+        self.band_sensitivity_max_samples = task.band_sensitivity_max_samples
+        if self.band_sensitivity_modality is not None:
+            if self.config.task_type != TaskType.CLASSIFICATION:
+                raise ValueError(
+                    "band_sensitivity_modality scores each occlusion with a KNN "
+                    f"probe, so it needs a classification task, got "
+                    f"'{self.config.task_type.value}' for {task.dataset}"
+                )
+            if (
+                self.input_modalities
+                and self.band_sensitivity_modality not in self.input_modalities
+            ):
+                raise ValueError(
+                    f"band_sensitivity_modality '{self.band_sensitivity_modality}' "
+                    f"is not among the task's input_modalities {self.input_modalities}"
+                )
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -359,6 +495,31 @@ class DownstreamEvaluator:
             self.eval_mode = EvalMode(self.eval_mode)
 
         assert self.eval_mode in EvalMode, f"Unexpected eval mode {self.eval_mode}"
+
+        if self.balanced_trial is not None:
+            # The trials reuse the embeddings an embedding-based eval already
+            # materializes; there is nothing to hook onto in the other modes.
+            if self.eval_mode not in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
+                raise ValueError(
+                    f"balanced_trial requires an embedding-based eval mode "
+                    f"(knn/linear_probe), got '{self.eval_mode}'"
+                )
+            # One-vs-rest squared error is the wrong objective for a dense
+            # segmentation task's mIoU, and IoU is precision-aware anyway, so
+            # the balanced-accuracy pathology the trials exist to measure does
+            # not arise there. See docs/EvalMetricsAndBalancedTrials.md.
+            if self.config.task_type != TaskType.CLASSIFICATION:
+                raise ValueError(
+                    f"balanced_trial only supports classification tasks, got "
+                    f"task type '{self.config.task_type.value}' for "
+                    f"'{task.dataset}'"
+                )
+            if self.config.is_multilabel:
+                raise ValueError(
+                    f"balanced_trial does not support multilabel tasks "
+                    f"('{task.dataset}'): a balanced draw is not well defined "
+                    f"when a sample carries several classes"
+                )
 
         if self.eval_mode == EvalMode.LINEAR_PROBE:
             if self.probe_lr is None:
@@ -414,6 +575,7 @@ class DownstreamEvaluator:
                         f"{self.dataset}_hw{getattr(self.config, 'height_width', None)}"
                         f"_{'-'.join(sorted(self.input_modalities))}"
                     ),
+                    probe_input_norm=self.probe_input_norm,
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
                 else None
@@ -426,6 +588,7 @@ class DownstreamEvaluator:
         batch_size: int,
         seed: int | None = None,
         shuffle: bool = False,
+        max_samples: int | None = None,
     ) -> DataLoader:
         """Get the data loader for the given split.
 
@@ -434,6 +597,11 @@ class DownstreamEvaluator:
         irrelevant downstream (the probe re-shuffles its own DataLoader every
         epoch), and sequential access lets tiled datasets reuse the loaded
         base sample across its windows instead of re-reading it per tile.
+
+        max_samples restricts the loader to a fixed random subset, for
+        diagnostics that re-embed a split many times. The subset is drawn with
+        max_train_samples_seed and kept in dataset order, so it is identical at
+        every checkpoint and still reads sequentially.
         """
         logger.info(
             f"Getting data loader for {self.dataset} with norm method {self.norm_method} and norm stats from pretrained {self.norm_stats_from_pretrained}"
@@ -464,11 +632,22 @@ class DownstreamEvaluator:
                 extra_kwargs["scl_cloud_mask"] = True
                 if self.scl_cloud_classes is not None:
                     extra_kwargs["scl_cloud_classes"] = self.scl_cloud_classes
+            if self.landsat_cloud_cover_max is not None:
+                extra_kwargs["landsat_cloud_cover_max"] = self.landsat_cloud_cover_max
+            if self.l8_pixel_cloud_mask:
+                extra_kwargs["l8_pixel_cloud_mask"] = True
+                if self.l8_pixel_cloud_bits is not None:
+                    extra_kwargs["l8_pixel_cloud_bits"] = self.l8_pixel_cloud_bits
+            if self.landsat_reflectance:
+                extra_kwargs["landsat_reflectance"] = True
+            if self.computed_norm_config != "computed.json":
+                extra_kwargs["computed_norm_config"] = self.computed_norm_config
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities
             extra_kwargs["max_samples"] = self.pretrain_max_samples
             extra_kwargs["target_modality"] = self.pretrain_target_modality
+            extra_kwargs["target_band_index"] = self.pretrain_target_band_index
             extra_kwargs["pretrain_split"] = split
             extra_kwargs["pretrain_label_seed"] = self.pretrain_label_seed
             extra_kwargs["pretrain_train_samples"] = self.pretrain_train_samples
@@ -488,6 +667,13 @@ class DownstreamEvaluator:
             **extra_kwargs,
         )
         is_iterable = isinstance(eval_ds, IterableDataset)
+        if max_samples is not None and not is_iterable and len(eval_ds) > max_samples:
+            generator_for_subset = torch.Generator()
+            generator_for_subset.manual_seed(self.max_train_samples_seed)
+            indices = torch.randperm(len(eval_ds), generator=generator_for_subset)[
+                :max_samples
+            ]
+            eval_ds = Subset(eval_ds, sorted(indices.tolist()))
         return DataLoader(
             eval_ds,
             collate_fn=eval_collate_fn_variable_time,
@@ -498,10 +684,45 @@ class DownstreamEvaluator:
             shuffle=False if is_iterable else shuffle,
         )
 
+    def _resolve_normalizer(self) -> tuple[EmbeddingNormalizer | None, bool]:
+        """Resolve the configured normalization to (normalizer, fit_on_train).
+
+        ``fit_on_train`` is True when the statistics still have to be taken from
+        this task's train split, which forces the train embeddings to be held in
+        float until the fit is done (see ``_val_embed_probe``). Stateless modes
+        (L2) and file-backed constants are ready immediately.
+        """
+        mode = self.embedding_normalization
+        if mode == EmbeddingNormalization.NONE:
+            return None, False
+        if mode in FITTED_NORMALIZATIONS:
+            if self.embedding_norm_stats_path is not None:
+                logger.info(
+                    f"Loading {mode} embedding norm stats from "
+                    f"{self.embedding_norm_stats_path}"
+                )
+                return (
+                    EmbeddingNormalizer.load(self.embedding_norm_stats_path, mode),
+                    False,
+                )
+            return None, True
+        return EmbeddingNormalizer(mode=mode), False
+
     def _get_embeddings(
-        self, data_loader: DataLoader, is_train: bool
+        self,
+        data_loader: DataLoader,
+        is_train: bool,
+        sample_transform: Any | None = None,
+        normalizer: EmbeddingNormalizer | None = None,
+        quantize: bool | None = None,
+        diagnostics_out: dict[str, float] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Get the embeddings for the given data loader."""
+        """Get the embeddings for the given data loader.
+
+        ``quantize=None`` defers to the task's ``quantize_embeddings``; pass
+        False to keep a split in float (needed while fitting a normalization on
+        it, since normalization has to precede the int8 round-trip).
+        """
         print(
             f"Getting embeddings for {self.dataset} with norm method {self.norm_method}"
         )
@@ -538,10 +759,122 @@ class DownstreamEvaluator:
             data_loader=data_loader,
             model=model,
             is_train=is_train,
-            quantize=self.quantize_embeddings,
+            quantize=(self.quantize_embeddings if quantize is None else quantize),
             quantize_bits=self.quantize_bits,
             quantile_config=self.quantile_config,
+            sample_transform=sample_transform,
+            quantization_scheme=self.quantization_scheme,
+            normalizer=normalizer,
+            diagnostics_out=diagnostics_out,
         )
+
+    def _knn_accuracy(
+        self,
+        train_embeddings: torch.Tensor,
+        train_labels: torch.Tensor,
+        val_embeddings: torch.Tensor,
+        val_labels: torch.Tensor,
+    ) -> float:
+        """Score a pair of embedding sets with a cosine KNN, returning accuracy."""
+        result = run_knn(
+            config=self.config,
+            train_embeddings=train_embeddings,
+            train_labels=train_labels,
+            val_embeddings=val_embeddings,
+            val_labels=val_labels,
+            test_embeddings=None,
+            test_labels=None,
+            device=self.device,
+            primary_metric=EvalMetric.ACCURACY,
+        )
+        assert result.val_result is not None
+        return result.val_result.primary
+
+    def _band_sensitivity_diagnostics(self) -> dict[str, float]:
+        """Measure which bands of one modality the frozen encoder still reads.
+
+        Every occlusion is scored with a KNN probe regardless of the task's own
+        eval mode: the quantity of interest is the ranking across bands, and a
+        linear probe would multiply the cost by its epoch count. Train and val
+        embeddings are occluded together, so a drop means the class information
+        is genuinely gone rather than merely displaced relative to a clean
+        reference set.
+
+        Both splits are read and normalized once into memory and then replayed
+        for every occlusion. The sweep re-embeds each split ``num_bands + 1``
+        times, and for these small classification sets loading dominates the
+        forward pass, so caching is what keeps the cost proportional to GPU work
+        instead of to disk. ``band_sensitivity_max_samples`` bounds the cache.
+        """
+        modality = self.band_sensitivity_modality
+        assert modality is not None
+        band_names = Modality.get(modality).band_order
+        max_samples = self.band_sensitivity_max_samples
+        logger.info(
+            "Running band sensitivity for %s over %d %s bands (<=%d samples/split)",
+            self.dataset,
+            len(band_names),
+            modality,
+            max_samples,
+        )
+
+        train_batches = list(
+            self._get_data_loader(
+                "train", self.embedding_batch_size, max_samples=max_samples
+            )
+        )
+        val_batches = list(
+            self._get_data_loader(
+                "valid", self.embedding_batch_size, max_samples=max_samples
+            )
+        )
+        reference_train, train_labels = self._get_embeddings(
+            train_batches, is_train=True
+        )
+        reference_val, val_labels = self._get_embeddings(val_batches, is_train=False)
+        reference_accuracy = self._knn_accuracy(
+            reference_train, train_labels, reference_val, val_labels
+        )
+
+        metrics: dict[str, float] = {
+            "band_sens/reference_knn_acc": reference_accuracy,
+            "band_sens/num_samples": float(reference_val.shape[0]),
+        }
+        drift_by_band: dict[str, float] = {}
+        accuracy_drop_by_band: dict[str, float] = {}
+        for band_index, band_name in enumerate(band_names):
+            transform = partial(occlude_band, modality=modality, band_index=band_index)
+            occluded_train, _ = self._get_embeddings(
+                train_batches, is_train=True, sample_transform=transform
+            )
+            occluded_val, _ = self._get_embeddings(
+                val_batches, is_train=False, sample_transform=transform
+            )
+            drift = embedding_drift(reference_val, occluded_val)
+            accuracy = self._knn_accuracy(
+                occluded_train, train_labels, occluded_val, val_labels
+            )
+            drift_by_band[band_name] = drift["emb_rel_l2"]
+            accuracy_drop_by_band[band_name] = reference_accuracy - accuracy
+            metrics[f"band_sens/{band_name}/emb_cos"] = drift["emb_cos"]
+            metrics[f"band_sens/{band_name}/emb_rel_l2"] = drift["emb_rel_l2"]
+            metrics[f"band_sens/{band_name}/knn_acc"] = accuracy
+            metrics[f"band_sens/{band_name}/acc_drop"] = reference_accuracy - accuracy
+
+        # The reliance profile is summarized from drift only. Drift is bounded
+        # below by zero and large enough per band to carry signal, whereas single
+        # band occlusions move accuracy by well under a point on a 1000-sample
+        # split -- an entropy over those drops would describe probe noise. The
+        # accuracy side is reported as plain extremes instead, which stay
+        # readable however small they are.
+        for key, value in reliance_profile(drift_by_band).items():
+            metrics[f"band_sens/drift_{key}"] = value
+        accuracy_drops = list(accuracy_drop_by_band.values())
+        metrics["band_sens/max_acc_drop"] = max(accuracy_drops)
+        metrics["band_sens/max_acc_gain"] = -min(accuracy_drops)
+        del train_batches, val_batches
+        logger.info("Band sensitivity for %s: %s", self.dataset, metrics)
+        return metrics
 
     def _val_embed_probe(self) -> EvalTaskResult:
         """Validate the model using embeddings and probe (knn or linear probe)."""
@@ -551,10 +884,23 @@ class DownstreamEvaluator:
         logger.info(f"Getting val loader for {self.dataset}...")
         val_loader = self._get_data_loader("valid", self.embedding_batch_size)
 
+        normalizer, fit_on_train = self._resolve_normalizer()
+        diagnostics: dict[str, float] | None = (
+            {} if self.embedding_pipeline_diagnostics else None
+        )
+
         start_time = time.time()
         logger.info(f"Getting train embeddings for {self.dataset}...")
+        # A train-fitted normalization has to see the raw floats first, so its
+        # normalize + quantize step is deferred until just below; every other
+        # mode transforms at extraction, keeping today's memory profile (the
+        # split is held as int8 rather than float32).
         train_embeddings, train_labels = self._get_embeddings(
-            train_loader, is_train=True
+            train_loader,
+            is_train=True,
+            normalizer=None if fit_on_train else normalizer,
+            quantize=False if fit_on_train else None,
+            diagnostics_out=None if fit_on_train else diagnostics,
         )
         logger.info(f"Train embeddings shape: {train_embeddings.shape}")
         logger.info(
@@ -577,8 +923,30 @@ class DownstreamEvaluator:
             train_embeddings = train_embeddings[indices]
             train_labels = train_labels[indices]
 
+        if fit_on_train:
+            # Fit after any subsample, so the constants describe exactly the
+            # rows the probe trains on.
+            normalizer = EmbeddingNormalizer.fit(
+                self.embedding_normalization, train_embeddings
+            )
+            logger.info(
+                f"Fitted {self.embedding_normalization} embedding normalization on "
+                f"{self.dataset}'s train split"
+            )
+            train_embeddings = normalize_and_quantize(
+                train_embeddings,
+                normalizer=normalizer,
+                quantize=self.quantize_embeddings,
+                quantize_bits=self.quantize_bits,
+                quantile_config=self.quantile_config,
+                quantization_scheme=self.quantization_scheme,
+                diagnostics_out=diagnostics,
+            )
+
         logger.info(f"Getting val embeddings for {self.dataset}...")
-        val_embeddings, val_labels = self._get_embeddings(val_loader, is_train=False)
+        val_embeddings, val_labels = self._get_embeddings(
+            val_loader, is_train=False, normalizer=normalizer
+        )
         logger.info(f"Val embeddings shape: {val_embeddings.shape}")
         logger.info(f"Val label counts: {torch.unique(val_labels, return_counts=True)}")
         if self.run_on_test:
@@ -586,7 +954,7 @@ class DownstreamEvaluator:
             test_loader = self._get_data_loader("test", self.embedding_batch_size)
             logger.info(f"Getting test embeddings for {self.dataset}...")
             test_embeddings, test_labels = self._get_embeddings(
-                test_loader, is_train=False
+                test_loader, is_train=False, normalizer=normalizer
             )
             logger.info(f"Test embeddings shape: {test_embeddings.shape}")
             logger.info(
@@ -611,7 +979,10 @@ class DownstreamEvaluator:
         if test_labels is not None:
             logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
 
-        if self.quantize_embeddings:
+        if (
+            self.quantize_embeddings
+            and self.quantization_scheme != QuantizationScheme.TESSERA_PER_VECTOR
+        ):
             logger.info(f"Dequantizing embeddings for {self.dataset}")
             if self.quantize_bits is not None and self.quantile_config is not None:
                 # Percentile-based dequantization
@@ -701,13 +1072,92 @@ class DownstreamEvaluator:
         }
         result = self.eval_function(**kwargs)  # type: ignore
 
+        if diagnostics:
+            # Measured on the train split's pipeline: raw_* is what the model
+            # emitted, norm_* what normalization made of it, roundtrip_* what
+            # the int8 round-trip cost. Logged next to the score so a
+            # geometry/quantization problem is visible on the same run.
+            logger.info(
+                f"Embedding pipeline diagnostics for {self.dataset}: {diagnostics}"
+            )
+            result.embedding_diagnostics = diagnostics
+
+        # After the assignment above, which would otherwise drop these.
+        result.embedding_diagnostics.update(self._geometry_diagnostics(val_embeddings))
+
+        if self.balanced_trial is not None:
+            # Run here rather than inside the probe so the trials see exactly the
+            # embeddings the probe saw -- past the int8 round-trip and any PCA --
+            # and so no second forward pass is needed.
+            trial_start = time.time()
+            trial_result = run_balanced_trials(
+                config=self.config,
+                embeddings_by_split={
+                    "train": train_embeddings,
+                    "val": val_embeddings,
+                    "test": test_embeddings,
+                },
+                labels_by_split={
+                    "train": train_labels,
+                    "val": val_labels,
+                    "test": test_labels,
+                },
+                trial_config=self.balanced_trial,
+                device=self.device or self.trainer.device,
+            )
+            result.extra_results.update(
+                {
+                    trial_task_name(self.evaluation_name, predictor): predictor_result
+                    for predictor, predictor_result in trial_result.results.items()
+                }
+            )
+            logger.info(
+                f"Balanced trials for {self.dataset} took "
+                f"{time.time() - trial_start:.2f}s"
+            )
+
         # Free memory aggressively between evals
         del train_embeddings, train_labels, test_embeddings, test_labels
         del val_embeddings, val_labels
         torch.cuda.empty_cache()
         gc.collect()
 
+        if self.band_sensitivity_modality is not None:
+            result.embedding_diagnostics.update(self._band_sensitivity_diagnostics())
+            torch.cuda.empty_cache()
+            gc.collect()
+
         return result
+
+    def _geometry_diagnostics(self, val_embeddings: torch.Tensor) -> dict[str, float]:
+        """Geometry of the embeddings the probe just scored, as ``geom_*`` metrics.
+
+        Logged alongside every KNN / linear-probe task so an accuracy trend can be
+        read against the shape of the space that produced it: a task can regress
+        either because the encoder lost information or because the surviving
+        information moved into a direction the probe cannot use, and only the
+        second shows up as rising ``geom_common_mode_frac`` / falling
+        ``geom_centered_effective_rank``.
+
+        Spatial tasks are mean-pooled to one vector per sample first, matching how
+        image-level probes consume them. Diagnostics never fail an eval.
+        """
+        try:
+            embeddings = val_embeddings.detach()
+            if embeddings.ndim > 2:
+                embeddings = embeddings.reshape(
+                    embeddings.shape[0], -1, embeddings.shape[-1]
+                ).mean(dim=1)
+            return {
+                f"geom_{k}": v
+                for k, v in compute_embedding_diagnostics(embeddings).items()
+            }
+        except Exception:
+            logger.warning(
+                f"Embedding geometry diagnostics failed for {self.dataset}",
+                exc_info=True,
+            )
+            return {}
 
     def _get_best_checkpoint_path(self) -> str:
         """Get the best checkpoint path."""
@@ -821,13 +1271,35 @@ class DownstreamEvaluator:
         """Compute embedding diagnostics only (no downstream task)."""
         logger.info(f"Computing embedding diagnostics for {self.dataset}")
         data_loader = self._get_data_loader("train", self.embedding_batch_size)
-        embeddings, _ = self._get_embeddings(data_loader, is_train=False)
+        normalizer, fit_on_train = self._resolve_normalizer()
+        pipeline: dict[str, float] = {}
+        embeddings, _ = self._get_embeddings(
+            data_loader,
+            is_train=False,
+            normalizer=None if fit_on_train else normalizer,
+            quantize=False if fit_on_train else None,
+            diagnostics_out=None if fit_on_train else pipeline,
+        )
+        if fit_on_train:
+            normalizer = EmbeddingNormalizer.fit(
+                self.embedding_normalization, embeddings
+            )
+            embeddings = normalize_and_quantize(
+                embeddings,
+                normalizer=normalizer,
+                quantize=self.quantize_embeddings,
+                quantize_bits=self.quantize_bits,
+                quantile_config=self.quantile_config,
+                quantization_scheme=self.quantization_scheme,
+                diagnostics_out=pipeline,
+            )
         logger.info(f"Embeddings shape for {self.dataset}: {embeddings.shape}")
 
         if embeddings.ndim >= 3:
             diagnostics = compute_spatial_embedding_diagnostics(embeddings)
         else:
             diagnostics = compute_embedding_diagnostics(embeddings)
+        diagnostics.update(pipeline)
         logger.info(f"Embedding diagnostics for {self.dataset}: {diagnostics}")
 
         result = EvalTaskResult(val_result=None, test_result=None)
@@ -897,6 +1369,24 @@ def eval_result_log_dict(
         if metric_name == result.primary_metric_key:
             continue
         log_dict[f"{other_prefix}/{name}/{metric_name}"] = metric_value
+    return log_dict
+
+
+def extra_results_log_dict(extra_results: dict[str, EvalResult]) -> dict[str, float]:
+    """Build the wandb log dict for results produced by a different protocol.
+
+    Each lands under its own synthetic task name via the ordinary key layout --
+    ``eval/{trial_task}`` for the primary metric, ``eval_other/{trial_task}/*``
+    for the rest -- so the CSV export and the dashboards treat a balanced trial
+    as just another task, with no special case and no way to read it as the host
+    task's own number.
+
+    Deliberately NOT logged under ``eval/test/``: a balanced trial's eval set is
+    its own remainder, not our test split.
+    """
+    log_dict: dict[str, float] = {}
+    for name, result in extra_results.items():
+        log_dict.update(eval_result_log_dict("eval", name, result))
     return log_dict
 
 
@@ -1009,6 +1499,11 @@ class DownstreamEvaluatorCallback(Callback):
             logger.info(
                 f"Downstream evaluator {evaluator.evaluation_name} score: {val_result.primary} (metrics: {val_result.metrics})"
             )
+        for name, extra_result in result.extra_results.items():
+            logger.info(
+                f"Downstream evaluator {name} score: {extra_result.primary} "
+                f"(metrics: {extra_result.metrics})"
+            )
         if self.run_on_test and test_result is not None:
             logger.info(
                 f"Downstream evaluator {evaluator.evaluation_name} test score: {test_result.primary} (metrics: {test_result.metrics})"
@@ -1033,6 +1528,8 @@ class DownstreamEvaluatorCallback(Callback):
                 _log_eval_result_to_wandb(
                     wandb_callback, "eval", evaluator.evaluation_name, val_result
                 )
+            if result.extra_results:
+                wandb_callback.wandb.log(extra_results_log_dict(result.extra_results))
             wandb_callback.wandb.log(
                 {"eval_time/" + evaluator.evaluation_name: eval_time}
             )
@@ -1277,12 +1774,31 @@ class DownstreamEvaluatorCallback(Callback):
             else os.path.basename(save_folder.rstrip("/"))
         )
 
+        # Beaker rejects experiment names longer than 128 chars. The launcher
+        # (common.build_launch_config) turns ``run_name`` into the experiment name
+        # ``{run_name}-evaluate-{8-char-uuid}`` (18 chars of suffix), so cap the eval
+        # run name accordingly. The ``_eval_step{step}`` suffix is kept intact (each
+        # step must map to a distinct job); only the train-run-name prefix is
+        # truncated, and the trailing uuid still guarantees uniqueness.
+        step_suffix = f"_eval_step{step}"
+        max_run_name_len = _BEAKER_MAX_NAME_LEN - _BEAKER_LAUNCH_NAME_SUFFIX_LEN
+        max_prefix_len = max_run_name_len - len(step_suffix)
+        eval_run_name = f"{train_run_name[:max_prefix_len]}{step_suffix}"
+        if len(eval_run_name) < len(train_run_name) + len(step_suffix):
+            logger.warning(
+                "Truncated in-loop eval experiment name to fit Beaker's %d-char "
+                "limit (train run name %r is too long); using %r.",
+                _BEAKER_MAX_NAME_LEN,
+                train_run_name,
+                eval_run_name,
+            )
+
         launch_checkpoint_eval_job(
             module_path=module_path,
             checkpoint_dir=save_folder,
             step=step,
             cluster=clusters[0],
-            run_name=f"{train_run_name}_eval_step{step}",
+            run_name=eval_run_name,
             priority=priority,
             tasks_to_run=task_names,
             wandb_project=(

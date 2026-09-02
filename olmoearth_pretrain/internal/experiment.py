@@ -468,6 +468,22 @@ class SubCmd(StrEnum):
         elif self == SubCmd.evaluate:
             try:
                 evaluate(config)
+            except BaseException:
+                # A crashed eval must take its container down with it.
+                # Graceful teardown after an exception has hung here before
+                # (threads that survive the excepthook keep the interpreter
+                # alive, torchrun keeps waiting on it), leaving a "running"
+                # beaker job holding its GPU for hours after the crash —
+                # the 20260808 sweep's zombies. os._exit skips all of that;
+                # the wandb run is marked crashed by heartbeat timeout, and
+                # the relaunch skip logic already treats non-finished runs
+                # as not done.
+                import os
+
+                logger.exception("evaluation crashed; forcing container exit")
+                sys.stdout.flush()
+                sys.stderr.flush()
+                os._exit(1)
             finally:
                 teardown_training_environment()
         elif self == SubCmd.train_single:

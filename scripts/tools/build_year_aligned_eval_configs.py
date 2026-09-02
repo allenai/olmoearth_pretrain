@@ -79,6 +79,7 @@ MONTHLY_LAYERS = {
 # input shrinks the evaluated window set for EVERY model on the dataset, which
 # would detach it from the published year-aligned numbers.
 SCL_LAYERS = [f"sentinel2_scl_mo{i:02d}" for i in range(1, 13)]
+LANDSAT_QA_LAYERS = [f"landsat_qa_mo{i:02d}" for i in range(1, 13)]
 
 # Landsat monthlies, also added on weka by setup_extra_layers.py (input parity
 # with AEF, which ingests Landsat). A real modality, unlike scl -- but
@@ -165,6 +166,19 @@ def landsat_input() -> dict:
     }
 
 
+def landsat_qa_input() -> dict:
+    """Build the optional model.yaml input block for the QA_PIXEL cloud-mask layers."""
+    return {
+        "data_type": "raster",
+        "dtype": "FLOAT32",
+        "layers": list(LANDSAT_QA_LAYERS),
+        "load_all_layers": True,
+        "bands": ["QA_PIXEL"],
+        "passthrough": True,
+        "required": False,
+    }
+
+
 def preserved_inputs(dst_path: Path, source_inputs: dict) -> tuple[dict, dict]:
     """Embedding inputs to take from the destination rather than the parent.
 
@@ -217,13 +231,21 @@ def convert(
     # a stable order ahead of the non-imagery inputs. scl rides along as the
     # optional cloud-mask input (see scl_input), landsat as the optional
     # third sensor (see landsat_input).
-    for modality in ("sentinel2_l2a", "sentinel1", "sentinel2", "scl", "landsat"):
+    for modality in (
+        "sentinel2_l2a",
+        "sentinel1",
+        "sentinel2",
+        "scl",
+        "landsat",
+        "landsat_qa",
+    ):
         inputs.pop(modality, None)
     rebuilt = {
         "sentinel2_l2a": imagery_input("sentinel2_l2a"),
         "sentinel1": imagery_input("sentinel1"),
         "scl": scl_input(),
         "landsat": landsat_input(),
+        "landsat_qa": landsat_qa_input(),
     }
     for name, block in inputs.items():
         # Keep "targets" last so a carried-over input reads next to the other

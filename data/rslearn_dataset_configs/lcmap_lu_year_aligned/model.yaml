@@ -14,6 +14,14 @@ data:
   init_args:
     path: /weka/dfive-default/olmoearth/eval_datasets/lcmap_lu_year_aligned
     inputs:
+      tessera_v2:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+          - tessera_v2
+        required: true
+        use_all_bands_in_order_of_band_set_idx: 0
+        passthrough: true
       sentinel2_l2a:
         data_type: raster
         dtype: FLOAT32
@@ -116,6 +124,27 @@ data:
         - B9
         - B10
         - B11
+        passthrough: true
+        required: false
+      landsat_qa:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+        - landsat_qa_mo01
+        - landsat_qa_mo02
+        - landsat_qa_mo03
+        - landsat_qa_mo04
+        - landsat_qa_mo05
+        - landsat_qa_mo06
+        - landsat_qa_mo07
+        - landsat_qa_mo08
+        - landsat_qa_mo09
+        - landsat_qa_mo10
+        - landsat_qa_mo11
+        - landsat_qa_mo12
+        load_all_layers: true
+        bands:
+        - QA_PIXEL
         passthrough: true
         required: false
       tessera:

@@ -86,6 +86,57 @@ python -m olmoearth_pretrain.evals.datasets.tessera_v2_export infer \
 python -m olmoearth_pretrain.internal.embedding_eval_sweep --cluster=... --model=tessera_v2_precomputed
 ```
 
+### v2 is the one baseline that must be quantized at eval time
+
+**Read this before launching any v2 eval.** Every other precomputed baseline
+already carries its product's int8 loss in the stored values — the GSE fetcher
+dequantizes int8 COGs, and tessera v1/v1.1 arrive pre-dequantized from
+geotessera — so the sweeps pass them through unquantized, which scores each at
+the precision it ships. **v2 does not**, because we bake it ourselves and
+`infer_v2.py` defaults to float32 (`--int8` is opt-in). The shipped v2 product
+*is* int8, via quantization-aware training, so an unquantized v2 arm is scored
+**above its own release precision** — which is what the 2026-08-07 and
+2026-08-11 africa/ethiopia sweeps did, flattering v2 on exactly the cell where
+it beats us hardest.
+
+Two constants in `full_eval_sweep.py` handle this, and both sweeps read them:
+`QUANTIZE_AT_EVAL_MODALITIES` (holds `tessera_v2` alone) and
+`QUANTIZE_SCHEME_BY_MODALITY` (maps it to `TESSERA_PER_VECTOR`). **Do not**
+re-add a blanket `quantize_embeddings=False` for precomputed arms; if a future
+product is downloaded rather than self-baked, leave it out of both.
+
+**Each product is quantized under its own scheme, which matters more than the
+flag.** Our default quantizer is AlphaEarth's published fixed-scale power scheme
+(`POWER=2.0`, `SCALE=127.5`), which clips at |x| > ~0.992 and therefore fits
+AEF's unit-L2 64-d vectors. The v2 student ends in a **non-affine LayerNorm**
+(`tessera_v2_model.py`) at per-coordinate std ~1, so scoring it under the power
+scheme would clip ~a third of its coordinates and cost it ~5 points of
+round-trip cosine that its real product never pays. Tessera's own scheme is
+linear with one float32 scale **per pixel** — verified against the shipped
+client, `geotessera/store.py:207-216`,
+`emb_int8.astype(np.float32) * scales[np.newaxis, :, :]`, published as
+`grid_{lon}_{lat}.npy` + `_scales.npy` — so it is clip-free by construction.
+`QuantizationScheme.TESSERA_PER_VECTOR` reproduces it, and
+`TestTesseraQuantization::test_matches_geotessera_decoder` asserts our
+dequantization is bit-identical to theirs (skipped if `geotessera` is not
+installed). Because the per-vector scales are needed to reconstruct, that scheme
+returns round-tripped **float32** rather than int8 codes, and the callback's
+later dequantize step skips it.
+
+Only their decoder ships in the client, so our encoder is the natural inverse
+(`scale = max|x| / 127`); any per-vector scale is clip-free, so the choice moves
+the step size by a few percent, not the conclusion.
+
+**Still outstanding, and charged to us:** our own register bottleneck ends in the
+same LayerNorm geometry (`flexi_vit.py:1917`), so the power scheme clips ~32% of
+*our* coordinates on every embedding-eval number in every dashboard — cosine
+0.95 against AEF's 0.9999. Fix on our side with `CENTER_L2` before the round-trip
+(what `EmbeddingNormalization` recommends) or per-vector quantization; note the
+bottleneck's `unit_norm` option does **not** fix it, because
+`unit_norm_scale` defaults to `sqrt(register_dim)`, not 1.
+`quantization_clip_stats` in `embedding_diagnostics.py` measures the real
+fraction; nothing has logged it yet.
+
 `--retry-backoff-seconds` is deliberately small for prepare: rslearn sleeps
 `backoff * (attempt+1) * random(1..2)`, so 60 parks a worker for 60-120s on its
 first (routine) 403 and collapses effective parallelism to ~1 worker. Keep 60

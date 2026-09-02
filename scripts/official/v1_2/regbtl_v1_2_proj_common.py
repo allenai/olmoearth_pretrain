@@ -57,6 +57,12 @@ from regbtl_v1_2_common import (
 from regbtl_v1_2_faster_common import build_wideread_regbtl_model_config
 from regbtl_v1_2_regsup_common import add_register_supervision
 
+from olmoearth_pretrain.internal.all_evals import (
+    AEF_SUPPLEMENTAL_YEAR_ALIGNED,
+)
+from olmoearth_pretrain.internal.all_evals import (
+    EMBEDDING_EVAL_TASKS as _EMBEDDING_EVAL_TASKS,
+)
 from olmoearth_pretrain.internal.experiment import CommonComponents
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModuleConfig
@@ -69,6 +75,12 @@ logger = logging.getLogger(__name__)
 # stored artifact serves both widths by truncation (Tessera-v2 per-prefix heads).
 REGISTER_DIM = 768
 PROJECTION_DIMS = [128, 64]
+# Hidden width of the 2-layer back-projection heads, for the arms that use one
+# (``register_back_projection_hidden``). SimReg's ``(m, 2m, d)`` rule read at
+# ``m = max(PROJECTION_DIMS)``, then held FIXED across prefixes so that prefix
+# width is the only thing varying between Matryoshka heads. The heads are
+# training-only, so this is free at serving time.
+BACK_PROJECTION_HIDDEN = 256
 # w0p1 (base 0.1) everywhere heads attach: best for the smaller register dims, and
 # d768 has only w0.01/w1 completed evals, so this doubles as the missing d768 w0p1
 # point. The sup768 variant is encoder-identical to the in-flight
@@ -141,96 +153,21 @@ class StudentArm:
         supervision_scale: Attach supervision heads to the student at this fraction
             of the register head's weight (needs supervision_source="both").
         gram_weight: Weight of the flat (mostly cross-scene) relational term.
-        gram_within_weight: Weight of the within-scene (block-diagonal) term.
     """
 
     slug: str
     constant_lr: bool = False
     supervision_scale: float | None = None
     gram_weight: float = 1.0
-    gram_within_weight: float = 0.0
 
 
-#: The five arms. Rationale for each is in its run script's docstring.
+#: The student arms. Rationale for each is in its run script's docstring.
 STUDENT_ARMS = {
     arm.slug: arm
     for arm in [
         StudentArm(slug="flatlr", constant_lr=True),
         StudentArm(slug="supstu0p1", supervision_scale=0.1),
         StudentArm(slug="supstu0p01", supervision_scale=0.01),
-        StudentArm(slug="gramwithin", gram_weight=0.5, gram_within_weight=0.5),
-        StudentArm(slug="gramonly", gram_weight=0.0, gram_within_weight=1.0),
-        # Both spatial remedies at once. The single-arm runs test two independent
-        # routes to the same deficiency -- the objective applies almost no pressure
-        # to discriminate CELLS within a scene, since the cosine term is satisfiable
-        # by the scene-mean direction and ~98% of the flat Gram's pairs are
-        # cross-scene. gramonly supplies that pressure relationally (every pair
-        # within one scene); supstu0p1 supplies it directly (each cell must predict
-        # the map modalities at its own location). Whether they compose, or one
-        # subsumes the other, is not answerable from the single-knob arms.
-        StudentArm(
-            slug="gramonly_supstu0p1",
-            supervision_scale=0.1,
-            gram_weight=0.0,
-            gram_within_weight=1.0,
-        ),
-        StudentArm(
-            slug="gramwithin_supstu0p1",
-            supervision_scale=0.1,
-            gram_weight=0.5,
-            gram_within_weight=0.5,
-        ),
-        # The same two combinations on a flat student LR. Only arms whose slug ends
-        # in ``_flatlr`` hold the LR constant after warmup; every other arm inherits
-        # the encoder's CosWithWarmup(alpha_f=0.1) and its 10x decay, which is the
-        # baseline's schedule. Run as pairs so the schedule stays attributable
-        # rather than folded into the combination.
-        StudentArm(
-            slug="gramonly_supstu0p1_flatlr",
-            constant_lr=True,
-            supervision_scale=0.1,
-            gram_weight=0.0,
-            gram_within_weight=1.0,
-        ),
-        StudentArm(
-            slug="gramwithin_supstu0p1_flatlr",
-            constant_lr=True,
-            supervision_scale=0.1,
-            gram_weight=0.5,
-            gram_within_weight=0.5,
-        ),
-        # The same four combinations at a TENTH the student supervision weight.
-        # Supervision trades early speed for late stability -- supboth_w1 (1.0x)
-        # sits ~6 mIoU behind at 40k and only crosses sup768 at 400k, once sup768
-        # has degraded. 0.1x reproduces that shape scaled down (-1.3 at 40k, -0.6
-        # by 120k). 0.01x asks whether the protection survives at a dose small
-        # enough to cost nothing early, or whether it is simply too weak to act.
-        StudentArm(
-            slug="gramonly_supstu0p01",
-            supervision_scale=0.01,
-            gram_weight=0.0,
-            gram_within_weight=1.0,
-        ),
-        StudentArm(
-            slug="gramwithin_supstu0p01",
-            supervision_scale=0.01,
-            gram_weight=0.5,
-            gram_within_weight=0.5,
-        ),
-        StudentArm(
-            slug="gramonly_supstu0p01_flatlr",
-            constant_lr=True,
-            supervision_scale=0.01,
-            gram_weight=0.0,
-            gram_within_weight=1.0,
-        ),
-        StudentArm(
-            slug="gramwithin_supstu0p01_flatlr",
-            constant_lr=True,
-            supervision_scale=0.01,
-            gram_weight=0.5,
-            gram_within_weight=0.5,
-        ),
     ]
 }
 
@@ -256,7 +193,6 @@ def apply_arm(
 ) -> LatentMIMTrainModuleConfig:
     """Apply the arm's distillation weights and LR schedule, in place."""
     config.projection_distill_gram_weight = arm.gram_weight
-    config.projection_distill_gram_within_weight = arm.gram_within_weight
     if arm.constant_lr:
         add_student_lr_group(config, scheduler=student_constant_scheduler(config))
     return config
@@ -434,6 +370,142 @@ def add_proj_loop_eval_beaker_job(
         **embedding_tasks,
         **evaluator.tasks,
     }
+    evaluator.run_as_beaker_job = True
+    evaluator.beaker_eval_module_path = module_path
+    evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
+    return trainer_config
+
+
+# --- year-aligned AEF-trial in-loop evals, both heads -----------------------------
+# The six early-read probes (see regbtl_v1_2_earlyread_common for the rationale):
+# the PASTIS S1+S2 bridge task shared with the older runs' in-loop sets, plus the
+# year-aligned S1+S2+Landsat PASTIS / ethiopia / descals probes. The two _knn tasks
+# carry AEF's balanced-trial protocol automatically (_aef_ps1_task attaches a
+# BalancedTrialConfig whenever eval_mode is KNN), which is where the aeftrial_*
+# metrics come from. Names are looked up in the canonical registry so a typo raises
+# KeyError at import instead of silently dropping a task. Duplicated here rather
+# than imported from regbtl_v1_2_earlyread_common, whose import chain drags in the
+# d128 tanchor model builders these runs do not use.
+_PROJ_EARLYREAD_LOOP_EVAL_NAMES = (
+    "pastis_ws16_ps1_sentinel1_sentinel2_pretrain_export",
+    "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat",
+    "ethiopia_crops_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat",
+    "ethiopia_crops_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_knn",
+    "descals_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat",
+    "descals_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_knn",
+)
+
+
+def set_proj_earlyread_loop_evals(
+    trainer_config,
+    module_path: str,
+    *,
+    interval_steps: int = 40000,
+    projection_dim: int = 128,
+):
+    """REPLACE the eval set with the early-read probes on BOTH heads, via Beaker.
+
+    The six tasks above probe the d768 teacher registers; their ``_proj{d}``
+    duplicates probe the detached student (``eval_on_projected_registers``), so the
+    shipped d128 embedding gets the same year-aligned LP/KNN/aeftrial readout
+    in-loop. Like ``set_earlyread_loop_evals`` this DISCARDS the shared catalog --
+    these runs are judged on the embedding product, and the catalog evals would
+    inflate the eval job's runtime measuring axes the experiment does not turn on.
+
+    ``interval_steps`` defaults to 40k, not the earlyread 20k: with the projected
+    duplicates this is a 12-task job, and the proj runs' 14-task jobs are the ones
+    that overflowed a 20k window and silently dropped their tail metrics (see
+    ``add_proj_loop_eval_beaker_job``). Must be a multiple of the checkpointer
+    save_interval (5000).
+    """
+    base_tasks = {
+        name: replace(
+            _EMBEDDING_EVAL_TASKS[name],
+            eval_interval=Duration.steps(interval_steps),
+        )
+        for name in _PROJ_EARLYREAD_LOOP_EVAL_NAMES
+    }
+    proj_tasks = {
+        f"{name}_proj{projection_dim}": replace(
+            task,
+            eval_on_projected_registers=True,
+            eval_projection_dim=projection_dim,
+        )
+        for name, task in base_tasks.items()
+    }
+    evaluator = trainer_config.callbacks["downstream_evaluator"]
+    # Student tasks FIRST: eval jobs at urgent can be preempted mid-run and the
+    # tail tasks are the ones that lose their metrics -- the shipped d128 head
+    # is the primary readout, so a clipped job should cost teacher cells, not
+    # student cells (lesson from the 2026-08-18 baseline sweep, which ran
+    # teacher-first and made the deliverable wait).
+    evaluator.tasks = {**proj_tasks, **base_tasks}
+    evaluator.run_as_beaker_job = True
+    evaluator.beaker_eval_module_path = module_path
+    evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
+    return trainer_config
+
+
+# --- AEF-trial + PASTIS in-loop evals, student widths only ------------------------
+# The eight year-aligned AEF datasets on S1+S2+Landsat (kNN twins, which carry AEF's
+# balanced-trial protocol automatically -- _aef_ps1_task attaches a
+# BalancedTrialConfig whenever eval_mode is KNN, and that is where the aeftrial_*
+# metrics come from) plus the year-aligned PASTIS task on the same input. Names are
+# looked up in the canonical registry so a typo raises KeyError at import instead of
+# silently dropping a task.
+_AEFTRIAL_LOOP_EVAL_NAMES = tuple(
+    f"{dataset}_ws16_ps1_sentinel1_sentinel2_landsat_knn"
+    for dataset in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+) + ("pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat",)
+
+
+def set_proj_aeftrial_loop_evals(
+    trainer_config,
+    module_path: str,
+    *,
+    interval_steps: int = 80000,
+    projection_dims: tuple[int, ...] = (128, 64),
+):
+    """REPLACE the eval set with the AEF trials + PASTIS on the STUDENT widths.
+
+    Nine tasks -- the eight AEF-supplemental datasets' kNN twins (which report
+    ``aeftrial_{ridge,knn5,knn20}``) and PASTIS -- all on unmasked S1+S2+Landsat,
+    duplicated at each entry of ``projection_dims``. Every task probes the detached
+    student (``eval_on_projected_registers``); the d768 teacher is deliberately NOT
+    scored here, since these runs are judged on the shipped embedding and the
+    teacher rows would add half again to an already long job.
+
+    Task ORDER is d128 before d64, PASTIS before the trials within each width. Eval
+    jobs at urgent priority get preempted mid-run and the trailing tasks are the ones
+    that systematically lose their metrics, so the order is the priority order: the
+    shipped width first, and the segmentation readout -- the cell the width question
+    hurts most -- ahead of the classification block.
+
+    ``interval_steps`` defaults to **80k**, double the proj runs' 40k. This is an
+    18-task job over ~159k windows per width at three modality passes each; the
+    12-task early-read job already needed 40k to finish before its successor spawned,
+    and consecutive jobs sharing one resumed W&B run silently drop the overlapping
+    writer's rows. Must be a multiple of the checkpointer save_interval (5000).
+    """
+    base_tasks = {
+        name: replace(
+            _EMBEDDING_EVAL_TASKS[name], eval_interval=Duration.steps(interval_steps)
+        )
+        for name in _AEFTRIAL_LOOP_EVAL_NAMES
+    }
+    # Ordered dict comprehension: widths outer, PASTIS-first inner.
+    ordered = sorted(base_tasks, key=lambda n: (not n.startswith("pastis"), n))
+    tasks = {
+        f"{name}_proj{dim}": replace(
+            base_tasks[name],
+            eval_on_projected_registers=True,
+            eval_projection_dim=dim,
+        )
+        for dim in projection_dims
+        for name in ordered
+    }
+    evaluator = trainer_config.callbacks["downstream_evaluator"]
+    evaluator.tasks = tasks
     evaluator.run_as_beaker_job = True
     evaluator.beaker_eval_module_path = module_path
     evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)

@@ -1,4 +1,25 @@
-"""Averaged FLOPs per task."""
+"""Averaged MACs per task, as plotted on the x-axis of Figure 1.
+
+Counted with ``true_macs`` below rather than ``thop``. thop hooks nn.Module instances and
+only knows Linear/Conv, so attention's QK^T and AV matmuls were never counted; the undercount
+factor is 1 + N/(6d) for tokens N and width d, which grows with sequence length and shrinks
+with width, so it does not divide out of a comparison between models. Switching the counter
+changed every number in Figure 1 by between 1.02x and 21.7x and moved 19 of 21 models'
+positions along the x-axis, so the OlmoEarth v1.2 report's figure and its "2.9x fewer MACs"
+claim (really 5.3x) were both computed on undercounts.
+
+Two implementations lose more than that formula suggests: nn.TransformerEncoderLayer takes a
+fused fast path under eval()+no_grad that has no flop formula at all, so whole layers report
+zero; and torchvision's Swin (Satlas) implements qkv, both matmuls and the output projection
+functionally, so its entire attention block is invisible rather than just the matmuls.
+
+Dropping thop also removes a silent corruption in the other direction. On models that alias
+a submodule at two points in the tree (upstream AnySat exposes ``spatial_encoder`` as both
+its own attribute and its inner model's), ``model.apply()`` registers thop's hooks twice
+while its cleanup dict is keyed by module, so hooks leak and MACs accumulate across
+successive profile() calls. AnySat's published value was ~11x too HIGH for this reason --
+the only model in the figure whose number was too large.
+"""
 
 import os
 import sys
@@ -6,7 +27,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import torch
-from thop import clever_format, profile
+from thop import clever_format
+from torch.utils.flop_counter import FlopCounterMode, sdpa_flop_count
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.models import (
@@ -21,7 +43,7 @@ from olmoearth_pretrain.evals.models import (
     Terramind,
 )
 from olmoearth_pretrain.evals.models.dinov3.dinov3 import DINOv3, DinoV3Models
-from olmoearth_pretrain.nn.flexi_vit import Encoder
+from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
@@ -57,6 +79,92 @@ SINGLE_BANDSET_CONFIG = TokenizationConfig(
         "landsat": LANDSAT_SINGLE_BANDSET,
     }
 )
+
+
+def build_v1_3_rc_encoder(with_projection: bool) -> Encoder:
+    """The v1.3 distillation release candidate's encoder.
+
+    Field values mirror ``encoder_config`` in
+    regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsamp_psuniform_config.json.
+    ``with_projection=True`` includes the shipped d128/d64 linear projection
+    (the distillation student); ``False`` measures the register bottleneck alone.
+    """
+    config = EncoderConfig(
+        supported_modality_names=[
+            "sentinel2_l2a",
+            "sentinel1",
+            "landsat",
+            "worldcover",
+            "srtm",
+            "openstreetmap_raster",
+            "wri_canopy_height_map",
+            "cdl",
+            "worldcereal",
+        ],
+        embedding_size=768,
+        max_patch_size=8,
+        min_patch_size=1,
+        num_heads=12,
+        mlp_ratio=4.0,
+        depth=12,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=SINGLE_BANDSET_CONFIG,
+        use_linear_patch_embed=True,
+        band_dropout_rate=0.2,
+        random_band_dropout=True,
+        band_dropout_modalities=["sentinel2_l2a", "landsat"],
+        patch_embed_hidden_sizes=[64],
+        position_encoding="rope_3d_mixed",
+        rope_base=10000.0,
+        rope_coordinate_scale=1.0,
+        rope_mixed_base=10000.0,
+        temporal_rope_dim_frac=0.25,
+        rope_temporal_coordinate_scale=1.0 / 30.0,
+        use_register_bottleneck=True,
+        register_grid_size=0,
+        register_dim=768,
+        register_read_depth=1,
+        register_latent_depth=4,
+        register_interleave=True,
+        register_per_depth_read_proj=True,
+        register_contrastive_source="registers",
+        register_latent_self_attn=True,
+        register_attn_dim=768,
+        register_projection_dims=[128, 64] if with_projection else None,
+        register_projection_type="linear",
+    )
+    encoder = config.build()
+    if with_projection:
+        # The per-prefix back-projections are training-only (never run in forward,
+        # discarded at inference); drop them so the param count is what ships.
+        encoder.register_back_projections = None
+    return encoder
+
+
+def _sdpa_cpu_flop(q_shape, k_shape, v_shape, *args, out_shape=None, **kwargs):
+    """The formula torch is missing for the CPU flash-attention op."""
+    return sdpa_flop_count(q_shape, k_shape, v_shape)
+
+
+# FlopCounterMode ships formulas for the CUDA SDPA variants but not for the CPU one, which is
+# what F.scaled_dot_product_attention dispatches to here -- without this, attention silently
+# counts as zero and we are back to thop's answer.
+_SDPA_CPU_MAPPING = {
+    torch.ops.aten._scaled_dot_product_flash_attention_for_cpu: _sdpa_cpu_flop,
+}
+
+
+def true_macs(fn) -> float:
+    """MACs for one forward pass, attention included.
+
+    Grad is left ENABLED deliberately: under eval() + no_grad, nn.TransformerEncoderLayer
+    takes a fused fast-path op that has no flop formula, so whole layers would count as zero.
+    """
+    counter = FlopCounterMode(display=False, custom_mapping=_SDPA_CPU_MAPPING)
+    with counter:
+        fn()
+    return counter.get_total_flops() / 2
 
 
 def count_params(model: torch.nn.Module, trainable_only: bool = True):
@@ -119,7 +227,7 @@ def construct_eval_samples() -> list[tuple[MaskedOlmoEarthSample, int, bool]]:
 
 
 def flops_per_model(model, samples: list[MaskedOlmoEarthSample, int, bool]) -> float:
-    """flops_per_model."""
+    """Averaged MACs over the 13 task slots."""
     total_macs = []
     for i, multiplier, spatial_pool in samples:
         if isinstance(model, Encoder):
@@ -130,7 +238,7 @@ def flops_per_model(model, samples: list[MaskedOlmoEarthSample, int, bool]) -> f
         else:
             inputs = (i,)
         with suppress_stdout():
-            macs, _ = profile(model, inputs=inputs)
+            macs = true_macs(lambda: model(*inputs))
         for _ in range(multiplier):
             total_macs.append(macs)
     return sum(total_macs) / len(total_macs)
@@ -141,6 +249,19 @@ if __name__ == "__main__":
     num_tasks = sum([s[1] for s in samples])
     # this is what we say in our figure
     assert num_tasks == 13
+
+    # The v1.3 distillation release candidate, with the shipped d128/d64 linear
+    # projection and without it. Run with --rc-only to skip the baseline zoo
+    # (which needs local model weights).
+    for label, rc_model in [
+        ("v1.3 RC (bottleneck + d128 linear projection)", build_v1_3_rc_encoder(True)),
+        ("v1.3 RC (bottleneck only, no projection)", build_v1_3_rc_encoder(False)),
+    ]:
+        fpm = flops_per_model(rc_model, samples)
+        print(label, count_params(rc_model), fpm, clever_format(fpm))
+    if "--rc-only" in sys.argv:
+        sys.exit(0)
+
     modalities = [
         Modality.SENTINEL2_L2A,
         Modality.SENTINEL1,

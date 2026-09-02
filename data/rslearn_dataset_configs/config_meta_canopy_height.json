@@ -1,0 +1,30 @@
+{
+  "layers": {
+    "meta_canopy_height": {
+      "band_sets": [
+        {
+          "bands": [
+            "canopy_height"
+          ],
+          "dtype": "uint8",
+          "nodata_value": 255
+        }
+      ],
+      "data_source": {
+        "class_path": "rslearn.data_sources.meta_canopy_height.MetaCanopyHeightV2",
+        "ingest": false,
+        "init_args": {
+          "metadata_cache_dir": "cache/meta_canopy_height"
+        }
+      },
+      "resampling_method": "nearest",
+      "type": "raster"
+    }
+  },
+  "tile_store": {
+    "class_path": "rslearn.tile_stores.default.DefaultTileStore",
+    "init_args": {
+      "convert_rasters_to_cogs": false
+    }
+  }
+}

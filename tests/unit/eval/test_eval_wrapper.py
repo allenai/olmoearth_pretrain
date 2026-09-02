@@ -47,11 +47,8 @@ class TestPoolRegisters:
     def _wrapper(
         self, task_type: TaskType, use_center_token: bool
     ) -> OlmoEarthEvalWrapper:
-        model = SimpleNamespace(
-            register_bottleneck=SimpleNamespace(register_grid=self.GRID),
-        )
         return OlmoEarthEvalWrapper(
-            model=model,  # type: ignore[arg-type]
+            model=SimpleNamespace(),  # type: ignore[arg-type]
             task_type=task_type,
             patch_size=1,
             pooling_type=PoolingType.MEAN,
@@ -60,7 +57,7 @@ class TestPoolRegisters:
 
     def _registers(self, batch: int = 2) -> torch.Tensor:
         n_h, n_w = self.GRID
-        return torch.randn(batch, n_h * n_w, self.DIM)
+        return torch.randn(batch, n_h, n_w, self.DIM)
 
     def test_center_token_takes_center_cell(self) -> None:
         """Center-pixel classification keeps only the center register, not the mean."""
@@ -68,7 +65,7 @@ class TestPoolRegisters:
         registers = self._registers()
         out = wrapper._pool_registers({"registers": registers})
         n_h, n_w = self.GRID
-        expected = registers.reshape(-1, n_h, n_w, self.DIM)[:, n_h // 2, n_w // 2, :]
+        expected = registers[:, n_h // 2, n_w // 2, :]
         assert out.shape == (registers.shape[0], self.DIM)
         assert torch.equal(out, expected)
 
@@ -78,7 +75,7 @@ class TestPoolRegisters:
         registers = self._registers()
         out = wrapper._pool_registers({"registers": registers})
         assert out.shape == (registers.shape[0], self.DIM)
-        assert torch.allclose(out, registers.mean(dim=1))
+        assert torch.allclose(out, registers.mean(dim=(1, 2)))
 
     def test_segmentation_keeps_grid(self) -> None:
         """Dense tasks get the coarse spatial map."""
@@ -107,11 +104,8 @@ class TestPoolProjectedRegisters:
         eval_on_projected_registers: bool = True,
         eval_on_encoder_tokens: bool = False,
     ) -> OlmoEarthEvalWrapper:
-        model = SimpleNamespace(
-            register_bottleneck=SimpleNamespace(register_grid=self.GRID),
-        )
         return OlmoEarthEvalWrapper(
-            model=model,  # type: ignore[arg-type]
+            model=SimpleNamespace(),  # type: ignore[arg-type]
             task_type=task_type,
             patch_size=1,
             pooling_type=PoolingType.MEAN,
@@ -123,8 +117,8 @@ class TestPoolProjectedRegisters:
     def _encoder_output(self, batch: int = 2) -> dict[str, torch.Tensor]:
         n_h, n_w = self.GRID
         return {
-            "registers": torch.randn(batch, n_h * n_w, self.DIM),
-            "projected_registers": torch.randn(batch, n_h * n_w, self.PROJ_DIM),
+            "registers": torch.randn(batch, n_h, n_w, self.DIM),
+            "projected_registers": torch.randn(batch, n_h, n_w, self.PROJ_DIM),
         }
 
     def test_projected_grid_for_segmentation(self) -> None:
@@ -139,10 +133,7 @@ class TestPoolProjectedRegisters:
         encoder_output = self._encoder_output()
         out = wrapper._pool_registers(encoder_output)
         assert out.shape == (2, *self.GRID, 4)
-        n_h, n_w = self.GRID
-        expected = encoder_output["projected_registers"][..., :4].reshape(
-            2, n_h, n_w, 4
-        )
+        expected = encoder_output["projected_registers"][..., :4]
         assert torch.equal(out, expected)
 
     def test_missing_projection_raises(self) -> None:

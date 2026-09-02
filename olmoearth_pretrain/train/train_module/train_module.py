@@ -45,6 +45,28 @@ from olmoearth_pretrain.train.loss import LossConfig
 
 logger = getLogger(__name__)
 
+# Gradient diagnostics are opt-in via the environment (like
+# OE_LOAD_SKIP_MISMATCHED_KEYS below) rather than a config field, so they can be
+# switched on when relaunching or resuming an existing run without perturbing the
+# experiment config that the run is checkpointed against.
+GRAD_DIAGNOSTICS_INTERVAL_ENV = "OE_GRAD_DIAGNOSTICS_INTERVAL"
+GRAD_DIAGNOSTICS_DEPTH_ENV = "OE_GRAD_DIAGNOSTICS_DEPTH"
+_DEFAULT_GRAD_DIAGNOSTICS_DEPTH = 5
+
+
+def _param_group_name(name: str, depth: int) -> str:
+    """Collapse a parameter FQN into the module group it should be reported under.
+
+    Numeric path components are collapsed to ``*`` so that repeated stacks
+    aggregate into one series (all of ``encoder.blocks.{0..11}.attn.q`` report as
+    ``encoder.blocks.*.attn.q``), then the path is truncated to ``depth``
+    components. At the default depth this keeps per-modality patch embeddings
+    separate -- which is where a modality-specific problem shows up -- without
+    emitting a series per tensor.
+    """
+    parts = ["*" if part.isdigit() else part for part in name.split(".")]
+    return ".".join(parts[:depth])
+
 
 def _strip_unknown_fields(d: Any) -> Any:
     """Recursively strip fields from config dicts that don't exist on the target class.
@@ -334,6 +356,16 @@ class OlmoEarthTrainModule(TrainModule):
             flatten_optimizer_state_dict=True, strict=True
         )
 
+        self._grad_diagnostics_interval = int(
+            os.environ.get(GRAD_DIAGNOSTICS_INTERVAL_ENV, "0")
+        )
+        self._grad_diagnostics_depth = int(
+            os.environ.get(
+                GRAD_DIAGNOSTICS_DEPTH_ENV, str(_DEFAULT_GRAD_DIAGNOSTICS_DEPTH)
+            )
+        )
+        self._grad_diagnostics_groups: dict[str, list[nn.Parameter]] | None = None
+
     @property
     def dp_process_group(self) -> dist.ProcessGroup | None:
         """Get the data parallel process group."""
@@ -521,12 +553,34 @@ class OlmoEarthTrainModule(TrainModule):
         if self._replicate_grad_sync:
             self._all_reduce_grads()
 
+        # Attribute the total grad norm to modules before clipping rescales it.
+        if (
+            self._grad_diagnostics_interval > 0
+            and self.trainer.global_step % self._grad_diagnostics_interval == 0
+        ):
+            self._log_grad_diagnostics()
+
         # Maybe clip gradients.
         if self.max_grad_norm is not None:
             grad_norm = self._clip_grad_norm(self.max_grad_norm)
             # NOTE: grad norm is already reduced over ranks, so we set `reduce_type` to `None`.
             self.trainer.record_metric(
                 "total grad norm", grad_norm, reduce_type=None, namespace="optim"
+            )
+            # How much clipping actually held the step back. `total grad norm` is
+            # the pre-clip value, so on its own it cannot tell you whether a rise
+            # is cosmetic or is throttling every update.
+            self.trainer.record_metric(
+                "clip scale",
+                (self.max_grad_norm / grad_norm.clamp(min=1e-12)).clamp(max=1.0),
+                reduce_type=None,
+                namespace="optim",
+            )
+            self.trainer.record_metric(
+                "clipped",
+                (grad_norm > self.max_grad_norm).float(),
+                reduce_type=None,
+                namespace="optim",
             )
             if isinstance(self.optimizer, SkipStepOptimizer):
                 self.optimizer.latest_grad_norm = grad_norm
@@ -698,6 +752,88 @@ class OlmoEarthTrainModule(TrainModule):
             parameters, max_grad_norm, total_norm, foreach=foreach
         )
         return total_norm
+
+    def _grad_diagnostic_groups(self) -> dict[str, list[nn.Parameter]]:
+        """Group trainable parameters by module for gradient reporting."""
+        if self._grad_diagnostics_groups is None:
+            groups: dict[str, list[nn.Parameter]] = {}
+            for name, param in self.model.named_parameters():
+                if not param.requires_grad:
+                    continue
+                group = _param_group_name(name, self._grad_diagnostics_depth)
+                groups.setdefault(group, []).append(param)
+            self._grad_diagnostics_groups = groups
+            logger.info(
+                "Gradient diagnostics enabled: %d parameter groups at depth %d, "
+                "logged every %d steps",
+                len(groups),
+                self._grad_diagnostics_depth,
+                self._grad_diagnostics_interval,
+            )
+        return self._grad_diagnostics_groups
+
+    def _log_grad_diagnostics(self) -> None:
+        """Break the total gradient norm down per module.
+
+        A rising ``optim/total grad norm`` is ambiguous: the whole model may be
+        drifting up together (an optimization-scale problem) or a few tensors may
+        dominate the sum (a localized problem, where the global clip then throttles
+        every other module on their behalf). ``grad share`` disambiguates the two
+        directly, and pairing each gradient norm with the weight norm of the same
+        parameters distinguishes a module that is genuinely being driven hard from
+        one that merely holds large weights.
+
+        Must be called after the gradient all-reduce and before clipping, so the
+        values describe the gradient the optimizer would actually step with.
+        """
+        groups = self._grad_diagnostic_groups()
+        names = sorted(groups)
+        grad_sq = torch.zeros(len(names), device=self.device, dtype=torch.float32)
+        weight_sq = torch.zeros(len(names), device=self.device, dtype=torch.float32)
+        for i, name in enumerate(names):
+            for param in groups[name]:
+                weight = get_local_tensor(param.detach())
+                weight_sq[i] += (
+                    torch.linalg.vector_norm(weight, 2, dtype=torch.float32) ** 2
+                )
+                if param.grad is None:
+                    continue
+                grad = get_local_tensor(param.grad)
+                grad_sq[i] += (
+                    torch.linalg.vector_norm(grad, 2, dtype=torch.float32) ** 2
+                )
+
+        # Under FSDP each rank holds a distinct shard, so squared norms have to be
+        # summed across ranks to describe the whole parameter. Under the replicated
+        # path gradients were already averaged above and every rank agrees, so the
+        # values are global as-is and either way we record with `reduce_type=None`.
+        if self.is_fsdp and dist.is_available() and dist.is_initialized():
+            stacked = torch.stack([grad_sq, weight_sq])
+            dist.all_reduce(stacked, group=self.dp_process_group)
+            grad_sq, weight_sq = stacked[0], stacked[1]
+
+        total_grad_sq = grad_sq.sum().clamp(min=1e-24)
+        grad_norm = grad_sq.sqrt()
+        weight_norm = weight_sq.sqrt()
+        share = grad_sq / total_grad_sq
+        for i, name in enumerate(names):
+            self.trainer.record_metric(
+                f"grad norm/{name}", grad_norm[i], reduce_type=None
+            )
+            self.trainer.record_metric(f"grad share/{name}", share[i], reduce_type=None)
+            self.trainer.record_metric(
+                f"weight norm/{name}", weight_norm[i], reduce_type=None
+            )
+            self.trainer.record_metric(
+                f"grad over weight/{name}",
+                grad_norm[i] / weight_norm[i].clamp(min=1e-12),
+                reduce_type=None,
+            )
+        # Single scalar to watch: if this climbs, the total norm is being set by one
+        # module rather than by the model as a whole.
+        self.trainer.record_metric(
+            "max group grad share", share.max(), reduce_type=None, namespace="optim"
+        )
 
     def update_target_encoder(self) -> None:
         """Update the target encoder."""

@@ -78,6 +78,13 @@ class EvalDatasetConfig:
     # (and thus comparable to other models / GeoBench-2). None = raw targets.
     target_mean: float | None = None
     target_std: float | None = None
+    # Corrections for datasets whose upstream band NAMES are misassigned to the
+    # data. Distinct from `imputes`, which fills in bands that are genuinely
+    # absent: here every band is present, but the source labelled them wrongly.
+    # Maps the name the source claims -> the band the data actually is. Applied
+    # to the sample band names and to the dataset's own normalization stats, so
+    # that everything downstream stays name-driven and needs no special-casing.
+    band_name_corrections: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate task-type-specific invariants."""
@@ -178,6 +185,69 @@ DATASET_TO_CONFIG = {
             Modality.GSE.name,
         ],
     ),
+    "pretrain_subset_meta_canopy": EvalDatasetConfig(
+        task_type=TaskType.PER_PIXEL_REGRESSION,
+        imputes=[],
+        num_classes=1,
+        is_multilabel=False,
+        height_width=32,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
+    "pretrain_subset_glo30_elevation": EvalDatasetConfig(
+        task_type=TaskType.PER_PIXEL_REGRESSION,
+        imputes=[],
+        num_classes=1,
+        is_multilabel=False,
+        height_width=32,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
+    "pretrain_subset_glo30_slope": EvalDatasetConfig(
+        task_type=TaskType.PER_PIXEL_REGRESSION,
+        imputes=[],
+        num_classes=1,
+        is_multilabel=False,
+        height_width=32,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
+    # Aspect is a compass bearing, so it is probed as sin/cos rather than raw
+    # degrees: the 0/360 seam makes degree-space MSE ill-posed. See
+    # pretrain_subset.GLO30_LABEL_ASPECT_SIN.
+    "pretrain_subset_glo30_aspect_sin": EvalDatasetConfig(
+        task_type=TaskType.PER_PIXEL_REGRESSION,
+        imputes=[],
+        num_classes=1,
+        is_multilabel=False,
+        height_width=32,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
+    "pretrain_subset_glo30_aspect_cos": EvalDatasetConfig(
+        task_type=TaskType.PER_PIXEL_REGRESSION,
+        imputes=[],
+        num_classes=1,
+        is_multilabel=False,
+        height_width=32,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
     "pretrain_subset_cdl": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
         imputes=[],
@@ -213,6 +283,23 @@ DATASET_TO_CONFIG = {
         num_classes=10,
         is_multilabel=False,
         supported_modalities=[Modality.SENTINEL2_L2A.name],
+        # GeoBench names EuroSAT's 13 tif channels positionally from a list with
+        # B8A ninth (geo-bench make_benchmark/dataset_converters/eurosat.py, via
+        # `gb.sentinel2_13_bands[band_idx]`), but the tifs put B8A LAST:
+        # B01..B08, B09, B10, B11, B12, B8A. Channels 1-8 are unaffected; the
+        # last five names are rotated by one, so four of the bands we feed the
+        # model are the wrong band and true B11 never reaches it at all (it sits
+        # under the cirrus name, which SENTINEL2_L2A.band_order drops).
+        # Verified against the original EuroSAT tifs (EuroSAT100, 100 files):
+        # channel 13 is the NIR plateau (corr 0.98 with B08) and channel 10 is
+        # cirrus (mean ~12). Upstream fix for reference: torchgeo PR #2480.
+        band_name_corrections={
+            "08A - Vegetation Red Edge": "09 - Water vapour",
+            "09 - Water vapour": "10 - SWIR - Cirrus",
+            "10 - SWIR - Cirrus": "11 - SWIR",
+            "11 - SWIR": "12 - SWIR",
+            "12 - SWIR": "08A - Vegetation Red Edge",
+        },
     ),
     "m-bigearthnet": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
@@ -234,10 +321,36 @@ DATASET_TO_CONFIG = {
     ),
     "m-brick-kiln": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
-        imputes=[],
+        # B06 and B09 were never exported, and B10 is only needed to build the
+        # 13-slot stack (SENTINEL2_L2A.band_order drops it). Sources are the
+        # nearest present neighbour; the last two match m-so2sat's imputes.
+        imputes=[
+            ("07 - Vegetation Red Edge", "06 - Vegetation Red Edge"),
+            ("08A - Vegetation Red Edge", "09 - Water vapour"),
+            ("11 - SWIR", "10 - SWIR - Cirrus"),
+        ],
         num_classes=2,
         is_multilabel=False,
         supported_modalities=[Modality.SENTINEL2_L2A.name],
+        # Same GeoBench converter bug as m-eurosat (brick_kiln.py:105, again
+        # `gb.sentinel2_13_bands[i]` positional) but a worse fit: this source
+        # never held the 13 MSI bands. SustainBench's docs claim "13 bands, B1
+        # through B12", which is both impossible and false -- the export
+        # (mliu356/kiln-scaling, notebooks/get_images.ipynb) is
+        # ['B1','B2','B3','B4','B5','B7','B8A','B8','B11','B12','TCI_R','TCI_G',
+        # 'TCI_B']. So B06/B09/B10 are absent, three channels are 8-bit
+        # true-colour renders rather than spectral bands (measured: R/G/B / 9.9
+        # clipped at 255, R2 0.998), and `08 - NIR` is right only by luck --
+        # the export lists B8A before B8 and the two offsets cancel.
+        band_name_corrections={
+            "06 - Vegetation Red Edge": "07 - Vegetation Red Edge",
+            "07 - Vegetation Red Edge": "08A - Vegetation Red Edge",
+            "08A - Vegetation Red Edge": "11 - SWIR",
+            "09 - Water vapour": "12 - SWIR",
+            "10 - SWIR - Cirrus": "TCI_R (not a spectral band)",
+            "11 - SWIR": "TCI_G (not a spectral band)",
+            "12 - SWIR": "TCI_B (not a spectral band)",
+        },
     ),
     "m-sa-crop-type": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,

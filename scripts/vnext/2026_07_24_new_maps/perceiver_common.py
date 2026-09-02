@@ -1,0 +1,819 @@
+"""Shared pieces for the new-maps v1.2 register-bottleneck (Perceiver) runs.
+
+Ports the ``scripts/official/v1_2`` perceiver recipe onto the new-maps base
+(``base.py``): the GLO30 DSM + Meta Canopy Height map set and the new H5 file.
+The recipe layered here is exactly:
+
+* ``regbtl`` + ``gdyn`` + ``il`` + ``pdproj`` + ``wideread`` -- the Perceiver-style
+  spatial register bottleneck. The encoder keeps v1.2's 3D mixed RoPE; the bottleneck
+  reads spatially (2D); the decoder cross-attends the 2D register grid. ``wideread``
+  runs the bottleneck attention at encoder width (``register_attn_dim=embedding_size``)
+  so ``register_dim`` is pure storage width.
+* ``faster`` train module -- single forward pass (plain ``LatentMIMTrainModule``, no
+  InfoNCE), fused AdamW, projection-only target encoder, replicated DP + bf16 autocast.
+* ``newsampling`` at ``psuniform`` -- the decorrelated (grid, timestep) shape sampler
+  with the patch-size distribution held UNIFORM over ps=1..8 (the sweep showed the
+  ps=1 oversampling is a confound, so uniform is the clean default).
+* ``regsup`` at ``w0p1`` -- register-grid supervision of the decode-only maps.
+
+Intentionally omitted vs the referenced official file: the ``tanchor`` temporal-anchored
+read and the time-conditioned ``ndvi`` arm (and the ``latlon`` arm).
+
+This module is self-contained (mirroring how ``base.py`` is a self-contained copy)
+so it never imports from ``scripts/official/v1_2``, which is hard-wired to the old
+``srtm`` / ``wri_canopy_height_map`` maps and the old H5 file.
+"""
+
+import logging
+import os
+from dataclasses import replace
+
+from base import ONLY_DECODE_MODALITIES, _masking_config
+from base import build_dataloader_config as _base_build_dataloader_config
+from base import build_dataset_config as _base_build_dataset_config
+from base import build_model_config as _base_build_model_config
+from base import build_train_module_config as _base_build_train_module_config
+from olmo_core.config import DType
+from olmo_core.distributed.parallel import DataParallelConfig, DataParallelType
+from olmo_core.train.common import Duration
+
+from olmoearth_pretrain.data.cloud_mask_cache import default_cache_dir
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
+from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig
+from olmoearth_pretrain.internal.all_evals import (
+    AEF_SUPPLEMENTAL_YEAR_ALIGNED,
+)
+from olmoearth_pretrain.internal.all_evals import (
+    EMBEDDING_EVAL_TASKS as _EMBEDDING_EVAL_TASKS,
+)
+from olmoearth_pretrain.internal.experiment import CommonComponents
+from olmoearth_pretrain.nn.encodings import PositionEncoding
+from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
+from olmoearth_pretrain.nn.supervision_head import (
+    SupervisionHeadConfig,
+    SupervisionModalityConfig,
+    SupervisionTaskType,
+)
+from olmoearth_pretrain.train.masking import MaskingConfig
+from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+
+logger = logging.getLogger(__name__)
+
+# Clusters the in-loop eval Beaker jobs may run on (mirrors base_faster.py).
+LOOP_EVAL_CLUSTERS = ["ai2/jupiter", "ai2/ceres"]
+
+
+# --------------------------------------------------------------------------- #
+# Register bottleneck model builders (port of regbtl_v1_2_common +            #
+# regbtl_v1_2_faster_common, on top of the new-maps base model config).       #
+# --------------------------------------------------------------------------- #
+
+# Latent-transformer depth over the register grid; with interleave this is also the
+# number of cross-attention reads ([read -> self] x4).
+REGISTER_LATENT_DEPTH = 4
+# The decoder cross-attends the (spatial) register grid, so it runs with 2D RoPE while
+# the encoder keeps 3D. "rope" == 2D axial RoPE.
+DECODER_POSITION_ENCODING = PositionEncoding.AXIAL_2D_ROPE.value
+
+
+def build_regbtl_model_config(
+    common: CommonComponents,
+    *,
+    latent_self_attn: bool,
+    register_dim: int,
+) -> LatentMIMConfig:
+    """New-maps base + spatial register bottleneck: ``gdyn`` + ``il`` + ``pdproj``."""
+    config = _base_build_model_config(common)
+    encoder_config = config.encoder_config
+    decoder_config = config.decoder_config
+
+    for sub_config in (encoder_config, decoder_config):
+        sub_config.use_register_bottleneck = True
+        sub_config.register_dim = register_dim
+
+    # gdyn: dynamic single-latent grid that matches the patch grid at forward time.
+    encoder_config.register_grid_size = 0
+    # il: interleave reads with the latent transformer ([read -> self] per layer).
+    encoder_config.register_interleave = True
+    # pdproj: each read block gets its own input norm + K/V projection.
+    encoder_config.register_per_depth_read_proj = True
+    encoder_config.register_latent_depth = REGISTER_LATENT_DEPTH
+    encoder_config.register_latent_self_attn = latent_self_attn
+
+    # The decoder cross-attends the spatial (2D) register grid; the encoder stays 3D.
+    decoder_config.position_encoding = DECODER_POSITION_ENCODING
+
+    return config
+
+
+def build_wideread_regbtl_model_config(
+    common: CommonComponents,
+    *,
+    latent_self_attn: bool,
+    register_dim: int,
+) -> LatentMIMConfig:
+    """Register bottleneck whose read/latent attention runs at ENCODER width.
+
+    ``register_attn_dim = embedding_size`` decouples the bottleneck's attention from
+    ``register_dim`` (reads run with the encoder's own 12x64 head shape and consume the
+    K/V source at full encoder width), so ``register_dim`` becomes purely the storage
+    width. ``register_num_heads`` is left unset so the bottleneck inherits the encoder's
+    head count. Projection-only target encoder (valid because the base uses all-zero
+    token exits + ema_decay=(1.0, 1.0)).
+    """
+    config = build_regbtl_model_config(
+        common, latent_self_attn=latent_self_attn, register_dim=register_dim
+    )
+    config.encoder_config.register_attn_dim = config.encoder_config.embedding_size
+    config.projection_only_target = True
+    return config
+
+
+# --------------------------------------------------------------------------- #
+# Faster train module (port of the 1fwd + fused AdamW + ddp/bf16 recipe).      #
+# --------------------------------------------------------------------------- #
+
+
+def build_faster_train_module_config(
+    common: CommonComponents,
+) -> LatentMIMTrainModuleConfig:
+    """Single-forward-pass, fused-AdamW, replicated-DP + bf16 train module.
+
+    The new-maps base builder returns a ``ContrastiveLatentMIMTrainModuleConfig`` that
+    runs two forward passes per batch to feed InfoNCE. This recipe is ``noic``, so the
+    second pass is dead work: we copy the base fields into a plain
+    :class:`LatentMIMTrainModuleConfig` (one forward pass), drop the contrastive term,
+    and switch FSDP -> replicated DDP + bf16 autocast. The base optimizer is already
+    ``fused=True``.
+    """
+    base = _base_build_train_module_config(common)
+    return LatentMIMTrainModuleConfig(
+        optim_config=base.optim_config,
+        rank_microbatch_size=base.rank_microbatch_size,
+        transform_config=base.transform_config,
+        masking_config=base.masking_config,
+        loss_config=base.loss_config,
+        mae_loss_config=base.mae_loss_config,
+        token_exit_cfg=base.token_exit_cfg,
+        max_grad_norm=base.max_grad_norm,
+        scheduler=base.scheduler,
+        ema_decay=base.ema_decay,
+        dp_config=DataParallelConfig(name=DataParallelType.ddp),
+        regularizer_config=base.regularizer_config,
+        autocast_precision=DType.bfloat16,
+        compile_model=base.compile_model,
+        compile_loss=base.compile_loss,
+        find_unused_parameters=base.find_unused_parameters,
+        state_dict_save_opts=base.state_dict_save_opts,
+        state_dict_load_opts=base.state_dict_load_opts,
+    )
+
+
+def build_1fwd_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """New-maps base dataloader, but a single masked view for the 1fwd train module.
+
+    The plain :class:`LatentMIMTrainModule` expects ``(patch_size, MaskedOlmoEarthSample)``;
+    the base config's ``num_masked_views=2`` would yield the contrastive two-view tuple.
+    """
+    config = _base_build_dataloader_config(common)
+    config.num_masked_views = 1
+    return config
+
+
+# --------------------------------------------------------------------------- #
+# Newsampling shape-sampler knobs (port of regbtl_v1_2_newsampling_common).    #
+# --------------------------------------------------------------------------- #
+
+# w0p1: 10x the original 0.01 supervision base weight.
+SUPERVISION_BASE_WEIGHT = 0.1
+
+# A multiple of 256; with the decode-only maps excluded from the budget this fits the
+# full 12 months up to a 9x9 register grid.
+TOKEN_BUDGET = 3072
+# Token floor; with maps excluded this is 3*hw^2*t, so 228 drops hw<=2 and forces small
+# grids onto long sequences.
+MIN_TOKENS_PER_INSTANCE = 228
+# Skews the timestep draw toward the maximum of its feasible window (weight t**bias).
+TEMPORAL_BIAS = 2.75
+# Half of batches sample timesteps first (then a grid that fits); half sample grid first.
+TIME_PRIORITY_PROB = 0.5
+# Base grids 1..16 plus a coarse incremental tail; the token floor drops hw<=2.
+SAMPLED_HW_P_LIST = list(range(1, 17)) + [18, 20, 24, 28, 32]
+# Uniform over ps=1..8 -- the psuniform arm (isolates the ps=1 oversampling confound out
+# of the newsampling recipe).
+UNIFORM_PATCH_SIZE_PROBS = [1.0 / 8] * 8
+# Base 64 (1 microbatch/step); drop to 32 if the larger budget OOMs (throughput
+# unchanged, micro only affects memory). Launch with expandable_segments to be safe.
+RANK_MICROBATCH_SIZE = 64
+
+
+def apply_new_sampling(config: OlmoEarthDataLoaderConfig) -> OlmoEarthDataLoaderConfig:
+    """Set the decorrelated shape-sampling knobs on a dataloader config in place.
+
+    Leaves ``patch_size_probs`` untouched (dataloader default = uniform); pair with
+    :func:`apply_uniform_patch_sizes` to pin the uniform distribution explicitly.
+    """
+    config.token_budget = TOKEN_BUDGET
+    config.exclude_only_decode_from_budget = True
+    config.min_tokens_per_instance = MIN_TOKENS_PER_INSTANCE
+    config.temporal_bias = TEMPORAL_BIAS
+    config.time_priority_prob = TIME_PRIORITY_PROB
+    config.sampled_hw_p_list = SAMPLED_HW_P_LIST
+    return config
+
+
+def apply_uniform_patch_sizes(
+    config: OlmoEarthDataLoaderConfig,
+) -> OlmoEarthDataLoaderConfig:
+    """Pin patch-size sampling to uniform over ps=1..8 (the psuniform arm)."""
+    config.patch_size_probs = list(UNIFORM_PATCH_SIZE_PROBS)
+    return config
+
+
+def apply_microbatch(config: LatentMIMTrainModuleConfig) -> LatentMIMTrainModuleConfig:
+    """Set the rank microbatch size in place so the larger budget fits memory."""
+    config.rank_microbatch_size = RANK_MICROBATCH_SIZE
+    return config
+
+
+# --------------------------------------------------------------------------- #
+# Register-grid supervision (port of regbtl_v1_2_regsup_common) for NEW maps.  #
+# --------------------------------------------------------------------------- #
+
+# Low base weight nudge; classification/BCE scaled 10x down to balance against L1/MSE.
+TASK_TYPE_WEIGHTS = {
+    SupervisionTaskType.CLASSIFICATION: 0.1,
+    SupervisionTaskType.BINARY_CLASSIFICATION: 0.1,
+    SupervisionTaskType.REGRESSION: 1.0,
+}
+
+WORLDCOVER_CLASS_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
+
+# USDA NASS CDL crop codes normalized as raw/200 (see regbtl_v1_2_regsup_common).
+_CDL_CODES = [
+    *range(1, 7),
+    *range(10, 15),
+    *range(21, 40),
+    *range(41, 62),
+    *range(63, 73),
+    74,
+    75,
+    76,
+    77,
+    81,
+    82,
+    83,
+    87,
+    88,
+    92,
+    111,
+    112,
+    121,
+    122,
+    123,
+    124,
+    131,
+    141,
+    142,
+    143,
+    152,
+    176,
+    190,
+    195,
+    *range(204, 251),
+    254,
+]
+CDL_CLASS_VALUES = [code / 200 for code in _CDL_CODES]
+
+# GLO30 is a 3-band DSM (elevation, slope, aspect). Supervise ELEVATION only (band 0),
+# the direct analog of the old single-band SRTM elevation target: aspect is circular
+# (0 deg ~= 360 deg, -1 flat sentinel) and plain L1/MSE is lossy on a wrap-around angle,
+# so it is left unsupervised rather than regressed naively.
+GLO30_ELEVATION_BAND_INDEX = 0
+# elevation + slope. Slope (deg [0, 90)) is a well-behaved continuous target, so it
+# takes the same L1 regression as elevation; only the circular aspect band needs
+# special handling, and that is what the glo30_aspect arm below is for.
+GLO30_ELEV_SLOPE_BAND_INDICES = [0, 1]
+
+# Harmonics in the fixed day-of-year sincos basis for the time-conditioned NDVI head.
+NDVI_TIME_HARMONICS = 4
+
+
+def build_supervision_head_config(
+    *,
+    base_weight: float = SUPERVISION_BASE_WEIGHT,
+    include_ndvi: bool = False,
+    glo30_bands: list[int] | None = None,
+    include_glo30_aspect: bool = False,
+) -> SupervisionHeadConfig:
+    """Register-grid supervision over the new-maps decode-only modalities.
+
+    Same six-modality set as the official regsup head, with the two swapped maps:
+    ``srtm`` -> ``glo30`` and ``wri_canopy_height_map`` -> ``meta_canopy_height``.
+    No latlon arm.
+
+    Args:
+        base_weight: Scales the per-task-type weights (w0p1 = 0.1, w1 = 1.0).
+        include_ndvi: Add the TIME-CONDITIONED NDVI regression: a small MLP on
+            ``[register_cell ; phi(day_of_year)]`` predicts the cell's NDVI at each
+            observed timestep, forcing each cell to store its own temporal
+            trajectory. Requires ``"ndvi"`` in the extra decode-only modalities.
+        glo30_bands: Which GLO30 DSM bands to regress, in band order
+            ``[elevation, slope, aspect]``. Defaults to elevation only
+            (``[0]``); pass :data:`GLO30_ELEV_SLOPE_BAND_INDICES` for elevation +
+            slope. Never include band 2 here -- raw aspect degrees are circular and
+            L1/MSE cannot represent the 0/360 seam; use ``include_glo30_aspect``.
+        include_glo30_aspect: Add the circular aspect arm as a 2-channel regression
+            on the derived ``glo30_aspect`` modality (``[sin, cos]`` of the bearing,
+            flat pixels already MISSING_VALUE). Requires ``"glo30_aspect"`` in the
+            extra decode-only modalities.
+    """
+    glo30_bands = list(glo30_bands) if glo30_bands else [GLO30_ELEVATION_BAND_INDEX]
+    if Modality.GLO30.band_order.index("aspect") in glo30_bands:
+        raise ValueError(
+            "raw aspect degrees are circular; supervise it via "
+            "include_glo30_aspect (the derived sin/cos modality) instead of "
+            "putting band 2 in glo30_bands"
+        )
+
+    def _weight(task_type: SupervisionTaskType) -> float:
+        return base_weight * TASK_TYPE_WEIGHTS[task_type]
+
+    modality_configs = {
+        "worldcover": SupervisionModalityConfig(
+            task_type=SupervisionTaskType.CLASSIFICATION,
+            num_output_channels=len(WORLDCOVER_CLASS_VALUES),
+            weight=_weight(SupervisionTaskType.CLASSIFICATION),
+            class_values=WORLDCOVER_CLASS_VALUES,
+        ),
+        "glo30": SupervisionModalityConfig(
+            task_type=SupervisionTaskType.REGRESSION,
+            num_output_channels=len(glo30_bands),
+            weight=_weight(SupervisionTaskType.REGRESSION),
+            regression_loss_type="l1",
+            target_band_indices=glo30_bands,
+        ),
+        "openstreetmap_raster": SupervisionModalityConfig(
+            task_type=SupervisionTaskType.BINARY_CLASSIFICATION,
+            num_output_channels=30,
+            weight=_weight(SupervisionTaskType.BINARY_CLASSIFICATION),
+            pos_weight=True,
+        ),
+        "meta_canopy_height": SupervisionModalityConfig(
+            task_type=SupervisionTaskType.REGRESSION,
+            num_output_channels=1,
+            weight=_weight(SupervisionTaskType.REGRESSION),
+            regression_loss_type="l1",
+        ),
+        "cdl": SupervisionModalityConfig(
+            task_type=SupervisionTaskType.CLASSIFICATION,
+            num_output_channels=len(CDL_CLASS_VALUES),
+            weight=_weight(SupervisionTaskType.CLASSIFICATION),
+            class_values=CDL_CLASS_VALUES,
+        ),
+        "worldcereal": SupervisionModalityConfig(
+            task_type=SupervisionTaskType.BINARY_CLASSIFICATION,
+            num_output_channels=8,
+            weight=_weight(SupervisionTaskType.BINARY_CLASSIFICATION),
+            pos_weight=True,
+        ),
+    }
+    if include_ndvi:
+        modality_configs[Modality.NDVI.name] = SupervisionModalityConfig(
+            task_type=SupervisionTaskType.REGRESSION,
+            num_output_channels=1,
+            weight=_weight(SupervisionTaskType.REGRESSION),
+            regression_loss_type="l1",
+            time_conditioned=True,
+            time_harmonics=NDVI_TIME_HARMONICS,
+        )
+    if include_glo30_aspect:
+        modality_configs[Modality.GLO30_ASPECT.name] = SupervisionModalityConfig(
+            task_type=SupervisionTaskType.REGRESSION,
+            num_output_channels=Modality.GLO30_ASPECT.num_bands,
+            weight=_weight(SupervisionTaskType.REGRESSION),
+            regression_loss_type="l1",
+        )
+    return SupervisionHeadConfig(
+        modality_configs=modality_configs,
+        register_supervision=True,
+    )
+
+
+def add_register_supervision(
+    config: LatentMIMConfig,
+    *,
+    base_weight: float = SUPERVISION_BASE_WEIGHT,
+    include_ndvi: bool = False,
+    glo30_bands: list[int] | None = None,
+    include_glo30_aspect: bool = False,
+) -> LatentMIMConfig:
+    """Attach the new-maps register-grid supervision head to a regbtl model config.
+
+    See :func:`build_supervision_head_config` for the optional arms; any arm over a
+    derived modality (``ndvi``, ``glo30_aspect``) also needs that modality in the
+    extra decode-only set passed to the ``build_extra_decode_*`` builders.
+    """
+    config.supervision_head_config = build_supervision_head_config(
+        base_weight=base_weight,
+        include_ndvi=include_ndvi,
+        glo30_bands=glo30_bands,
+        include_glo30_aspect=include_glo30_aspect,
+    )
+    return config
+
+
+# --------------------------------------------------------------------------- #
+# Extra decode-only modalities (port of regbtl_v1_2_regsup_common's helpers).   #
+# --------------------------------------------------------------------------- #
+
+
+def _extra_decode_masking_config(
+    tokenization_config,
+    extra_modalities: list[str],
+) -> MaskingConfig:
+    """New-maps masking config with extra supervision-only decode modalities.
+
+    only_decode marks every non-missing token of the extra modalities DECODE, keeping
+    them out of the encode split; since neither the encoder nor the decoder supports
+    them, the mask is inert and the modality just rides along in the batch for
+    supervision. ``ndvi`` and ``glo30_aspect`` both work this way.
+    """
+    config = _masking_config(tokenization_config)
+    config.strategy_config["only_decode_modalities"] = [
+        *ONLY_DECODE_MODALITIES,
+        *extra_modalities,
+    ]
+    return config
+
+
+def build_extra_decode_dataset_config(
+    common: CommonComponents, extra_modalities: list[str]
+) -> OlmoEarthDatasetConfig:
+    """New-maps dataset config with extra supervision-only training modalities.
+
+    Both extras are DERIVED (``ignore_when_parsing=True``), computed in the dataset's
+    ``__getitem__`` from raw un-normalized bands whenever they are training
+    modalities: ``ndvi`` from S2 L2A B04/B08, ``glo30_aspect`` from the glo30 aspect
+    band as ``[sin, cos]`` with flat pixels written out as MISSING_VALUE.
+    """
+    config = _base_build_dataset_config(common)
+    config.training_modalities = [
+        *config.training_modalities,
+        *extra_modalities,
+    ]
+    return config
+
+
+def build_extra_decode_dataloader_config(
+    common: CommonComponents, extra_modalities: list[str]
+) -> OlmoEarthDataLoaderConfig:
+    """Single-view (1fwd) dataloader whose masking knows the extras are decode-only."""
+    config = build_1fwd_dataloader_config(common)
+    config.masking_config = _extra_decode_masking_config(
+        common.tokenization_config, extra_modalities
+    )
+    return config
+
+
+def build_extra_decode_train_module_config(
+    common: CommonComponents, extra_modalities: list[str]
+) -> LatentMIMTrainModuleConfig:
+    """Faster (1fwd + fused AdamW + ddp/bf16) train module with extras decode-only."""
+    config = build_faster_train_module_config(common)
+    config.masking_config = _extra_decode_masking_config(
+        common.tokenization_config, extra_modalities
+    )
+    return config
+
+
+# --------------------------------------------------------------------------- #
+# In-loop eval routing.                                                        #
+# --------------------------------------------------------------------------- #
+
+
+def route_loop_evals_to_beaker(trainer_config, module_path: str):
+    """Route the base in-loop evals through non-blocking Beaker jobs.
+
+    Keeps the new-maps base eval catalog (m-eurosat, so2sat, mados, pastis, yemen_crop,
+    fifty_cities S2 + S1S2) but makes each due evaluator launch a Beaker job that
+    evaluates the just-saved checkpoint. ``beaker_eval_module_path`` points at the
+    launching script so the eval job rebuilds the matching architecture from its
+    ``build_model_config``.
+    """
+    evaluator = trainer_config.callbacks["downstream_evaluator"]
+    evaluator.run_as_beaker_job = True
+    evaluator.beaker_eval_module_path = module_path
+    evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
+    return trainer_config
+
+
+# --------------------------------------------------------------------------- #
+# Landsat radiometry: TOA reflectance H5 + matching norm stats.                #
+# --------------------------------------------------------------------------- #
+
+# New-maps h5 whose Landsat modality has been converted from raw DN to top-of-
+# atmosphere reflectance (B1-B9) / brightness temperature (B10-B11) with per-scene
+# sun-elevation correction.
+LANDSAT_REFL_H5_DIR = (
+    "/weka/dfive-default/helios/dataset/osm_sampling_landsat_refl/"
+    "h5py_data_w_missing_timesteps_zstd_3_128_x_4/"
+    "cdl_glo30_landsat_meta_canopy_height_openstreetmap_raster_"
+    "sentinel1_sentinel2_l2a_worldcereal_worldcover/1138828"
+)
+# Reflectance-scale Landsat norm stats (computed.json with only the landsat entry
+# replaced); a resource under olmoearth_pretrain/data/norm_configs.
+LANDSAT_REFL_NORM_CONFIG = "computed_landsat_reflectance.json"
+
+
+def apply_landsat_reflectance(
+    config: OlmoEarthDatasetConfig,
+) -> OlmoEarthDatasetConfig:
+    """Point a new-maps dataset config at the reflectance H5 + reflectance norms.
+
+    Both must move together: reading the reflectance H5 with DN-scale Landsat norm
+    stats (or vice versa) mis-normalizes Landsat by orders of magnitude.
+    """
+    config.h5py_dir = LANDSAT_REFL_H5_DIR
+    config.computed_norm_config = LANDSAT_REFL_NORM_CONFIG
+    return config
+
+
+# --------------------------------------------------------------------------- #
+# Detached Matryoshka student (port of regbtl_v1_2_proj_common's model bits).   #
+# --------------------------------------------------------------------------- #
+
+# The student is trained at 128d with its first 64 dims as a self-sufficient
+# Matryoshka prefix, so one artifact ships both widths.
+PROJECTION_DIMS = [128, 64]
+# w1: the supervision base weight the proj runs settled on.
+SUPERVISION_BASE_WEIGHT_W1 = 1.0
+
+
+def build_proj_model_config(
+    common: CommonComponents,
+    *,
+    projection_type: str,
+    supervision_source: str,
+    register_dim: int = 768,
+    base_weight: float = SUPERVISION_BASE_WEIGHT_W1,
+    include_ndvi: bool = False,
+    glo30_bands: list[int] | None = None,
+    include_glo30_aspect: bool = False,
+    temporal_anchor: str | None = None,
+    projection_supervision_weight_scale: float | None = None,
+) -> LatentMIMConfig:
+    """New-maps wideread regbtl + regsup + a detached [128, 64] Matryoshka student.
+
+    The new-maps twin of ``regbtl_v1_2_proj_common.build_proj_model_config``: same
+    student wiring, but the supervision head is the new-maps one (glo30 /
+    meta_canopy_height instead of srtm / wri_canopy_height_map), which is exactly why
+    this cannot just import the official builder.
+
+    Args:
+        common: The common experiment components.
+        projection_type: ``"linear"`` or ``"perceiver"`` (the student architecture).
+        supervision_source: ``"registers"`` (sup768), ``"both"`` (supboth) or
+            ``"projection"`` (sup128) -- where the supervision heads attach.
+        register_dim: Teacher (primary bottleneck) width.
+        base_weight: Supervision base weight (w0p1 = 0.1, w1 = 1.0).
+        include_ndvi: Add the time-conditioned NDVI arm (needs the ndvi extra-decode
+            builders in the run script).
+        glo30_bands: GLO30 bands to regress; see
+            :func:`build_supervision_head_config`.
+        include_glo30_aspect: Add the circular aspect arm (needs the glo30_aspect
+            extra-decode builders in the run script).
+        temporal_anchor: If set (``"year_start"``), the register READ becomes
+            temporally anchored. NOTE: a perceiver student mirrors the primary's
+            anchor, so this changes both reads at once.
+        projection_supervision_weight_scale: Scales the student's supervision heads
+            relative to ``base_weight``. Requires a supervision_source that builds
+            projection heads ("both" / "projection").
+    """
+    config = build_wideread_regbtl_model_config(
+        common, latent_self_attn=True, register_dim=register_dim
+    )
+    if temporal_anchor is not None:
+        config.encoder_config.register_temporal_anchor = temporal_anchor
+    config = add_register_supervision(
+        config,
+        base_weight=base_weight,
+        include_ndvi=include_ndvi,
+        glo30_bands=glo30_bands,
+        include_glo30_aspect=include_glo30_aspect,
+    )
+    config.encoder_config.register_projection_dims = list(PROJECTION_DIMS)
+    config.encoder_config.register_projection_type = projection_type
+    config.supervision_source = supervision_source
+    config.projection_supervision_weight_scale = projection_supervision_weight_scale
+    return config
+
+
+# PASTIS per-pixel (ps=1, ws=16) embedding evals on the pretraining-mirror export --
+# the deployment scenario for these models (frozen ps=1 embeddings probed for
+# segmentation, the way Tessera/AEF are compared).
+_PASTIS_EMBEDDING_LOOP_EVAL_NAMES = (
+    "pastis_ws16_ps1_sentinel2_pretrain_export",
+    "pastis_ws16_ps1_sentinel1_sentinel2_pretrain_export",
+)
+PASTIS_EMBEDDING_LOOP_EVAL_TASKS = {
+    name: replace(_EMBEDDING_EVAL_TASKS[name], eval_interval=Duration.steps(20000))
+    for name in _PASTIS_EMBEDDING_LOOP_EVAL_NAMES
+}
+# The same probes duplicated onto the projected head at each Matryoshka width, so
+# every eval step scores the checkpoint at all three widths (768 / 128 / 64).
+PASTIS_PROJ_EMBEDDING_LOOP_EVAL_TASKS = {
+    f"{name}_proj{dim}": replace(
+        task, eval_on_projected_registers=True, eval_projection_dim=dim
+    )
+    for name, task in PASTIS_EMBEDDING_LOOP_EVAL_TASKS.items()
+    for dim in PROJECTION_DIMS
+}
+
+
+def route_proj_loop_evals_to_beaker(
+    trainer_config,
+    module_path: str,
+    *,
+    embedding_eval_interval_steps: int | None = None,
+):
+    """New-maps in-loop evals on BOTH heads, routed through Beaker.
+
+    Keeps the new-maps base catalog and prepends the PASTIS ps=1 embedding probes
+    plus their projected duplicates, so distillation quality is tracked per
+    checkpoint at every shipped width without a separate eval launch. The PASTIS
+    tasks go FIRST: eval jobs at urgent priority can be preempted mid-run and the
+    trailing tasks are the ones that systematically lose their metrics.
+
+    ``embedding_eval_interval_steps`` overrides the 20k default on the embedding
+    tasks. The proj runs' eval jobs run longer than 20k training steps, so
+    consecutive jobs overlap on one resumed W&B run and the overlapping writer's
+    rows are silently dropped; 40k gives each job time to finish. Must be a multiple
+    of the checkpointer save_interval (5000).
+    """
+    embedding_tasks = {
+        **PASTIS_EMBEDDING_LOOP_EVAL_TASKS,
+        **PASTIS_PROJ_EMBEDDING_LOOP_EVAL_TASKS,
+    }
+    if embedding_eval_interval_steps is not None:
+        embedding_tasks = {
+            name: replace(
+                task, eval_interval=Duration.steps(embedding_eval_interval_steps)
+            )
+            for name, task in embedding_tasks.items()
+        }
+    evaluator = trainer_config.callbacks["downstream_evaluator"]
+    evaluator.tasks = {
+        **embedding_tasks,
+        **evaluator.tasks,
+    }
+    evaluator.run_as_beaker_job = True
+    evaluator.beaker_eval_module_path = module_path
+    evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
+    return trainer_config
+
+
+# --------------------------------------------------------------------------- #
+# Cloud-aware patch discrimination (port of regbtl_v1_2_cloudmask_common).      #
+# --------------------------------------------------------------------------- #
+
+# Root of the weka mount the h5 and cloud caches live under. Used only to decide
+# whether the cache-presence check below can run: inside a Beaker job the mount is
+# there and the check is meaningful; on a laptop building a launch spec it is not.
+_WEKA_ROOT = "/weka"
+
+
+def _assert_cloud_cache_present(cache_dir: str) -> None:
+    """Fail loudly when a cloud cache is configured but not actually there.
+
+    An ABSENT cache is silent, not fatal: ``load_sample_clouds`` returns None per
+    sample and ``dataset.__getitem__`` just skips the side-payload, so the run trains
+    with NO cloud skip while its config claims otherwise -- the same failure mode that
+    voided the ``_l8pixmask`` eval variants. This turns that into a crash at config
+    build time.
+
+    Skipped when the weka mount is not present at all, since ``launch`` builds the
+    config locally to construct the Beaker spec and cannot see the cache from there.
+    """
+    if not os.path.isdir(_WEKA_ROOT):
+        logger.warning(
+            "cloud cache presence NOT verified (%s is not mounted here) -- the check "
+            "will run in the Beaker job, where a missing cache is a hard failure "
+            "rather than a silent no-op. Configured cache: %s",
+            _WEKA_ROOT,
+            cache_dir,
+        )
+        return
+    if not os.path.isdir(cache_dir):
+        raise FileNotFoundError(
+            f"cloud_cache_dir {cache_dir!r} does not exist. The OmniCloudMask "
+            "sidecars have to be precomputed for THIS h5 set before a cloud-skip arm "
+            "can run -- see olmoearth_pretrain.data.cloud_mask_cache "
+            "(--h5_dir/--cache_dir) and scripts/tools/precompute_clouds_8gpu.sh. "
+            "Without them the run trains with no cloud skip and reports nothing wrong."
+        )
+    shards = [e for e in os.scandir(cache_dir) if e.is_dir()]
+    if not shards:
+        raise FileNotFoundError(
+            f"cloud_cache_dir {cache_dir!r} exists but holds no shard directories, so "
+            "every sample would miss the cache and the cloud skip would be a no-op."
+        )
+
+
+def apply_cloud_cache(
+    config: OlmoEarthDatasetConfig, cache_dir: str | None = None
+) -> OlmoEarthDatasetConfig:
+    """Point the dataset at the precomputed OmniCloudMask sidecars.
+
+    Args:
+        config: The dataset config to modify in place.
+        cache_dir: Explicit cache directory. Leave None to derive the sibling of the
+            configured ``h5py_dir`` (``default_cache_dir`` swaps the ``h5py_data*``
+            path component for ``cloud_masks_omnicloudmask``). Pass it explicitly to
+            REUSE a cache computed for a different h5 set -- valid only because the
+            sidecar key is the raw h5 sample id (``dataset.__getitem__`` indexes with
+            ``sample_indices[idx]``, not the filtered position), so any h5 built from
+            the same underlying sample set is index-compatible.
+    """
+    resolved = cache_dir or default_cache_dir(config.h5py_dir)
+    _assert_cloud_cache_present(resolved)
+    config.cloud_cache_dir = resolved
+    return config
+
+
+def apply_cloud_skip_threshold(config, threshold: float):
+    """Record the per-token cloud-skip threshold on a config's masking strategy.
+
+    Must be set on BOTH masking configs. The dataloader's copy is the operative one
+    (masking runs inside the collate fn), but the train module keeps its own, and
+    setting only one leaves the saved run config disagreeing with what actually ran.
+    """
+    config.masking_config.strategy_config["cloud_skip_threshold"] = threshold
+    return config
+
+
+# --- AEF-trial + PASTIS in-loop evals, student widths only ------------------------
+# The eight year-aligned AEF datasets on S1+S2+Landsat (kNN twins, which carry AEF's
+# balanced-trial protocol automatically -- _aef_ps1_task attaches a
+# BalancedTrialConfig whenever eval_mode is KNN, and that is where the aeftrial_*
+# metrics come from) plus the year-aligned PASTIS task on the same input. Names are
+# looked up in the canonical registry so a typo raises KeyError at import instead of
+# silently dropping a task.
+_AEFTRIAL_LOOP_EVAL_NAMES = tuple(
+    f"{dataset}_ws16_ps1_sentinel1_sentinel2_landsat_knn"
+    for dataset in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+) + ("pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat",)
+
+
+def set_proj_aeftrial_loop_evals(
+    trainer_config,
+    module_path: str,
+    *,
+    interval_steps: int = 80000,
+    projection_dims: tuple[int, ...] = (128, 64),
+):
+    """REPLACE the eval set with the AEF trials + PASTIS on the STUDENT widths.
+
+    Nine tasks -- the eight AEF-supplemental datasets' kNN twins (which report
+    ``aeftrial_{ridge,knn5,knn20}``) and PASTIS -- all on unmasked S1+S2+Landsat,
+    duplicated at each entry of ``projection_dims``. Every task probes the detached
+    student (``eval_on_projected_registers``); the d768 teacher is deliberately NOT
+    scored here, since these runs are judged on the shipped embedding and the
+    teacher rows would add half again to an already long job.
+
+    Task ORDER is d128 before d64, PASTIS before the trials within each width. Eval
+    jobs at urgent priority get preempted mid-run and the trailing tasks are the ones
+    that systematically lose their metrics, so the order is the priority order: the
+    shipped width first, and the segmentation readout -- the cell the width question
+    hurts most -- ahead of the classification block.
+
+    ``interval_steps`` defaults to **80k**, double the proj runs' 40k. This is an
+    18-task job over ~159k windows per width at three modality passes each; the
+    12-task early-read job already needed 40k to finish before its successor spawned,
+    and consecutive jobs sharing one resumed W&B run silently drop the overlapping
+    writer's rows. Must be a multiple of the checkpointer save_interval (5000).
+    """
+    base_tasks = {
+        name: replace(
+            _EMBEDDING_EVAL_TASKS[name], eval_interval=Duration.steps(interval_steps)
+        )
+        for name in _AEFTRIAL_LOOP_EVAL_NAMES
+    }
+    # Ordered dict comprehension: widths outer, PASTIS-first inner.
+    ordered = sorted(base_tasks, key=lambda n: (not n.startswith("pastis"), n))
+    tasks = {
+        f"{name}_proj{dim}": replace(
+            base_tasks[name],
+            eval_on_projected_registers=True,
+            eval_projection_dim=dim,
+        )
+        for dim in projection_dims
+        for name in ordered
+    }
+    evaluator = trainer_config.callbacks["downstream_evaluator"]
+    evaluator.tasks = tasks
+    evaluator.run_as_beaker_job = True
+    evaluator.beaker_eval_module_path = module_path
+    evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
+    return trainer_config

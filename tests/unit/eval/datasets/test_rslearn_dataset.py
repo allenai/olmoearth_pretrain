@@ -2,15 +2,20 @@
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pytest
 import torch
 from rslearn.train.model_context import RasterImage
 
-from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
+from olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.landsat_calibration import (
+    convert_landsat_to_physical,
+)
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
+    L8QA_INPUT_NAME,
     RslearnToOlmoEarthDataset,
 )
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
@@ -462,7 +467,7 @@ LANDSAT = Modality.LANDSAT.name
 NUM_LANDSAT_BANDS = len(Modality.get(LANDSAT).band_order)
 
 
-def monthly_ranges(year: int, months: list[int]) -> list[tuple]:
+def monthly_ranges(year: int, months: list[int]) -> list[tuple[datetime, datetime]]:
     """(start, end) ranges for the given month slots of `year`'s 30-day grid."""
     jan1 = datetime(year, 1, 1, tzinfo=UTC)
     return [
@@ -535,3 +540,474 @@ class TestRaggedModalities:
         input_dict, target = self.sample_with_landsat(None)
         with pytest.raises(ValueError, match="not found"):
             ds._transform_sample(input_dict, target)
+
+
+class TestLandsatCloudMask:
+    """Scene-level Landsat cloud masking via the sidecar table."""
+
+    LANDSAT_MASK = MaskedOlmoEarthSample.get_masked_modality_name(LANDSAT)
+
+    @staticmethod
+    def dataset_with_table(table: dict | None) -> RslearnToOlmoEarthDataset:
+        """A wrapper with the L8 mask armed at threshold 50."""
+        ds = build_dataset(input_modalities=[S2, LANDSAT])
+        ds.landsat_cloud_cover_max = 50.0
+        ds.landsat_cloud_cover_table = table
+        return ds
+
+    def test_cloudy_months_masked(self) -> None:
+        """Months at/over threshold go MISSING; below, unknown (-1) stay."""
+        table = {"g/w1": {"mo01": 80.0, "mo02": 49.9, "mo03": -1, "mo04": 50.0}}
+        ds = self.dataset_with_table(table)
+        input_dict, target = TestRaggedModalities.sample_with_landsat(list(range(12)))
+        masked_sample, _ = ds._transform_sample(input_dict, target, window_key="g/w1")
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        assert (mask[:, :, 0] == MaskValue.MISSING.value).all()  # mo01: 80
+        assert (mask[:, :, 1] == MaskValue.ONLINE_ENCODER.value).all()  # 49.9
+        assert (mask[:, :, 2] == MaskValue.ONLINE_ENCODER.value).all()  # unknown
+        assert (mask[:, :, 3] == MaskValue.MISSING.value).all()  # exactly 50
+        assert (mask[:, :, 4:] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_merges_with_coverage_gaps(self) -> None:
+        """Cloud-masked slots union with ragged coverage-gap slots."""
+        table = {"g/w1": {"mo01": 90.0}}
+        ds = self.dataset_with_table(table)
+        # landsat missing month index 6 entirely (coverage gap)
+        months = [m for m in range(12) if m != 6]
+        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
+        masked_sample, _ = ds._transform_sample(input_dict, target, window_key="g/w1")
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        for slot in range(12):
+            expected = (
+                MaskValue.MISSING.value
+                if slot in (0, 6)
+                else MaskValue.ONLINE_ENCODER.value
+            )
+            assert (mask[:, :, slot] == expected).all(), slot
+
+    def test_unknown_window_or_missing_table_no_op(self) -> None:
+        """No sidecar entry (or no table) -> unmasked, never a crash."""
+        for table in (None, {"g/other": {"mo01": 99.0}}):
+            ds = self.dataset_with_table(table)
+            input_dict, target = TestRaggedModalities.sample_with_landsat(
+                list(range(12))
+            )
+            masked_sample, _ = ds._transform_sample(
+                input_dict, target, window_key="g/w1"
+            )
+            mask = getattr(masked_sample, self.LANDSAT_MASK)
+            assert (mask == MaskValue.ONLINE_ENCODER.value).all()
+
+
+class TestLandsatReflectance:
+    """DN -> TOA reflectance conversion for reflectance-pretrained checkpoints.
+
+    The eval GeoTIFFs are raw Collection-2 DN, so a checkpoint trained on the
+    reflectance h5 is otherwise evaluated out of domain.
+    """
+
+    BAND_ORDER = list(Modality.LANDSAT.band_order)
+
+    @staticmethod
+    def calibration(sun_elevation: float, month: int) -> dict[str, Any]:
+        """A sidecar entry for one month slot of the 30-day grid."""
+        start, _ = monthly_ranges(2020, [month])[0]
+        return {
+            "sun_elevation": sun_elevation,
+            "platform": "LC08",
+            "start": start.isoformat(),
+        }
+
+    @classmethod
+    def full_year(cls, sun_elevation: float = 50.0) -> dict[str, dict]:
+        """A sidecar window with every month calibrated."""
+        return {f"mo{m + 1:02d}": cls.calibration(sun_elevation, m) for m in range(12)}
+
+    @staticmethod
+    def dataset_with_calibration(table: dict | None) -> RslearnToOlmoEarthDataset:
+        """A wrapper with reflectance conversion armed."""
+        ds = build_dataset(input_modalities=[S2, LANDSAT])
+        ds.landsat_reflectance = True
+        ds.landsat_calibration_table = table
+        return ds
+
+    @staticmethod
+    def dn_array(timesteps: int) -> np.ndarray:
+        """Deterministic DN in the Collection-2 uint16 range."""
+        rng = np.random.default_rng(0)
+        return rng.integers(1, 65535, size=(2, 2, timesteps, NUM_LANDSAT_BANDS)).astype(
+            np.float32
+        )
+
+    def test_matches_h5_conversion(self) -> None:
+        """The loader reproduces exactly what the h5 conversion writes."""
+        ds = self.dataset_with_calibration({"g/w1": self.full_year()})
+        dn = self.dn_array(12)
+
+        actual = ds._landsat_to_physical(
+            dn, "g/w1", monthly_ranges(2020, list(range(12)))
+        )
+        expected = convert_landsat_to_physical(
+            dn, [50.0] * 12, ["LC08"] * 12, self.BAND_ORDER
+        )
+        np.testing.assert_allclose(actual, expected)
+
+    def test_reflective_bands_land_on_reflectance_scale(self) -> None:
+        """Sanity: B4 leaves DN (~1e4) for physical reflectance (~0-1.5)."""
+        ds = self.dataset_with_calibration(
+            {"g/w1": {"mo01": self.calibration(50.0, 0)}}
+        )
+        dn = np.full((1, 1, 1, NUM_LANDSAT_BANDS), 12000.0, dtype=np.float32)
+
+        out = ds._landsat_to_physical(dn, "g/w1", monthly_ranges(2020, [0]))
+        red = out[0, 0, 0, self.BAND_ORDER.index("B4")]
+        assert 0.0 < red < 1.5, red
+
+    def test_ragged_year_calibrates_by_layer_period(self) -> None:
+        """A ragged year calibrates by period, not by position or calendar month.
+
+        Landsat's 16-day revisit drops whole months, so timestep i is not
+        month i -- reading the sidecar positionally would apply January's sun
+        angle to a June scene. The layers are also a 30-day grid rather than
+        calendar months, so mo06 starts on May 31: taking the month off the
+        date would pick mo05 instead.
+        """
+        table = {
+            "g/w1": {
+                "mo01": self.calibration(20.0, 0),
+                "mo02": self.calibration(90.0, 1),  # the positional-bug answer
+                "mo05": self.calibration(80.0, 4),  # the calendar-month-bug answer
+                "mo06": self.calibration(70.0, 5),
+            }
+        }
+        ds = self.dataset_with_calibration(table)
+        dn = self.dn_array(2)
+
+        actual = ds._landsat_to_physical(dn, "g/w1", monthly_ranges(2020, [0, 5]))
+        expected = convert_landsat_to_physical(
+            dn, [20.0, 70.0], ["LC08"] * 2, self.BAND_ORDER
+        )
+        np.testing.assert_allclose(actual, expected)
+
+    @pytest.mark.parametrize(
+        "table",
+        [
+            None,
+            {},
+            {
+                "g/other": {
+                    "mo01": {
+                        "sun_elevation": 50.0,
+                        "start": "2020-01-01T00:00:00+00:00",
+                    }
+                }
+            },
+        ],
+    )
+    def test_uncalibrated_months_become_missing(self, table: dict | None) -> None:
+        """Without calibration a timestep is MISSING, never DN on a refl scale."""
+        ds = self.dataset_with_calibration(table)
+        dn = self.dn_array(12)
+
+        out = ds._landsat_to_physical(dn, "g/w1", monthly_ranges(2020, list(range(12))))
+        assert (out == MISSING_VALUE).all()
+
+    def test_disabled_leaves_dn_untouched(self) -> None:
+        """The DN model's inputs must be byte-for-byte what they were."""
+        input_dict, target = TestRaggedModalities.sample_with_landsat(list(range(12)))
+        baseline = build_dataset(input_modalities=[S2, LANDSAT])
+        armed = self.dataset_with_calibration({"g/w1": self.full_year()})
+        armed.landsat_reflectance = False
+
+        before, _ = baseline._transform_sample(input_dict, target, window_key="g/w1")
+        after, _ = armed._transform_sample(input_dict, target, window_key="g/w1")
+        torch.testing.assert_close(
+            getattr(before, LANDSAT), getattr(after, LANDSAT), rtol=0, atol=0
+        )
+
+    def test_enabled_changes_the_sample(self) -> None:
+        """Guard against the conversion silently not running end to end."""
+        input_dict, target = TestRaggedModalities.sample_with_landsat(list(range(12)))
+        baseline = build_dataset(input_modalities=[S2, LANDSAT])
+        armed = self.dataset_with_calibration({"g/w1": self.full_year()})
+
+        before, _ = baseline._transform_sample(input_dict, target, window_key="g/w1")
+        after, _ = armed._transform_sample(input_dict, target, window_key="g/w1")
+        assert not torch.allclose(getattr(before, LANDSAT), getattr(after, LANDSAT))
+
+    def test_requires_a_calibration_table(self) -> None:
+        """Reflectance stats over unconverted DN must be impossible to request."""
+        with pytest.raises(ValueError, match="requires landsat_calibration_table"):
+            RslearnToOlmoEarthDataset(
+                model_dataset=None,  # type: ignore[arg-type]
+                input_modalities=[LANDSAT],
+                landsat_reflectance=True,
+            )
+
+    def test_normalizer_honours_computed_norm_config(self) -> None:
+        """The pretrain normalizer loads the checkpoint's own stats resource."""
+        ds = RslearnToOlmoEarthDataset(
+            model_dataset=None,  # type: ignore[arg-type]
+            input_modalities=[LANDSAT],
+            landsat_reflectance=True,
+            landsat_calibration_table={},
+            computed_norm_config="computed_landsat_reflectance.json",
+        )
+        assert (
+            ds.normalizer_computed.computed_config_filename
+            == "computed_landsat_reflectance.json"
+        )
+
+
+# QA_PIXEL codes: clear land is 21824 (the quality bits, no cloud bits); the
+# cloud bits under test are dilated=1, cirrus=2, cloud=3, shadow=4. Bit 0 is
+# fill, deliberately NOT masked.
+QA_CLEAR = 21824
+QA_FILL = 1
+QA_DILATED = QA_CLEAR | 0b00010
+QA_CIRRUS = QA_CLEAR | 0b00100
+QA_CLOUD = QA_CLEAR | 0b01000
+QA_SHADOW = QA_CLEAR | 0b10000
+
+
+def make_qa(
+    size: int,
+    num_timesteps: int,
+    codes: dict[tuple[int, int, int], int] | None = None,
+    months: list[int] | None = None,
+) -> RasterImage:
+    """Build a QA_PIXEL RasterImage: clear land except `codes` (h, w, t) -> code."""
+    qa = torch.full((1, num_timesteps, size, size), float(QA_CLEAR))
+    for (row, col, t), value in (codes or {}).items():
+        qa[0, t, row, col] = float(value)
+    return RasterImage(
+        image=qa,
+        timestamps=monthly_ranges(2020, months) if months is not None else None,
+    )
+
+
+class TestL8PixelCloudMask:
+    """Per-pixel Landsat cloud masking from the optional landsat_qa input."""
+
+    LANDSAT_MASK = MaskedOlmoEarthSample.get_masked_modality_name(LANDSAT)
+
+    @staticmethod
+    def armed_dataset(**kwargs: Any) -> RslearnToOlmoEarthDataset:
+        """A wrapper with the per-pixel Landsat mask armed."""
+        ds = build_dataset(input_modalities=[S2, LANDSAT], **kwargs)
+        ds.l8_pixel_cloud_mask = True
+        return ds
+
+    def test_cloud_bits_masked_fill_and_clear_kept(self) -> None:
+        """Each cloud bit masks its pixel-timestep; clear and fill do not."""
+        ds = self.armed_dataset()
+        months = list(range(12))
+        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
+        input_dict[L8QA_INPUT_NAME] = make_qa(
+            8,
+            12,
+            {
+                (1, 1, 0): QA_CLOUD,
+                (2, 2, 1): QA_SHADOW,
+                (3, 3, 2): QA_CIRRUS,
+                (4, 4, 3): QA_DILATED,
+                (5, 5, 4): QA_FILL,
+            },
+            months=months,
+        )
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        for (row, col), slot in (((1, 1), 0), ((2, 2), 1), ((3, 3), 2), ((4, 4), 3)):
+            assert (mask[row, col, slot] == MaskValue.MISSING.value).all()
+            # Only that pixel-timestep moves.
+            assert (mask[row, col, slot + 1] == MaskValue.ONLINE_ENCODER.value).all()
+        # Fill is not a cloud bit.
+        assert (mask[5, 5, 4] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_ragged_qa_aligned_by_acquisition_date(self) -> None:
+        """QA with a coverage gap masks the month it was acquired in, not slot i."""
+        ds = self.armed_dataset()
+        months = [m for m in range(12) if m != 3]
+        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
+        # QA timestep 3 is month 4 (month 3 is missing on both sides): a
+        # positional read would mask slot 3, which has no observation at all.
+        input_dict[L8QA_INPUT_NAME] = make_qa(
+            8, len(months), {(1, 1, 3): QA_CLOUD}, months=months
+        )
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        assert (mask[1, 1, 4] == MaskValue.MISSING.value).all()
+        # Slot 3 is MISSING from the coverage gap for every pixel, and no
+        # other pixel picked up a cloud mask.
+        assert (mask[:, :, 3] == MaskValue.MISSING.value).all()
+        for slot in (m for m in range(12) if m not in (3, 4)):
+            assert (mask[:, :, slot] == MaskValue.ONLINE_ENCODER.value).all(), slot
+        assert (mask[2, 2, 4] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_fully_cloudy_pixel_left_unmasked(self) -> None:
+        """A pixel cloudy at every timestep keeps all of them."""
+        ds = self.armed_dataset()
+        months = list(range(12))
+        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
+        input_dict[L8QA_INPUT_NAME] = make_qa(
+            8, 12, {(1, 1, t): QA_CLOUD for t in range(12)}, months=months
+        )
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        assert (mask[1, 1] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_guard_counts_coverage_gaps_as_lost_timesteps(self) -> None:
+        """Cloudy on every month it HAS: the pixel keeps them rather than blanking."""
+        ds = self.armed_dataset()
+        months = [0, 1]
+        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
+        input_dict[L8QA_INPUT_NAME] = make_qa(
+            8, 2, {(1, 1, 0): QA_CLOUD, (1, 1, 1): QA_CLOUD}, months=months
+        )
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        # Slots 0 and 1 are the pixel's only observations, so they survive.
+        assert (mask[1, 1, 0] == MaskValue.ONLINE_ENCODER.value).all()
+        assert (mask[1, 1, 1] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_mask_follows_center_crop(self) -> None:
+        """With window_size, QA takes the same crop as the imagery."""
+        ds = self.armed_dataset(window_size=16, label_at_center_pixel=True)
+        input_dict, target = make_sample(32, {(12, 20): 5}, num_timesteps=12)
+        months = list(range(12))
+        input_dict[S2] = RasterImage(
+            image=input_dict[S2].image, timestamps=monthly_ranges(2020, months)
+        )
+        input_dict[LANDSAT] = RasterImage(
+            image=torch.rand(NUM_LANDSAT_BANDS, 12, 32, 32),
+            timestamps=monthly_ranges(2020, months),
+        )
+        # Crop is rows 4..20, cols 12..28; cloudy pixel at raster (6, 14)
+        # lands at cropped (2, 2).
+        input_dict[L8QA_INPUT_NAME] = make_qa(
+            32, 12, {(6, 14, 1): QA_CLOUD}, months=months
+        )
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        assert (mask[2, 2, 1] == MaskValue.MISSING.value).all()
+        assert (mask[2, 2, 0] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_half_resolution_qa_is_upsampled(self) -> None:
+        """A 60m-grid QA read (half resolution) is nearest-upsampled to match."""
+        ds = self.armed_dataset()
+        months = list(range(12))
+        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
+        # 4x4 QA against 8x8 imagery: QA (1, 1) covers imagery (2:4, 2:4).
+        input_dict[L8QA_INPUT_NAME] = make_qa(
+            4, 12, {(1, 1, 0): QA_CLOUD}, months=months
+        )
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        assert (mask[2:4, 2:4, 0] == MaskValue.MISSING.value).all()
+        assert (mask[2:4, 2:4, 1] == MaskValue.ONLINE_ENCODER.value).all()
+        assert (mask[0:2, 0:2, 0] == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_missing_qa_input_leaves_sample_unmasked(self) -> None:
+        """No landsat_qa input -> warn and proceed unmasked, never crash."""
+        ds = self.armed_dataset()
+        input_dict, target = TestRaggedModalities.sample_with_landsat(list(range(12)))
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        assert (mask == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_absent_landsat_with_qa_present_does_not_crash(self) -> None:
+        """QA without imagery: every slot is already MISSING, so just warn."""
+        ds = self.armed_dataset()
+        input_dict, target = TestRaggedModalities.sample_with_landsat(None)
+        input_dict[L8QA_INPUT_NAME] = make_qa(8, 12, {(1, 1, 0): QA_CLOUD})
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        assert (mask == MaskValue.MISSING.value).all()
+
+    def test_shape_mismatch_skips_masking(self) -> None:
+        """A QA grid that is neither matching nor half resolution is skipped."""
+        ds = self.armed_dataset()
+        months = list(range(12))
+        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
+        input_dict[L8QA_INPUT_NAME] = make_qa(
+            5, 12, {(1, 1, 0): QA_CLOUD}, months=months
+        )
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        assert (mask == MaskValue.ONLINE_ENCODER.value).all()
+
+    def test_flag_off_ignores_qa_input(self) -> None:
+        """l8_pixel_cloud_mask=False leaves the mask untouched even with QA present."""
+        ds = build_dataset(input_modalities=[S2, LANDSAT])
+        months = list(range(12))
+        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
+        input_dict[L8QA_INPUT_NAME] = make_qa(
+            8, 12, {(1, 1, 0): QA_CLOUD}, months=months
+        )
+        masked_sample, _ = ds._transform_sample(input_dict, target)
+        mask = getattr(masked_sample, self.LANDSAT_MASK)
+        assert (mask == MaskValue.ONLINE_ENCODER.value).all()
+
+
+class TestSubsetBands:
+    """A dataset may store fewer than its modality's canonical bands."""
+
+    @staticmethod
+    def _dataset(declared: dict[str, list[str]]) -> Any:
+        """A bare instance carrying only what band_scatter needs."""
+        obj = object.__new__(RslearnToOlmoEarthDataset)
+        obj.input_modalities = [Modality.SENTINEL2_L2A.name]
+        RslearnToOlmoEarthDataset._init_band_scatter(obj, declared)
+        return obj
+
+    def test_full_band_list_is_a_no_op(self) -> None:
+        """Every existing dataset declares all bands and must be untouched."""
+        canonical = list(Modality.SENTINEL2_L2A.band_order)
+        ds = self._dataset({Modality.SENTINEL2_L2A.name: canonical})
+        assert ds.band_scatter == {}
+        assert ds.absent_bands == {}
+
+    def test_subset_records_positions_and_gaps(self) -> None:
+        """The ten-band composite must map onto canonical positions 0-9."""
+        canonical = list(Modality.SENTINEL2_L2A.band_order)
+        ten = [b for b in canonical if b not in ("B01", "B09")]
+        ds = self._dataset({Modality.SENTINEL2_L2A.name: ten})
+
+        assert ds.band_scatter[Modality.SENTINEL2_L2A.name] == [
+            canonical.index(b) for b in ten
+        ]
+        assert ds.absent_bands[Modality.SENTINEL2_L2A.name] == [
+            canonical.index("B01"),
+            canonical.index("B09"),
+        ]
+
+    def test_scatter_puts_read_channels_at_canonical_positions(self) -> None:
+        """Channel k of the raster must land at its band's canonical index."""
+        canonical = list(Modality.SENTINEL2_L2A.band_order)
+        ten = [b for b in canonical if b not in ("B01", "B09")]
+        ds = self._dataset({Modality.SENTINEL2_L2A.name: ten})
+
+        arr = np.arange(10, dtype=np.float32).reshape(1, 1, 1, 10)
+        out = ds._scatter_bands(Modality.SENTINEL2_L2A.name, arr)
+
+        assert out.shape == (1, 1, 1, len(canonical))
+        for read_index, band in enumerate(ten):
+            assert out[0, 0, 0, canonical.index(band)] == read_index
+        assert out[0, 0, 0, canonical.index("B01")] == 0
+        assert out[0, 0, 0, canonical.index("B09")] == 0
+
+    def test_channel_count_mismatch_is_loud(self) -> None:
+        """Config and rasters disagreeing must fail, not silently misalign."""
+        canonical = list(Modality.SENTINEL2_L2A.band_order)
+        ten = [b for b in canonical if b not in ("B01", "B09")]
+        ds = self._dataset({Modality.SENTINEL2_L2A.name: ten})
+
+        with pytest.raises(ValueError, match="config and data disagree"):
+            ds._scatter_bands(
+                Modality.SENTINEL2_L2A.name, np.zeros((1, 1, 1, 12), dtype=np.float32)
+            )
+
+    def test_unknown_band_is_rejected(self) -> None:
+        """A typo in model.yaml must not be silently ignored."""
+        with pytest.raises(ValueError, match="not in its canonical band order"):
+            self._dataset({Modality.SENTINEL2_L2A.name: ["B02", "NOPE"]})

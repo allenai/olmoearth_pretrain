@@ -55,11 +55,12 @@ def _as_dict(obj: NamedTuple, include_nones: bool = False) -> dict[str, Any]:
 
 
 def _modalities(obj: NamedTuple) -> list[str]:
-    """Get present modalities (excludes masks and timestamps)."""
+    """Get present modalities (excludes masks, cloud side-payloads, and timestamps)."""
     return [
         name
         for name in obj._fields
         if not name.endswith("_mask")
+        and not name.endswith("_cloud")
         and name != TIMESTAMPS_FIELD
         and getattr(obj, name) is not None
     ]
@@ -91,6 +92,11 @@ class OlmoEarthSample(NamedTuple):
     )
     openstreetmap_raster: ArrayTensor | None = None  # [B, H, W, 1, len(OSM_bands)]
     srtm: ArrayTensor | None = None  # [B, H, W, 1, len(SRTM_bands)]
+    # glo30 (Copernicus GLO-30 DSM): elevation, slope, aspect.
+    glo30: ArrayTensor | None = None  # [B, H, W, 1, 3]
+    # glo30_aspect is derived from the glo30 aspect band (not loaded from file):
+    # [sin(aspect), cos(aspect)], MISSING_VALUE where aspect is the -1 flat sentinel.
+    glo30_aspect: ArrayTensor | None = None  # [B, H, W, 1, 2]
     landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
     # naip with different tile resolution is currently not used in favor of naip_10.
     naip: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
@@ -104,11 +110,19 @@ class OlmoEarthSample(NamedTuple):
     worldpop: ArrayTensor | None = None  # [B, H, W, 1, len(WORLDPOP_bands)]
     worldcereal: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
     wri_canopy_height_map: ArrayTensor | None = None  # [B, H, W, 1, 1]
+    # meta_canopy_height (Meta Canopy Height V2): canopy_height band.
+    meta_canopy_height: ArrayTensor | None = None  # [B, H, W, 1, 1]
     # era5_10 is not spatially varying, so it has no height/width dimensions.
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
     # ndvi is computed from S2 L2A bands B04 (Red) and B08 (NIR), not loaded from file.
     ndvi: ArrayTensor | None = None  # [B, H, W, T, 1]
     eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
+    # OmniCloudMask cloud-class side-payloads (0 clear/1 thick/2 thin/3 shadow/255
+    # no-data), aligned to the S2/Landsat time+space grid. Excluded from
+    # `.modalities` (never tokenized/normalized); consumed by the masking strategy
+    # to drop mostly-cloud tokens, then dropped. See data.cloud_mask_cache.
+    sentinel2_l2a_cloud: ArrayTensor | None = None  # [B, H, W, T, 1]
+    landsat_cloud: ArrayTensor | None = None  # [B, H, W, T, 1]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
 
@@ -127,10 +141,14 @@ class OlmoEarthSample(NamedTuple):
 
     @property
     def modalities_with_timestamps(self) -> list[str]:
-        """Get all modalities including timestamps if present (excludes masks)."""
+        """Get all modalities including timestamps if present (excludes masks, cloud)."""
         result = []
         for name in self._fields:
-            if not name.endswith("_mask") and getattr(self, name) is not None:
+            if (
+                not name.endswith("_mask")
+                and not name.endswith("_cloud")
+                and getattr(self, name) is not None
+            ):
                 result.append(name)
         return result
 
@@ -163,6 +181,10 @@ class OlmoEarthSample(NamedTuple):
         """Get the number of channels for a given attribute."""
         if attribute == "timestamps":
             return len(TIMESTAMPS)
+        elif attribute.endswith("_cloud"):
+            # `*_cloud` side-payloads are single-channel class maps, not modalities,
+            # so there is no ModalitySpec to look up (see data.cloud_mask_cache).
+            return 1
         else:
             return Modality.get(attribute).num_bands
 
@@ -372,6 +394,10 @@ class MaskedOlmoEarthSample(NamedTuple):
     openstreetmap_raster_mask: Tensor | None = None
     srtm: Tensor | None = None
     srtm_mask: Tensor | None = None
+    glo30: Tensor | None = None
+    glo30_mask: Tensor | None = None
+    glo30_aspect: Tensor | None = None
+    glo30_aspect_mask: Tensor | None = None
     landsat: Tensor | None = None
     landsat_mask: Tensor | None = None
     naip: Tensor | None = None
@@ -394,6 +420,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     worldcereal_mask: Tensor | None = None
     wri_canopy_height_map: Tensor | None = None
     wri_canopy_height_map_mask: Tensor | None = None
+    meta_canopy_height: Tensor | None = None
+    meta_canopy_height_mask: Tensor | None = None
     era5_10: Tensor | None = None
     era5_10_mask: Tensor | None = None
     ndvi: Tensor | None = None
@@ -467,6 +495,11 @@ class MaskedOlmoEarthSample(NamedTuple):
         for key, t in sample.as_dict(include_nones=True).items():
             if key == "timestamps":
                 masked_sample_dict[key] = t
+            elif key.endswith("_cloud"):
+                # `*_cloud` side-payloads have no counterpart on
+                # MaskedOlmoEarthSample: the masking strategy consumes them (see
+                # data.collate.extract_cloud_payload) and they never reach the model.
+                continue
             else:
                 if t is None:
                     masked_sample_dict[key] = None
@@ -518,6 +551,10 @@ class TokensAndMasks(NamedTuple):
     openstreetmap_raster_mask: Tensor | None = None
     srtm: Tensor | None = None
     srtm_mask: Tensor | None = None
+    glo30: Tensor | None = None
+    glo30_mask: Tensor | None = None
+    glo30_aspect: Tensor | None = None
+    glo30_aspect_mask: Tensor | None = None
     landsat: Tensor | None = None
     landsat_mask: Tensor | None = None
     naip: Tensor | None = None
@@ -540,6 +577,8 @@ class TokensAndMasks(NamedTuple):
     worldcereal_mask: Tensor | None = None
     wri_canopy_height_map: Tensor | None = None
     wri_canopy_height_map_mask: Tensor | None = None
+    meta_canopy_height: Tensor | None = None
+    meta_canopy_height_mask: Tensor | None = None
     era5_10: Tensor | None = None
     era5_10_mask: Tensor | None = None
     ndvi: Tensor | None = None
