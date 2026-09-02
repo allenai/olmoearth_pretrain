@@ -227,6 +227,12 @@ class AnySat(nn.Module):
         patch_size_meters = (
             max(self.patch_size, self._calculate_patch_size(hs[0])) * self.resolution
         )
+        # Cap at the input image size. For single-pixel time-series inputs
+        # (e.g. breizhcrops, cropharvest, awf, nandi at h=w=1), AnySat's LTAE
+        # encoder calls `x.unfold(spatial_dim, scale, scale)` where
+        # scale=patch_size_meters//resolution; with scale > h that unfold
+        # raises "maximum size for tensor at dimension 2 is 1 but size is N".
+        patch_size_meters = min(patch_size_meters, hs[0] * self.resolution)
         logger.info(f"Using patch size {patch_size_meters} for AnySat")
 
         # from the README (https://github.com/gastruc/AnySat/blob/main/README.md):
