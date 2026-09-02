@@ -367,6 +367,17 @@ DATASET_TO_CONFIG = {
         ],
         timeseries=True,
     ),
+    # Similar But Different: 10-class ESA WorldCover land-cover classification on
+    # single-timestamp Sentinel-2 L2A 32x32 patches, built so RGB is uninformative.
+    # 12 L2A bands, no cirrus -> no imputes (uses the L2A band path).
+    "similar_but_different": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[],
+        num_classes=10,
+        is_multilabel=False,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        source_imagery=[SourceImagery.SENTINEL2],
+    ),
 }
 
 # "gb2-" prefix denotes geobench v2 datasets
