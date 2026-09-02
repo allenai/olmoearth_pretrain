@@ -30,6 +30,7 @@ def build_default_config() -> ConvertToH5pyConfig:
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
             Modality.WORLDCOVER.name,
+            Modality.WORLDCOVER_PRED.name,
             Modality.OPENSTREETMAP_RASTER.name,
             Modality.WORLDCEREAL.name,
             Modality.SRTM.name,

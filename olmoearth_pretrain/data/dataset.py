@@ -27,6 +27,7 @@ from olmoearth_pretrain.data.constants import (
     MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
     WORLDCOVER_CLASSES,
+    WORLDCOVER_PRED_NUM_CLASSES,
     Modality,
     ModalitySpec,
 )
@@ -297,6 +298,34 @@ def one_hot_worldcover(raw: np.ndarray, dtype: np.dtype) -> np.ndarray:
     onehot = np.zeros((*codes.shape, len(WORLDCOVER_CLASSES)), dtype=dtype)
     for idx, code in enumerate(WORLDCOVER_CLASSES):
         onehot[..., idx] = codes == code
+    # Preserve missingness so it is recognised by the missing mask downstream.
+    onehot[missing] = MISSING_VALUE
+    return onehot
+
+
+def one_hot_worldcover_pred(raw: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    """One-hot encode predicted WorldCover class indices.
+
+    The worldcover_pred modality is stored on disk as a single band holding one class
+    index per pixel (argmax over the model's taxonomy). The derived worldcover_pred_onehot
+    modality expands that band into one channel per class index.
+
+    Args:
+        raw: array of class indices with the band axis as the last dim of size 1,
+            e.g. [H, W, 1, 1]. MISSING_VALUE marks missing pixels.
+        dtype: the dtype of the output array.
+
+    Returns:
+        Array with the trailing band axis expanded to WORLDCOVER_PRED_NUM_CLASSES.
+        Missing pixels are MISSING_VALUE across all channels; indices out of range map to
+        all-zero.
+    """
+    # Drop the single-band axis: [H, W, 1, 1] -> [H, W, 1].
+    indices = raw[..., 0]
+    missing = indices == MISSING_VALUE
+    onehot = np.zeros((*indices.shape, WORLDCOVER_PRED_NUM_CLASSES), dtype=dtype)
+    for idx in range(WORLDCOVER_PRED_NUM_CLASSES):
+        onehot[..., idx] = indices == idx
     # Preserve missingness so it is recognised by the missing mask downstream.
     onehot[missing] = MISSING_VALUE
     return onehot
@@ -779,6 +808,18 @@ class OlmoEarthDataset(Dataset):
                 ):
                     sample_dict[Modality.WORLDCOVER_ONEHOT.name] = one_hot_worldcover(
                         h5file[Modality.WORLDCOVER.name][()], self.dtype
+                    )
+
+                # worldcover_pred_onehot is likewise derived from the raw worldcover_pred
+                # class-index band, which is not stored on disk.
+                if (
+                    Modality.WORLDCOVER_PRED_ONEHOT.name in self.training_modalities
+                    and Modality.WORLDCOVER_PRED.name in h5file
+                ):
+                    sample_dict[Modality.WORLDCOVER_PRED_ONEHOT.name] = (
+                        one_hot_worldcover_pred(
+                            h5file[Modality.WORLDCOVER_PRED.name][()], self.dtype
+                        )
                     )
 
                 if (
