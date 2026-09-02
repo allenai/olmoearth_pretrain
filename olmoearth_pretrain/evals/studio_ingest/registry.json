@@ -9601,6 +9601,1293 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
       "window_size": 128
     },
+    "pastis2_drom_bg8void_mo01": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_mo01",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_mo01",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 1,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_mo02": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_mo02",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_mo02",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 2,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_mo03": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_mo03",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_mo03",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 3,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_mo04": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_mo04",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_mo04",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 4,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_mo05": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_mo05",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_mo05",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 5,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_mo06": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_mo06",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_mo06",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 6,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_mo07": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_mo07",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_mo07",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 7,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_mo08": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_mo08",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_mo08",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 8,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_mo09": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_mo09",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_mo09",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 9,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_mo10": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_mo10",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_mo10",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 10,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
+    "pastis2_drom_bg8void_mo11": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis2_drom_bg8void_mo11",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pastis2_drom_bg8void_mo11",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 15484.0,
+            "mean": 1456.9388224283855,
+            "min": 0.0,
+            "std": 2593.986140755219
+          },
+          "B02": {
+            "max": 17856.0,
+            "mean": 1446.4766387939453,
+            "min": 1.0,
+            "std": 2487.5174465649557
+          },
+          "B03": {
+            "max": 17472.0,
+            "mean": 1587.8660278320312,
+            "min": 1.0,
+            "std": 2300.892976231966
+          },
+          "B04": {
+            "max": 17312.0,
+            "mean": 1429.6076965332031,
+            "min": 1.0,
+            "std": 2285.3987504583006
+          },
+          "B05": {
+            "max": 16130.0,
+            "mean": 1929.1870218912761,
+            "min": 0.0,
+            "std": 2350.9529577527214
+          },
+          "B06": {
+            "max": 16481.0,
+            "mean": 3137.1181437174478,
+            "min": 0.0,
+            "std": 2072.532449048457
+          },
+          "B07": {
+            "max": 16275.0,
+            "mean": 3590.7949015299478,
+            "min": 0.0,
+            "std": 2046.9516095436159
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 3628.7611083984375,
+            "min": 1.0,
+            "std": 2042.373472582396
+          },
+          "B09": {
+            "max": 16386.0,
+            "mean": 4322.5722249348955,
+            "min": 0.0,
+            "std": 3208.4565775807823
+          },
+          "B11": {
+            "max": 15344.0,
+            "mean": 2189.14013671875,
+            "min": 0.0,
+            "std": 1493.4166097041862
+          },
+          "B12": {
+            "max": 15091.0,
+            "mean": 1422.0722351074219,
+            "min": 0.0,
+            "std": 1331.5780252404468
+          },
+          "B8A": {
+            "max": 16029.0,
+            "mean": 3783.646728515625,
+            "min": 0.0,
+            "std": 2018.9242433681547
+          }
+        }
+      },
+      "num_classes": 8,
+      "num_timesteps": 11,
+      "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
+      "split_stats": {
+        "test": {
+          "count": 324
+        },
+        "train": {
+          "count": 2003
+        },
+        "val": {
+          "count": 423
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis2_drom",
+      "window_size": 128
+    },
     "pastis2_drom_bg8void_s1": {
       "classes": [
         "0",

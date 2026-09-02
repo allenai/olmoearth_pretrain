@@ -1987,6 +1987,67 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
                 window_size=_ws,
                 dataset="pastis2_drom_bg8void",
             ),
+            # TEMPORAL-ABLATION-START
+            # Temporal ablation: the same S2 probe over the first N monthly
+            # mosaics, N=1..11. N=12 is pastis2_drom_bg8void_ws16_ps1_sentinel2
+            # above -- the published 35.02 -- so it is the curve's control, not
+            # a twelfth registration.
+            f"pastis2_drom_bg8void_mo01_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void_mo01",
+            ),
+            f"pastis2_drom_bg8void_mo02_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void_mo02",
+            ),
+            f"pastis2_drom_bg8void_mo03_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void_mo03",
+            ),
+            f"pastis2_drom_bg8void_mo04_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void_mo04",
+            ),
+            f"pastis2_drom_bg8void_mo05_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void_mo05",
+            ),
+            f"pastis2_drom_bg8void_mo06_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void_mo06",
+            ),
+            f"pastis2_drom_bg8void_mo07_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void_mo07",
+            ),
+            f"pastis2_drom_bg8void_mo08_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void_mo08",
+            ),
+            f"pastis2_drom_bg8void_mo09_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void_mo09",
+            ),
+            f"pastis2_drom_bg8void_mo10_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void_mo10",
+            ),
+            f"pastis2_drom_bg8void_mo11_ws{_ws}_ps1_sentinel2": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name],
+                window_size=_ws,
+                dataset="pastis2_drom_bg8void_mo11",
+            ),
+            # TEMPORAL-ABLATION-END
             f"pastis2_drom_bg8_ws{_ws}_ps1_sentinel1": _pastis_ps1_task(
                 [Modality.SENTINEL1.name],
                 window_size=_ws,
