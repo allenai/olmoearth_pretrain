@@ -71,6 +71,7 @@ class EvalTaskResult:
     bootstrap_stats: dict[str, Any] = field(default_factory=dict)
     eval_time: float | None = None
     embedding_diagnostics: dict[str, float] = field(default_factory=dict)
+    pca_rgb: np.ndarray | None = None
 
 
 @dataclass
