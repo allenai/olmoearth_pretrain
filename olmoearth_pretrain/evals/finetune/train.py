@@ -204,6 +204,8 @@ def compute_eval_metrics(
             patch_size,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
+            # the val loader is sharded per rank; eval_seg gathers before scoring
+            distributed=_ddp_enabled(),
         )
 
     test_result: EvalResult | None = None
@@ -510,6 +512,8 @@ def run_finetune_eval(
                 patch_size,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
+                # the val loader is sharded per rank; eval_seg gathers before scoring
+                distributed=_ddp_enabled(),
             )
 
         if device.type == "cuda":

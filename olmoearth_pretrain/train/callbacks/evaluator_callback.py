@@ -678,22 +678,41 @@ class DownstreamEvaluator:
         # training data. Without a sampler every rank iterates the whole split, so
         # N GPUs would do N copies of the same work and the effective batch size
         # would be N x what was asked for -- slower per epoch AND a different
-        # optimisation problem. Only the shuffled (training) loader is sharded:
-        # val/test stay whole on every rank so each computes identical metrics and
-        # no gather is needed to report them.
-        sampler = None
-        if shuffle and not is_iterable and get_world_size() > 1:
-            sampler = DistributedSampler(
-                eval_ds,
-                num_replicas=get_world_size(),
-                rank=get_rank(),
-                shuffle=True,
-                seed=seed if seed is not None else 0,
-                drop_last=False,
-            )
+        # optimisation problem.
+        #
+        # VALIDATION is sharded too. Left whole it does not speed up at all, and at
+        # 8 ranks it dominated the epoch: measured on the PASTIS fine-tune, training
+        # fell from 106.5 min to 23.6 min while validation stayed ~9 min, so ~40% of
+        # each epoch was 8 ranks redundantly scoring the same val set. Its consumer
+        # (eval_seg with distributed=True) gathers the shards before computing, so
+        # the reported metric is over the whole split exactly as before.
+        #
+        # TEST is deliberately NOT sharded: eval_seg writes the offline prediction
+        # dump from the test split, and a sharded dump would silently contain one
+        # rank's slice -- those dumps feed published numbers.
+        sampler: Any = None
+        if not is_iterable and get_world_size() > 1 and (shuffle or split == "valid"):
+            if shuffle:
+                sampler = DistributedSampler(
+                    eval_ds,
+                    num_replicas=get_world_size(),
+                    rank=get_rank(),
+                    shuffle=True,
+                    seed=seed if seed is not None else 0,
+                    drop_last=False,
+                )
+            else:
+                # DistributedSampler pads the index list so every rank gets an equal
+                # count, which repeats a few samples -- harmless while training, but
+                # it would double-count them in a metric. A plain strided index list
+                # partitions exactly: no duplicates, rank counts differing by <=1.
+                # Uneven counts are safe here because validation runs on the
+                # UNWRAPPED module, so there is no collective inside the loop for a
+                # short rank to desynchronise.
+                sampler = list(range(get_rank(), len(eval_ds), get_world_size()))
             logger.info(
-                "Sharding the %s loader across %d ranks (%d samples -> ~%d per rank)",
-                split, get_world_size(), len(eval_ds), len(sampler),
+                "Sharding the %s loader across %d ranks (%d samples -> %d on rank %d)",
+                split, get_world_size(), len(eval_ds), len(sampler), get_rank(),
             )
         return DataLoader(
             eval_ds,
