@@ -67,6 +67,12 @@ CLASSIFIERS: tuple[str, ...] = (RANDOM_FOREST, XGBOOST, LOGISTIC_REGRESSION, MLP
 # oversubscribe; the CPU affinity mask is the honest figure where available.
 MAX_DEFAULT_JOBS = 16
 
+# Set once the first xgboost GPU fit fails (driver / CUDA-version mismatch on
+# the node, say); every later xgboost fit in the process then runs on CPU
+# rather than repeating the failure per fold. A CPU forest is slower, not
+# different, so the eval survives instead of dying after its forward pass.
+_XGB_CUDA_BROKEN = False
+
 
 def classifier_task_name(host_task: str, predictor: str) -> str:
     """Synthetic task name a classifier probe's result is reported under."""
@@ -172,6 +178,8 @@ def _build_estimator(name: str, config: ClassifierProbeConfig) -> Any:
         device = config.xgb_device
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
+        if _XGB_CUDA_BROKEN and device != "cpu":
+            device = "cpu"
         return XGBClassifier(
             n_estimators=config.xgb_n_estimators,
             max_depth=config.xgb_max_depth,
@@ -211,7 +219,20 @@ def fit_classifier(
         # Nothing to discriminate; predict_scores handles the degenerate case.
         return _Fitted(model=None, classes=classes)
     model = _build_estimator(name, config)
-    model.fit(features, encoded)
+    try:
+        model.fit(features, encoded)
+    except Exception as exc:
+        global _XGB_CUDA_BROKEN
+        on_gpu = name == XGBOOST and getattr(model, "device", "cpu") != "cpu"
+        if not on_gpu or _XGB_CUDA_BROKEN:
+            raise
+        logger.warning(
+            f"xgboost GPU fit failed ({type(exc).__name__}: {exc}); falling back "
+            f"to CPU for this and every later xgboost fit in this process"
+        )
+        _XGB_CUDA_BROKEN = True
+        model = _build_estimator(name, config)
+        model.fit(features, encoded)
     return _Fitted(model=model, classes=classes)
 
 
