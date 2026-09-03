@@ -85,6 +85,10 @@ class EvalTaskResult:
     # set (the remainder), and may use a different predictor, so filing them
     # under the host task would put two very different numbers behind one name.
     extra_results: dict[str, EvalResult] = field(default_factory=dict)
+    # Test-split counterparts of extra_results, for the synthetic tasks that DO
+    # score our test split (the classifier probes, evals/classifier_probes.py);
+    # logged under eval/test/{name}. The balanced trials never populate this.
+    extra_test_results: dict[str, EvalResult] = field(default_factory=dict)
 
 
 @dataclass

@@ -11,9 +11,11 @@ from olmoearth_pretrain.evals.balanced_trial import (
     aef_num_folds,
     draw_balanced_indices,
     fit_ridge_ovr,
+    lambda_tag,
     run_balanced_trials,
     trial_task_name,
 )
+from olmoearth_pretrain.evals.classifier_probes import ClassifierProbeConfig
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
 from olmoearth_pretrain.evals.task_types import TaskType
 
@@ -284,6 +286,45 @@ class TestRunBalancedTrials:
             # Separable classes, so a sane protocol scores well above chance.
             assert result.results[predictor].metrics["balanced_accuracy"] > 0.8
             assert len(result.per_fold[predictor]["balanced_accuracy"]) == 4
+
+    def test_extra_ridge_penalties_and_classifiers_are_their_own_predictors(
+        self,
+    ) -> None:
+        """Optional predictors report beside, never instead of, AEF's ridge/kNN."""
+        embeddings, labels = self._splits()
+        result = run_balanced_trials(
+            config=_config(),
+            embeddings_by_split=embeddings,
+            labels_by_split=labels,
+            trial_config=BalancedTrialConfig(
+                n_folds=2,
+                knn_ks=(5,),
+                ridge_lambdas=(1.0, 0.1),
+                classifiers=ClassifierProbeConfig(
+                    names=("rf", "logreg"), n_jobs=1, rf_n_estimators=20
+                ),
+            ),
+            device=torch.device("cpu"),
+        )
+        assert list(result.results) == [
+            "ridge",
+            "ridge_lam1",
+            "ridge_lam0p1",
+            "knn5",
+            "rf",
+            "logreg",
+        ]
+        for predictor, predictor_result in result.results.items():
+            assert predictor_result.metrics["balanced_accuracy"] > 0.8, predictor
+            assert predictor_result.metrics["n_folds"] == 2.0
+            assert len(result.per_fold[predictor]["balanced_accuracy"]) == 2
+
+    def test_lambda_tag_is_name_safe(self) -> None:
+        """Penalty values render as predictor-name-safe tags."""
+        assert lambda_tag(1.0) == "lam1"
+        assert lambda_tag(0.1) == "lam0p1"
+        assert lambda_tag(10.0) == "lam10"
+        assert lambda_tag(1e-5) == "lam1em05"
 
     def test_fold_count_defaults_to_the_aef_formula(self) -> None:
         """With no explicit n_folds the S4.3 formula applies, then max_folds caps it."""

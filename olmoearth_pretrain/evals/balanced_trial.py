@@ -18,6 +18,13 @@ This reproduces the evaluation protocol of *AlphaEarth Foundations* (arXiv
    (S4.1). Neither has a model-selection step, which is what makes a few hundred
    refits affordable: each ridge fit is a closed-form solve.
 
+   Optionally, and outside AEF's protocol, the same draws can also be scored
+   with extra ridge penalties (``ridge_lambdas``, reported as ``ridge_lam{l}``)
+   and with off-the-shelf classifiers at library defaults (``classifiers``:
+   random forest, xgboost, logistic regression; see evals/classifier_probes.py).
+   Each is its own predictor name, so the AEF-faithful ``ridge``/``knn*`` cells
+   are untouched and a forest's number can never be read as the ridge's.
+
 This is purely additive: the caller's own train -> val probe result is untouched.
 Each trial predictor is reported as its OWN task -- ``{host}_aeftrial_{predictor}``
 with the host's ``_knn`` suffix dropped -- rather than as extra metrics on the
@@ -41,6 +48,10 @@ from dataclasses import dataclass, field
 
 import torch
 
+from olmoearth_pretrain.evals.classifier_probes import (
+    ClassifierProbeConfig,
+    classifier_scores,
+)
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
 from olmoearth_pretrain.evals.knn import _run_knn_for_k
 from olmoearth_pretrain.evals.metrics import (
@@ -66,6 +77,11 @@ def trial_task_name(host_task: str, predictor: str) -> str:
     because a ridge result under a ``_knn`` task name reads as a contradiction.
     """
     return f"{host_task.removesuffix('_knn')}_{TASK_SUFFIX}_{predictor}"
+
+
+def lambda_tag(lam: float) -> str:
+    """Predictor-name-safe rendering of a ridge penalty: 1.0 -> "lam1", 0.1 -> "lam0p1"."""
+    return "lam" + f"{lam:g}".replace(".", "p").replace("-", "m").replace("+", "")
 
 
 # Metrics aggregated (mean + std) across folds. Balanced accuracy is AEF's
@@ -147,6 +163,16 @@ class BalancedTrialConfig:
     # of relying on the min-norm pseudoinverse solution.
     ridge_lambda: float = 0.0
     fit_intercept: bool = True
+    # Extra ridge penalties fit on the same draws, each reported as its own
+    # predictor ``ridge_lam{lambda}`` (1.0 -> "ridge_lam1", 0.1 -> "ridge_lam0p1").
+    # sklearn's RidgeClassifier default is alpha=1; AEF's lambda=0 is a deliberate
+    # no-hyperparameter choice whose price is an unstable estimator when the draw
+    # is small relative to the embedding width (ethiopia at d128: 196 rows).
+    ridge_lambdas: tuple[float, ...] = ()
+    # Off-the-shelf classifiers fit per fold on the same draws; ``names`` empty
+    # (the default) runs none. Reported under their own predictor names
+    # ("rf", "xgb", "logreg").
+    classifiers: ClassifierProbeConfig = field(default_factory=ClassifierProbeConfig)
 
 
 @dataclass
@@ -462,7 +488,24 @@ def run_balanced_trials(
         fixed_eval_embeddings = fixed_eval[0].to(device)
         fixed_eval_labels = fixed_eval[1]
 
-    predictors = ["ridge"] + [f"knn{k}" for k in trial_config.knn_ks]
+    trial_config.classifiers.validate()
+    extra_ridge = [
+        (lam, f"ridge_{lambda_tag(lam)}") for lam in trial_config.ridge_lambdas
+    ]
+    classifier_names = list(trial_config.classifiers.names)
+    predictors = (
+        ["ridge"]
+        + [name for _, name in extra_ridge]
+        + [f"knn{k}" for k in trial_config.knn_ks]
+        + classifier_names
+    )
+    if classifier_names:
+        # The estimators are CPU numpy; index the pool once rather than moving
+        # a fold's rows off the device every time.
+        pool_embeddings_np = pool_embeddings.detach().cpu().float().numpy()
+        pool_labels_np = pool_labels.detach().cpu().long().numpy()
+        if fixed_eval is not None:
+            fixed_eval_np = fixed_eval[0].detach().cpu().float().numpy()
     per_fold: dict[str, dict[str, list[float]]] = {
         name: {metric: [] for metric in AGGREGATED_METRICS} for name in predictors
     }
@@ -508,6 +551,22 @@ def run_balanced_trials(
             scores=ridge_scores,
         )
 
+        for lam, name in extra_ridge:
+            weights, bias = fit_ridge_ovr(
+                train_embeddings,
+                train_labels.to(train_embeddings.device),
+                num_classes,
+                lam=lam,
+                fit_intercept=trial_config.fit_intercept,
+            )
+            scores = (eval_embeddings.double() @ weights + bias).float().cpu()
+            _record_fold(
+                per_fold[name],
+                predictions=scores.argmax(dim=1),
+                labels=eval_labels,
+                scores=scores,
+            )
+
         for k in trial_config.knn_ks:
             knn_scores = _run_knn_for_k(
                 train_embeddings=train_embeddings,
@@ -524,6 +583,28 @@ def run_balanced_trials(
                 predictions=knn_scores.argmax(dim=1),
                 labels=eval_labels,
                 scores=knn_scores,
+            )
+
+        for name in classifier_names:
+            train_indices_np = train_indices.numpy()
+            eval_features_np = (
+                fixed_eval_np
+                if fixed_eval is not None
+                else pool_embeddings_np[held_out.numpy()]
+            )
+            clf_scores = classifier_scores(
+                name,
+                trial_config.classifiers,
+                pool_embeddings_np[train_indices_np],
+                pool_labels_np[train_indices_np],
+                eval_features_np,
+                num_classes,
+            )
+            _record_fold(
+                per_fold[name],
+                predictions=clf_scores.argmax(dim=1),
+                labels=eval_labels,
+                scores=clf_scores,
             )
 
         if n_folds > 1 and (fold_idx + 1) % 25 == 0:

@@ -193,6 +193,12 @@ def evaluate_checkpoints(
 
             if result.extra_results:
                 metrics.update(extra_results_log_dict(result.extra_results))
+            if eval_callback.run_on_test and result.extra_test_results:
+                metrics.update(
+                    extra_results_log_dict(
+                        result.extra_test_results, prefix="eval/test"
+                    )
+                )
 
             if result.embedding_diagnostics:
                 for k, v in result.embedding_diagnostics.items():

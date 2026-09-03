@@ -33,6 +33,11 @@ from olmoearth_pretrain.evals.band_sensitivity import (
     occlude_band,
     reliance_profile,
 )
+from olmoearth_pretrain.evals.classifier_probes import (
+    ClassifierProbeConfig,
+    classifier_task_name,
+    run_classifier_probes,
+)
 from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
     DATASET_TO_CONFIG,
@@ -267,6 +272,16 @@ class DownstreamTaskConfig:
     # eval mode (KNN / LINEAR_PROBE); it is hosted on the KNN twin so the trials
     # compute once instead of once per swept probe LR. None = don't run.
     balanced_trial: BalancedTrialConfig | None = None
+    # Additionally fit off-the-shelf classifiers (random forest / xgboost /
+    # logistic regression, at library defaults) on the embeddings this task
+    # materializes, under the task's own train -> val / test protocol. Purely
+    # additive, like balanced_trial; each predictor is reported as its own
+    # synthetic task ``{task}_clf_{predictor}``. Dense tasks are scored per
+    # pixel (needs one embedding per label pixel, i.e. patch_size=1) with a
+    # seeded cap on the training pixels. ``names`` empty (default) = don't run.
+    classifier_probes: ClassifierProbeConfig = field(
+        default_factory=ClassifierProbeConfig
+    )
     # Override the default primary metric (e.g. EvalMetric.F1 instead of ACCURACY).
     # None = use the default for the task type (accuracy for classification, miou for segmentation).
     primary_metric: EvalMetric | None = None
@@ -455,6 +470,7 @@ class DownstreamEvaluator:
         self.primary_metric = task.primary_metric
         self.primary_metric_class = task.primary_metric_class
         self.balanced_trial = task.balanced_trial
+        self.classifier_probes = task.classifier_probes
         self.h5py_dir = task.h5py_dir
         self.pretrain_max_samples = task.pretrain_max_samples
         self.pretrain_target_modality = task.pretrain_target_modality
@@ -520,6 +536,26 @@ class DownstreamEvaluator:
                     f"balanced_trial does not support multilabel tasks "
                     f"('{task.dataset}'): a balanced draw is not well defined "
                     f"when a sample carries several classes"
+                )
+
+        if self.classifier_probes.names:
+            self.classifier_probes.validate()
+            if self.eval_mode not in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
+                raise ValueError(
+                    f"classifier_probes require an embedding-based eval mode "
+                    f"(knn/linear_probe), got '{self.eval_mode}'"
+                )
+            if self.config.task_type not in (
+                TaskType.CLASSIFICATION,
+                TaskType.SEGMENTATION,
+            ):
+                raise ValueError(
+                    f"classifier_probes support classification and segmentation "
+                    f"tasks, got '{self.config.task_type.value}' for '{task.dataset}'"
+                )
+            if self.config.is_multilabel:
+                raise ValueError(
+                    f"classifier_probes do not support multilabel tasks ('{task.dataset}')"
                 )
 
         if self.eval_mode == EvalMode.LINEAR_PROBE:
@@ -1076,6 +1112,32 @@ class DownstreamEvaluator:
                 f"{time.time() - trial_start:.2f}s"
             )
 
+        if self.classifier_probes.names:
+            # Same embeddings the host probe saw (post round-trip, post PCA),
+            # same splits; only the readout differs.
+            clf_start = time.time()
+            clf_results = run_classifier_probes(
+                config=self.config,
+                train_embeddings=train_embeddings,
+                train_labels=train_labels,
+                val_embeddings=val_embeddings,
+                val_labels=val_labels,
+                test_embeddings=test_embeddings,
+                test_labels=test_labels,
+                probe_config=self.classifier_probes,
+                primary_metric=self.primary_metric,
+                primary_metric_class=self.primary_metric_class,
+            )
+            for predictor, (val_result, test_result) in clf_results.items():
+                name = classifier_task_name(self.evaluation_name, predictor)
+                result.extra_results[name] = val_result
+                if test_result is not None:
+                    result.extra_test_results[name] = test_result
+            logger.info(
+                f"Classifier probes for {self.dataset} took "
+                f"{time.time() - clf_start:.2f}s"
+            )
+
         # Free memory aggressively between evals
         del train_embeddings, train_labels, test_embeddings, test_labels
         del val_embeddings, val_labels
@@ -1332,21 +1394,24 @@ def eval_result_log_dict(
     return log_dict
 
 
-def extra_results_log_dict(extra_results: dict[str, EvalResult]) -> dict[str, float]:
+def extra_results_log_dict(
+    extra_results: dict[str, EvalResult], prefix: str = "eval"
+) -> dict[str, float]:
     """Build the wandb log dict for results produced by a different protocol.
 
     Each lands under its own synthetic task name via the ordinary key layout --
-    ``eval/{trial_task}`` for the primary metric, ``eval_other/{trial_task}/*``
+    ``{prefix}/{trial_task}`` for the primary metric, ``{prefix}_other/.../*``
     for the rest -- so the CSV export and the dashboards treat a balanced trial
     as just another task, with no special case and no way to read it as the host
     task's own number.
 
-    Deliberately NOT logged under ``eval/test/``: a balanced trial's eval set is
-    its own remainder, not our test split.
+    Balanced trials are deliberately NOT logged under ``eval/test/``: their eval
+    set is their own remainder, not our test split. The classifier probes do
+    score the test split, and pass ``prefix="eval/test"`` for those results.
     """
     log_dict: dict[str, float] = {}
     for name, result in extra_results.items():
-        log_dict.update(eval_result_log_dict("eval", name, result))
+        log_dict.update(eval_result_log_dict(prefix, name, result))
     return log_dict
 
 
@@ -1464,6 +1529,11 @@ class DownstreamEvaluatorCallback(Callback):
                 f"Downstream evaluator {name} score: {extra_result.primary} "
                 f"(metrics: {extra_result.metrics})"
             )
+        for name, extra_result in result.extra_test_results.items():
+            logger.info(
+                f"Downstream evaluator {name} test score: {extra_result.primary} "
+                f"(metrics: {extra_result.metrics})"
+            )
         if self.run_on_test and test_result is not None:
             logger.info(
                 f"Downstream evaluator {evaluator.evaluation_name} test score: {test_result.primary} (metrics: {test_result.metrics})"
@@ -1490,6 +1560,12 @@ class DownstreamEvaluatorCallback(Callback):
                 )
             if result.extra_results:
                 wandb_callback.wandb.log(extra_results_log_dict(result.extra_results))
+            if self.run_on_test and result.extra_test_results:
+                wandb_callback.wandb.log(
+                    extra_results_log_dict(
+                        result.extra_test_results, prefix="eval/test"
+                    )
+                )
             wandb_callback.wandb.log(
                 {"eval_time/" + evaluator.evaluation_name: eval_time}
             )

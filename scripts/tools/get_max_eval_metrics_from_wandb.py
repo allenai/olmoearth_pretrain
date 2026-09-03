@@ -18,6 +18,9 @@ import wandb
 from olmoearth_pretrain.evals.balanced_trial import (
     TASK_SUFFIX as BALANCED_TRIAL_TASK_SUFFIX,
 )
+from olmoearth_pretrain.evals.classifier_probes import (
+    TASK_SUFFIX as CLASSIFIER_TASK_SUFFIX,
+)
 from olmoearth_pretrain.evals.datasets.configs import TaskType, dataset_to_config
 from olmoearth_pretrain.evals.models import (
     MODELS_WITH_MULTIPLE_SIZES,
@@ -785,7 +788,14 @@ def get_max_metrics_grouped(
                 # own -- their eval set is the remainder of the balanced draw --
                 # so both the has-test gate and the task-config lookup below
                 # would reject them (the latter with a KeyError).
-                if f"_{BALANCED_TRIAL_TASK_SUFFIX}_" in task_name:
+                # Classifier probes ("{host}_clf_{predictor}", see
+                # evals/classifier_probes.py) are synthetic in the same way,
+                # but they DO score our test split, so their eval/test/ keys
+                # are picked up by the test pass below like any other task's.
+                if (
+                    f"_{BALANCED_TRIAL_TASK_SUFFIX}_" in task_name
+                    or f"_{CLASSIFIER_TASK_SUFFIX}_" in task_name
+                ):
                     prev_max_val = metrics.get(normalized_key, float("-inf"))
                     metrics[normalized_key] = max(prev_max_val, value)
                     if value > prev_max_val:
