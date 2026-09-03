@@ -219,9 +219,17 @@ class MockOlmoEarthDataLoader(DataLoaderBase):
         helpers return 1/0 when no process group exists) while letting a
         torchrun job with more than one rank get past the check.
         """
+        # global_batch_size must stay divisible by (micro_batch x dp_world_size) or
+        # the Trainer refuses to build:
+        #   "global batch size (128) must be divisible by micro-batch size (64) x
+        #    DP world size (8)"
+        # The fixed 128 satisfies that at 1 and 2 ranks by luck (64x2 = 128) and
+        # fails from 4 upward. Scaling with the world size keeps it valid at any
+        # rank count and leaves the single-rank value exactly 128 as before. This
+        # loader never reads data, so the number only has to satisfy the check.
         super().__init__(
             work_dir="./",
-            global_batch_size=128,
+            global_batch_size=128 * get_world_size(),
             dp_world_size=get_world_size(),
             dp_rank=get_rank(),
             fs_local_rank=get_fs_local_rank(),
