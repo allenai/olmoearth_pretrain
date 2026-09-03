@@ -406,21 +406,30 @@ def cmd_convert_worker(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _prepare_h5(olmoearth_dir: str) -> UPath:
+def _prepare_h5(
+    olmoearth_dir: str, allcap: bool = False, tile_size: int | None = None
+) -> UPath:
     """Scan olmoearth TIFFs, filter, assign global indices, write metadata.
 
     Produces sample_manifest.json + sample_metadata.csv + latlon_distribution.npy
     in the H5 output directory.
     """
+    from olmoearth_pretrain.data.constants import IMAGE_TILE_SIZE
     from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5pyConfig
-    from olmoearth_pretrain.dataset_creation.pipeline import MODALITIES_FOR_H5
+    from olmoearth_pretrain.dataset_creation.pipeline import (
+        MODALITIES_FOR_H5,
+        MODALITIES_FOR_H5_ALLCAP,
+    )
 
+    modalities = MODALITIES_FOR_H5_ALLCAP if allcap else MODALITIES_FOR_H5
+    tile_size = tile_size or IMAGE_TILE_SIZE
     logger.info(f"prepare-h5: scanning {olmoearth_dir}")
     config = ConvertToH5pyConfig(
         tile_path=olmoearth_dir,
-        supported_modality_names=MODALITIES_FOR_H5,
+        supported_modality_names=modalities,
         compression="zstd",
         compression_opts=3,
+        tile_size=tile_size,
     )
     converter = config.build()
 
@@ -450,9 +459,10 @@ def _prepare_h5(olmoearth_dir: str) -> UPath:
         "h5py_dir": str(h5py_dir),
         "olmoearth_dir": olmoearth_dir,
         "num_samples": len(tuples),
-        "modalities": MODALITIES_FOR_H5,
+        "modalities": modalities,
         "compression": "zstd",
         "compression_opts": 3,
+        "tile_size": tile_size,
     }
     with manifest_path.open("w") as f:
         json.dump(manifest, f, indent=2)
@@ -468,7 +478,7 @@ def cmd_prepare_h5(args: argparse.Namespace) -> None:
         if not args.rslearn_dir:
             raise SystemExit("Must provide --olmoearth-dir or --rslearn-dir")
         args.olmoearth_dir = _derive_olmoearth_dir(args.rslearn_dir)
-    _prepare_h5(args.olmoearth_dir)
+    _prepare_h5(args.olmoearth_dir, allcap=args.allcap, tile_size=args.h5_tile_size)
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +514,7 @@ def cmd_h5_worker(args: argparse.Namespace) -> None:
         multiprocessed_h5_creation=False,
         compression=manifest.get("compression"),
         compression_opts=manifest.get("compression_opts"),
+        tile_size=manifest.get("tile_size") or 256,
     )
     converter = config.build()
     samples = converter.get_and_filter_samples()
@@ -678,6 +689,9 @@ def cmd_launch_h5(args: argparse.Namespace) -> None:
         worker_cmd_template=cmd_template,
         num_shards=args.num_h5_shards,
         clusters=args.clusters,
+        gpus=args.gpus,
+        cpus=args.cpus,
+        priority=args.priority,
     )
     for eid in experiment_ids:
         print(f"  https://beaker.org/ex/{eid}")
@@ -1093,6 +1107,8 @@ def main() -> None:
         default=None,
         help="Output dir (default: derived from rslearn-dir)",
     )
+    p.add_argument("--allcap", action="store_true", help="Use allcap modality list")
+    p.add_argument("--h5-tile-size", type=int, default=None, help="h5 subtile px (128)")
     p.set_defaults(func=cmd_prepare_h5)
 
     # -- launch-h5 --
@@ -1101,6 +1117,11 @@ def main() -> None:
     p.add_argument("--num-h5-shards", type=int, required=True)
     p.add_argument(
         "--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters"
+    )
+    p.add_argument("--gpus", type=int, default=0)
+    p.add_argument("--cpus", type=int, default=None)
+    p.add_argument(
+        "--priority", default=None, choices=["low", "normal", "high", "urgent"]
     )
     p.set_defaults(func=cmd_launch_h5)
 
