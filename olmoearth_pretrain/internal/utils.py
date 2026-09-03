@@ -5,6 +5,7 @@ from typing import Any
 
 import torch
 from olmo_core.data.data_loader import DataLoaderBase
+from olmo_core.distributed.utils import get_fs_local_rank, get_rank, get_world_size
 from olmo_core.train.train_module import EvalBatchSpec, TrainModule
 
 EXIT_CONFIG_TYPES = ["zero", "half", "full", "varied"]
@@ -207,13 +208,23 @@ class MockOlmoEarthDataLoader(DataLoaderBase):
     """Minimal OlmoEarth dataloader that only satisfies the abstract interface."""
 
     def __init__(self) -> None:
-        """Initialize the mock loader with trivial single-rank defaults."""
+        """Initialize the mock loader, reporting the REAL process topology.
+
+        This loader never reads data -- it exists only to satisfy the Trainer's
+        interface on the eval path. But Trainer.__post_init__ asserts
+        ``data_loader.dp_world_size == get_world_size(dp_process_group)``, so
+        hardcoding 1 made any multi-rank eval job die at construction with
+        "data loader's DP world size appears to be configured incorrectly".
+        Reading the actual values keeps single-rank behaviour identical (the
+        helpers return 1/0 when no process group exists) while letting a
+        torchrun job with more than one rank get past the check.
+        """
         super().__init__(
             work_dir="./",
             global_batch_size=128,
-            dp_world_size=1,
-            dp_rank=0,
-            fs_local_rank=0,
+            dp_world_size=get_world_size(),
+            dp_rank=get_rank(),
+            fs_local_rank=get_fs_local_rank(),
         )
         self._seed = 42
         self._epoch = 0
