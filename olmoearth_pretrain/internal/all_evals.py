@@ -3300,6 +3300,22 @@ for _loio_terr in ("reunion", "guadeloupe", "martinique", "guyane", "mayotte"):
         f"pastis2_drom_bg8void_loio_{_loio_terr}_full_ws16_ps1_sentinel2"
     ] = _pastis_ps1_task([Modality.SENTINEL2_L2A.name], dataset=f"{_void_ds}_full")
 
+    # LOIO window-size ablation. The LOIO probe tasks above hardcode ws16, unlike
+    # the 443 ones which are generated for every size in
+    # EMBEDDING_EVAL_WINDOW_SIZES -- so the smaller windows simply did not exist
+    # for the held-out-island setting. ws16 is deliberately NOT re-registered
+    # here: its numbers are published, and rebuilding it would change a result for
+    # no reason. Name suffixes match the 443 convention exactly, so the existing
+    # harvest globs pick these up unchanged.
+    for _loio_ws in (8, 4, 1):
+        EMBEDDING_EVAL_TASKS[
+            f"pastis2_drom_bg8void_loio_{_loio_terr}_ws{_loio_ws}_ps1_sentinel2"
+        ] = _pastis_ps1_task(
+            [Modality.SENTINEL2_L2A.name],
+            window_size=_loio_ws,
+            dataset=_void_ds,
+        )
+
     # bg8void LOIO, the other four input modalities. These read the *_full entry, not
     # the S2-trimmed one: the trimmed dataset declares only sentinel2_l2a, and
     # full_eval_sweep skips any task whose modality is absent from the dataset's
