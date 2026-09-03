@@ -515,7 +515,14 @@ def run_finetune_eval(
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
-        if wandb_logger is not None:
+        # rank 0 only: WandBCallback runs wandb.init() on the main rank alone, so a
+        # non-zero rank reaching wandb.log() dies with "You must call wandb.init()
+        # before wandb.log()" -- and takes the job with it, since the surviving rank
+        # then hits "Connection closed by peer". This is what killed the 2-GPU smoke
+        # test at the end of epoch 1; the in-loop training log at line ~471 was
+        # already guarded, this one was not. val_result is identical on every rank
+        # (validation runs on an unsharded loader), so rank 0 logs the same numbers.
+        if wandb_logger is not None and _is_main():
             log_dict: dict[str, float] = {
                 f"{task_name}_step": (epoch + 1) * num_batches,
                 f"{task_name}/val_metric": val_result.primary,
