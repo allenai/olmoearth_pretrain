@@ -1,5 +1,19 @@
-"""Main finetuning training loop."""
+"""Fine-tuning eval, single- or multi-GPU.
 
+Multi-GPU: nothing here needs a flag. When the job is launched across more than
+one rank the model is wrapped in DistributedDataParallel, the training loader is
+sharded by a DistributedSampler (built in EvaluatorCallback._get_data_loader),
+losses are averaged across ranks, and only rank 0 writes checkpoints. On a single
+rank every one of those paths is a no-op, so behaviour is unchanged.
+
+To use it, the Beaker spec needs BOTH:
+  resources.gpuCount: N          # so the container sees N devices
+  --launch.num_gpus=N            # so torchrun spawns N ranks
+
+Note this makes the FINE-TUNE path distributed. The linear-probe path is not
+DDP-aware, so a job that runs probes should stay at gpuCount 1; give multi-GPU
+only to jobs whose tasks are all eval_mode=FINETUNE.
+"""
 from __future__ import annotations
 
 import functools
@@ -14,7 +28,8 @@ import torch
 import torch.nn as nn
 from olmo_core.train.trainer import Trainer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import DataLoader
+from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data import DataLoader, DistributedSampler
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.finetune.checkpoint import (
@@ -50,6 +65,52 @@ from olmoearth_pretrain.evals.metrics import (
     EvalTaskResult,
     metric_higher_is_better,
 )
+
+
+def _ddp_enabled() -> bool:
+    """True when this fine-tune is running across more than one rank."""
+    return torch.distributed.is_available() and torch.distributed.is_initialized() \
+        and torch.distributed.get_world_size() > 1
+
+
+def _wrap_ddp(module: nn.Module, device: torch.device) -> nn.Module:
+    """Wrap in DDP, or return the module untouched on a single rank.
+
+    Two things this must get right:
+
+    * It is called AFTER the head's dry pass. BackboneWithHead builds its head
+      lazily on first forward, so wrapping earlier would register a module whose
+      head parameters do not exist yet and DDP would never sync them.
+    * ``find_unused_parameters=True`` is required because the backbone is frozen
+      for the first epochs: its parameters produce no gradients, and DDP's default
+      reducer raises when a registered parameter never receives one.
+    """
+    if not _ddp_enabled():
+        return module
+    return DistributedDataParallel(
+        module,
+        device_ids=[device.index] if device.type == "cuda" else None,
+        output_device=device.index if device.type == "cuda" else None,
+        find_unused_parameters=True,
+    )
+
+
+def _unwrap(module: nn.Module) -> nn.Module:
+    """The underlying model, whether or not DDP is in the way."""
+    return module.module if isinstance(module, DistributedDataParallel) else module
+
+
+def _reduce_mean(value: float, device: torch.device) -> float:
+    """Average a scalar across ranks so logged losses describe the whole batch."""
+    if not _ddp_enabled():
+        return value
+    t = torch.tensor([value], device=device, dtype=torch.float32)
+    torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.SUM)
+    return float(t.item() / torch.distributed.get_world_size())
+
+
+def _is_main() -> bool:
+    return not _ddp_enabled() or torch.distributed.get_rank() == 0
 
 
 def _primary_metric_higher_is_better(
@@ -224,13 +285,25 @@ def run_finetune_eval(
         sample_batch, label = next(iter(train_loader))
         _, _ = ft(to_device(sample_batch, device), label.to(device))
 
+    # `raw` is the unwrapped model and is what every state_dict / backbone access
+    # must go through: under DDP the real module sits at .module, so touching the
+    # wrapper would write checkpoints with "module." prefixes that nothing else
+    # can load. `ft` stays the thing we call forward on.
+    raw = ft
+    ft = _wrap_ddp(ft, device)
+    if _ddp_enabled():
+        logger.info(
+            "Fine-tuning across %d ranks (rank %d, device %s)",
+            torch.distributed.get_world_size(), torch.distributed.get_rank(), device,
+        )
+
     # If best checkpoint exists, load it and evaluate directly
     if best_checkpoint_path and os.path.exists(best_checkpoint_path):
         logger.info(f"Loading existing best checkpoint from {best_checkpoint_path}")
         state = torch.load(best_checkpoint_path, map_location=device)
-        ft.load_state_dict(state)
+        raw.load_state_dict(state)
         return compute_eval_metrics(
-            ft,
+            raw,
             task_config,
             val_loader,
             test_loader,
@@ -245,13 +318,13 @@ def run_finetune_eval(
     freeze_epochs = math.ceil(FREEZE_EPOCH_FRACTION * epochs) if epochs > 0 else 0
     backbone_unfrozen = freeze_epochs == 0
     if not backbone_unfrozen:
-        set_backbone_trainable(ft.backbone, False)
+        set_backbone_trainable(raw.backbone, False)
         logger.info(
             f"Freezing backbone for the first {freeze_epochs} epoch(s) before unfreezing."
         )
 
     current_lr = lr
-    opt = torch.optim.AdamW(ft.parameters(), lr=current_lr)
+    opt = torch.optim.AdamW(raw.parameters(), lr=current_lr)
     higher_is_better = _primary_metric_higher_is_better(
         task_config.task_type, primary_metric
     )
@@ -277,7 +350,7 @@ def run_finetune_eval(
     else:
         loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
 
-    best_state = snapshot_state_dict(ft)
+    best_state = snapshot_state_dict(raw)
     best_val_metric = float("-inf") if higher_is_better else float("inf")
     start_epoch = 0
 
@@ -285,14 +358,14 @@ def run_finetune_eval(
     if resume_checkpoint_path and os.path.exists(resume_checkpoint_path):
         ckpt = load_training_checkpoint(resume_checkpoint_path, device)
         start_epoch = ckpt["epoch"] + 1
-        ft.load_state_dict(ckpt["model_state"])
+        raw.load_state_dict(ckpt["model_state"])
         opt.load_state_dict(ckpt["optimizer_state"])
         scheduler.load_state_dict(ckpt["scheduler_state"])
         best_state = ckpt["best_state"]
         best_val_metric = ckpt["best_val_metric"]
         backbone_unfrozen = ckpt["backbone_unfrozen"]
         # Handle backbone freeze state on resume
-        set_backbone_trainable(ft.backbone, backbone_unfrozen)
+        set_backbone_trainable(raw.backbone, backbone_unfrozen)
         logger.info(
             f"Resumed from epoch {start_epoch}, best_val_metric={best_val_metric:.4f}, "
             f"backbone_unfrozen={backbone_unfrozen}"
@@ -304,12 +377,12 @@ def run_finetune_eval(
                 "All epochs already completed before preemption. "
                 "Saving best checkpoint and evaluating."
             )
-            ft.load_state_dict(best_state)
+            raw.load_state_dict(best_state)
             _save_best_and_cleanup(
                 best_state, best_checkpoint_path, resume_checkpoint_path
             )
             return compute_eval_metrics(
-                ft,
+                raw,
                 task_config,
                 val_loader,
                 test_loader,
@@ -333,13 +406,24 @@ def run_finetune_eval(
             )
 
     for epoch in range(start_epoch, epochs):
+        # Without set_epoch a DistributedSampler replays the SAME permutation every
+        # epoch, so each rank sees one fixed shard order for the whole run.
+        if isinstance(getattr(train_loader, "sampler", None), DistributedSampler):
+            train_loader.sampler.set_epoch(epoch)
+
         # Reset epoch and global step
         trainer.global_step = epoch * len(train_loader)
         trainer.epoch = epoch + 1
 
         if not backbone_unfrozen and epoch >= freeze_epochs:
-            set_backbone_trainable(ft.backbone, True)
+            set_backbone_trainable(raw.backbone, True)
             backbone_unfrozen = True
+            # DDP fixes its gradient buckets when it is constructed, from the
+            # parameters that required grad at that moment. Flipping the backbone
+            # to trainable afterwards leaves those parameters outside the reducer,
+            # so their gradients are never synchronised and each rank silently
+            # drifts onto its own encoder. Rebuilding the wrapper re-registers them.
+            ft = _wrap_ddp(raw, device)
             current_lr = lr * UNFREEZE_LR_FACTOR
             for group in opt.param_groups:
                 group["lr"] = current_lr
@@ -357,28 +441,36 @@ def run_finetune_eval(
                     logits = _seg_logits_to_pixel(
                         logits,
                         label,
-                        ft.pixel_space_output,
+                        raw.pixel_space_output,
                         task_config.num_classes,
                         patch_size,
                     )
                 if task_config.task_type == TaskType.PER_PIXEL_REGRESSION:
                     reg_logits = _reg_logits_to_pixel(
-                        logits, label, ft.pixel_space_output
+                        logits, label, raw.pixel_space_output
                     )
                     raw_loss = loss_fn(reg_logits, label.float())
                 else:
                     raw_loss = loss_fn(logits, label)
                 loss = raw_loss / accum_steps
-                if wandb_logger is not None:
-                    wandb_logger.log(
-                        {
-                            f"{task_name}_step": epoch * num_batches + i,
-                            f"{task_name}/train_loss": raw_loss.item(),
-                        }
+                # Each rank only sees its own shard, so its local loss describes a
+                # fraction of the batch. Average across ranks before reporting, or
+                # the logged curve is one shard's and not the model's. Every rank
+                # must reach the all_reduce (it is collective), but only rank 0
+                # writes, so the log does not repeat N times.
+                loss_value = _reduce_mean(raw_loss.item(), device)
+                if _is_main():
+                    if wandb_logger is not None:
+                        wandb_logger.log(
+                            {
+                                f"{task_name}_step": epoch * num_batches + i,
+                                f"{task_name}/train_loss": loss_value,
+                            }
+                        )
+                    logger.info(
+                        f"Finetune Epoch [{epoch + 1}/{epochs}] "
+                        f"Step [{i + 1}/{len(train_loader)}] Loss: {loss_value:.4f}"
                     )
-                logger.info(
-                    f"Finetune Epoch [{epoch + 1}/{epochs}] Step [{i + 1}/{len(train_loader)}] Loss: {raw_loss.item():.4f}"
-                )
             loss.backward()
             if (i + 1) % accum_steps == 0 or (i + 1) == num_batches:
                 opt.step()
@@ -435,30 +527,40 @@ def run_finetune_eval(
         )
         if improved:
             best_val_metric = val_result.primary
-            best_state = snapshot_state_dict(ft)
+            best_state = snapshot_state_dict(raw)
             logger.info(
                 f"New best validation metric {best_val_metric:.4f} at epoch {epoch + 1}"
             )
 
-        # Save resumable checkpoint at end of each epoch
-        if resume_checkpoint_path:
+        # Save resumable checkpoint at end of each epoch (rank 0 only)
+        if resume_checkpoint_path and _is_main():
             save_training_checkpoint(
                 path=resume_checkpoint_path,
                 epoch=epoch,
-                model_state=snapshot_state_dict(ft),
+                model_state=snapshot_state_dict(raw),
                 optimizer_state=opt.state_dict(),
                 scheduler_state=scheduler.state_dict(),
                 best_state=best_state,
                 best_val_metric=best_val_metric,
                 backbone_unfrozen=backbone_unfrozen,
             )
+        if _ddp_enabled():
+            torch.distributed.barrier()
 
         ft.train()
 
-    ft.load_state_dict(best_state)
-    _save_best_and_cleanup(best_state, best_checkpoint_path, resume_checkpoint_path)
+    raw.load_state_dict(best_state)
+    # Only rank 0 writes. Every rank holds identical weights (DDP keeps them in
+    # sync and validation is computed on an unsharded loader), so concurrent
+    # writers would race on one path for no benefit -- and torch.save is not
+    # atomic across processes. The barrier keeps the ranks together so none
+    # races ahead to read a half-written file.
+    if _is_main():
+        _save_best_and_cleanup(best_state, best_checkpoint_path, resume_checkpoint_path)
+    if _ddp_enabled():
+        torch.distributed.barrier()
     return compute_eval_metrics(
-        ft,
+        raw,
         task_config,
         val_loader,
         test_loader,

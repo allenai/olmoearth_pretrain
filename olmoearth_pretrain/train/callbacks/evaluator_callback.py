@@ -13,12 +13,12 @@ from typing import Any
 
 import numpy as np
 import torch
-from olmo_core.distributed.utils import get_rank
+from olmo_core.distributed.utils import get_rank, get_world_size
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
 from olmo_core.train.callbacks.checkpointer import CheckpointerCallback
 from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
-from torch.utils.data import DataLoader, IterableDataset, Subset
+from torch.utils.data import DataLoader, IterableDataset, Subset, DistributedSampler
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
@@ -674,6 +674,27 @@ class DownstreamEvaluator:
                 :max_samples
             ]
             eval_ds = Subset(eval_ds, sorted(indices.tolist()))
+        # Under multi-GPU fine-tuning each rank must see a DISJOINT shard of the
+        # training data. Without a sampler every rank iterates the whole split, so
+        # N GPUs would do N copies of the same work and the effective batch size
+        # would be N x what was asked for -- slower per epoch AND a different
+        # optimisation problem. Only the shuffled (training) loader is sharded:
+        # val/test stay whole on every rank so each computes identical metrics and
+        # no gather is needed to report them.
+        sampler = None
+        if shuffle and not is_iterable and get_world_size() > 1:
+            sampler = DistributedSampler(
+                eval_ds,
+                num_replicas=get_world_size(),
+                rank=get_rank(),
+                shuffle=True,
+                seed=seed if seed is not None else 0,
+                drop_last=False,
+            )
+            logger.info(
+                "Sharding the %s loader across %d ranks (%d samples -> ~%d per rank)",
+                split, get_world_size(), len(eval_ds), len(sampler),
+            )
         return DataLoader(
             eval_ds,
             collate_fn=eval_collate_fn_variable_time,
@@ -681,7 +702,9 @@ class DownstreamEvaluator:
             num_workers=self.num_workers,
             generator=None if is_iterable else generator,
             worker_init_fn=worker_init_fn,
-            shuffle=False if is_iterable else shuffle,
+            # a sampler and shuffle are mutually exclusive in DataLoader
+            shuffle=False if (is_iterable or sampler is not None) else shuffle,
+            sampler=sampler,
         )
 
     def _resolve_normalizer(self) -> tuple[EmbeddingNormalizer | None, bool]:
