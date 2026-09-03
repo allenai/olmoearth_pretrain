@@ -168,6 +168,15 @@ def compute_eval_metrics(
     dump_tag: str | None = None,
 ) -> EvalTaskResult:
     """Evaluate a finetuned model on val and test sets."""
+    # The eval helpers read module.pixel_space_output, and DDP does not proxy
+    # attribute access -- passing the wrapper here raises AttributeError at the
+    # first epoch-end eval. Fail loudly at the boundary instead, so a future call
+    # site that forgets to unwrap is caught immediately rather than after an epoch
+    # of training.
+    assert not isinstance(ft, DistributedDataParallel), (
+        "compute_eval_metrics needs the unwrapped module; pass `raw`, not the "
+        "DDP wrapper"
+    )
     ft.eval()
 
     if task_config.task_type == TaskType.CLASSIFICATION:
@@ -478,7 +487,7 @@ def run_finetune_eval(
 
         if task_config.task_type == TaskType.CLASSIFICATION:
             val_result = eval_cls(
-                ft,
+                raw,
                 val_loader,
                 device,
                 task_config.is_multilabel,
@@ -487,14 +496,14 @@ def run_finetune_eval(
             )
         elif task_config.task_type == TaskType.PER_PIXEL_REGRESSION:
             val_result = eval_reg(
-                ft,
+                raw,
                 val_loader,
                 device,
                 primary_metric=primary_metric,
             )
         else:
             val_result = eval_seg(
-                ft,
+                raw,
                 val_loader,
                 device,
                 task_config.num_classes,
