@@ -648,6 +648,10 @@ def cmd_launch_convert(args: argparse.Namespace) -> None:
         worker_cmd_template=cmd_template,
         num_shards=args.num_shards,
         clusters=args.clusters,
+        shard_ids=args.shard_ids,
+        gpus=args.gpus,
+        cpus=args.cpus,
+        priority=args.priority,
     )
     for eid in experiment_ids:
         print(f"  https://beaker.org/ex/{eid}")
@@ -1056,6 +1060,12 @@ def main() -> None:
     )
     p.add_argument("--disabled-layers", nargs="*", default=[])
     p.add_argument("--max-samples", type=int, default=None)
+    p.add_argument("--shard-ids", nargs="*", type=int, default=None)
+    p.add_argument("--gpus", type=int, default=0)
+    p.add_argument("--cpus", type=int, default=None)
+    p.add_argument(
+        "--priority", default=None, choices=["low", "normal", "high", "urgent"]
+    )
     p.set_defaults(func=cmd_launch_convert)
 
     # -- convert-worker --
