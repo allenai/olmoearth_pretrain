@@ -151,6 +151,11 @@ eval = [
     "scikit-learn>=1.7.2",
     "terratorch>=1.2.6,<1.3",
     "xgboost>=3.0",
+    # terratorch 1.2.x imports torchgeo.trainers.utils, which torchgeo 0.10 removed
+    # (trainers/ became a deprecated alias shim over torchgeo.tasks). Pin below 0.10
+    # until terratorch drops the import. (No lower bound: torchgeo 0.9 needs
+    # Python >=3.12, so Python 3.11 environments resolve to 0.8.x.)
+    "torchgeo<0.10",
     "timm==1.0.20",
     "torchmetrics==1.7.1",
     "xarray>=2025.10.1",
