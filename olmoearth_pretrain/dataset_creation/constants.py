@@ -8,9 +8,6 @@ WINDOW_DURATION = timedelta(days=14)
 WINDOW_SIZE = 256
 
 # Columns in the per-modality metadata CSVs.
-# ``sun_elevation`` and ``platform`` are only populated for Landsat (used to
-# convert DN to reflectance / brightness temperature at h5-creation); other
-# modalities leave them empty (csv.DictWriter fills missing keys with restval).
 METADATA_COLUMNS = [
     "crs",
     "col",
@@ -19,8 +16,6 @@ METADATA_COLUMNS = [
     "image_idx",
     "start_time",
     "end_time",
-    "sun_elevation",
-    "platform",
 ]
 
 GEOTIFF_BLOCK_SIZE = 32

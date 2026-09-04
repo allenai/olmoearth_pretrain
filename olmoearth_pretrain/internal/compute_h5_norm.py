@@ -27,14 +27,6 @@ from olmoearth_pretrain.data.utils import update_streaming_stats
 
 logger = logging.getLogger(__name__)
 
-# Per-(modality, band) sentinel values that encode "not measured" rather than a
-# measurement, and so must be excluded from the stats. glo30 aspect uses -1 for
-# flat pixels, which have no compass bearing; including them drags the mean
-# toward north and inflates the std.
-BAND_STAT_EXCLUDED_VALUES: dict[tuple[str, str], float] = {
-    ("glo30", "aspect"): -1.0,
-}
-
 # Sampling a subset of a large h5 dir will hit some samples that carry none of
 # the requested modalities; those raise instead of loading. Tolerate them, but
 # fail loudly if they stop being a small minority.
@@ -85,9 +77,8 @@ def compute_normalization_values(
             if modality_data is None:
                 continue
             # MISSING_VALUE pixels are excluded per-band below rather than skipping
-            # the whole modality-sample: modalities like reflectance-converted
-            # landsat store the sentinel for nodata / missing timesteps in almost
-            # every sample, so a whole-sample skip would discard nearly all data.
+            # the whole modality-sample, so a sample with a few nodata / missing
+            # timesteps still contributes its valid pixels.
             if modality not in norm_dict:
                 norm_dict[modality] = {}
                 for band in modality_bands:
@@ -105,11 +96,6 @@ def compute_normalization_values(
                 modality_band_data = modality_band_data[
                     modality_band_data != MISSING_VALUE
                 ]
-                excluded = BAND_STAT_EXCLUDED_VALUES.get((modality, band))
-                if excluded is not None:
-                    modality_band_data = modality_band_data[
-                        modality_band_data != excluded
-                    ]
                 if modality_band_data.size == 0:
                     # Every pixel was a sentinel; nothing to accumulate.
                     continue

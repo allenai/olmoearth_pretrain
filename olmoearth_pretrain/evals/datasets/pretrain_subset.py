@@ -16,11 +16,7 @@ import torch
 from torch.utils.data import Dataset
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import (
-    GLO30_ASPECT_FLAT,
-    MISSING_VALUE,
-    Modality,
-)
+from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 from olmoearth_pretrain.data.constants import (
     WORLDCOVER_CLASSES as WORLDCOVER_CLASS_CODES,
 )
@@ -44,19 +40,6 @@ WORLDCOVER_TARGET_MODALITY = "worldcover"
 CDL_TARGET_MODALITY = "cdl"
 WORLDCEREAL_TARGET_MODALITY = "worldcereal"
 WRI_CANOPY_TARGET_MODALITY = "wri_canopy_height_map"
-GLO30_TARGET_MODALITY = "glo30"
-META_CANOPY_TARGET_MODALITY = "meta_canopy_height"
-# Band indices into the stored 3-band glo30 target.
-GLO30_BAND_ELEVATION = 0
-GLO30_BAND_SLOPE = 1
-GLO30_BAND_ASPECT = 2
-# Virtual band indices for the circular aspect encoding. Aspect is a compass
-# bearing, so regressing degrees directly is ill-posed: 359 and 1 are one degree
-# apart but land at opposite ends of the target range, and a near-uniform
-# bearing distribution makes RMSE/R2 in degrees uninterpretable. Probing sin and
-# cos of the bearing instead is continuous across north and bounded to [-1, 1].
-GLO30_LABEL_ASPECT_SIN = 3
-GLO30_LABEL_ASPECT_COS = 4
 # WorldCereal channel used for the binary "is annual temporary crops" probe.
 WORLDCEREAL_PRIMARY_CHANNEL = 0
 # CDL uses 0 to mark no-data / background.
@@ -100,7 +83,6 @@ class PretrainSubsetDataset(Dataset):
         test_samples: int = DEFAULT_MAX_SAMPLES,
         split_strategy: str = "random",
         geographic_bin_size_deg: float = 5.0,
-        target_band_index: int | None = None,
         require_input_modalities_present: bool = True,
     ) -> None:
         """Initialize a deterministic pretrain eval subset.
@@ -122,9 +104,6 @@ class PretrainSubsetDataset(Dataset):
             split_strategy: ``random`` for shuffled 80/10/10 sample splits or
                 ``geographic`` for shuffled 80/10/10 lat/lon-bin splits.
             geographic_bin_size_deg: Geographic bin size for spatial holdouts.
-            target_band_index: For multi-band regression targets (e.g. glo30),
-                the band to select for this single-channel probe. ``None`` keeps
-                the full target as-is.
             require_input_modalities_present: Drop samples missing any input
                 modality. Applied after split assignment so split membership
                 stays aligned with runs using other input modalities. Only
@@ -135,7 +114,6 @@ class PretrainSubsetDataset(Dataset):
         self.hw_p = hw_p
         self.max_samples = max_samples
         self.target_modality = target_modality
-        self.target_band_index = target_band_index
 
         self._dataset = OlmoEarthDataset(
             h5py_dir=UPath(h5py_dir),
@@ -417,58 +395,6 @@ class PretrainSubsetDataset(Dataset):
         return PretrainSubsetDataset._squeeze_label(label).float()
 
     @staticmethod
-    def _meta_canopy_label(label: torch.Tensor) -> torch.Tensor:
-        """Return continuous Meta canopy height labels (meters)."""
-        return PretrainSubsetDataset._squeeze_label(label).float()
-
-    @staticmethod
-    def _glo30_label(label: torch.Tensor, band_index: int | None) -> torch.Tensor:
-        """Return one continuous GLO-30 DSM target band.
-
-        The glo30 label tensor carries 3 bands in the last axis and the
-        single-channel regression head consumes one band per probe, so
-        ``band_index`` selects which one before squeezing to [H, W]. Besides the
-        three stored bands it accepts the two virtual aspect bands
-        (``GLO30_LABEL_ASPECT_SIN``/``_COS``), which encode the compass bearing
-        as sin/cos so the target is continuous across north.
-
-        Every aspect-derived label marks flat pixels (aspect ``-1``) as NaN,
-        since a flat pixel has no bearing to predict. ``MaskedMSELoss`` and the
-        regression target statistics both ignore non-finite pixels, so those
-        pixels drop out of training and metrics instead of colliding with due
-        north (0 degrees), which is what they would normalize to otherwise.
-        """
-        if band_index is None:
-            raise ValueError(
-                "glo30 target requires a target_band_index: "
-                f"{GLO30_BAND_ELEVATION}=elevation, {GLO30_BAND_SLOPE}=slope, "
-                f"{GLO30_BAND_ASPECT}=aspect (degrees), "
-                f"{GLO30_LABEL_ASPECT_SIN}=sin(aspect), "
-                f"{GLO30_LABEL_ASPECT_COS}=cos(aspect)"
-            )
-        if band_index in (GLO30_BAND_ELEVATION, GLO30_BAND_SLOPE):
-            band = label[..., band_index].float()
-        elif band_index in (
-            GLO30_BAND_ASPECT,
-            GLO30_LABEL_ASPECT_SIN,
-            GLO30_LABEL_ASPECT_COS,
-        ):
-            aspect = label[..., GLO30_BAND_ASPECT].float()
-            if band_index == GLO30_BAND_ASPECT:
-                band = aspect
-            else:
-                radians = torch.deg2rad(aspect)
-                band = (
-                    torch.sin(radians)
-                    if band_index == GLO30_LABEL_ASPECT_SIN
-                    else torch.cos(radians)
-                )
-            band = band.masked_fill(aspect == GLO30_ASPECT_FLAT, float("nan"))
-        else:
-            raise ValueError(f"Unsupported glo30 target_band_index: {band_index}")
-        return PretrainSubsetDataset._squeeze_label(band).float()
-
-    @staticmethod
     def _cdl_label(label: torch.Tensor) -> torch.Tensor:
         """Return CDL class-code labels with no-data pixels marked as ignore."""
         label = PretrainSubsetDataset._squeeze_label(label).long()
@@ -514,10 +440,6 @@ class PretrainSubsetDataset(Dataset):
             return self._srtm_label(label)
         if self.target_modality == WRI_CANOPY_TARGET_MODALITY:
             return self._canopy_label(label)
-        if self.target_modality == META_CANOPY_TARGET_MODALITY:
-            return self._meta_canopy_label(label)
-        if self.target_modality == GLO30_TARGET_MODALITY:
-            return self._glo30_label(label, self.target_band_index)
         if self.target_modality == CDL_TARGET_MODALITY:
             return self._cdl_label(label)
         if self.target_modality == WORLDCEREAL_TARGET_MODALITY:

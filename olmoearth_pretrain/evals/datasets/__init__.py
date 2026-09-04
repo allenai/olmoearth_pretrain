@@ -65,7 +65,6 @@ def get_eval_dataset(
             seed=kwargs.get("pretrain_seed", 42),
             split=kwargs.get("pretrain_split", split),
             target_modality=kwargs.get("target_modality"),
-            target_band_index=kwargs.get("target_band_index"),
             label_seed=kwargs.get("pretrain_label_seed", 42),
             train_samples=scale_train_samples(
                 kwargs.get("pretrain_train_samples", 512), label_fraction
@@ -168,6 +167,4 @@ def get_eval_dataset(
             window_size=kwargs.get("window_size"),
             label_at_center_pixel=kwargs.get("label_at_center_pixel", False),
             tile_samples=kwargs.get("tile_samples", False),
-            landsat_reflectance=kwargs.get("landsat_reflectance", False),
-            computed_norm_config=kwargs.get("computed_norm_config", "computed.json"),
         )

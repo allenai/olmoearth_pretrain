@@ -91,11 +91,6 @@ class OlmoEarthSample(NamedTuple):
     )
     openstreetmap_raster: ArrayTensor | None = None  # [B, H, W, 1, len(OSM_bands)]
     srtm: ArrayTensor | None = None  # [B, H, W, 1, len(SRTM_bands)]
-    # glo30 (Copernicus GLO-30 DSM): elevation, slope, aspect.
-    glo30: ArrayTensor | None = None  # [B, H, W, 1, 3]
-    # glo30_aspect is derived from the glo30 aspect band (not loaded from file):
-    # [sin(aspect), cos(aspect)], MISSING_VALUE where aspect is the -1 flat sentinel.
-    glo30_aspect: ArrayTensor | None = None  # [B, H, W, 1, 2]
     landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
     # naip with different tile resolution is currently not used in favor of naip_10.
     naip: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
@@ -107,8 +102,6 @@ class OlmoEarthSample(NamedTuple):
     worldpop: ArrayTensor | None = None  # [B, H, W, 1, len(WORLDPOP_bands)]
     worldcereal: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
     wri_canopy_height_map: ArrayTensor | None = None  # [B, H, W, 1, 1]
-    # meta_canopy_height (Meta Canopy Height V2): canopy_height band.
-    meta_canopy_height: ArrayTensor | None = None  # [B, H, W, 1, 1]
     # era5_10 is not spatially varying, so it has no height/width dimensions.
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
     # ndvi is computed from S2 L2A bands B04 (Red) and B08 (NIR), not loaded from file.
@@ -377,10 +370,6 @@ class MaskedOlmoEarthSample(NamedTuple):
     openstreetmap_raster_mask: Tensor | None = None
     srtm: Tensor | None = None
     srtm_mask: Tensor | None = None
-    glo30: Tensor | None = None
-    glo30_mask: Tensor | None = None
-    glo30_aspect: Tensor | None = None
-    glo30_aspect_mask: Tensor | None = None
     landsat: Tensor | None = None
     landsat_mask: Tensor | None = None
     naip: Tensor | None = None
@@ -399,8 +388,6 @@ class MaskedOlmoEarthSample(NamedTuple):
     worldcereal_mask: Tensor | None = None
     wri_canopy_height_map: Tensor | None = None
     wri_canopy_height_map_mask: Tensor | None = None
-    meta_canopy_height: Tensor | None = None
-    meta_canopy_height_mask: Tensor | None = None
     era5_10: Tensor | None = None
     era5_10_mask: Tensor | None = None
     ndvi: Tensor | None = None
@@ -525,10 +512,6 @@ class TokensAndMasks(NamedTuple):
     openstreetmap_raster_mask: Tensor | None = None
     srtm: Tensor | None = None
     srtm_mask: Tensor | None = None
-    glo30: Tensor | None = None
-    glo30_mask: Tensor | None = None
-    glo30_aspect: Tensor | None = None
-    glo30_aspect_mask: Tensor | None = None
     landsat: Tensor | None = None
     landsat_mask: Tensor | None = None
     naip: Tensor | None = None
@@ -547,8 +530,6 @@ class TokensAndMasks(NamedTuple):
     worldcereal_mask: Tensor | None = None
     wri_canopy_height_map: Tensor | None = None
     wri_canopy_height_map_mask: Tensor | None = None
-    meta_canopy_height: Tensor | None = None
-    meta_canopy_height_mask: Tensor | None = None
     era5_10: Tensor | None = None
     era5_10_mask: Tensor | None = None
     ndvi: Tensor | None = None

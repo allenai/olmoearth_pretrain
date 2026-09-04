@@ -212,14 +212,6 @@ def build_launch_config(
     embedding_evals = os.environ.get("EMBEDDING_EVALS")
     if embedding_evals is not None:
         env_vars.append(BeakerEnvVar(name="EMBEDDING_EVALS", value=embedding_evals))
-    # Landsat DN -> TOA reflectance at eval load time, for checkpoints
-    # pretrained on the reflectance h5 (see all_evals.LANDSAT_REFLECTANCE).
-    landsat_reflectance = os.environ.get("LANDSAT_REFLECTANCE")
-    if landsat_reflectance is not None:
-        logger.info("Propagating LANDSAT_REFLECTANCE to experiment")
-        env_vars.append(
-            BeakerEnvVar(name="LANDSAT_REFLECTANCE", value=landsat_reflectance)
-        )
     # Propagate the CUDA allocator config if set (e.g. expandable_segments:True to
     # reduce fragmentation OOMs at large token budgets).
     cuda_alloc_conf = os.environ.get("PYTORCH_CUDA_ALLOC_CONF")

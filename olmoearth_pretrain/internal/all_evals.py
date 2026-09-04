@@ -23,12 +23,6 @@ from upath import UPath
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.balanced_trial import BalancedTrialConfig
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
-from olmoearth_pretrain.evals.datasets.pretrain_subset import (
-    GLO30_BAND_ELEVATION,
-    GLO30_BAND_SLOPE,
-    GLO30_LABEL_ASPECT_COS,
-    GLO30_LABEL_ASPECT_SIN,
-)
 from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
 from olmoearth_pretrain.internal.experiment import (
@@ -1146,14 +1140,6 @@ PRETRAIN_SUBSET_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset
 # probes fall back to PRETRAIN_SUBSET_H5PY_DIR (in-distribution).
 PRETRAIN_AUX_EVAL_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/65536"
 
-# Frozen snapshot of the regenerated osm_sampling h5, which carries glo30 and
-# meta_canopy_height in place of srtm/wri_canopy_height_map. Used by the
-# glo30/meta-canopy probes, which read these DSM/canopy targets
-# in-distribution. Built with `--preset dsm_canopy --total 65536`; quotas give
-# ~50k meta_canopy-eligible and ~65k glo30-eligible samples, comfortably above
-# what the geographic splits need (valid/test see only ~10% of the pool).
-PRETRAIN_DSM_CANOPY_H5PY_DIR = "/weka/dfive-default/presto_eval_sets/pretrain_subset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_glo30_landsat_meta_canopy_height_openstreetmap_raster_sentinel1_sentinel2_l2a_worldcereal_worldcover/65536"
-
 MAP_MODALITY_PROBE_INPUTS = [
     Modality.SENTINEL2_L2A.name,
 ]
@@ -1175,7 +1161,6 @@ def _map_modality_probe(
     h5py_dir: str,
     split_strategy: str = "random",
     input_modalities: list[str] | None = None,
-    target_band_index: int | None = None,
 ) -> DownstreamTaskConfig:
     """Build a uniform DownstreamTaskConfig for a decode-only map modality probe."""
     return DownstreamTaskConfig(
@@ -1195,7 +1180,6 @@ def _map_modality_probe(
         primary_metric=primary_metric,
         h5py_dir=h5py_dir,
         pretrain_target_modality=target_modality,
-        pretrain_target_band_index=target_band_index,
         pretrain_train_samples=6144,
         pretrain_valid_samples=3072,
         pretrain_test_samples=3072,
@@ -1243,44 +1227,6 @@ EVAL_TASKS.update(
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
         ),
-        # In-distribution DSM/canopy regression probes, read from the full h5
-        # that carries glo30 (elevation/slope/aspect) and meta_canopy_height.
-        f"pretrain_meta_canopy_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
-            dataset="pretrain_subset_meta_canopy",
-            target_modality=Modality.META_CANOPY_HEIGHT.name,
-            primary_metric=EvalMetric.NEG_RMSE,
-            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
-        ),
-        f"pretrain_glo30_elevation_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
-            dataset="pretrain_subset_glo30_elevation",
-            target_modality=Modality.GLO30.name,
-            primary_metric=EvalMetric.NEG_RMSE,
-            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
-            target_band_index=GLO30_BAND_ELEVATION,
-        ),
-        f"pretrain_glo30_slope_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
-            dataset="pretrain_subset_glo30_slope",
-            target_modality=Modality.GLO30.name,
-            primary_metric=EvalMetric.NEG_RMSE,
-            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
-            target_band_index=GLO30_BAND_SLOPE,
-        ),
-        # Aspect is probed as sin/cos of the compass bearing, not raw degrees:
-        # degree-space MSE is ill-posed across the 0/360 seam.
-        f"pretrain_glo30_aspect_sin_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
-            dataset="pretrain_subset_glo30_aspect_sin",
-            target_modality=Modality.GLO30.name,
-            primary_metric=EvalMetric.NEG_RMSE,
-            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
-            target_band_index=GLO30_LABEL_ASPECT_SIN,
-        ),
-        f"pretrain_glo30_aspect_cos_regression_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
-            dataset="pretrain_subset_glo30_aspect_cos",
-            target_modality=Modality.GLO30.name,
-            primary_metric=EvalMetric.NEG_RMSE,
-            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
-            target_band_index=GLO30_LABEL_ASPECT_COS,
-        ),
         # Geographic-holdout variants: train/val/test split by spatial bins
         # so the test set is geographically disjoint from train.
         f"pretrain_worldcover_probe_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
@@ -1324,45 +1270,6 @@ EVAL_TASKS.update(
             primary_metric=EvalMetric.MIOU,
             h5py_dir=PRETRAIN_SUBSET_H5PY_DIR,
             split_strategy="geographic",
-        ),
-        f"pretrain_meta_canopy_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
-            dataset="pretrain_subset_meta_canopy",
-            target_modality=Modality.META_CANOPY_HEIGHT.name,
-            primary_metric=EvalMetric.NEG_RMSE,
-            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
-            split_strategy="geographic",
-        ),
-        f"pretrain_glo30_elevation_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
-            dataset="pretrain_subset_glo30_elevation",
-            target_modality=Modality.GLO30.name,
-            primary_metric=EvalMetric.NEG_RMSE,
-            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
-            split_strategy="geographic",
-            target_band_index=GLO30_BAND_ELEVATION,
-        ),
-        f"pretrain_glo30_slope_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
-            dataset="pretrain_subset_glo30_slope",
-            target_modality=Modality.GLO30.name,
-            primary_metric=EvalMetric.NEG_RMSE,
-            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
-            split_strategy="geographic",
-            target_band_index=GLO30_BAND_SLOPE,
-        ),
-        f"pretrain_glo30_aspect_sin_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
-            dataset="pretrain_subset_glo30_aspect_sin",
-            target_modality=Modality.GLO30.name,
-            primary_metric=EvalMetric.NEG_RMSE,
-            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
-            split_strategy="geographic",
-            target_band_index=GLO30_LABEL_ASPECT_SIN,
-        ),
-        f"pretrain_glo30_aspect_cos_regression_geo_{MAP_MODALITY_PROBE_INPUT_SUFFIX}": _map_modality_probe(
-            dataset="pretrain_subset_glo30_aspect_cos",
-            target_modality=Modality.GLO30.name,
-            primary_metric=EvalMetric.NEG_RMSE,
-            h5py_dir=PRETRAIN_DSM_CANOPY_H5PY_DIR,
-            split_strategy="geographic",
-            target_band_index=GLO30_LABEL_ASPECT_COS,
         ),
         # SRTM elevation regression from S1-only and S2+S1 inputs, so we can
         # compare elevation signal across modality combinations.
@@ -1815,32 +1722,6 @@ EMBEDDING_EVAL_TASKS.update(
         ),
     }
 )
-
-# Landsat norm stats on the reflectance scale, the twin of the pretraining
-# config used by the *_landsat_refl runs.
-LANDSAT_REFLECTANCE_NORM_CONFIG = "computed_landsat_reflectance.json"
-
-# A checkpoint pretrained on the reflectance h5 has to read Landsat as TOA
-# reflectance, so LANDSAT_REFLECTANCE=1 converts it at load time and swaps in
-# the matching stats (embedding_eval_sweep.py --landsat_reflectance).
-#
-# Applied as an override here rather than as `_refl` sibling tasks so the task
-# NAMES stay identical across the two arms: a DN run and a reflectance run then
-# land on the same wandb keys and diff one-to-one, instead of forcing a
-# name-mapping at analysis time.
-#
-# Only Landsat-bearing tasks are touched. The S2 and S1+S2 tasks keep DN-scale
-# stats under both arms, which is exactly what makes them the control for
-# "did retraining on reflectance move the non-Landsat representations too".
-if os.environ.get("LANDSAT_REFLECTANCE"):
-    for _name, _task in list(EMBEDDING_EVAL_TASKS.items()):
-        if Modality.LANDSAT.name in (_task.input_modalities or []):
-            EMBEDDING_EVAL_TASKS[_name] = replace(
-                _task,
-                landsat_reflectance=True,
-                computed_norm_config=LANDSAT_REFLECTANCE_NORM_CONFIG,
-            )
-
 
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(

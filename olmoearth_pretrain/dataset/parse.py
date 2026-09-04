@@ -31,12 +31,6 @@ class ModalityImage:
     start_time: datetime
     end_time: datetime
 
-    # Landsat-only: per-image scene sun elevation (degrees) and platform (LC08/LC09),
-    # used to convert DN to reflectance / brightness temperature at h5-creation. Left
-    # as None for other modalities (and for older CSVs without these columns).
-    solar_elevation: float | None = None
-    platform: str | None = None
-
     # Add this to see if there are two ModalityImage objects that are the same
     def __eq__(self, other: object) -> bool:
         """Check if two ModalityImage objects are the same."""
@@ -113,15 +107,9 @@ def parse_modality_csv(
                 col=int(csv_row["col"]),
                 row=int(csv_row["row"]),
             )
-            sun_elevation_raw = csv_row.get("sun_elevation")
-            solar_elevation = float(sun_elevation_raw) if sun_elevation_raw else None
-            platform_raw = csv_row.get("platform")
-            platform = platform_raw if platform_raw else None
             image = ModalityImage(
                 start_time=datetime.fromisoformat(csv_row["start_time"]),
                 end_time=datetime.fromisoformat(csv_row["end_time"]),
-                solar_elevation=solar_elevation,
-                platform=platform,
             )
             image_idx = int(csv_row["image_idx"])
             if grid_tile not in modality_tiles:
