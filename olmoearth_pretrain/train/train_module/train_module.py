@@ -39,6 +39,8 @@ from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_cla
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
+from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.nn.latent_mim import FrozenTargetProjection
 from olmoearth_pretrain.train.loss import LossConfig
 
 logger = getLogger(__name__)
@@ -664,6 +666,70 @@ class OlmoEarthTrainModule(TrainModule):
             parameters, max_grad_norm, total_norm, foreach=foreach
         )
         return total_norm
+
+    def update_target_encoder(self) -> None:
+        """Update the target encoder."""
+        # Update target encoder with EMA this should be a callback
+        if self.start_ema == 1.0 and self.end_ema == 1.0:
+            return
+
+        if isinstance(
+            getattr(self.model, "target_encoder", None), FrozenTargetProjection
+        ):
+            raise OLMoConfigurationError(
+                "EMA updates require a full target-encoder copy: "
+                "projection_only_target=True only supports ema_decay=(1.0, 1.0)."
+            )
+
+        cur_ema_value = (
+            self.start_ema
+            + self.trainer.global_step
+            * (self.end_ema - self.start_ema)
+            / self.trainer.max_steps
+        )
+        with torch.no_grad():
+            self.trainer.record_metric(
+                "train/ema_decay",
+                cur_ema_value,
+                ReduceType.mean,
+            )
+            for p, tp in zip(
+                self.model.encoder.parameters(), self.model.target_encoder.parameters()
+            ):
+                if isinstance(p.data, DTensor):
+                    # get the local shard, update it in place
+                    p_local = p.data.to_local()
+                    tp_local = tp.data.to_local()
+                    tp_local.mul_(cur_ema_value).add_(
+                        p_local, alpha=(1 - cur_ema_value)
+                    )
+                else:
+                    # fallback for any plain Tensor
+                    tp.data.mul_(cur_ema_value).add_(p.data, alpha=(1 - cur_ema_value))
+
+    def eval_batch(
+        self, batch: dict[str, Any], labels: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        """Evaluate a batch."""
+        raise NotImplementedError("eval batch not implemented")
+
+    def compute_regularization(self, latent: TokensAndMasks) -> torch.Tensor | None:
+        """If a regularizer is present, compute it."""
+        regularizer = getattr(self, "regularizer", None)
+        if regularizer is None:
+            return None
+        return regularizer.compute(latent, None)
+
+    def log_regularization(self, total_batch_reg: torch.Tensor) -> None:
+        """If a regularizer is present, log its values."""
+        regularizer = getattr(self, "regularizer", None)
+        if regularizer is None:
+            return None
+        self.trainer.record_metric(
+            f"train/{regularizer.name}",
+            total_batch_reg,
+            ReduceType.mean,
+        )
 
     def accumulate_extra_metrics(
         self,

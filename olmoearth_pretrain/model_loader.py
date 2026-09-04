@@ -4,25 +4,17 @@ This module works with or without olmo-core installed:
 - Without olmo-core: inference-only mode (loading pre-trained models)
 - With olmo-core: full functionality including training
 
-The weights are converted to pth file from distributed checkpoint like this:
-
-    import json
-    from pathlib import Path
+The weights are converted to a pth file from a distributed checkpoint like this
+(``load_pretrain_checkpoint`` applies ``patch_legacy_encoder_config`` before building,
+which is required for any config.json that still carries since-removed fields):
 
     import torch
 
-    from olmo_core.config import Config
-    from olmo_core.distributed.checkpoint import load_model_and_optim_state
+    from olmoearth_pretrain.model_loader import load_pretrain_checkpoint
 
-    checkpoint_path = Path("/weka/dfive-default/helios/checkpoints/joer/nano_lr0.001_wd0.002/step370000")
-    with (checkpoint_path / "config.json").open() as f:
-        config_dict = json.load(f)
-        model_config = Config.from_dict(config_dict["model"])
-
-    model = model_config.build()
-
-    train_module_dir = checkpoint_path / "model_and_optim"
-    load_model_and_optim_state(str(train_module_dir), model)
+    model = load_pretrain_checkpoint(
+        "/weka/dfive-default/helios/checkpoints/joer/nano_lr0.001_wd0.002/step370000"
+    )
     torch.save(model.state_dict(), "OlmoEarth-v1-Nano.pth")
 """
 
