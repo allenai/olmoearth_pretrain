@@ -12,12 +12,13 @@ Each fixture is a pair:
 
 ``<name>.json``
     The ``model`` subtree of a real checkpoint's config.json. That subtree is the only
-    part deserialized when a checkpoint is loaded.
+    part deserialized when a checkpoint is loaded. (An optional ``_source`` key records
+    where the copy came from; nothing reads it.)
 ``<name>.shapes.json``
-    Its parameter manifest, recorded ONCE at a commit where the config still
-    deserializes natively -- see ``recorded_at_commit``. This is what makes the test
-    non-circular: the expectation comes from the code that ran when the checkpoint was
-    trained, not from HEAD.
+    The parameter manifest of the WHOLE model it builds -- encoder, decoder, supervision
+    head -- recorded ONCE at a commit where the config still deserializes natively; see
+    ``recorded_at_commit``. This is what makes the test non-circular: the expectation
+    comes from the code that ran when the checkpoint was trained, not from HEAD.
 
 So a fixture fails loudly in either direction: HEAD can no longer build the config at
 all, or HEAD builds something structurally different from what was trained. The second
@@ -45,16 +46,24 @@ CONFIGS = sorted(
 )
 
 
-def _build_manifest(encoder_config: dict) -> dict[str, list[int]]:
-    """Parameter name -> shape, built without allocating any storage.
+def _build_model(model_config: dict) -> torch.nn.Module:
+    """Build the full model from its config subtree without allocating any storage.
 
     The meta device gives every parameter its real shape and no memory, which keeps a
     768-wide, 170M-parameter fixture free to check under ``pytest -n auto``.
     """
-    from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
+    # Imported before entering the meta context: the model modules pull in
+    # torch._dynamo at import time, which trips over the device override.
+    import olmoearth_pretrain.nn.latent_mim  # noqa: F401
+    from olmoearth_pretrain.config import Config
 
     with torch.device("meta"):
-        model = EncoderConfig.from_dict(encoder_config).build()
+        return Config.from_dict(model_config).build()
+
+
+def _build_manifest(model_config: dict) -> dict[str, list[int]]:
+    """Parameter name -> shape for the whole model."""
+    model = _build_model(model_config)
     return {name: list(t.shape) for name, t in model.state_dict().items()}
 
 
@@ -72,7 +81,7 @@ def test_legacy_checkpoint_config_rebuilds_identical_model(config_path: Path) ->
 
     config_dict = json.loads(config_path.read_text())
     patched = patch_legacy_encoder_config(copy.deepcopy(config_dict))
-    manifest = _build_manifest(patched["model"]["encoder_config"])
+    manifest = _build_manifest(patched["model"])
 
     expected = golden["shapes"]
     missing = sorted(set(expected) - set(manifest))
@@ -99,9 +108,6 @@ def test_patching_is_required(config_path: Path) -> None:
     config), the test above would pass trivially. Fail here instead, so the fixture is
     knowingly retired rather than quietly becoming a no-op.
     """
-    from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
-
-    raw = json.loads(config_path.read_text())["model"]["encoder_config"]
+    raw = json.loads(config_path.read_text())["model"]
     with pytest.raises(Exception):
-        with torch.device("meta"):
-            EncoderConfig.from_dict(copy.deepcopy(raw)).build()
+        _build_model(copy.deepcopy(raw))

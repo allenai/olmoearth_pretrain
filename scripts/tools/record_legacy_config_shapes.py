@@ -9,8 +9,10 @@ trained with, not from HEAD.
     cd /tmp/wt && python scripts/tools/record_legacy_config_shapes.py \\
         <config.json> tests/fixtures/legacy_configs/<name>.shapes.json
 
-The config may be a full checkpoint config.json or just its "model" subtree. The model
-is built on the meta device, so this costs no memory regardless of model size.
+The config may be a full checkpoint config.json or just its "model" subtree. The WHOLE
+model (encoder, decoder, supervision head, ...) is built on the meta device, so the
+manifest pins every parameter the checkpoint carries and costs no memory regardless of
+model size.
 """
 
 import json
@@ -20,19 +22,22 @@ from pathlib import Path
 
 import torch
 
-from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
+# Imported before entering the meta-device context: the model modules pull in
+# torch._dynamo at import time, which trips over the device override.
+import olmoearth_pretrain.nn.latent_mim  # noqa: F401
+from olmoearth_pretrain.config import Config
 
 
 def main() -> int:
     """Build the config on the meta device and write its parameter manifest."""
     src, dst = Path(sys.argv[1]), Path(sys.argv[2])
     config_dict = json.loads(src.read_text())
-    encoder_config = config_dict.get("model", config_dict)["encoder_config"]
+    model_config = config_dict.get("model", config_dict)
 
     # Deliberately NOT patched: if this raises, you are on a commit that has already
     # dropped the field, and the manifest would record the wrong architecture.
     with torch.device("meta"):
-        model = EncoderConfig.from_dict(encoder_config).build()
+        model = Config.from_dict(model_config).build()
 
     commit = subprocess.check_output(  # nosec
         ["git", "rev-parse", "--short", "HEAD"], text=True
@@ -48,9 +53,10 @@ def main() -> int:
                 ),
                 "shapes": {k: list(v.shape) for k, v in model.state_dict().items()},
             },
-            indent=1,
+            indent=2,
             sort_keys=True,
         )
+        + "\n"  # matches the pretty-format-json / end-of-file pre-commit hooks
     )
     print(f"recorded {len(model.state_dict())} tensors at {commit} -> {dst}")
     return 0

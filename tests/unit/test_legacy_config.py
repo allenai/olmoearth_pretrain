@@ -19,6 +19,7 @@ import pytest
 
 from olmoearth_pretrain.model_loader import (
     REMOVED_ENCODER_FIELDS,
+    REMOVED_SUPERVISION_MODALITY_FIELDS,
     patch_legacy_encoder_config,
 )
 
@@ -40,6 +41,23 @@ def _config_dict(**encoder_overrides: object) -> dict:
     return {"model": {"encoder_config": encoder}}
 
 
+def _supervised_config_dict(**modality_overrides: object) -> dict:
+    """A checkpoint-shaped config dict with one register-supervision head."""
+    config_dict = _config_dict()
+    modality = {
+        "task_type": "regression",
+        "num_output_channels": 1,
+        "weight": 0.01,
+        "regression_loss_type": "l1",
+    }
+    modality.update(modality_overrides)
+    config_dict["model"]["supervision_head_config"] = {
+        "register_supervision": True,
+        "modality_configs": {"srtm": modality},
+    }
+    return config_dict
+
+
 def _active_value(name: str) -> object:
     """A value for ``name`` that would have turned its removed feature ON."""
     return {
@@ -59,6 +77,16 @@ def _active_value(name: str) -> object:
         "register_students": [
             {"name": "lin128", "projection_type": "linear", "dims": [128, 64]}
         ],
+        "register_temporal_anchor": "year_start",
+    }[name]
+
+
+def _active_supervision_value(name: str) -> object:
+    """A value for ``name`` that would have turned its removed head feature ON."""
+    return {
+        "time_conditioned": True,
+        "time_harmonics": 6,
+        "time_mlp_hidden_dim": 128,
     }[name]
 
 
@@ -68,6 +96,8 @@ def test_every_removed_field_has_an_active_example() -> None:
     """The fixture covers the whole registry."""
     for name in REMOVED_ENCODER_FIELDS:
         assert _active_value(name) is not None, name
+    for name in REMOVED_SUPERVISION_MODALITY_FIELDS:
+        assert _active_supervision_value(name) is not None, name
 
 
 @pytest.mark.parametrize(
@@ -142,3 +172,54 @@ def test_missing_register_dim_restored_for_legacy_bottleneck() -> None:
     del config_dict["model"]["encoder_config"]["register_dim"]
     patched = patch_legacy_encoder_config(config_dict)
     assert patched["model"]["encoder_config"]["register_dim"] == 8
+
+
+@pytest.mark.parametrize(
+    "name,inert",
+    [
+        (name, inert)
+        for name, removed in REMOVED_SUPERVISION_MODALITY_FIELDS.items()
+        for inert in removed.inert
+    ],
+)
+def test_inert_removed_supervision_field_is_stripped(name: str, inert: object) -> None:
+    """(i) for the supervision head: a feature-off leftover on a modality is dropped."""
+    config_dict = _supervised_config_dict(**{name: inert})
+    patched = patch_legacy_encoder_config(config_dict)
+    modality = patched["model"]["supervision_head_config"]["modality_configs"]["srtm"]
+    assert name not in modality
+    # The caller's dict is never mutated in place.
+    original = config_dict["model"]["supervision_head_config"]["modality_configs"]
+    assert name in original["srtm"]
+
+
+@pytest.mark.parametrize("name", sorted(REMOVED_SUPERVISION_MODALITY_FIELDS))
+def test_active_removed_supervision_field_raises(name: str) -> None:
+    """(iii) for the supervision head: a USED removed field refuses to load."""
+    config_dict = _supervised_config_dict(**{name: _active_supervision_value(name)})
+    with pytest.raises(ValueError, match="since been removed") as excinfo:
+        patch_legacy_encoder_config(config_dict)
+    assert f"modality_configs.srtm.{name}" in str(excinfo.value)
+
+
+def test_legacy_supervised_config_deserializes_and_builds() -> None:
+    """(ii) for the supervision head: every inert leftover stripped, the model builds.
+
+    ``SupervisionHeadConfig.from_dict`` is the step that rejects unknown modality keys,
+    so this fails if any leftover survives the strip.
+    """
+    from olmoearth_pretrain.nn.supervision_head import SupervisionHeadConfig
+
+    inert_values = {
+        name: removed.inert[0]
+        for name, removed in REMOVED_SUPERVISION_MODALITY_FIELDS.items()
+    }
+    config_dict = _supervised_config_dict(**inert_values)
+    head_dict = patch_legacy_encoder_config(config_dict)["model"][
+        "supervision_head_config"
+    ]
+    config = SupervisionHeadConfig.from_dict(head_dict)
+    modality = config.modality_configs["srtm"]
+    for name in REMOVED_SUPERVISION_MODALITY_FIELDS:
+        assert not hasattr(modality, name), f"{name} should no longer be a field"
+    assert config.build(embedding_dim=8, max_patch_size=4) is not None

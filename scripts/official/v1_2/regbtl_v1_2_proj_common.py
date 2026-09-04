@@ -266,8 +266,6 @@ def build_proj_model_config(
     base_weight: float = SUPERVISION_BASE_WEIGHT_W0P1,
     register_dim: int = REGISTER_DIM,
     size_name: str = ENCODER_SIZE_NAME,
-    include_ndvi: bool = False,
-    temporal_anchor: str | None = None,
     projection_supervision_weight_scale: float | None = None,
 ) -> LatentMIMConfig:
     """Wideread regbtl + regsup + a detached [128, 64] Matryoshka student.
@@ -281,17 +279,10 @@ def build_proj_model_config(
         register_dim: Teacher (primary bottleneck) width; 768 on the base backbone,
             :data:`SMALL_REGISTER_DIM` on the small one.
         size_name: Encoder/decoder size preset (base by default).
-        include_ndvi: Add the time-conditioned NDVI supervision arm (requires the
-            ndvi extra-decode dataset/dataloader/train-module builders from
-            ``regbtl_v1_2_regsup_common`` in the run script).
         projection_supervision_weight_scale: Scales the student's supervision heads
             relative to the register head's ``base_weight`` -- with w1, 0.1 is the
             w0p1 arm and 0.01 the w0p01 arm. Requires a supervision_source that
             builds projection heads ("both" / "projection").
-        temporal_anchor: If set (``"year_start"``), the register READ becomes
-            temporally anchored (tanchor). NOTE: the perceiver student mirrors the
-            primary's ``register_temporal_anchor``, so a tanchor arm changes both
-            the teacher's and the pcv student's reads at once.
     """
     config = build_wideread_regbtl_model_config(
         common,
@@ -299,12 +290,9 @@ def build_proj_model_config(
         register_dim=register_dim,
         size_name=size_name,
     )
-    if temporal_anchor is not None:
-        config.encoder_config.register_temporal_anchor = temporal_anchor
     config = add_register_supervision(
         config,
         include_latlon=False,
-        include_ndvi=include_ndvi,
         base_weight=base_weight,
     )
     config.encoder_config.register_projection_dims = list(PROJECTION_DIMS)
@@ -377,15 +365,12 @@ def add_proj_loop_eval_beaker_job(
 
 
 # --- year-aligned AEF-trial in-loop evals, both heads -----------------------------
-# The six early-read probes (see regbtl_v1_2_earlyread_common for the rationale):
-# the PASTIS S1+S2 bridge task shared with the older runs' in-loop sets, plus the
-# year-aligned S1+S2+Landsat PASTIS / ethiopia / descals probes. The two _knn tasks
-# carry AEF's balanced-trial protocol automatically (_aef_ps1_task attaches a
-# BalancedTrialConfig whenever eval_mode is KNN), which is where the aeftrial_*
-# metrics come from. Names are looked up in the canonical registry so a typo raises
-# KeyError at import instead of silently dropping a task. Duplicated here rather
-# than imported from regbtl_v1_2_earlyread_common, whose import chain drags in the
-# d128 tanchor model builders these runs do not use.
+# The six early-read probes: the PASTIS S1+S2 bridge task shared with the older
+# runs' in-loop sets, plus the year-aligned S1+S2+Landsat PASTIS / ethiopia / descals
+# probes. The two _knn tasks carry AEF's balanced-trial protocol automatically
+# (_aef_ps1_task attaches a BalancedTrialConfig whenever eval_mode is KNN), which is
+# where the aeftrial_* metrics come from. Names are looked up in the canonical
+# registry so a typo raises KeyError at import instead of silently dropping a task.
 _PROJ_EARLYREAD_LOOP_EVAL_NAMES = (
     "pastis_ws16_ps1_sentinel1_sentinel2_pretrain_export",
     "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat",

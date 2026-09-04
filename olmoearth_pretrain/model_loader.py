@@ -264,11 +264,46 @@ REMOVED_ENCODER_FIELDS: dict[str, _RemovedField] = {
             "this checkpoint's student weights have no home"
         ),
     ),
+    "register_temporal_anchor": _RemovedField(
+        inert=(None,),
+        feature="the temporally-anchored register read (tanchor)",
+        note=(
+            "the read blocks rotate over (row, col) again; the anchored 3D read has the "
+            "same parameters but computes a different read, so the weights would load "
+            "into a model that is not the one trained"
+        ),
+    ),
 }
 
 
-def _removed_encoder_fields_to_strip(encoder_config: dict) -> list[str]:
-    """Find removed fields in a checkpoint config, refusing any that were USED.
+#: ``SupervisionModalityConfig`` fields removed from this version, keyed by name. Same
+#: contract as :data:`REMOVED_ENCODER_FIELDS`, applied to every entry of
+#: ``model.supervision_head_config.modality_configs``.
+REMOVED_SUPERVISION_MODALITY_FIELDS: dict[str, _RemovedField] = {
+    "time_conditioned": _RemovedField(
+        inert=(False,),
+        feature="time-conditioned (day-of-year MLP) supervision heads",
+        note="the MLP over [register_cell ; phi(day_of_year)] no longer exists",
+    ),
+    # The two below are int-defaulted, so they are always PRESENT in a config from that
+    # window; their defaults are the inert values (unused unless time_conditioned).
+    "time_harmonics": _RemovedField(
+        inert=(4,),
+        feature="the day-of-year harmonic count",
+        note="only meaningful with time_conditioned, which was removed",
+    ),
+    "time_mlp_hidden_dim": _RemovedField(
+        inert=(64,),
+        feature="the time-conditioned head's hidden width",
+        note="only meaningful with time_conditioned, which was removed",
+    ),
+}
+
+
+def _removed_fields_to_strip(
+    section: dict, registry: dict[str, _RemovedField], where: str
+) -> list[str]:
+    """Find removed fields in one config section, refusing any that were USED.
 
     A removed field left at its feature-off value is inert: dropping it rebuilds the
     identical model, so it is reported for stripping. A field that was ACTIVE cannot be
@@ -276,24 +311,28 @@ def _removed_encoder_fields_to_strip(encoder_config: dict) -> list[str]:
     model than the one trained, and that raises instead.
 
     Args:
-        encoder_config: The ``model.encoder_config`` sub-dict of a checkpoint config.
+        section: The config sub-dict to inspect (e.g. ``model.encoder_config``).
+        registry: The removed-field registry that applies to this section.
+        where: Dotted path of ``section``, for the error message.
 
     Returns:
         Names of inert removed fields, to delete before deserialization.
 
     Raises:
-        ValueError: If any removed feature is active in this config.
+        ValueError: If any removed feature is active in this section.
     """
     inert_present: list[str] = []
     active: list[str] = []
-    for name, removed in REMOVED_ENCODER_FIELDS.items():
-        if name not in encoder_config:
+    for name, removed in registry.items():
+        if name not in section:
             continue
-        value = encoder_config[name]
+        value = section[name]
         if any(value == inert for inert in removed.inert):
             inert_present.append(name)
         else:
-            active.append(f"  {name}={value!r} -- {removed.feature}: {removed.note}")
+            active.append(
+                f"  {where}.{name}={value!r} -- {removed.feature}: {removed.note}"
+            )
     if active:
         raise ValueError(
             "this checkpoint uses model features that have since been removed, so it "
@@ -304,12 +343,27 @@ def _removed_encoder_fields_to_strip(encoder_config: dict) -> list[str]:
     return inert_present
 
 
+def _supervision_modality_sections(model_config: dict) -> dict[str, dict]:
+    """``modality name -> its config dict`` for the supervision head, if any."""
+    head = model_config.get("supervision_head_config")
+    if not isinstance(head, dict):
+        return {}
+    modality_configs = head.get("modality_configs")
+    if not isinstance(modality_configs, dict):
+        return {}
+    return {
+        name: cfg for name, cfg in modality_configs.items() if isinstance(cfg, dict)
+    }
+
+
 def patch_legacy_encoder_config(config_dict: dict) -> dict:
     """Patch checkpoint config dicts saved by older code.
 
     Applied before passing the dict to ``Config.from_dict``. First it REFUSES configs
     that use a since-removed feature, and STRIPS the removed keys that were merely left
-    at their feature-off values (see :func:`_removed_encoder_fields_to_strip`) --
+    at their feature-off values (see :func:`_removed_fields_to_strip`; the registries
+    are :data:`REMOVED_ENCODER_FIELDS` for ``model.encoder_config`` and
+    :data:`REMOVED_SUPERVISION_MODALITY_FIELDS` for each supervision modality) --
     olmo-core's deserializer rejects any unknown key, so those leftovers would otherwise
     block the load outright. Then three fixups for configs that CAN still be rebuilt:
 
@@ -329,10 +383,24 @@ def patch_legacy_encoder_config(config_dict: dict) -> dict:
     Raises:
         ValueError: If the config uses a model feature this version has removed.
     """
-    enc = config_dict.get("model", {}).get("encoder_config", {})
+    model = config_dict.get("model", {})
+    enc = model.get("encoder_config", {}) if isinstance(model, dict) else {}
     if not isinstance(enc, dict):
         return config_dict
-    strip = _removed_encoder_fields_to_strip(enc)
+    strip = _removed_fields_to_strip(
+        enc, REMOVED_ENCODER_FIELDS, "model.encoder_config"
+    )
+    strip_supervision = {
+        name: fields
+        for name, section in _supervision_modality_sections(model).items()
+        if (
+            fields := _removed_fields_to_strip(
+                section,
+                REMOVED_SUPERVISION_MODALITY_FIELDS,
+                f"model.supervision_head_config.modality_configs.{name}",
+            )
+        )
+    }
     bottleneck_dim_missing = (
         enc.get("use_register_bottleneck")
         and enc.get("register_dim") is None
@@ -340,6 +408,7 @@ def patch_legacy_encoder_config(config_dict: dict) -> dict:
     )
     needs_patch = (
         bool(strip)
+        or bool(strip_supervision)
         or "use_linear_patch_embed" not in enc
         or (
             enc.get("use_register_bottleneck") and enc.get("register_grid_size") is None
@@ -349,13 +418,23 @@ def patch_legacy_encoder_config(config_dict: dict) -> dict:
     if not needs_patch:
         return config_dict
     config_dict = copy.deepcopy(config_dict)
-    enc = config_dict["model"]["encoder_config"]
+    model = config_dict["model"]
+    enc = model["encoder_config"]
     for name in strip:
         logger.info(
             "dropping removed-but-inert legacy config field %r (was %r)",
             name,
             enc.pop(name),
         )
+    modality_sections = _supervision_modality_sections(model)
+    for modality, fields in strip_supervision.items():
+        for name in fields:
+            logger.info(
+                "dropping removed-but-inert legacy supervision field %s.%s (was %r)",
+                modality,
+                name,
+                modality_sections[modality].pop(name),
+            )
     if "use_linear_patch_embed" not in enc:
         enc["use_linear_patch_embed"] = False
     if enc.get("use_register_bottleneck") and enc.get("register_grid_size") is None:

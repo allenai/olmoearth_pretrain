@@ -114,24 +114,15 @@ _CDL_CODES = [
 CDL_CLASS_VALUES = [code / 200 for code in _CDL_CODES]
 
 
-# Annual harmonics for the NDVI time-conditioned head's day-of-year sincos basis.
-NDVI_TIME_HARMONICS = 4
-
-
 def build_supervision_head_config(
     *,
     include_latlon: bool,
-    include_ndvi: bool = False,
     base_weight: float = SUPERVISION_WEIGHT,
 ) -> SupervisionHeadConfig:
     """Register-grid supervision head config over the decode-only map modalities.
 
     ``include_latlon`` adds the unit-sphere location regression read from the
-    mean-pooled register grid. ``include_ndvi`` adds the TIME-CONDITIONED NDVI
-    regression: a small MLP on ``[register_cell ; phi(day_of_year)]`` predicts the
-    cell's NDVI at each observed timestep, so each cell is forced to store its own
-    temporal trajectory, decodable given time — the property the frozen ps=1
-    phenology probes (PASTIS) need. ``base_weight`` overrides the low
+    mean-pooled register grid. ``base_weight`` overrides the low
     ``SUPERVISION_WEIGHT`` nudge (kept as the default); it is still scaled per-task
     by ``TASK_TYPE_WEIGHTS``.
     """
@@ -183,15 +174,6 @@ def build_supervision_head_config(
             num_output_channels=LATLON_TARGET_DIM,
             weight=_weight(SupervisionTaskType.REGRESSION),
         )
-    if include_ndvi:
-        modality_configs[Modality.NDVI.name] = SupervisionModalityConfig(
-            task_type=SupervisionTaskType.REGRESSION,
-            num_output_channels=1,
-            weight=_weight(SupervisionTaskType.REGRESSION),
-            regression_loss_type="l1",
-            time_conditioned=True,
-            time_harmonics=NDVI_TIME_HARMONICS,
-        )
     return SupervisionHeadConfig(
         modality_configs=modality_configs,
         register_supervision=True,
@@ -202,13 +184,11 @@ def add_register_supervision(
     config: LatentMIMConfig,
     *,
     include_latlon: bool,
-    include_ndvi: bool = False,
     base_weight: float = SUPERVISION_WEIGHT,
 ) -> LatentMIMConfig:
     """Attach the register-grid supervision head to a regbtl model config."""
     config.supervision_head_config = build_supervision_head_config(
         include_latlon=include_latlon,
-        include_ndvi=include_ndvi,
         base_weight=base_weight,
     )
     return config
