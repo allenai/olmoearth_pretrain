@@ -130,7 +130,6 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
-            Modality.GSE.name,
         ],
     ),
     "pretrain_subset_worldcover": EvalDatasetConfig(
@@ -143,7 +142,6 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
-            Modality.GSE.name,
         ],
     ),
     "pretrain_subset_osm": EvalDatasetConfig(
@@ -156,7 +154,6 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
-            Modality.GSE.name,
         ],
     ),
     "pretrain_subset_srtm": EvalDatasetConfig(
@@ -169,7 +166,6 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
-            Modality.GSE.name,
         ],
     ),
     "pretrain_subset_canopy": EvalDatasetConfig(
@@ -182,7 +178,6 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
-            Modality.GSE.name,
         ],
     ),
     "pretrain_subset_cdl": EvalDatasetConfig(
@@ -197,7 +192,6 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
-            Modality.GSE.name,
         ],
     ),
     "pretrain_subset_worldcereal": EvalDatasetConfig(
@@ -211,7 +205,6 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.LANDSAT.name,
-            Modality.GSE.name,
         ],
     ),
     "m-eurosat": EvalDatasetConfig(
