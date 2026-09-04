@@ -16,8 +16,7 @@ which skips those windows up front.
 
 The promotion has to stay surgical: it must not touch a stack that already has
 a required input (that would silently change the window set of every existing
-task), and it must not promote the SCL/QA mask inputs, which resolve to the
-modality they mask and are not always read.
+task).
 """
 
 import copy
@@ -28,7 +27,7 @@ from olmoearth_pretrain.evals.datasets.rslearn_builder import require_stack_inpu
 
 
 def _model_config() -> dict[str, Any]:
-    """A year-aligned model.yaml shape: required S2/S1, optional Landsat + masks."""
+    """A year-aligned model.yaml shape: required S2/S1, optional Landsat."""
     return {
         "data": {
             "init_args": {
@@ -41,17 +40,9 @@ def _model_config() -> dict[str, Any]:
                         "layers": ["sentinel1_mo01"],
                         "load_all_layers": True,
                     },
-                    "scl": {
-                        "layers": ["sentinel2_scl_mo01"],
-                        "required": False,
-                    },
                     "landsat": {
                         "layers": ["landsat_mo01", "landsat_mo02"],
                         "load_all_layers": True,
-                        "required": False,
-                    },
-                    "landsat_qa": {
-                        "layers": ["landsat_qa_mo01"],
                         "required": False,
                     },
                     "targets": {"layers": ["label"], "is_target": True},
@@ -72,20 +63,6 @@ def test_landsat_only_stack_is_promoted_to_required() -> None:
     patched = require_stack_inputs(config, [Modality.LANDSAT.name])
 
     assert _required(patched, "landsat") is True
-
-
-def test_mask_inputs_are_never_promoted() -> None:
-    """landsat_qa_mo01 suffix-strips to "landsat", so it matches the stack.
-
-    Requiring it would drop windows over gaps in a QA band the stack need not
-    read at all (l8_pixel_cloud_mask defaults off).
-    """
-    config = _model_config()
-
-    patched = require_stack_inputs(config, [Modality.LANDSAT.name])
-
-    assert _required(patched, "landsat_qa") is False
-    assert _required(patched, "scl") is False
 
 
 def test_stack_with_a_required_input_is_returned_untouched() -> None:

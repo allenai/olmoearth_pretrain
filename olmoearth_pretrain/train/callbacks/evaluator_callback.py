@@ -181,30 +181,6 @@ class DownstreamTaskConfig:
     # labeled pixel; pair with use_center_token=True (and patch_size=1) so the
     # probe reads exactly that token.
     label_at_center_pixel: bool = False
-    # For registry (rslearn) datasets carrying the optional "scl" input
-    # (setup_extra_layers.py): mask cloud-contaminated S2 pixel-timesteps
-    # MISSING at load time, reproducing the pre-year-aligned exports'
-    # eo:cloud_cover scene filter at pixel granularity. Never changes the
-    # window set; windows without SCL are just left unmasked.
-    scl_cloud_mask: bool = False
-    # SCL classes to mask when scl_cloud_mask is set. None = the full default
-    # set (nodata/saturated/shadow/cloud-med/cloud-high/cirrus); the
-    # "cloudless" variants pass (8, 9) for unambiguous cloud only.
-    scl_cloud_classes: tuple[int, ...] | None = None
-    # Scene-level Landsat cloud threshold: months whose chosen scene's
-    # cloud_cover meets/exceeds this are masked MISSING, using the
-    # landsat_cloud_cover.json sidecar at the dataset root
-    # (build_landsat_cloud_cover_sidecar.py). None = no Landsat masking.
-    landsat_cloud_cover_max: float | None = None
-    # Per-pixel Landsat cloud mask: LANDSAT pixel-timesteps whose QA_PIXEL
-    # (the optional "landsat_qa" input, setup_extra_layers.py layer set
-    # `landsat_qa`) flags dilated/cirrus/cloud/shadow are masked MISSING at
-    # load time -- the Landsat analogue of scl_cloud_mask. Windows without
-    # the input are left unmasked.
-    l8_pixel_cloud_mask: bool = False
-    # Which QA_PIXEL bits count as cloud. None keeps the loader's aggressive
-    # default (dilated|cirrus|cloud|shadow); the narrow policy is cloud alone.
-    l8_pixel_cloud_bits: int | None = None
     # Convert eval Landsat DN to TOA reflectance / brightness temperature at
     # load time, for checkpoints pretrained on the reflectance h5. Reads the
     # per-window sun-elevation sidecar; pair with the reflectance-scale
@@ -363,11 +339,6 @@ class DownstreamEvaluator:
         self._is_registry_dataset = task.dataset not in DATASET_TO_CONFIG
         self.window_size = task.window_size
         self.label_at_center_pixel = task.label_at_center_pixel
-        self.scl_cloud_mask = task.scl_cloud_mask
-        self.scl_cloud_classes = task.scl_cloud_classes
-        self.landsat_cloud_cover_max = task.landsat_cloud_cover_max
-        self.l8_pixel_cloud_mask = task.l8_pixel_cloud_mask
-        self.l8_pixel_cloud_bits = task.l8_pixel_cloud_bits
         self.landsat_reflectance = task.landsat_reflectance
         self.computed_norm_config = task.computed_norm_config
         self.tile_samples = task.tile_samples
@@ -411,13 +382,6 @@ class DownstreamEvaluator:
             # task is a classification task over per-sample embeddings.
             self.config = dataclasses.replace(
                 self.config, task_type=TaskType.CLASSIFICATION, height_width=None
-            )
-        if (
-            self.scl_cloud_mask or self.l8_pixel_cloud_mask
-        ) and not self._is_registry_dataset:
-            raise ValueError(
-                f"scl_cloud_mask/l8_pixel_cloud_mask are only supported for registry datasets, "
-                f"got dataset '{task.dataset}'"
             )
         self.trainer = trainer
         self.device = device
@@ -661,16 +625,6 @@ class DownstreamEvaluator:
                 extra_kwargs["label_at_center_pixel"] = True
             if self.tile_samples:
                 extra_kwargs["tile_samples"] = True
-            if self.scl_cloud_mask:
-                extra_kwargs["scl_cloud_mask"] = True
-                if self.scl_cloud_classes is not None:
-                    extra_kwargs["scl_cloud_classes"] = self.scl_cloud_classes
-            if self.landsat_cloud_cover_max is not None:
-                extra_kwargs["landsat_cloud_cover_max"] = self.landsat_cloud_cover_max
-            if self.l8_pixel_cloud_mask:
-                extra_kwargs["l8_pixel_cloud_mask"] = True
-                if self.l8_pixel_cloud_bits is not None:
-                    extra_kwargs["l8_pixel_cloud_bits"] = self.l8_pixel_cloud_bits
             if self.landsat_reflectance:
                 extra_kwargs["landsat_reflectance"] = True
             if self.computed_norm_config != "computed.json":

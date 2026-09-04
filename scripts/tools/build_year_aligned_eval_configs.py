@@ -73,19 +73,12 @@ MONTHLY_LAYERS = {
     "sentinel1": [f"sentinel1_mo{i:02d}" for i in range(1, 13)],
 }
 
-# S2 scene-classification layers, added on weka by setup_extra_layers.py.
-# The loader turns them into per-pixel cloud masks (scl_cloud_mask=True); they
-# are never fed to the model as a modality. required stays False: a required
-# input shrinks the evaluated window set for EVERY model on the dataset, which
-# would detach it from the published year-aligned numbers.
-SCL_LAYERS = [f"sentinel2_scl_mo{i:02d}" for i in range(1, 13)]
-LANDSAT_QA_LAYERS = [f"landsat_qa_mo{i:02d}" for i in range(1, 13)]
-
-# Landsat monthlies, also added on weka by setup_extra_layers.py (input parity
-# with AEF, which ingests Landsat). A real modality, unlike scl -- but
-# required stays False for the same window-set reason, which means windows
-# with Landsat coverage gaps lack the input entirely: measure per-dataset
-# completeness before registering any landsat eval task.
+# Landsat monthlies, added on weka by setup_extra_layers.py (input parity
+# with AEF, which ingests Landsat). required stays False: a required input
+# shrinks the evaluated window set for EVERY model on the dataset, which would
+# detach it from the published year-aligned numbers -- so windows with Landsat
+# coverage gaps lack the input entirely: measure per-dataset completeness
+# before registering any landsat eval task.
 LANDSAT_LAYERS = [f"landsat_mo{i:02d}" for i in range(1, 13)]
 
 # Band order must match Modality.LANDSAT.band_order (B8 first: its band sets
@@ -140,19 +133,6 @@ def imagery_input(modality: str) -> dict:
     }
 
 
-def scl_input() -> dict:
-    """Build the optional model.yaml input block for the SCL cloud-mask layers."""
-    return {
-        "data_type": "raster",
-        "dtype": "FLOAT32",
-        "layers": list(SCL_LAYERS),
-        "load_all_layers": True,
-        "bands": ["SCL"],
-        "passthrough": True,
-        "required": False,
-    }
-
-
 def landsat_input() -> dict:
     """Build the optional model.yaml input block for the Landsat monthlies."""
     return {
@@ -161,19 +141,6 @@ def landsat_input() -> dict:
         "layers": list(LANDSAT_LAYERS),
         "load_all_layers": True,
         "bands": list(LANDSAT_BANDS),
-        "passthrough": True,
-        "required": False,
-    }
-
-
-def landsat_qa_input() -> dict:
-    """Build the optional model.yaml input block for the QA_PIXEL cloud-mask layers."""
-    return {
-        "data_type": "raster",
-        "dtype": "FLOAT32",
-        "layers": list(LANDSAT_QA_LAYERS),
-        "load_all_layers": True,
-        "bands": ["QA_PIXEL"],
         "passthrough": True,
         "required": False,
     }
@@ -228,24 +195,14 @@ def convert(
 
     # Replace whatever imagery the source used with the monthly layer scheme,
     # dropping any single-layer sentinel2 input, and insert both modalities in
-    # a stable order ahead of the non-imagery inputs. scl rides along as the
-    # optional cloud-mask input (see scl_input), landsat as the optional
-    # third sensor (see landsat_input).
-    for modality in (
-        "sentinel2_l2a",
-        "sentinel1",
-        "sentinel2",
-        "scl",
-        "landsat",
-        "landsat_qa",
-    ):
+    # a stable order ahead of the non-imagery inputs. landsat rides along as
+    # the optional third sensor (see landsat_input).
+    for modality in ("sentinel2_l2a", "sentinel1", "sentinel2", "landsat"):
         inputs.pop(modality, None)
     rebuilt = {
         "sentinel2_l2a": imagery_input("sentinel2_l2a"),
         "sentinel1": imagery_input("sentinel1"),
-        "scl": scl_input(),
         "landsat": landsat_input(),
-        "landsat_qa": landsat_qa_input(),
     }
     for name, block in inputs.items():
         # Keep "targets" last so a carried-over input reads next to the other
@@ -259,15 +216,14 @@ def convert(
     init_args["inputs"] = rebuilt
 
     # Any Pad transform must cover the newly added modalities too, otherwise
-    # S1/SCL/Landsat keep their native size and the shape check in the eval
-    # dataset trips (for SCL, the mask would be misaligned with the padded
-    # imagery). scl/landsat are OPTIONAL inputs (required: false), absent on
-    # windows without their layers -- and rslearn selectors hard-fail on
+    # S1/Landsat keep their native size and the shape check in the eval
+    # dataset trips. landsat is an OPTIONAL input (required: false), absent on
+    # windows without its layers -- and rslearn selectors hard-fail on
     # missing keys unless skip_missing is set, so it must be.
     for transform in init_args.get("default_config", {}).get("transforms", []):
         selectors = transform.get("init_args", {}).get("image_selectors")
         if selectors and "sentinel2_l2a" in selectors:
-            for extra in ("sentinel1", "scl", "landsat"):
+            for extra in ("sentinel1", "landsat"):
                 if extra not in selectors:
                     selectors.insert(selectors.index("sentinel2_l2a") + 1, extra)
             transform["init_args"]["skip_missing"] = True

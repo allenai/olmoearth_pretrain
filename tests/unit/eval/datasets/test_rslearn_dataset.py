@@ -15,7 +15,6 @@ from olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.landsat_calibratio
 )
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
-    L8QA_INPUT_NAME,
     RslearnToOlmoEarthDataset,
 )
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
@@ -23,6 +22,8 @@ from olmoearth_pretrain.evals.task_types import TaskType
 
 S2 = Modality.SENTINEL2_L2A.name
 NUM_S2_BANDS = len(Modality.get(S2).band_order)
+LANDSAT = Modality.LANDSAT.name
+NUM_LANDSAT_BANDS = len(Modality.get(LANDSAT).band_order)
 
 
 def build_dataset(
@@ -32,8 +33,6 @@ def build_dataset(
     tile_samples: bool = False,
     sample_size: int | None = None,
     model_dataset: list | None = None,
-    scl_cloud_mask: bool = False,
-    scl_cloud_classes: tuple[int, ...] | None = None,
     input_modalities: list[str] | None = None,
 ) -> RslearnToOlmoEarthDataset:
     """Build a wrapper with no underlying model dataset (transform-only tests)."""
@@ -45,8 +44,6 @@ def build_dataset(
         label_at_center_pixel=label_at_center_pixel,
         tile_samples=tile_samples,
         sample_size=sample_size,
-        scl_cloud_mask=scl_cloud_mask,
-        scl_cloud_classes=scl_cloud_classes,
     )
 
 
@@ -362,111 +359,6 @@ def test_masked_sample_uses_numpy_free_path() -> None:
     assert isinstance(s2, torch.Tensor) or isinstance(s2, np.ndarray)
 
 
-def make_scl(
-    size: int, num_timesteps: int, cloudy: dict[tuple[int, int, int], int] | None = None
-) -> RasterImage:
-    """Build an SCL RasterImage: vegetation (4) except `cloudy` (h, w, t) -> class."""
-    scl = torch.full((1, num_timesteps, size, size), 4.0)
-    for (row, col, t), value in (cloudy or {}).items():
-        scl[0, t, row, col] = float(value)
-    return RasterImage(image=scl)
-
-
-class TestSclCloudMask:
-    """Tests for scl_cloud_mask through _transform_sample."""
-
-    S2_MASK = MaskedOlmoEarthSample.get_masked_modality_name(S2)
-
-    def test_cloudy_pixel_timestep_masked_missing(self) -> None:
-        """SCL cloud classes become MISSING; clear pixels stay ONLINE_ENCODER."""
-        ds = build_dataset(scl_cloud_mask=True)
-        input_dict, target = make_sample(8, {(4, 4): 1})
-        input_dict["scl"] = make_scl(8, 2, {(2, 3, 0): 9, (5, 6, 1): 3})
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.S2_MASK)
-        assert (mask[2, 3, 0] == MaskValue.MISSING.value).all()
-        assert (mask[5, 6, 0] == MaskValue.ONLINE_ENCODER.value).all()
-        assert (mask[5, 6, 1] == MaskValue.MISSING.value).all()
-        assert (mask[2, 3, 1] == MaskValue.ONLINE_ENCODER.value).all()
-        assert (mask[0, 0] == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_custom_cloud_classes_narrow_the_mask(self) -> None:
-        """The cloudless policy (8, 9) leaves shadow (3) pixels unmasked."""
-        ds = build_dataset(scl_cloud_mask=True, scl_cloud_classes=(8, 9))
-        input_dict, target = make_sample(8, {(4, 4): 1})
-        input_dict["scl"] = make_scl(8, 2, {(2, 3, 0): 9, (5, 6, 0): 3})
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.S2_MASK)
-        assert (mask[2, 3, 0] == MaskValue.MISSING.value).all()
-        # Shadow is not in the cloudless class set, so it stays visible.
-        assert (mask[5, 6, 0] == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_fully_cloudy_pixel_left_unmasked(self) -> None:
-        """A pixel cloudy at every timestep keeps all timesteps."""
-        ds = build_dataset(scl_cloud_mask=True)
-        input_dict, target = make_sample(8, {(4, 4): 1})
-        input_dict["scl"] = make_scl(8, 2, {(1, 1, 0): 9, (1, 1, 1): 8})
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.S2_MASK)
-        assert (mask[1, 1] == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_missing_scl_input_leaves_sample_unmasked(self) -> None:
-        """No scl input -> warn and proceed unmasked, never crash."""
-        ds = build_dataset(scl_cloud_mask=True)
-        input_dict, target = make_sample(8, {(4, 4): 1})
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.S2_MASK)
-        assert (mask == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_flag_off_ignores_scl_input(self) -> None:
-        """scl_cloud_mask=False leaves the mask untouched even with SCL present."""
-        ds = build_dataset(scl_cloud_mask=False)
-        input_dict, target = make_sample(8, {(4, 4): 1})
-        input_dict["scl"] = make_scl(8, 2, {(2, 3, 0): 9})
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.S2_MASK)
-        assert (mask == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_mask_follows_center_crop(self) -> None:
-        """With window_size, SCL takes the same crop as the imagery."""
-        ds = build_dataset(
-            window_size=16, label_at_center_pixel=True, scl_cloud_mask=True
-        )
-        input_dict, target = make_sample(32, {(12, 20): 5})
-        # Crop is rows 4..20, cols 12..28; cloudy pixel at raster (6, 14)
-        # lands at cropped (2, 2).
-        input_dict["scl"] = make_scl(32, 2, {(6, 14, 1): 10})
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.S2_MASK)
-        assert (mask[2, 2, 1] == MaskValue.MISSING.value).all()
-        assert (mask[2, 2, 0] == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_half_resolution_scl_is_upsampled(self) -> None:
-        """A 20m-grid SCL read (half resolution) is nearest-upsampled to match."""
-        ds = build_dataset(scl_cloud_mask=True)
-        input_dict, target = make_sample(8, {(4, 4): 1})
-        # 4x4 SCL against 8x8 imagery: pixel (1, 1) covers imagery (2:4, 2:4).
-        input_dict["scl"] = make_scl(4, 2, {(1, 1, 0): 9})
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.S2_MASK)
-        assert (mask[2:4, 2:4, 0] == MaskValue.MISSING.value).all()
-        assert (mask[2:4, 2:4, 1] == MaskValue.ONLINE_ENCODER.value).all()
-        assert (mask[0:2, 0:2, 0] == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_shape_mismatch_skips_masking(self) -> None:
-        """An SCL grid that is neither matching nor half resolution is skipped."""
-        ds = build_dataset(scl_cloud_mask=True)
-        input_dict, target = make_sample(8, {(4, 4): 1})
-        input_dict["scl"] = make_scl(5, 2, {(1, 1, 0): 9})
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.S2_MASK)
-        assert (mask == MaskValue.ONLINE_ENCODER.value).all()
-
-
-LANDSAT = Modality.LANDSAT.name
-NUM_LANDSAT_BANDS = len(Modality.get(LANDSAT).band_order)
-
-
 def monthly_ranges(year: int, months: list[int]) -> list[tuple[datetime, datetime]]:
     """(start, end) ranges for the given month slots of `year`'s 30-day grid."""
     jan1 = datetime(year, 1, 1, tzinfo=UTC)
@@ -540,63 +432,6 @@ class TestRaggedModalities:
         input_dict, target = self.sample_with_landsat(None)
         with pytest.raises(ValueError, match="not found"):
             ds._transform_sample(input_dict, target)
-
-
-class TestLandsatCloudMask:
-    """Scene-level Landsat cloud masking via the sidecar table."""
-
-    LANDSAT_MASK = MaskedOlmoEarthSample.get_masked_modality_name(LANDSAT)
-
-    @staticmethod
-    def dataset_with_table(table: dict | None) -> RslearnToOlmoEarthDataset:
-        """A wrapper with the L8 mask armed at threshold 50."""
-        ds = build_dataset(input_modalities=[S2, LANDSAT])
-        ds.landsat_cloud_cover_max = 50.0
-        ds.landsat_cloud_cover_table = table
-        return ds
-
-    def test_cloudy_months_masked(self) -> None:
-        """Months at/over threshold go MISSING; below, unknown (-1) stay."""
-        table = {"g/w1": {"mo01": 80.0, "mo02": 49.9, "mo03": -1, "mo04": 50.0}}
-        ds = self.dataset_with_table(table)
-        input_dict, target = TestRaggedModalities.sample_with_landsat(list(range(12)))
-        masked_sample, _ = ds._transform_sample(input_dict, target, window_key="g/w1")
-        mask = getattr(masked_sample, self.LANDSAT_MASK)
-        assert (mask[:, :, 0] == MaskValue.MISSING.value).all()  # mo01: 80
-        assert (mask[:, :, 1] == MaskValue.ONLINE_ENCODER.value).all()  # 49.9
-        assert (mask[:, :, 2] == MaskValue.ONLINE_ENCODER.value).all()  # unknown
-        assert (mask[:, :, 3] == MaskValue.MISSING.value).all()  # exactly 50
-        assert (mask[:, :, 4:] == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_merges_with_coverage_gaps(self) -> None:
-        """Cloud-masked slots union with ragged coverage-gap slots."""
-        table = {"g/w1": {"mo01": 90.0}}
-        ds = self.dataset_with_table(table)
-        # landsat missing month index 6 entirely (coverage gap)
-        months = [m for m in range(12) if m != 6]
-        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
-        masked_sample, _ = ds._transform_sample(input_dict, target, window_key="g/w1")
-        mask = getattr(masked_sample, self.LANDSAT_MASK)
-        for slot in range(12):
-            expected = (
-                MaskValue.MISSING.value
-                if slot in (0, 6)
-                else MaskValue.ONLINE_ENCODER.value
-            )
-            assert (mask[:, :, slot] == expected).all(), slot
-
-    def test_unknown_window_or_missing_table_no_op(self) -> None:
-        """No sidecar entry (or no table) -> unmasked, never a crash."""
-        for table in (None, {"g/other": {"mo01": 99.0}}):
-            ds = self.dataset_with_table(table)
-            input_dict, target = TestRaggedModalities.sample_with_landsat(
-                list(range(12))
-            )
-            masked_sample, _ = ds._transform_sample(
-                input_dict, target, window_key="g/w1"
-            )
-            mask = getattr(masked_sample, self.LANDSAT_MASK)
-            assert (mask == MaskValue.ONLINE_ENCODER.value).all()
 
 
 class TestLandsatReflectance:
@@ -757,196 +592,6 @@ class TestLandsatReflectance:
             ds.normalizer_computed.computed_config_filename
             == "computed_landsat_reflectance.json"
         )
-
-
-# QA_PIXEL codes: clear land is 21824 (the quality bits, no cloud bits); the
-# cloud bits under test are dilated=1, cirrus=2, cloud=3, shadow=4. Bit 0 is
-# fill, deliberately NOT masked.
-QA_CLEAR = 21824
-QA_FILL = 1
-QA_DILATED = QA_CLEAR | 0b00010
-QA_CIRRUS = QA_CLEAR | 0b00100
-QA_CLOUD = QA_CLEAR | 0b01000
-QA_SHADOW = QA_CLEAR | 0b10000
-
-
-def make_qa(
-    size: int,
-    num_timesteps: int,
-    codes: dict[tuple[int, int, int], int] | None = None,
-    months: list[int] | None = None,
-) -> RasterImage:
-    """Build a QA_PIXEL RasterImage: clear land except `codes` (h, w, t) -> code."""
-    qa = torch.full((1, num_timesteps, size, size), float(QA_CLEAR))
-    for (row, col, t), value in (codes or {}).items():
-        qa[0, t, row, col] = float(value)
-    return RasterImage(
-        image=qa,
-        timestamps=monthly_ranges(2020, months) if months is not None else None,
-    )
-
-
-class TestL8PixelCloudMask:
-    """Per-pixel Landsat cloud masking from the optional landsat_qa input."""
-
-    LANDSAT_MASK = MaskedOlmoEarthSample.get_masked_modality_name(LANDSAT)
-
-    @staticmethod
-    def armed_dataset(**kwargs: Any) -> RslearnToOlmoEarthDataset:
-        """A wrapper with the per-pixel Landsat mask armed."""
-        ds = build_dataset(input_modalities=[S2, LANDSAT], **kwargs)
-        ds.l8_pixel_cloud_mask = True
-        return ds
-
-    def test_cloud_bits_masked_fill_and_clear_kept(self) -> None:
-        """Each cloud bit masks its pixel-timestep; clear and fill do not."""
-        ds = self.armed_dataset()
-        months = list(range(12))
-        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
-        input_dict[L8QA_INPUT_NAME] = make_qa(
-            8,
-            12,
-            {
-                (1, 1, 0): QA_CLOUD,
-                (2, 2, 1): QA_SHADOW,
-                (3, 3, 2): QA_CIRRUS,
-                (4, 4, 3): QA_DILATED,
-                (5, 5, 4): QA_FILL,
-            },
-            months=months,
-        )
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.LANDSAT_MASK)
-        for (row, col), slot in (((1, 1), 0), ((2, 2), 1), ((3, 3), 2), ((4, 4), 3)):
-            assert (mask[row, col, slot] == MaskValue.MISSING.value).all()
-            # Only that pixel-timestep moves.
-            assert (mask[row, col, slot + 1] == MaskValue.ONLINE_ENCODER.value).all()
-        # Fill is not a cloud bit.
-        assert (mask[5, 5, 4] == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_ragged_qa_aligned_by_acquisition_date(self) -> None:
-        """QA with a coverage gap masks the month it was acquired in, not slot i."""
-        ds = self.armed_dataset()
-        months = [m for m in range(12) if m != 3]
-        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
-        # QA timestep 3 is month 4 (month 3 is missing on both sides): a
-        # positional read would mask slot 3, which has no observation at all.
-        input_dict[L8QA_INPUT_NAME] = make_qa(
-            8, len(months), {(1, 1, 3): QA_CLOUD}, months=months
-        )
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.LANDSAT_MASK)
-        assert (mask[1, 1, 4] == MaskValue.MISSING.value).all()
-        # Slot 3 is MISSING from the coverage gap for every pixel, and no
-        # other pixel picked up a cloud mask.
-        assert (mask[:, :, 3] == MaskValue.MISSING.value).all()
-        for slot in (m for m in range(12) if m not in (3, 4)):
-            assert (mask[:, :, slot] == MaskValue.ONLINE_ENCODER.value).all(), slot
-        assert (mask[2, 2, 4] == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_fully_cloudy_pixel_left_unmasked(self) -> None:
-        """A pixel cloudy at every timestep keeps all of them."""
-        ds = self.armed_dataset()
-        months = list(range(12))
-        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
-        input_dict[L8QA_INPUT_NAME] = make_qa(
-            8, 12, {(1, 1, t): QA_CLOUD for t in range(12)}, months=months
-        )
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.LANDSAT_MASK)
-        assert (mask[1, 1] == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_guard_counts_coverage_gaps_as_lost_timesteps(self) -> None:
-        """Cloudy on every month it HAS: the pixel keeps them rather than blanking."""
-        ds = self.armed_dataset()
-        months = [0, 1]
-        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
-        input_dict[L8QA_INPUT_NAME] = make_qa(
-            8, 2, {(1, 1, 0): QA_CLOUD, (1, 1, 1): QA_CLOUD}, months=months
-        )
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.LANDSAT_MASK)
-        # Slots 0 and 1 are the pixel's only observations, so they survive.
-        assert (mask[1, 1, 0] == MaskValue.ONLINE_ENCODER.value).all()
-        assert (mask[1, 1, 1] == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_mask_follows_center_crop(self) -> None:
-        """With window_size, QA takes the same crop as the imagery."""
-        ds = self.armed_dataset(window_size=16, label_at_center_pixel=True)
-        input_dict, target = make_sample(32, {(12, 20): 5}, num_timesteps=12)
-        months = list(range(12))
-        input_dict[S2] = RasterImage(
-            image=input_dict[S2].image, timestamps=monthly_ranges(2020, months)
-        )
-        input_dict[LANDSAT] = RasterImage(
-            image=torch.rand(NUM_LANDSAT_BANDS, 12, 32, 32),
-            timestamps=monthly_ranges(2020, months),
-        )
-        # Crop is rows 4..20, cols 12..28; cloudy pixel at raster (6, 14)
-        # lands at cropped (2, 2).
-        input_dict[L8QA_INPUT_NAME] = make_qa(
-            32, 12, {(6, 14, 1): QA_CLOUD}, months=months
-        )
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.LANDSAT_MASK)
-        assert (mask[2, 2, 1] == MaskValue.MISSING.value).all()
-        assert (mask[2, 2, 0] == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_half_resolution_qa_is_upsampled(self) -> None:
-        """A 60m-grid QA read (half resolution) is nearest-upsampled to match."""
-        ds = self.armed_dataset()
-        months = list(range(12))
-        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
-        # 4x4 QA against 8x8 imagery: QA (1, 1) covers imagery (2:4, 2:4).
-        input_dict[L8QA_INPUT_NAME] = make_qa(
-            4, 12, {(1, 1, 0): QA_CLOUD}, months=months
-        )
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.LANDSAT_MASK)
-        assert (mask[2:4, 2:4, 0] == MaskValue.MISSING.value).all()
-        assert (mask[2:4, 2:4, 1] == MaskValue.ONLINE_ENCODER.value).all()
-        assert (mask[0:2, 0:2, 0] == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_missing_qa_input_leaves_sample_unmasked(self) -> None:
-        """No landsat_qa input -> warn and proceed unmasked, never crash."""
-        ds = self.armed_dataset()
-        input_dict, target = TestRaggedModalities.sample_with_landsat(list(range(12)))
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.LANDSAT_MASK)
-        assert (mask == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_absent_landsat_with_qa_present_does_not_crash(self) -> None:
-        """QA without imagery: every slot is already MISSING, so just warn."""
-        ds = self.armed_dataset()
-        input_dict, target = TestRaggedModalities.sample_with_landsat(None)
-        input_dict[L8QA_INPUT_NAME] = make_qa(8, 12, {(1, 1, 0): QA_CLOUD})
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.LANDSAT_MASK)
-        assert (mask == MaskValue.MISSING.value).all()
-
-    def test_shape_mismatch_skips_masking(self) -> None:
-        """A QA grid that is neither matching nor half resolution is skipped."""
-        ds = self.armed_dataset()
-        months = list(range(12))
-        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
-        input_dict[L8QA_INPUT_NAME] = make_qa(
-            5, 12, {(1, 1, 0): QA_CLOUD}, months=months
-        )
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.LANDSAT_MASK)
-        assert (mask == MaskValue.ONLINE_ENCODER.value).all()
-
-    def test_flag_off_ignores_qa_input(self) -> None:
-        """l8_pixel_cloud_mask=False leaves the mask untouched even with QA present."""
-        ds = build_dataset(input_modalities=[S2, LANDSAT])
-        months = list(range(12))
-        input_dict, target = TestRaggedModalities.sample_with_landsat(months)
-        input_dict[L8QA_INPUT_NAME] = make_qa(
-            8, 12, {(1, 1, 0): QA_CLOUD}, months=months
-        )
-        masked_sample, _ = ds._transform_sample(input_dict, target)
-        mask = getattr(masked_sample, self.LANDSAT_MASK)
-        assert (mask == MaskValue.ONLINE_ENCODER.value).all()
 
 
 class TestSubsetBands:

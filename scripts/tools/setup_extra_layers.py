@@ -1,67 +1,30 @@
-"""Set up extra imagery layers (SCL, Landsat) on the *_year_aligned datasets.
+"""Set up the Landsat imagery layers on the *_year_aligned datasets.
 
-Two layer sets, selected with ``--layer_sets`` (default: both):
-
-``scl`` -- the pixel-level cloud-mask fix. The year-aligned re-export dropped
-the original AEF-supplemental fetch's ``eo:cloud_cover < 50`` scene filter,
-so in persistently cloudy regions (descals oil palm above all) the monthly
-mosaics now carry cloud instead of being empty. Twelve ``sentinel2_scl_moNN``
-layers are derived from the dataset's OWN ``sentinel2_l2a_moNN`` layers (same
-data source, duration, time_offset; SCL band set at uint8, 20 m ->
-zoom_offset -1, nearest resampling -- SCL is categorical), and every window's
-S2 items.json entries are CLONED under the SCL names: the serialized items
-already carry every STAC asset URL, SCL included, so the metadata copy IS the
-prepare step -- identical scenes by construction, zero STAC queries. The eval
-loader consumes them via ``RslearnToOlmoEarthDataset(scl_cloud_mask=True)``.
-
-``landsat`` -- input parity with AEF, which ingests Landsat. Twelve
-``landsat_moNN`` layers are taken from the pretraining config
-(config_landsat.json, the exact config the pretraining dataset materialized
-Landsat with), offsets rewritten to tile the calendar year (0d..330d, the
-same rewrite reanchor_year_aligned_dataset.py applied to S2/S1). No items
-exist to copy, so Landsat needs a real Beaker PREPARE pass before
-materialize; ``launch`` picks the right stage per dataset automatically by
-sampling window readiness, so re-running ``run --go`` advances the pipeline:
-first invocation launches SCL materialize + Landsat prepare, a later one
-(once prepare reads complete) launches Landsat materialize.
-
-``landsat_qa`` -- the pixel-level Landsat cloud mask (QA_PIXEL, CFMask
-cloud/shadow/cirrus/dilated bit flags), the Landsat analogue of ``scl``.
-Twelve ``landsat_qa_moNN`` layers are derived from the dataset's OWN
-``landsat_moNN`` layers, and every window's Landsat items.json entries are
-CLONED under the QA names -- like SCL, the metadata copy IS the prepare, so
-the QA raster is guaranteed to describe exactly the scene the imagery came
-from. The band is fetched through ``l8qa_plugin.LandsatOliTirsQA`` (rslearn's
-LandsatOliTirs hardcodes the spectral bands); ``apply`` copies the plugin to
-``PLUGIN_WEKA_DIR`` and jobs import it via an injected PYTHONPATH. Requires
-the ``landsat`` set to be applied+prepared first. Off by default: pass
-``--layer_sets landsat_qa`` explicitly.
+Input parity with AEF, which ingests Landsat. Twelve ``landsat_moNN`` layers
+are taken from the pretraining config (config_landsat.json, the exact config
+the pretraining dataset materialized Landsat with), offsets rewritten to tile
+the calendar year (0d..330d, the same rewrite reanchor_year_aligned_dataset.py
+applied to S2/S1). No items exist to copy, so Landsat needs a real Beaker
+PREPARE pass before materialize; ``launch`` picks the right stage per dataset
+automatically by sampling window readiness, so re-running ``run --go``
+advances the pipeline: first invocation launches prepare, a later one (once
+prepare reads complete) launches materialize.
 
 Commands:
 
-- ``plan``   -- report per dataset x layer set: config state, window
-  readiness, materialize progress, and the next launch stage. Read-only;
+- ``plan``   -- report per dataset: config state, window readiness,
+  materialize progress, and the next launch stage. Read-only;
   re-run any time to watch progress.
-- ``apply``  -- weka-side config.json edits + the SCL items copy.
-- ``launch`` -- submit one Beaker job per dataset x layer set directly via
-  beaker-py (no rslp checkout needed), hosts round-robin, host-pinned so no
-  GPU is reserved. ``--enabled-layers`` restricts each job to its layer
-  set, so the existing imagery layers are never rescanned (and pastis's
+- ``apply``  -- weka-side config.json edits.
+- ``launch`` -- submit one Beaker job per dataset directly via beaker-py (no
+  rslp checkout needed), hosts round-robin, host-pinned so no GPU is
+  reserved. ``--enabled-layers`` restricts each job to the Landsat layers,
+  so the existing imagery layers are never rescanned (and pastis's
   *_all fetch layers cannot trigger); their rasters stay byte-identical to
   what the published year-aligned numbers were measured on. Prepare jobs
   get the rate-limited regime defaults (fewer workers, short backoff);
   materialize the worker-bound ones. Dry-run unless ``--go``.
 - ``run``    -- apply then launch.
-
-The PRETRAINING rslearn dataset is opt-in and off by default. It uses the
-same monthly S2 layers (the eval re-export copied its configs), so the SCL
-set applies there too when the time comes: pass its path via
-``--pretrain_ds_path`` and it is handled alongside the eval datasets,
-restricted to the ``res_10`` window group (``--pretrain_group``). Landsat is
-skipped for it (the pretraining dataset already has Landsat). Note this only
-lands SCL rasters on weka; using them in training additionally needs the
-rslearn->olmoearth conversion step and dataloader/masking support, which are
-separate work.
 
 Usage, from the helios repo root on a weka-mounted machine::
 
@@ -71,34 +34,25 @@ Usage, from the helios repo root on a weka-mounted machine::
     # later: watch progress / advance landsat prepare -> materialize
     python scripts/tools/setup_extra_layers.py plan --only descals
     python scripts/tools/setup_extra_layers.py run --only descals --hosts ... --go
-    # one layer set only
-    python scripts/tools/setup_extra_layers.py run --layer_sets landsat --hosts ... --go
-    # include the pretraining dataset (SCL only)
-    python scripts/tools/setup_extra_layers.py run --pretrain_ds_path /weka/... --hosts ... --go
 
 Jobs are submitted with beaker-py from this repo's own environment, so the
 launch machine only needs Beaker auth (BEAKER_TOKEN or ~/.beaker/config.yml).
-Experiments get readable names (``<layer_set>-<stage>-<dataset>-<suffix>``).
-SCL jobs query Planetary Computer anonymously; Landsat jobs get AWS
-credentials injected from the workspace secrets named AWS_ACCESS_KEY_ID /
-AWS_SECRET_ACCESS_KEY -- the usgs-landsat bucket is requester-pays, so
+Experiments get readable names (``landsat-<stage>-<dataset>-<suffix>``).
+Jobs get AWS credentials injected from the workspace secrets named
+AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY -- the usgs-landsat bucket is requester-pays, so
 prepare/materialize fail with NoCredentialsError without them. Rate limits
 are per-account either way, so fan out across datasets, not by stacking
 jobs on one dataset (identical jobs do not shard).
 
 After materialize completes (re-run ``plan`` until progress is ~100%):
 
-1. ``python scripts/tools/check_scl_layers.py --ds_path ...`` per dataset to
-   verify SCL landed wherever imagery exists.
-2. ``python scripts/tools/backfill_eval_registry_provenance.py`` and commit
+1. ``python scripts/tools/backfill_eval_registry_provenance.py`` and commit
    registry.json: the registry pins config.json by sha256
    (``verify_config_json_hash``), so every eval on an edited dataset FAILS
-   LOUDLY until the new hash is recorded. Run it once, after BOTH layer
-   sets' config edits have landed, so the datasets go through one hash
-   change.
-3. Regenerate + re-sync model.yaml (build_year_aligned_eval_configs.py adds
-   the optional ``scl`` and ``landsat`` inputs; the weka copy must match the
-   repo copy for config_repo_dir provenance to hold).
+   LOUDLY until the new hash is recorded.
+2. Regenerate + re-sync model.yaml (build_year_aligned_eval_configs.py adds
+   the optional ``landsat`` input; the weka copy must match the repo copy for
+   config_repo_dir provenance to hold).
 
 Landsat eval tasks are deliberately NOT registered yet: the landsat input is
 ``required: false`` (a required input would shrink the evaluated window set
@@ -118,12 +72,11 @@ import random
 import sys
 import uuid
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from rslearn.dataset import Dataset
-from rslearn.dataset.window import Window, WindowLayerData
+from rslearn.dataset.window import Window
 from upath import UPath
 
 logger = logging.getLogger(__name__)
@@ -133,29 +86,8 @@ CONFIG_ROOT = REPO_ROOT / "data" / "rslearn_dataset_configs"
 
 MONTHS = 12
 S2_LAYERS = [f"sentinel2_l2a_mo{i:02d}" for i in range(1, MONTHS + 1)]
-SCL_LAYERS = [f"sentinel2_scl_mo{i:02d}" for i in range(1, MONTHS + 1)]
 LANDSAT_LAYERS = [f"landsat_mo{i:02d}" for i in range(1, MONTHS + 1)]
-LANDSAT_QA_LAYERS = [f"landsat_qa_mo{i:02d}" for i in range(1, MONTHS + 1)]
-S2_TO_SCL = dict(zip(S2_LAYERS, SCL_LAYERS))
-LANDSAT_TO_QA = dict(zip(LANDSAT_LAYERS, LANDSAT_QA_LAYERS))
-# landsat_qa is opt-in: it depends on the landsat set being applied+prepared,
-# so the default selection stays the original pair.
-LAYER_SET_NAMES = ("scl", "landsat")
-ALL_LAYER_SET_NAMES = ("scl", "landsat", "landsat_qa")
-
-# SCL ships at 20 m (zoom_offset -1, matching the B05/B06/... band set) and is
-# categorical, so it must be resampled nearest -- bilinear would invent
-# classes on upsample.
-SCL_BAND_SET = {"bands": ["SCL"], "dtype": "uint8", "zoom_offset": -1}
-
-# QA_PIXEL is uint16 bit flags at 30 m (zoom_offset -1 like B1-B11) and is
-# categorical, so nearest resampling for the same reason as SCL.
-QA_BAND_SET = {"bands": ["QA_PIXEL"], "dtype": "uint16", "zoom_offset": -1}
-# The materialize job runs the plain rslp image (no helios checkout), so the
-# QA-capable data source lives in a weka-hosted plugin module injected via
-# PYTHONPATH (see l8qa_plugin.py's docstring).
-PLUGIN_WEKA_DIR = "/weka/dfive-default/rslearn-eai/plugins"
-QA_CLASS_PATH = "l8qa_plugin.LandsatOliTirsQA"
+LAYER_SET = "landsat"
 
 DATASETS = (
     "africa_crop_mask_year_aligned",
@@ -176,8 +108,8 @@ DEFAULT_IMAGE = "favyen/rslpomp20260727a"
 BEAKER_WORKSPACE = "ai2/earth-systems"
 BEAKER_BUDGET = "ai2/atec-olmoearth"
 WEKA_BUCKET = "dfive-default"
-# Workspace secrets holding AWS credentials, injected into Landsat jobs only
-# (the usgs-landsat bucket is requester-pays; SCL reads PC anonymously).
+# Workspace secrets holding AWS credentials, injected into every job (the
+# usgs-landsat bucket is requester-pays).
 AWS_SECRET_NAMES = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
 
 # tessera_v2_export.py adds a `<dataset>_tessera_v2` fetch group beside the
@@ -189,33 +121,9 @@ AWS_SECRET_NAMES = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
 FETCH_GROUP_SUFFIX = "_tessera_v2"
 
 
-def layer_names(layer_set: str) -> list[str]:
-    """The twelve monthly layer names of a layer set."""
-    if layer_set == "scl":
-        return SCL_LAYERS
-    if layer_set == "landsat_qa":
-        return LANDSAT_QA_LAYERS
-    return LANDSAT_LAYERS
-
-
 # ---------------------------------------------------------------------------
-# apply: config.json layers (+ items.json copies for scl)
+# apply: config.json layers
 # ---------------------------------------------------------------------------
-
-
-def build_scl_layer(s2_layer: dict) -> dict:
-    """Derive one SCL layer config from its sentinel2_l2a_moNN sibling.
-
-    Copies the data source verbatim (class, duration, time_offset, harmonize
-    -- harmless for SCL, which the Sentinel2 data source excludes from
-    harmonization), so the layer targets exactly the same 30-day period as
-    the imagery it masks.
-    """
-    layer = json.loads(json.dumps(s2_layer))
-    layer["alias"] = "sentinel2_scl"
-    layer["band_sets"] = [dict(SCL_BAND_SET)]
-    layer["resampling_method"] = "nearest"
-    return layer
 
 
 def build_landsat_layers() -> dict[str, dict]:
@@ -239,46 +147,7 @@ def build_landsat_layers() -> dict[str, dict]:
     return layers
 
 
-def build_landsat_qa_layer(landsat_layer: dict) -> dict:
-    """Derive one QA_PIXEL layer config from its landsat_moNN sibling.
-
-    Copies the data source verbatim (duration, time_offset, sort_by) except
-    the class_path, which points at the plugin subclass that knows the
-    QA_PIXEL asset -- same 30-day period, same scene ordering, so the cloned
-    items resolve identically.
-    """
-    layer = json.loads(json.dumps(landsat_layer))
-    layer["alias"] = "landsat_qa"
-    layer["band_sets"] = [dict(QA_BAND_SET)]
-    layer["resampling_method"] = "nearest"
-    layer["data_source"]["class_path"] = QA_CLASS_PATH
-    return layer
-
-
-def expected_layers(config: dict, layer_set: str) -> dict[str, dict]:
-    """The layer configs a layer set should add to this dataset's config."""
-    if layer_set == "scl":
-        return {
-            S2_TO_SCL[s2_name]: build_scl_layer(config["layers"][s2_name])
-            for s2_name in S2_LAYERS
-        }
-    if layer_set == "landsat_qa":
-        missing = [name for name in LANDSAT_LAYERS if name not in config["layers"]]
-        if missing:
-            raise ValueError(
-                f"dataset lacks landsat layers ({missing[:3]}...); "
-                "apply + prepare the landsat set first"
-            )
-        return {
-            LANDSAT_TO_QA[name]: build_landsat_qa_layer(config["layers"][name])
-            for name in LANDSAT_LAYERS
-        }
-    return build_landsat_layers()
-
-
-def config_with_layers(
-    config: dict, layer_set: str
-) -> tuple[dict, list[str], list[str]]:
+def config_with_layers(config: dict) -> tuple[dict, list[str], list[str]]:
     """Return (updated config, layers to add, layers already present).
 
     Raises:
@@ -298,7 +167,7 @@ def config_with_layers(
     updated = json.loads(json.dumps(config))
     added: list[str] = []
     present: list[str] = []
-    for name, generated in expected_layers(config, layer_set).items():
+    for name, generated in build_landsat_layers().items():
         if name in layers:
             if layers[name] != generated:
                 raise ValueError(
@@ -312,151 +181,36 @@ def config_with_layers(
     return updated, added, present
 
 
-def copy_window_scl_items(window: Window) -> str:
-    """Clone a window's S2 monthly layer datas under the SCL names.
+def window_state(window: Window) -> str:
+    """Classify one window's readiness (read-only).
 
-    Returns:
-        one of "copied", "partial" (some S2 months unprepared -- their SCL
-        siblings mirror the gap), "already", or "unprepared" (no S2 layer
-        datas at all; the window never finished prepare and is not in the
-        eval set anyway).
+    Has Beaker prepare written its twelve layer-data entries?
     """
     layer_datas = window.load_layer_datas()
-    s2_present = [name for name in S2_LAYERS if name in layer_datas]
-    if not s2_present:
-        return "unprepared"
-
-    changed = False
-    for s2_name in s2_present:
-        scl_name = S2_TO_SCL[s2_name]
-        if scl_name in layer_datas:
-            continue
-        serialized = json.loads(json.dumps(layer_datas[s2_name].serialize()))
-        serialized["layer_name"] = scl_name
-        serialized["materialized"] = False
-        layer_datas[scl_name] = WindowLayerData.deserialize(serialized)
-        changed = True
-    if changed:
-        window.save_layer_datas(layer_datas)
-    if not changed:
-        return "already"
-    return "partial" if len(s2_present) < MONTHS else "copied"
+    have = sum(1 for name in LANDSAT_LAYERS if name in layer_datas)
+    if have == MONTHS:
+        return "prepared"
+    return "partially prepared" if have else "needs prepare"
 
 
-def copy_window_landsat_qa_items(window: Window) -> str:
-    """Clone a window's Landsat monthly layer datas under the QA names.
+def list_windows(ds_path: UPath, workers: int = 8) -> list[Window]:
+    """List a dataset's eval windows.
 
-    Mirrors copy_window_scl_items: "copied", "partial" (some Landsat months
-    unprepared), "already", or "unprepared" (Landsat prepare never reached
-    this window).
+    tessera_v2 fetch groups are excluded (see FETCH_GROUP_SUFFIX).
     """
-    layer_datas = window.load_layer_datas()
-    landsat_present = [name for name in LANDSAT_LAYERS if name in layer_datas]
-    if not landsat_present:
-        return "unprepared"
-
-    changed = False
-    for landsat_name in landsat_present:
-        qa_name = LANDSAT_TO_QA[landsat_name]
-        if qa_name in layer_datas:
-            continue
-        serialized = json.loads(json.dumps(layer_datas[landsat_name].serialize()))
-        serialized["layer_name"] = qa_name
-        serialized["materialized"] = False
-        layer_datas[qa_name] = WindowLayerData.deserialize(serialized)
-        changed = True
-    if changed:
-        window.save_layer_datas(layer_datas)
-    if not changed:
-        return "already"
-    return "partial" if len(landsat_present) < MONTHS else "copied"
+    windows = Dataset(ds_path).storage.get_windows(workers=workers)
+    return [w for w in windows if not w.group.endswith(FETCH_GROUP_SUFFIX)]
 
 
-def window_state(window: Window, layer_set: str) -> str:
-    """Classify one window's readiness for a layer set (read-only).
-
-    For scl: whether the items copy has run. For landsat: whether Beaker
-    prepare has written its twelve layer-data entries.
-    """
-    layer_datas = window.load_layer_datas()
-    if layer_set == "landsat":
-        have = sum(1 for name in LANDSAT_LAYERS if name in layer_datas)
-        if have == MONTHS:
-            return "prepared"
-        return "partially prepared" if have else "needs prepare"
-    if layer_set == "landsat_qa":
-        landsat_present = [name for name in LANDSAT_LAYERS if name in layer_datas]
-        if not landsat_present:
-            return "unprepared"
-        if all(LANDSAT_TO_QA[name] in layer_datas for name in landsat_present):
-            return "already"
-        return "partial landsat" if len(landsat_present) < MONTHS else "needs copy"
-    s2_present = [name for name in S2_LAYERS if name in layer_datas]
-    if not s2_present:
-        return "unprepared"
-    if all(S2_TO_SCL[name] in layer_datas for name in s2_present):
-        return "already"
-    return "partial s2" if len(s2_present) < MONTHS else "needs copy"
-
-
-def list_windows(ds_path: UPath, group: str | None, workers: int = 8) -> list[Window]:
-    """List a dataset's windows, restricted to one group when set.
-
-    Without an explicit group, tessera_v2 fetch groups are excluded (see
-    FETCH_GROUP_SUFFIX).
-    """
-    windows = Dataset(ds_path).storage.get_windows(
-        groups=[group] if group else None, workers=workers
-    )
-    if group is None:
-        windows = [w for w in windows if not w.group.endswith(FETCH_GROUP_SUFFIX)]
-    return windows
-
-
-def apply_dataset(
-    ds_path: UPath, group: str | None, layer_sets: list[str], workers: int
-) -> None:
-    """Write the config layers and (for scl) clone every window's items."""
+def apply_dataset(ds_path: UPath) -> None:
+    """Write the Landsat layers into the dataset's config.json."""
     config_path = ds_path / "config.json"
     config = json.loads(config_path.read_text())
-    added_any = False
-    for layer_set in layer_sets:
-        config, added, present = config_with_layers(config, layer_set)
-        added_any = added_any or bool(added)
-        logger.info(
-            f"  config.json [{layer_set}]: +{len(added)} layers "
-            f"({len(present)} present)"
-        )
-    if added_any:
+    config, added, present = config_with_layers(config)
+    logger.info(f"  config.json: +{len(added)} layers ({len(present)} present)")
+    if added:
         with config_path.open("w") as f:
             json.dump(config, f, indent=2)
-
-    copy_fns = {
-        "scl": copy_window_scl_items,
-        "landsat_qa": copy_window_landsat_qa_items,
-    }
-    todo = [name for name in ("scl", "landsat_qa") if name in layer_sets]
-    if not todo:
-        return
-    windows = list_windows(ds_path, group)
-    for layer_set in todo:
-        logger.info(f"  copying {layer_set} layer datas for {len(windows)} windows...")
-        counts: Counter = Counter()
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            for i, state in enumerate(pool.map(copy_fns[layer_set], windows)):
-                counts[state] += 1
-                if (i + 1) % 10000 == 0:
-                    logger.info(f"    {i + 1}/{len(windows)}")
-        logger.info(f"  {layer_set} items: {dict(counts)}")
-
-
-def sync_qa_plugin() -> None:
-    """Copy l8qa_plugin.py to PLUGIN_WEKA_DIR so materialize jobs can import it."""
-    src = Path(__file__).resolve().parent / "l8qa_plugin.py"
-    dst_dir = UPath(PLUGIN_WEKA_DIR)
-    dst_dir.mkdir(parents=True, exist_ok=True)
-    (dst_dir / "l8qa_plugin.py").write_text(src.read_text())
-    logger.info(f"  synced l8qa_plugin.py -> {PLUGIN_WEKA_DIR}")
 
 
 # ---------------------------------------------------------------------------
@@ -464,7 +218,7 @@ def sync_qa_plugin() -> None:
 # ---------------------------------------------------------------------------
 
 
-def materialize_progress(sampled: list[Window], layer_set: str) -> str:
+def materialize_progress(sampled: list[Window]) -> str:
     """Completed-marker counts over a window sample.
 
     Months whose period matched no scene never get a marker, so mature
@@ -473,37 +227,31 @@ def materialize_progress(sampled: list[Window], layer_set: str) -> str:
     completion signal is a re-run reporting nothing left to do.
     """
     done = sum(
-        1
-        for w in sampled
-        for name in layer_names(layer_set)
-        if w.is_layer_completed(name)
+        1 for w in sampled for name in LANDSAT_LAYERS if w.is_layer_completed(name)
     )
     return f"{done}/{len(sampled) * MONTHS} sampled layer-months"
 
 
-def plan_dataset(
-    ds_path: UPath, group: str | None, layer_sets: list[str], sample: int
-) -> None:
+def plan_dataset(ds_path: UPath, sample: int) -> None:
     """Report config state, window readiness and materialize progress."""
     config = json.loads((ds_path / "config.json").read_text())
-    windows = list_windows(ds_path, group)
+    windows = list_windows(ds_path)
     random.seed(0)
     sampled = random.sample(windows, min(sample, len(windows)))
     print(f"  windows: {len(windows)} ({len(sampled)} sampled)")
 
-    for layer_set in layer_sets:
-        try:
-            _, added, present = config_with_layers(config, layer_set)
-        except ValueError as e:
-            print(f"  [{layer_set}] BLOCKED -- {e}")
-            continue
-        states = Counter(window_state(w, layer_set) for w in sampled)
-        print(
-            f"  [{layer_set}] config: {len(present)} present, {len(added)} to add"
-            f" | windows: {dict(states)}"
-            f" | materialized: {materialize_progress(sampled, layer_set)}"
-            f" | next launch: {launch_stage(states, layer_set) or 'apply first'}"
-        )
+    try:
+        _, added, present = config_with_layers(config)
+    except ValueError as e:
+        print(f"  BLOCKED -- {e}")
+        return
+    states = Counter(window_state(w) for w in sampled)
+    print(
+        f"  config: {len(present)} present, {len(added)} to add"
+        f" | windows: {dict(states)}"
+        f" | materialized: {materialize_progress(sampled)}"
+        f" | next launch: {launch_stage(states)}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -511,21 +259,12 @@ def plan_dataset(
 # ---------------------------------------------------------------------------
 
 
-def launch_stage(states: Counter, layer_set: str) -> str | None:
-    """Which rslearn command a launch would run now, or None if not ready.
+def launch_stage(states: Counter) -> str:
+    """Which rslearn command a launch would run now.
 
-    scl is ready to materialize once the items copy has run. landsat needs a
-    prepare pass first; once every sampled window that exists is prepared,
-    the next stage is materialize.
+    Landsat needs a prepare pass first; once every sampled window that exists
+    is prepared, the next stage is materialize.
     """
-    if layer_set == "scl":
-        if states["needs copy"] + states["partial s2"]:
-            return None
-        return "materialize"
-    if layer_set == "landsat_qa":
-        if states["needs copy"] + states["partial landsat"]:
-            return None
-        return "materialize"
     return (
         "materialize"
         if states["needs prepare"] + states["partially prepared"] == 0
@@ -536,7 +275,6 @@ def launch_stage(states: Counter, layer_set: str) -> str | None:
 def job_command(
     ds_path: UPath,
     stage: str,
-    layer_set: str,
     groups: list[str],
     args: argparse.Namespace,
 ) -> list[str]:
@@ -567,11 +305,11 @@ def job_command(
         "--retry-backoff-seconds",
         str(backoff),
         "--ignore-errors",
-        # Only this layer set does work; without this the job would also scan
+        # Only the Landsat layers do work; without this the job would also scan
         # the imagery layers (harmless but slow) and, on pastis, try to fetch
         # the *_all scene layers (max_matches 150 -- NOT harmless).
         "--enabled-layers",
-        ",".join(layer_names(layer_set)),
+        ",".join(LANDSAT_LAYERS),
     ]
     if groups:
         # Scope to the eval window groups (rslearn's --group takes several),
@@ -591,18 +329,17 @@ def launch_job(
     beaker_client: Any,
     ds_path: UPath,
     stage: str,
-    layer_set: str,
     groups: list[str],
     host: str,
     args: argparse.Namespace,
 ) -> bool:
-    """Submit (or print) one host-pinned Beaker job for one dataset x layer set.
+    """Submit (or print) one host-pinned Beaker job for one dataset.
 
-    Host-pinned jobs reserve no GPU. Landsat jobs carry AWS credentials from
-    the workspace secrets in AWS_SECRET_NAMES (requester-pays bucket).
+    Host-pinned jobs reserve no GPU. Jobs carry AWS credentials from the
+    workspace secrets in AWS_SECRET_NAMES (requester-pays bucket).
     """
-    command = job_command(ds_path, stage, layer_set, groups, args)
-    name = f"{layer_set}-{stage}-{ds_path.name}-{uuid.uuid4().hex[:8]}"
+    command = job_command(ds_path, stage, groups, args)
+    name = f"{LAYER_SET}-{stage}-{ds_path.name}-{uuid.uuid4().hex[:8]}"
 
     if not args.go:
         print(f"\n  would submit {name} on {host}:\n    {' '.join(command)}")
@@ -610,12 +347,7 @@ def launch_job(
 
     from beaker import Constraints, DataMount, DataSource, EnvVar, ExperimentSpec
 
-    env_vars = []
-    if layer_set in ("landsat", "landsat_qa"):
-        env_vars = [EnvVar(name=secret, secret=secret) for secret in AWS_SECRET_NAMES]
-    if layer_set == "landsat_qa":
-        # The QA data source lives in a weka-hosted plugin (see l8qa_plugin.py).
-        env_vars.append(EnvVar(name="PYTHONPATH", value=PLUGIN_WEKA_DIR))
+    env_vars = [EnvVar(name=secret, secret=secret) for secret in AWS_SECRET_NAMES]
     spec = ExperimentSpec.new(
         budget=BEAKER_BUDGET,
         task_name=name,
@@ -646,32 +378,14 @@ def launch_job(
 # ---------------------------------------------------------------------------
 
 
-def resolve_targets(
-    args: argparse.Namespace, layer_sets: list[str]
-) -> list[tuple[str, UPath, str | None, list[str]]]:
-    """Resolve CLI args to (name, ds_path, window group, layer sets) targets.
+def resolve_targets(args: argparse.Namespace) -> list[tuple[str, UPath]]:
+    """Resolve CLI args to (name, ds_path) targets.
 
-    The nine eval datasets live under --stage_root with no group restriction
-    and take every requested layer set; the pretraining dataset (when
-    --pretrain_ds_path is given) is restricted to --pretrain_group and takes
-    only scl -- it already has Landsat. --only selects one by base name,
-    full name, or "pretrain".
+    The nine eval datasets live under --stage_root; --only selects one by base
+    name or full name.
     """
     stage_root = UPath(args.stage_root)
-    targets: list[tuple[str, UPath, str | None, list[str]]] = [
-        (name, stage_root / name, None, layer_sets) for name in DATASETS
-    ]
-    if args.pretrain_ds_path:
-        pretrain_sets = [s for s in layer_sets if s == "scl"]
-        if pretrain_sets:
-            targets.append(
-                (
-                    "pretrain",
-                    UPath(args.pretrain_ds_path),
-                    args.pretrain_group or None,
-                    pretrain_sets,
-                )
-            )
+    targets: list[tuple[str, UPath]] = [(name, stage_root / name) for name in DATASETS]
     if args.only is None:
         return targets
     matches = [t for t in targets if t[0] in (args.only, f"{args.only}_year_aligned")]
@@ -694,45 +408,19 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("command", choices=["plan", "apply", "launch", "run"])
-    parser.add_argument(
-        "--layer_sets",
-        default=",".join(LAYER_SET_NAMES),
-        help=f"Comma-separated subset of {ALL_LAYER_SET_NAMES} "
-        "(landsat_qa is opt-in; default runs the original pair).",
-    )
-    parser.add_argument(
-        "--only",
-        default=None,
-        help="One dataset (base or full name, or 'pretrain').",
-    )
+    parser.add_argument("--only", default=None, help="One dataset (base or full name).")
     parser.add_argument("--stage_root", default=DEFAULT_STAGE_ROOT)
-    parser.add_argument(
-        "--pretrain_ds_path",
-        default=None,
-        help="Path to the pretraining rslearn dataset; when set it is handled "
-        "alongside the eval datasets (scl only -- it already has Landsat), "
-        "restricted to --pretrain_group.",
-    )
-    parser.add_argument(
-        "--pretrain_group",
-        default="res_10",
-        help="Window group of the pretraining dataset to process (the group "
-        "internal_docs.md's pretraining materialize targets).",
-    )
     parser.add_argument(
         "--sample", type=int, default=200, help="Readiness sample size."
     )
-    parser.add_argument(
-        "--copy_workers", type=int, default=32, help="Items-copy threads."
-    )
-    # Launch targeting: hosts round-robin, one job per dataset x layer set
-    # (times --jobs_per_dataset). Host-pinned jobs reserve no GPU.
+    # Launch targeting: hosts round-robin, one job per dataset (times
+    # --jobs_per_dataset). Host-pinned jobs reserve no GPU.
     parser.add_argument("--hosts", default=None, help="Comma-separated Beaker hosts.")
     parser.add_argument(
         "--jobs_per_dataset",
         type=int,
         default=1,
-        help="Identical jobs per dataset x layer set, rotated across hosts. "
+        help="Identical jobs per dataset, rotated across hosts. "
         "Effective for MATERIALIZE: rslearn shuffles each job's window order, "
         "so concurrent jobs work mostly-disjoint windows and skip completed "
         "ones cheaply (some duplicated work near the tail). Near-useless for "
@@ -756,14 +444,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    layer_sets = [s for s in args.layer_sets.replace(",", " ").split() if s]
-    unknown = [s for s in layer_sets if s not in ALL_LAYER_SET_NAMES]
-    if unknown:
-        parser.error(
-            f"unknown layer set(s) {unknown}; choose from {ALL_LAYER_SET_NAMES}"
-        )
-
-    targets = resolve_targets(args, layer_sets)
+    targets = resolve_targets(args)
 
     do_apply = args.command in ("apply", "run")
     do_launch = args.command in ("launch", "run")
@@ -781,70 +462,54 @@ def main() -> int:
         else:
             beaker_client = get_beaker_client()
 
-    if "landsat_qa" in layer_sets and do_apply and (args.command == "apply" or args.go):
-        sync_qa_plugin()
-
     failures = 0
     launched = 0
-    for name, ds_path, group, target_sets in targets:
-        print(f"\n{name}:" + (f" (group {group})" if group else ""))
+    for name, ds_path in targets:
+        print(f"\n{name}:")
         if not ds_path.exists():
             print("  SKIP -- not staged")
             continue
 
         if args.command == "plan":
-            plan_dataset(ds_path, group, target_sets, args.sample)
+            plan_dataset(ds_path, args.sample)
             continue
 
         if do_apply:
             # In `run` mode --go gates the weka writes too, so a dry run is
             # fully read-only; the explicit `apply` command always executes.
             if args.command == "apply" or args.go:
-                apply_dataset(ds_path, group, target_sets, args.copy_workers)
+                apply_dataset(ds_path)
             else:
                 config = json.loads((ds_path / "config.json").read_text())
-                for layer_set in target_sets:
-                    try:
-                        _, added, present = config_with_layers(config, layer_set)
-                    except ValueError as e:
-                        print(f"  [{layer_set}] BLOCKED -- {e}")
-                        continue
-                    print(
-                        f"  DRY RUN [{layer_set}]: would add {len(added)} config "
-                        f"layers ({len(present)} present)"
-                        + (
-                            " and copy window items"
-                            if layer_set in ("scl", "landsat_qa")
-                            else ""
-                        )
-                    )
+                try:
+                    _, added, present = config_with_layers(config)
+                except ValueError as e:
+                    print(f"  BLOCKED -- {e}")
+                    continue
+                print(
+                    f"  DRY RUN: would add {len(added)} config layers "
+                    f"({len(present)} present)"
+                )
 
         if do_launch:
-            windows = list_windows(ds_path, group)
+            windows = list_windows(ds_path)
             if not windows:
                 print("  SKIP -- no eval windows")
                 continue
             groups = sorted({w.group for w in windows})
             random.seed(0)
             sampled = random.sample(windows, min(25, len(windows)))
-            for layer_set in target_sets:
-                states = Counter(window_state(w, layer_set) for w in sampled)
-                stage = launch_stage(states, layer_set)
-                if stage is None:
-                    print(f"  SKIP {layer_set} -- not ready: {dict(states)}; run apply")
+            states = Counter(window_state(w) for w in sampled)
+            stage = launch_stage(states)
+            for _ in range(max(1, args.jobs_per_dataset)):
+                host = hosts[launched % len(hosts)]
+                if not launch_job(beaker_client, ds_path, stage, groups, host, args):
                     failures += 1
-                    continue
-                for _ in range(max(1, args.jobs_per_dataset)):
-                    host = hosts[launched % len(hosts)]
-                    if not launch_job(
-                        beaker_client, ds_path, stage, layer_set, groups, host, args
-                    ):
-                        failures += 1
-                    launched += 1
+                launched += 1
 
     if args.command == "plan":
         print(
-            "\nplan is read-only; `apply` edits configs/items, `launch --go` "
+            "\nplan is read-only; `apply` edits configs, `launch --go` "
             "submits Beaker jobs (prepare or materialize, per readiness), "
             "`run --go` does both."
         )

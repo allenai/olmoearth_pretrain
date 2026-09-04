@@ -355,11 +355,6 @@ def require_stack_inputs(
         layers = cfg.get("layers", [])
         if not layers:
             continue
-        # SCL and QA are mask inputs, not model modalities, and they resolve to
-        # the modality they mask (landsat_qa_mo01 -> landsat). Requiring them
-        # would drop windows over gaps in a band the stack may never read.
-        if layers[0].startswith(("sentinel2_scl", "landsat_qa")):
-            continue
         resolved = resolve_rslearn_layer_name(layers[0])
         modality = (
             RSLEARN_TO_OLMOEARTH[resolved].name if resolved is not None else layers[0]

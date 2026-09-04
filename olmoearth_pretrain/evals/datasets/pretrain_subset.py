@@ -534,10 +534,6 @@ class PretrainSubsetDataset(Dataset):
             if modality_name == "timestamps":
                 masked_sample_dict[modality_name] = data
                 continue
-            if modality_name.endswith("_cloud"):
-                # `*_cloud` side-payloads are not modalities and have no field on
-                # MaskedOlmoEarthSample (see datatypes.from_olmoearthsample).
-                continue
 
             mask_name = MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
             if data is None:
