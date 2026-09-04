@@ -43,10 +43,8 @@ rebuild the model from the launching module's ``build_model_config``).
 """
 
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
-from olmo_core.optim import OptimGroupOverride
-from olmo_core.optim.scheduler import ConstantWithWarmup, Scheduler
 from olmo_core.train.common import Duration
 from regbtl_v1_2_common import (
     ENCODER_SIZE_NAME,
@@ -93,20 +91,6 @@ SUPERVISION_BASE_WEIGHT_W0P1 = 0.1
 # psuniform run.
 SUPERVISION_BASE_WEIGHT_W1 = 1.0
 
-# Param-group tag for the detached student, so one scheduler override covers it and
-# its LR is logged as ``optim/LR (student)``.
-STUDENT_LR_GROUP = "student"
-# Every parameter of the detached student: the projection itself plus its per-prefix
-# back-projections. The projection lives under DIFFERENT attribute names per
-# architecture -- ``register_projection`` for linear, ``register_projection_student``
-# for perceiver -- so the glob must cover both without a trailing dot, since
-# OptimConfig.build_groups is strict and raises when a pattern matches no parameter
-# (a per-architecture pattern list would fail on whichever variant is not in use).
-STUDENT_PARAM_GLOBS = [
-    "*register_projection*",
-    "*register_back_projections*",
-]
-
 # --- the ``small`` backbone arms -------------------------------------------------
 # The v1.2 size sweep's ViT-Small (384-d, depth 12, 6 heads) is very strong relative
 # to base for its cost, so the w1 pcv students are re-run on it. The register width
@@ -130,132 +114,6 @@ PASTIS_PROJ_EMBEDDING_LOOP_EVAL_TASKS = {
     for name, task in PASTIS_EMBEDDING_LOOP_EVAL_TASKS.items()
     for dim in PROJECTION_DIMS
 }
-
-
-@dataclass
-class StudentArm:
-    """One student-side variation on the ``pcv_sup768_w1`` baseline.
-
-    Every arm is a d768 teacher + a single detached perceiver student at
-    [128, 64], identical to the in-flight
-    ``regbtl_v1_2_gdyn_d768_proj128pcv_sup768_w1_newsamp_psuniform`` run except for
-    the one field it changes -- that run IS the shared baseline, so no arm re-runs
-    it. Each arm is its own training run: the students are cheap but the encoder is
-    not, so hosting them together would have meant one process, and that turned out
-    to need five perceiver students in memory at once (it OOM'd) plus a halved
-    microbatch that would have moved the Gram statistics out of line with the
-    baseline.
-
-    Attributes:
-        slug: Goes into the run and script names.
-        constant_lr: Hold the student's LR flat after the encoder's warmup instead
-            of inheriting its cosine decay to 0.1x.
-        supervision_scale: Attach supervision heads to the student at this fraction
-            of the register head's weight (needs supervision_source="both").
-        gram_weight: Weight of the flat (mostly cross-scene) relational term.
-    """
-
-    slug: str
-    constant_lr: bool = False
-    supervision_scale: float | None = None
-    gram_weight: float = 1.0
-
-
-#: The student arms. Rationale for each is in its run script's docstring.
-STUDENT_ARMS = {
-    arm.slug: arm
-    for arm in [
-        StudentArm(slug="flatlr", constant_lr=True),
-        StudentArm(slug="supstu0p1", supervision_scale=0.1),
-        StudentArm(slug="supstu0p01", supervision_scale=0.01),
-    ]
-}
-
-
-def build_arm_model_config(
-    common: CommonComponents, arm: StudentArm, **kwargs: object
-) -> LatentMIMConfig:
-    """Baseline pcv student config with the arm's supervision placement applied."""
-    return build_proj_model_config(
-        common,
-        base_weight=SUPERVISION_BASE_WEIGHT_W1,
-        projection_type="perceiver",
-        # Supervision arms need heads on BOTH widths so the student's can be scaled
-        # independently; every other arm is the sup768 recipe (registers only).
-        supervision_source="both" if arm.supervision_scale is not None else "registers",
-        projection_supervision_weight_scale=arm.supervision_scale,
-        **kwargs,  # type: ignore[arg-type]
-    )
-
-
-def apply_arm(
-    config: LatentMIMTrainModuleConfig, arm: StudentArm
-) -> LatentMIMTrainModuleConfig:
-    """Apply the arm's distillation weights and LR schedule, in place."""
-    config.projection_distill_gram_weight = arm.gram_weight
-    if arm.constant_lr:
-        add_student_lr_group(config, scheduler=student_constant_scheduler(config))
-    return config
-
-
-def student_constant_scheduler(
-    train_module_config: LatentMIMTrainModuleConfig,
-) -> ConstantWithWarmup:
-    """Constant student LR that MIRRORS the encoder's warmup, then stops decaying.
-
-    Warmup is copied from the shared scheduler rather than restated, so the two can
-    never drift apart. Mirroring it matters: during warmup the teacher's own LR is
-    still ramping and its representation moves fastest, so a student pinned at full
-    LR from step 0 would chase its most unstable target at its largest step. After
-    warmup the schedules separate -- the encoder decays toward its ``alpha_f`` floor
-    while the student holds, which is the contrast the flat-LR arm tests.
-    """
-    shared = train_module_config.scheduler
-    return ConstantWithWarmup(
-        warmup=getattr(shared, "warmup", None),
-        warmup_steps=getattr(shared, "warmup_steps", None),
-        warmup_fraction=getattr(shared, "warmup_fraction", None),
-        warmup_min_lr=getattr(shared, "warmup_min_lr", 0.0),
-        units=getattr(shared, "units", "steps"),
-    )
-
-
-def add_student_lr_group(
-    train_module_config: LatentMIMTrainModuleConfig,
-    *,
-    lr: float | None = None,
-    scheduler: Scheduler | None = None,
-) -> LatentMIMTrainModuleConfig:
-    """Put the detached student in its own param group, with its own LR/schedule.
-
-    The student otherwise sits in the encoder's group and inherits its
-    ``CosWithWarmup(alpha_f=0.1)``, which cuts its LR 10x over a run. That is right
-    for an encoder converging on a stationary objective and wrong for a head chasing
-    a teacher that is still improving at the end of training -- the in-flight runs
-    show ``projection/distill_cosine_d128`` RISING ~17x while that decay is applied.
-
-    Args:
-        train_module_config: The train module config to modify in place.
-        lr: Student peak LR. None keeps the optimizer's (i.e. the encoder's).
-        scheduler: Schedule for the student group; see
-            :func:`student_constant_scheduler`. None keeps the shared one.
-
-    Returns:
-        The modified config.
-    """
-    opts: dict[str, float | str] = {"group_name": STUDENT_LR_GROUP}
-    if lr is not None:
-        opts["lr"] = lr
-    train_module_config.optim_config.group_overrides = [
-        *(train_module_config.optim_config.group_overrides or []),
-        OptimGroupOverride(params=list(STUDENT_PARAM_GLOBS), opts=opts),
-    ]
-    if scheduler is not None:
-        train_module_config.scheduler_overrides = {
-            **(train_module_config.scheduler_overrides or {}),
-            STUDENT_LR_GROUP: scheduler,
-        }
-    return train_module_config
 
 
 def build_proj_model_config(

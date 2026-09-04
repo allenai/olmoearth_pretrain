@@ -62,14 +62,7 @@ _LABEL_FRACTION_TO_PARTITION = {
 class PASTISRDataset(Dataset):
     """PASTIS-R dataset class."""
 
-    allowed_modalities = [
-        Modality.SENTINEL1.name,
-        Modality.SENTINEL2_L2A.name,
-        # Precomputed embedding products; require the splits to have been
-        # processed with pastis_processor.py --embedding_products.
-        Modality.GSE.name,
-    ]
-    embedding_modalities = [Modality.GSE.name]
+    allowed_modalities = [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name]
 
     def __init__(
         self,
@@ -163,18 +156,6 @@ class PASTISRDataset(Dataset):
 
         self.s2_images_dir = path_to_splits / f"pastis_r_{split}" / "s2_images"
         self.s1_images_dir = path_to_splits / f"pastis_r_{split}" / "s1_images"
-        self.embedding_dirs: dict[str, Path] = {}
-        for modality in self.embedding_modalities:
-            if modality not in input_modalities:
-                continue
-            embedding_dir = path_to_splits / f"pastis_r_{split}" / f"{modality}_images"
-            if not embedding_dir.exists():
-                raise FileNotFoundError(
-                    f"PASTIS splits at {path_to_splits} have no '{modality}' "
-                    f"embeddings. Re-run pastis_processor.py with "
-                    f"--embedding_products to bake them in."
-                )
-            self.embedding_dirs[modality] = embedding_dir
         self.labels = torch.load(path_to_splits / f"pastis_r_{split}" / "targets.pt")
         self.months = torch.load(path_to_splits / f"pastis_r_{split}" / "months.pt")
         if label_fraction not in _LABEL_FRACTION_TO_PARTITION:
@@ -303,13 +284,6 @@ class PASTISRDataset(Dataset):
         if Modality.SENTINEL2_L2A.name in self.input_modalities:
             sample_dict[Modality.SENTINEL2_L2A.name] = torch.from_numpy(
                 self._load_s2(image_idx)
-            ).float()[rows, cols]
-        for modality, embedding_dir in self.embedding_dirs.items():
-            # Precomputed embedding products are consumed exactly as stored,
-            # with a singleton time dim: (C, H, W) -> (H, W, 1, C).
-            embedding = torch.load(embedding_dir / f"{image_idx}.pt")
-            sample_dict[modality] = einops.rearrange(
-                embedding, "c h w -> h w 1 c"
             ).float()[rows, cols]
 
         masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(

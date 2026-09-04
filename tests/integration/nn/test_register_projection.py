@@ -266,37 +266,3 @@ def test_projection_supervision_weight_scale_requires_projection_heads() -> None
     config.projection_supervision_weight_scale = 0.1
     with pytest.raises(ValueError, match="no projection heads"):
         config.validate()
-
-
-@pytest.mark.parametrize("projection_type", ["linear", "perceiver"])
-def test_student_param_globs_match_both_architectures(projection_type: str) -> None:
-    """The student LR-group globs must hit parameters for either student type.
-
-    ``OptimConfig.build_groups`` is strict: a pattern matching nothing raises. The
-    projection lives at ``register_projection`` for linear and
-    ``register_projection_student`` for perceiver, so a pattern naming one kills
-    every run using the other -- which is how a flat-LR arm reached the cluster and
-    died at optimizer construction.
-    """
-    import fnmatch
-    import sys
-
-    sys.path.insert(0, "scripts/official/v1_2")
-    from regbtl_v1_2_proj_common import STUDENT_PARAM_GLOBS
-
-    encoder = _encoder_config(projection_type).build()
-    names = [name for name, _ in encoder.named_parameters()]
-    for glob in STUDENT_PARAM_GLOBS:
-        assert [n for n in names if fnmatch.fnmatch(n, glob)], (
-            f"{glob!r} matches no parameter of a {projection_type} student"
-        )
-
-    # And together they must cover the whole student, or part of it silently stays
-    # on the encoder's schedule.
-    matched = {n for n in names for g in STUDENT_PARAM_GLOBS if fnmatch.fnmatch(n, g)}
-    student_params = {
-        n
-        for n in names
-        if n.startswith(("register_projection", "register_back_projections"))
-    }
-    assert student_params <= matched

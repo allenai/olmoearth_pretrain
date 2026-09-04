@@ -39,33 +39,9 @@ from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_cla
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
-from olmoearth_pretrain.nn.latent_mim import FrozenTargetProjection
 from olmoearth_pretrain.train.loss import LossConfig
 
 logger = getLogger(__name__)
-
-# Gradient diagnostics are opt-in via the environment (like
-# OE_LOAD_SKIP_MISMATCHED_KEYS below) rather than a config field, so they can be
-# switched on when relaunching or resuming an existing run without perturbing the
-# experiment config that the run is checkpointed against.
-GRAD_DIAGNOSTICS_INTERVAL_ENV = "OE_GRAD_DIAGNOSTICS_INTERVAL"
-GRAD_DIAGNOSTICS_DEPTH_ENV = "OE_GRAD_DIAGNOSTICS_DEPTH"
-_DEFAULT_GRAD_DIAGNOSTICS_DEPTH = 5
-
-
-def _param_group_name(name: str, depth: int) -> str:
-    """Collapse a parameter FQN into the module group it should be reported under.
-
-    Numeric path components are collapsed to ``*`` so that repeated stacks
-    aggregate into one series (all of ``encoder.blocks.{0..11}.attn.q`` report as
-    ``encoder.blocks.*.attn.q``), then the path is truncated to ``depth``
-    components. At the default depth this keeps per-modality patch embeddings
-    separate -- which is where a modality-specific problem shows up -- without
-    emitting a series per tensor.
-    """
-    parts = ["*" if part.isdigit() else part for part in name.split(".")]
-    return ".".join(parts[:depth])
 
 
 def _strip_unknown_fields(d: Any) -> Any:
@@ -140,12 +116,6 @@ class OlmoEarthTrainModuleConfig(Config):
     autocast_precision: DType | None = None
     max_grad_norm: float | None = None
     scheduler: Scheduler | None = None
-    # Per-param-group scheduler, keyed by the group's "group_name" tag (set via the
-    # optimizer's group_overrides opts). Lets one group follow a different schedule
-    # SHAPE from the rest -- the detached students are the motivating case, since
-    # they chase a teacher that is still improving when the encoder's cosine decay
-    # has all but stopped them. Groups without a match use `scheduler`.
-    scheduler_overrides: dict[str, Scheduler] | None = None
     find_unused_parameters: bool = True
 
     # Checkpoint settings
@@ -225,7 +195,6 @@ class OlmoEarthTrainModule(TrainModule):
         autocast_precision: torch.dtype | None = None,
         max_grad_norm: float | None = None,
         scheduler: Scheduler | None = None,
-        scheduler_overrides: dict[str, Scheduler] | None = None,
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
@@ -244,8 +213,6 @@ class OlmoEarthTrainModule(TrainModule):
             autocast_precision: Enable AMP with this data type.
             max_grad_norm: Clip gradient norms to this value.
             scheduler: Optional learning rate scheduler.
-            scheduler_overrides: Optional per-param-group schedulers, keyed by the
-                group's "group_name" tag; groups without a match use `scheduler`.
             device: The device to train on.
             state_dict_save_opts: Override state dict options for saving.
             state_dict_load_opts: Override state dict options for loading.
@@ -348,23 +315,12 @@ class OlmoEarthTrainModule(TrainModule):
         self.autocast_precision = autocast_precision
         self.max_grad_norm = max_grad_norm
         self.scheduler = scheduler
-        self.scheduler_overrides: dict[str, Scheduler] = scheduler_overrides or {}
         self.state_dict_save_opts = state_dict_save_opts or dist_cp_sd.StateDictOptions(
             flatten_optimizer_state_dict=True, cpu_offload=True
         )
         self.state_dict_load_opts = state_dict_load_opts or dist_cp_sd.StateDictOptions(
             flatten_optimizer_state_dict=True, strict=True
         )
-
-        self._grad_diagnostics_interval = int(
-            os.environ.get(GRAD_DIAGNOSTICS_INTERVAL_ENV, "0")
-        )
-        self._grad_diagnostics_depth = int(
-            os.environ.get(
-                GRAD_DIAGNOSTICS_DEPTH_ENV, str(_DEFAULT_GRAD_DIAGNOSTICS_DEPTH)
-            )
-        )
-        self._grad_diagnostics_groups: dict[str, list[nn.Parameter]] | None = None
 
     @property
     def dp_process_group(self) -> dist.ProcessGroup | None:
@@ -553,13 +509,6 @@ class OlmoEarthTrainModule(TrainModule):
         if self._replicate_grad_sync:
             self._all_reduce_grads()
 
-        # Attribute the total grad norm to modules before clipping rescales it.
-        if (
-            self._grad_diagnostics_interval > 0
-            and self.trainer.global_step % self._grad_diagnostics_interval == 0
-        ):
-            self._log_grad_diagnostics()
-
         # Maybe clip gradients.
         if self.max_grad_norm is not None:
             grad_norm = self._clip_grad_norm(self.max_grad_norm)
@@ -567,53 +516,16 @@ class OlmoEarthTrainModule(TrainModule):
             self.trainer.record_metric(
                 "total grad norm", grad_norm, reduce_type=None, namespace="optim"
             )
-            # How much clipping actually held the step back. `total grad norm` is
-            # the pre-clip value, so on its own it cannot tell you whether a rise
-            # is cosmetic or is throttling every update.
-            self.trainer.record_metric(
-                "clip scale",
-                (self.max_grad_norm / grad_norm.clamp(min=1e-12)).clamp(max=1.0),
-                reduce_type=None,
-                namespace="optim",
-            )
-            self.trainer.record_metric(
-                "clipped",
-                (grad_norm > self.max_grad_norm).float(),
-                reduce_type=None,
-                namespace="optim",
-            )
             if isinstance(self.optimizer, SkipStepOptimizer):
                 self.optimizer.latest_grad_norm = grad_norm
 
-        # Maybe adjust learning rate. A param group tagged with "group_name" may
-        # name its own scheduler in scheduler_overrides, so groups can run different
-        # schedule SHAPES (not just different peaks, which group_overrides' lr
-        # already covers) -- e.g. a detached student on a flat LR while the encoder
-        # cosine-decays. Untagged groups fall back to the shared scheduler.
-        if self.scheduler is not None or self.scheduler_overrides:
-            groups = self.optimizer.param_groups
-            # Several groups may share a tag (one scheduler, many students). Keep
-            # their metric labels distinct anyway, so a future arm with a different
-            # peak LR cannot silently overwrite its neighbour's curve.
-            tag_counts: dict[str | None, int] = {}
-            for group in groups:
-                tag = group.get("group_name")
-                tag_counts[tag] = tag_counts.get(tag, 0) + 1
-            for group_idx, group in enumerate(groups):
-                group_name: str | None = group.get("group_name")
-                scheduler = self.scheduler
-                if group_name is not None and group_name in self.scheduler_overrides:
-                    scheduler = self.scheduler_overrides[group_name]
-                if scheduler is None:
-                    continue
-                new_lr = scheduler.set_lr(group, self.trainer)
-                if group_name is None:
-                    label = f"group {group_idx}"
-                elif tag_counts[group_name] > 1:
-                    label = f"{group_name} {group_idx}"
-                else:
-                    label = group_name
-                self.trainer.record_metric(f"LR ({label})", new_lr, namespace="optim")
+        # Maybe adjust learning rate.
+        if self.scheduler is not None:
+            for group_idx, group in enumerate(self.optimizer.param_groups):
+                new_lr = self.scheduler.set_lr(group, self.trainer)
+                self.trainer.record_metric(
+                    f"LR (group {group_idx})", new_lr, namespace="optim"
+                )
 
         # Step optimizer.
         self.optimizer.step()
@@ -752,152 +664,6 @@ class OlmoEarthTrainModule(TrainModule):
             parameters, max_grad_norm, total_norm, foreach=foreach
         )
         return total_norm
-
-    def _grad_diagnostic_groups(self) -> dict[str, list[nn.Parameter]]:
-        """Group trainable parameters by module for gradient reporting."""
-        if self._grad_diagnostics_groups is None:
-            groups: dict[str, list[nn.Parameter]] = {}
-            for name, param in self.model.named_parameters():
-                if not param.requires_grad:
-                    continue
-                group = _param_group_name(name, self._grad_diagnostics_depth)
-                groups.setdefault(group, []).append(param)
-            self._grad_diagnostics_groups = groups
-            logger.info(
-                "Gradient diagnostics enabled: %d parameter groups at depth %d, "
-                "logged every %d steps",
-                len(groups),
-                self._grad_diagnostics_depth,
-                self._grad_diagnostics_interval,
-            )
-        return self._grad_diagnostics_groups
-
-    def _log_grad_diagnostics(self) -> None:
-        """Break the total gradient norm down per module.
-
-        A rising ``optim/total grad norm`` is ambiguous: the whole model may be
-        drifting up together (an optimization-scale problem) or a few tensors may
-        dominate the sum (a localized problem, where the global clip then throttles
-        every other module on their behalf). ``grad share`` disambiguates the two
-        directly, and pairing each gradient norm with the weight norm of the same
-        parameters distinguishes a module that is genuinely being driven hard from
-        one that merely holds large weights.
-
-        Must be called after the gradient all-reduce and before clipping, so the
-        values describe the gradient the optimizer would actually step with.
-        """
-        groups = self._grad_diagnostic_groups()
-        names = sorted(groups)
-        grad_sq = torch.zeros(len(names), device=self.device, dtype=torch.float32)
-        weight_sq = torch.zeros(len(names), device=self.device, dtype=torch.float32)
-        for i, name in enumerate(names):
-            for param in groups[name]:
-                weight = get_local_tensor(param.detach())
-                weight_sq[i] += (
-                    torch.linalg.vector_norm(weight, 2, dtype=torch.float32) ** 2
-                )
-                if param.grad is None:
-                    continue
-                grad = get_local_tensor(param.grad)
-                grad_sq[i] += (
-                    torch.linalg.vector_norm(grad, 2, dtype=torch.float32) ** 2
-                )
-
-        # Under FSDP each rank holds a distinct shard, so squared norms have to be
-        # summed across ranks to describe the whole parameter. Under the replicated
-        # path gradients were already averaged above and every rank agrees, so the
-        # values are global as-is and either way we record with `reduce_type=None`.
-        if self.is_fsdp and dist.is_available() and dist.is_initialized():
-            stacked = torch.stack([grad_sq, weight_sq])
-            dist.all_reduce(stacked, group=self.dp_process_group)
-            grad_sq, weight_sq = stacked[0], stacked[1]
-
-        total_grad_sq = grad_sq.sum().clamp(min=1e-24)
-        grad_norm = grad_sq.sqrt()
-        weight_norm = weight_sq.sqrt()
-        share = grad_sq / total_grad_sq
-        for i, name in enumerate(names):
-            self.trainer.record_metric(
-                f"grad norm/{name}", grad_norm[i], reduce_type=None
-            )
-            self.trainer.record_metric(f"grad share/{name}", share[i], reduce_type=None)
-            self.trainer.record_metric(
-                f"weight norm/{name}", weight_norm[i], reduce_type=None
-            )
-            self.trainer.record_metric(
-                f"grad over weight/{name}",
-                grad_norm[i] / weight_norm[i].clamp(min=1e-12),
-                reduce_type=None,
-            )
-        # Single scalar to watch: if this climbs, the total norm is being set by one
-        # module rather than by the model as a whole.
-        self.trainer.record_metric(
-            "max group grad share", share.max(), reduce_type=None, namespace="optim"
-        )
-
-    def update_target_encoder(self) -> None:
-        """Update the target encoder."""
-        # Update target encoder with EMA this should be a callback
-        if self.start_ema == 1.0 and self.end_ema == 1.0:
-            return
-
-        if isinstance(
-            getattr(self.model, "target_encoder", None), FrozenTargetProjection
-        ):
-            raise OLMoConfigurationError(
-                "EMA updates require a full target-encoder copy: "
-                "projection_only_target=True only supports ema_decay=(1.0, 1.0)."
-            )
-
-        cur_ema_value = (
-            self.start_ema
-            + self.trainer.global_step
-            * (self.end_ema - self.start_ema)
-            / self.trainer.max_steps
-        )
-        with torch.no_grad():
-            self.trainer.record_metric(
-                "train/ema_decay",
-                cur_ema_value,
-                ReduceType.mean,
-            )
-            for p, tp in zip(
-                self.model.encoder.parameters(), self.model.target_encoder.parameters()
-            ):
-                if isinstance(p.data, DTensor):
-                    # get the local shard, update it in place
-                    p_local = p.data.to_local()
-                    tp_local = tp.data.to_local()
-                    tp_local.mul_(cur_ema_value).add_(
-                        p_local, alpha=(1 - cur_ema_value)
-                    )
-                else:
-                    # fallback for any plain Tensor
-                    tp.data.mul_(cur_ema_value).add_(p.data, alpha=(1 - cur_ema_value))
-
-    def eval_batch(
-        self, batch: dict[str, Any], labels: torch.Tensor | None = None
-    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        """Evaluate a batch."""
-        raise NotImplementedError("eval batch not implemented")
-
-    def compute_regularization(self, latent: TokensAndMasks) -> torch.Tensor | None:
-        """If a regularizer is present, compute it."""
-        regularizer = getattr(self, "regularizer", None)
-        if regularizer is None:
-            return None
-        return regularizer.compute(latent, None)
-
-    def log_regularization(self, total_batch_reg: torch.Tensor) -> None:
-        """If a regularizer is present, log its values."""
-        regularizer = getattr(self, "regularizer", None)
-        if regularizer is None:
-            return None
-        self.trainer.record_metric(
-            f"train/{regularizer.name}",
-            total_batch_reg,
-            ReduceType.mean,
-        )
 
     def accumulate_extra_metrics(
         self,
